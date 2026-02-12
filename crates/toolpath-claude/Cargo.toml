@@ -1,0 +1,24 @@
+[package]
+name = "toolpath-claude"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Derive Toolpath provenance documents from Claude conversation logs"
+
+[features]
+default = ["watcher"]
+watcher = ["dep:notify", "dep:tokio"]
+
+[dependencies]
+toolpath = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+notify = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync", "time", "fs"], optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }

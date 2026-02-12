@@ -1,0 +1,180 @@
+{
+  "Graph": {
+    "graph": {
+      "id": "graph-release-v2.0"
+    },
+
+    "paths": [
+      {
+        "path": {
+          "id": "path-pr-42",
+          "base": {
+            "uri": "github:myorg/myrepo",
+            "ref": "main",
+            "commit": "abc123def456"
+          },
+          "head": "step-003"
+        },
+        "steps": [
+          {
+            "step": {
+              "id": "step-001",
+              "actor": "agent:claude-code",
+              "timestamp": "2026-01-29T10:00:00Z"
+            },
+            "change": {
+              "src/auth/validator.rs": {
+                "raw": "@@ -1,5 +1,25 @@\n+pub struct ValidationError {...}"
+              }
+            },
+            "meta": {
+              "intent": "Add email validation with custom error type"
+            }
+          },
+          {
+            "step": {
+              "id": "step-002",
+              "parents": ["step-001"],
+              "actor": "tool:rustfmt",
+              "timestamp": "2026-01-29T10:00:30Z"
+            },
+            "change": {
+              "src/auth/validator.rs": {
+                "raw": "@@ -15,2 +15,5 @@\n-pub fn validate..."
+              }
+            },
+            "meta": {
+              "intent": "Auto-format"
+            }
+          },
+          {
+            "step": {
+              "id": "step-003",
+              "parents": ["step-002"],
+              "actor": "human:alex",
+              "timestamp": "2026-01-29T10:15:00Z"
+            },
+            "change": {
+              "src/auth/validator.rs": {
+                "raw": "@@ -20,2 +20,2 @@\n-message: \"must contain @\"..."
+              }
+            },
+            "meta": {
+              "intent": "Improve error messages for better UX"
+            }
+          }
+        ],
+        "meta": {
+          "title": "Add email validation",
+          "source": "github:myorg/myrepo/pull/42"
+        }
+      },
+      {
+        "path": {
+          "id": "path-pr-43",
+          "base": {
+            "uri": "github:myorg/myrepo",
+            "ref": "main",
+            "commit": "def456789abc"
+          },
+          "head": "step-002"
+        },
+        "steps": [
+          {
+            "step": {
+              "id": "step-001",
+              "actor": "human:bob",
+              "timestamp": "2026-01-28T14:00:00Z"
+            },
+            "change": {
+              "src/auth/session.rs": {
+                "raw": "@@ -45,3 +45,8 @@\n+fn refresh_token(...)"
+              }
+            },
+            "meta": {
+              "intent": "Add session refresh to prevent timeouts"
+            }
+          },
+          {
+            "step": {
+              "id": "step-002",
+              "parents": ["step-001"],
+              "actor": "agent:claude-code",
+              "timestamp": "2026-01-28T14:30:00Z"
+            },
+            "change": {
+              "src/auth/session.rs": {
+                "raw": "@@ -50,5 +50,15 @@\n+// Handle edge cases..."
+              }
+            },
+            "meta": {
+              "intent": "Add edge case handling for expired refresh tokens"
+            }
+          }
+        ],
+        "meta": {
+          "title": "Fix session timeout bug",
+          "source": "github:myorg/myrepo/pull/43"
+        }
+      },
+      { "$ref": "https://archive.example.com/toolpath/path-pr-44.json" },
+      { "$ref": "toolpath://internal/path-pr-45" }
+    ],
+
+    "meta": {
+      "title": "Release v2.0",
+      "refs": [
+        {"rel": "milestone", "href": "issue://github/myorg/myrepo/milestone/5"},
+        {"rel": "changelog", "href": "doc://CHANGELOG.md#v2.0"}
+      ],
+      "actors": {
+        "human:alex": {
+          "name": "Alex Kesling",
+          "identities": [
+            {"system": "github", "id": "akesling"},
+            {"system": "email", "id": "alex@empathic.dev"}
+          ]
+        },
+        "human:bob": {
+          "name": "Bob Developer",
+          "identities": [
+            {"system": "github", "id": "bobdev"}
+          ]
+        },
+        "human:release-manager": {
+          "name": "Release Manager",
+          "identities": [
+            {"system": "github", "id": "releasebot"}
+          ],
+          "keys": [
+            {
+              "type": "gpg",
+              "fingerprint": "RELEASE1234567890ABCD",
+              "href": "https://keys.openpgp.org/vks/v1/by-fingerprint/..."
+            }
+          ]
+        },
+        "agent:claude-code": {
+          "name": "Claude Code",
+          "provider": "anthropic",
+          "model": "claude-sonnet-4-20250514"
+        },
+        "tool:rustfmt": {
+          "name": "rustfmt",
+          "identities": [
+            {"system": "crates.io", "id": "rustfmt-nightly/1.7.0"}
+          ]
+        }
+      },
+      "signatures": [
+        {
+          "signer": "human:release-manager",
+          "key": "gpg:RELEASE1234567890ABCD",
+          "scope": "release",
+          "timestamp": "2026-01-30T09:00:00Z",
+          "sig": "-----BEGIN PGP SIGNATURE-----\n\niQIzBAABCAAdFiEE...(release signature)...\n-----END PGP SIGNATURE-----"
+        }
+      ]
+    }
+  }
+}

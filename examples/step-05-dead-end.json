@@ -1,0 +1,29 @@
+{
+  "Step": {
+    "step": {
+      "id": "step-002a",
+      "parents": ["step-001"],
+      "actor": "agent:claude-code/session-abc123",
+      "timestamp": "2026-01-29T10:03:00Z"
+    },
+
+    "change": {
+      "src/auth/validator.rs": {
+        "raw": "@@ -1,5 +1,15 @@\n use std::error::Error;\n+use regex::Regex;\n+use lazy_static::lazy_static;\n+\n+lazy_static! {\n+    static ref EMAIL_REGEX: Regex = Regex::new(\n+        r\"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$\"\n+    ).unwrap();\n+}\n+\n+pub fn validate_email(input: &str) -> bool {\n+    EMAIL_REGEX.is_match(input)\n+}\n",
+        "structural": {
+          "type": "rust.add_items",
+          "items": [
+            {"kind": "use", "path": "regex::Regex"},
+            {"kind": "use", "path": "lazy_static::lazy_static"},
+            {"kind": "macro_invocation", "macro": "lazy_static", "defines": "EMAIL_REGEX"},
+            {"kind": "fn", "name": "validate_email", "signature": "fn validate_email(input: &str) -> bool"}
+          ]
+        }
+      }
+    },
+
+    "meta": {
+      "intent": "Validate email addresses using regex pattern matching"
+    }
+  }
+}

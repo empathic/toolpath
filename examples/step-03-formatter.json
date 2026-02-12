@@ -1,0 +1,20 @@
+{
+  "Step": {
+    "step": {
+      "id": "step-003",
+      "parents": ["step-002"],
+      "actor": "tool:rustfmt/1.7.0",
+      "timestamp": "2026-01-29T10:05:30Z"
+    },
+
+    "change": {
+      "src/auth/validator.rs": {
+        "raw": "@@ -15,4 +15,8 @@\n-pub fn validate_email(input: &str) -> Result<(), ValidationError> {\n-    if !input.contains('@') {\n-        return Err(ValidationError { field: \"email\".to_string(), message: \"must contain @\".to_string() });\n+pub fn validate_email(\n+    input: &str,\n+) -> Result<(), ValidationError> {\n+    if !input.contains('@') {\n+        return Err(ValidationError {\n+            field: \"email\".to_string(),\n+            message: \"must contain @\".to_string(),\n+        });"
+      }
+    },
+
+    "meta": {
+      "intent": "Automatic code formatting"
+    }
+  }
+}

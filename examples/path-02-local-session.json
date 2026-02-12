@@ -1,0 +1,82 @@
+{
+  "Path": {
+    "path": {
+      "id": "path-session-xyz",
+      "base": {
+        "uri": "file:///home/alex/projects/myrepo",
+        "commit": "def789abc123456"
+      },
+      "head": "step-003"
+    },
+
+    "steps": [
+      {
+        "step": {
+          "id": "step-001",
+          "actor": "agent:claude-code/session-xyz",
+          "timestamp": "2026-01-29T14:00:00Z"
+        },
+        "change": {
+          "src/lib.rs": {
+            "raw": "@@ -1,3 +1,10 @@\n+/// Configuration for the service\n+pub struct Config {\n+    pub port: u16,\n+    pub host: String,\n+}\n",
+            "structural": {
+              "type": "rust.add_items",
+              "items": [
+                {"kind": "struct", "name": "Config"}
+              ]
+            }
+          }
+        },
+        "meta": {
+          "intent": "Add Config struct for service configuration",
+          "refs": [
+            {"rel": "requested_by", "href": "agent://claude-code/session-xyz/turn/1"}
+          ]
+        }
+      },
+      {
+        "step": {
+          "id": "step-002",
+          "parents": ["step-001"],
+          "actor": "agent:claude-code/session-xyz",
+          "timestamp": "2026-01-29T14:02:00Z"
+        },
+        "change": {
+          "src/lib.rs": {
+            "raw": "@@ -8,0 +9,15 @@\n+impl Config {\n+    pub fn from_env() -> Self {\n+        Self {\n+            port: std::env::var(\"PORT\")\n+                .unwrap_or_else(|_| \"8080\".to_string())\n+                .parse()\n+                .expect(\"PORT must be a number\"),\n+            host: std::env::var(\"HOST\")\n+                .unwrap_or_else(|_| \"localhost\".to_string()),\n+        }\n+    }\n+}\n",
+            "structural": {
+              "type": "rust.add_items",
+              "items": [
+                {"kind": "impl", "for": "Config", "methods": ["from_env"]}
+              ]
+            }
+          }
+        },
+        "meta": {
+          "intent": "Add from_env constructor for Config"
+        }
+      },
+      {
+        "step": {
+          "id": "step-003",
+          "parents": ["step-002"],
+          "actor": "tool:rustfmt/1.7.0",
+          "timestamp": "2026-01-29T14:02:05Z"
+        },
+        "change": {
+          "src/lib.rs": {
+            "raw": "@@ -12,4 +12,5 @@\n-            port: std::env::var(\"PORT\").unwrap_or_else(|_| \"8080\".to_string()).parse().expect(\"PORT must be a number\"),\n+            port: std::env::var(\"PORT\")\n+                .unwrap_or_else(|_| \"8080\".to_string())\n+                .parse()\n+                .expect(\"PORT must be a number\"),"
+          }
+        },
+        "meta": {
+          "intent": "Auto-format"
+        }
+      }
+    ],
+
+    "meta": {
+      "title": "Claude Code session: Add service config",
+      "source": "agent://claude-code/session-xyz"
+    }
+  }
+}

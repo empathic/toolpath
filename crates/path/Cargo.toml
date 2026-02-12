@@ -1,0 +1,26 @@
+[package]
+name = "path"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "CLI for deriving, querying, and visualizing Toolpath provenance"
+
+[[bin]]
+name = "path"
+path = "src/main.rs"
+
+[dependencies]
+toolpath = { workspace = true }
+toolpath-git = { workspace = true }
+toolpath-claude = { workspace = true }
+toolpath-dot = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+similar = { workspace = true }
+chrono = { workspace = true }
+tempfile = { workspace = true }
+git2 = { workspace = true }
+
+[dev-dependencies]

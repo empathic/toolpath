@@ -1,0 +1,20 @@
+{
+  "Step": {
+    "step": {
+      "id": "step-004",
+      "parents": ["step-002a", "step-003b"],
+      "actor": "human:alex",
+      "timestamp": "2026-01-29T12:00:00Z"
+    },
+
+    "change": {
+      "src/auth/validator.rs": {
+        "raw": "@@ -1,10 +1,20 @@\n...(merged changes from both branches)..."
+      }
+    },
+
+    "meta": {
+      "intent": "Merge validation improvements from feature-A with logging from feature-B"
+    }
+  }
+}

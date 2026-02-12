@@ -1,0 +1,142 @@
+{
+  "Path": {
+    "path": {
+      "id": "path-pr-42",
+      "base": {
+        "uri": "github:myorg/myrepo",
+        "ref": "main",
+        "commit": "abc123def456789"
+      },
+      "head": "step-003"
+    },
+
+    "steps": [
+      {
+        "step": {
+          "id": "step-001",
+          "actor": "agent:claude-code",
+          "timestamp": "2026-01-29T10:00:00Z"
+        },
+        "change": {
+          "src/auth/validator.rs": {
+            "raw": "@@ -1,5 +1,25 @@\n+pub struct ValidationError {...}"
+          }
+        },
+        "meta": {
+          "intent": "Add email validation with custom error type"
+        }
+      },
+      {
+        "step": {
+          "id": "step-002",
+          "parents": ["step-001"],
+          "actor": "tool:rustfmt",
+          "timestamp": "2026-01-29T10:00:30Z"
+        },
+        "change": {
+          "src/auth/validator.rs": {
+            "raw": "@@ -15,2 +15,5 @@\n-pub fn validate_email..."
+          }
+        },
+        "meta": {
+          "intent": "Auto-format"
+        }
+      },
+      {
+        "step": {
+          "id": "step-003",
+          "parents": ["step-002"],
+          "actor": "human:alex",
+          "timestamp": "2026-01-29T10:15:00Z"
+        },
+        "change": {
+          "src/auth/validator.rs": {
+            "raw": "@@ -20,2 +20,2 @@\n-message: \"must contain @\"..."
+          }
+        },
+        "meta": {
+          "intent": "Improve error messages for better UX"
+        }
+      }
+    ],
+
+    "meta": {
+      "title": "Add email validation",
+      "source": "github:myorg/myrepo/pull/42",
+      "refs": [
+        {"rel": "fixes", "href": "issue://github/myorg/myrepo/issues/42"}
+      ],
+
+      "actors": {
+        "human:alex": {
+          "name": "Alex Kesling",
+          "identities": [
+            {"system": "github", "id": "akesling"},
+            {"system": "email", "id": "alex@empathic.dev"},
+            {"system": "orcid", "id": "0000-0001-2345-6789"}
+          ],
+          "keys": [
+            {
+              "type": "gpg",
+              "fingerprint": "ABCD 1234 5678 90EF GHIJ KLMN OPQR STUV WXYZ",
+              "href": "https://keys.openpgp.org/vks/v1/by-fingerprint/..."
+            }
+          ]
+        },
+        "human:bob": {
+          "name": "Bob Reviewer",
+          "identities": [
+            {"system": "github", "id": "bobreviewer"},
+            {"system": "email", "id": "bob@example.com"}
+          ],
+          "keys": [
+            {
+              "type": "gpg",
+              "fingerprint": "WXYZ 9876 5432 10FE DCBA",
+              "href": "https://keys.openpgp.org/vks/v1/by-fingerprint/..."
+            }
+          ]
+        },
+        "agent:claude-code": {
+          "name": "Claude Code",
+          "provider": "anthropic",
+          "model": "claude-sonnet-4-20250514",
+          "identities": [
+            {"system": "anthropic", "id": "claude-code/1.0.0"}
+          ]
+        },
+        "tool:rustfmt": {
+          "name": "rustfmt",
+          "identities": [
+            {"system": "crates.io", "id": "rustfmt-nightly/1.7.0"},
+            {"system": "github", "id": "rust-lang/rustfmt"}
+          ]
+        }
+      },
+
+      "signatures": [
+        {
+          "signer": "human:alex",
+          "key": "gpg:ABCD1234567890EFGHIJKLMNOPQRSTUVWXYZ",
+          "scope": "author",
+          "timestamp": "2026-01-29T10:20:00Z",
+          "sig": "-----BEGIN PGP SIGNATURE-----\n\niQIzBAABCAAdFiEE...(author signature)...\n-----END PGP SIGNATURE-----"
+        },
+        {
+          "signer": "human:bob",
+          "key": "gpg:WXYZ987654321FEDCBA",
+          "scope": "reviewer",
+          "timestamp": "2026-01-29T11:00:00Z",
+          "sig": "-----BEGIN PGP SIGNATURE-----\n\niQIzBAABCAAdFiEE...(reviewer signature)...\n-----END PGP SIGNATURE-----"
+        },
+        {
+          "signer": "ci:github-actions",
+          "key": "sigstore:github-actions/myorg/myrepo",
+          "scope": "ci",
+          "timestamp": "2026-01-29T10:25:00Z",
+          "sig": "eyJhbGciOiJFUzI1NiIs...(sigstore attestation)..."
+        }
+      ]
+    }
+  }
+}

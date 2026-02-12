@@ -1,0 +1,100 @@
+{
+  "Path": {
+    "path": {
+      "id": "path-pr-42",
+      "base": {
+        "uri": "github:myorg/myrepo",
+        "ref": "main",
+        "commit": "abc123def456789"
+      },
+      "head": "step-004"
+    },
+
+    "steps": [
+      {
+        "step": {
+          "id": "step-001",
+          "actor": "human:alex",
+          "timestamp": "2026-01-29T10:00:00Z"
+        },
+        "change": {
+          "src/main.rs": {
+            "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
+          }
+        }
+      },
+      {
+        "step": {
+          "id": "step-002a",
+          "parents": ["step-001"],
+          "actor": "agent:claude-code/session-abc123",
+          "timestamp": "2026-01-29T10:03:00Z"
+        },
+        "change": {
+          "src/auth/validator.rs": {
+            "raw": "@@ -1,5 +1,15 @@\n+use regex::Regex;..."
+          }
+        },
+        "meta": {
+          "intent": "Regex-based validation (abandoned)"
+        }
+      },
+      {
+        "step": {
+          "id": "step-002",
+          "parents": ["step-001"],
+          "actor": "agent:claude-code/session-abc123",
+          "timestamp": "2026-01-29T10:05:00Z"
+        },
+        "change": {
+          "src/auth/validator.rs": {
+            "raw": "@@ -1,5 +1,25 @@\n+pub struct ValidationError..."
+          }
+        },
+        "meta": {
+          "intent": "Add email validation with custom error type"
+        }
+      },
+      {
+        "step": {
+          "id": "step-003",
+          "parents": ["step-002"],
+          "actor": "tool:rustfmt/1.7.0",
+          "timestamp": "2026-01-29T10:05:30Z"
+        },
+        "change": {
+          "src/auth/validator.rs": {
+            "raw": "@@ -15,4 +15,8 @@\n-pub fn validate_email..."
+          }
+        },
+        "meta": {
+          "intent": "Auto-format"
+        }
+      },
+      {
+        "step": {
+          "id": "step-004",
+          "parents": ["step-003"],
+          "actor": "human:alex",
+          "timestamp": "2026-01-29T10:15:00Z"
+        },
+        "change": {
+          "src/auth/validator.rs": {
+            "raw": "@@ -20,2 +20,2 @@\n-message: \"must contain @\"..."
+          }
+        },
+        "meta": {
+          "intent": "Refine error messages"
+        }
+      }
+    ],
+
+    "meta": {
+      "title": "Add email validation",
+      "source": "github:myorg/myrepo/pull/42",
+      "refs": [
+        {"rel": "fixes", "href": "issue://github/myorg/myrepo/issues/42"}
+      ]
+    }
+  }
+}

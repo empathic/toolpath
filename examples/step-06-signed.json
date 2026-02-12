@@ -1,0 +1,50 @@
+{
+  "Step": {
+    "step": {
+      "id": "step-001",
+      "actor": "human:alex",
+      "timestamp": "2026-01-29T10:00:00Z"
+    },
+
+    "change": {
+      "src/main.rs": {
+        "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
+      }
+    },
+
+    "meta": {
+      "intent": "Fix greeting punctuation",
+      "actors": {
+        "human:alex": {
+          "name": "Alex Kesling",
+          "identities": [
+            {"system": "github", "id": "akesling"},
+            {"system": "twitter", "id": "AlexKesling"},
+            {"system": "email", "id": "alex@empathic.dev"}
+          ],
+          "keys": [
+            {
+              "type": "gpg",
+              "fingerprint": "ABCD 1234 5678 90EF GHIJ KLMN OPQR STUV WXYZ",
+              "href": "https://keys.openpgp.org/vks/v1/by-fingerprint/ABCD1234567890EFGHIJKLMNOPQRSTUVWXYZ"
+            },
+            {
+              "type": "ssh",
+              "fingerprint": "SHA256:abcdefghijklmnopqrstuvwxyz123456789",
+              "href": "https://github.com/akesling.keys"
+            }
+          ]
+        }
+      },
+      "signatures": [
+        {
+          "signer": "human:alex",
+          "key": "gpg:ABCD1234567890EFGHIJKLMNOPQRSTUVWXYZ",
+          "scope": "author",
+          "timestamp": "2026-01-29T10:00:05Z",
+          "sig": "-----BEGIN PGP SIGNATURE-----\n\niQIzBAABCAAdFiEE...\n-----END PGP SIGNATURE-----"
+        }
+      ]
+    }
+  }
+}

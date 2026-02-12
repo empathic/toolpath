@@ -1,0 +1,15 @@
+{
+  "Step": {
+    "step": {
+      "id": "step-001",
+      "actor": "human:alex",
+      "timestamp": "2026-01-29T10:00:00Z"
+    },
+
+    "change": {
+      "src/main.rs": {
+        "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
+      }
+    }
+  }
+}

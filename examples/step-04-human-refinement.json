@@ -1,0 +1,30 @@
+{
+  "Step": {
+    "step": {
+      "id": "step-004",
+      "parents": ["step-003"],
+      "actor": "human:alex",
+      "timestamp": "2026-01-29T10:15:00Z"
+    },
+
+    "change": {
+      "src/auth/validator.rs": {
+        "raw": "@@ -20,2 +20,2 @@\n-            field: \"email\".to_string(),\n-            message: \"must contain @\".to_string(),\n+            field: \"email\".into(),\n+            message: \"Invalid email format - missing @\".into(),",
+        "structural": {
+          "type": "rust.modify_expressions",
+          "changes": [
+            {"from": "\"email\".to_string()", "to": "\"email\".into()"},
+            {"from": "\"must contain @\".to_string()", "to": "\"Invalid email format - missing @\".into()"}
+          ]
+        }
+      }
+    },
+
+    "meta": {
+      "intent": "Improve error message clarity and use idiomatic .into()",
+      "refs": [
+        {"rel": "refines", "href": "toolpath://step-002"}
+      ]
+    }
+  }
+}

@@ -1,0 +1,490 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toolpath.dev/schema/toolpath.schema.json",
+  "title": "Toolpath",
+  "description": "A tool-agnostic format for tracking artifact transformation provenance",
+
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp"
+    },
+
+    "actorRef": {
+      "type": "string",
+      "pattern": "^(human|agent|tool|ci):[a-zA-Z0-9_-]+(\/[a-zA-Z0-9_.-]+)?$",
+      "description": "Actor reference string (e.g., 'human:alex', 'agent:claude-code', 'tool:rustfmt/1.5.0')",
+      "examples": ["human:alex", "agent:claude-code", "tool:rustfmt", "ci:github-actions"]
+    },
+
+    "identity": {
+      "type": "object",
+      "description": "External identity reference",
+      "properties": {
+        "system": {
+          "type": "string",
+          "description": "Identity system (e.g., 'github', 'email', 'orcid')",
+          "examples": ["github", "gitlab", "email", "twitter", "orcid", "crates.io", "npm", "anthropic"]
+        },
+        "id": {
+          "type": "string",
+          "description": "Identifier within the system"
+        }
+      },
+      "required": ["system", "id"],
+      "additionalProperties": false
+    },
+
+    "key": {
+      "type": "object",
+      "description": "Cryptographic key reference",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["gpg", "ssh", "sigstore"],
+          "description": "Key type"
+        },
+        "fingerprint": {
+          "type": "string",
+          "description": "Key fingerprint or identifier"
+        },
+        "href": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to retrieve the public key"
+        }
+      },
+      "required": ["type", "fingerprint"],
+      "additionalProperties": false
+    },
+
+    "actorDefinition": {
+      "type": "object",
+      "description": "Full actor definition with identity and key information",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Display name"
+        },
+        "provider": {
+          "type": "string",
+          "description": "Provider (for agents)"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier (for agents)"
+        },
+        "identities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/identity" },
+          "description": "External identities"
+        },
+        "keys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/key" },
+          "description": "Cryptographic keys"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "actors": {
+      "type": "object",
+      "description": "Map of actor references to their definitions",
+      "propertyNames": { "$ref": "#/$defs/actorRef" },
+      "additionalProperties": { "$ref": "#/$defs/actorDefinition" }
+    },
+
+    "signature": {
+      "type": "object",
+      "description": "Cryptographic signature",
+      "properties": {
+        "signer": {
+          "$ref": "#/$defs/actorRef",
+          "description": "Actor who signed"
+        },
+        "key": {
+          "type": "string",
+          "description": "Key identifier (type:fingerprint)",
+          "examples": ["gpg:ABCD1234", "ssh:SHA256:abc123"]
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["author", "reviewer", "witness", "ci", "release"],
+          "description": "Role of the signer"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the signature was created"
+        },
+        "sig": {
+          "type": "string",
+          "description": "The signature data"
+        }
+      },
+      "required": ["signer", "key", "scope", "sig"],
+      "additionalProperties": false
+    },
+
+    "ref": {
+      "type": "object",
+      "description": "Reference to external resource",
+      "properties": {
+        "rel": {
+          "type": "string",
+          "description": "Relationship type",
+          "examples": ["fixes", "implements", "references", "milestone", "changelog"]
+        },
+        "href": {
+          "type": "string",
+          "description": "URI of the referenced resource"
+        }
+      },
+      "required": ["rel", "href"],
+      "additionalProperties": false
+    },
+
+    "artifactChange": {
+      "type": "object",
+      "description": "Change to a single artifact with one or more perspectives",
+      "properties": {
+        "raw": {
+          "type": "string",
+          "description": "Unified Diff format change"
+        },
+        "structural": {
+          "type": "object",
+          "description": "Language-aware structural operation",
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Operation type (e.g., 'rust.add_items', 'core.replace')"
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": true
+        }
+      },
+      "anyOf": [
+        { "required": ["raw"] },
+        { "required": ["structural"] }
+      ],
+      "additionalProperties": false
+    },
+
+    "change": {
+      "type": "object",
+      "description": "Map of artifact URLs to their changes",
+      "additionalProperties": { "$ref": "#/$defs/artifactChange" }
+    },
+
+    "vcsSource": {
+      "type": "object",
+      "description": "Reference to a VCS revision that produced this step",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "VCS type (git, hg, fossil, jj, svn, darcs, etc.)",
+          "examples": ["git", "hg", "fossil", "jj", "svn", "darcs"]
+        },
+        "revision": {
+          "type": "string",
+          "description": "Full revision identifier (commit hash, revision number, etc.)"
+        },
+        "change_id": {
+          "type": "string",
+          "description": "Change ID for VCS systems that distinguish changes from commits (e.g., jj)"
+        }
+      },
+      "required": ["type", "revision"],
+      "additionalProperties": true
+    },
+
+    "stepMeta": {
+      "type": "object",
+      "description": "Optional metadata for a step",
+      "properties": {
+        "intent": {
+          "type": "string",
+          "description": "Human-readable description of purpose"
+        },
+        "source": {
+          "$ref": "#/$defs/vcsSource",
+          "description": "VCS revision this step was derived from"
+        },
+        "refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ref" },
+          "description": "Links to issues, docs, reasoning"
+        },
+        "actors": {
+          "$ref": "#/$defs/actors",
+          "description": "Actor definitions (for standalone steps)"
+        },
+        "signatures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/signature" },
+          "description": "Cryptographic signatures"
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "stepIdentity": {
+      "type": "object",
+      "description": "Step identity and lineage",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique step identifier"
+        },
+        "parents": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Parent step IDs (empty or omitted for root steps)"
+        },
+        "actor": {
+          "$ref": "#/$defs/actorRef",
+          "description": "Actor who performed this step"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the step was performed"
+        }
+      },
+      "required": ["id", "actor", "timestamp"],
+      "additionalProperties": false
+    },
+
+    "step": {
+      "type": "object",
+      "description": "A single change to one or more artifacts",
+      "properties": {
+        "step": {
+          "$ref": "#/$defs/stepIdentity"
+        },
+        "change": {
+          "$ref": "#/$defs/change"
+        },
+        "meta": {
+          "$ref": "#/$defs/stepMeta"
+        }
+      },
+      "required": ["step", "change"],
+      "additionalProperties": false
+    },
+
+    "base": {
+      "type": "object",
+      "description": "Root context for a path. URI can be a VCS reference (github:, gitlab:, file:) or a toolpath reference (toolpath:path-id/step-id)",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "description": "Base reference: VCS repo (e.g., 'github:org/repo') or toolpath step (e.g., 'toolpath:path-main/step-005')",
+          "examples": ["github:org/repo", "svn://server/repo", "file:///path/to/repo", "toolpath:path-main/step-005"]
+        },
+        "ref": {
+          "type": "string",
+          "description": "VCS state identifier: commit hash, revision number, changeset ID, tag, or branch name. Interpretation depends on the VCS.",
+          "examples": ["abc123def456", "12345", "v1.0", "main"]
+        }
+      },
+      "required": ["uri"],
+      "additionalProperties": false
+    },
+
+    "pathIdentity": {
+      "type": "object",
+      "description": "Path identity and context",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique path identifier"
+        },
+        "base": {
+          "$ref": "#/$defs/base",
+          "description": "Root context this path branches from"
+        },
+        "head": {
+          "type": "string",
+          "description": "Current tip step ID"
+        }
+      },
+      "required": ["id", "base", "head"],
+      "additionalProperties": false
+    },
+
+    "pathMeta": {
+      "type": "object",
+      "description": "Optional metadata for a path",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Human-readable title"
+        },
+        "source": {
+          "type": "string",
+          "description": "Source reference (e.g., PR URL)"
+        },
+        "intent": {
+          "type": "string",
+          "description": "Human-readable description of purpose"
+        },
+        "refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ref" },
+          "description": "Links to issues, docs, reasoning"
+        },
+        "actors": {
+          "$ref": "#/$defs/actors",
+          "description": "Actor definitions shared by steps"
+        },
+        "signatures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/signature" },
+          "description": "Cryptographic signatures"
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "path": {
+      "type": "object",
+      "description": "Collection of steps with base context",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/pathIdentity"
+        },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/step" },
+          "description": "Steps in this path"
+        },
+        "meta": {
+          "$ref": "#/$defs/pathMeta"
+        }
+      },
+      "required": ["path", "steps"],
+      "additionalProperties": false
+    },
+
+    "pathRef": {
+      "type": "object",
+      "description": "Reference to an external path",
+      "properties": {
+        "$ref": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to the external path document"
+        }
+      },
+      "required": ["$ref"],
+      "additionalProperties": false
+    },
+
+    "pathOrRef": {
+      "oneOf": [
+        { "$ref": "#/$defs/path" },
+        { "$ref": "#/$defs/pathRef" }
+      ],
+      "description": "Either an inline path or a reference to an external path"
+    },
+
+    "graphIdentity": {
+      "type": "object",
+      "description": "Graph identity",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique graph identifier"
+        }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+
+    "graphMeta": {
+      "type": "object",
+      "description": "Optional metadata for a graph",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Human-readable title"
+        },
+        "intent": {
+          "type": "string",
+          "description": "Human-readable description of purpose"
+        },
+        "refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ref" },
+          "description": "Links to milestones, changelogs, etc."
+        },
+        "actors": {
+          "$ref": "#/$defs/actors",
+          "description": "Actor definitions shared by paths"
+        },
+        "signatures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/signature" },
+          "description": "Cryptographic signatures (e.g., release signature)"
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "graph": {
+      "type": "object",
+      "description": "Collection of related paths",
+      "properties": {
+        "graph": {
+          "$ref": "#/$defs/graphIdentity"
+        },
+        "paths": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pathOrRef" },
+          "description": "Paths in this graph (inline or referenced)"
+        },
+        "meta": {
+          "$ref": "#/$defs/graphMeta"
+        }
+      },
+      "required": ["graph", "paths"],
+      "additionalProperties": false
+    }
+  },
+
+  "oneOf": [
+    {
+      "type": "object",
+      "title": "Step document",
+      "description": "Externally tagged Step: {\"Step\": {…}}",
+      "properties": {
+        "Step": { "$ref": "#/$defs/step" }
+      },
+      "required": ["Step"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "title": "Path document",
+      "description": "Externally tagged Path: {\"Path\": {…}}",
+      "properties": {
+        "Path": { "$ref": "#/$defs/path" }
+      },
+      "required": ["Path"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "title": "Graph document",
+      "description": "Externally tagged Graph: {\"Graph\": {…}}",
+      "properties": {
+        "Graph": { "$ref": "#/$defs/graph" }
+      },
+      "required": ["Graph"],
+      "additionalProperties": false
+    }
+  ]
+}
