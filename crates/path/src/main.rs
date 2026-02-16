@@ -1,4 +1,5 @@
 mod cmd_derive;
+mod cmd_haiku;
 mod cmd_list;
 mod cmd_merge;
 mod cmd_query;
@@ -69,6 +70,8 @@ enum Commands {
         #[arg(short, long)]
         input: PathBuf,
     },
+    /// Print a random Toolpath haiku
+    Haiku,
 }
 
 fn main() -> Result<()> {
@@ -82,5 +85,9 @@ fn main() -> Result<()> {
         Commands::Merge { inputs, title } => cmd_merge::run(inputs, title, cli.pretty),
         Commands::Track { op } => cmd_track::run(op, cli.pretty),
         Commands::Validate { input } => cmd_validate::run(input),
+        Commands::Haiku => {
+            cmd_haiku::run();
+            Ok(())
+        }
     }
 }
