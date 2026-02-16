@@ -1,27 +1,4 @@
-//! Derive Toolpath provenance documents from git repository history.
-//!
-//! This crate converts git commit history into Toolpath [`Document`]s,
-//! mapping branches to [`Path`]s and multi-branch views to [`Graph`]s.
-//!
-//! # Example
-//!
-//! ```no_run
-//! use toolpath_git::{derive, DeriveConfig};
-//!
-//! let repo = git2::Repository::open(".")?;
-//! let config = DeriveConfig {
-//!     remote: "origin".into(),
-//!     title: None,
-//!     base: None,
-//! };
-//!
-//! // Single branch produces a Path document
-//! let doc = derive(&repo, &["main".into()], &config)?;
-//!
-//! // Multiple branches produce a Graph document
-//! let doc = derive(&repo, &["main".into(), "feature".into()], &config)?;
-//! # Ok::<(), anyhow::Error>(())
-//! ```
+#![doc = include_str!("../README.md")]
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};

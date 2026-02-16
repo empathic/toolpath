@@ -16,6 +16,41 @@ Or run from source:
 cargo run -p toolpath-cli -- <command>
 ```
 
+## Typical workflows
+
+**Capture the provenance of a PR:**
+
+```bash
+path derive git --repo . --branch feature --pretty > pr-provenance.json
+```
+
+**Visualize how a branch evolved, including dead ends:**
+
+```bash
+path derive git --repo . --branch main:HEAD~20 | path render dot | dot -Tpng -o history.png
+```
+
+**Review what an AI agent changed:**
+
+```bash
+path derive claude --project . --pretty | path query filter --actor "agent:" --pretty
+```
+
+**Record provenance for a live editing session:**
+
+```bash
+cat src/main.rs | path track init --file src/main.rs --actor "human:alex"
+# ... edit the file ...
+cat src/main.rs | path track step --session /tmp/session.json --seq 1 --intent "Refactored auth"
+path track close --session /tmp/session.json --pretty > session-provenance.json
+```
+
+**Merge multiple sources into a release graph:**
+
+```bash
+path merge git-provenance.json claude-provenance.json --title "v2.0 Release" --pretty
+```
+
 ## Commands
 
 ### list
@@ -135,3 +170,13 @@ path haiku
 | Flag | Description |
 |---|---|
 | `--pretty` | Pretty-print JSON output |
+
+## Part of Toolpath
+
+This is the CLI for the [Toolpath](https://github.com/empathic/toolpath) workspace. See also:
+
+- [`toolpath`](https://crates.io/crates/toolpath) -- core types and query API
+- [`toolpath-git`](https://crates.io/crates/toolpath-git) -- derive from git history
+- [`toolpath-claude`](https://crates.io/crates/toolpath-claude) -- derive from Claude conversations
+- [`toolpath-dot`](https://crates.io/crates/toolpath-dot) -- Graphviz DOT rendering
+- [RFC](https://github.com/empathic/toolpath/blob/main/RFC.md) -- full format specification

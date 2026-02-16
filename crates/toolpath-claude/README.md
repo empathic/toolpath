@@ -2,9 +2,14 @@
 
 Derive Toolpath provenance documents from Claude conversation logs.
 
+When Claude Code writes your code, the conversation — the reasoning, the
+tool calls, the abandoned approaches — is the provenance. This crate
+reads those conversations directly and maps them to Toolpath documents
+so every AI-assisted change has a traceable origin.
+
 ## Overview
 
-This crate reads Claude Code conversation data from `~/.claude/projects/` and provides:
+Reads Claude Code conversation data from `~/.claude/projects/` and provides:
 
 - **Conversation reading**: Parse JSONL conversation files into typed structures
 - **Query**: Filter and search conversation entries by role, tool use, text content
@@ -15,7 +20,7 @@ This crate reads Claude Code conversation data from `~/.claude/projects/` and pr
 
 Convert Claude conversations into Toolpath documents:
 
-```rust
+```rust,no_run
 use toolpath_claude::{ClaudeConvo, derive::{DeriveConfig, derive_path}};
 
 let manager = ClaudeConvo::new();
@@ -23,6 +28,7 @@ let convo = manager.read_conversation("/Users/alex/project", "session-uuid")?;
 
 let config = DeriveConfig::default();
 let path = derive_path(&convo, &config);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ### Mapping
@@ -39,7 +45,7 @@ let path = derive_path(&convo, &config);
 
 ## Reading conversations
 
-```rust
+```rust,no_run
 use toolpath_claude::ClaudeConvo;
 
 let manager = ClaudeConvo::new();
@@ -56,11 +62,12 @@ let latest = manager.most_recent_conversation("/Users/alex/project")?;
 
 // Search
 let matches = manager.find_conversations_with_text("/Users/alex/project", "authentication")?;
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ## Querying
 
-```rust
+```rust,ignore
 use toolpath_claude::{ConversationQuery, MessageRole};
 
 let query = ConversationQuery::new(&convo);
@@ -74,7 +81,7 @@ let matches = query.contains_text("authentication");
 
 With the `watcher` feature (enabled by default):
 
-```rust
+```rust,ignore
 use toolpath_claude::{AsyncConversationWatcher, WatcherConfig};
 
 let config = WatcherConfig::new("/Users/alex/project", "session-uuid");
@@ -94,3 +101,13 @@ while let Some(entries) = handle.recv().await {
 | Feature | Default | Description |
 |---|---|---|
 | `watcher` | yes | Filesystem watching via `notify` + `tokio` |
+
+## Part of Toolpath
+
+This crate is part of the [Toolpath](https://github.com/empathic/toolpath) workspace. See also:
+
+- [`toolpath`](https://crates.io/crates/toolpath) -- core types and query API
+- [`toolpath-git`](https://crates.io/crates/toolpath-git) -- derive from git history
+- [`toolpath-dot`](https://crates.io/crates/toolpath-dot) -- Graphviz DOT rendering
+- [`toolpath-cli`](https://crates.io/crates/toolpath-cli) -- unified CLI (`cargo install toolpath-cli`)
+- [RFC](https://github.com/empathic/toolpath/blob/main/RFC.md) -- full format specification

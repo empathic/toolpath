@@ -1,43 +1,4 @@
-//! # Toolpath Claude
-//!
-//! Derive Toolpath provenance documents from Claude conversation logs.
-//!
-//! This crate absorbs the `claude_convo` library and adds a `derive` module
-//! for mapping Claude conversations to Toolpath Path documents.
-//!
-//! ## Overview
-//!
-//! Claude stores conversation data in JSONL files within `~/.claude/projects/`. This library provides:
-//! - Type-safe structures for conversations and messages
-//! - Convenient APIs for reading conversation history
-//! - Query capabilities for filtering and searching messages
-//! - Derivation of Toolpath Path documents from conversation logs
-//!
-//! ## Quick Start
-//!
-//! ```rust,no_run
-//! use toolpath_claude::{ClaudeConvo, ConversationQuery};
-//!
-//! // Create a conversation manager
-//! let manager = ClaudeConvo::new();
-//!
-//! // List all projects with conversations
-//! let projects = manager.list_projects().unwrap();
-//!
-//! // Read a specific conversation
-//! let convo = manager.read_conversation(
-//!     "/Users/alice/project",
-//!     "session-uuid-123"
-//! ).unwrap();
-//!
-//! // Query messages
-//! let query = ConversationQuery::new(&convo);
-//! let user_messages = query.by_role(toolpath_claude::MessageRole::User);
-//!
-//! // Derive a Toolpath Path from the conversation
-//! let config = toolpath_claude::derive::DeriveConfig::default();
-//! let path = toolpath_claude::derive::derive_path(&convo, &config);
-//! ```
+#![doc = include_str!("../README.md")]
 
 #[cfg(feature = "watcher")]
 pub mod async_watcher;

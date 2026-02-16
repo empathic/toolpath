@@ -1,44 +1,4 @@
-//! # Toolpath — artifact transformation provenance
-//!
-//! Toolpath records **who** changed **what**, **why**, what they tried that
-//! didn't work, and how to verify all of it.  Think "git blame, but for
-//! everything that happens to code — including the stuff git doesn't see."
-//!
-//! ## Three core objects
-//!
-//! ```text
-//! Step      ← a single atomic change (one actor, one timestamp, one or more artifacts)
-//!   └─ Path      ← a sequence of steps forming a DAG (e.g. a pull request)
-//!        └─ Graph      ← a collection of paths (e.g. a release)
-//! ```
-//!
-//! **Steps** are the leaves.  Each step records an actor (`"human:alex"`,
-//! `"agent:claude-code"`, `"tool:rustfmt"`), a timestamp, and a set of
-//! artifact changes (keyed by path or URL).  Steps link to their parents,
-//! forming a DAG — abandoned branches become implicit dead ends.
-//!
-//! A **Path** groups steps under a shared context: a repo base, a head step,
-//! and optional metadata like title, intent, and external references.
-//!
-//! A **Graph** collects related paths (inline or by reference) to represent a
-//! larger unit of work such as a release.
-//!
-//! ## Quick start
-//!
-//! ```
-//! use toolpath::v1::{Step, Document};
-//!
-//! let step = Step::new("step-001", "human:alex", "2026-01-29T10:00:00Z")
-//!     .with_raw_change("src/main.rs", "@@ -1 +1 @@\n-old\n+new")
-//!     .with_intent("Fix greeting");
-//!
-//! let doc = Document::Step(step);
-//! let json = doc.to_json_pretty().unwrap();
-//! assert!(json.contains("\"Step\"")); // externally tagged
-//! assert!(json.contains("step-001"));
-//! ```
-//!
-//! All public types live under [`v1`].
+#![doc = include_str!("../README.md")]
 
 mod query;
 mod types;

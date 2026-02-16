@@ -2,9 +2,17 @@
 
 Core types, builders, and query operations for Toolpath provenance documents.
 
+Toolpath records **who** changed **what**, **why**, what they tried that
+didn't work, and how to verify all of it. Think "git blame, but for
+everything that happens to code — including the stuff git doesn't see."
+
+Three objects model this: a **Step** is one atomic change by one actor.
+A **Path** is a DAG of steps (like a PR) — abandoned branches become
+implicit dead ends. A **Graph** collects related paths (like a release).
+
 ## Overview
 
-This crate provides the type system for Toolpath -- a format for tracking artifact transformation provenance. It contains:
+This crate provides the type system and query API for Toolpath. It contains:
 
 - **Types**: `Document`, `Graph`, `Path`, `Step`, `ArtifactChange`, and all supporting structures
 - **Builders**: Convenient constructors and builder methods for constructing documents
@@ -15,7 +23,7 @@ This is the gravity well of the workspace. All other crates depend on `toolpath`
 
 ## Types
 
-```
+```text
 Document (enum: Graph | Path | Step)
 
 Graph
@@ -37,7 +45,7 @@ Step
 ## Building documents
 
 ```rust
-use toolpath::{Step, Path, Base, ArtifactChange};
+use toolpath::v1::{Step, Path, Base, ArtifactChange};
 
 // Build a step
 let step = Step::new("step-001", "human:alex", "2026-01-29T10:00:00Z")
@@ -62,28 +70,22 @@ let base = Base::toolpath("path-main", "step-005");
 The `query` module provides graph traversal and filtering over step slices:
 
 ```rust
-use toolpath::query;
+use toolpath::v1::{Step, query};
 
-// Walk the parent chain from head
-let ancestors = query::ancestors(&steps, "step-005");
+let s1 = Step::new("s1", "human:alex", "2026-01-29T10:00:00Z")
+    .with_raw_change("src/main.rs", "@@");
+let s2 = Step::new("s2", "agent:claude", "2026-01-29T10:01:00Z")
+    .with_parent("s1")
+    .with_raw_change("src/main.rs", "@@");
+let steps = vec![s1, s2];
 
-// Find abandoned branches
-let dead_ends = query::dead_ends(&steps, "step-005");
-
-// Filter by actor type
+let ancestors = query::ancestors(&steps, "s2");
+let dead_ends = query::dead_ends(&steps, "s2");
 let human_steps = query::filter_by_actor(&steps, "human:");
-let agent_steps = query::filter_by_actor(&steps, "agent:");
-
-// Filter by artifact
 let main_rs = query::filter_by_artifact(&steps, "src/main.rs");
-
-// Time range
-let recent = query::filter_by_time_range(&steps, "2026-01-29T00:00:00Z", "2026-01-30T00:00:00Z");
-
-// Summaries
 let all_files = query::all_artifacts(&steps);
 let all_actors = query::all_actors(&steps);
-let index = query::step_index(&steps);  // id -> &Step
+let index = query::step_index(&steps);
 ```
 
 ## Serialization
@@ -91,10 +93,23 @@ let index = query::step_index(&steps);  // id -> &Step
 Documents roundtrip through JSON:
 
 ```rust
-use toolpath::Document;
+use toolpath::v1::Document;
 
-let doc = Document::from_json(json_str)?;
-let json = doc.to_json_pretty()?;
+let json_str = r#"{"Step":{"step":{"id":"s1","actor":"human:alex","timestamp":"2026-01-29T10:00:00Z"},"change":{}}}"#;
+let doc = Document::from_json(json_str).unwrap();
+let json = doc.to_json_pretty().unwrap();
+assert!(json.contains("s1"));
 ```
 
 The `Document` enum uses `#[serde(untagged)]` and discriminates by structure: it tries Graph (has `graph` + `paths`), then Path (has `path` + `steps`), then Step (has `step` + `change`).
+
+## Part of Toolpath
+
+This crate is the core of the [Toolpath](https://github.com/empathic/toolpath) workspace. See also:
+
+- [`toolpath-git`](https://crates.io/crates/toolpath-git) -- derive from git history
+- [`toolpath-claude`](https://crates.io/crates/toolpath-claude) -- derive from Claude conversations
+- [`toolpath-dot`](https://crates.io/crates/toolpath-dot) -- Graphviz DOT rendering
+- [`toolpath-cli`](https://crates.io/crates/toolpath-cli) -- unified CLI (`cargo install toolpath-cli`)
+- [RFC](https://github.com/empathic/toolpath/blob/main/RFC.md) -- full format specification
+- [FAQ](https://github.com/empathic/toolpath/blob/main/FAQ.md) -- design rationale

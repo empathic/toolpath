@@ -2,21 +2,27 @@
 
 Generate Graphviz DOT visualizations from Toolpath documents.
 
+Provenance data is only useful if you can see it. This crate renders the
+step DAG as a Graphviz diagram so you can see at a glance who did what,
+where the dead ends branched off, and how human/agent/tool contributions
+interleave — color-coded by actor type.
+
 ## Overview
 
-This crate renders any Toolpath `Document` (Step, Path, or Graph) as a Graphviz DOT string. Steps are colored by actor type, dead ends are highlighted, and the DAG structure is preserved visually.
+Renders any Toolpath `Document` (Step, Path, or Graph) as a Graphviz DOT string. Steps are colored by actor type, dead ends are highlighted, and the DAG structure is preserved visually.
 
 Depends only on `toolpath` -- no external rendering libraries.
 
 ## Usage
 
 ```rust
-use toolpath::Document;
+use toolpath::v1::Document;
 use toolpath_dot::{render, RenderOptions};
 
-let doc = Document::from_json(json_str)?;
+let json_str = r#"{"Step":{"step":{"id":"s1","actor":"human:alex","timestamp":"T"},"change":{}}}"#;
+let doc = Document::from_json(json_str).unwrap();
 let dot = render(&doc, &RenderOptions::default());
-println!("{}", dot);
+assert!(dot.contains("digraph"));
 ```
 
 Pipe through Graphviz to produce images:
@@ -59,3 +65,13 @@ let options = RenderOptions {
 | `ci:*` | Purple (`#e2d5f1`) |
 | Dead ends | Red dashed border (`#ffcccc`) |
 | BASE node | Gray ellipse |
+
+## Part of Toolpath
+
+This crate is part of the [Toolpath](https://github.com/empathic/toolpath) workspace. See also:
+
+- [`toolpath`](https://crates.io/crates/toolpath) -- core types and query API
+- [`toolpath-git`](https://crates.io/crates/toolpath-git) -- derive from git history
+- [`toolpath-claude`](https://crates.io/crates/toolpath-claude) -- derive from Claude conversations
+- [`toolpath-cli`](https://crates.io/crates/toolpath-cli) -- unified CLI (`cargo install toolpath-cli`)
+- [RFC](https://github.com/empathic/toolpath/blob/main/RFC.md) -- full format specification

@@ -162,8 +162,8 @@ let dot_string = render(&doc, &RenderOptions::default());
 ## Documentation
 
 - [RFC.md](RFC.md) -- Full format specification
-- [FAQ.md](FAQ.md) -- Design rationale, FAQ, and open questions
-- [NOTES.md](NOTES.md) -- Working notes
+- [FAQ.md](FAQ.md) -- Design rationale and FAQ
+- [CHANGELOG.md](CHANGELOG.md) -- Release history
 - [schema/toolpath.schema.json](schema/toolpath.schema.json) -- JSON Schema
 - [examples/](examples/) -- 11 example documents covering steps, paths, and graphs
 
