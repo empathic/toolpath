@@ -1,11 +1,47 @@
+//! Generate Graphviz DOT visualizations from Toolpath documents.
+//!
+//! Renders [`Document`]s — Steps, Paths, and Graphs — as Graphviz DOT
+//! digraphs. Steps become nodes, parent references become edges, and
+//! actor types are color-coded (blue for humans, green for agents,
+//! yellow for tools). Dead ends are highlighted with dashed red borders.
+//!
+//! # Example
+//!
+//! ```
+//! use toolpath::v1::{Document, Path, PathIdentity, Step};
+//! use toolpath_dot::{render, RenderOptions};
+//!
+//! let step = Step::new("step-001", "human:alex", "2026-01-29T10:00:00Z")
+//!     .with_raw_change("src/main.rs", "@@ -1 +1 @@\n-old\n+new")
+//!     .with_intent("Fix greeting");
+//!
+//! let path = Path {
+//!     path: PathIdentity { id: "p1".into(), base: None, head: "step-001".into() },
+//!     steps: vec![step],
+//!     meta: None,
+//! };
+//!
+//! let dot = render(&Document::Path(path), &RenderOptions::default());
+//! assert!(dot.contains("digraph toolpath"));
+//! ```
+//!
+//! Pipe the output through Graphviz to produce images:
+//!
+//! ```bash
+//! path derive git --repo . --branch main | path render dot | dot -Tpng -o graph.png
+//! ```
+
 use std::collections::{HashMap, HashSet};
 
 use toolpath::v1::{Document, Graph, Path, PathOrRef, Step, query};
 
 /// Options controlling what information is rendered in the DOT output.
 pub struct RenderOptions {
+    /// Include filenames from each step's change map.
     pub show_files: bool,
+    /// Include the time portion of each step's timestamp.
     pub show_timestamps: bool,
+    /// Render dead-end steps with dashed red borders.
     pub highlight_dead_ends: bool,
 }
 

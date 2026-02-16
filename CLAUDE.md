@@ -15,7 +15,7 @@ crates/
   toolpath-git/                 # derive from git repos (git2)
   toolpath-claude/              # derive from Claude conversation logs
   toolpath-dot/                 # Graphviz DOT rendering
-  path/                         # unified CLI binary
+  toolpath-cli/                 # unified CLI (binary: path)
 schema/toolpath.schema.json     # JSON Schema for the format
 examples/*.json                 # 11 example documents (step, path, graph)
 RFC.md                          # full format specification
@@ -25,7 +25,7 @@ FAQ.md                          # design rationale, FAQ, and open questions
 ## Dependency graph
 
 ```
-path (CLI binary)
+toolpath-cli (binary: path)
  ├── toolpath           (core types)
  ├── toolpath-git     → toolpath
  ├── toolpath-claude  → toolpath
@@ -46,16 +46,19 @@ Requires Rust 1.85+ (edition 2024). Currently on rustc 1.93.0.
 
 ## CLI usage
 
-The binary is called `path`:
+The binary is called `path` (package: `toolpath-cli`):
 
 ```bash
-cargo run -p path -- derive git --repo . --branch main --pretty
-cargo run -p path -- derive claude --project /path/to/project
-cargo run -p path -- render dot --input doc.json
-cargo run -p path -- query dead-ends --input doc.json
-cargo run -p path -- query ancestors --input doc.json --step-id step-003
-cargo run -p path -- query filter --input doc.json --actor "agent:"
-cargo run -p path -- validate --input doc.json
+cargo run -p toolpath-cli -- derive git --repo . --branch main --pretty
+cargo run -p toolpath-cli -- derive claude --project /path/to/project
+cargo run -p toolpath-cli -- render dot --input doc.json
+cargo run -p toolpath-cli -- query dead-ends --input doc.json
+cargo run -p toolpath-cli -- query ancestors --input doc.json --step-id step-003
+cargo run -p toolpath-cli -- query filter --input doc.json --actor "agent:"
+cargo run -p toolpath-cli -- merge doc1.json doc2.json --title "Combined"
+cargo run -p toolpath-cli -- list git --repo .
+cargo run -p toolpath-cli -- track init --file src/main.rs --actor "human:alex"
+cargo run -p toolpath-cli -- validate --input doc.json
 ```
 
 ## Key conventions
@@ -73,7 +76,7 @@ Tests live alongside the code (`#[cfg(test)] mod tests`). No integration test di
 - `toolpath`: serde roundtrip, builder methods, query functions (12 tests)
 - `toolpath-claude`: path resolution, conversation reading, query, watcher, derive (22 unit + 4 doc tests)
 
-Validate example documents: `for f in examples/*.json; do cargo run -p path -- validate --input "$f"; done`
+Validate example documents: `for f in examples/*.json; do cargo run -p toolpath-cli -- validate --input "$f"; done`
 
 ## Feature flags
 

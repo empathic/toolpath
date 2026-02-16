@@ -10,7 +10,7 @@ pub enum DeriveSource {
         #[arg(short, long, default_value = ".")]
         repo: PathBuf,
 
-        /// Branch name(s). Format: name[:start]
+        /// Branch name(s). Format: `name` or `name:start`
         #[arg(short, long, required = true)]
         branch: Vec<String>,
 

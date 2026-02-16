@@ -28,6 +28,14 @@ step-1 -- step-2 --+
               +-- step-3b -- step-4b -- step-5b  (head)
 ```
 
+## Install
+
+```bash
+cargo install toolpath-cli
+```
+
+This installs a binary called `path`.
+
 ## Workspace
 
 ```
@@ -36,7 +44,7 @@ crates/
   toolpath-git/       Derive from git repository history
   toolpath-claude/    Derive from Claude conversation logs
   toolpath-dot/       Graphviz DOT visualization
-  path/               Unified CLI
+  toolpath-cli/       Unified CLI (binary: path)
 ```
 
 See each crate's README for library-level documentation.
@@ -48,33 +56,37 @@ See each crate's README for library-level documentation.
 cargo build --workspace
 
 # Derive a Toolpath document from this repo's git history
-cargo run -p path -- derive git --repo . --branch main --pretty
+path derive git --repo . --branch main --pretty
 
 # Visualize it
-cargo run -p path -- derive git --repo . --branch main \
-  | cargo run -p path -- render dot \
-  | dot -Tpng -o graph.png
+path derive git --repo . --branch main | path render dot | dot -Tpng -o graph.png
 
 # Derive from Claude conversation logs
-cargo run -p path -- derive claude --project /path/to/project --pretty
+path derive claude --project /path/to/project --pretty
 
 # Query for dead ends (abandoned approaches)
-cargo run -p path -- query dead-ends --input doc.json
+path query dead-ends --input doc.json
 
 # Filter steps by actor
-cargo run -p path -- query filter --input doc.json --actor "agent:"
+path query filter --input doc.json --actor "agent:"
 
 # Walk the ancestry of a step
-cargo run -p path -- query ancestors --input doc.json --step-id step-003
+path query ancestors --input doc.json --step-id step-003
+
+# Merge multiple documents into a graph
+path merge doc1.json doc2.json --title "Release v2" --pretty
 
 # Validate a document
-cargo run -p path -- validate --input examples/step-01-minimal.json
+path validate --input examples/step-01-minimal.json
 ```
 
 ## CLI reference
 
 ```
 path
+  list
+    git       [--repo PATH] [--remote NAME] [--json]
+    claude    [--project PATH] [--json]
   derive
     git       --repo PATH --branch NAME[:START] [--base COMMIT] [--remote NAME] [--title TEXT]
     claude    --project PATH [--session ID] [--all]
@@ -84,7 +96,17 @@ path
     filter    --input FILE [--actor PREFIX] [--artifact PATH] [--after TIME] [--before TIME]
   render
     dot       [--input FILE] [--output FILE] [--show-files] [--show-timestamps]
+  merge       FILE... [--title TEXT]
+  track
+    init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
+    step      --session FILE --seq N [--actor ACTOR] [--intent TEXT]
+    visit     --session FILE --seq N
+    note      --session FILE --intent TEXT
+    export    --session FILE
+    close     --session FILE
+    list
   validate    --input FILE
+  haiku
 ```
 
 Global: `--pretty` for formatted JSON output.

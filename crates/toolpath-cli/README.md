@@ -1,20 +1,40 @@
-# path
+# toolpath-cli
 
 Unified CLI for deriving, querying, and visualizing Toolpath provenance documents.
 
 ## Installation
 
 ```bash
-cargo install --path crates/path
+cargo install toolpath-cli
 ```
 
-Or run directly:
+This installs a binary called `path`.
+
+Or run from source:
 
 ```bash
-cargo run -p path -- <command>
+cargo run -p toolpath-cli -- <command>
 ```
 
 ## Commands
+
+### list
+
+Discover available sources before deriving.
+
+```bash
+# List git branches with metadata
+path list git --repo .
+
+# List Claude projects
+path list claude
+
+# List sessions within a project
+path list claude --project /path/to/project
+
+# Machine-readable output
+path list git --repo . --json
+```
 
 ### derive
 
@@ -62,6 +82,39 @@ path render dot --input doc.json --show-files --show-timestamps
 path derive git --repo . --branch main | path render dot | dot -Tpng -o graph.png
 ```
 
+### merge
+
+Combine multiple documents into a single Graph.
+
+```bash
+path merge doc1.json doc2.json --title "Release v2" --pretty
+path merge *.json --pretty
+```
+
+### track
+
+Incrementally build a Path document step by step, useful for editor integrations and live sessions.
+
+```bash
+# Start a session (pipe initial content via stdin)
+echo "hello" | path track init --file src/main.rs --actor "human:alex" --title "Editing session"
+
+# Record a step (pipe current content via stdin)
+echo "world" | path track step --session /tmp/session.json --seq 1 --intent "Changed greeting"
+
+# Add a note to the current step
+path track note --session /tmp/session.json --intent "Refactored for clarity"
+
+# Export the session as a Toolpath Path document
+path track export --session /tmp/session.json --pretty
+
+# Export and clean up
+path track close --session /tmp/session.json --pretty
+
+# List active sessions
+path track list
+```
+
 ### validate
 
 Check that a JSON file is a valid Toolpath document.
@@ -69,6 +122,12 @@ Check that a JSON file is a valid Toolpath document.
 ```bash
 path validate --input examples/step-01-minimal.json
 # Valid: Step (id: step-001)
+```
+
+### haiku
+
+```bash
+path haiku
 ```
 
 ## Global flags

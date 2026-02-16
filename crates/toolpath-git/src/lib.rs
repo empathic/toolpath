@@ -2,6 +2,26 @@
 //!
 //! This crate converts git commit history into Toolpath [`Document`]s,
 //! mapping branches to [`Path`]s and multi-branch views to [`Graph`]s.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use toolpath_git::{derive, DeriveConfig};
+//!
+//! let repo = git2::Repository::open(".")?;
+//! let config = DeriveConfig {
+//!     remote: "origin".into(),
+//!     title: None,
+//!     base: None,
+//! };
+//!
+//! // Single branch produces a Path document
+//! let doc = derive(&repo, &["main".into()], &config)?;
+//!
+//! // Multiple branches produce a Graph document
+//! let doc = derive(&repo, &["main".into(), "feature".into()], &config)?;
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -240,6 +260,21 @@ pub fn get_repo_uri(repo: &Repository, remote_name: &str) -> Result<String> {
 /// - `https://github.com/org/repo.git` -> `github:org/repo`
 /// - `git@gitlab.com:org/repo.git` -> `gitlab:org/repo`
 /// - `https://gitlab.com/org/repo.git` -> `gitlab:org/repo`
+///
+/// # Examples
+///
+/// ```
+/// use toolpath_git::normalize_git_url;
+///
+/// assert_eq!(normalize_git_url("git@github.com:org/repo.git"), "github:org/repo");
+/// assert_eq!(normalize_git_url("https://gitlab.com/org/repo"), "gitlab:org/repo");
+///
+/// // Unknown hosts pass through unchanged
+/// assert_eq!(
+///     normalize_git_url("https://bitbucket.org/org/repo"),
+///     "https://bitbucket.org/org/repo",
+/// );
+/// ```
 pub fn normalize_git_url(url: &str) -> String {
     if let Some(rest) = url.strip_prefix("git@github.com:") {
         let repo = rest.trim_end_matches(".git");
@@ -268,6 +303,15 @@ pub fn normalize_git_url(url: &str) -> String {
 /// Create a URL-safe slug from a git author name and email.
 ///
 /// Prefers the email username; falls back to the name.
+///
+/// # Examples
+///
+/// ```
+/// use toolpath_git::slugify_author;
+///
+/// assert_eq!(slugify_author("Alex Smith", "asmith@example.com"), "asmith");
+/// assert_eq!(slugify_author("Alex Smith", "unknown"), "alex-smith");
+/// ```
 pub fn slugify_author(name: &str, email: &str) -> String {
     // Try to extract username from email
     if let Some(username) = email.split('@').next()
