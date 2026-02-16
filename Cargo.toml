@@ -4,7 +4,7 @@ members = [
     "crates/toolpath-git",
     "crates/toolpath-claude",
     "crates/toolpath-dot",
-    "crates/path",
+    "crates/toolpath-cli",
 ]
 resolver = "2"
 
