@@ -3,7 +3,10 @@ name = "toolpath-dot"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/empathic/toolpath"
 description = "Generate Graphviz DOT visualizations from Toolpath documents"
+keywords = ["graphviz", "dot", "provenance", "toolpath", "visualization"]
+categories = ["development-tools", "visualization"]
 
 [dependencies]
 toolpath = { workspace = true }

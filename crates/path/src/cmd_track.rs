@@ -223,9 +223,7 @@ fn build_path_document(session: &TrackSession) -> v1::Path {
     let mut path = v1::Path::new(&session.session_id, base, &head);
     path.steps = session.steps.clone();
 
-    let has_meta = session.title.is_some()
-        || session.source.is_some()
-        || session.actors.is_some();
+    let has_meta = session.title.is_some() || session.source.is_some() || session.actors.is_some();
     if has_meta {
         path.meta = Some(v1::PathMeta {
             title: session.title.clone(),
@@ -423,7 +421,14 @@ fn run_step(
     time_override: Option<String>,
 ) -> Result<()> {
     let content = read_stdin()?;
-    match record_step(&session_path, content, seq, parent_seq, actor_override, time_override)? {
+    match record_step(
+        &session_path,
+        content,
+        seq,
+        parent_seq,
+        actor_override,
+        time_override,
+    )? {
         StepResult::Created(id) => println!("{id}"),
         StepResult::Skip => println!("skip"),
     }
@@ -446,7 +451,9 @@ fn run_visit(session_path: PathBuf, seq: u64, inherit_from: Option<u64>) -> Resu
     // (contains_key + get is required here to avoid borrowing session.seq_to_step mutably
     // and immutably at the same time)
     #[allow(clippy::map_entry)]
-    if !session.seq_to_step.contains_key(&seq) && let Some(ancestor) = inherit_from {
+    if !session.seq_to_step.contains_key(&seq)
+        && let Some(ancestor) = inherit_from
+    {
         let step_id = session
             .seq_to_step
             .get(&ancestor)
@@ -713,7 +720,12 @@ mod tests {
     fn test_load_session_nonexistent() {
         let result = load_session(std::path::Path::new("/nonexistent/session.json"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("failed to read session file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed to read session file")
+        );
     }
 
     #[test]
@@ -723,7 +735,12 @@ mod tests {
         std::fs::write(&path, "not valid json {{{").unwrap();
         let result = load_session(&path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("failed to parse session file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed to parse session file")
+        );
     }
 
     #[test]
@@ -941,15 +958,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "hello\n");
 
-        let result = record_step(
-            &session_path,
-            "hello\n".to_string(),
-            1,
-            0,
-            None,
-            None,
-        )
-        .unwrap();
+        let result = record_step(&session_path, "hello\n".to_string(), 1, 0, None, None).unwrap();
 
         assert_eq!(result, StepResult::Skip);
 
@@ -1048,7 +1057,12 @@ mod tests {
             None,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("parent seq 99 not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("parent seq 99 not found")
+        );
     }
 
     #[test]
@@ -1092,11 +1106,35 @@ mod tests {
         let session_path = make_session(dir.path(), "original\n");
 
         // Linear: seq 0 → seq 1 → seq 2
-        record_step(&session_path, "edit-1\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
-        record_step(&session_path, "edit-2\n".to_string(), 2, 1, None, Some("2026-01-01T00:02:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "edit-1\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
+        record_step(
+            &session_path,
+            "edit-2\n".to_string(),
+            2,
+            1,
+            None,
+            Some("2026-01-01T00:02:00Z".to_string()),
+        )
+        .unwrap();
 
         // Branch from seq 1: seq 3 (creates a fork, making step-002 a dead end)
-        record_step(&session_path, "branch-b\n".to_string(), 3, 1, None, Some("2026-01-01T00:03:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "branch-b\n".to_string(),
+            3,
+            1,
+            None,
+            Some("2026-01-01T00:03:00Z".to_string()),
+        )
+        .unwrap();
 
         let session = load_session(&session_path).unwrap();
         assert_eq!(session.steps.len(), 3);
@@ -1115,14 +1153,30 @@ mod tests {
         let session_path = make_session(dir.path(), "hello\n");
 
         // Step 1
-        record_step(&session_path, "world\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
 
         // Undo back to "hello\n" at seq 2 (parent_seq 0) — skip
         let r = record_step(&session_path, "hello\n".to_string(), 2, 0, None, None).unwrap();
         assert_eq!(r, StepResult::Skip);
 
         // Edit from seq 2 to seq 3 — should be a root step (seq 2 mapped to "")
-        let r3 = record_step(&session_path, "goodbye\n".to_string(), 3, 2, None, Some("2026-01-01T00:02:00Z".to_string())).unwrap();
+        let r3 = record_step(
+            &session_path,
+            "goodbye\n".to_string(),
+            3,
+            2,
+            None,
+            Some("2026-01-01T00:02:00Z".to_string()),
+        )
+        .unwrap();
         assert_eq!(r3, StepResult::Created("step-002".to_string()));
 
         let session = load_session(&session_path).unwrap();
@@ -1140,9 +1194,25 @@ mod tests {
         let session_path = make_session(dir.path(), "A\n");
 
         // seq 1: A→B
-        record_step(&session_path, "B\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "B\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
         // seq 2: B→C
-        record_step(&session_path, "C\n".to_string(), 2, 1, None, Some("2026-01-01T00:02:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "C\n".to_string(),
+            2,
+            1,
+            None,
+            Some("2026-01-01T00:02:00Z".to_string()),
+        )
+        .unwrap();
 
         let before = load_session(&session_path).unwrap();
         assert_eq!(before.steps.len(), 2);
@@ -1167,15 +1237,39 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "A\n");
 
-        record_step(&session_path, "B\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
-        record_step(&session_path, "C\n".to_string(), 2, 1, None, Some("2026-01-01T00:02:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "B\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
+        record_step(
+            &session_path,
+            "C\n".to_string(),
+            2,
+            1,
+            None,
+            Some("2026-01-01T00:02:00Z".to_string()),
+        )
+        .unwrap();
 
         // Undo to seq 1 — skip
         let r = record_step(&session_path, "B\n".to_string(), 1, 2, None, None).unwrap();
         assert_eq!(r, StepResult::Skip);
 
         // New edit from seq 1 → seq 3
-        let r3 = record_step(&session_path, "D\n".to_string(), 3, 1, None, Some("2026-01-01T00:03:00Z".to_string())).unwrap();
+        let r3 = record_step(
+            &session_path,
+            "D\n".to_string(),
+            3,
+            1,
+            None,
+            Some("2026-01-01T00:03:00Z".to_string()),
+        )
+        .unwrap();
         assert_eq!(r3, StepResult::Created("step-003".to_string()));
 
         let session = load_session(&session_path).unwrap();
@@ -1192,14 +1286,30 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "A\n");
 
-        record_step(&session_path, "B\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "B\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
 
         // Undo to seq 0 — skip (seq 0 was cached at init time)
         let r = record_step(&session_path, "A\n".to_string(), 0, 1, None, None).unwrap();
         assert_eq!(r, StepResult::Skip);
 
         // New edit from seq 0 → seq 2
-        let r2 = record_step(&session_path, "C\n".to_string(), 2, 0, None, Some("2026-01-01T00:02:00Z".to_string())).unwrap();
+        let r2 = record_step(
+            &session_path,
+            "C\n".to_string(),
+            2,
+            0,
+            None,
+            Some("2026-01-01T00:02:00Z".to_string()),
+        )
+        .unwrap();
         assert_eq!(r2, StepResult::Created("step-002".to_string()));
 
         let session = load_session(&session_path).unwrap();
@@ -1240,9 +1350,25 @@ mod tests {
         let session_path = make_session(dir.path(), "A\n");
 
         // seq 1: A→B
-        record_step(&session_path, "B\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "B\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
         // seq 2: B→C
-        record_step(&session_path, "C\n".to_string(), 2, 1, None, Some("2026-01-01T00:02:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "C\n".to_string(),
+            2,
+            1,
+            None,
+            Some("2026-01-01T00:02:00Z".to_string()),
+        )
+        .unwrap();
 
         // Navigate to seq 1 (already cached), inherit from seq 1
         simulate_visit(&session_path, 1, "B\n", Some(1));
@@ -1259,14 +1385,30 @@ mod tests {
         let session_path = make_session(dir.path(), "A\n");
 
         // seq 1: step-001 (A→B)
-        record_step(&session_path, "B\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "B\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
         // seq 3: step-002 (B→C) — pretend seq 2 was skipped by TextChanged batching
         {
             let mut session = load_session(&session_path).unwrap();
             session.buffer_cache.insert(3, "C\n".to_string());
             save_session(&session_path, &session).unwrap();
         }
-        record_step(&session_path, "D\n".to_string(), 4, 3, None, Some("2026-01-01T00:03:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "D\n".to_string(),
+            4,
+            3,
+            None,
+            Some("2026-01-01T00:03:00Z".to_string()),
+        )
+        .unwrap();
 
         // Mundo navigates to seq 2 (intermediate, no step). Inherit from seq 1.
         simulate_visit(&session_path, 2, "B-mid\n", Some(1));
@@ -1276,7 +1418,15 @@ mod tests {
         assert_eq!(session.seq_to_step[&2], "step-001");
 
         // Now branch from seq 2 — should parent off step-001
-        let r = record_step(&session_path, "E\n".to_string(), 5, 2, None, Some("2026-01-01T00:04:00Z".to_string())).unwrap();
+        let r = record_step(
+            &session_path,
+            "E\n".to_string(),
+            5,
+            2,
+            None,
+            Some("2026-01-01T00:04:00Z".to_string()),
+        )
+        .unwrap();
         assert_eq!(r, StepResult::Created("step-003".to_string()));
 
         let session = load_session(&session_path).unwrap();
@@ -1297,7 +1447,15 @@ mod tests {
         assert_eq!(session.seq_to_step[&3], "");
 
         // Branch from seq 3 — root step (empty parent)
-        let r = record_step(&session_path, "Y\n".to_string(), 4, 3, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        let r = record_step(
+            &session_path,
+            "Y\n".to_string(),
+            4,
+            3,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
         assert_eq!(r, StepResult::Created("step-001".to_string()));
 
         let session = load_session(&session_path).unwrap();
@@ -1309,7 +1467,15 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "A\n");
 
-        record_step(&session_path, "B\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "B\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
 
         // seq 1 already has seq_to_step["step-001"]. Visit with different inherit should not overwrite.
         simulate_visit(&session_path, 1, "B\n", Some(0));
@@ -1324,12 +1490,23 @@ mod tests {
     fn test_note_sets_intent() {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "hello\n");
-        record_step(&session_path, "world\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
 
         run_note(session_path.clone(), "Fix the greeting".to_string()).unwrap();
 
         let session = load_session(&session_path).unwrap();
-        let intent = session.steps[0].meta.as_ref().and_then(|m| m.intent.as_ref());
+        let intent = session.steps[0]
+            .meta
+            .as_ref()
+            .and_then(|m| m.intent.as_ref());
         assert_eq!(intent, Some(&"Fix the greeting".to_string()));
     }
 
@@ -1337,13 +1514,24 @@ mod tests {
     fn test_note_overwrites_previous_intent() {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "hello\n");
-        record_step(&session_path, "world\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
 
         run_note(session_path.clone(), "First intent".to_string()).unwrap();
         run_note(session_path.clone(), "Updated intent".to_string()).unwrap();
 
         let session = load_session(&session_path).unwrap();
-        let intent = session.steps[0].meta.as_ref().and_then(|m| m.intent.as_ref());
+        let intent = session.steps[0]
+            .meta
+            .as_ref()
+            .and_then(|m| m.intent.as_ref());
         assert_eq!(intent, Some(&"Updated intent".to_string()));
     }
 
@@ -1364,7 +1552,15 @@ mod tests {
     fn test_close_deletes_session_file() {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "hello\n");
-        record_step(&session_path, "world\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
         assert!(session_path.exists());
 
         run_close(session_path.clone(), false, None).unwrap();
@@ -1375,7 +1571,15 @@ mod tests {
     fn test_close_writes_to_output_file() {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "hello\n");
-        record_step(&session_path, "world\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
 
         let output_path = dir.path().join("output.json");
         run_close(session_path.clone(), true, Some(output_path.clone())).unwrap();
@@ -1436,7 +1640,11 @@ mod tests {
             title: None,
             source: None,
             base: None,
-            steps: vec![v1::Step::new("step-001", "human:bob", "2026-01-01T00:01:00Z")],
+            steps: vec![v1::Step::new(
+                "step-001",
+                "human:bob",
+                "2026-01-01T00:01:00Z",
+            )],
             buffer_cache: HashMap::new(),
             seq_to_step: HashMap::new(),
             head_step: Some("step-001".to_string()),
@@ -1554,9 +1762,33 @@ mod tests {
         let session_path = make_session(dir.path(), "original\n");
 
         // Build a multi-step DAG via record_step
-        record_step(&session_path, "edit-1\n".to_string(), 1, 0, None, Some("2026-01-01T00:01:00Z".to_string())).unwrap();
-        record_step(&session_path, "edit-2\n".to_string(), 2, 1, None, Some("2026-01-01T00:02:00Z".to_string())).unwrap();
-        record_step(&session_path, "branch\n".to_string(), 3, 1, None, Some("2026-01-01T00:03:00Z".to_string())).unwrap();
+        record_step(
+            &session_path,
+            "edit-1\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+        )
+        .unwrap();
+        record_step(
+            &session_path,
+            "edit-2\n".to_string(),
+            2,
+            1,
+            None,
+            Some("2026-01-01T00:02:00Z".to_string()),
+        )
+        .unwrap();
+        record_step(
+            &session_path,
+            "branch\n".to_string(),
+            3,
+            1,
+            None,
+            Some("2026-01-01T00:03:00Z".to_string()),
+        )
+        .unwrap();
 
         let session = load_session(&session_path).unwrap();
         let path = build_path_document(&session);

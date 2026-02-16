@@ -740,24 +740,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "path"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "git2",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "toolpath",
- "toolpath-claude",
- "toolpath-dot",
- "toolpath-git",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1064,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1083,6 +1065,24 @@ dependencies = [
  "thiserror",
  "tokio",
  "toolpath",
+]
+
+[[package]]
+name = "toolpath-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "git2",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "toolpath",
+ "toolpath-claude",
+ "toolpath-dot",
+ "toolpath-git",
 ]
 
 [[package]]
