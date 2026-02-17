@@ -66,15 +66,6 @@ step-1 -- step-2 --+
 
 ## What Toolpath adds
 
-<svg class="topo topo-float-right" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M100,20 Q160,40 170,100 Q180,160 120,180 Q60,200 40,140 Q20,80 100,20Z" stroke="#b5652b" stroke-width="1" opacity="0.10" fill="none"/>
-  <path d="M105,40 Q150,55 155,100 Q160,145 115,160 Q70,175 55,130 Q40,85 105,40Z" stroke="#b5652b" stroke-width="1" opacity="0.15" fill="none"/>
-  <path d="M108,58 Q140,68 143,100 Q146,132 112,142 Q78,152 68,120 Q58,88 108,58Z" stroke="#b5652b" stroke-width="1" opacity="0.20" fill="none"/>
-  <path d="M110,74 Q132,80 134,102 Q136,124 113,130 Q88,136 80,112 Q72,90 110,74Z" stroke="#b5652b" stroke-width="1" opacity="0.28" fill="none"/>
-  <path d="M112,88 Q124,92 125,103 Q126,114 114,118 Q100,122 95,108 Q90,94 112,88Z" stroke="#b5652b" stroke-width="1.2" opacity="0.35" fill="none"/>
-  <circle cx="113" cy="103" r="3" fill="#b5652b" opacity="0.30"/>
-</svg>
-
 | What                   | Git                         | Toolpath                                         |
 | ---------------------- | --------------------------- | ------------------------------------------------ |
 | Who made the change    | Single author per commit    | Typed actors: `human:`, `agent:`, `tool:`, `ci:` |

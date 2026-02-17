@@ -105,7 +105,7 @@ Options: semver, date-based, or extension-based (frozen core). Current leaning: 
 
 ## Links
 
-- [Full specification (RFC.md)](https://github.com/empathic/toolpath/blob/main/RFC.md)
+- [Full specification (RFC)](/rfc/)
 - [JSON Schema](https://github.com/empathic/toolpath/blob/main/schema/toolpath.schema.json)
 - [Example documents](https://github.com/empathic/toolpath/tree/main/examples)
 - [Changelog](https://github.com/empathic/toolpath/blob/main/CHANGELOG.md)
