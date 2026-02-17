@@ -17,14 +17,15 @@
   --border: #b5652b26;
   --white: #ffffff;
 
-  --pixel: "Press Start 2P", cursive;
-  --serif: "Newsreader", "Georgia", "Times New Roman", serif;
-  --mono: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
+  --display:
+    "IBM Plex Sans Condensed", "Helvetica Neue", "Arial Narrow", sans-serif;
+  --serif: "Source Serif 4", "Georgia", "Times New Roman", serif;
+  --mono: "IBM Plex Mono", "SF Mono", "Menlo", "Consolas", monospace;
 }
 
 html {
   font-size: 17px;
-  line-height: 1.65;
+  line-height: 1.55;
   color: var(--graphite);
   background: var(--ground);
 }
@@ -37,38 +38,45 @@ body {
 
 /* --- Typography --- */
 h1 {
-  font-family: var(--pixel);
-  font-weight: 400;
-  font-size: 1.6rem;
-  line-height: 1.4;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.5rem;
+  line-height: 1.2;
   color: var(--copper);
   margin: 2rem 0 1rem;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 h2 {
-  font-family: var(--mono);
+  font-family: var(--display);
   font-weight: 600;
-  font-size: 1.2rem;
-  line-height: 1.3;
+  font-size: 1.1rem;
+  line-height: 1.25;
   color: var(--graphite);
-  margin: 2.5rem 0 0.75rem;
+  margin: 2.5rem 0 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   border-bottom: 1px solid var(--border);
   padding-bottom: 0.3rem;
 }
 h3 {
-  font-family: var(--mono);
+  font-family: var(--display);
   font-weight: 600;
-  font-size: 1rem;
-  line-height: 1.3;
+  font-size: 0.95rem;
+  line-height: 1.25;
   color: var(--graphite);
-  margin: 1.5rem 0 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin: 1.5rem 0 0.4rem;
 }
 h4 {
   font-family: var(--mono);
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   line-height: 1.3;
   color: var(--pencil);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   margin: 1.25rem 0 0.4rem;
 }
 
@@ -182,12 +190,12 @@ td {
   border-bottom: 1px solid #b5652b1a;
 }
 th {
-  font-family: var(--mono);
+  font-family: var(--display);
   font-weight: 600;
   font-size: 0.8rem;
   color: var(--pencil);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
 
 /* --- Navigation --- */
@@ -198,22 +206,28 @@ th {
   padding: 1.25rem 0;
   border-bottom: 1px solid var(--border);
   font-family: var(--mono);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
 }
 .nav-logo {
-  font-family: var(--pixel);
-  font-weight: 400;
-  font-size: 0.7rem;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 0.85rem;
   text-decoration: none;
   color: var(--copper);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 .nav-links {
   display: flex;
   gap: 1.25rem;
 }
 .nav-links a {
+  font-family: var(--display);
+  font-weight: 500;
   text-decoration: none;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.78rem;
   color: var(--pencil);
 }
 .nav-links a:hover,
@@ -244,10 +258,11 @@ th {
   margin-top: 4rem;
   padding: 1.5rem 0;
   border-top: 1px solid var(--border);
-  font-family: var(--mono);
-  font-size: 0.8rem;
+  font-family: var(--display);
+  font-size: 0.78rem;
   color: var(--pencil);
   text-align: center;
+  letter-spacing: 0.02em;
 }
 .site-footer a {
   color: var(--pencil);
@@ -263,18 +278,19 @@ th {
   margin-bottom: 0;
 }
 .hero h1 {
-  font-size: 2.2rem;
+  font-size: 2.4rem;
   margin: 0 0 0.75rem;
-  line-height: 1.5;
+  line-height: 1.1;
+  letter-spacing: 0.14em;
 }
 .hero .tagline {
   font-family: var(--serif);
   font-style: italic;
-  font-size: 1.15rem;
+  font-size: 1.1rem;
   color: var(--pencil);
   margin: 0 0 1.5rem;
   max-width: 42rem;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 .hero-install {
   font-family: var(--mono);
@@ -306,8 +322,9 @@ th {
 }
 .object-card h3 {
   margin: 0 0 0.5rem;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   color: var(--copper);
+  letter-spacing: 0.05em;
 }
 .object-card p {
   margin: 0;
@@ -324,8 +341,9 @@ th {
 }
 .crate-card h3 {
   margin: 0 0 0.15rem;
-  font-size: 1rem;
+  font-size: 0.95rem;
   color: var(--copper);
+  letter-spacing: 0.03em;
 }
 .crate-card .version {
   font-family: var(--mono);
@@ -346,27 +364,29 @@ th {
 }
 
 /* --- DAG diagram --- */
-.dag-ascii {
-  font-family: var(--mono);
-  font-size: 0.85rem;
-  line-height: 1.6;
+.dag-figure {
   background: var(--grain);
-  border-left: 3px solid #b5652b4d;
-  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--border);
+  padding: 1.5rem 1.5rem 1rem;
+  margin: 1.25rem 0;
   overflow-x: auto;
-  margin: 1rem 0;
 }
-.dag-ascii .muted {
-  color: var(--pencil);
+.dag-svg {
+  display: block;
+  width: 100%;
+  max-width: 680px;
+  height: auto;
+  margin: 0 auto;
 }
 
 /* --- Subtitle --- */
 .subtitle {
   font-family: var(--serif);
   font-style: italic;
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   color: var(--pencil);
   margin-bottom: 2rem;
+  line-height: 1.5;
 }
 
 /* --- Topographic illustrations --- */
@@ -419,7 +439,7 @@ th {
     flex-direction: column;
   }
   .hero h1 {
-    font-size: 1.4rem;
+    font-size: 1.6rem;
   }
   .topo-hero {
     width: 80%;

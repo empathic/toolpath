@@ -4,12 +4,12 @@
 
 ## Design philosophy
 
-**Sketchbook meets shop floor.** Toolpath documents how code transforms through multiple actors. The visual identity should feel like the designer's notebook pinned above a CNC machine: confident pen strokes annotating precise machining paths, warm wood shavings on graph paper.
+**Technical manual meets shop floor.** Toolpath documents how code transforms through multiple actors. The visual identity should feel like a Bell Labs internal reference — the Bell System Technical Journal, UNIX programmer's manuals, research memoranda — printed on warm stock and annotated by hand.
 
 Two sensibilities held in tension:
 
-- **The industrial designer's sketch** — loose but intentional linework, callout annotations, marker highlights on vellum. The hand that thinks by drawing.
-- **The CNC topographic map** — contour lines carved into wood, layered elevation, the beauty of a machine path rendered as terrain. Digital precision expressed through natural material.
+- **The technical reference** — condensed sans-serif headings, ruled tables, precise hierarchy. The authority of a published standard. Typography that says "this has been reviewed."
+- **The workshop annotation** — warm paper, copper ink, topographic contour lines, hand-annotated margins. The tactile evidence that someone cared enough to mark it up.
 
 The **provenance diagram** is Toolpath's native visual form. DAG diagrams of steps, actors, and dead ends are the core illustrations — rendered as topographic contour maps where each step is an elevation and dead ends are valleys that lead nowhere.
 
@@ -49,50 +49,53 @@ Humans and agents are copper (the active hands). Tools and CI are pencil-gray (t
 
 ## Typography
 
-Three registers, each with a clear role.
+Three registers in the tradition of Bell Labs technical manuals. Tight, mechanical, authoritative — the typography of the Bell System Technical Journal and UNIX reference manuals.
 
-### Display: Pixel / bitmap font
+### Display: Condensed sans-serif
 
-- **Font**: A pixel/bitmap display face (e.g., [Silkscreen](https://www.kottke.org/plus/type/silkscreen/), [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P), or [Dotrice](https://www.futurefonts.xyz/kel/dotrice))
-- **Usage**: Logo/wordmark only ("TOOLPATH"), hero headings
-- **Style**: All uppercase, large scale, tracked out
-- **Color**: `--copper`
+- **Font**: [IBM Plex Sans Condensed](https://fonts.google.com/specimen/IBM+Plex+Sans+Condensed) (fallback: Helvetica Neue, Arial Narrow)
+- **Usage**: Logo/wordmark ("TOOLPATH"), page headings (h1–h3), navigation, table headers, footer
+- **Style**: All uppercase, tracked, bold (700) for h1/wordmark, semibold (600) for h2–h3
+- **Color**: `--copper` for h1/wordmark, `--graphite` for h2–h3
 
-The pixel grid is the CNC coordinate system. Each pixel is a plunge point. The font reads as both "digital" and "machined" — a bitmap routed into material.
+The condensed sans is the voice of the technical manual masthead. IBM Plex Sans Condensed carries the direct lineage of Helvetica — the typeface that defined Bell Labs publications — through IBM's own technical heritage. Narrow letterforms, wide tracking: precision instrument typography.
 
-### Body: Editorial serif
+### Body: Scholarly serif
 
-- **Font**: A refined text serif (e.g., [Newsreader](https://fonts.google.com/specimen/Newsreader), [Source Serif](https://fonts.google.com/specimen/Source+Serif+4), [Freight Text](https://fonts.adobe.com/fonts/freight-text))
-- **Usage**: Body text, paragraphs, long-form explanation
-- **Style**: Regular weight, justified or left-aligned, generous line height (1.6–1.7)
-- **Size**: 17–18px base
+- **Font**: [Source Serif 4](https://fonts.google.com/specimen/Source+Serif+4) (fallback: Georgia, Times New Roman)
+- **Usage**: Body text, paragraphs, long-form explanation, taglines/subtitles (italic)
+- **Style**: Regular weight, left-aligned, moderate line height (1.5–1.55)
+- **Size**: 17px base
 - **Color**: `--graphite`
 
-The serif is the designer's handwriting formalized. It lends the warmth of a notebook and the authority of a published reference.
+Source Serif is closer to Century Schoolbook — the canonical text face of mid-century technical publishing — than literary serifs like Newsreader. Crisper stroke contrast, more mechanical terminals. It reads as "journal paper," not "novel."
 
 ### Labels: Monospace / technical
 
-- **Font**: A clean monospace (e.g., [Berkeley Mono](https://berkeleygraphics.com/typefaces/berkeley-mono/), [JetBrains Mono](https://fonts.google.com/specimen/JetBrains+Mono), [IBM Plex Mono](https://fonts.google.com/specimen/IBM+Plex+Mono))
-- **Usage**: Code, figure labels, diagram annotations, nav links, metadata, actor strings
+- **Font**: [IBM Plex Mono](https://fonts.google.com/specimen/IBM+Plex+Mono) (fallback: SF Mono, Menlo, Consolas)
+- **Usage**: Code blocks, inline code, figure labels, diagram annotations, metadata, actor strings, h4 headings
 - **Style**: All uppercase for labels (FIG_001, STEP-003), regular case for code
 - **Size**: 0.85em relative to body
 - **Color**: `--copper` for labels, `--graphite` for code
 - **Letter-spacing**: Slightly tracked for uppercase labels (0.04em)
 
-The monospace is the machine's voice. Anything the system names or measures is in mono — like dimensions etched into a technical drawing.
+IBM Plex Mono completes the type system. Tighter than JetBrains Mono, more evocative of keypunch output and teletype listings. The machine's voice, rendered in the same design language as the display face.
 
 ### Hierarchy
 
-| Element              | Font                | Size           | Weight | Color                   |
-| -------------------- | ------------------- | -------------- | ------ | ----------------------- |
-| Wordmark             | Pixel               | 3–4rem         | —      | `--copper`              |
-| Page heading (h1)    | Pixel               | 2–2.5rem       | —      | `--copper`              |
-| Section heading (h2) | Monospace           | 1.3rem         | 600    | `--graphite`            |
-| Subsection (h3)      | Monospace           | 1rem           | 600    | `--graphite`            |
-| Body                 | Serif               | 1rem (17–18px) | 400    | `--graphite`            |
-| Caption / label      | Monospace uppercase | 0.8rem         | 400    | `--pencil`              |
-| Code                 | Monospace           | 0.85rem        | 400    | `--graphite`            |
-| Nav links            | Monospace           | 0.85rem        | 400    | `--pencil` / `--copper` |
+| Element              | Font              | Size        | Weight | Color                   |
+| -------------------- | ----------------- | ----------- | ------ | ----------------------- |
+| Wordmark             | Display           | 0.85rem     | 700    | `--copper`              |
+| Page heading (h1)    | Display           | 1.5rem      | 700    | `--copper`              |
+| Hero heading         | Display           | 2.4rem      | 700    | `--copper`              |
+| Section heading (h2) | Display           | 1.1rem      | 600    | `--graphite`            |
+| Subsection (h3)      | Display           | 0.95rem     | 600    | `--graphite`            |
+| Sub-subsection (h4)  | Monospace         | 0.85rem     | 600    | `--pencil`              |
+| Body                 | Serif             | 1rem (17px) | 400    | `--graphite`            |
+| Caption / label      | Display uppercase | 0.8rem      | 600    | `--pencil`              |
+| Table header         | Display uppercase | 0.8rem      | 600    | `--pencil`              |
+| Code                 | Monospace         | 0.85rem     | 400    | `--graphite`            |
+| Nav links            | Display uppercase | 0.78rem     | 500    | `--pencil` / `--copper` |
 
 ---
 
@@ -258,19 +261,19 @@ Bad: "In modern software development workflows, attribution can sometimes be cha
 
 ## Logo / wordmark
 
-The Toolpath wordmark is "TOOLPATH" set in the pixel display font, colored `--copper`.
+The Toolpath wordmark is "TOOLPATH" set in IBM Plex Sans Condensed Bold, colored `--copper`, tracked at 0.12em.
 
 - Always uppercase
-- Always in the pixel font
+- Always in the display font (IBM Plex Sans Condensed), bold weight
 - Always in `--copper` on light backgrounds, `--ground` reversed on dark
-- Minimum size: 1.5rem
+- Wide letter-spacing (0.12em) — the tracking conveys mechanical precision
 - Preferred lockup: wordmark left, tagline right in serif italic
 
 ```
 TOOLPATH                    Know your tools.
 ```
 
-The pixel grid reads as a CNC coordinate system — each letterform is a machining path.
+The condensed sans reads as a technical manual masthead. The wide tracking transforms a workhorse typeface into a mark — each letter spaced like coordinates on a grid.
 
 ---
 
@@ -280,7 +283,7 @@ The pixel grid reads as a CNC coordinate system — each letterform is a machini
 - Don't round corners. Sharp edges — milled, not molded.
 - Don't use drop shadows. Depth comes from layering and contour, not elevation.
 - Don't use stock photography. All visuals are diagrams, sketches, or contour illustrations.
-- Don't use the pixel font for body text. It's display only.
+- Don't use the display font for body text. It's headings and UI only.
 - Don't use color to distinguish content hierarchy. Use type size, weight, and font register instead.
 - Don't center body text. Left-align or justify.
 - Don't use gradients. Hatching, contour lines, and opacity steps create depth instead.
@@ -292,12 +295,12 @@ The pixel grid reads as a CNC coordinate system — each letterform is a machini
 | Attribute     | Choice                                                        |
 | ------------- | ------------------------------------------------------------- |
 | Palette       | Warm monotone: copper accent, graphite text, parchment ground |
-| Display font  | Pixel / bitmap (CNC grid)                                     |
-| Body font     | Editorial serif (designer's notebook)                         |
-| Label font    | Monospace (machine dimensions)                                |
+| Display font  | IBM Plex Sans Condensed (technical manual masthead)           |
+| Body font     | Source Serif 4 (scholarly journal text)                       |
+| Label font    | IBM Plex Mono (keypunch / teletype)                           |
 | Layout        | Wide, two-column affinity, generous spacing                   |
 | Illustrations | Topographic contour maps, sketch-style callouts, hatching     |
-| Dividers      | Contour line or pixel-grid pattern                            |
+| Dividers      | Ruled lines or pixel-grid pattern                             |
 | Corners       | Sharp (no border-radius) — milled edges                       |
 | Shadows       | None — depth via contour and layering                         |
 | Texture       | Warm paper grain, not flat white                              |

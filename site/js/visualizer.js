@@ -369,7 +369,7 @@
             COLORS.base.stroke +
             "; stroke-width: 2px;",
           labelStyle:
-            "font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600;",
+            "font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600;",
         });
         if (clusters.length > 1) {
           g.setParent(baseId, "cluster_" + ci);
@@ -385,7 +385,7 @@
           style:
             "fill: #8a807815; stroke: #8a8078; stroke-dasharray: 4,3; stroke-width: 1px;",
           labelStyle:
-            "font-family: 'JetBrains Mono', monospace; font-size: 10px; font-style: italic;",
+            "font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-style: italic;",
         });
         return;
       }
@@ -448,7 +448,7 @@
             dashArray +
             ";",
           labelStyle:
-            "font-family: 'JetBrains Mono', monospace; font-size: 10px; " +
+            "font-family: 'IBM Plex Mono', monospace; font-size: 10px; " +
             fontWeight,
           _stepData: s,
           _isDead: isDead,

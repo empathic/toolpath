@@ -58,10 +58,38 @@ Toolpath records **who** changed **what**, **why**, what they tried that didn't 
 
 Steps form a DAG via parent references. Dead ends are implicit: steps not in the ancestry of `path.head`.
 
-<div class="dag-ascii">
-              +-- step-3a -- step-4a  <span class="muted">(dead end)</span>
-step-1 -- step-2 --+
-              +-- step-3b -- step-4b -- step-5b  <span class="muted">(head)</span>
+<div class="dag-figure">
+<svg class="dag-svg" viewBox="0 0 780 200" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="DAG diagram showing steps with a dead-end branch and a head branch">
+<line x1="108" y1="100" x2="172" y2="100" stroke="#2d2a26" stroke-width="2"/>
+<path d="M280,100 L310,100 Q320,100 320,90 L320,45 Q320,35 330,35 L352,35" stroke="#8a8078" stroke-width="1.5" stroke-dasharray="6 3" fill="none"/>
+<path d="M280,100 L310,100 Q320,100 320,110 L320,165 Q320,175 330,175 L352,175" stroke="#2d2a26" stroke-width="2" fill="none"/>
+<line x1="460" y1="35" x2="532" y2="35" stroke="#8a8078" stroke-width="1.5" stroke-dasharray="6 3"/>
+<line x1="460" y1="175" x2="532" y2="175" stroke="#2d2a26" stroke-width="2"/>
+<line x1="640" y1="175" x2="672" y2="175" stroke="#2d2a26" stroke-width="2"/>
+<rect x="0" y="78" width="108" height="44" fill="#b5652b18" stroke="#b5652b" stroke-width="1.5"/>
+<text x="54" y="97" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="#2d2a26">step-1</text>
+<text x="54" y="112" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="#8a8078">human:alex</text>
+<rect x="172" y="78" width="108" height="44" fill="#b5652b30" stroke="#b5652b" stroke-width="1.5"/>
+<text x="226" y="97" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="#2d2a26">step-2</text>
+<text x="226" y="112" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="#8a8078">agent:claude</text>
+<rect x="352" y="13" width="108" height="44" fill="#c4403018" stroke="#c44030" stroke-width="1.5" stroke-dasharray="5 3"/>
+<text x="406" y="32" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="#2d2a26">step-3a</text>
+<text x="406" y="47" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="#8a8078">agent:claude</text>
+<rect x="532" y="13" width="108" height="44" fill="#c4403018" stroke="#c44030" stroke-width="1.5" stroke-dasharray="5 3"/>
+<text x="586" y="32" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="#2d2a26">step-4a</text>
+<text x="586" y="47" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="#8a8078">agent:claude</text>
+<rect x="352" y="153" width="108" height="44" fill="#b5652b30" stroke="#b5652b" stroke-width="1.5"/>
+<text x="406" y="172" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="#2d2a26">step-3b</text>
+<text x="406" y="187" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="#8a8078">tool:rustfmt</text>
+<rect x="532" y="153" width="108" height="44" fill="#b5652b18" stroke="#b5652b" stroke-width="1.5"/>
+<text x="586" y="172" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="#2d2a26">step-4b</text>
+<text x="586" y="187" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="#8a8078">human:alex</text>
+<rect x="672" y="153" width="108" height="44" fill="#b5652b18" stroke="#b5652b" stroke-width="3"/>
+<text x="726" y="172" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="700" fill="#2d2a26">step-5b</text>
+<text x="726" y="187" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="#8a8078">human:alex</text>
+<text x="586" y="72" text-anchor="middle" font-family="IBM Plex Sans Condensed, sans-serif" font-size="10" font-weight="600" fill="#c44030" letter-spacing="0.05em">DEAD END</text>
+<text x="726" y="146" text-anchor="middle" font-family="IBM Plex Sans Condensed, sans-serif" font-size="10" font-weight="600" fill="#b5652b" letter-spacing="0.05em">HEAD</text>
+</svg>
 </div>
 
 ## What Toolpath adds
