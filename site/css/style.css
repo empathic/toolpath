@@ -1,0 +1,315 @@
+/* --- Reset & base --- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --fg: #1a1a1a;
+  --fg-muted: #555;
+  --bg: #fafaf8;
+  --bg-alt: #f0efec;
+  --accent: #2a6;
+  --accent-dim: #1a5038;
+  --border: #d4d2cc;
+  --mono: "Berkeley Mono", "SF Mono", "Menlo", "Consolas", monospace;
+  --sans: "Inter", "system-ui", -apple-system, sans-serif;
+  --blue: #cce5ff;
+  --green: #d4edda;
+  --yellow: #fff3cd;
+  --purple: #e2d5f1;
+  --red-light: #ffcccc;
+  --radius: 4px;
+}
+
+html {
+  font-size: 17px;
+  line-height: 1.65;
+  color: var(--fg);
+  background: var(--bg);
+}
+body {
+  font-family: var(--sans);
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--mono);
+  font-weight: 600;
+  line-height: 1.25;
+}
+h1 {
+  font-size: 2rem;
+  margin: 2rem 0 1rem;
+}
+h2 {
+  font-size: 1.4rem;
+  margin: 2.5rem 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3rem;
+}
+h3 {
+  font-size: 1.1rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+p {
+  margin: 0.75rem 0;
+}
+a {
+  color: var(--accent-dim);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+a:hover {
+  color: var(--accent);
+}
+
+ul,
+ol {
+  margin: 0.75rem 0 0.75rem 1.5rem;
+}
+li {
+  margin: 0.25rem 0;
+}
+strong {
+  font-weight: 600;
+}
+
+/* --- Code --- */
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--bg-alt);
+  padding: 0.15em 0.35em;
+  border-radius: var(--radius);
+}
+pre {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+  line-height: 1.5;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+/* --- Tables --- */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  font-size: 0.95rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* --- Navigation --- */
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+.nav-logo {
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-decoration: none;
+  color: var(--fg);
+}
+.nav-links {
+  display: flex;
+  gap: 1.25rem;
+}
+.nav-links a {
+  text-decoration: none;
+  color: var(--fg-muted);
+}
+.nav-links a:hover,
+.nav-links a[aria-current] {
+  color: var(--accent-dim);
+}
+.nav-github {
+  opacity: 0.7;
+}
+.nav-github:hover {
+  opacity: 1;
+}
+
+/* --- Footer --- */
+.site-footer {
+  margin-top: 4rem;
+  padding: 1.5rem 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+/* --- Hero --- */
+.hero {
+  padding: 3rem 0 2rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2rem;
+}
+.hero h1 {
+  font-size: 2.5rem;
+  margin: 0 0 0.5rem;
+}
+.hero .tagline {
+  font-size: 1.2rem;
+  color: var(--fg-muted);
+  margin: 0 0 1.5rem;
+  max-width: 40rem;
+}
+.hero-install {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius);
+  display: inline-block;
+}
+.hero-install .prompt {
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+/* --- Objects grid --- */
+.objects {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1.25rem;
+  margin: 1.5rem 0;
+}
+.object-card {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+.object-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.object-card p {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--fg-muted);
+}
+
+/* --- Crate cards --- */
+.crate-card {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  margin: 1.25rem 0;
+}
+.crate-card h3 {
+  margin: 0 0 0.15rem;
+  font-size: 1.05rem;
+}
+.crate-card .version {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  margin-bottom: 0.5rem;
+}
+.crate-card .role {
+  font-size: 0.92rem;
+  color: var(--fg-muted);
+  margin: 0.5rem 0;
+}
+.crate-links {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.85rem;
+  font-family: var(--mono);
+}
+
+/* --- Actor colors (matching toolpath-dot) --- */
+.actor-human {
+  background: var(--blue);
+}
+.actor-agent {
+  background: var(--green);
+}
+.actor-tool {
+  background: var(--yellow);
+}
+.actor-ci {
+  background: var(--purple);
+}
+.actor-dead {
+  background: var(--red-light);
+  border-style: dashed;
+}
+
+/* --- DAG diagram --- */
+.dag-ascii {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  padding: 1.25rem 1.5rem;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+.dag-ascii .muted {
+  color: var(--fg-muted);
+}
+
+/* --- Page title --- */
+.page-title {
+  margin-top: 2rem;
+}
+
+/* --- Responsive --- */
+@media (max-width: 640px) {
+  html {
+    font-size: 16px;
+  }
+  .hero h1 {
+    font-size: 1.8rem;
+  }
+  .site-nav {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .objects {
+    grid-template-columns: 1fr;
+  }
+}

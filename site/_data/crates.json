@@ -1,0 +1,42 @@
+[
+  {
+    "name": "toolpath",
+    "version": "0.1.3",
+    "description": "Core types, builders, and query API",
+    "docs": "https://docs.rs/toolpath",
+    "crate": "https://crates.io/crates/toolpath",
+    "role": "The gravity well. All other crates depend on this; it depends on nothing except serde. Defines Step, Path, Graph, and the query functions to traverse them."
+  },
+  {
+    "name": "toolpath-git",
+    "version": "0.1.2",
+    "description": "Derive from git repository history",
+    "docs": "https://docs.rs/toolpath-git",
+    "crate": "https://crates.io/crates/toolpath-git",
+    "role": "Reads git history via libgit2 and maps commits to Steps, branches to Paths. Single branch produces a Path; multiple branches produce a Graph."
+  },
+  {
+    "name": "toolpath-claude",
+    "version": "0.1.2",
+    "description": "Derive from Claude conversation logs",
+    "docs": "https://docs.rs/toolpath-claude",
+    "crate": "https://crates.io/crates/toolpath-claude",
+    "role": "Reads Claude Code conversation data from ~/.claude/projects/ and maps messages, tool calls, and abandoned approaches to Toolpath documents."
+  },
+  {
+    "name": "toolpath-dot",
+    "version": "0.1.2",
+    "description": "Graphviz DOT visualization",
+    "docs": "https://docs.rs/toolpath-dot",
+    "crate": "https://crates.io/crates/toolpath-dot",
+    "role": "Renders any Toolpath Document as a Graphviz diagram. Steps are color-coded by actor type, dead ends get red dashed borders, and the DAG structure is preserved visually."
+  },
+  {
+    "name": "toolpath-cli",
+    "version": "0.1.2",
+    "description": "Unified CLI (binary: path)",
+    "docs": "https://docs.rs/toolpath-cli",
+    "crate": "https://crates.io/crates/toolpath-cli",
+    "role": "One binary called `path` that ties everything together: derive, query, render, merge, track, validate."
+  }
+]
