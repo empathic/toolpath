@@ -8,7 +8,7 @@ nav: home
   <div class="hero-content">
     <h1>Toolpath</h1>
     <p class="tagline">
-      Know your tools. A tool-agnostic format for tracking artifact transformation provenance.
+      <strong>Know your tools.</strong> A tool-agnostic format for tracking artifact transformation provenance.
       Git blame, but for everything that happens to code &mdash; including the stuff git doesn't see.
     </p>
     <div class="hero-install">

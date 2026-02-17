@@ -292,6 +292,9 @@ th {
   max-width: 42rem;
   line-height: 1.5;
 }
+.hero .tagline strong {
+  color: var(--graphite);
+}
 .hero-install {
   font-family: var(--mono);
   font-size: 0.9rem;
