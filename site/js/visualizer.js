@@ -103,6 +103,23 @@
         title: "Add email validation",
         source: "github:myorg/myrepo/pull/42",
         refs: [{ rel: "fixes", href: "issue://github/myorg/myrepo/issues/42" }],
+        actors: {
+          "human:alex": {
+            name: "Alex Kesling",
+            identities: [
+              { system: "github", id: "akesling" },
+              { system: "email", id: "toolpath@empathic.dev" },
+            ],
+          },
+          "agent:claude-code/session-abc123": {
+            name: "Claude Code",
+            provider: "anthropic",
+            model: "claude-sonnet-4-5-20250929",
+          },
+          "tool:rustfmt/1.7.0": {
+            name: "rustfmt",
+          },
+        },
       },
     },
   };
@@ -145,6 +162,34 @@
   function actorColors(actor) {
     var t = actorType(actor);
     return COLORS[t] || COLORS.tool;
+  }
+
+  // Resolve an actor string to its definition from meta.actors, if available
+  function resolveActor(actorStr, actorDefs) {
+    if (!actorDefs) return null;
+    return actorDefs[actorStr] || null;
+  }
+
+  // Format actor display name: use definition name if available, else raw name
+  function actorDisplayName(actorStr, actorDefs) {
+    var def = resolveActor(actorStr, actorDefs);
+    if (def && def.name) return def.name;
+    return actorName(actorStr);
+  }
+
+  // Format actor identity summary for tooltip/detail (e.g. "github:akesling")
+  function actorIdentitySummary(actorStr, actorDefs) {
+    var def = resolveActor(actorStr, actorDefs);
+    if (!def) return "";
+    var parts = [];
+    if (def.provider) parts.push(def.provider);
+    if (def.model) parts.push(def.model);
+    if (def.identities) {
+      def.identities.forEach(function (id) {
+        parts.push(id.system + ":" + id.id);
+      });
+    }
+    return parts.join(", ");
   }
 
   function truncate(s, n) {
@@ -197,22 +242,27 @@
     var clusters = [];
     if (parsed.type === "Step") {
       // Single step, no path context
+      var stepMeta = parsed.data.Step.meta || {};
       clusters.push({
         pathInfo: null,
         steps: [parsed.data.Step],
         headId: null,
         base: null,
+        actors: stepMeta.actors || null,
       });
     } else if (parsed.type === "Path") {
       var p = parsed.data.Path;
+      var pathActors = (p.meta && p.meta.actors) || null;
       clusters.push({
         pathInfo: p.path,
         steps: p.steps,
         headId: p.path.head,
         base: p.path.base || null,
+        actors: pathActors,
       });
     } else if (parsed.type === "Graph") {
       var g = parsed.data.Graph;
+      var graphActors = (g.meta && g.meta.actors) || null;
       (g.paths || []).forEach(function (entry) {
         // entry can be a Path object or a { "$ref": ... }
         if (entry["$ref"]) {
@@ -222,13 +272,17 @@
             headId: null,
             base: null,
             isRef: true,
+            actors: graphActors,
           });
         } else {
+          // Path-level actors override graph-level
+          var entryActors = (entry.meta && entry.meta.actors) || graphActors;
           clusters.push({
             pathInfo: entry.path,
             steps: entry.steps || [],
             headId: entry.path.head,
             base: entry.path.base || null,
+            actors: entryActors,
           });
         }
       });
@@ -356,7 +410,7 @@
         // Build label
         var labelLines = [];
         labelLines.push(sid);
-        labelLines.push(actorName(s.step.actor));
+        labelLines.push(actorDisplayName(s.step.actor, cluster.actors));
         if (s.meta && s.meta.intent) {
           labelLines.push(truncate(s.meta.intent, 30));
         }
@@ -525,17 +579,31 @@
       var s = nodeData._stepData;
       var isDead = nodeData._isDead;
       var isHead = nodeData._isHead;
+      var clusterActors = clusters[nodeData._clusterId]
+        ? clusters[nodeData._clusterId].actors
+        : null;
 
       var html = [];
       html.push("<div><strong>" + escapeHtml(s.step.id) + "</strong>");
       if (isHead) html.push(' <span style="color:#b5652b">(HEAD)</span>');
       if (isDead) html.push(' <span class="tt-dead">(dead end)</span>');
       html.push("</div>");
+      var displayName = actorDisplayName(s.step.actor, clusterActors);
       html.push(
         '<div class="tt-label">Actor</div><div>' +
+          escapeHtml(displayName) +
+          ' <span style="color:#8a8078">' +
           escapeHtml(s.step.actor) +
-          "</div>",
+          "</span></div>",
       );
+      var idSummary = actorIdentitySummary(s.step.actor, clusterActors);
+      if (idSummary) {
+        html.push(
+          '<div style="color:#8a8078;font-size:0.68rem">' +
+            escapeHtml(idSummary) +
+            "</div>",
+        );
+      }
       if (s.step.timestamp) {
         html.push(
           '<div class="tt-label">Timestamp</div><div>' +
@@ -609,12 +677,53 @@
       step.step.id + (isHead ? " (HEAD)" : "") + (isDead ? " (dead end)" : "");
     detail.hidden = false;
 
+    // Find actor definitions for this step's cluster
+    var stepActorDefs = null;
+    for (var ci = 0; ci < clusters.length; ci++) {
+      for (var si = 0; si < clusters[ci].steps.length; si++) {
+        if (clusters[ci].steps[si].step.id === step.step.id) {
+          stepActorDefs = clusters[ci].actors;
+          break;
+        }
+      }
+      if (stepActorDefs !== null) break;
+    }
+
     var html = [];
 
     // Actor
+    var actorDef = resolveActor(step.step.actor, stepActorDefs);
     html.push('<div class="detail-section">');
     html.push('<div class="detail-label">Actor</div>');
     html.push("<div>" + escapeHtml(step.step.actor) + "</div>");
+    if (actorDef) {
+      if (actorDef.name) {
+        html.push(
+          "<div><strong>" + escapeHtml(actorDef.name) + "</strong></div>",
+        );
+      }
+      if (actorDef.provider || actorDef.model) {
+        var providerParts = [];
+        if (actorDef.provider) providerParts.push(actorDef.provider);
+        if (actorDef.model) providerParts.push(actorDef.model);
+        html.push(
+          '<div style="color:#8a8078">' +
+            escapeHtml(providerParts.join(" / ")) +
+            "</div>",
+        );
+      }
+      if (actorDef.identities && actorDef.identities.length > 0) {
+        actorDef.identities.forEach(function (id) {
+          html.push(
+            '<div style="color:#8a8078">' +
+              escapeHtml(id.system) +
+              ": " +
+              escapeHtml(id.id) +
+              "</div>",
+          );
+        });
+      }
+    }
     html.push("</div>");
 
     // Timestamp
