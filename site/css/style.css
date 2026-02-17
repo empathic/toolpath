@@ -294,29 +294,6 @@ th {
   font-family: var(--mono);
 }
 
-/* --- Actor colors (warm palette) --- */
-.actor-human {
-  background: #b5652b18;
-  border: 1px solid #b5652b;
-}
-.actor-agent {
-  background: #b5652b30;
-  border: 1px solid #b5652b;
-}
-.actor-tool {
-  background: #8a807815;
-  border: 1px solid #8a8078;
-}
-.actor-ci {
-  background: #8a807815;
-  border: 1px solid #8a8078;
-  border-style: dashed;
-}
-.actor-dead {
-  background: #c4403018;
-  border: 1px dashed #c44030;
-}
-
 /* --- DAG diagram --- */
 .dag-ascii {
   font-family: var(--mono);

@@ -1,0 +1,69 @@
+---
+layout: base.njk
+title: Visualizer
+nav: visualizer
+permalink: /visualizer/
+---
+
+<h1 class="page-title">VISUALIZER</h1>
+<p class="subtitle">Interactive DAG explorer for Toolpath documents</p>
+
+<link rel="stylesheet" href="/css/visualizer.css" />
+
+<div class="viz-layout">
+  <div class="viz-input-section">
+    <div class="viz-input-row">
+      <textarea id="viz-input" class="viz-textarea" rows="6" spellcheck="false"
+        placeholder="Paste a Toolpath JSON document (Step, Path, or Graph)..."></textarea>
+    </div>
+    <div class="viz-buttons">
+      <label class="viz-btn viz-btn-file">
+        Load file
+        <input type="file" id="viz-file" accept=".json" hidden />
+      </label>
+      <button id="viz-example" class="viz-btn">Load example</button>
+      <button id="viz-render" class="viz-btn viz-btn-primary">Render</button>
+    </div>
+    <div id="viz-error" class="viz-error" hidden></div>
+  </div>
+
+  <div class="viz-controls">
+    <div class="viz-controls-left">
+      <button id="viz-zoom-in" class="viz-ctrl" title="Zoom in">+</button>
+      <button id="viz-zoom-out" class="viz-ctrl" title="Zoom out">&minus;</button>
+      <button id="viz-fit" class="viz-ctrl" title="Fit to view">Fit</button>
+    </div>
+    <div class="viz-controls-right">
+      <label class="viz-toggle"><input type="checkbox" id="viz-show-dead" checked /> Dead ends</label>
+      <label class="viz-toggle"><input type="checkbox" id="viz-show-ts" /> Timestamps</label>
+      <label class="viz-toggle"><input type="checkbox" id="viz-show-files" /> Files</label>
+    </div>
+  </div>
+
+  <div class="viz-canvas-wrap">
+    <svg id="viz-canvas"></svg>
+    <div id="viz-tooltip" class="viz-tooltip" hidden></div>
+  </div>
+
+  <div id="viz-detail" class="viz-detail" hidden>
+    <div class="viz-detail-header">
+      <strong id="viz-detail-title"></strong>
+      <button id="viz-detail-close" class="viz-ctrl">&times;</button>
+    </div>
+    <div id="viz-detail-body" class="viz-detail-body"></div>
+  </div>
+
+  <div class="viz-legend">
+    <span class="viz-legend-item"><span class="viz-swatch viz-swatch-human"></span> human</span>
+    <span class="viz-legend-item"><span class="viz-swatch viz-swatch-agent"></span> agent</span>
+    <span class="viz-legend-item"><span class="viz-swatch viz-swatch-tool"></span> tool</span>
+    <span class="viz-legend-item"><span class="viz-swatch viz-swatch-ci"></span> ci</span>
+    <span class="viz-legend-item"><span class="viz-swatch viz-swatch-dead"></span> dead end</span>
+    <span class="viz-legend-item"><span class="viz-swatch viz-swatch-head"></span> HEAD</span>
+    <span class="viz-legend-item"><span class="viz-swatch viz-swatch-base"></span> BASE</span>
+  </div>
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre-d3/0.6.4/dagre-d3.min.js"></script>
+<script src="/js/visualizer.js"></script>
