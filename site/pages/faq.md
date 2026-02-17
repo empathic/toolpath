@@ -78,6 +78,11 @@ A minimal document needs only `step` + `change`. Making `meta` optional means si
 
 Steps have a `parents` array. An empty or omitted array means root step. A single-element array is linear history. Multiple parents represent a merge from parallel work.
 
+<svg class="topo topo-wide" viewBox="0 0 900 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M0,30 Q200,5 400,35 Q600,60 900,25" stroke="#b5652b" stroke-width="1" opacity="0.09" fill="none"/>
+  <path d="M0,35 Q210,12 410,40 Q610,62 900,32" stroke="#8a8078" stroke-width="1" opacity="0.07" fill="none"/>
+</svg>
+
 ## Open design questions
 
 These questions are not yet resolved. They need more thought before the format stabilizes.

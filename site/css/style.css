@@ -341,6 +341,42 @@ th {
   margin-bottom: 2rem;
 }
 
+/* --- Topographic illustrations --- */
+.topo {
+  display: block;
+  pointer-events: none;
+}
+.topo-hero {
+  width: clamp(200px, 40%, 380px);
+  height: auto;
+  flex-shrink: 0;
+}
+.topo-wide {
+  width: 100%;
+  height: auto;
+  margin: 1rem 0;
+}
+.topo-float-right {
+  float: right;
+  width: 180px;
+  height: auto;
+  margin: 0 0 1rem 1.5rem;
+}
+.topo-float-right.topo-sm {
+  width: 130px;
+}
+
+/* Hero layout with topo */
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+}
+.hero-content {
+  flex: 1;
+  min-width: 0;
+}
+
 /* --- Page title --- */
 .page-title {
   margin-top: 2rem;
@@ -351,8 +387,21 @@ th {
   html {
     font-size: 16px;
   }
+  .hero {
+    flex-direction: column;
+  }
   .hero h1 {
     font-size: 1.4rem;
+  }
+  .topo-hero {
+    width: 80%;
+    max-width: 300px;
+  }
+  .topo-float-right {
+    float: none;
+    width: 60%;
+    max-width: 200px;
+    margin: 1rem auto;
   }
   .site-nav {
     flex-direction: column;

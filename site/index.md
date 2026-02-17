@@ -5,14 +5,31 @@ nav: home
 ---
 
 <div class="hero">
-  <h1>Toolpath</h1>
-  <p class="tagline">
-    Know your tools. A tool-agnostic format for tracking artifact transformation provenance.
-    Git blame, but for everything that happens to code &mdash; including the stuff git doesn't see.
-  </p>
-  <div class="hero-install">
-    <span class="prompt">$ </span>cargo install toolpath-cli
+  <div class="hero-content">
+    <h1>Toolpath</h1>
+    <p class="tagline">
+      Know your tools. A tool-agnostic format for tracking artifact transformation provenance.
+      Git blame, but for everything that happens to code &mdash; including the stuff git doesn't see.
+    </p>
+    <div class="hero-install">
+      <span class="prompt">$ </span>cargo install toolpath-cli
+    </div>
   </div>
+  <svg class="topo topo-hero" viewBox="0 0 380 320" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <ellipse cx="190" cy="160" rx="170" ry="140" stroke="#b5652b" stroke-width="1" opacity="0.12"/>
+    <ellipse cx="200" cy="155" rx="140" ry="115" stroke="#b5652b" stroke-width="1" opacity="0.16"/>
+    <ellipse cx="208" cy="148" rx="112" ry="90" stroke="#b5652b" stroke-width="1" opacity="0.20"/>
+    <ellipse cx="214" cy="142" rx="85" ry="68" stroke="#b5652b" stroke-width="1" opacity="0.25"/>
+    <ellipse cx="218" cy="138" rx="60" ry="48" stroke="#b5652b" stroke-width="1.2" opacity="0.30"/>
+    <ellipse cx="221" cy="135" rx="38" ry="30" stroke="#b5652b" stroke-width="1.2" opacity="0.38"/>
+    <ellipse cx="223" cy="133" rx="18" ry="14" stroke="#b5652b" stroke-width="1.5" opacity="0.45"/>
+    <circle cx="224" cy="132" r="4" fill="#b5652b" opacity="0.35"/>
+    <!-- secondary peak -->
+    <ellipse cx="120" cy="210" rx="80" ry="65" stroke="#8a8078" stroke-width="1" opacity="0.10"/>
+    <ellipse cx="125" cy="205" rx="55" ry="44" stroke="#8a8078" stroke-width="1" opacity="0.14"/>
+    <ellipse cx="128" cy="201" rx="32" ry="26" stroke="#8a8078" stroke-width="1" opacity="0.18"/>
+    <ellipse cx="130" cy="199" rx="14" ry="11" stroke="#8a8078" stroke-width="1" opacity="0.22"/>
+  </svg>
 </div>
 <div class="divider"></div>
 
@@ -48,6 +65,15 @@ step-1 -- step-2 --+
 </div>
 
 ## What Toolpath adds
+
+<svg class="topo topo-float-right" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M100,20 Q160,40 170,100 Q180,160 120,180 Q60,200 40,140 Q20,80 100,20Z" stroke="#b5652b" stroke-width="1" opacity="0.10" fill="none"/>
+  <path d="M105,40 Q150,55 155,100 Q160,145 115,160 Q70,175 55,130 Q40,85 105,40Z" stroke="#b5652b" stroke-width="1" opacity="0.15" fill="none"/>
+  <path d="M108,58 Q140,68 143,100 Q146,132 112,142 Q78,152 68,120 Q58,88 108,58Z" stroke="#b5652b" stroke-width="1" opacity="0.20" fill="none"/>
+  <path d="M110,74 Q132,80 134,102 Q136,124 113,130 Q88,136 80,112 Q72,90 110,74Z" stroke="#b5652b" stroke-width="1" opacity="0.28" fill="none"/>
+  <path d="M112,88 Q124,92 125,103 Q126,114 114,118 Q100,122 95,108 Q90,94 112,88Z" stroke="#b5652b" stroke-width="1.2" opacity="0.35" fill="none"/>
+  <circle cx="113" cy="103" r="3" fill="#b5652b" opacity="0.30"/>
+</svg>
 
 | What                   | Git                         | Toolpath                                         |
 | ---------------------- | --------------------------- | ------------------------------------------------ |
@@ -102,6 +128,12 @@ path query dead-ends --input doc.json
 # Filter by actor
 path query filter --input doc.json --actor "agent:"
 ```
+
+<svg class="topo topo-wide" viewBox="0 0 900 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M0,55 Q80,20 200,45 Q320,70 450,30 Q580,0 700,50 Q800,75 900,40" stroke="#b5652b" stroke-width="1" opacity="0.12" fill="none"/>
+  <path d="M0,60 Q90,30 210,52 Q340,74 460,38 Q590,8 710,55 Q810,78 900,48" stroke="#b5652b" stroke-width="1" opacity="0.09" fill="none"/>
+  <path d="M0,65 Q100,40 220,58 Q350,76 470,44 Q600,14 720,58 Q815,80 900,54" stroke="#8a8078" stroke-width="1" opacity="0.08" fill="none"/>
+</svg>
 
 ## Workspace
 

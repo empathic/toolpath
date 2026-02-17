@@ -197,6 +197,12 @@ Paths can be inline or referenced externally:
 }
 ```
 
+<svg class="topo topo-wide" viewBox="0 0 900 70" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M0,35 Q150,10 300,40 Q450,65 600,25 Q750,0 900,35" stroke="#b5652b" stroke-width="1" opacity="0.10" fill="none"/>
+  <path d="M0,40 Q160,18 310,45 Q460,68 610,32 Q760,5 900,42" stroke="#8a8078" stroke-width="1" opacity="0.08" fill="none"/>
+  <path d="M0,45 Q170,25 320,48 Q470,70 620,38 Q770,10 900,48" stroke="#b5652b" stroke-width="1" opacity="0.06" fill="none"/>
+</svg>
+
 ## Artifacts
 
 Artifact keys in `change` are URLs. Bare paths are relative to `path.base`:
@@ -233,6 +239,14 @@ ci:github-actions/workflow-123
 Full actor definitions (identity, keys) live in `meta.actors`.
 
 ## Signatures
+
+<svg class="topo topo-float-right topo-sm" viewBox="0 0 150 150" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <ellipse cx="75" cy="75" rx="65" ry="60" stroke="#8a8078" stroke-width="1" opacity="0.10"/>
+  <ellipse cx="80" cy="72" rx="48" ry="44" stroke="#b5652b" stroke-width="1" opacity="0.14"/>
+  <ellipse cx="84" cy="70" rx="32" ry="29" stroke="#b5652b" stroke-width="1" opacity="0.20"/>
+  <ellipse cx="86" cy="68" rx="18" ry="16" stroke="#b5652b" stroke-width="1.2" opacity="0.28"/>
+  <circle cx="87" cy="67" r="4" fill="#b5652b" opacity="0.25"/>
+</svg>
 
 Toolpath supports multi-party, scoped cryptographic signatures using JCS (RFC 8785) canonicalization:
 
