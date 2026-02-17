@@ -89,10 +89,10 @@ let dot_string = render(&doc, &RenderOptions::default());
 
 ### Visual conventions (toolpath-dot)
 
-| Actor type | Color                                                                                                                  |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `human:*`  | <span class="actor-human" style="padding: 0.15em 0.5em; border-radius: 3px;">Blue</span>                               |
-| `agent:*`  | <span class="actor-agent" style="padding: 0.15em 0.5em; border-radius: 3px;">Green</span>                              |
-| `tool:*`   | <span class="actor-tool" style="padding: 0.15em 0.5em; border-radius: 3px;">Yellow</span>                              |
-| `ci:*`     | <span class="actor-ci" style="padding: 0.15em 0.5em; border-radius: 3px;">Purple</span>                                |
-| Dead ends  | <span class="actor-dead" style="padding: 0.15em 0.5em; border-radius: 3px; border: 1px dashed #c66;">Red dashed</span> |
+| Actor type | Color                                                                           |
+| ---------- | ------------------------------------------------------------------------------- |
+| `human:*`  | <span class="actor-human" style="padding: 0.15em 0.5em;">Copper (light)</span>  |
+| `agent:*`  | <span class="actor-agent" style="padding: 0.15em 0.5em;">Copper (medium)</span> |
+| `tool:*`   | <span class="actor-tool" style="padding: 0.15em 0.5em;">Pencil gray</span>      |
+| `ci:*`     | <span class="actor-ci" style="padding: 0.15em 0.5em;">Pencil gray dashed</span> |
+| Dead ends  | <span class="actor-dead" style="padding: 0.15em 0.5em;">Red dashed</span>       |

@@ -14,6 +14,7 @@ nav: home
     <span class="prompt">$ </span>cargo install toolpath-cli
   </div>
 </div>
+<div class="divider"></div>
 
 ## The problem
 

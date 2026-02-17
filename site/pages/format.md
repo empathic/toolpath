@@ -7,7 +7,7 @@ permalink: /format/
 
 # The Toolpath format
 
-<p class="tagline" style="color: var(--fg-muted); font-size: 1.1rem; margin-bottom: 2rem;">
+<p class="subtitle">
 Three objects. One DAG. Full provenance.
 </p>
 

@@ -5,11 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title }}{% if title !== site.title %} — {{ site.title }}{% endif %}</title>
     <meta name="description" content="{{ description or site.description }}" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/css/style.css" />
   </head>
   <body>
     <nav class="site-nav">
-      <a href="/" class="nav-logo">toolpath</a>
+      <a href="/" class="nav-logo">TOOLPATH</a>
       <div class="nav-links">
         <a href="/format/"{% if nav == "format" %} aria-current="page"{% endif %}>Format</a>
         <a href="/crates/"{% if nav == "crates" %} aria-current="page"{% endif %}>Crates</a>
