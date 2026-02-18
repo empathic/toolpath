@@ -33,6 +33,7 @@ function prismHighlight(code, lang) {
 export default function (eleventyConfig) {
   eleventyConfig.addPassthroughCopy("css");
   eleventyConfig.addPassthroughCopy("js");
+  eleventyConfig.addPassthroughCopy("wasm");
 
   eleventyConfig.amendLibrary("md", (mdLib) => {
     mdLib.set({ highlight: prismHighlight });
@@ -62,6 +63,19 @@ export default function (eleventyConfig) {
     slugify,
   });
   eleventyConfig.addGlobalData("rfcHtml", rfcMd.render(rfcContent));
+
+  // Load example JSON files for the interactive playground
+  eleventyConfig.addGlobalData("playgroundFiles", () => {
+    const files = [
+      "step-01-minimal.json",
+      "path-01-pr.json",
+      "graph-01-release.json",
+    ];
+    const result = {};
+    for (const f of files)
+      result[f] = readFileSync(`../examples/${f}`, "utf-8");
+    return result;
+  });
 
   return {
     dir: {

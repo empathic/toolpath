@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+#[cfg(not(target_os = "emscripten"))]
+use anyhow::Context;
+use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
@@ -67,31 +69,42 @@ fn run_git(
     title: Option<String>,
     pretty: bool,
 ) -> Result<()> {
-    let repo_path = if repo_path.is_absolute() {
-        repo_path
-    } else {
-        std::env::current_dir()?.join(&repo_path)
-    };
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (repo_path, branches, base, remote, title, pretty);
+        anyhow::bail!(
+            "'path derive git' requires a native environment with access to a git repository"
+        );
+    }
 
-    let repo = git2::Repository::open(&repo_path)
-        .with_context(|| format!("Failed to open repository at {:?}", repo_path))?;
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let repo_path = if repo_path.is_absolute() {
+            repo_path
+        } else {
+            std::env::current_dir()?.join(&repo_path)
+        };
 
-    let config = toolpath_git::DeriveConfig {
-        remote,
-        title,
-        base,
-    };
+        let repo = git2::Repository::open(&repo_path)
+            .with_context(|| format!("Failed to open repository at {:?}", repo_path))?;
 
-    let doc = toolpath_git::derive(&repo, &branches, &config)?;
+        let config = toolpath_git::DeriveConfig {
+            remote,
+            title,
+            base,
+        };
 
-    let json = if pretty {
-        doc.to_json_pretty()?
-    } else {
-        doc.to_json()?
-    };
+        let doc = toolpath_git::derive(&repo, &branches, &config)?;
 
-    println!("{}", json);
-    Ok(())
+        let json = if pretty {
+            doc.to_json_pretty()?
+        } else {
+            doc.to_json()?
+        };
+
+        println!("{}", json);
+        Ok(())
+    }
 }
 
 fn run_claude(project: String, session: Option<String>, all: bool, pretty: bool) -> Result<()> {
@@ -143,7 +156,7 @@ fn run_claude_with_manager(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
     use super::*;
 

@@ -1,0 +1,12 @@
+[target.wasm32-unknown-emscripten]
+rustflags = [
+  "-C", "link-arg=-sINVOKE_RUN=0",
+  "-C", "link-arg=-sEXIT_RUNTIME=0",
+  "-C", "link-arg=-sMODULARIZE=1",
+  "-C", "link-arg=-sEXPORT_NAME=createPathModule",
+  "-C", "link-arg=-sEXPORTED_RUNTIME_METHODS=callMain,FS",
+  "-C", "link-arg=-sFORCE_FILESYSTEM=1",
+  "-C", "link-arg=-sALLOW_MEMORY_GROWTH=1",
+  "-C", "link-arg=-sENVIRONMENT=web",
+  "-C", "link-arg=-sSTACK_SIZE=1048576",
+]

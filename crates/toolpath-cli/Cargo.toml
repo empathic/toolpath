@@ -15,7 +15,6 @@ path = "src/main.rs"
 [dependencies]
 toolpath = { workspace = true }
 toolpath-git = { workspace = true }
-toolpath-claude = { workspace = true }
 toolpath-dot = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
@@ -24,7 +23,13 @@ serde_json = { workspace = true }
 similar = { workspace = true }
 chrono = { workspace = true }
 tempfile = { workspace = true }
-git2 = { workspace = true }
 rand = "0.9"
+
+[target.'cfg(not(target_os = "emscripten"))'.dependencies]
+toolpath-claude = { workspace = true, features = ["watcher"] }
+git2 = { workspace = true }
+
+[target.'cfg(target_os = "emscripten")'.dependencies]
+toolpath-claude = { workspace = true }
 
 [dev-dependencies]
