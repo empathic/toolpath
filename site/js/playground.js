@@ -403,6 +403,9 @@
 
     window.addEventListener("resize", function () {
       self.fitAddon.fit();
+      var screen = container.querySelector(".xterm-screen");
+      if (screen) self.cellHeight = screen.clientHeight / self.term.rows;
+      self.updatePinned();
     });
 
     this.term.onKey(function (ev) {
@@ -426,6 +429,42 @@
           }
         }
       }
+    });
+
+    // Pinned command header (sticky fold)
+    this.pinnedEl = document.createElement("div");
+    this.pinnedEl.className = "playground-pinned-cmd";
+    this.pinnedEl.hidden = true;
+    this.pinnedPromptEl = document.createElement("span");
+    this.pinnedPromptEl.className = "pinned-prompt";
+    this.pinnedPromptEl.textContent = "path";
+    this.pinnedDollarEl = document.createElement("span");
+    this.pinnedDollarEl.className = "pinned-dollar";
+    this.pinnedDollarEl.textContent = " $ ";
+    this.pinnedTextEl = document.createElement("span");
+    this.pinnedTextEl.className = "pinned-text";
+    this.pinnedEl.appendChild(this.pinnedPromptEl);
+    this.pinnedEl.appendChild(this.pinnedDollarEl);
+    this.pinnedEl.appendChild(this.pinnedTextEl);
+    container.appendChild(this.pinnedEl);
+
+    this.cmdPositions = [];
+
+    // Scroll listener for pinned header
+    setTimeout(function () {
+      self.viewport = container.querySelector(".xterm-viewport");
+      var screen = container.querySelector(".xterm-screen");
+      if (screen) self.cellHeight = screen.clientHeight / self.term.rows;
+      if (self.viewport) {
+        self.viewport.addEventListener("scroll", function () {
+          self.updatePinned();
+        });
+      }
+    }, 0);
+    this.term.onScroll(function () {
+      setTimeout(function () {
+        self.updatePinned();
+      }, 0);
     });
   }
 
@@ -503,7 +542,38 @@
     this.refreshLine();
   };
 
+  TermShell.prototype.pinCommand = function (cmd) {
+    this.cmdPositions.push({
+      cmd: cmd,
+      absY: this.term.buffer.active.baseY + this.term.buffer.active.cursorY,
+    });
+    this.updatePinned();
+  };
+
+  TermShell.prototype.updatePinned = function () {
+    if (!this.cmdPositions.length || !this.viewport || !this.cellHeight) {
+      this.pinnedEl.hidden = true;
+      return;
+    }
+    var topLine = Math.floor(this.viewport.scrollTop / this.cellHeight);
+    // Find the last command whose prompt scrolled above the viewport
+    var pinned = null;
+    for (var i = this.cmdPositions.length - 1; i >= 0; i--) {
+      if (this.cmdPositions[i].absY < topLine) {
+        pinned = this.cmdPositions[i];
+        break;
+      }
+    }
+    if (pinned) {
+      this.pinnedTextEl.textContent = pinned.cmd;
+      this.pinnedEl.hidden = false;
+    } else {
+      this.pinnedEl.hidden = true;
+    }
+  };
+
   TermShell.prototype.submit = function () {
+    if (this.line.trim()) this.pinCommand(this.line);
     this.term.write("\r\n");
     var line = this.line;
     if (line.trim()) {
@@ -527,6 +597,8 @@
       if (result) {
         if (result.clear) {
           this.term.clear();
+          this.cmdPositions = [];
+          this.pinnedEl.hidden = true;
         } else if (result.output != null) {
           this.term.write(result.output + "\r\n");
         }
@@ -590,6 +662,8 @@
     // Ctrl+L - always clear
     if (domEvent.ctrlKey && code === 76) {
       this.term.clear();
+      this.cmdPositions = [];
+      this.pinnedEl.hidden = true;
       this.refreshLine();
       return;
     }
@@ -1172,6 +1246,7 @@
   // Execute a command programmatically and write output
   TermShell.prototype.exec = function (line, callback) {
     this.term.write(line);
+    if (line.trim()) this.pinCommand(line);
     this.term.write("\r\n");
     this.line = line;
     if (line.trim()) {
@@ -1206,6 +1281,7 @@
         i++;
         setTimeout(typeNext, 30);
       } else {
+        if (line.trim()) self.pinCommand(line);
         self.term.write("\r\n");
         self.line = line;
         if (line.trim()) {
