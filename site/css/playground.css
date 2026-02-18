@@ -81,6 +81,39 @@
   border-color: var(--copper);
 }
 
+/* Pinned command header (sticky fold) */
+.playground-pinned-cmd {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  background: var(--grain);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 14px;
+  padding: 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(45, 42, 38, 0.08);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.playground-pinned-cmd .pinned-prompt {
+  color: var(--copper);
+  font-weight: bold;
+}
+
+.playground-pinned-cmd .pinned-dollar {
+  color: var(--pencil);
+}
+
+.playground-pinned-cmd .pinned-text {
+  color: var(--ink);
+}
+
 @media (max-width: 640px) {
   .playground-terminal .xterm {
     padding: 0.5rem;
