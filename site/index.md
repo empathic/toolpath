@@ -13,6 +13,7 @@ nav: home
     </p>
     <div class="hero-install">
       <span class="prompt">$ </span>cargo install toolpath-cli
+      <button id="try-it-btn" class="try-it-btn">Try in browser</button>
     </div>
   </div>
   <svg class="topo topo-hero" viewBox="0 0 380 320" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -33,7 +34,7 @@ nav: home
 </div>
 <div class="divider"></div>
 
-<div class="playground">
+<div id="playground-section" class="playground" hidden>
 <h2>Try it</h2>
 <p class="playground-desc">
 Explore Toolpath documents in your browser. Real <code>path</code> commands, real output.

@@ -307,6 +307,30 @@ th {
   color: var(--pencil);
   user-select: none;
 }
+.try-it-btn {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--copper);
+  background: transparent;
+  border: 1px solid var(--copper);
+  padding: 0.25rem 0.7rem;
+  margin-left: 1rem;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+  vertical-align: middle;
+}
+.try-it-btn:hover {
+  background: var(--copper);
+  color: var(--ground);
+}
+.try-it-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 .hero + .divider {
   margin-bottom: 2rem;
 }
