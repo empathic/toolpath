@@ -148,146 +148,39 @@
   var zoomBehavior = null;
   var svgGroup = null;
 
-  // --- Helpers ---
+  // --- Helpers (delegated to ToolpathCore) ---
+  var TC = window.ToolpathCore;
+
   function actorType(actor) {
-    var colon = actor.indexOf(":");
-    return colon > -1 ? actor.substring(0, colon) : actor;
+    return TC.actorType(actor);
   }
-
-  function actorName(actor) {
-    var colon = actor.indexOf(":");
-    return colon > -1 ? actor.substring(colon + 1) : actor;
-  }
-
   function actorColors(actor) {
     var t = actorType(actor);
     return COLORS[t] || COLORS.tool;
   }
-
-  // Resolve an actor string to its definition from meta.actors, if available
-  function resolveActor(actorStr, actorDefs) {
-    if (!actorDefs) return null;
-    return actorDefs[actorStr] || null;
-  }
-
-  // Format actor display name: use definition name if available, else raw name
   function actorDisplayName(actorStr, actorDefs) {
-    var def = resolveActor(actorStr, actorDefs);
-    if (def && def.name) return def.name;
-    return actorName(actorStr);
+    return TC.actorDisplayName(actorStr, actorDefs);
   }
-
-  // Format actor identity summary for tooltip/detail (e.g. "github:akesling")
   function actorIdentitySummary(actorStr, actorDefs) {
-    var def = resolveActor(actorStr, actorDefs);
-    if (!def) return "";
-    var parts = [];
-    if (def.provider) parts.push(def.provider);
-    if (def.model) parts.push(def.model);
-    if (def.identities) {
-      def.identities.forEach(function (id) {
-        parts.push(id.system + ":" + id.id);
-      });
-    }
-    return parts.join(", ");
+    return TC.actorIdentitySummary(actorStr, actorDefs);
   }
-
+  function resolveActor(actorStr, actorDefs) {
+    return TC.resolveActor(actorStr, actorDefs);
+  }
   function truncate(s, n) {
-    if (!s) return "";
-    return s.length > n ? s.substring(0, n) + "..." : s;
+    return TC.truncate(s, n);
   }
-
   function escapeHtml(s) {
-    var d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
+    return TC.escapeHtml(s);
   }
-
-  // --- Dead-end detection (port of query::ancestors) ---
   function ancestors(steps, headId) {
-    var stepMap = {};
-    steps.forEach(function (s) {
-      stepMap[s.step.id] = s;
-    });
-    var result = {};
-    var stack = [headId];
-    while (stack.length > 0) {
-      var id = stack.pop();
-      if (result[id]) continue;
-      result[id] = true;
-      var step = stepMap[id];
-      if (step && step.step.parents) {
-        step.step.parents.forEach(function (p) {
-          stack.push(p);
-        });
-      }
-    }
-    return result;
+    return TC.ancestors(steps, headId);
   }
-
-  // --- Parse document ---
   function parseDoc(text) {
-    var doc = JSON.parse(text);
-    // Detect document type by top-level key
-    if (doc.Step) return { type: "Step", data: doc };
-    if (doc.Path) return { type: "Path", data: doc };
-    if (doc.Graph) return { type: "Graph", data: doc };
-    throw new Error(
-      "Unknown document type. Expected top-level key: Step, Path, or Graph.",
-    );
+    return TC.parseDoc(text);
   }
-
-  // Normalize into array of { pathInfo, steps } clusters
   function normalizeClusters(parsed) {
-    var clusters = [];
-    if (parsed.type === "Step") {
-      // Single step, no path context
-      var stepMeta = parsed.data.Step.meta || {};
-      clusters.push({
-        pathInfo: null,
-        steps: [parsed.data.Step],
-        headId: null,
-        base: null,
-        actors: stepMeta.actors || null,
-      });
-    } else if (parsed.type === "Path") {
-      var p = parsed.data.Path;
-      var pathActors = (p.meta && p.meta.actors) || null;
-      clusters.push({
-        pathInfo: p.path,
-        steps: p.steps,
-        headId: p.path.head,
-        base: p.path.base || null,
-        actors: pathActors,
-      });
-    } else if (parsed.type === "Graph") {
-      var g = parsed.data.Graph;
-      var graphActors = (g.meta && g.meta.actors) || null;
-      (g.paths || []).forEach(function (entry) {
-        // entry can be a Path object or a { "$ref": ... }
-        if (entry["$ref"]) {
-          clusters.push({
-            pathInfo: { id: entry["$ref"] },
-            steps: [],
-            headId: null,
-            base: null,
-            isRef: true,
-            actors: graphActors,
-          });
-        } else {
-          // Path-level actors override graph-level
-          var entryActors = (entry.meta && entry.meta.actors) || graphActors;
-          clusters.push({
-            pathInfo: entry.path,
-            steps: entry.steps || [],
-            headId: entry.path.head,
-            base: entry.path.base || null,
-            actors: entryActors,
-          });
-        }
-      });
-    }
-    return clusters;
+    return TC.normalizeClusters(parsed);
   }
 
   // --- Render graph ---

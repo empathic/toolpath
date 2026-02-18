@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+#[cfg(not(target_os = "emscripten"))]
+use anyhow::Context;
+use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
@@ -30,49 +32,60 @@ pub fn run(source: ListSource, json: bool) -> Result<()> {
 }
 
 fn run_git(repo_path: PathBuf, remote: String, json: bool) -> Result<()> {
-    let repo_path = if repo_path.is_absolute() {
-        repo_path
-    } else {
-        std::env::current_dir()?.join(&repo_path)
-    };
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (repo_path, remote, json);
+        anyhow::bail!(
+            "'path list git' requires a native environment with access to a git repository"
+        );
+    }
 
-    let repo = git2::Repository::open(&repo_path)
-        .with_context(|| format!("Failed to open repository at {:?}", repo_path))?;
-
-    let uri = toolpath_git::get_repo_uri(&repo, &remote)?;
-    let branches = toolpath_git::list_branches(&repo)?;
-
-    if json {
-        let items: Vec<serde_json::Value> = branches
-            .iter()
-            .map(|b| {
-                serde_json::json!({
-                    "name": b.name,
-                    "head": b.head,
-                    "subject": b.subject,
-                    "author": b.author,
-                    "timestamp": b.timestamp,
-                })
-            })
-            .collect();
-        let output = serde_json::json!({
-            "source": "git",
-            "uri": uri,
-            "branches": items,
-        });
-        println!("{}", serde_json::to_string_pretty(&output)?);
-    } else {
-        println!("Repository: {}", uri);
-        println!();
-        if branches.is_empty() {
-            println!("  (no local branches)");
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let repo_path = if repo_path.is_absolute() {
+            repo_path
         } else {
-            for b in &branches {
-                println!("  {} {} {}", b.head_short, b.name, truncate(&b.subject, 60));
+            std::env::current_dir()?.join(&repo_path)
+        };
+
+        let repo = git2::Repository::open(&repo_path)
+            .with_context(|| format!("Failed to open repository at {:?}", repo_path))?;
+
+        let uri = toolpath_git::get_repo_uri(&repo, &remote)?;
+        let branches = toolpath_git::list_branches(&repo)?;
+
+        if json {
+            let items: Vec<serde_json::Value> = branches
+                .iter()
+                .map(|b| {
+                    serde_json::json!({
+                        "name": b.name,
+                        "head": b.head,
+                        "subject": b.subject,
+                        "author": b.author,
+                        "timestamp": b.timestamp,
+                    })
+                })
+                .collect();
+            let output = serde_json::json!({
+                "source": "git",
+                "uri": uri,
+                "branches": items,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("Repository: {}", uri);
+            println!();
+            if branches.is_empty() {
+                println!("  (no local branches)");
+            } else {
+                for b in &branches {
+                    println!("  {} {} {}", b.head_short, b.name, truncate(&b.subject, 60));
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 fn run_claude(project: Option<String>, json: bool) -> Result<()> {
@@ -167,7 +180,7 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
     use super::*;
 

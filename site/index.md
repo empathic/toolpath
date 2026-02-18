@@ -33,6 +33,17 @@ nav: home
 </div>
 <div class="divider"></div>
 
+<div class="playground">
+<h2>Try it</h2>
+<p class="playground-desc">
+Explore Toolpath documents in your browser. Real <code>path</code> commands, real output.
+</p>
+<script>window.__PLAYGROUND_FILES__ = {{ playgroundFiles | dump | safe }};</script>
+<div id="playground-terminal" class="playground-terminal"></div>
+</div>
+<script src="/wasm/path.js"></script>
+<script src="/js/playground.js"></script>
+
 ## The problem
 
 When Claude writes code, `rustfmt` reformats it, and a human refines it, git blame attributes everything to the human's commit. The actual provenance is lost. Dead ends disappear. Tool contributions collapse into whoever typed `git commit`.
