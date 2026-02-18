@@ -4,20 +4,54 @@
 }
 
 /* --- Input section --- */
+.viz-editor {
+  position: relative;
+  background: var(--grain);
+  border: 1px solid var(--border);
+}
+.viz-editor:focus-within {
+  outline: 2px solid var(--copper);
+  outline-offset: -2px;
+}
+.viz-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  padding: 0.75rem 1rem;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  color: var(--graphite);
+}
 .viz-textarea {
   width: 100%;
   font-family: var(--mono);
   font-size: 0.8rem;
   line-height: 1.5;
-  background: var(--grain);
-  border: 1px solid var(--border);
-  color: var(--graphite);
+  background: transparent;
+  border: none;
+  color: transparent;
+  caret-color: var(--graphite);
   padding: 0.75rem 1rem;
   resize: vertical;
+  position: relative;
+  z-index: 1;
 }
 .viz-textarea:focus {
-  outline: 2px solid var(--copper);
-  outline-offset: -2px;
+  outline: none;
+}
+.viz-textarea::selection {
+  background: #b5652b30;
+}
+.viz-textarea::placeholder {
+  color: var(--pencil);
 }
 
 .viz-buttons {
@@ -208,6 +242,20 @@
   white-space: pre-wrap;
   word-break: break-all;
   margin: 0.5rem 0;
+}
+
+/* Diff line backgrounds */
+.viz-detail-body .token.inserted {
+  display: block;
+  background: #6e7d3a12;
+}
+.viz-detail-body .token.deleted {
+  display: block;
+  background: #c4403010;
+}
+.viz-detail-body .token.coord {
+  color: #8a8078;
+  font-style: italic;
 }
 .viz-detail-body .detail-section {
   margin-bottom: 1rem;

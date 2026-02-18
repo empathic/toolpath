@@ -126,6 +126,7 @@
 
   // --- DOM refs ---
   var input = document.getElementById("viz-input");
+  var highlight = document.getElementById("viz-highlight");
   var fileInput = document.getElementById("viz-file");
   var exampleBtn = document.getElementById("viz-example");
   var renderBtn = document.getElementById("viz-render");
@@ -689,12 +690,20 @@
         );
         var ch = step.change[f];
         if (ch.raw) {
-          html.push("<pre>" + escapeHtml(ch.raw) + "</pre>");
+          html.push(
+            "<pre>" +
+              Prism.highlight(ch.raw, Prism.languages.diff, "diff") +
+              "</pre>",
+          );
         }
         if (ch.structural) {
           html.push(
             "<pre>" +
-              escapeHtml(JSON.stringify(ch.structural, null, 2)) +
+              Prism.highlight(
+                JSON.stringify(ch.structural, null, 2),
+                Prism.languages.json,
+                "json",
+              ) +
               "</pre>",
           );
         }
@@ -705,7 +714,15 @@
     // Full JSON
     html.push('<div class="detail-section">');
     html.push('<div class="detail-label">Raw JSON</div>');
-    html.push("<pre>" + escapeHtml(JSON.stringify(step, null, 2)) + "</pre>");
+    html.push(
+      "<pre>" +
+        Prism.highlight(
+          JSON.stringify(step, null, 2),
+          Prism.languages.json,
+          "json",
+        ) +
+        "</pre>",
+    );
     html.push("</div>");
 
     detailBody.innerHTML = html.join("");
@@ -784,11 +801,26 @@
     errorBox.hidden = true;
   }
 
+  // --- Input highlight sync ---
+  function syncHighlight() {
+    var code = input.value;
+    highlight.innerHTML = code
+      ? Prism.highlight(code, Prism.languages.json, "json")
+      : "";
+    highlight.scrollTop = input.scrollTop;
+  }
+
+  input.addEventListener("input", syncHighlight);
+  input.addEventListener("scroll", function () {
+    highlight.scrollTop = input.scrollTop;
+  });
+
   // --- Event wiring ---
   renderBtn.addEventListener("click", render);
 
   exampleBtn.addEventListener("click", function () {
     input.value = JSON.stringify(DEFAULT_EXAMPLE, null, 2);
+    syncHighlight();
     render();
   });
 
@@ -798,6 +830,7 @@
     var reader = new FileReader();
     reader.onload = function () {
       input.value = reader.result;
+      syncHighlight();
       render();
     };
     reader.readAsText(file);
@@ -839,5 +872,6 @@
 
   // --- Auto-load example on page load ---
   input.value = JSON.stringify(DEFAULT_EXAMPLE, null, 2);
+  syncHighlight();
   render();
 })();
