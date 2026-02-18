@@ -13,7 +13,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
-toolpath = { version = "0.1.3", path = "crates/toolpath" }
+toolpath = { version = "0.1.4", path = "crates/toolpath" }
 toolpath-git = { version = "0.1.2", path = "crates/toolpath-git" }
 toolpath-claude = { version = "0.1.2", path = "crates/toolpath-claude", default-features = false }
 toolpath-dot = { version = "0.1.2", path = "crates/toolpath-dot" }

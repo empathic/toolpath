@@ -92,6 +92,9 @@ pub struct GraphMeta {
     pub actors: Option<HashMap<String, ActorDefinition>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<Signature>,
+    /// Additional properties (schema: `additionalProperties: true`)
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Either an inline path or a reference to an external path
@@ -181,6 +184,9 @@ pub struct PathMeta {
     pub actors: Option<HashMap<String, ActorDefinition>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<Signature>,
+    /// Additional properties (schema: `additionalProperties: true`)
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 // ============================================================================
@@ -291,6 +297,9 @@ pub struct StepMeta {
     pub actors: Option<HashMap<String, ActorDefinition>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<Signature>,
+    /// Additional properties (schema: `additionalProperties: true`)
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// VCS source reference

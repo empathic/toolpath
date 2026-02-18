@@ -2,6 +2,16 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.1.4 — toolpath / 0.2.0 — toolpath-cli
+
+### toolpath 0.1.4
+
+- Added `extra: HashMap<String, serde_json::Value>` with `#[serde(flatten)]` to `PathMeta`, `StepMeta`, and `GraphMeta`, matching the schema's `additionalProperties: true` and enabling round-trip fidelity for extension fields
+
+### toolpath-cli 0.2.0
+
+- **Breaking:** `path track` session files are now valid `{"Path": {...}}` Toolpath documents at all times. Tracking bookkeeping (buffer cache, sequence mappings) lives in `meta.track` and is stripped on export/close. Any Toolpath tool can read a live session file — `path validate`, `path query dead-ends`, `path render dot` all work mid-session without export.
+
 ## 0.1.3 — toolpath / 0.1.2 — all other crates
 
 ### All crates
