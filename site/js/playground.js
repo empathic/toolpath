@@ -1379,10 +1379,26 @@
     });
   }
 
-  // Initialize when DOM is ready
+  // Wire up the "Try in browser" button
+  function init() {
+    var btn = document.getElementById("try-it-btn");
+    if (!btn) return;
+
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      var section = document.getElementById("playground-section");
+      if (section) {
+        section.hidden = false;
+        section.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      // Slight delay so the terminal container is visible before xterm measures
+      setTimeout(boot, 80);
+    });
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
+    document.addEventListener("DOMContentLoaded", init);
   } else {
-    boot();
+    init();
   }
 })();
