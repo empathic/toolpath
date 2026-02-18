@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "path")]
+#[command(name = "path", version)]
 #[command(about = "Derive, query, and visualize Toolpath provenance documents")]
 struct Cli {
     #[command(subcommand)]

@@ -96,6 +96,7 @@
   var wasmFiles = null;
   var wasmReady = false;
   var wasmError = null;
+  var cliVersion = null;
 
   function loadWasm(files) {
     wasmFiles = files;
@@ -111,6 +112,12 @@
       .then(function (mod) {
         compiledWasm = mod;
         wasmReady = true;
+      })
+      .then(function () {
+        return runPath(["--version"]).then(function (result) {
+          var m = (result.stdout || "").match(/(\d+\.\d+\.\d+\S*)/);
+          if (m) cliVersion = m[1];
+        });
       })
       .catch(function (err) {
         wasmError = err.message || String(err);
@@ -235,6 +242,37 @@
     if (cmd === "help") return { output: cmdHelp(fs) };
     if (cmd === "ls") return { output: cmdLs(fs) };
     if (cmd === "cat") return { output: cmdCat(fs, tokens) };
+
+    if (cmd === "cargo") {
+      var v = cliVersion || "0.x.x";
+      if (tokens.indexOf("--force") !== -1 || tokens.indexOf("-f") !== -1) {
+        return {
+          output:
+            ANSI.green +
+            ANSI.bold +
+            "    Compiling" +
+            ANSI.reset +
+            " stubbornness v1.0.0\r\n" +
+            ANSI.green +
+            ANSI.bold +
+            "    Finished" +
+            ANSI.reset +
+            " cargo pushed really hard but `toolpath-cli v" +
+            v +
+            "` is still installed",
+        };
+      }
+      return {
+        output:
+          ANSI.green +
+          ANSI.bold +
+          "    Ignored" +
+          ANSI.reset +
+          " package `toolpath-cli v" +
+          v +
+          "` is already installed, use --force to override",
+      };
+    }
 
     if (cmd === "path") {
       if (!wasmReady) {
@@ -1313,45 +1351,32 @@
     var fs = new VirtualFS(files);
     var shell = new TermShell(el, fs);
 
-    // Banner
-    shell.term.write(
-      copperBold("TOOLPATH PLAYGROUND") +
-        "  " +
-        dim("interactive terminal") +
-        "\r\n",
-    );
-    shell.term.write(
-      dim("Type help for commands. Example documents are preloaded.") + "\r\n",
-    );
-    shell.term.write("\r\n");
+    // Show cargo install, then load wasm in background
+    shell.term.write(copperBold("path") + " " + pencil("$") + " ");
+    shell.autoType("cargo install toolpath-cli", function () {
+      shell.term.write("\r\n");
+      shell.term.write(
+        dim("Type help for commands. Example documents are preloaded.") +
+          "\r\n",
+      );
+      shell.term.write("\r\n");
 
-    // Suggested commands (dimmed)
-    var suggestions = [
-      "path validate --input path-01-pr.json",
-      "path query dead-ends --input path-01-pr.json --pretty",
-      'path query filter --input path-01-pr.json --actor "agent:" --pretty',
-    ];
-    for (var i = 0; i < suggestions.length; i++) {
-      shell.term.write(dim("  # " + suggestions[i]) + "\r\n");
-    }
-    shell.term.write("\r\n");
-
-    // Load wasm in background, then auto-type a command
-    shell.term.write(dim("  Loading CLI...") + "\r\n\r\n");
-    loadWasm(files)
-      .then(function () {
-        shell.term.write(copperBold("path") + " " + pencil("$") + " ");
-        shell.autoType(
-          "path query dead-ends --input path-01-pr.json --pretty",
-          function () {
-            shell.prompt();
-          },
-        );
-      })
-      .catch(function () {
-        shell.term.write(red("  Failed to load wasm binary.") + "\r\n\r\n");
-        shell.prompt();
-      });
+      shell.term.write(dim("  Loading CLI...") + "\r\n\r\n");
+      loadWasm(files)
+        .then(function () {
+          shell.term.write(copperBold("path") + " " + pencil("$") + " ");
+          shell.autoType(
+            "path query dead-ends --input path-01-pr.json --pretty",
+            function () {
+              shell.prompt();
+            },
+          );
+        })
+        .catch(function () {
+          shell.term.write(red("  Failed to load wasm binary.") + "\r\n\r\n");
+          shell.prompt();
+        });
+    });
   }
 
   // Initialize when DOM is ready
