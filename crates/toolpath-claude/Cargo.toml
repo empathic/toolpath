@@ -14,6 +14,7 @@ watcher = ["dep:notify", "dep:tokio"]
 
 [dependencies]
 toolpath = { workspace = true }
+toolpath-convo = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

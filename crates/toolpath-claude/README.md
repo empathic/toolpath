@@ -102,11 +102,31 @@ while let Some(entries) = handle.recv().await {
 |---|---|---|
 | `watcher` | yes | Filesystem watching via `notify` + `tokio` |
 
+## Provider-agnostic usage
+
+This crate implements `toolpath_convo::ConversationProvider`, so consumers can
+code against the provider-agnostic types instead of Claude-specific structures:
+
+```rust,ignore
+use toolpath_claude::ClaudeConvo;
+use toolpath_convo::ConversationProvider;
+
+let provider = ClaudeConvo::new();
+let view = provider.load_conversation("/path/to/project", "session-id")?;
+
+for turn in &view.turns {
+    println!("[{}] {}: {}", turn.timestamp, turn.role, turn.text);
+}
+```
+
+See [`toolpath-convo`](https://crates.io/crates/toolpath-convo) for the full trait and type definitions.
+
 ## Part of Toolpath
 
 This crate is part of the [Toolpath](https://github.com/empathic/toolpath) workspace. See also:
 
 - [`toolpath`](https://crates.io/crates/toolpath) -- core types and query API
+- [`toolpath-convo`](https://crates.io/crates/toolpath-convo) -- provider-agnostic conversation abstraction
 - [`toolpath-git`](https://crates.io/crates/toolpath-git) -- derive from git history
 - [`toolpath-dot`](https://crates.io/crates/toolpath-dot) -- Graphviz DOT rendering
 - [`toolpath-cli`](https://crates.io/crates/toolpath-cli) -- unified CLI (`cargo install toolpath-cli`)

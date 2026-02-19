@@ -41,6 +41,7 @@ This installs a binary called `path`.
 ```
 crates/
   toolpath/           Core types, builders, query API
+  toolpath-convo/     Provider-agnostic conversation types and traits
   toolpath-git/       Derive from git repository history
   toolpath-claude/    Derive from Claude conversation logs
   toolpath-dot/       Graphviz DOT visualization
