@@ -10,12 +10,13 @@ set -euo pipefail
 #
 # Dependency order:
 #   1. toolpath           (no workspace deps)
+#      toolpath-convo     (no workspace deps)
 #   2. toolpath-git       (depends on toolpath)
 #      toolpath-dot       (depends on toolpath)
-#      toolpath-claude    (depends on toolpath)
+#      toolpath-claude    (depends on toolpath, toolpath-convo)
 #   3. toolpath-cli       (depends on all of the above)
 
-ALL_CRATES=(toolpath toolpath-git toolpath-dot toolpath-claude toolpath-cli)
+ALL_CRATES=(toolpath toolpath-convo toolpath-git toolpath-dot toolpath-claude toolpath-cli)
 
 DRY_RUN=""
 AUTO_YES=""
@@ -185,13 +186,17 @@ publish() {
     echo
 }
 
-# Tier 1: toolpath (foundation, no workspace deps)
-publish toolpath
-if should_publish toolpath; then
-    wait_for_index toolpath "$(crate_version toolpath)"
-fi
+# Tier 1: foundation crates (no workspace deps)
+for crate in toolpath toolpath-convo; do
+    publish "$crate"
+done
+for crate in toolpath toolpath-convo; do
+    if should_publish "$crate"; then
+        wait_for_index "$crate" "$(crate_version "$crate")"
+    fi
+done
 
-# Tier 2: satellite crates (depend only on toolpath, no cross-deps)
+# Tier 2: satellite crates (depend on tier 1, no cross-deps)
 for crate in toolpath-git toolpath-dot toolpath-claude; do
     publish "$crate"
 done

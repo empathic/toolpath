@@ -142,6 +142,123 @@ impl ToolResultContent {
     }
 }
 
+/// A reference to a tool use entry within a content part.
+#[derive(Debug)]
+pub struct ToolUseRef<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub input: &'a Value,
+}
+
+impl Message {
+    /// Collapsed text content, joining all text parts with newlines.
+    ///
+    /// Returns an empty string if content is `None` or contains no text parts.
+    pub fn text(&self) -> String {
+        match &self.content {
+            Some(MessageContent::Text(t)) => t.clone(),
+            Some(MessageContent::Parts(parts)) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => String::new(),
+        }
+    }
+
+    /// Thinking blocks, if any.
+    ///
+    /// Returns `None` when the message has no thinking content (not an empty vec).
+    pub fn thinking(&self) -> Option<Vec<&str>> {
+        let parts = match &self.content {
+            Some(MessageContent::Parts(parts)) => parts,
+            _ => return None,
+        };
+        let thinking: Vec<&str> = parts
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::Thinking { thinking, .. } => Some(thinking.as_str()),
+                _ => None,
+            })
+            .collect();
+        if thinking.is_empty() {
+            None
+        } else {
+            Some(thinking)
+        }
+    }
+
+    /// Tool use entries, if any.
+    pub fn tool_uses(&self) -> Vec<ToolUseRef<'_>> {
+        let parts = match &self.content {
+            Some(MessageContent::Parts(parts)) => parts,
+            _ => return Vec::new(),
+        };
+        parts
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::ToolUse { id, name, input } => Some(ToolUseRef { id, name, input }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether this message has the given role.
+    pub fn is_role(&self, role: MessageRole) -> bool {
+        self.role == role
+    }
+
+    /// Whether this is a user message.
+    pub fn is_user(&self) -> bool {
+        self.role == MessageRole::User
+    }
+
+    /// Whether this is an assistant message.
+    pub fn is_assistant(&self) -> bool {
+        self.role == MessageRole::Assistant
+    }
+}
+
+impl ConversationEntry {
+    /// Role of the message, if present.
+    pub fn role(&self) -> Option<&MessageRole> {
+        self.message.as_ref().map(|m| &m.role)
+    }
+
+    /// Collapsed text content of the message.
+    ///
+    /// Delegates to [`Message::text`]. Returns an empty string if no message is present.
+    pub fn text(&self) -> String {
+        self.message.as_ref().map(|m| m.text()).unwrap_or_default()
+    }
+
+    /// Thinking blocks from the message, if any.
+    pub fn thinking(&self) -> Option<Vec<&str>> {
+        self.message.as_ref().and_then(|m| m.thinking())
+    }
+
+    /// Tool use entries from the message, if any.
+    pub fn tool_uses(&self) -> Vec<ToolUseRef<'_>> {
+        self.message
+            .as_ref()
+            .map(|m| m.tool_uses())
+            .unwrap_or_default()
+    }
+
+    /// Stop reason, if present.
+    pub fn stop_reason(&self) -> Option<&str> {
+        self.message.as_ref().and_then(|m| m.stop_reason.as_deref())
+    }
+
+    /// Model name, if present.
+    pub fn model(&self) -> Option<&str> {
+        self.message.as_ref().and_then(|m| m.model.as_deref())
+    }
+}
+
 impl ContentPart {
     /// Returns a short summary of this content part.
     pub fn summary(&self) -> String {
@@ -333,6 +450,32 @@ impl Conversation {
     /// Returns the UUID of the last entry, if any.
     pub fn last_uuid(&self) -> Option<&str> {
         self.entries.last().map(|e| e.uuid.as_str())
+    }
+
+    /// Text of the first user message, truncated to `max_len` characters.
+    pub fn title(&self, max_len: usize) -> Option<String> {
+        self.first_user_text().map(|text| {
+            if text.chars().count() > max_len {
+                let truncated: String = text.chars().take(max_len).collect();
+                format!("{}...", truncated)
+            } else {
+                text
+            }
+        })
+    }
+
+    /// Full text of the first user message, untruncated.
+    pub fn first_user_text(&self) -> Option<String> {
+        self.entries.iter().find_map(|e| {
+            e.message.as_ref().and_then(|msg| {
+                if msg.is_user() {
+                    let text = msg.text();
+                    if text.is_empty() { None } else { Some(text) }
+                } else {
+                    None
+                }
+            })
+        })
     }
 }
 
@@ -635,5 +778,230 @@ mod tests {
     #[test]
     fn test_message_role_from_str_invalid() {
         assert!("invalid".parse::<MessageRole>().is_err());
+    }
+
+    // ── Message convenience methods ──────────────────────────────────
+
+    #[test]
+    fn test_message_text_from_string() {
+        let msg = Message {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("Hello world".to_string())),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        assert_eq!(msg.text(), "Hello world");
+    }
+
+    #[test]
+    fn test_message_text_from_parts() {
+        let msg = Message {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Parts(vec![
+                ContentPart::Text {
+                    text: "First".to_string(),
+                },
+                ContentPart::Thinking {
+                    thinking: "hmm".to_string(),
+                    signature: None,
+                },
+                ContentPart::Text {
+                    text: "Second".to_string(),
+                },
+            ])),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        assert_eq!(msg.text(), "First\nSecond");
+    }
+
+    #[test]
+    fn test_message_text_none() {
+        let msg = Message {
+            role: MessageRole::User,
+            content: None,
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        assert_eq!(msg.text(), "");
+    }
+
+    #[test]
+    fn test_message_thinking() {
+        let msg = Message {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Parts(vec![
+                ContentPart::Thinking {
+                    thinking: "deep thought".to_string(),
+                    signature: None,
+                },
+                ContentPart::Text {
+                    text: "answer".to_string(),
+                },
+                ContentPart::Thinking {
+                    thinking: "more thought".to_string(),
+                    signature: None,
+                },
+            ])),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        let thinking = msg.thinking().unwrap();
+        assert_eq!(thinking, vec!["deep thought", "more thought"]);
+    }
+
+    #[test]
+    fn test_message_thinking_none() {
+        let msg = Message {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("hi".to_string())),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        assert!(msg.thinking().is_none());
+    }
+
+    #[test]
+    fn test_message_tool_uses() {
+        let msg = Message {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::Parts(vec![
+                ContentPart::ToolUse {
+                    id: "t1".to_string(),
+                    name: "Read".to_string(),
+                    input: serde_json::json!({"file": "test.rs"}),
+                },
+                ContentPart::Text {
+                    text: "checking".to_string(),
+                },
+                ContentPart::ToolUse {
+                    id: "t2".to_string(),
+                    name: "Write".to_string(),
+                    input: serde_json::json!({}),
+                },
+            ])),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        let uses = msg.tool_uses();
+        assert_eq!(uses.len(), 2);
+        assert_eq!(uses[0].name, "Read");
+        assert_eq!(uses[1].name, "Write");
+    }
+
+    #[test]
+    fn test_message_role_checks() {
+        let user_msg = Message {
+            role: MessageRole::User,
+            content: None,
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        assert!(user_msg.is_user());
+        assert!(!user_msg.is_assistant());
+        assert!(user_msg.is_role(MessageRole::User));
+    }
+
+    // ── ConversationEntry convenience methods ────────────────────────
+
+    #[test]
+    fn test_entry_text() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello there"}}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.text(), "Hello there");
+    }
+
+    #[test]
+    fn test_entry_text_no_message() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.text(), "");
+    }
+
+    #[test]
+    fn test_entry_role() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.role(), Some(&MessageRole::User));
+    }
+
+    #[test]
+    fn test_entry_stop_reason() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"done","stopReason":"end_turn"}}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.stop_reason(), Some("end_turn"));
+    }
+
+    #[test]
+    fn test_entry_model() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"hi","model":"claude-opus-4-6"}}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.model(), Some("claude-opus-4-6"));
+    }
+
+    // ── Conversation title/first_user_text ───────────────────────────
+
+    #[test]
+    fn test_conversation_title() {
+        let convo = create_test_conversation();
+        let title = convo.title(4).unwrap();
+        assert_eq!(title, "Hell...");
+    }
+
+    #[test]
+    fn test_conversation_title_short() {
+        let convo = create_test_conversation();
+        let title = convo.title(100).unwrap();
+        assert_eq!(title, "Hello");
+    }
+
+    #[test]
+    fn test_conversation_first_user_text() {
+        let convo = create_test_conversation();
+        assert_eq!(convo.first_user_text(), Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn test_conversation_title_empty() {
+        let convo = Conversation::new("empty".to_string());
+        assert!(convo.title(50).is_none());
     }
 }

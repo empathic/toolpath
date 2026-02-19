@@ -6,6 +6,7 @@ pub mod derive;
 pub mod error;
 pub mod io;
 pub mod paths;
+pub mod provider;
 pub mod query;
 pub mod reader;
 pub mod types;
@@ -21,7 +22,7 @@ pub use query::{ConversationQuery, HistoryQuery};
 pub use reader::ConversationReader;
 pub use types::{
     CacheCreation, ContentPart, Conversation, ConversationEntry, ConversationMetadata,
-    HistoryEntry, Message, MessageContent, MessageRole, ToolResultContent, Usage,
+    HistoryEntry, Message, MessageContent, MessageRole, ToolResultContent, ToolUseRef, Usage,
 };
 #[cfg(feature = "watcher")]
 pub use watcher::ConversationWatcher;

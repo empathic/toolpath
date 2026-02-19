@@ -12,6 +12,7 @@ Three core objects: **Step** (a single change), **Path** (a sequence of steps, e
 Cargo.toml                      # workspace root (edition 2024, resolver 2)
 crates/
   toolpath/                     # core types, builders, serde, query API
+  toolpath-convo/               # provider-agnostic conversation types and traits
   toolpath-git/                 # derive from git repos (git2)
   toolpath-claude/              # derive from Claude conversation logs
   toolpath-dot/                 # Graphviz DOT rendering
@@ -27,12 +28,13 @@ FAQ.md                          # design rationale, FAQ, and open questions
 ```
 toolpath-cli (binary: path)
  ├── toolpath           (core types)
+ ├── toolpath-convo     (conversation abstraction)
  ├── toolpath-git     → toolpath
- ├── toolpath-claude  → toolpath
+ ├── toolpath-claude  → toolpath, toolpath-convo
  └── toolpath-dot     → toolpath
 ```
 
-No cross-dependencies between satellite crates. `toolpath` is the sole shared foundation.
+No cross-dependencies between satellite crates except `toolpath-claude → toolpath-convo`.
 
 ## Build and test
 

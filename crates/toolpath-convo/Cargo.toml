@@ -1,0 +1,15 @@
+[package]
+name = "toolpath-convo"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/empathic/toolpath"
+description = "Provider-agnostic conversation types and traits for AI coding tools"
+keywords = ["conversation", "ai", "provider", "toolpath", "abstraction"]
+categories = ["development-tools"]
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

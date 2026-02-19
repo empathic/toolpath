@@ -12,12 +12,13 @@ Toolpath is a Rust workspace of focused, composable crates. The core crate has z
 ```
 toolpath-cli (binary: path)
  +-- toolpath           (core types)
+ +-- toolpath-convo     (conversation abstraction)
  +-- toolpath-git     -> toolpath
- +-- toolpath-claude  -> toolpath
+ +-- toolpath-claude  -> toolpath, toolpath-convo
  +-- toolpath-dot     -> toolpath
 ```
 
-No cross-dependencies between satellite crates. `toolpath` is the sole shared foundation.
+No cross-dependencies between satellite crates except `toolpath-claude -> toolpath-convo`.
 
 {% for crate in crates %}
 

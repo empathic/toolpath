@@ -8,6 +8,14 @@
     "role": "The gravity well. All other crates depend on this; it depends on nothing except serde. Defines Step, Path, Graph, and the query functions to traverse them."
   },
   {
+    "name": "toolpath-convo",
+    "version": "0.1.0",
+    "description": "Provider-agnostic conversation types and traits",
+    "docs": "https://docs.rs/toolpath-convo",
+    "crate": "https://crates.io/crates/toolpath-convo",
+    "role": "Defines Turn, Role, ConversationView, and the ConversationProvider/ConversationWatcher traits. Provider crates (like toolpath-claude) implement the traits; consumer apps code against them."
+  },
+  {
     "name": "toolpath-git",
     "version": "0.1.2",
     "description": "Derive from git repository history",

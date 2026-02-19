@@ -2,6 +2,25 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.1.0 — toolpath-convo / 0.1.3 — toolpath-claude
+
+### toolpath-convo 0.1.0
+
+- New crate: provider-agnostic conversation types and traits for AI coding tools
+- Types: `Turn`, `Role`, `ConversationView`, `ConversationMeta`, `TokenUsage`, `ToolInvocation`, `ToolResult`, `WatcherEvent`
+- Traits: `ConversationProvider` (list/load conversations), `ConversationWatcher` (poll for updates)
+- Enables consumer apps to code against a common conversation model instead of provider-specific types
+
+### toolpath-claude 0.1.3
+
+- Added convenience methods on `Message`: `text()`, `thinking()`, `tool_uses()`, `is_user()`, `is_assistant()`, `is_role()`
+- Added convenience methods on `ConversationEntry`: `text()`, `role()`, `thinking()`, `tool_uses()`, `stop_reason()`, `model()`
+- Added convenience methods on `Conversation`: `title(max_len)`, `first_user_text()`
+- Implemented `toolpath_convo::ConversationProvider` for `ClaudeConvo`
+- Implemented `toolpath_convo::ConversationWatcher` for sync `ConversationWatcher`
+- Added `provider::to_view()` and `provider::to_turn()` for direct conversion
+- New dependency: `toolpath-convo`
+
 ## 0.1.4 — toolpath / 0.2.0 — toolpath-cli
 
 ### toolpath 0.1.4

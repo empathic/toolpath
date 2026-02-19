@@ -1103,6 +1103,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toolpath",
+ "toolpath-convo",
 ]
 
 [[package]]
@@ -1122,6 +1123,16 @@ dependencies = [
  "toolpath-claude",
  "toolpath-dot",
  "toolpath-git",
+]
+
+[[package]]
+name = "toolpath-convo"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
