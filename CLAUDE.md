@@ -84,6 +84,34 @@ Validate example documents: `for f in examples/*.json; do cargo run -p toolpath-
 
 - `toolpath-claude` has a `watcher` feature (default: on) gating `notify`/`tokio` dependencies for filesystem watching
 
+## Versioning and release checklist
+
+When changing a crate's public API (new types, new trait impls, new public methods, new dependencies), bump its version. Use semver: patch for bug fixes, minor for additive changes, major for breaking changes. Pre-1.0 crates treat minor as "potentially breaking."
+
+**Every version bump must update all of the following:**
+
+1. **`crates/<name>/Cargo.toml`** — the crate's own `version` field
+2. **`Cargo.toml`** (workspace root) — the `[workspace.dependencies]` entry for that crate
+3. **`site/_data/crates.json`** — the `version` field for the crate's entry
+4. **`CHANGELOG.md`** — add a new section at the top with the version and changes
+
+**When adding a new crate**, also update:
+
+5. **`Cargo.toml`** (workspace root) — add to `members` and `[workspace.dependencies]`
+6. **`CLAUDE.md`** — repository layout, dependency graph
+7. **`README.md`** — workspace listing
+8. **`site/_data/crates.json`** — add a full entry (name, version, description, docs, crate, role)
+9. **`site/pages/crates.md`** — dependency diagram
+10. **`scripts/release.sh`** — add to `ALL_CRATES` array and the correct tier in the publish section
+11. **Crate README** — create `crates/<name>/README.md` and wire it into lib.rs via `#![doc = include_str!("../README.md")]`
+
+**Release script** (`scripts/release.sh`) publishes in dependency order:
+- Tier 1: `toolpath`, `toolpath-convo` (no workspace deps)
+- Tier 2: `toolpath-git`, `toolpath-dot`, `toolpath-claude` (depend on tier 1)
+- Tier 3: `toolpath-cli` (depends on everything)
+
+Build the site after changes: `cd site && pnpm run build` (should produce 7 pages).
+
 ## Things to know
 
 - The `Document` enum is externally tagged -- JSON documents are wrapped in `{"Step": ...}`, `{"Path": ...}`, or `{"Graph": ...}`

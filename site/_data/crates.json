@@ -25,7 +25,7 @@
   },
   {
     "name": "toolpath-claude",
-    "version": "0.1.2",
+    "version": "0.2.0",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",

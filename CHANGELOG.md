@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## 0.1.0 — toolpath-convo / 0.1.3 — toolpath-claude
+## 0.1.0 — toolpath-convo / 0.2.0 — toolpath-claude
 
 ### toolpath-convo 0.1.0
 
@@ -11,7 +11,7 @@ All notable changes to the Toolpath workspace are documented here.
 - Traits: `ConversationProvider` (list/load conversations), `ConversationWatcher` (poll for updates)
 - Enables consumer apps to code against a common conversation model instead of provider-specific types
 
-### toolpath-claude 0.1.3
+### toolpath-claude 0.2.0
 
 - Added convenience methods on `Message`: `text()`, `thinking()`, `tool_uses()`, `is_user()`, `is_assistant()`, `is_role()`
 - Added convenience methods on `ConversationEntry`: `text()`, `role()`, `thinking()`, `tool_uses()`, `stop_reason()`, `model()`
