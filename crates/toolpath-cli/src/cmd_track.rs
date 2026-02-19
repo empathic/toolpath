@@ -69,6 +69,10 @@ pub enum TrackOp {
         /// Override timestamp (ISO 8601)
         #[arg(long)]
         time: Option<String>,
+
+        /// VCS source as JSON (e.g. '{"type":"git","revision":"abc123"}')
+        #[arg(long)]
+        source: Option<String>,
     },
 
     /// Cache content at a sequence number without creating a step;
@@ -96,6 +100,29 @@ pub enum TrackOp {
         /// Intent text
         #[arg(long)]
         intent: String,
+    },
+
+    /// Set metadata on a step (intent, source, refs)
+    Annotate {
+        /// Path to session state file
+        #[arg(long)]
+        session: PathBuf,
+
+        /// Step ID to annotate (defaults to head)
+        #[arg(long)]
+        step: Option<String>,
+
+        /// Intent text
+        #[arg(long)]
+        intent: Option<String>,
+
+        /// VCS source as JSON (e.g. '{"type":"git","revision":"abc123"}')
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Reference as JSON (e.g. '{"rel":"issue","href":"https://..."}'), repeatable
+        #[arg(long = "ref")]
+        refs: Vec<String>,
     },
 
     /// Emit the session as a Toolpath Path document
@@ -353,6 +380,7 @@ fn record_step(
     parent_seq: u64,
     actor_override: Option<String>,
     time_override: Option<String>,
+    source_json: Option<&str>,
 ) -> Result<StepResult> {
     let (mut path_doc, mut state) = load_session(session_path)?;
 
@@ -392,6 +420,13 @@ fn record_step(
             step = step.with_parent(parent_step_id);
         }
 
+        // Attach VCS source if provided
+        if let Some(src) = source_json {
+            let vcs_source: v1::VcsSource =
+                serde_json::from_str(src).context("failed to parse --source JSON as VcsSource")?;
+            step.meta.get_or_insert_with(v1::StepMeta::default).source = Some(vcs_source);
+        }
+
         path_doc.steps.push(step);
         state.seq_to_step.insert(seq, step_id.clone());
         path_doc.path.head = step_id.clone();
@@ -420,6 +455,7 @@ fn run_step(
     parent_seq: u64,
     actor_override: Option<String>,
     time_override: Option<String>,
+    source: Option<String>,
 ) -> Result<()> {
     let content = read_stdin()?;
     match record_step(
@@ -429,6 +465,7 @@ fn run_step(
         parent_seq,
         actor_override,
         time_override,
+        source.as_deref(),
     )? {
         StepResult::Created(id) => println!("{id}"),
         StepResult::Skip => println!("skip"),
@@ -484,6 +521,54 @@ fn run_note(session_path: PathBuf, intent: String) -> Result<()> {
         .context("head step not found in session")?;
 
     step.meta.get_or_insert_with(v1::StepMeta::default).intent = Some(intent);
+    save_session(&session_path, &path_doc, &state)?;
+    Ok(())
+}
+
+fn run_annotate(
+    session_path: PathBuf,
+    step_id: Option<String>,
+    intent: Option<String>,
+    source_json: Option<String>,
+    ref_jsons: Vec<String>,
+) -> Result<()> {
+    let (mut path_doc, state) = load_session(&session_path)?;
+
+    // Resolve target step
+    let target_id = match step_id {
+        Some(id) => id,
+        None => {
+            if path_doc.path.head == "none" {
+                anyhow::bail!("no head step to annotate (use --step to specify)");
+            }
+            path_doc.path.head.clone()
+        }
+    };
+
+    let step = path_doc
+        .steps
+        .iter_mut()
+        .find(|s| s.step.id == target_id)
+        .with_context(|| format!("step not found: {target_id}"))?;
+
+    let meta = step.meta.get_or_insert_with(v1::StepMeta::default);
+
+    if let Some(text) = intent {
+        meta.intent = Some(text);
+    }
+
+    if let Some(src) = source_json {
+        let vcs_source: v1::VcsSource =
+            serde_json::from_str(&src).context("failed to parse --source JSON as VcsSource")?;
+        meta.source = Some(vcs_source);
+    }
+
+    for ref_json in &ref_jsons {
+        let r: v1::Ref =
+            serde_json::from_str(ref_json).context("failed to parse --ref JSON as Ref")?;
+        meta.refs.push(r);
+    }
+
     save_session(&session_path, &path_doc, &state)?;
     Ok(())
 }
@@ -579,13 +664,21 @@ pub fn run(op: TrackOp, pretty: bool) -> Result<()> {
             parent_seq,
             actor,
             time,
-        } => run_step(session, seq, parent_seq, actor, time),
+            source,
+        } => run_step(session, seq, parent_seq, actor, time, source),
         TrackOp::Visit {
             session,
             seq,
             inherit_from,
         } => run_visit(session, seq, inherit_from),
         TrackOp::Note { session, intent } => run_note(session, intent),
+        TrackOp::Annotate {
+            session,
+            step,
+            intent,
+            source,
+            refs,
+        } => run_annotate(session, step, intent, source, refs),
         TrackOp::Export { session } => run_export(session, pretty),
         TrackOp::Close { session, output } => run_close(session, pretty, output),
         TrackOp::List { session_dir, json } => run_list(session_dir, json),
@@ -926,6 +1019,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -952,7 +1046,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let session_path = make_session(dir.path(), "hello\n");
 
-        let result = record_step(&session_path, "hello\n".to_string(), 1, 0, None, None).unwrap();
+        let result =
+            record_step(&session_path, "hello\n".to_string(), 1, 0, None, None, None).unwrap();
 
         assert_eq!(result, StepResult::Skip);
 
@@ -976,6 +1071,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r1, StepResult::Created("step-001".to_string()));
@@ -988,6 +1084,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r2, StepResult::Created("step-002".to_string()));
@@ -1011,6 +1108,7 @@ mod tests {
             0,
             Some("tool:formatter".to_string()),
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1030,6 +1128,7 @@ mod tests {
             0,
             None,
             Some("2026-06-15T12:00:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1047,6 +1146,7 @@ mod tests {
             "world\n".to_string(),
             1,
             99, // parent_seq 99 doesn't exist
+            None,
             None,
             None,
         );
@@ -1072,6 +1172,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1083,6 +1184,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1107,6 +1209,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         record_step(
@@ -1116,6 +1219,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1127,6 +1231,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:03:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1154,11 +1259,12 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
         // Undo back to "hello\n" at seq 2 (parent_seq 0) — skip
-        let r = record_step(&session_path, "hello\n".to_string(), 2, 0, None, None).unwrap();
+        let r = record_step(&session_path, "hello\n".to_string(), 2, 0, None, None, None).unwrap();
         assert_eq!(r, StepResult::Skip);
 
         // Edit from seq 2 to seq 3 — should be a root step (seq 2 mapped to "")
@@ -1169,6 +1275,7 @@ mod tests {
             2,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r3, StepResult::Created("step-002".to_string()));
@@ -1195,6 +1302,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         // seq 2: B→C
@@ -1205,6 +1313,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1214,7 +1323,7 @@ mod tests {
         assert_eq!(before_doc.path.head, "step-002");
 
         // Undo to seq 1 (revisit) — should skip, no mutation
-        let r = record_step(&session_path, "B\n".to_string(), 1, 2, None, None).unwrap();
+        let r = record_step(&session_path, "B\n".to_string(), 1, 2, None, None, None).unwrap();
         assert_eq!(r, StepResult::Skip);
 
         let (after_doc, after_state) = load_session(&session_path).unwrap();
@@ -1238,6 +1347,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         record_step(
@@ -1247,11 +1357,12 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
 
         // Undo to seq 1 — skip
-        let r = record_step(&session_path, "B\n".to_string(), 1, 2, None, None).unwrap();
+        let r = record_step(&session_path, "B\n".to_string(), 1, 2, None, None, None).unwrap();
         assert_eq!(r, StepResult::Skip);
 
         // New edit from seq 1 → seq 3
@@ -1262,6 +1373,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:03:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r3, StepResult::Created("step-003".to_string()));
@@ -1287,11 +1399,12 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
         // Undo to seq 0 — skip (seq 0 was cached at init time)
-        let r = record_step(&session_path, "A\n".to_string(), 0, 1, None, None).unwrap();
+        let r = record_step(&session_path, "A\n".to_string(), 0, 1, None, None, None).unwrap();
         assert_eq!(r, StepResult::Skip);
 
         // New edit from seq 0 → seq 2
@@ -1302,6 +1415,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r2, StepResult::Created("step-002".to_string()));
@@ -1351,6 +1465,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         // seq 2: B→C
@@ -1361,6 +1476,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1386,6 +1502,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         // seq 3: step-002 (B→C) — pretend seq 2 was skipped by TextChanged batching
@@ -1401,6 +1518,7 @@ mod tests {
             3,
             None,
             Some("2026-01-01T00:03:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1419,6 +1537,7 @@ mod tests {
             2,
             None,
             Some("2026-01-01T00:04:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r, StepResult::Created("step-003".to_string()));
@@ -1448,6 +1567,7 @@ mod tests {
             3,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r, StepResult::Created("step-001".to_string()));
@@ -1468,6 +1588,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1491,6 +1612,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1515,6 +1637,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1553,6 +1676,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert!(session_path.exists());
@@ -1572,6 +1696,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1769,6 +1894,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         record_step(
@@ -1778,6 +1904,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
         record_step(
@@ -1787,6 +1914,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:03:00Z".to_string()),
+            None,
         )
         .unwrap();
 
@@ -1843,6 +1971,7 @@ mod tests {
             0,
             None,
             Some("2026-01-01T00:01:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r1, StepResult::Created("step-001".to_string()));
@@ -1855,6 +1984,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:02:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r2, StepResult::Created("step-002".to_string()));
@@ -1870,6 +2000,7 @@ mod tests {
             1,
             None,
             Some("2026-01-01T00:03:00Z".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(r3, StepResult::Created("step-003".to_string()));
@@ -1928,5 +2059,374 @@ mod tests {
             }
             _ => panic!("Expected Path"),
         }
+    }
+
+    // ── record_step --source ──────────────────────────────────────────────
+
+    #[test]
+    fn test_record_step_with_source() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+
+        let result = record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            Some(r#"{"type":"git","revision":"abc123"}"#),
+        )
+        .unwrap();
+        assert_eq!(result, StepResult::Created("step-001".to_string()));
+
+        let (path_doc, _) = load_session(&session_path).unwrap();
+        let source = path_doc.steps[0]
+            .meta
+            .as_ref()
+            .and_then(|m| m.source.as_ref())
+            .unwrap();
+        assert_eq!(source.vcs_type, "git");
+        assert_eq!(source.revision, "abc123");
+    }
+
+    #[test]
+    fn test_record_step_source_bad_json() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+
+        let result = record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            Some("not valid json"),
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed to parse --source JSON")
+        );
+    }
+
+    #[test]
+    fn test_record_step_source_with_extra_fields() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            Some(r#"{"type":"git","revision":"abc123","branch":"main","dirty":true}"#),
+        )
+        .unwrap();
+
+        let (path_doc, _) = load_session(&session_path).unwrap();
+        let source = path_doc.steps[0]
+            .meta
+            .as_ref()
+            .and_then(|m| m.source.as_ref())
+            .unwrap();
+        assert_eq!(source.vcs_type, "git");
+        assert_eq!(source.revision, "abc123");
+        assert_eq!(source.extra["branch"], serde_json::json!("main"));
+        assert_eq!(source.extra["dirty"], serde_json::json!(true));
+
+        // Roundtrip through JSON
+        let doc = v1::Document::Path(path_doc);
+        let json = doc.to_json_pretty().unwrap();
+        let parsed = v1::Document::from_json(&json).unwrap();
+        match parsed {
+            v1::Document::Path(p) => {
+                let s = p.steps[0].meta.as_ref().unwrap().source.as_ref().unwrap();
+                assert_eq!(s.extra["branch"], serde_json::json!("main"));
+                assert_eq!(s.extra["dirty"], serde_json::json!(true));
+            }
+            _ => panic!("Expected Path"),
+        }
+    }
+
+    #[test]
+    fn test_source_survives_export() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            Some(r#"{"type":"git","revision":"def456","change_id":"I1234"}"#),
+        )
+        .unwrap();
+
+        // Export (load strips track state)
+        let (path_doc, _) = load_session(&session_path).unwrap();
+        let doc = v1::Document::Path(path_doc);
+        let json = doc.to_json_pretty().unwrap();
+
+        // Parse back and verify source persisted
+        let parsed = v1::Document::from_json(&json).unwrap();
+        match parsed {
+            v1::Document::Path(p) => {
+                let source = p.steps[0].meta.as_ref().unwrap().source.as_ref().unwrap();
+                assert_eq!(source.vcs_type, "git");
+                assert_eq!(source.revision, "def456");
+                assert_eq!(source.change_id.as_deref(), Some("I1234"));
+            }
+            _ => panic!("Expected Path"),
+        }
+    }
+
+    // ── run_annotate ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_annotate_intent_on_head() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            None,
+        )
+        .unwrap();
+
+        run_annotate(
+            session_path.clone(),
+            None, // defaults to head
+            Some("Fix greeting".to_string()),
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        let (path_doc, _) = load_session(&session_path).unwrap();
+        let intent = path_doc.steps[0]
+            .meta
+            .as_ref()
+            .and_then(|m| m.intent.as_ref());
+        assert_eq!(intent, Some(&"Fix greeting".to_string()));
+    }
+
+    #[test]
+    fn test_annotate_intent_on_specific_step() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            None,
+        )
+        .unwrap();
+        record_step(
+            &session_path,
+            "again\n".to_string(),
+            2,
+            1,
+            None,
+            Some("2026-01-01T00:02:00Z".to_string()),
+            None,
+        )
+        .unwrap();
+
+        // Annotate step-001 (not head)
+        run_annotate(
+            session_path.clone(),
+            Some("step-001".to_string()),
+            Some("First edit".to_string()),
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        let (path_doc, _) = load_session(&session_path).unwrap();
+        let intent = path_doc.steps[0]
+            .meta
+            .as_ref()
+            .and_then(|m| m.intent.as_ref());
+        assert_eq!(intent, Some(&"First edit".to_string()));
+        // Head step should not have intent
+        assert!(
+            path_doc.steps[1]
+                .meta
+                .as_ref()
+                .and_then(|m| m.intent.as_ref())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_annotate_source() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            None,
+        )
+        .unwrap();
+
+        run_annotate(
+            session_path.clone(),
+            None,
+            None,
+            Some(r#"{"type":"git","revision":"abc123"}"#.to_string()),
+            vec![],
+        )
+        .unwrap();
+
+        let (path_doc, _) = load_session(&session_path).unwrap();
+        let source = path_doc.steps[0]
+            .meta
+            .as_ref()
+            .unwrap()
+            .source
+            .as_ref()
+            .unwrap();
+        assert_eq!(source.vcs_type, "git");
+        assert_eq!(source.revision, "abc123");
+    }
+
+    #[test]
+    fn test_annotate_ref() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            None,
+        )
+        .unwrap();
+
+        run_annotate(
+            session_path.clone(),
+            None,
+            None,
+            None,
+            vec![r#"{"rel":"issue","href":"https://github.com/org/repo/issues/1"}"#.to_string()],
+        )
+        .unwrap();
+
+        let (path_doc, _) = load_session(&session_path).unwrap();
+        let refs = &path_doc.steps[0].meta.as_ref().unwrap().refs;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].rel, "issue");
+        assert!(refs[0].href.contains("issues/1"));
+    }
+
+    #[test]
+    fn test_annotate_multiple_refs() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            None,
+        )
+        .unwrap();
+
+        // First annotate with one ref
+        run_annotate(
+            session_path.clone(),
+            None,
+            None,
+            None,
+            vec![r#"{"rel":"issue","href":"https://example.com/1"}"#.to_string()],
+        )
+        .unwrap();
+
+        // Second annotate adds another ref
+        run_annotate(
+            session_path.clone(),
+            None,
+            None,
+            None,
+            vec![r#"{"rel":"pr","href":"https://example.com/pr/42"}"#.to_string()],
+        )
+        .unwrap();
+
+        let (path_doc, _) = load_session(&session_path).unwrap();
+        let refs = &path_doc.steps[0].meta.as_ref().unwrap().refs;
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].rel, "issue");
+        assert_eq!(refs[1].rel, "pr");
+    }
+
+    #[test]
+    fn test_annotate_no_step_errors() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+        // No steps recorded → head is "none"
+
+        let result = run_annotate(
+            session_path,
+            None, // defaults to head, which is "none"
+            Some("intent".to_string()),
+            None,
+            vec![],
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no head step"));
+    }
+
+    #[test]
+    fn test_annotate_missing_step_errors() {
+        let dir = TempDir::new().unwrap();
+        let session_path = make_session(dir.path(), "hello\n");
+        record_step(
+            &session_path,
+            "world\n".to_string(),
+            1,
+            0,
+            None,
+            Some("2026-01-01T00:01:00Z".to_string()),
+            None,
+        )
+        .unwrap();
+
+        let result = run_annotate(
+            session_path,
+            Some("nonexistent-step".to_string()),
+            Some("intent".to_string()),
+            None,
+            vec![],
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("step not found: nonexistent-step")
+        );
     }
 }

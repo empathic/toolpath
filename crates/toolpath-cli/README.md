@@ -41,7 +41,8 @@ path derive claude --project . --pretty | path query filter --actor "agent:" --p
 ```bash
 cat src/main.rs | path track init --file src/main.rs --actor "human:alex"
 # ... edit the file ...
-cat src/main.rs | path track step --session /tmp/session.json --seq 1 --intent "Refactored auth"
+cat src/main.rs | path track step --session /tmp/session.json --seq 1 --parent-seq 0
+path track annotate --session /tmp/session.json --intent "Refactored auth"
 path track close --session /tmp/session.json --pretty > session-provenance.json
 ```
 
@@ -135,10 +136,20 @@ Incrementally build a Path document step by step, useful for editor integrations
 echo "hello" | path track init --file src/main.rs --actor "human:alex" --title "Editing session"
 
 # Record a step (pipe current content via stdin)
-echo "world" | path track step --session /tmp/session.json --seq 1 --intent "Changed greeting"
+echo "world" | path track step --session /tmp/session.json --seq 1 --parent-seq 0
+
+# Record a step with VCS source metadata
+echo "world" | path track step --session /tmp/session.json --seq 2 --parent-seq 1 \
+  --source '{"type":"git","revision":"abc123"}'
 
 # Add a note to the current step
 path track note --session /tmp/session.json --intent "Refactored for clarity"
+
+# Annotate any step with metadata (intent, source, refs)
+path track annotate --session /tmp/session.json --step step-001 \
+  --intent "Extract helper" \
+  --source '{"type":"git","revision":"abc123"}' \
+  --ref '{"rel":"issue","href":"https://github.com/org/repo/issues/42"}'
 
 # Export the session as a Toolpath Path document
 path track export --session /tmp/session.json --pretty

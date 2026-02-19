@@ -570,6 +570,7 @@ mod native {
             vcs_type: "git".to_string(),
             revision: commit.id().to_string(),
             change_id: None,
+            extra: HashMap::new(),
         };
 
         Ok(Step {
