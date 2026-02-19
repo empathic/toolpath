@@ -32,12 +32,13 @@ path
   merge       FILE... [--title TEXT]
   track
     init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
-    step      --session FILE --seq N [--actor ACTOR] [--intent TEXT]
-    visit     --session FILE --seq N
+    step      --session FILE --seq N --parent-seq N [--actor ACTOR] [--source JSON]
+    visit     --session FILE --seq N [--inherit-from N]
     note      --session FILE --intent TEXT
+    annotate  --session FILE [--step ID] [--intent TEXT] [--source JSON] [--ref JSON]...
     export    --session FILE
-    close     --session FILE
-    list
+    close     --session FILE [--output FILE]
+    list      [--session-dir PATH] [--json]
   validate    --input FILE
   haiku
 ```
@@ -87,15 +88,18 @@ Returns steps that have no descendants leading to the path head. These are the t
 ### Track changes in real time
 
 ```bash
-# Start a session
-path track init --file src/main.rs --actor human:alex --title "Refactoring auth"
+# Start a session (pipe initial content via stdin)
+cat src/main.rs | path track init --file src/main.rs --actor human:alex --title "Refactoring auth"
 
-# After each save, record a step
-path track step --session .toolpath-session.json --seq 1
-path track step --session .toolpath-session.json --seq 2 --intent "Extract helper"
+# After each save, record a step (pipe current content via stdin)
+cat src/main.rs | path track step --session /tmp/session.json --seq 1 --parent-seq 0
+cat src/main.rs | path track step --session /tmp/session.json --seq 2 --parent-seq 1
+
+# Annotate a step with intent or VCS source
+path track annotate --session /tmp/session.json --intent "Extract helper"
 
 # Export the finished document
-path track export --session .toolpath-session.json --pretty
+path track export --session /tmp/session.json --pretty
 ```
 
 The `track` command group records changes to a file over time, building a Path document incrementally. Each `step` captures a diff from the previous state.

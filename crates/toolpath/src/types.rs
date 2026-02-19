@@ -310,6 +310,9 @@ pub struct VcsSource {
     pub revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_id: Option<String>,
+    /// Additional properties (schema: `additionalProperties: true`)
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 // ============================================================================
@@ -484,6 +487,7 @@ impl Step {
             vcs_type: vcs_type.into(),
             revision: revision.into(),
             change_id: None,
+            extra: HashMap::new(),
         });
         self
     }
