@@ -2,6 +2,14 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.2.1 — toolpath-claude
+
+### toolpath-claude 0.2.1
+
+- Fixed silent data loss when deserializing Claude Code JSONL conversation logs: `stop_reason`, `stop_sequence`, and all `Usage`/`CacheCreation` fields were always `None` because the structs expected camelCase keys but Claude Code writes the inner `message` object in the Anthropic API's native snake_case
+- Added `#[serde(alias = "...")]` for snake_case variants on `Message`, `Usage`, and `CacheCreation` fields — both camelCase and snake_case are now accepted during deserialization
+- Thanks to the crabcity maintainers for the detailed bug report
+
 ## 0.1.0 — toolpath-convo / 0.2.0 — toolpath-claude
 
 ### toolpath-convo 0.1.0

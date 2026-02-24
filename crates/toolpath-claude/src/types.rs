@@ -72,10 +72,10 @@ pub struct Message {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub message_type: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "stop_reason")]
     pub stop_reason: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "stop_sequence")]
     pub stop_sequence: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,18 +314,26 @@ impl std::str::FromStr for MessageRole {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
+    #[serde(alias = "input_tokens")]
     pub input_tokens: Option<u32>,
+    #[serde(alias = "output_tokens")]
     pub output_tokens: Option<u32>,
+    #[serde(alias = "cache_creation_input_tokens")]
     pub cache_creation_input_tokens: Option<u32>,
+    #[serde(alias = "cache_read_input_tokens")]
     pub cache_read_input_tokens: Option<u32>,
+    #[serde(alias = "cache_creation")]
     pub cache_creation: Option<CacheCreation>,
+    #[serde(alias = "service_tier")]
     pub service_tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CacheCreation {
+    #[serde(alias = "ephemeral_5m_input_tokens")]
     pub ephemeral_5m_input_tokens: Option<u32>,
+    #[serde(alias = "ephemeral_1h_input_tokens")]
     pub ephemeral_1h_input_tokens: Option<u32>,
 }
 
@@ -966,6 +974,59 @@ mod tests {
         )
         .unwrap();
         assert_eq!(entry.stop_reason(), Some("end_turn"));
+    }
+
+    // ── Snake_case deserialization (real JSONL format) ─────────────
+
+    #[test]
+    fn test_stop_reason_snake_case() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"done","stop_reason":"end_turn","stop_sequence":null}}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.stop_reason(), Some("end_turn"));
+        assert!(entry.message.as_ref().unwrap().stop_sequence.is_none());
+    }
+
+    #[test]
+    fn test_usage_snake_case() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"hi","usage":{"input_tokens":1200,"output_tokens":350,"cache_creation_input_tokens":100,"cache_read_input_tokens":500,"service_tier":"standard"}}}"#,
+        )
+        .unwrap();
+        let usage = entry.message.unwrap().usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(1200));
+        assert_eq!(usage.output_tokens, Some(350));
+        assert_eq!(usage.cache_creation_input_tokens, Some(100));
+        assert_eq!(usage.cache_read_input_tokens, Some(500));
+        assert_eq!(usage.service_tier.as_deref(), Some("standard"));
+    }
+
+    #[test]
+    fn test_cache_creation_snake_case() {
+        let json = r#"{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20}"#;
+        let cc: CacheCreation = serde_json::from_str(json).unwrap();
+        assert_eq!(cc.ephemeral_5m_input_tokens, Some(10));
+        assert_eq!(cc.ephemeral_1h_input_tokens, Some(20));
+    }
+
+    #[test]
+    fn test_full_assistant_entry_snake_case() {
+        // Matches the actual JSONL format written by Claude Code
+        let json = r#"{"parentUuid":"abc","isSidechain":false,"userType":"external","cwd":"/project","sessionId":"sess-1","version":"2.1.37","message":{"model":"claude-opus-4-6","id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":4561,"cache_read_input_tokens":17868,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":4561},"output_tokens":4,"service_tier":"standard"}},"requestId":"req_123","type":"assistant","uuid":"u1","timestamp":"2024-01-01T00:00:00Z"}"#;
+        let entry: ConversationEntry = serde_json::from_str(json).unwrap();
+        let msg = entry.message.unwrap();
+        assert_eq!(msg.stop_reason.as_deref(), Some("end_turn"));
+        assert!(msg.stop_sequence.is_none());
+        let usage = msg.usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(3));
+        assert_eq!(usage.output_tokens, Some(4));
+        assert_eq!(usage.cache_creation_input_tokens, Some(4561));
+        assert_eq!(usage.cache_read_input_tokens, Some(17868));
+        assert_eq!(usage.service_tier.as_deref(), Some("standard"));
+        let cc = usage.cache_creation.unwrap();
+        assert_eq!(cc.ephemeral_5m_input_tokens, Some(0));
+        assert_eq!(cc.ephemeral_1h_input_tokens, Some(4561));
     }
 
     #[test]
