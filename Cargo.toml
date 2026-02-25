@@ -15,9 +15,9 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 toolpath = { version = "0.1.5", path = "crates/toolpath" }
-toolpath-convo = { version = "0.1.0", path = "crates/toolpath-convo" }
+toolpath-convo = { version = "0.2.0", path = "crates/toolpath-convo" }
 toolpath-git = { version = "0.1.3", path = "crates/toolpath-git" }
-toolpath-claude = { version = "0.2.1", path = "crates/toolpath-claude", default-features = false }
+toolpath-claude = { version = "0.3.0", path = "crates/toolpath-claude", default-features = false }
 toolpath-dot = { version = "0.1.2", path = "crates/toolpath-dot" }
 
 serde = { version = "1.0", features = ["derive"] }

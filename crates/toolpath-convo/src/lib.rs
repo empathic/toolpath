@@ -176,8 +176,15 @@ pub struct ConversationMeta {
 /// Events emitted by a [`ConversationWatcher`].
 #[derive(Debug, Clone)]
 pub enum WatcherEvent {
-    /// A complete conversational turn.
+    /// A turn seen for the first time.
     Turn(Box<Turn>),
+
+    /// A previously-emitted turn with additional data filled in
+    /// (e.g. tool results that arrived in a later log entry).
+    ///
+    /// Consumers should replace their stored copy of the turn with this
+    /// updated version. The turn's `id` field identifies which turn to replace.
+    TurnUpdated(Box<Turn>),
 
     /// A non-conversational progress/status event.
     Progress {
@@ -378,6 +385,9 @@ mod tests {
     fn test_watcher_event_variants() {
         let turn_event = WatcherEvent::Turn(Box::new(sample_view().turns[0].clone()));
         assert!(matches!(turn_event, WatcherEvent::Turn(_)));
+
+        let updated_event = WatcherEvent::TurnUpdated(Box::new(sample_view().turns[1].clone()));
+        assert!(matches!(updated_event, WatcherEvent::TurnUpdated(_)));
 
         let progress_event = WatcherEvent::Progress {
             kind: "agent_progress".into(),

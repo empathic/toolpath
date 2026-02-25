@@ -19,7 +19,7 @@ coupling consumer code to provider-specific data formats.
 | `ToolInvocation` | A tool call within a turn |
 | `ToolResult` | The result of a tool call |
 | `TokenUsage` | Input/output token counts |
-| `WatcherEvent` | Either a `Turn` or a `Progress` event |
+| `WatcherEvent` | A `Turn` (new), `TurnUpdated` (enriched with tool results), or `Progress` event |
 
 **Traits** define how providers expose their data:
 

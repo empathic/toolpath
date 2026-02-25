@@ -105,7 +105,12 @@ while let Some(entries) = handle.recv().await {
 ## Provider-agnostic usage
 
 This crate implements `toolpath_convo::ConversationProvider`, so consumers can
-code against the provider-agnostic types instead of Claude-specific structures:
+code against the provider-agnostic types instead of Claude-specific structures.
+
+Tool results are automatically assembled across entry boundaries — Claude's JSONL
+writes tool invocations and their results as separate entries, but
+`load_conversation` pairs them by `tool_use_id` so `ToolInvocation.result` is
+populated and tool-result-only user entries are absorbed (no phantom empty turns):
 
 ```rust,ignore
 use toolpath_claude::ClaudeConvo;
@@ -116,6 +121,26 @@ let view = provider.load_conversation("/path/to/project", "session-id")?;
 
 for turn in &view.turns {
     println!("[{}] {}: {}", turn.timestamp, turn.role, turn.text);
+    for tool_use in &turn.tool_uses {
+        if let Some(result) = &tool_use.result {
+            println!("  {} -> {}", tool_use.name, if result.is_error { "error" } else { "ok" });
+        }
+    }
+}
+```
+
+The `ConversationWatcher` trait impl emits `WatcherEvent::Turn` eagerly and
+follows up with `WatcherEvent::TurnUpdated` when tool results arrive:
+
+```rust,ignore
+use toolpath_convo::{ConversationWatcher, WatcherEvent};
+
+for event in watcher.poll()? {
+    match event {
+        WatcherEvent::Turn(turn) => ui.add_turn(*turn),
+        WatcherEvent::TurnUpdated(turn) => ui.replace_turn(*turn),
+        WatcherEvent::Progress { .. } => {}
+    }
 }
 ```
 

@@ -2,6 +2,20 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.2.0 — toolpath-convo / 0.3.0 — toolpath-claude
+
+### toolpath-convo 0.2.0
+
+- Added `WatcherEvent::TurnUpdated` variant for signaling when a previously-emitted turn has been updated with additional data (e.g. tool results that arrived in a later log entry)
+
+### toolpath-claude 0.3.0
+
+- **Breaking (behavioral):** `conversation_to_view()` and `ConversationProvider::load_conversation()` now perform cross-entry tool result assembly — tool-result-only user entries are absorbed into the preceding assistant turn's `ToolInvocation.result` fields instead of being emitted as separate phantom empty turns
+- **Breaking (behavioral):** `ConversationWatcher` trait impl now emits `WatcherEvent::TurnUpdated` when tool results arrive, instead of emitting phantom empty user turns
+- Added `Message::tool_results()` convenience method and `ToolResultRef` type, symmetric with `tool_uses()`/`ToolUseRef`
+- Added shared `merge_tool_results()` that pairs results to invocations by `tool_use_id`
+- Thanks to the crabcity maintainers for the detailed design request
+
 ## 0.2.1 — toolpath-claude
 
 ### toolpath-claude 0.2.1
