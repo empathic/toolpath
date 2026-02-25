@@ -9,7 +9,7 @@
   },
   {
     "name": "toolpath-convo",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Provider-agnostic conversation types and traits",
     "docs": "https://docs.rs/toolpath-convo",
     "crate": "https://crates.io/crates/toolpath-convo",
@@ -25,7 +25,7 @@
   },
   {
     "name": "toolpath-claude",
-    "version": "0.2.1",
+    "version": "0.3.0",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",

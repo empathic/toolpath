@@ -22,7 +22,8 @@ pub use query::{ConversationQuery, HistoryQuery};
 pub use reader::ConversationReader;
 pub use types::{
     CacheCreation, ContentPart, Conversation, ConversationEntry, ConversationMetadata,
-    HistoryEntry, Message, MessageContent, MessageRole, ToolResultContent, ToolUseRef, Usage,
+    HistoryEntry, Message, MessageContent, MessageRole, ToolResultContent, ToolResultRef,
+    ToolUseRef, Usage,
 };
 #[cfg(feature = "watcher")]
 pub use watcher::ConversationWatcher;

@@ -150,6 +150,14 @@ pub struct ToolUseRef<'a> {
     pub input: &'a Value,
 }
 
+/// A reference to a tool result entry within a content part.
+#[derive(Debug)]
+pub struct ToolResultRef<'a> {
+    pub tool_use_id: &'a str,
+    pub content: &'a ToolResultContent,
+    pub is_error: bool,
+}
+
 impl Message {
     /// Collapsed text content, joining all text parts with newlines.
     ///
@@ -201,6 +209,29 @@ impl Message {
             .iter()
             .filter_map(|p| match p {
                 ContentPart::ToolUse { id, name, input } => Some(ToolUseRef { id, name, input }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Tool result entries, if any.
+    pub fn tool_results(&self) -> Vec<ToolResultRef<'_>> {
+        let parts = match &self.content {
+            Some(MessageContent::Parts(parts)) => parts,
+            _ => return Vec::new(),
+        };
+        parts
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => Some(ToolResultRef {
+                    tool_use_id,
+                    content,
+                    is_error: *is_error,
+                }),
                 _ => None,
             })
             .collect()
@@ -919,6 +950,53 @@ mod tests {
         assert_eq!(uses.len(), 2);
         assert_eq!(uses[0].name, "Read");
         assert_eq!(uses[1].name, "Write");
+    }
+
+    #[test]
+    fn test_message_tool_results() {
+        let msg = Message {
+            role: MessageRole::User,
+            content: Some(MessageContent::Parts(vec![
+                ContentPart::ToolResult {
+                    tool_use_id: "t1".to_string(),
+                    content: ToolResultContent::Text("file contents".to_string()),
+                    is_error: false,
+                },
+                ContentPart::ToolResult {
+                    tool_use_id: "t2".to_string(),
+                    content: ToolResultContent::Text("error msg".to_string()),
+                    is_error: true,
+                },
+            ])),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        let results = msg.tool_results();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tool_use_id, "t1");
+        assert_eq!(results[0].content.text(), "file contents");
+        assert!(!results[0].is_error);
+        assert_eq!(results[1].tool_use_id, "t2");
+        assert!(results[1].is_error);
+    }
+
+    #[test]
+    fn test_message_tool_results_empty() {
+        let msg = Message {
+            role: MessageRole::User,
+            content: Some(MessageContent::Text("hello".to_string())),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        };
+        assert!(msg.tool_results().is_empty());
     }
 
     #[test]
