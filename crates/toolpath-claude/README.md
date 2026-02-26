@@ -144,6 +144,40 @@ for event in watcher.poll()? {
 }
 ```
 
+### Enrichment
+
+Beyond basic conversation reading, the provider populates
+[`toolpath-convo`](https://crates.io/crates/toolpath-convo) enrichment fields:
+
+**Tool classification** — Claude Code tool names are mapped to `ToolCategory`:
+
+| Claude Code tool | ToolCategory |
+|---|---|
+| `Read` | `FileRead` |
+| `Glob`, `Grep` | `FileSearch` |
+| `Write`, `Edit`, `NotebookEdit` | `FileWrite` |
+| `Bash` | `Shell` |
+| `WebFetch`, `WebSearch` | `Network` |
+| `Task` | `Delegation` |
+
+Unrecognized tools get `category: None` — consumers still have `name` and `input`.
+
+**Environment context** — each turn's `EnvironmentSnapshot` is populated from the
+log entry's `cwd` (working directory) and `git_branch` (VCS branch).
+
+**Delegation tracking** — `Task` tool invocations are extracted as `DelegatedWork`
+on the parent turn, with `agent_id`, `prompt`, and `result` populated. Sub-agent
+turns are stored in separate session files and not yet cross-referenced (`turns`
+is empty).
+
+**Token usage** — per-turn `TokenUsage` includes `cache_read_tokens` and
+`cache_write_tokens` from Claude's prompt caching. `ConversationView.total_usage`
+aggregates across all turns.
+
+**Session summary** — `ConversationView.provider_id` is `"claude-code"`.
+`ConversationView.files_changed` lists all files mutated during the session
+(deduplicated, first-touch order), derived from `FileWrite`-categorized tool inputs.
+
 See [`toolpath-convo`](https://crates.io/crates/toolpath-convo) for the full trait and type definitions.
 
 ## Part of Toolpath
