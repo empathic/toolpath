@@ -2,6 +2,31 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.3.0 — toolpath-convo / 0.4.0 — toolpath-claude
+
+### toolpath-convo 0.3.0
+
+- Added `EnvironmentSnapshot` type and `Turn.environment` field for per-turn working directory and VCS branch/revision
+- Added `DelegatedWork` type and `Turn.delegations` field for sub-agent delegation tracking
+- Added `ToolCategory` enum (`FileRead`, `FileWrite`, `FileSearch`, `Shell`, `Network`, `Delegation`) — toolpath's own classification ontology for tool invocations
+- Added `ToolInvocation.category` field (`Option<ToolCategory>`) for semantic classification of tool calls
+- Added `TokenUsage.cache_read_tokens` and `TokenUsage.cache_write_tokens` for prompt/context caching visibility
+- Added `ConversationView.total_usage` for session-level aggregate token usage
+- Added `ConversationView.provider_id` for identifying the conversation source (e.g. `"claude-code"`)
+- Added `ConversationView.files_changed` for deduplicated, first-touch-ordered file mutation summary
+- All new fields use `#[serde(default)]` — existing JSON without them deserializes cleanly
+
+### toolpath-claude 0.4.0
+
+- Populates `Turn.environment` from entry `cwd` and `gitBranch` fields
+- Populates `ToolInvocation.category` by mapping known Claude Code tool names to `ToolCategory` variants
+- Populates `Turn.delegations` from `Task` tool invocations, with cross-entry result assembly
+- Populates `TokenUsage.cache_read_tokens` and `cache_write_tokens` from Claude usage data
+- Computes `ConversationView.total_usage` by summing per-turn token usage
+- Sets `ConversationView.provider_id` to `"claude-code"`
+- Computes `ConversationView.files_changed` from `FileWrite`-categorized tool invocation inputs
+- Thanks to the crabcity maintainers for the detailed enrichment proposal
+
 ## 0.2.0 — toolpath-convo / 0.3.0 — toolpath-claude
 
 ### toolpath-convo 0.2.0

@@ -53,6 +53,67 @@ impl std::fmt::Display for Role {
 pub struct TokenUsage {
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    /// Tokens read from cache (prompt caching, context caching).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u32>,
+    /// Tokens written to cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u32>,
+}
+
+/// Snapshot of the working environment when a turn was produced.
+///
+/// All fields are optional. Providers populate what they have.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EnvironmentSnapshot {
+    /// Working directory (absolute path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    /// Version control branch (git, hg, jj, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vcs_branch: Option<String>,
+    /// Version control revision (commit hash, changeset ID, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vcs_revision: Option<String>,
+}
+
+/// A sub-agent delegation: a turn that spawned child work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegatedWork {
+    /// Provider-specific agent identifier (e.g. session ID, task ID).
+    pub agent_id: String,
+    /// The prompt/instruction given to the sub-agent.
+    pub prompt: String,
+    /// Turns produced by the sub-agent (may be empty if not available
+    /// or if the sub-agent's work is stored in a separate session).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<Turn>,
+    /// Final result returned by the sub-agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+}
+
+/// Toolpath's classification of what a tool invocation does.
+///
+/// This is toolpath's ontology, not a provider-specific label. Provider
+/// crates map their tool names into these categories. `None` means the
+/// tool isn't recognized — consumers still have `name` and `input` for
+/// anything we don't classify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCategory {
+    /// Read a file — no side effects on the filesystem.
+    FileRead,
+    /// Write, edit, create, or delete a file.
+    FileWrite,
+    /// Search or discover files by name or content pattern.
+    FileSearch,
+    /// Shell or terminal command execution.
+    Shell,
+    /// Network access — web fetch, search, API call.
+    Network,
+    /// Spawn a sub-agent or delegate work.
+    Delegation,
 }
 
 /// A tool invocation within a turn.
@@ -63,6 +124,10 @@ pub struct ToolInvocation {
     pub input: serde_json::Value,
     /// Populated when the result is available in the same turn.
     pub result: Option<ToolResult>,
+    /// Toolpath's classification of this invocation. Set by the provider
+    /// crate; `None` for unrecognized tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<ToolCategory>,
 }
 
 /// The result of a tool invocation.
@@ -105,6 +170,14 @@ pub struct Turn {
     /// Token usage for this turn.
     pub token_usage: Option<TokenUsage>,
 
+    /// Environment at time of this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<EnvironmentSnapshot>,
+
+    /// Sub-agent work delegated from this turn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegations: Vec<DelegatedWork>,
+
     /// Provider-specific data that doesn't fit the common schema.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
@@ -124,6 +197,19 @@ pub struct ConversationView {
 
     /// Ordered turns.
     pub turns: Vec<Turn>,
+
+    /// Aggregate token usage across all turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_usage: Option<TokenUsage>,
+
+    /// Provider identity (e.g. "claude-code", "aider", "codex-cli").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+
+    /// Files mutated during this conversation, deduplicated, in first-touch order.
+    /// Populated by the provider from tool invocation inputs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_changed: Vec<String>,
 }
 
 impl ConversationView {
@@ -245,6 +331,8 @@ mod tests {
                     model: None,
                     stop_reason: None,
                     token_usage: None,
+                    environment: None,
+                    delegations: vec![],
                     extra: HashMap::new(),
                 },
                 Turn {
@@ -262,13 +350,18 @@ mod tests {
                             content: "fn login() { ... }".into(),
                             is_error: false,
                         }),
+                        category: Some(ToolCategory::FileRead),
                     }],
                     model: Some("claude-opus-4-6".into()),
                     stop_reason: Some("end_turn".into()),
                     token_usage: Some(TokenUsage {
                         input_tokens: Some(100),
                         output_tokens: Some(50),
+                        cache_read_tokens: None,
+                        cache_write_tokens: None,
                     }),
+                    environment: None,
+                    delegations: vec![],
                     extra: HashMap::new(),
                 },
                 Turn {
@@ -282,9 +375,14 @@ mod tests {
                     model: None,
                     stop_reason: None,
                     token_usage: None,
+                    environment: None,
+                    delegations: vec![],
                     extra: HashMap::new(),
                 },
             ],
+            total_usage: None,
+            provider_id: None,
+            files_changed: vec![],
         }
     }
 
@@ -309,6 +407,9 @@ mod tests {
             started_at: None,
             last_activity: None,
             turns: vec![],
+            total_usage: None,
+            provider_id: None,
+            files_changed: vec![],
         };
         assert!(view.title(50).is_none());
     }
@@ -401,6 +502,217 @@ mod tests {
         let usage = TokenUsage::default();
         assert!(usage.input_tokens.is_none());
         assert!(usage.output_tokens.is_none());
+        assert!(usage.cache_read_tokens.is_none());
+        assert!(usage.cache_write_tokens.is_none());
+    }
+
+    #[test]
+    fn test_token_usage_cache_fields_serde() {
+        let usage = TokenUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            cache_read_tokens: Some(500),
+            cache_write_tokens: Some(200),
+        };
+        let json = serde_json::to_string(&usage).unwrap();
+        let back: TokenUsage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cache_read_tokens, Some(500));
+        assert_eq!(back.cache_write_tokens, Some(200));
+    }
+
+    #[test]
+    fn test_token_usage_cache_fields_omitted() {
+        // Old-format JSON without cache fields should deserialize with None
+        let json = r#"{"input_tokens":100,"output_tokens":50}"#;
+        let usage: TokenUsage = serde_json::from_str(json).unwrap();
+        assert_eq!(usage.input_tokens, Some(100));
+        assert!(usage.cache_read_tokens.is_none());
+        assert!(usage.cache_write_tokens.is_none());
+    }
+
+    #[test]
+    fn test_environment_snapshot_serde() {
+        let env = EnvironmentSnapshot {
+            working_dir: Some("/home/user/project".into()),
+            vcs_branch: Some("main".into()),
+            vcs_revision: Some("abc123".into()),
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        let back: EnvironmentSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.working_dir.as_deref(), Some("/home/user/project"));
+        assert_eq!(back.vcs_branch.as_deref(), Some("main"));
+        assert_eq!(back.vcs_revision.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn test_environment_snapshot_default() {
+        let env = EnvironmentSnapshot::default();
+        assert!(env.working_dir.is_none());
+        assert!(env.vcs_branch.is_none());
+        assert!(env.vcs_revision.is_none());
+    }
+
+    #[test]
+    fn test_environment_snapshot_skip_none_fields() {
+        let env = EnvironmentSnapshot {
+            working_dir: Some("/tmp".into()),
+            vcs_branch: None,
+            vcs_revision: None,
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(!json.contains("vcs_branch"));
+        assert!(!json.contains("vcs_revision"));
+    }
+
+    #[test]
+    fn test_delegated_work_serde() {
+        let dw = DelegatedWork {
+            agent_id: "agent-123".into(),
+            prompt: "Search for the bug".into(),
+            turns: vec![],
+            result: Some("Found the bug in auth.rs".into()),
+        };
+        let json = serde_json::to_string(&dw).unwrap();
+        assert!(!json.contains("turns")); // empty vec skipped
+        let back: DelegatedWork = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.agent_id, "agent-123");
+        assert_eq!(back.result.as_deref(), Some("Found the bug in auth.rs"));
+        assert!(back.turns.is_empty());
+    }
+
+    #[test]
+    fn test_tool_category_serde() {
+        let ti = ToolInvocation {
+            id: "t1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "ls"}),
+            result: None,
+            category: Some(ToolCategory::Shell),
+        };
+        let json = serde_json::to_string(&ti).unwrap();
+        assert!(json.contains("\"shell\""));
+        let back: ToolInvocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.category, Some(ToolCategory::Shell));
+    }
+
+    #[test]
+    fn test_tool_category_none_skipped() {
+        let ti = ToolInvocation {
+            id: "t1".into(),
+            name: "CustomTool".into(),
+            input: serde_json::json!({}),
+            result: None,
+            category: None,
+        };
+        let json = serde_json::to_string(&ti).unwrap();
+        assert!(!json.contains("category"));
+    }
+
+    #[test]
+    fn test_tool_category_missing_defaults_none() {
+        // Old-format JSON without category should deserialize as None
+        let json = r#"{"id":"t1","name":"Read","input":{},"result":null}"#;
+        let ti: ToolInvocation = serde_json::from_str(json).unwrap();
+        assert!(ti.category.is_none());
+    }
+
+    #[test]
+    fn test_tool_category_all_variants_roundtrip() {
+        let variants = vec![
+            ToolCategory::FileRead,
+            ToolCategory::FileWrite,
+            ToolCategory::FileSearch,
+            ToolCategory::Shell,
+            ToolCategory::Network,
+            ToolCategory::Delegation,
+        ];
+        for cat in variants {
+            let json = serde_json::to_value(&cat).unwrap();
+            let back: ToolCategory = serde_json::from_value(json).unwrap();
+            assert_eq!(back, cat);
+        }
+    }
+
+    #[test]
+    fn test_turn_with_environment_and_delegations() {
+        let turn = Turn {
+            id: "t1".into(),
+            parent_id: None,
+            role: Role::Assistant,
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            text: "Delegating...".into(),
+            thinking: None,
+            tool_uses: vec![],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            environment: Some(EnvironmentSnapshot {
+                working_dir: Some("/project".into()),
+                vcs_branch: Some("feat/auth".into()),
+                vcs_revision: None,
+            }),
+            delegations: vec![DelegatedWork {
+                agent_id: "sub-1".into(),
+                prompt: "Find the bug".into(),
+                turns: vec![],
+                result: None,
+            }],
+            extra: HashMap::new(),
+        };
+        let json = serde_json::to_string(&turn).unwrap();
+        let back: Turn = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.environment.as_ref().unwrap().vcs_branch.as_deref(),
+            Some("feat/auth")
+        );
+        assert_eq!(back.delegations.len(), 1);
+        assert_eq!(back.delegations[0].agent_id, "sub-1");
+    }
+
+    #[test]
+    fn test_turn_without_new_fields_deserializes() {
+        // Old-format Turn JSON without environment/delegations
+        let json = r#"{"id":"t1","parent_id":null,"role":"User","timestamp":"2026-01-01T00:00:00Z","text":"hi","thinking":null,"tool_uses":[],"model":null,"stop_reason":null,"token_usage":null}"#;
+        let turn: Turn = serde_json::from_str(json).unwrap();
+        assert!(turn.environment.is_none());
+        assert!(turn.delegations.is_empty());
+    }
+
+    #[test]
+    fn test_conversation_view_new_fields_serde() {
+        let view = ConversationView {
+            id: "s1".into(),
+            started_at: None,
+            last_activity: None,
+            turns: vec![],
+            total_usage: Some(TokenUsage {
+                input_tokens: Some(1000),
+                output_tokens: Some(500),
+                cache_read_tokens: Some(800),
+                cache_write_tokens: None,
+            }),
+            provider_id: Some("claude-code".into()),
+            files_changed: vec!["src/main.rs".into(), "src/lib.rs".into()],
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        let back: ConversationView = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.provider_id.as_deref(), Some("claude-code"));
+        assert_eq!(back.files_changed, vec!["src/main.rs", "src/lib.rs"]);
+        assert_eq!(back.total_usage.as_ref().unwrap().input_tokens, Some(1000));
+        assert_eq!(
+            back.total_usage.as_ref().unwrap().cache_read_tokens,
+            Some(800)
+        );
+    }
+
+    #[test]
+    fn test_conversation_view_old_format_deserializes() {
+        // Old-format JSON without total_usage/provider_id/files_changed
+        let json = r#"{"id":"s1","started_at":null,"last_activity":null,"turns":[]}"#;
+        let view: ConversationView = serde_json::from_str(json).unwrap();
+        assert!(view.total_usage.is_none());
+        assert!(view.provider_id.is_none());
+        assert!(view.files_changed.is_empty());
     }
 
     #[test]

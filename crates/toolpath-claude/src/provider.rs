@@ -8,8 +8,9 @@
 use crate::ClaudeConvo;
 use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, Role, TokenUsage,
-    ToolInvocation, ToolResult, Turn, WatcherEvent,
+    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
+    EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    WatcherEvent,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -22,6 +23,22 @@ fn claude_role_to_role(role: &MessageRole) -> Role {
     }
 }
 
+/// Classify a Claude Code tool into toolpath's category ontology.
+///
+/// Returns `None` for unrecognized tools. When Claude Code adds or
+/// renames tools, update this map.
+fn tool_category(name: &str) -> Option<ToolCategory> {
+    match name {
+        "Read" => Some(ToolCategory::FileRead),
+        "Glob" | "Grep" => Some(ToolCategory::FileSearch),
+        "Write" | "Edit" | "NotebookEdit" => Some(ToolCategory::FileWrite),
+        "Bash" => Some(ToolCategory::Shell),
+        "WebFetch" | "WebSearch" => Some(ToolCategory::Network),
+        "Task" => Some(ToolCategory::Delegation),
+        _ => None,
+    }
+}
+
 /// Convert a single entry to a Turn without cross-entry assembly.
 /// Tool results within the same message are still matched.
 fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
@@ -29,16 +46,18 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let thinking = msg.thinking().map(|parts| parts.join("\n"));
 
-    let tool_uses = msg
+    let tool_uses: Vec<ToolInvocation> = msg
         .tool_uses()
         .into_iter()
         .map(|tu| {
             let result = find_tool_result_in_parts(msg, tu.id);
+            let category = tool_category(tu.name);
             ToolInvocation {
                 id: tu.id.to_string(),
                 name: tu.name.to_string(),
                 input: tu.input.clone(),
                 result,
+                category,
             }
         })
         .collect();
@@ -46,7 +65,21 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
     let token_usage = msg.usage.as_ref().map(|u| TokenUsage {
         input_tokens: u.input_tokens,
         output_tokens: u.output_tokens,
+        cache_read_tokens: u.cache_read_input_tokens,
+        cache_write_tokens: u.cache_creation_input_tokens,
     });
+
+    let environment = if entry.cwd.is_some() || entry.git_branch.is_some() {
+        Some(EnvironmentSnapshot {
+            working_dir: entry.cwd.clone(),
+            vcs_branch: entry.git_branch.clone(),
+            vcs_revision: None,
+        })
+    } else {
+        None
+    };
+
+    let delegations = extract_delegations(&tool_uses);
 
     Turn {
         id: entry.uuid.clone(),
@@ -59,8 +92,29 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         model: msg.model.clone(),
         stop_reason: msg.stop_reason.clone(),
         token_usage,
+        environment,
+        delegations,
         extra: Default::default(),
     }
+}
+
+/// Extract delegation info from Task tool invocations.
+fn extract_delegations(tool_uses: &[ToolInvocation]) -> Vec<DelegatedWork> {
+    tool_uses
+        .iter()
+        .filter(|tu| tu.category == Some(ToolCategory::Delegation))
+        .map(|tu| DelegatedWork {
+            agent_id: tu.id.clone(),
+            prompt: tu
+                .input
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            turns: vec![],
+            result: tu.result.as_ref().map(|r| r.content.clone()),
+        })
+        .collect()
 }
 
 fn find_tool_result_in_parts(msg: &Message, tool_use_id: &str) -> Option<ToolResult> {
@@ -147,12 +201,77 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         turns.push(message_to_turn(entry, msg));
     }
 
+    // Re-derive delegation results now that tool results are merged
+    for turn in &mut turns {
+        for delegation in &mut turn.delegations {
+            if delegation.result.is_none()
+                && let Some(tu) = turn
+                    .tool_uses
+                    .iter()
+                    .find(|tu| tu.id == delegation.agent_id)
+            {
+                delegation.result = tu.result.as_ref().map(|r| r.content.clone());
+            }
+        }
+    }
+
+    let total_usage = sum_usage(&turns);
+    let files_changed = extract_files_changed(&turns);
+
     ConversationView {
         id: convo.session_id.clone(),
         started_at: convo.started_at,
         last_activity: convo.last_activity,
         turns,
+        total_usage,
+        provider_id: Some("claude-code".into()),
+        files_changed,
     }
+}
+
+/// Sum token usage across all turns.
+fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
+    let mut total = TokenUsage::default();
+    let mut any = false;
+    for turn in turns {
+        if let Some(u) = &turn.token_usage {
+            any = true;
+            total.input_tokens =
+                Some(total.input_tokens.unwrap_or(0) + u.input_tokens.unwrap_or(0));
+            total.output_tokens =
+                Some(total.output_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0));
+            total.cache_read_tokens = match (total.cache_read_tokens, u.cache_read_tokens) {
+                (Some(a), Some(b)) => Some(a + b),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
+            total.cache_write_tokens = match (total.cache_write_tokens, u.cache_write_tokens) {
+                (Some(a), Some(b)) => Some(a + b),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
+        }
+    }
+    if any { Some(total) } else { None }
+}
+
+/// Extract deduplicated file paths from file-write tool invocations.
+fn extract_files_changed(turns: &[Turn]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut files = Vec::new();
+    for turn in turns {
+        for tool_use in &turn.tool_uses {
+            if tool_use.category == Some(ToolCategory::FileWrite)
+                && let Some(path) = tool_use.input.get("file_path").and_then(|v| v.as_str())
+                && seen.insert(path.to_string())
+            {
+                files.push(path.to_string());
+            }
+        }
+    }
+    files
 }
 
 fn entry_to_watcher_event(entry: &ConversationEntry) -> WatcherEvent {
@@ -319,9 +438,9 @@ mod tests {
 
         let entries = vec![
             r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Fix the bug"}}"#,
-            r#"{"uuid":"uuid-2","type":"assistant","parentUuid":"uuid-1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"I'll fix that."},{"type":"thinking","thinking":"The bug is in auth"},{"type":"tool_use","id":"t1","name":"Read","input":{"file":"src/main.rs"}}],"model":"claude-opus-4-6","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+            r#"{"uuid":"uuid-2","type":"assistant","parentUuid":"uuid-1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"I'll fix that."},{"type":"thinking","thinking":"The bug is in auth"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"src/main.rs"}}],"model":"claude-opus-4-6","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":50}}}"#,
             r#"{"uuid":"uuid-3","type":"user","parentUuid":"uuid-2","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"fn main() { println!(\"hello\"); }","is_error":false}]}}"#,
-            r#"{"uuid":"uuid-4","type":"assistant","parentUuid":"uuid-3","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"I see the issue. Let me fix it."},{"type":"tool_use","id":"t2","name":"Edit","input":{"file":"src/main.rs","content":"fixed"}}],"model":"claude-opus-4-6","stop_reason":"tool_use","usage":{"input_tokens":200,"output_tokens":100}}}"#,
+            r#"{"uuid":"uuid-4","type":"assistant","parentUuid":"uuid-3","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"I see the issue. Let me fix it."},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"src/main.rs","old_string":"hello","new_string":"fixed"}}],"model":"claude-opus-4-6","stop_reason":"tool_use","usage":{"input_tokens":200,"output_tokens":100}}}"#,
             r#"{"uuid":"uuid-5","type":"user","parentUuid":"uuid-4","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"File written successfully","is_error":false}]}}"#,
             r#"{"uuid":"uuid-6","type":"assistant","parentUuid":"uuid-5","timestamp":"2024-01-01T00:00:05Z","message":{"role":"assistant","content":"Done! The bug is fixed.","model":"claude-opus-4-6","stop_reason":"end_turn"}}"#,
             r#"{"uuid":"uuid-7","type":"user","parentUuid":"uuid-6","timestamp":"2024-01-01T00:00:06Z","message":{"role":"user","content":"Thanks!"}}"#,
@@ -743,17 +862,21 @@ mod tests {
                     name: "Read".into(),
                     input: serde_json::json!({}),
                     result: None,
+                    category: Some(ToolCategory::FileRead),
                 },
                 ToolInvocation {
                     id: "tool-b".into(),
                     name: "Write".into(),
                     input: serde_json::json!({}),
                     result: None,
+                    category: Some(ToolCategory::FileWrite),
                 },
             ],
             model: None,
             stop_reason: None,
             token_usage: None,
+            environment: None,
+            delegations: vec![],
             extra: Default::default(),
         }];
 
@@ -809,5 +932,180 @@ mod tests {
         )
         .unwrap();
         assert!(!is_tool_result_only(&entry));
+    }
+
+    // ── New enrichment tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_tool_category_mapping() {
+        assert_eq!(tool_category("Read"), Some(ToolCategory::FileRead));
+        assert_eq!(tool_category("Glob"), Some(ToolCategory::FileSearch));
+        assert_eq!(tool_category("Grep"), Some(ToolCategory::FileSearch));
+        assert_eq!(tool_category("Write"), Some(ToolCategory::FileWrite));
+        assert_eq!(tool_category("Edit"), Some(ToolCategory::FileWrite));
+        assert_eq!(tool_category("NotebookEdit"), Some(ToolCategory::FileWrite));
+        assert_eq!(tool_category("Bash"), Some(ToolCategory::Shell));
+        assert_eq!(tool_category("WebFetch"), Some(ToolCategory::Network));
+        assert_eq!(tool_category("WebSearch"), Some(ToolCategory::Network));
+        assert_eq!(tool_category("Task"), Some(ToolCategory::Delegation));
+        assert_eq!(tool_category("UnknownTool"), None);
+    }
+
+    #[test]
+    fn test_turn_has_tool_category() {
+        let (_temp, provider) = setup_provider();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        // Turn 1 (assistant) has a Read tool
+        assert_eq!(
+            view.turns[1].tool_uses[0].category,
+            Some(ToolCategory::FileRead)
+        );
+        // Turn 2 (assistant) has an Edit tool
+        assert_eq!(
+            view.turns[2].tool_uses[0].category,
+            Some(ToolCategory::FileWrite)
+        );
+    }
+
+    #[test]
+    fn test_environment_populated_from_entry() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entries = vec![
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","cwd":"/project/path","gitBranch":"feat/auth","message":{"role":"user","content":"Hello"}}"#,
+            r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi"}}"#,
+        ];
+        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
+
+        // User turn has environment (entry has cwd and gitBranch)
+        let env = view.turns[0].environment.as_ref().unwrap();
+        assert_eq!(env.working_dir.as_deref(), Some("/project/path"));
+        assert_eq!(env.vcs_branch.as_deref(), Some("feat/auth"));
+        assert!(env.vcs_revision.is_none());
+
+        // Assistant turn has no environment (entry has no cwd/gitBranch)
+        assert!(view.turns[1].environment.is_none());
+    }
+
+    #[test]
+    fn test_cache_tokens_populated() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entries = vec![
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
+            r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":500}}}"#,
+        ];
+        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
+
+        let usage = view.turns[1].token_usage.as_ref().unwrap();
+        assert_eq!(usage.cache_read_tokens, Some(500));
+        assert_eq!(usage.cache_write_tokens, Some(200));
+    }
+
+    #[test]
+    fn test_total_usage_aggregated() {
+        let (_temp, provider) = setup_provider();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        let total = view.total_usage.as_ref().unwrap();
+        // Two assistant turns with usage: (100, 50) and (200, 100)
+        assert_eq!(total.input_tokens, Some(300));
+        assert_eq!(total.output_tokens, Some(150));
+    }
+
+    #[test]
+    fn test_provider_id_set() {
+        let (_temp, provider) = setup_provider();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        assert_eq!(view.provider_id.as_deref(), Some("claude-code"));
+    }
+
+    #[test]
+    fn test_files_changed_populated() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entries = vec![
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Edit files"}}"#,
+            r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Editing..."},{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"src/main.rs","content":"fn main() {}"}},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"src/lib.rs","old_string":"a","new_string":"b"}}]}}"#,
+            r#"{"uuid":"u3","type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false},{"type":"tool_result","tool_use_id":"t2","content":"ok","is_error":false}]}}"#,
+            r#"{"uuid":"u4","type":"assistant","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"More edits..."},{"type":"tool_use","id":"t3","name":"Write","input":{"file_path":"src/main.rs","content":"updated"}}]}}"#,
+        ];
+        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
+
+        // Deduplicated, first-touch order: src/main.rs first, then src/lib.rs
+        assert_eq!(view.files_changed, vec!["src/main.rs", "src/lib.rs"]);
+    }
+
+    #[test]
+    fn test_delegations_extracted() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entries = vec![
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Search for bugs"}}"#,
+            r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Delegating..."},{"type":"tool_use","id":"task-1","name":"Task","input":{"prompt":"Find the authentication bug","subagent_type":"Explore"}}]}}"#,
+            r#"{"uuid":"u3","type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"task-1","content":"Found the bug in auth.rs line 42","is_error":false}]}}"#,
+        ];
+        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
+
+        // Assistant turn should have one delegation
+        assert_eq!(view.turns[1].delegations.len(), 1);
+        let d = &view.turns[1].delegations[0];
+        assert_eq!(d.agent_id, "task-1");
+        assert_eq!(d.prompt, "Find the authentication bug");
+        assert!(d.turns.is_empty()); // Sub-agent turns are in separate files
+        // Result gets populated from tool result assembly
+        assert_eq!(
+            d.result.as_deref(),
+            Some("Found the bug in auth.rs line 42")
+        );
+    }
+
+    #[test]
+    fn test_no_delegations_for_non_task_tools() {
+        let (_temp, provider) = setup_provider();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        // No turns should have delegations (none use Task tool)
+        for turn in &view.turns {
+            assert!(turn.delegations.is_empty());
+        }
     }
 }
