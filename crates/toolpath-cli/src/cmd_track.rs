@@ -3,7 +3,7 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use similar::TextDiff;
 use std::collections::HashMap;
-use std::io::{self, Read};
+use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 use toolpath::v1;
 
@@ -267,6 +267,62 @@ fn format_output(doc: v1::Document, pretty: bool) -> Result<String> {
 }
 
 // ============================================================================
+// JSONL step storage
+// ============================================================================
+
+/// Derive the `.jsonl` steps file path from the `.json` session path.
+fn jsonl_path(session: &std::path::Path) -> PathBuf {
+    session.with_extension("jsonl")
+}
+
+/// Append a single step as one JSONL line (no rewrite).
+fn append_step(session: &std::path::Path, step: &v1::Step) -> Result<()> {
+    let jsonl = jsonl_path(session);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&jsonl)
+        .with_context(|| format!("failed to open steps file: {}", jsonl.display()))?;
+    serde_json::to_writer(&mut file, step).context("failed to write step")?;
+    file.write_all(b"\n").context("failed to write newline")?;
+    Ok(())
+}
+
+/// Load all steps from the companion `.jsonl` file.
+fn load_steps(session: &std::path::Path) -> Result<Vec<v1::Step>> {
+    let jsonl = jsonl_path(session);
+    let file = std::fs::File::open(&jsonl)
+        .with_context(|| format!("failed to open steps file: {}", jsonl.display()))?;
+    let reader = io::BufReader::new(file);
+    let mut steps = Vec::new();
+    for line in reader.lines() {
+        let line = line.context("failed to read line from steps file")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let step: v1::Step = serde_json::from_str(&line)
+            .with_context(|| format!("failed to parse step in: {}", jsonl.display()))?;
+        steps.push(step);
+    }
+    Ok(steps)
+}
+
+/// Rewrite the `.jsonl` file with the given steps (for note/annotate).
+fn rewrite_steps(session: &std::path::Path, steps: &[v1::Step]) -> Result<()> {
+    let jsonl = jsonl_path(session);
+    let dir = jsonl.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)
+        .context("failed to create temp file for steps rewrite")?;
+    for step in steps {
+        serde_json::to_writer(&mut tmp, step).context("failed to write step")?;
+        tmp.write_all(b"\n").context("failed to write newline")?;
+    }
+    tmp.persist(&jsonl)
+        .with_context(|| format!("failed to persist steps file: {}", jsonl.display()))?;
+    Ok(())
+}
+
+// ============================================================================
 // Subcommand implementations
 // ============================================================================
 
@@ -324,6 +380,12 @@ fn init_session(config: InitConfig) -> Result<PathBuf> {
     let dir = session_dir(config.session_dir.as_ref());
     let session_path = dir.join(format!("{session_id}.json"));
     save_session(&session_path, &path_doc, &state)?;
+
+    // Create empty companion JSONL file for steps
+    let jsonl = jsonl_path(&session_path);
+    std::fs::File::create(&jsonl)
+        .with_context(|| format!("failed to create steps file: {}", jsonl.display()))?;
+
     Ok(session_path)
 }
 
@@ -427,7 +489,8 @@ fn record_step(
             step.meta.get_or_insert_with(v1::StepMeta::default).source = Some(vcs_source);
         }
 
-        path_doc.steps.push(step);
+        // Append step to JSONL
+        append_step(session_path, &step)?;
         state.seq_to_step.insert(seq, step_id.clone());
         path_doc.path.head = step_id.clone();
 
@@ -508,20 +571,20 @@ fn run_visit(session_path: PathBuf, seq: u64, inherit_from: Option<u64>) -> Resu
 }
 
 fn run_note(session_path: PathBuf, intent: String) -> Result<()> {
-    let (mut path_doc, state) = load_session(&session_path)?;
+    let (path_doc, _state) = load_session(&session_path)?;
     if path_doc.path.head == "none" {
         anyhow::bail!("no head step to annotate");
     }
 
     let head_id = path_doc.path.head.clone();
-    let step = path_doc
-        .steps
+    let mut steps = load_steps(&session_path)?;
+    let step = steps
         .iter_mut()
         .find(|s| s.step.id == head_id)
         .context("head step not found in session")?;
 
     step.meta.get_or_insert_with(v1::StepMeta::default).intent = Some(intent);
-    save_session(&session_path, &path_doc, &state)?;
+    rewrite_steps(&session_path, &steps)?;
     Ok(())
 }
 
@@ -532,7 +595,7 @@ fn run_annotate(
     source_json: Option<String>,
     ref_jsons: Vec<String>,
 ) -> Result<()> {
-    let (mut path_doc, state) = load_session(&session_path)?;
+    let (path_doc, _state) = load_session(&session_path)?;
 
     // Resolve target step
     let target_id = match step_id {
@@ -545,8 +608,8 @@ fn run_annotate(
         }
     };
 
-    let step = path_doc
-        .steps
+    let mut steps = load_steps(&session_path)?;
+    let step = steps
         .iter_mut()
         .find(|s| s.step.id == target_id)
         .with_context(|| format!("step not found: {target_id}"))?;
@@ -569,12 +632,13 @@ fn run_annotate(
         meta.refs.push(r);
     }
 
-    save_session(&session_path, &path_doc, &state)?;
+    rewrite_steps(&session_path, &steps)?;
     Ok(())
 }
 
 fn run_export(session_path: PathBuf, pretty: bool) -> Result<()> {
-    let (path_doc, _state) = load_session(&session_path)?;
+    let (mut path_doc, _state) = load_session(&session_path)?;
+    path_doc.steps = load_steps(&session_path)?;
     let doc = v1::Document::Path(path_doc);
     let json = format_output(doc, pretty)?;
     println!("{json}");
@@ -582,7 +646,8 @@ fn run_export(session_path: PathBuf, pretty: bool) -> Result<()> {
 }
 
 fn run_close(session_path: PathBuf, pretty: bool, output: Option<PathBuf>) -> Result<()> {
-    let (path_doc, _state) = load_session(&session_path)?;
+    let (mut path_doc, _state) = load_session(&session_path)?;
+    path_doc.steps = load_steps(&session_path)?;
     let doc = v1::Document::Path(path_doc);
     let json = format_output(doc, pretty)?;
 
@@ -593,6 +658,9 @@ fn run_close(session_path: PathBuf, pretty: bool, output: Option<PathBuf>) -> Re
         println!("{json}");
     }
 
+    // Delete both session files
+    let jsonl = jsonl_path(&session_path);
+    let _ = std::fs::remove_file(&jsonl);
     std::fs::remove_file(&session_path)
         .with_context(|| format!("failed to remove session file: {}", session_path.display()))?;
     Ok(())
@@ -611,14 +679,18 @@ fn run_list(session_dir_opt: Option<PathBuf>, json: bool) -> Result<()> {
         let name_str = name.to_string_lossy();
         if name_str.starts_with("track-")
             && name_str.ends_with(".json")
+            && !name_str.ends_with(".jsonl")
             && let Ok((path_doc, state)) = load_session(&entry.path())
         {
+            let step_count = std::fs::read_to_string(jsonl_path(&entry.path()))
+                .map(|data| data.lines().filter(|l| !l.trim().is_empty()).count())
+                .unwrap_or(0);
             sessions.push(SessionSummary {
                 session_file: entry.path().to_string_lossy().to_string(),
                 session_id: path_doc.path.id,
                 file: state.file,
                 actor: state.default_actor,
-                steps: path_doc.steps.len(),
+                steps: step_count,
                 created_at: state.created_at,
             });
         }
@@ -711,6 +783,8 @@ mod tests {
         };
         let path = dir.join("track-test-1.json");
         save_session(&path, &path_doc, &state).unwrap();
+        // Create empty companion JSONL
+        std::fs::File::create(jsonl_path(&path)).unwrap();
         path
     }
 
@@ -874,7 +948,7 @@ mod tests {
 
     #[test]
     fn test_session_file_is_valid_toolpath_document() {
-        // The session file should be readable by any Toolpath tool
+        // The session .json file should be readable by any Toolpath tool
         let dir = TempDir::new().unwrap();
         let path = make_session(dir.path(), "hello\n");
 
@@ -883,6 +957,8 @@ mod tests {
         match doc {
             v1::Document::Path(p) => {
                 assert_eq!(p.path.id, "track-test-1");
+                // Steps live in .jsonl, not in the .json file
+                assert!(p.steps.is_empty());
                 // meta.track is present (tracking bookkeeping)
                 assert!(p.meta.as_ref().unwrap().extra.contains_key("track"));
             }
@@ -913,6 +989,7 @@ mod tests {
         let session_path = simple_init(dir.path(), "hello\n", "test.txt", "human:alex");
 
         assert!(session_path.exists());
+        assert!(jsonl_path(&session_path).exists());
         let (path_doc, state) = load_session(&session_path).unwrap();
         assert!(path_doc.path.id.starts_with("track-"));
         assert_eq!(state.file, "test.txt");
@@ -921,6 +998,8 @@ mod tests {
         assert_eq!(state.version, 1);
         assert_eq!(path_doc.path.head, "none");
         assert!(path_doc.steps.is_empty());
+        let steps = load_steps(&session_path).unwrap();
+        assert!(steps.is_empty());
         assert_eq!(state.step_counter, 0);
     }
 
@@ -1026,16 +1105,19 @@ mod tests {
         assert_eq!(result, StepResult::Created("step-001".to_string()));
 
         let (path_doc, state) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps.len(), 1);
-        assert_eq!(path_doc.steps[0].step.id, "step-001");
-        assert!(path_doc.steps[0].step.parents.is_empty());
-        assert_eq!(path_doc.steps[0].step.actor, "human:tester");
+        assert!(path_doc.steps.is_empty()); // steps in .jsonl
         assert_eq!(path_doc.path.head, "step-001");
         assert_eq!(state.buffer_cache[&1], "world\n");
         assert_eq!(state.seq_to_step[&1], "step-001");
 
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].step.id, "step-001");
+        assert!(steps[0].step.parents.is_empty());
+        assert_eq!(steps[0].step.actor, "human:tester");
+
         // Verify the diff is present in the change
-        let change = &path_doc.steps[0].change["test.txt"];
+        let change = &steps[0].change["test.txt"];
         let raw = change.raw.as_ref().unwrap();
         assert!(raw.contains("-hello"));
         assert!(raw.contains("+world"));
@@ -1052,10 +1134,11 @@ mod tests {
         assert_eq!(result, StepResult::Skip);
 
         let (path_doc, state) = load_session(&session_path).unwrap();
-        assert!(path_doc.steps.is_empty());
         assert_eq!(path_doc.path.head, "none");
         // Buffer should still be cached
         assert_eq!(state.buffer_cache[&1], "hello\n");
+        let steps = load_steps(&session_path).unwrap();
+        assert!(steps.is_empty());
     }
 
     #[test]
@@ -1090,10 +1173,11 @@ mod tests {
         assert_eq!(r2, StepResult::Created("step-002".to_string()));
 
         let (path_doc, _) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps.len(), 2);
-        assert!(path_doc.steps[0].step.parents.is_empty()); // root
-        assert_eq!(path_doc.steps[1].step.parents, vec!["step-001"]); // child
         assert_eq!(path_doc.path.head, "step-002");
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert!(steps[0].step.parents.is_empty()); // root
+        assert_eq!(steps[1].step.parents, vec!["step-001"]); // child
     }
 
     #[test]
@@ -1112,8 +1196,8 @@ mod tests {
         )
         .unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps[0].step.actor, "tool:formatter");
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps[0].step.actor, "tool:formatter");
     }
 
     #[test]
@@ -1132,8 +1216,8 @@ mod tests {
         )
         .unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps[0].step.timestamp, "2026-06-15T12:00:00Z");
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps[0].step.timestamp, "2026-06-15T12:00:00Z");
     }
 
     #[test]
@@ -1189,11 +1273,12 @@ mod tests {
         .unwrap();
 
         let (path_doc, _) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps.len(), 2);
-        // Both are roots (parent seq 0 has no step)
-        assert!(path_doc.steps[0].step.parents.is_empty());
-        assert!(path_doc.steps[1].step.parents.is_empty());
         assert_eq!(path_doc.path.head, "step-002");
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps.len(), 2);
+        // Both are roots (parent seq 0 has no step)
+        assert!(steps[0].step.parents.is_empty());
+        assert!(steps[1].step.parents.is_empty());
     }
 
     #[test]
@@ -1235,13 +1320,13 @@ mod tests {
         )
         .unwrap();
 
-        // Dead ends work directly on the session — no conversion needed
         let (path_doc, _) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps.len(), 3);
-        assert_eq!(path_doc.steps[1].step.parents, vec!["step-001"]);
-        assert_eq!(path_doc.steps[2].step.parents, vec!["step-001"]); // fork
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[1].step.parents, vec!["step-001"]);
+        assert_eq!(steps[2].step.parents, vec!["step-001"]); // fork
 
-        let dead = v1::query::dead_ends(&path_doc.steps, &path_doc.path.head);
+        let dead = v1::query::dead_ends(&steps, &path_doc.path.head);
         assert_eq!(dead.len(), 1);
         assert_eq!(dead[0].step.id, "step-002");
     }
@@ -1280,10 +1365,10 @@ mod tests {
         .unwrap();
         assert_eq!(r3, StepResult::Created("step-002".to_string()));
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps.len(), 2);
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps.len(), 2);
         // step-002 is a root (seq 2 mapped to empty string → no parent)
-        assert!(path_doc.steps[1].step.parents.is_empty());
+        assert!(steps[1].step.parents.is_empty());
     }
 
     #[test]
@@ -1318,7 +1403,8 @@ mod tests {
         .unwrap();
 
         let (before_doc, before_state) = load_session(&session_path).unwrap();
-        assert_eq!(before_doc.steps.len(), 2);
+        let before_steps = load_steps(&session_path).unwrap();
+        assert_eq!(before_steps.len(), 2);
         assert_eq!(before_state.seq_to_step[&1], "step-001");
         assert_eq!(before_doc.path.head, "step-002");
 
@@ -1327,7 +1413,8 @@ mod tests {
         assert_eq!(r, StepResult::Skip);
 
         let (after_doc, after_state) = load_session(&session_path).unwrap();
-        assert_eq!(after_doc.steps.len(), 2); // no new step
+        let after_steps = load_steps(&session_path).unwrap();
+        assert_eq!(after_steps.len(), 2); // no new step
         assert_eq!(after_state.seq_to_step[&1], "step-001"); // mapping preserved
         assert_eq!(after_doc.path.head, "step-002"); // head unchanged
     }
@@ -1379,11 +1466,11 @@ mod tests {
         assert_eq!(r3, StepResult::Created("step-003".to_string()));
 
         let (path_doc, _) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps.len(), 3);
-        // step-003 parents off step-001 (the original B edit), not some reverse-diff
-        assert_eq!(path_doc.steps[2].step.parents, vec!["step-001"]);
-        // step-002 (C) is now a dead end
         assert_eq!(path_doc.path.head, "step-003");
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps.len(), 3);
+        // step-003 parents off step-001 (the original B edit), not some reverse-diff
+        assert_eq!(steps[2].step.parents, vec!["step-001"]);
     }
 
     #[test]
@@ -1420,9 +1507,9 @@ mod tests {
         .unwrap();
         assert_eq!(r2, StepResult::Created("step-002".to_string()));
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
+        let steps = load_steps(&session_path).unwrap();
         // step-002 is a root (seq 0 has no step), just like step-001
-        assert!(path_doc.steps[1].step.parents.is_empty());
+        assert!(steps[1].step.parents.is_empty());
     }
 
     // ── visit + inherit ────────────────────────────────────────────────
@@ -1542,8 +1629,8 @@ mod tests {
         .unwrap();
         assert_eq!(r, StepResult::Created("step-003".to_string()));
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        assert_eq!(path_doc.steps[2].step.parents, vec!["step-001"]);
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps[2].step.parents, vec!["step-001"]);
     }
 
     #[test]
@@ -1572,8 +1659,8 @@ mod tests {
         .unwrap();
         assert_eq!(r, StepResult::Created("step-001".to_string()));
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        assert!(path_doc.steps[0].step.parents.is_empty());
+        let steps = load_steps(&session_path).unwrap();
+        assert!(steps[0].step.parents.is_empty());
     }
 
     #[test]
@@ -1618,11 +1705,8 @@ mod tests {
 
         run_note(session_path.clone(), "Fix the greeting".to_string()).unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let intent = path_doc.steps[0]
-            .meta
-            .as_ref()
-            .and_then(|m| m.intent.as_ref());
+        let steps = load_steps(&session_path).unwrap();
+        let intent = steps[0].meta.as_ref().and_then(|m| m.intent.as_ref());
         assert_eq!(intent, Some(&"Fix the greeting".to_string()));
     }
 
@@ -1644,11 +1728,8 @@ mod tests {
         run_note(session_path.clone(), "First intent".to_string()).unwrap();
         run_note(session_path.clone(), "Updated intent".to_string()).unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let intent = path_doc.steps[0]
-            .meta
-            .as_ref()
-            .and_then(|m| m.intent.as_ref());
+        let steps = load_steps(&session_path).unwrap();
+        let intent = steps[0].meta.as_ref().and_then(|m| m.intent.as_ref());
         assert_eq!(intent, Some(&"Updated intent".to_string()));
     }
 
@@ -1680,9 +1761,11 @@ mod tests {
         )
         .unwrap();
         assert!(session_path.exists());
+        assert!(jsonl_path(&session_path).exists());
 
         run_close(session_path.clone(), false, None).unwrap();
         assert!(!session_path.exists());
+        assert!(!jsonl_path(&session_path).exists());
     }
 
     #[test]
@@ -1703,8 +1786,9 @@ mod tests {
         let output_path = dir.path().join("output.json");
         run_close(session_path.clone(), true, Some(output_path.clone())).unwrap();
 
-        // Session file deleted
+        // Both session files deleted
         assert!(!session_path.exists());
+        assert!(!jsonl_path(&session_path).exists());
 
         // Output file written with valid Toolpath document (no track state)
         let json = std::fs::read_to_string(&output_path).unwrap();
@@ -1715,6 +1799,7 @@ mod tests {
             v1::Document::Path(p) => {
                 assert_eq!(p.path.id, "track-test-1");
                 assert_eq!(p.path.head, "step-001");
+                // Steps are assembled from .jsonl into the exported document
                 assert_eq!(p.steps.len(), 1);
                 // No title/source set → no meta block
                 assert!(p.meta.is_none());
@@ -1735,7 +1820,8 @@ mod tests {
     fn test_list_finds_sessions() {
         let dir = TempDir::new().unwrap();
 
-        // Create two session files (as valid Path documents)
+        // Session 1: no steps
+        let session_1 = dir.path().join("track-20260101T000000-111.json");
         let path_doc_1 = v1::Path::new("track-20260101T000000-111", None, "none");
         let state_1 = TrackState {
             version: 1,
@@ -1746,19 +1832,12 @@ mod tests {
             step_counter: 0,
             created_at: "2026-01-01T00:00:00Z".to_string(),
         };
-        save_session(
-            &dir.path().join("track-20260101T000000-111.json"),
-            &path_doc_1,
-            &state_1,
-        )
-        .unwrap();
+        save_session(&session_1, &path_doc_1, &state_1).unwrap();
+        std::fs::File::create(jsonl_path(&session_1)).unwrap();
 
-        let mut path_doc_2 = v1::Path::new("track-20260101T000000-222", None, "step-001");
-        path_doc_2.steps.push(v1::Step::new(
-            "step-001",
-            "human:bob",
-            "2026-01-01T00:01:00Z",
-        ));
+        // Session 2: one step in .jsonl
+        let session_2 = dir.path().join("track-20260101T000000-222.json");
+        let path_doc_2 = v1::Path::new("track-20260101T000000-222", None, "step-001");
         let state_2 = TrackState {
             version: 1,
             file: "b.txt".to_string(),
@@ -1768,12 +1847,9 @@ mod tests {
             step_counter: 1,
             created_at: "2026-01-01T00:00:01Z".to_string(),
         };
-        save_session(
-            &dir.path().join("track-20260101T000000-222.json"),
-            &path_doc_2,
-            &state_2,
-        )
-        .unwrap();
+        save_session(&session_2, &path_doc_2, &state_2).unwrap();
+        let step = v1::Step::new("step-001", "human:bob", "2026-01-01T00:01:00Z");
+        append_step(&session_2, &step).unwrap();
 
         // Non-track file — should be ignored
         std::fs::write(dir.path().join("other.json"), "{}").unwrap();
@@ -1813,11 +1889,7 @@ mod tests {
             uri: "github:org/repo".to_string(),
             ref_str: Some("abc123".to_string()),
         };
-        let mut path_doc = v1::Path::new("track-test-doc", Some(base), "step-001");
-        path_doc.steps.push(
-            v1::Step::new("step-001", "human:alex", "2026-01-01T00:01:00Z")
-                .with_raw_change("src/main.rs", "@@ changed"),
-        );
+        let path_doc = v1::Path::new("track-test-doc", Some(base), "step-001");
         let state = TrackState {
             version: 1,
             file: "src/main.rs".to_string(),
@@ -1829,8 +1901,12 @@ mod tests {
         };
         let session_path = dir.path().join("track-test-doc.json");
         save_session(&session_path, &path_doc, &state).unwrap();
+        // Step lives in .jsonl
+        let step = v1::Step::new("step-001", "human:alex", "2026-01-01T00:01:00Z")
+            .with_raw_change("src/main.rs", "@@ changed");
+        append_step(&session_path, &step).unwrap();
 
-        // Read raw file as Toolpath document — should work
+        // Raw .json file is a valid Path doc (with empty steps)
         let data = std::fs::read_to_string(&session_path).unwrap();
         let doc = v1::Document::from_json(&data).unwrap();
         match &doc {
@@ -1838,23 +1914,29 @@ mod tests {
                 assert_eq!(p.path.id, "track-test-doc");
                 assert_eq!(p.path.head, "step-001");
                 assert_eq!(p.path.base.as_ref().unwrap().uri, "github:org/repo");
-                assert_eq!(p.steps.len(), 1);
+                assert!(p.steps.is_empty()); // steps in .jsonl
             }
             _ => panic!("Expected Path"),
         }
 
-        // Load and export (track state stripped)
+        // Load and export (track state stripped, steps from .jsonl)
         let (exported, _) = load_session(&session_path).unwrap();
         assert!(exported.meta.is_none()); // no title/source → meta removed
         assert_eq!(exported.path.id, "track-test-doc");
-        assert_eq!(exported.steps.len(), 1);
+        let steps = load_steps(&session_path).unwrap();
+        assert_eq!(steps.len(), 1);
 
-        // Roundtrip through JSON
-        let doc = v1::Document::Path(exported);
+        // Roundtrip: assemble full document for export
+        let mut full = exported;
+        full.steps = steps;
+        let doc = v1::Document::Path(full);
         let json = doc.to_json_pretty().unwrap();
         let parsed = v1::Document::from_json(&json).unwrap();
         match parsed {
-            v1::Document::Path(p) => assert_eq!(p.path.id, "track-test-doc"),
+            v1::Document::Path(p) => {
+                assert_eq!(p.path.id, "track-test-doc");
+                assert_eq!(p.steps.len(), 1);
+            }
             _ => panic!("Expected Path"),
         }
     }
@@ -1918,8 +2000,9 @@ mod tests {
         )
         .unwrap();
 
-        // Load = export-ready (track state already stripped)
-        let (path_doc, _) = load_session(&session_path).unwrap();
+        // Assemble full document for export
+        let (mut path_doc, _) = load_session(&session_path).unwrap();
+        path_doc.steps = load_steps(&session_path).unwrap();
         let doc = v1::Document::Path(path_doc.clone());
 
         // Serialize and parse back
@@ -2005,27 +2088,23 @@ mod tests {
         .unwrap();
         assert_eq!(r3, StepResult::Created("step-003".to_string()));
 
-        // Verify the session is a valid Toolpath document mid-session
-        let data = std::fs::read_to_string(&init_path).unwrap();
-        let mid_doc = v1::Document::from_json(&data).unwrap();
-        match &mid_doc {
-            v1::Document::Path(p) => {
-                assert_eq!(p.steps.len(), 3);
-                assert_eq!(p.path.head, "step-003");
-                // Can run queries on the live session
-                let dead = v1::query::dead_ends(&p.steps, &p.path.head);
-                assert_eq!(dead.len(), 1);
-                assert_eq!(dead[0].step.id, "step-002");
-            }
-            _ => panic!("Expected Path"),
-        }
+        // Verify the session is usable mid-session
+        let (mid_doc, _) = load_session(&init_path).unwrap();
+        let mid_steps = load_steps(&init_path).unwrap();
+        assert_eq!(mid_steps.len(), 3);
+        assert_eq!(mid_doc.path.head, "step-003");
+        // Can run queries on the live session
+        let dead = v1::query::dead_ends(&mid_steps, &mid_doc.path.head);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].step.id, "step-002");
 
         // 6. Close with output file
         let output = dir.path().join("result.json");
         run_close(init_path.clone(), true, Some(output.clone())).unwrap();
 
-        // Session file deleted
+        // Both session files deleted
         assert!(!init_path.exists());
+        assert!(!jsonl_path(&init_path).exists());
 
         // Parse and verify the output document
         let json = std::fs::read_to_string(&output).unwrap();
@@ -2080,8 +2159,8 @@ mod tests {
         .unwrap();
         assert_eq!(result, StepResult::Created("step-001".to_string()));
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let source = path_doc.steps[0]
+        let steps = load_steps(&session_path).unwrap();
+        let source = steps[0]
             .meta
             .as_ref()
             .and_then(|m| m.source.as_ref())
@@ -2129,8 +2208,8 @@ mod tests {
         )
         .unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let source = path_doc.steps[0]
+        let steps = load_steps(&session_path).unwrap();
+        let source = steps[0]
             .meta
             .as_ref()
             .and_then(|m| m.source.as_ref())
@@ -2140,7 +2219,9 @@ mod tests {
         assert_eq!(source.extra["branch"], serde_json::json!("main"));
         assert_eq!(source.extra["dirty"], serde_json::json!(true));
 
-        // Roundtrip through JSON
+        // Roundtrip: assemble into a Path document, serialize and parse back
+        let (mut path_doc, _) = load_session(&session_path).unwrap();
+        path_doc.steps = steps;
         let doc = v1::Document::Path(path_doc);
         let json = doc.to_json_pretty().unwrap();
         let parsed = v1::Document::from_json(&json).unwrap();
@@ -2170,8 +2251,9 @@ mod tests {
         )
         .unwrap();
 
-        // Export (load strips track state)
-        let (path_doc, _) = load_session(&session_path).unwrap();
+        // Export: assemble Path from .json + .jsonl
+        let (mut path_doc, _) = load_session(&session_path).unwrap();
+        path_doc.steps = load_steps(&session_path).unwrap();
         let doc = v1::Document::Path(path_doc);
         let json = doc.to_json_pretty().unwrap();
 
@@ -2214,11 +2296,8 @@ mod tests {
         )
         .unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let intent = path_doc.steps[0]
-            .meta
-            .as_ref()
-            .and_then(|m| m.intent.as_ref());
+        let steps = load_steps(&session_path).unwrap();
+        let intent = steps[0].meta.as_ref().and_then(|m| m.intent.as_ref());
         assert_eq!(intent, Some(&"Fix greeting".to_string()));
     }
 
@@ -2257,15 +2336,12 @@ mod tests {
         )
         .unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let intent = path_doc.steps[0]
-            .meta
-            .as_ref()
-            .and_then(|m| m.intent.as_ref());
+        let steps = load_steps(&session_path).unwrap();
+        let intent = steps[0].meta.as_ref().and_then(|m| m.intent.as_ref());
         assert_eq!(intent, Some(&"First edit".to_string()));
         // Head step should not have intent
         assert!(
-            path_doc.steps[1]
+            steps[1]
                 .meta
                 .as_ref()
                 .and_then(|m| m.intent.as_ref())
@@ -2297,14 +2373,8 @@ mod tests {
         )
         .unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let source = path_doc.steps[0]
-            .meta
-            .as_ref()
-            .unwrap()
-            .source
-            .as_ref()
-            .unwrap();
+        let steps = load_steps(&session_path).unwrap();
+        let source = steps[0].meta.as_ref().unwrap().source.as_ref().unwrap();
         assert_eq!(source.vcs_type, "git");
         assert_eq!(source.revision, "abc123");
     }
@@ -2333,8 +2403,8 @@ mod tests {
         )
         .unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let refs = &path_doc.steps[0].meta.as_ref().unwrap().refs;
+        let steps = load_steps(&session_path).unwrap();
+        let refs = &steps[0].meta.as_ref().unwrap().refs;
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel, "issue");
         assert!(refs[0].href.contains("issues/1"));
@@ -2375,8 +2445,8 @@ mod tests {
         )
         .unwrap();
 
-        let (path_doc, _) = load_session(&session_path).unwrap();
-        let refs = &path_doc.steps[0].meta.as_ref().unwrap().refs;
+        let steps = load_steps(&session_path).unwrap();
+        let refs = &steps[0].meta.as_ref().unwrap().refs;
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].rel, "issue");
         assert_eq!(refs[1].rel, "pr");
