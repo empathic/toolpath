@@ -171,8 +171,9 @@ turns are stored in separate session files and not yet cross-referenced (`turns`
 is empty).
 
 **Token usage** — per-turn `TokenUsage` includes `cache_read_tokens` and
-`cache_write_tokens` from Claude's prompt caching. `ConversationView.total_usage`
-aggregates across all turns.
+`cache_write_tokens` from Claude's prompt caching.
+`ConversationView.total_usage` sums all per-turn token counts (input, output,
+cache read, cache write) into a single aggregate.
 
 **Session summary** — `ConversationView.provider_id` is `"claude-code"`.
 `ConversationView.files_changed` lists all files mutated during the session

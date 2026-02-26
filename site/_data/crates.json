@@ -1,7 +1,7 @@
 [
   {
     "name": "toolpath",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "description": "Core types, builders, and query API",
     "docs": "https://docs.rs/toolpath",
     "crate": "https://crates.io/crates/toolpath",
@@ -17,7 +17,7 @@
   },
   {
     "name": "toolpath-git",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Derive from git repository history",
     "docs": "https://docs.rs/toolpath-git",
     "crate": "https://crates.io/crates/toolpath-git",
@@ -41,7 +41,7 @@
   },
   {
     "name": "toolpath-cli",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",
