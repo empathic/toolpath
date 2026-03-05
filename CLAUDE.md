@@ -18,7 +18,7 @@ crates/
   toolpath-dot/                 # Graphviz DOT rendering
   toolpath-cli/                 # unified CLI (binary: path)
 schema/toolpath.schema.json     # JSON Schema for the format
-examples/*.json                 # 11 example documents (step, path, graph)
+examples/*.json                 # 12 example documents (step, path, graph)
 RFC.md                          # full format specification
 FAQ.md                          # design rationale, FAQ, and open questions
 ```

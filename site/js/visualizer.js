@@ -19,8 +19,8 @@
 
   // --- Examples loaded from window.__VIZ_EXAMPLES__ (injected by Eleventy) ---
   var VIZ_EXAMPLES = window.__VIZ_EXAMPLES__ || [];
-  // Default to "Path: PR with dead end" (index 7) or first available
-  var DEFAULT_EXAMPLE_INDEX = VIZ_EXAMPLES.length > 7 ? 7 : 0;
+  // Default to "Path: exploration & merge" (index 4) or first available
+  var DEFAULT_EXAMPLE_INDEX = VIZ_EXAMPLES.length > 4 ? 4 : 0;
 
   // --- DOM refs ---
   var input = document.getElementById("viz-input");
@@ -264,6 +264,9 @@
         if (s.step.parents) {
           s.step.parents.forEach(function (pid) {
             var sourceId = prefix + pid;
+            // Don't add edge if parent node doesn't exist in graph
+            // (e.g. standalone Step docs referencing external parents)
+            if (!g.node(sourceId)) return;
             // Don't add edge if parent is hidden dead-end
             if (!showDeadEnds && ancestorSet && !ancestorSet[pid]) return;
 
