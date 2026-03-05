@@ -35,6 +35,10 @@ pub use watcher::ConversationWatcher;
 /// convenient methods for reading conversations, listing projects,
 /// and accessing conversation history.
 ///
+/// **Chain-default:** `read_conversation` and `list_conversations` operate
+/// on logical conversations (merged session chains). Use `read_segment`
+/// and `list_segments` for single-file access.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -45,7 +49,7 @@ pub use watcher::ConversationWatcher;
 /// // List all projects
 /// let projects = manager.list_projects()?;
 ///
-/// // Read a conversation
+/// // Read a conversation (follows session chains automatically)
 /// let convo = manager.read_conversation(
 ///     "/Users/alex/project",
 ///     "session-uuid"
@@ -54,9 +58,19 @@ pub use watcher::ConversationWatcher;
 /// println!("Conversation has {} messages", convo.message_count());
 /// # Ok::<(), toolpath_claude::ConvoError>(())
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ClaudeConvo {
     io: ConvoIO,
+    chain_cache: std::cell::RefCell<std::collections::HashMap<String, chain::ChainIndex>>,
+}
+
+impl Clone for ClaudeConvo {
+    fn clone(&self) -> Self {
+        Self {
+            io: self.io.clone(),
+            chain_cache: std::cell::RefCell::new(self.chain_cache.borrow().clone()),
+        }
+    }
 }
 
 impl Default for ClaudeConvo {
@@ -68,7 +82,10 @@ impl Default for ClaudeConvo {
 impl ClaudeConvo {
     /// Creates a new ClaudeConvo manager with default path resolution.
     pub fn new() -> Self {
-        Self { io: ConvoIO::new() }
+        Self {
+            io: ConvoIO::new(),
+            chain_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
     }
 
     /// Creates a ClaudeConvo manager with a custom path resolver.
@@ -89,6 +106,7 @@ impl ClaudeConvo {
     pub fn with_resolver(resolver: PathResolver) -> Self {
         Self {
             io: ConvoIO::with_resolver(resolver),
+            chain_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -104,42 +122,136 @@ impl ClaudeConvo {
 
     /// Reads a conversation by project path and session ID.
     ///
-    /// # Arguments
+    /// **Chain-aware:** if this session is part of a chain (file rotation),
+    /// all segments are merged into a single `Conversation` with bridge
+    /// entries filtered out and `session_ids` populated.
     ///
-    /// * `project_path` - The project path (e.g., "/Users/alex/project")
-    /// * `session_id` - The session UUID
-    ///
-    /// # Returns
-    ///
-    /// Returns the parsed conversation or an error if the file doesn't exist or can't be parsed.
+    /// Use [`read_segment`] for single-file access.
     pub fn read_conversation(&self, project_path: &str, session_id: &str) -> Result<Conversation> {
-        self.io.read_conversation(project_path, session_id)
+        let chain = self.chain_for(project_path, session_id)?;
+
+        if chain.len() <= 1 {
+            return self.io.read_conversation(project_path, session_id);
+        }
+
+        // Multi-segment: merge all segments
+        let head = &chain[0];
+        let mut merged = Conversation::new(head.clone());
+
+        for segment_id in &chain {
+            let convo = self.io.read_conversation(project_path, segment_id)?;
+
+            if merged.started_at.is_none() {
+                merged.started_at = convo.started_at;
+            }
+            merged.last_activity = convo.last_activity.or(merged.last_activity);
+            if merged.project_path.is_none() {
+                merged.project_path = convo.project_path.clone();
+            }
+
+            for entry in &convo.entries {
+                if chain::is_bridge_entry(entry, segment_id) {
+                    continue;
+                }
+                merged.add_entry(entry.clone());
+            }
+        }
+
+        merged.session_ids = chain;
+        Ok(merged)
     }
 
     /// Reads conversation metadata without loading the full content.
     ///
-    /// This is more efficient when you only need basic information about a conversation.
+    /// **Chain-aware:** aggregates `message_count` (sum), `started_at`
+    /// (earliest), and `last_activity` (latest) across all segments.
     pub fn read_conversation_metadata(
         &self,
         project_path: &str,
         session_id: &str,
     ) -> Result<ConversationMetadata> {
-        self.io.read_conversation_metadata(project_path, session_id)
+        let chain = self.chain_for(project_path, session_id)?;
+
+        if chain.len() <= 1 {
+            return self.io.read_conversation_metadata(project_path, session_id);
+        }
+
+        let head = &chain[0];
+        let mut total_messages = 0usize;
+        let mut started_at = None;
+        let mut last_activity = None;
+        let mut project_path_val = String::new();
+        let mut file_path = std::path::PathBuf::new();
+
+        for (i, segment_id) in chain.iter().enumerate() {
+            let meta = self.io.read_conversation_metadata(project_path, segment_id)?;
+            total_messages += meta.message_count;
+
+            if started_at.is_none() || meta.started_at < started_at {
+                started_at = meta.started_at;
+            }
+            if last_activity.is_none() || meta.last_activity > last_activity {
+                last_activity = meta.last_activity;
+            }
+            if project_path_val.is_empty() {
+                project_path_val = meta.project_path;
+            }
+            if i == 0 {
+                file_path = meta.file_path;
+            }
+        }
+
+        Ok(ConversationMetadata {
+            session_id: head.clone(),
+            project_path: project_path_val,
+            file_path,
+            message_count: total_messages,
+            started_at,
+            last_activity,
+        })
     }
 
-    /// Lists all conversation session IDs for a project.
-    pub fn list_conversations(&self, project_path: &str) -> Result<Vec<String>> {
-        self.io.list_conversations(project_path)
-    }
-
-    /// Lists metadata for all conversations in a project.
+    /// Lists logical conversation IDs for a project (chain heads only).
     ///
-    /// Results are sorted by last activity (most recent first).
+    /// Chained sessions collapse to a single entry (the head).
+    /// Use [`list_segments`] for all file stems.
+    pub fn list_conversations(&self, project_path: &str) -> Result<Vec<String>> {
+        self.chain_heads(project_path)
+    }
+
+    /// Lists metadata for all logical conversations in a project.
+    ///
+    /// Chain heads only. Results are sorted by last activity (most recent first).
     pub fn list_conversation_metadata(
         &self,
         project_path: &str,
     ) -> Result<Vec<ConversationMetadata>> {
-        self.io.list_conversation_metadata(project_path)
+        let heads = self.chain_heads(project_path)?;
+        let mut metadata = Vec::new();
+
+        for session_id in heads {
+            match self.read_conversation_metadata(project_path, &session_id) {
+                Ok(meta) => metadata.push(meta),
+                Err(e) => {
+                    eprintln!("Warning: Failed to read metadata for {}: {}", session_id, e);
+                }
+            }
+        }
+
+        metadata.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+        Ok(metadata)
+    }
+
+    // ── Single-file access (opt-in) ──────────────────────────────────
+
+    /// Reads a single JSONL file without following chains.
+    pub fn read_segment(&self, project_path: &str, session_id: &str) -> Result<Conversation> {
+        self.io.read_conversation(project_path, session_id)
+    }
+
+    /// Lists all file stems (including successor segments).
+    pub fn list_segments(&self, project_path: &str) -> Result<Vec<String>> {
+        self.io.list_conversations(project_path)
     }
 
     /// Lists all projects that have conversations.
@@ -223,16 +335,41 @@ impl ClaudeConvo {
     /// in chronological order (oldest segment first).
     ///
     /// For single-segment sessions, returns `[session_id]`.
-    pub fn session_chain(&self, project_path: &str, session_id: &str) -> Result<Vec<String>> {
-        chain::resolve_chain(self.resolver(), project_path, session_id)
+    #[allow(dead_code)]
+    pub(crate) fn session_chain(&self, project_path: &str, session_id: &str) -> Result<Vec<String>> {
+        self.chain_for(project_path, session_id)
     }
 
     /// Returns the chain head (earliest segment) for `session_id`.
     ///
     /// For single-segment sessions, returns `session_id` unchanged.
-    pub fn chain_head(&self, project_path: &str, session_id: &str) -> Result<String> {
+    #[allow(dead_code)]
+    pub(crate) fn chain_head(&self, project_path: &str, session_id: &str) -> Result<String> {
         let chain = self.session_chain(project_path, session_id)?;
         Ok(chain.into_iter().next().unwrap_or_else(|| session_id.to_string()))
+    }
+
+    // ── Private helpers ──────────────────────────────────────────────
+
+    /// Refresh the chain index for `project_path` and resolve the chain
+    /// for `session_id`. RefCell borrow is scoped internally.
+    fn chain_for(&self, project_path: &str, session_id: &str) -> Result<Vec<String>> {
+        let mut cache = self.chain_cache.borrow_mut();
+        let index = cache
+            .entry(project_path.to_string())
+            .or_insert_with(chain::ChainIndex::new);
+        index.refresh(self.resolver(), project_path)?;
+        Ok(index.resolve_chain(session_id))
+    }
+
+    /// Refresh the chain index and return chain heads.
+    fn chain_heads(&self, project_path: &str) -> Result<Vec<String>> {
+        let mut cache = self.chain_cache.borrow_mut();
+        let index = cache
+            .entry(project_path.to_string())
+            .or_insert_with(chain::ChainIndex::new);
+        index.refresh(self.resolver(), project_path)?;
+        Ok(index.chain_heads())
     }
 
     /// Finds conversations that contain specific text.
@@ -521,5 +658,75 @@ mod tests {
         let (_temp, manager) = setup_test_with_conversation();
         let head = manager.chain_head("/test/project", "session-abc").unwrap();
         assert_eq!(head, "session-abc");
+    }
+
+    // ── Chain-default API tests ──────────────────────────────────────
+
+    #[test]
+    fn test_read_conversation_follows_chain() {
+        let (_temp, manager) = setup_chained_conversations();
+
+        // Reading from any segment returns the full merged conversation
+        let convo = manager.read_conversation("/test/project", "session-a").unwrap();
+        assert_eq!(convo.session_id, "session-a");
+        assert_eq!(convo.session_ids, vec!["session-a", "session-b", "session-c"]);
+        // a1, b1, c1 (bridge entries b0 and c0 filtered out)
+        assert_eq!(convo.entries.len(), 3);
+        assert_eq!(convo.entries[0].uuid, "a1");
+        assert_eq!(convo.entries[1].uuid, "b1");
+        assert_eq!(convo.entries[2].uuid, "c1");
+
+        // From the middle
+        let convo_b = manager.read_conversation("/test/project", "session-b").unwrap();
+        assert_eq!(convo_b.session_ids, vec!["session-a", "session-b", "session-c"]);
+        assert_eq!(convo_b.entries.len(), 3);
+
+        // From the tail
+        let convo_c = manager.read_conversation("/test/project", "session-c").unwrap();
+        assert_eq!(convo_c.entries.len(), 3);
+    }
+
+    #[test]
+    fn test_list_conversations_returns_chain_heads() {
+        let (_temp, manager) = setup_chained_conversations();
+
+        let sessions = manager.list_conversations("/test/project").unwrap();
+        // Three files but only one chain head
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions.contains(&"session-a".to_string()));
+    }
+
+    #[test]
+    fn test_read_segment_single_file() {
+        let (_temp, manager) = setup_chained_conversations();
+
+        // read_segment returns only the single file, not merged
+        let segment = manager.read_segment("/test/project", "session-b").unwrap();
+        assert_eq!(segment.session_id, "session-b");
+        assert_eq!(segment.entries.len(), 2); // b0 (bridge) + b1
+        assert!(segment.session_ids.is_empty());
+    }
+
+    #[test]
+    fn test_list_segments_returns_all() {
+        let (_temp, manager) = setup_chained_conversations();
+
+        let mut segments = manager.list_segments("/test/project").unwrap();
+        segments.sort();
+        assert_eq!(segments, vec!["session-a", "session-b", "session-c"]);
+    }
+
+    #[test]
+    fn test_read_conversation_metadata_aggregates_chain() {
+        let (_temp, manager) = setup_chained_conversations();
+
+        let meta = manager.read_conversation_metadata("/test/project", "session-a").unwrap();
+        assert_eq!(meta.session_id, "session-a");
+        // a: 1 msg, b: 2 msgs, c: 2 msgs = 5 total
+        assert_eq!(meta.message_count, 5);
+        // started_at from first segment, last_activity from last
+        assert!(meta.started_at.is_some());
+        assert!(meta.last_activity.is_some());
+        assert!(meta.last_activity > meta.started_at);
     }
 }

@@ -6,12 +6,11 @@
 //! with `ToolInvocation.result` populated.
 
 use crate::ClaudeConvo;
-use crate::chain;
 use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Role, SessionLink, SessionLinkKind, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn, WatcherEvent,
+    EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    WatcherEvent,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -289,26 +288,6 @@ fn entry_to_watcher_event(entry: &ConversationEntry) -> WatcherEvent {
     }
 }
 
-/// Derive predecessor/successor links for a given session.
-///
-/// `succession` maps predecessor → successor.
-/// `reverse` maps successor → predecessor.
-fn links_from_maps(
-    succession: &std::collections::HashMap<String, String>,
-    reverse: &std::collections::HashMap<String, String>,
-    session_id: &str,
-) -> (Option<SessionLink>, Option<SessionLink>) {
-    let successor = succession.get(session_id).map(|succ| SessionLink {
-        session_id: succ.clone(),
-        kind: SessionLinkKind::Rotation,
-    });
-    let predecessor = reverse.get(session_id).map(|pred| SessionLink {
-        session_id: pred.clone(),
-        kind: SessionLinkKind::Rotation,
-    });
-    (predecessor, successor)
-}
-
 // ── ConversationProvider for ClaudeConvo ──────────────────────────────
 
 impl ConversationProvider for ClaudeConvo {
@@ -322,47 +301,11 @@ impl ConversationProvider for ClaudeConvo {
         project: &str,
         conversation_id: &str,
     ) -> toolpath_convo::Result<ConversationView> {
-        let succession = chain::build_succession_map(self.resolver(), project)
+        let convo = self
+            .read_conversation(project, conversation_id)
             .map_err(|e| ConvoError::Provider(e.to_string()))?;
-        let chain = chain::resolve_chain_with_map(&succession, conversation_id);
-
-        if chain.len() <= 1 {
-            // Fast path: single segment, no merging needed
-            let convo = self
-                .read_conversation(project, conversation_id)
-                .map_err(|e| ConvoError::Provider(e.to_string()))?;
-            return Ok(conversation_to_view(&convo));
-        }
-
-        // Multi-segment: merge all segments into one conversation
-        let mut merged = Conversation::new(conversation_id.to_string());
-
-        for segment_id in &chain {
-            let convo = self
-                .read_conversation(project, segment_id)
-                .map_err(|e| ConvoError::Provider(e.to_string()))?;
-
-            // Use timestamps from first and last segments
-            if merged.started_at.is_none() {
-                merged.started_at = convo.started_at;
-            }
-            merged.last_activity = convo.last_activity.or(merged.last_activity);
-            if merged.project_path.is_none() {
-                merged.project_path = convo.project_path.clone();
-            }
-
-            for entry in &convo.entries {
-                // Skip bridge entries (entries whose session_id points to a
-                // different segment — they're linking metadata, not content)
-                if chain::is_bridge_entry(entry, segment_id) {
-                    continue;
-                }
-                merged.add_entry(entry.clone());
-            }
-        }
-
-        let mut view = conversation_to_view(&merged);
-        view.session_ids = chain;
+        let mut view = conversation_to_view(&convo);
+        view.session_ids = convo.session_ids.clone();
         Ok(view)
     }
 
@@ -375,19 +318,14 @@ impl ConversationProvider for ClaudeConvo {
             .read_conversation_metadata(project, conversation_id)
             .map_err(|e| ConvoError::Provider(e.to_string()))?;
 
-        let succession = chain::build_succession_map(self.resolver(), project)
-            .map_err(|e| ConvoError::Provider(e.to_string()))?;
-        let reverse = chain::build_reverse_map(&succession);
-        let (predecessor, successor) = links_from_maps(&succession, &reverse, conversation_id);
-
         Ok(ConversationMeta {
             id: meta.session_id,
             started_at: meta.started_at,
             last_activity: meta.last_activity,
             message_count: meta.message_count,
             file_path: Some(meta.file_path),
-            predecessor,
-            successor,
+            predecessor: None,
+            successor: None,
         })
     }
 
@@ -395,23 +333,17 @@ impl ConversationProvider for ClaudeConvo {
         let metas = self
             .list_conversation_metadata(project)
             .map_err(|e| ConvoError::Provider(e.to_string()))?;
-        let succession = chain::build_succession_map(self.resolver(), project)
-            .map_err(|e| ConvoError::Provider(e.to_string()))?;
-        let reverse = chain::build_reverse_map(&succession);
 
         Ok(metas
             .into_iter()
-            .map(|m| {
-                let (predecessor, successor) = links_from_maps(&succession, &reverse, &m.session_id);
-                ConversationMeta {
-                    id: m.session_id,
-                    started_at: m.started_at,
-                    last_activity: m.last_activity,
-                    message_count: m.message_count,
-                    file_path: Some(m.file_path),
-                    predecessor,
-                    successor,
-                }
+            .map(|m| ConversationMeta {
+                id: m.session_id,
+                started_at: m.started_at,
+                last_activity: m.last_activity,
+                message_count: m.message_count,
+                file_path: Some(m.file_path),
+                predecessor: None,
+                successor: None,
             })
             .collect())
     }
@@ -1288,24 +1220,18 @@ mod tests {
     }
 
     #[test]
-    fn test_list_metadata_populates_links() {
+    fn test_list_metadata_chain_transparent() {
         let (_temp, provider) = setup_chained_provider();
 
         let metas = ConversationProvider::list_metadata(&provider, "/test/project").unwrap();
 
-        let meta_a = metas.iter().find(|m| m.id == "session-a").unwrap();
-        let meta_b = metas.iter().find(|m| m.id == "session-b").unwrap();
+        // Chain-default: only the chain head is returned
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].id, "session-a");
 
-        // session-a has successor session-b
-        assert!(meta_a.predecessor.is_none());
-        let succ = meta_a.successor.as_ref().unwrap();
-        assert_eq!(succ.session_id, "session-b");
-        assert_eq!(succ.kind, toolpath_convo::SessionLinkKind::Rotation);
-
-        // session-b has predecessor session-a
-        let pred = meta_b.predecessor.as_ref().unwrap();
-        assert_eq!(pred.session_id, "session-a");
-        assert!(meta_b.successor.is_none());
+        // Chains are transparent — no predecessor/successor links
+        assert!(metas[0].predecessor.is_none());
+        assert!(metas[0].successor.is_none());
     }
 
     #[cfg(feature = "watcher")]
@@ -1381,23 +1307,25 @@ mod tests {
     }
 
     #[test]
-    fn test_load_metadata_populates_links() {
+    fn test_load_metadata_chain_transparent() {
         let (_temp, provider) = setup_chained_provider();
 
+        // Load from chain head — aggregated metadata
         let meta_a =
             ConversationProvider::load_metadata(&provider, "/test/project", "session-a").unwrap();
+        assert_eq!(meta_a.id, "session-a");
+        // Aggregated message count across both segments (2 + 3 = 5)
+        assert_eq!(meta_a.message_count, 5);
+        // Chains are transparent — no predecessor/successor links
         assert!(meta_a.predecessor.is_none());
-        assert_eq!(
-            meta_a.successor.as_ref().unwrap().session_id,
-            "session-b"
-        );
+        assert!(meta_a.successor.is_none());
 
+        // Load from a successor — still resolves the full chain
         let meta_b =
             ConversationProvider::load_metadata(&provider, "/test/project", "session-b").unwrap();
-        assert_eq!(
-            meta_b.predecessor.as_ref().unwrap().session_id,
-            "session-a"
-        );
+        assert_eq!(meta_b.id, "session-a"); // head of chain
+        assert_eq!(meta_b.message_count, 5);
+        assert!(meta_b.predecessor.is_none());
         assert!(meta_b.successor.is_none());
     }
 }

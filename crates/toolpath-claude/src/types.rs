@@ -391,6 +391,10 @@ pub struct Conversation {
     pub entries: Vec<ConversationEntry>,
     pub started_at: Option<DateTime<Utc>>,
     pub last_activity: Option<DateTime<Utc>>,
+    /// Segment IDs when this conversation spans multiple files.
+    /// Empty for single-segment conversations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_ids: Vec<String>,
 }
 
 impl Conversation {
@@ -401,6 +405,7 @@ impl Conversation {
             entries: Vec::new(),
             started_at: None,
             last_activity: None,
+            session_ids: Vec::new(),
         }
     }
 

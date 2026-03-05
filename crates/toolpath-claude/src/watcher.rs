@@ -14,6 +14,9 @@ use std::collections::HashSet;
 /// Tracks which entries have been seen (by UUID) and only returns new entries
 /// on subsequent polls.
 ///
+/// Uses `read_segment` (single-file) internally — the watcher tails
+/// individual files and follows rotations via `ChainIndex`.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -51,6 +54,8 @@ pub struct ConversationWatcher {
     /// Rotations detected during the last `poll()`, consumed by
     /// `take_pending_rotations`. Each entry is `(from_session, to_session)`.
     pending_rotations: Vec<(String, String)>,
+    /// Cached chain index for incremental successor lookup.
+    chain_index: chain::ChainIndex,
 }
 
 impl ConversationWatcher {
@@ -64,6 +69,7 @@ impl ConversationWatcher {
             role_filter: None,
             successor_checked: false,
             pending_rotations: Vec::new(),
+            chain_index: chain::ChainIndex::new(),
         }
     }
 
@@ -100,7 +106,7 @@ impl ConversationWatcher {
     pub fn poll(&mut self) -> Result<Vec<ConversationEntry>> {
         let convo = self
             .manager
-            .read_conversation(&self.project, &self.session_id)?;
+            .read_segment(&self.project, &self.session_id)?;
         let new_entries = self.extract_new_entries(&convo)?;
 
         if !new_entries.is_empty() {
@@ -123,7 +129,7 @@ impl ConversationWatcher {
     pub fn poll_with_full(&mut self) -> Result<(Conversation, Vec<ConversationEntry>)> {
         let convo = self
             .manager
-            .read_conversation(&self.project, &self.session_id)?;
+            .read_segment(&self.project, &self.session_id)?;
         let new_entries = self.extract_new_entries(&convo)?;
 
         if !new_entries.is_empty() {
@@ -163,7 +169,7 @@ impl ConversationWatcher {
     pub fn skip_existing(&mut self) -> Result<usize> {
         let convo = self
             .manager
-            .read_conversation(&self.project, &self.session_id)?;
+            .read_segment(&self.project, &self.session_id)?;
         let count = convo.entries.len();
         for entry in &convo.entries {
             self.seen_uuids.insert(entry.uuid.clone());
@@ -186,9 +192,11 @@ impl ConversationWatcher {
         }
         self.successor_checked = true;
 
-        if let Ok(Some(successor)) =
-            chain::find_successor(self.manager.resolver(), &self.project, &self.session_id)
-        {
+        self.chain_index
+            .refresh(self.manager.resolver(), &self.project)?;
+
+        if let Some(successor) = self.chain_index.successor_of(&self.session_id) {
+            let successor = successor.to_string();
             let old_id = self.session_id.clone();
             self.pending_rotations.push((old_id, successor.clone()));
             self.session_id = successor;

@@ -12,45 +12,10 @@ use crate::reader::ConversationReader;
 use crate::types::ConversationEntry;
 use std::collections::{HashMap, HashSet};
 
-/// Build a map: predecessor_session_id → successor_file_stem.
+/// Resolve a chain using a pre-built succession map.
 ///
-/// Scans each JSONL file's first few lines. If the first entry's
-/// `session_id` differs from the filename stem, that file is a
-/// successor of the session named in the bridge entry.
-pub(crate) fn build_succession_map(
-    resolver: &PathResolver,
-    project_path: &str,
-) -> Result<HashMap<String, String>> {
-    let mut map = HashMap::new();
-    let sessions = resolver.list_conversations(project_path)?;
-
-    for file_stem in &sessions {
-        let path = resolver.conversation_file(project_path, file_stem)?;
-        if let Some(first_sid) = ConversationReader::read_first_session_id(&path) {
-            // If the first session_id in the file differs from the filename,
-            // this file is a successor — the bridge entry points back to the
-            // predecessor.
-            if first_sid != *file_stem {
-                map.insert(first_sid, file_stem.clone());
-            }
-        }
-    }
-
-    Ok(map)
-}
-
-/// Resolve the full chain containing `session_id`, returned in
-/// chronological order (oldest segment first).
-pub(crate) fn resolve_chain(
-    resolver: &PathResolver,
-    project_path: &str,
-    session_id: &str,
-) -> Result<Vec<String>> {
-    let succession = build_succession_map(resolver, project_path)?;
-    Ok(resolve_chain_with_map(&succession, session_id))
-}
-
-/// Like [`resolve_chain`] but uses a pre-built succession map.
+/// Walks backwards from `session_id` to the head, then forwards to the
+/// tail. Returns the chain in chronological order (oldest first).
 pub(crate) fn resolve_chain_with_map(
     succession: &HashMap<String, String>,
     session_id: &str,
@@ -87,32 +52,99 @@ pub(crate) fn resolve_chain_with_map(
     chain
 }
 
-/// Build the reverse map (successor → predecessor) from a succession map.
-pub(crate) fn build_reverse_map(
-    succession: &HashMap<String, String>,
-) -> HashMap<String, String> {
-    succession
-        .iter()
-        .map(|(pred, succ)| (succ.clone(), pred.clone()))
-        .collect()
+/// Cached index of session succession relationships.
+///
+/// Incrementally built: once a file has been checked and found not to be
+/// a successor, it's never re-checked (`non_successors` is an immutable
+/// property of a file's first entry).
+#[derive(Debug, Clone)]
+pub(crate) struct ChainIndex {
+    /// predecessor session_id → successor file stem
+    succession: HashMap<String, String>,
+    /// successor file stem → predecessor session_id
+    reverse: HashMap<String, String>,
+    /// File stems confirmed not to be successors (immutable property)
+    non_successors: HashSet<String>,
+    /// All file stems we've ever checked
+    known_files: HashSet<String>,
 }
 
-/// Find the immediate successor of `session_id`, if any.
-pub(crate) fn find_successor(
-    resolver: &PathResolver,
-    project_path: &str,
-    session_id: &str,
-) -> Result<Option<String>> {
-    let succession = build_succession_map(resolver, project_path)?;
-    Ok(successor_of(&succession, session_id))
-}
+impl ChainIndex {
+    pub(crate) fn new() -> Self {
+        Self {
+            succession: HashMap::new(),
+            reverse: HashMap::new(),
+            non_successors: HashSet::new(),
+            known_files: HashSet::new(),
+        }
+    }
 
-/// Look up the immediate successor in a pre-built map.
-pub(crate) fn successor_of(
-    succession: &HashMap<String, String>,
-    session_id: &str,
-) -> Option<String> {
-    succession.get(session_id).cloned()
+    /// Scan for new files and classify them. Files already in
+    /// `known_files` are skipped entirely.
+    pub(crate) fn refresh(
+        &mut self,
+        resolver: &PathResolver,
+        project_path: &str,
+    ) -> Result<()> {
+        let sessions = resolver.list_conversations(project_path)?;
+
+        for file_stem in &sessions {
+            if self.known_files.contains(file_stem.as_str()) {
+                continue;
+            }
+            self.known_files.insert(file_stem.clone());
+
+            let path = resolver.conversation_file(project_path, file_stem)?;
+            if let Some(first_sid) = ConversationReader::read_first_session_id(&path) {
+                if first_sid != *file_stem {
+                    // This file is a successor of first_sid
+                    self.succession.insert(first_sid.clone(), file_stem.clone());
+                    self.reverse.insert(file_stem.clone(), first_sid);
+                } else {
+                    self.non_successors.insert(file_stem.clone());
+                }
+            } else {
+                self.non_successors.insert(file_stem.clone());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Resolve the full chain containing `session_id` (oldest first).
+    pub(crate) fn resolve_chain(&self, session_id: &str) -> Vec<String> {
+        resolve_chain_with_map(&self.succession, session_id)
+    }
+
+    /// Return the chain head (earliest segment) for `session_id`.
+    #[allow(dead_code)]
+    pub(crate) fn head_for(&self, session_id: &str) -> String {
+        let chain = self.resolve_chain(session_id);
+        chain
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| session_id.to_string())
+    }
+
+    /// Immediate successor of `session_id`, if any.
+    pub(crate) fn successor_of(&self, session_id: &str) -> Option<&str> {
+        self.succession.get(session_id).map(|s| s.as_str())
+    }
+
+    /// All chain heads — file stems that are not successors of another.
+    pub(crate) fn chain_heads(&self) -> Vec<String> {
+        self.known_files
+            .iter()
+            .filter(|stem| !self.reverse.contains_key(stem.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    /// Whether `session_id` is a successor file (not a chain head).
+    #[allow(dead_code)]
+    pub(crate) fn is_successor(&self, session_id: &str) -> bool {
+        self.reverse.contains_key(session_id)
+    }
 }
 
 /// Test whether an entry is a bridge entry (its `session_id` differs
@@ -147,11 +179,12 @@ mod tests {
         fs::write(&path, entries.join("\n")).unwrap();
     }
 
+    // ── ChainIndex tests ─────────────────────────────────────────────
+
     #[test]
-    fn test_build_succession_map() {
+    fn test_chain_index_basic_build() {
         let (_temp, resolver) = setup_chain_env();
 
-        // Session A: normal file, session_id matches filename
         write_session(
             &resolver,
             "session-a",
@@ -160,46 +193,87 @@ mod tests {
             ],
         );
 
-        // Session B: bridge entry with session_id pointing to session-a
         write_session(
             &resolver,
             "session-b",
             &[
-                r#"{"type":"user","uuid":"u2","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Continued"}}"#,
-                r#"{"type":"user","uuid":"u3","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New content"}}"#,
+                r#"{"type":"user","uuid":"u2","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+                r#"{"type":"user","uuid":"u3","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New"}}"#,
             ],
         );
 
-        let map = build_succession_map(&resolver, "/test/project").unwrap();
-        assert_eq!(map.len(), 1);
-        assert_eq!(map.get("session-a").unwrap(), "session-b");
+        let mut index = ChainIndex::new();
+        index.refresh(&resolver, "/test/project").unwrap();
+
+        assert_eq!(index.successor_of("session-a"), Some("session-b"));
+        assert!(index.successor_of("session-b").is_none());
+        assert!(index.is_successor("session-b"));
+        assert!(!index.is_successor("session-a"));
+        assert_eq!(index.head_for("session-b"), "session-a");
+        assert_eq!(index.head_for("session-a"), "session-a");
     }
 
     #[test]
-    fn test_resolve_chain_single() {
-        let (_temp, resolver) = setup_chain_env();
-
-        write_session(
-            &resolver,
-            "session-solo",
-            &[
-                r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-solo","message":{"role":"user","content":"Hello"}}"#,
-            ],
-        );
-
-        let chain = resolve_chain(&resolver, "/test/project", "session-solo").unwrap();
-        assert_eq!(chain, vec!["session-solo"]);
-    }
-
-    #[test]
-    fn test_resolve_chain_two_segments() {
+    fn test_chain_index_incremental_refresh() {
         let (_temp, resolver) = setup_chain_env();
 
         write_session(
             &resolver,
             "session-a",
             &[
-                r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Start"}}"#,
+                r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#,
+            ],
+        );
+
+        let mut index = ChainIndex::new();
+        index.refresh(&resolver, "/test/project").unwrap();
+        assert_eq!(index.chain_heads().len(), 1);
+        assert!(index.chain_heads().contains(&"session-a".to_string()));
+
+        // Add a successor file after initial build
+        write_session(
+            &resolver,
+            "session-b",
+            &[
+                r#"{"type":"user","uuid":"u2","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+            ],
+        );
+
+        index.refresh(&resolver, "/test/project").unwrap();
+        assert_eq!(index.successor_of("session-a"), Some("session-b"));
+
+        let heads = index.chain_heads();
+        assert_eq!(heads.len(), 1);
+        assert!(heads.contains(&"session-a".to_string()));
+    }
+
+    #[test]
+    fn test_chain_index_chain_heads() {
+        let (_temp, resolver) = setup_chain_env();
+
+        // Two independent conversations
+        write_session(
+            &resolver,
+            "session-x",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-x","message":{"role":"user","content":"Hello"}}"#,
+            ],
+        );
+
+        write_session(
+            &resolver,
+            "session-y",
+            &[
+                r#"{"type":"user","uuid":"u2","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-y","message":{"role":"user","content":"World"}}"#,
+            ],
+        );
+
+        // Chain: session-a → session-b
+        write_session(
+            &resolver,
+            "session-a",
+            &[
+                r#"{"type":"user","uuid":"u3","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Start"}}"#,
             ],
         );
 
@@ -207,22 +281,25 @@ mod tests {
             &resolver,
             "session-b",
             &[
-                r#"{"type":"user","uuid":"u2","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
-                r#"{"type":"user","uuid":"u3","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"Continued"}}"#,
+                r#"{"type":"user","uuid":"u4","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
             ],
         );
 
-        // From A
-        let chain_from_a = resolve_chain(&resolver, "/test/project", "session-a").unwrap();
-        assert_eq!(chain_from_a, vec!["session-a", "session-b"]);
+        let mut index = ChainIndex::new();
+        index.refresh(&resolver, "/test/project").unwrap();
 
-        // From B — should resolve the same chain
-        let chain_from_b = resolve_chain(&resolver, "/test/project", "session-b").unwrap();
-        assert_eq!(chain_from_b, vec!["session-a", "session-b"]);
+        let mut heads = index.chain_heads();
+        heads.sort();
+        // session-b is a successor, so heads are: session-a, session-x, session-y
+        assert_eq!(heads.len(), 3);
+        assert!(heads.contains(&"session-a".to_string()));
+        assert!(heads.contains(&"session-x".to_string()));
+        assert!(heads.contains(&"session-y".to_string()));
+        assert!(!heads.contains(&"session-b".to_string()));
     }
 
     #[test]
-    fn test_resolve_chain_three_segments() {
+    fn test_chain_index_resolve_chain_three_segments() {
         let (_temp, resolver) = setup_chain_env();
 
         write_session(
@@ -238,7 +315,6 @@ mod tests {
             "session-b",
             &[
                 r#"{"type":"user","uuid":"u2","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge AB"}}"#,
-                r#"{"type":"user","uuid":"u3","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"Middle"}}"#,
             ],
         );
 
@@ -246,77 +322,28 @@ mod tests {
             &resolver,
             "session-c",
             &[
-                r#"{"type":"user","uuid":"u4","timestamp":"2024-01-01T02:00:00Z","sessionId":"session-b","message":{"role":"user","content":"Bridge BC"}}"#,
-                r#"{"type":"user","uuid":"u5","timestamp":"2024-01-01T02:00:01Z","sessionId":"session-c","message":{"role":"user","content":"End"}}"#,
+                r#"{"type":"user","uuid":"u3","timestamp":"2024-01-01T02:00:00Z","sessionId":"session-b","message":{"role":"user","content":"Bridge BC"}}"#,
             ],
         );
 
-        let chain = resolve_chain(&resolver, "/test/project", "session-a").unwrap();
-        assert_eq!(chain, vec!["session-a", "session-b", "session-c"]);
-
-        // From the middle
-        let chain_b = resolve_chain(&resolver, "/test/project", "session-b").unwrap();
-        assert_eq!(chain_b, vec!["session-a", "session-b", "session-c"]);
-
-        // From the tail
-        let chain_c = resolve_chain(&resolver, "/test/project", "session-c").unwrap();
-        assert_eq!(chain_c, vec!["session-a", "session-b", "session-c"]);
-    }
-
-    #[test]
-    fn test_find_successor() {
-        let (_temp, resolver) = setup_chain_env();
-
-        write_session(
-            &resolver,
-            "session-a",
-            &[
-                r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Start"}}"#,
-            ],
-        );
-
-        write_session(
-            &resolver,
-            "session-b",
-            &[
-                r#"{"type":"user","uuid":"u2","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
-            ],
-        );
+        let mut index = ChainIndex::new();
+        index.refresh(&resolver, "/test/project").unwrap();
 
         assert_eq!(
-            find_successor(&resolver, "/test/project", "session-a").unwrap(),
-            Some("session-b".to_string())
+            index.resolve_chain("session-a"),
+            vec!["session-a", "session-b", "session-c"]
         );
         assert_eq!(
-            find_successor(&resolver, "/test/project", "session-b").unwrap(),
-            None
+            index.resolve_chain("session-b"),
+            vec!["session-a", "session-b", "session-c"]
+        );
+        assert_eq!(
+            index.resolve_chain("session-c"),
+            vec!["session-a", "session-b", "session-c"]
         );
     }
 
-    #[test]
-    fn test_is_bridge_entry() {
-        let entry: ConversationEntry = serde_json::from_str(
-            r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hi"}}"#,
-        )
-        .unwrap();
-
-        // Entry with session_id "session-a" in a file owned by "session-b" is a bridge
-        assert!(is_bridge_entry(&entry, "session-b"));
-
-        // Entry with matching session_id is not a bridge
-        assert!(!is_bridge_entry(&entry, "session-a"));
-    }
-
-    #[test]
-    fn test_is_bridge_entry_no_session_id() {
-        let entry: ConversationEntry = serde_json::from_str(
-            r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hi"}}"#,
-        )
-        .unwrap();
-
-        // Entry without session_id is never a bridge
-        assert!(!is_bridge_entry(&entry, "session-b"));
-    }
+    // ── resolve_chain_with_map tests ─────────────────────────────────
 
     #[test]
     fn test_resolve_chain_with_map_cycle() {
@@ -342,15 +369,30 @@ mod tests {
         assert_eq!(chain[0], "session-a");
     }
 
-    #[test]
-    fn test_build_reverse_map() {
-        let mut succession = HashMap::new();
-        succession.insert("a".to_string(), "b".to_string());
-        succession.insert("b".to_string(), "c".to_string());
+    // ── is_bridge_entry tests ────────────────────────────────────────
 
-        let reverse = build_reverse_map(&succession);
-        assert_eq!(reverse.get("b").map(String::as_str), Some("a"));
-        assert_eq!(reverse.get("c").map(String::as_str), Some("b"));
-        assert!(reverse.get("a").is_none());
+    #[test]
+    fn test_is_bridge_entry() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hi"}}"#,
+        )
+        .unwrap();
+
+        // Entry with session_id "session-a" in a file owned by "session-b" is a bridge
+        assert!(is_bridge_entry(&entry, "session-b"));
+
+        // Entry with matching session_id is not a bridge
+        assert!(!is_bridge_entry(&entry, "session-a"));
+    }
+
+    #[test]
+    fn test_is_bridge_entry_no_session_id() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hi"}}"#,
+        )
+        .unwrap();
+
+        // Entry without session_id is never a bridge
+        assert!(!is_bridge_entry(&entry, "session-b"));
     }
 }

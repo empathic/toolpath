@@ -2,6 +2,22 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.6.0 — toolpath-claude
+
+### toolpath-claude 0.6.0
+
+- **Breaking:** `read_conversation` now follows session chains by default — any session ID returns the full merged conversation with bridge entries filtered out and `Conversation.session_ids` populated
+- **Breaking:** `list_conversations` returns logical conversations (chain heads only) instead of all file stems
+- **Breaking:** `list_conversation_metadata` / `read_conversation_metadata` aggregate across chain segments
+- **Breaking:** `session_chain()` / `chain_head()` are now `pub(crate)` — no longer needed externally since `read_conversation` handles chain resolution
+- **Breaking:** `ConversationMeta.predecessor` / `successor` are always `None` — chains are transparent, not navigable
+- Added `read_segment()` and `list_segments()` for opt-in single-file access
+- Added `Conversation.session_ids` field listing merged segment IDs
+- Added `ChainIndex` — cached, incrementally-refreshed chain index replacing per-call `build_succession_map` scans
+- `ConversationProvider` trait methods simplified to delegate to chain-aware `ClaudeConvo`
+- `ConversationWatcher` now uses `read_segment` internally and `ChainIndex` for successor lookup
+- Removed standalone `build_succession_map`, `resolve_chain`, `find_successor`, `successor_of`, `build_reverse_map` functions (superseded by `ChainIndex`)
+
 ## 0.4.0 — toolpath-convo / 0.5.0 — toolpath-claude
 
 ### toolpath-convo 0.4.0
