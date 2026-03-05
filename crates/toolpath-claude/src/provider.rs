@@ -5,6 +5,8 @@
 //! pairs them by `tool_use_id` so consumers get complete `Turn` values
 //! with `ToolInvocation.result` populated.
 
+use std::collections::HashMap;
+
 use crate::ClaudeConvo;
 use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
 #[cfg(any(feature = "watcher", test))]
@@ -82,6 +84,17 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let delegations = extract_delegations(&tool_uses);
 
+    let extra = if entry.extra.is_empty() {
+        HashMap::new()
+    } else {
+        let mut map = HashMap::new();
+        map.insert(
+            "claude".to_string(),
+            serde_json::to_value(&entry.extra).unwrap_or_default(),
+        );
+        map
+    };
+
     Turn {
         id: entry.uuid.clone(),
         parent_id: entry.parent_uuid.clone(),
@@ -95,7 +108,7 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         token_usage,
         environment,
         delegations,
-        extra: Default::default(),
+        extra,
     }
 }
 
@@ -280,13 +293,20 @@ fn extract_files_changed(turns: &[Turn]) -> Vec<String> {
 fn entry_to_watcher_event(entry: &ConversationEntry) -> WatcherEvent {
     match entry_to_turn(entry) {
         Some(turn) => WatcherEvent::Turn(Box::new(turn)),
-        None => WatcherEvent::Progress {
-            kind: entry.entry_type.clone(),
-            data: serde_json::json!({
+        None => {
+            let mut data = serde_json::json!({
                 "uuid": entry.uuid,
                 "timestamp": entry.timestamp,
-            }),
-        },
+            });
+            if !entry.extra.is_empty() {
+                data["claude"] =
+                    serde_json::to_value(&entry.extra).unwrap_or_default();
+            }
+            WatcherEvent::Progress {
+                kind: entry.entry_type.clone(),
+                data,
+            }
+        }
     }
 }
 
@@ -1117,6 +1137,64 @@ mod tests {
             d.result.as_deref(),
             Some("Found the bug in auth.rs line 42")
         );
+    }
+
+    // ── Provider-specific extras (Turn.extra["claude"]) ─────────────
+
+    #[test]
+    fn test_turn_extra_populated_from_entry() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","subtype":"init","message":{"role":"user","content":"hello"}}"#,
+        )
+        .unwrap();
+        let turn = to_turn(&entry).unwrap();
+        let claude = turn.extra.get("claude").expect("extra[\"claude\"] missing");
+        assert_eq!(claude["subtype"], "init");
+    }
+
+    #[test]
+    fn test_turn_extra_empty_when_no_extras() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}"#,
+        )
+        .unwrap();
+        let turn = to_turn(&entry).unwrap();
+        assert!(turn.extra.is_empty());
+    }
+
+    #[test]
+    fn test_progress_data_enriched_with_extras() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"progress","timestamp":"2024-01-01T00:00:00Z","data":{"type":"hook_progress","hookName":"pre-commit"}}"#,
+        )
+        .unwrap();
+        let event = entry_to_watcher_event(&entry);
+        match event {
+            WatcherEvent::Progress { kind, data } => {
+                assert_eq!(kind, "progress");
+                assert_eq!(data["uuid"], "u1");
+                assert_eq!(data["timestamp"], "2024-01-01T00:00:00Z");
+                let claude = &data["claude"];
+                assert_eq!(claude["data"]["type"], "hook_progress");
+                assert_eq!(claude["data"]["hookName"], "pre-commit");
+            }
+            other => panic!("Expected Progress, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn test_progress_data_no_claude_key_when_no_extras() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"progress","timestamp":"2024-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let event = entry_to_watcher_event(&entry);
+        match event {
+            WatcherEvent::Progress { data, .. } => {
+                assert!(data.get("claude").is_none());
+            }
+            other => panic!("Expected Progress, got {:?}", std::mem::discriminant(&other)),
+        }
     }
 
     #[test]

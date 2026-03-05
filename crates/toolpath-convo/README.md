@@ -24,7 +24,7 @@ Write your conversation analysis once, swap providers without changing a line.
 | `TokenUsage` | Input/output/cache token counts |
 | `EnvironmentSnapshot` | Working directory and VCS branch/revision at time of a turn |
 | `DelegatedWork` | A sub-agent delegation: prompt, nested turns, result |
-| `WatcherEvent` | A `Turn` (new), `TurnUpdated` (enriched with tool results), or `Progress` event |
+| `WatcherEvent` | A `Turn` (new), `TurnUpdated` (enriched with tool results), or `Progress` event — with `as_turn()`, `as_progress()`, `is_update()`, `turn_id()` helpers for ergonomic dispatch |
 
 **Traits** define how providers expose their data:
 
@@ -100,6 +100,40 @@ let writes: Vec<_> = turn.tool_uses.iter()
     .filter(|t| t.category == Some(ToolCategory::FileWrite))
     .collect();
 ```
+
+## Watching
+
+Dispatch on `WatcherEvent` with `match` — three variants, exhaustive:
+
+```rust,ignore
+use toolpath_convo::{ConversationWatcher, WatcherEvent};
+
+for event in watcher.poll()? {
+    match &event {
+        WatcherEvent::Turn(turn) => ui.add_turn(turn),
+        WatcherEvent::TurnUpdated(turn) => ui.replace_turn(turn),
+        WatcherEvent::Progress { kind, data } => ui.show_progress(kind, data),
+    }
+}
+```
+
+Convenience methods (`as_turn()`, `as_progress()`, `is_update()`, `turn_id()`)
+are available for cases where the distinction between `Turn` and `TurnUpdated`
+collapses — e.g. a formatting pipeline that takes a turn + flag:
+
+```rust,ignore
+// When Turn/TurnUpdated go through the same path:
+if let Some(turn) = event.as_turn() {
+    format_turn(turn, event.is_update());
+}
+
+// Keying/dedup without matching two variants:
+if let Some(id) = event.turn_id() {
+    seen.insert(id);
+}
+```
+
+Provider-specific metadata lives in `Turn.extra`, namespaced by provider (e.g. `turn.extra["claude"]`). This keeps the common schema clean while giving consumers opt-in access to provider internals.
 
 ## Provider implementations
 
