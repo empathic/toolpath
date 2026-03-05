@@ -1436,18 +1436,19 @@ mod tests {
         inherit_from: Option<u64>,
     ) {
         let (path_doc, mut state) = load_session(session_path).unwrap();
-        if !state.buffer_cache.contains_key(&seq) {
-            state.buffer_cache.insert(seq, content.to_string());
-        }
-        if !state.seq_to_step.contains_key(&seq) {
-            if let Some(ancestor) = inherit_from {
-                let step_id = state
-                    .seq_to_step
-                    .get(&ancestor)
-                    .cloned()
-                    .unwrap_or_default();
-                state.seq_to_step.insert(seq, step_id);
-            }
+        state
+            .buffer_cache
+            .entry(seq)
+            .or_insert_with(|| content.to_string());
+        if !state.seq_to_step.contains_key(&seq)
+            && let Some(ancestor) = inherit_from
+        {
+            let step_id = state
+                .seq_to_step
+                .get(&ancestor)
+                .cloned()
+                .unwrap_or_default();
+            state.seq_to_step.insert(seq, step_id);
         }
         save_session(session_path, &path_doc, &state).unwrap();
     }

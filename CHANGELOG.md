@@ -2,6 +2,23 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.5.0 — toolpath-convo / 0.6.2 — toolpath-claude
+
+### toolpath-convo 0.5.0
+
+- Added `WatcherEvent::as_turn()` — returns the `Turn` payload for both `Turn` and `TurnUpdated` variants
+- Added `WatcherEvent::as_progress()` — returns `(kind, data)` for `Progress` events
+- Added `WatcherEvent::is_update()` — returns `true` only for `TurnUpdated`
+- Added `WatcherEvent::turn_id()` — returns the turn ID for turn-carrying variants
+- Added dispatch loop example to `WatcherEvent` rustdoc
+
+### toolpath-claude 0.6.2
+
+- `to_turn()` now populates `Turn.extra["claude"]` with provider-specific metadata from `ConversationEntry.extra` (e.g. `subtype`, `data`), enabling trait-only consumers to access state-inference signals without importing provider types
+- `WatcherEvent::Progress` events now include the full entry payload under `data["claude"]`, carrying fields like `data.type`, `data.hookName`, `data.agentId`, and `data.message` that were previously discarded
+- Both changes are additive — previously-empty fields are now populated; no existing behavior changes
+- Thanks to the crabcity maintainers for the detailed gap analysis
+
 ## 0.6.1 — toolpath-claude
 
 ### toolpath-claude 0.6.1

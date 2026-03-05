@@ -610,14 +610,14 @@ mod tests {
         ).unwrap();
 
         // session-b: successor of a (bridge entry points to a)
-        let b = vec![
+        let b = [
             r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
             r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"Middle"}}"#,
         ];
         fs::write(project_dir.join("session-b.jsonl"), b.join("\n")).unwrap();
 
         // session-c: successor of b
-        let c = vec![
+        let c = [
             r#"{"uuid":"c0","type":"user","timestamp":"2024-01-01T02:00:00Z","sessionId":"session-b","message":{"role":"user","content":"Bridge"}}"#,
             r#"{"uuid":"c1","type":"user","timestamp":"2024-01-01T02:00:01Z","sessionId":"session-c","message":{"role":"user","content":"End"}}"#,
         ];

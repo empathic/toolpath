@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(watcher.session_id(), "session-a");
 
         // Now create session-b with a bridge entry pointing to session-a
-        let entries_b = vec![
+        let entries_b = [
             r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
             r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New content"}}"#,
         ];
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(convo.session_id, "session-a");
 
         // Create successor
-        let entries_b = vec![
+        let entries_b = [
             r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
             r#"{"uuid":"b1","type":"assistant","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"assistant","content":"Continued"}}"#,
         ];
@@ -521,7 +521,7 @@ mod tests {
         .unwrap();
 
         // Session B (successor of A)
-        let entries_b = vec![
+        let entries_b = [
             r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
             r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New"}}"#,
         ];

@@ -18,7 +18,7 @@ crates/
   toolpath-dot/                 # Graphviz DOT rendering
   toolpath-cli/                 # unified CLI (binary: path)
 schema/toolpath.schema.json     # JSON Schema for the format
-examples/*.json                 # 11 example documents (step, path, graph)
+examples/*.json                 # 12 example documents (step, path, graph)
 RFC.md                          # full format specification
 FAQ.md                          # design rationale, FAQ, and open questions
 ```
@@ -123,3 +123,4 @@ Build the site after changes: `cd site && pnpm run build` (should produce 7 page
 - The git derivation (`toolpath-git`) uses `git2` (libgit2 bindings), not shelling out to git
 - Claude conversation data lives in `~/.claude/projects/` as JSONL files; `toolpath-claude` reads these directly
 - `toolpath-claude` follows session chains by default — Claude Code rotates JSONL files on context overflow; `read_conversation` merges segments, `list_conversations` returns chain heads. `read_segment`/`list_segments` for single-file access. `ChainIndex` makes this incremental.
+- Provider-specific extras convention: `Turn.extra` and `WatcherEvent::Progress.data` use provider-namespaced keys (e.g. `extra["claude"]`). `toolpath-claude` populates `Turn.extra["claude"]` from `ConversationEntry.extra` and `Progress.data["claude"]` from the full entry payload. This lets trait-only consumers access provider metadata (like `subtype` for state inference) without importing provider types.

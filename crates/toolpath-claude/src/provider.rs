@@ -5,6 +5,8 @@
 //! pairs them by `tool_use_id` so consumers get complete `Turn` values
 //! with `ToolInvocation.result` populated.
 
+use std::collections::HashMap;
+
 use crate::ClaudeConvo;
 use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
 #[cfg(any(feature = "watcher", test))]
@@ -82,6 +84,17 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let delegations = extract_delegations(&tool_uses);
 
+    let extra = if entry.extra.is_empty() {
+        HashMap::new()
+    } else {
+        let mut map = HashMap::new();
+        map.insert(
+            "claude".to_string(),
+            serde_json::to_value(&entry.extra).unwrap_or_default(),
+        );
+        map
+    };
+
     Turn {
         id: entry.uuid.clone(),
         parent_id: entry.parent_uuid.clone(),
@@ -95,7 +108,7 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         token_usage,
         environment,
         delegations,
-        extra: Default::default(),
+        extra,
     }
 }
 
@@ -280,13 +293,19 @@ fn extract_files_changed(turns: &[Turn]) -> Vec<String> {
 fn entry_to_watcher_event(entry: &ConversationEntry) -> WatcherEvent {
     match entry_to_turn(entry) {
         Some(turn) => WatcherEvent::Turn(Box::new(turn)),
-        None => WatcherEvent::Progress {
-            kind: entry.entry_type.clone(),
-            data: serde_json::json!({
+        None => {
+            let mut data = serde_json::json!({
                 "uuid": entry.uuid,
                 "timestamp": entry.timestamp,
-            }),
-        },
+            });
+            if !entry.extra.is_empty() {
+                data["claude"] = serde_json::to_value(&entry.extra).unwrap_or_default();
+            }
+            WatcherEvent::Progress {
+                kind: entry.entry_type.clone(),
+                data,
+            }
+        }
     }
 }
 
@@ -458,7 +477,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Fix the bug"}}"#,
             r#"{"uuid":"uuid-2","type":"assistant","parentUuid":"uuid-1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"I'll fix that."},{"type":"thinking","thinking":"The bug is in auth"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"src/main.rs"}}],"model":"claude-opus-4-6","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":50}}}"#,
             r#"{"uuid":"uuid-3","type":"user","parentUuid":"uuid-2","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"fn main() { println!(\"hello\"); }","is_error":false}]}}"#,
@@ -553,7 +572,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Read a file"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading..."},{"type":"tool_use","id":"t1","name":"Read","input":{"path":"/nonexistent"}}],"stop_reason":"tool_use"}}"#,
             r#"{"uuid":"u3","type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"File not found","is_error":true}]}}"#,
@@ -578,7 +597,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Check two files"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading both..."},{"type":"tool_use","id":"t1","name":"Read","input":{"path":"a.rs"}},{"type":"tool_use","id":"t2","name":"Read","input":{"path":"b.rs"}}]}}"#,
             r#"{"uuid":"u3","type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file a contents","is_error":false},{"type":"tool_result","tool_use_id":"t2","content":"file b contents","is_error":false}]}}"#,
@@ -607,7 +626,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi there!"}}"#,
         ];
@@ -631,7 +650,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Read a file"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading..."},{"type":"tool_use","id":"t1","name":"Read","input":{"path":"test.rs"}}]}}"#,
         ];
@@ -731,7 +750,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
             r#"{"uuid":"uuid-2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi"}}"#,
         ];
@@ -766,7 +785,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Read the file"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading..."},{"type":"tool_use","id":"t1","name":"Read","input":{"path":"test.rs"}}]}}"#,
             r#"{"uuid":"u3","type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"fn main() {}","is_error":false}]}}"#,
@@ -820,7 +839,7 @@ mod tests {
         fs::create_dir_all(&project_dir).unwrap();
 
         // Start with just the user message and assistant tool use
-        let entries_phase1 = vec![
+        let entries_phase1 = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Read file"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading..."},{"type":"tool_use","id":"t1","name":"Read","input":{"path":"test.rs"}}]}}"#,
         ];
@@ -998,7 +1017,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","cwd":"/project/path","gitBranch":"feat/auth","message":{"role":"user","content":"Hello"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi"}}"#,
         ];
@@ -1026,7 +1045,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":500}}}"#,
         ];
@@ -1070,7 +1089,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Edit files"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Editing..."},{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"src/main.rs","content":"fn main() {}"}},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"src/lib.rs","old_string":"a","new_string":"b"}}]}}"#,
             r#"{"uuid":"u3","type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false},{"type":"tool_result","tool_use_id":"t2","content":"ok","is_error":false}]}}"#,
@@ -1094,7 +1113,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Search for bugs"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Delegating..."},{"type":"tool_use","id":"task-1","name":"Task","input":{"prompt":"Find the authentication bug","subagent_type":"Explore"}}]}}"#,
             r#"{"uuid":"u3","type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"task-1","content":"Found the bug in auth.rs line 42","is_error":false}]}}"#,
@@ -1119,6 +1138,70 @@ mod tests {
         );
     }
 
+    // ── Provider-specific extras (Turn.extra["claude"]) ─────────────
+
+    #[test]
+    fn test_turn_extra_populated_from_entry() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","subtype":"init","message":{"role":"user","content":"hello"}}"#,
+        )
+        .unwrap();
+        let turn = to_turn(&entry).unwrap();
+        let claude = turn.extra.get("claude").expect("extra[\"claude\"] missing");
+        assert_eq!(claude["subtype"], "init");
+    }
+
+    #[test]
+    fn test_turn_extra_empty_when_no_extras() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}"#,
+        )
+        .unwrap();
+        let turn = to_turn(&entry).unwrap();
+        assert!(turn.extra.is_empty());
+    }
+
+    #[test]
+    fn test_progress_data_enriched_with_extras() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"progress","timestamp":"2024-01-01T00:00:00Z","data":{"type":"hook_progress","hookName":"pre-commit"}}"#,
+        )
+        .unwrap();
+        let event = entry_to_watcher_event(&entry);
+        match event {
+            WatcherEvent::Progress { kind, data } => {
+                assert_eq!(kind, "progress");
+                assert_eq!(data["uuid"], "u1");
+                assert_eq!(data["timestamp"], "2024-01-01T00:00:00Z");
+                let claude = &data["claude"];
+                assert_eq!(claude["data"]["type"], "hook_progress");
+                assert_eq!(claude["data"]["hookName"], "pre-commit");
+            }
+            other => panic!(
+                "Expected Progress, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn test_progress_data_no_claude_key_when_no_extras() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"progress","timestamp":"2024-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let event = entry_to_watcher_event(&entry);
+        match event {
+            WatcherEvent::Progress { data, .. } => {
+                assert!(data.get("claude").is_none());
+            }
+            other => panic!(
+                "Expected Progress, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
     #[test]
     fn test_no_delegations_for_non_task_tools() {
         let (_temp, provider) = setup_provider();
@@ -1140,14 +1223,14 @@ mod tests {
         fs::create_dir_all(&project_dir).unwrap();
 
         // Session A: original conversation
-        let entries_a = vec![
+        let entries_a = [
             r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Fix the bug"}}"#,
             r#"{"uuid":"a2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","sessionId":"session-a","message":{"role":"assistant","content":"I'll fix that.","model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50}}}"#,
         ];
         fs::write(project_dir.join("session-a.jsonl"), entries_a.join("\n")).unwrap();
 
         // Session B: continuation with bridge entry
-        let entries_b = vec![
+        let entries_b = [
             // Bridge entry: session_id points back to session-a
             r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Continue the fix"}}"#,
             // Real entries in session-b
@@ -1201,7 +1284,7 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let entries = vec![
+        let entries = [
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"solo","message":{"role":"user","content":"Hello"}}"#,
             r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","sessionId":"solo","message":{"role":"assistant","content":"Hi there!"}}"#,
         ];
@@ -1265,7 +1348,7 @@ mod tests {
         assert!(matches!(&events[0], WatcherEvent::Turn(_)));
 
         // Create successor session-b
-        let entries_b = vec![
+        let entries_b = [
             r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
             r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New"}}"#,
         ];

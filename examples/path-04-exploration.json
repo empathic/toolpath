@@ -1,0 +1,154 @@
+{
+  "Path": {
+    "path": {
+      "id": "path-explore-cli-args",
+      "base": {
+        "uri": "github:myorg/myrepo",
+        "ref": "main"
+      },
+      "head": "step-004"
+    },
+
+    "steps": [
+      {
+        "step": {
+          "id": "step-001",
+          "actor": "human:alex",
+          "timestamp": "2026-02-10T09:00:00Z"
+        },
+        "change": {
+          "src/main.rs": {
+            "raw": "@@ -1,3 +1,8 @@\n+use std::process;\n+\n fn main() {\n-    println!(\"Hello, world!\");\n+    let args: Vec<String> = std::env::args().collect();\n+    if args.len() < 2 {\n+        eprintln!(\"usage: mytool <command>\");\n+        process::exit(1);\n+    }\n }"
+          }
+        },
+        "meta": {
+          "intent": "Scaffold CLI entry point with basic arg check"
+        }
+      },
+      {
+        "step": {
+          "id": "step-002a",
+          "parents": ["step-001"],
+          "actor": "agent:claude-code/session-exp1",
+          "timestamp": "2026-02-10T09:05:00Z"
+        },
+        "change": {
+          "Cargo.toml": {
+            "raw": "@@ -6,0 +7,2 @@\n+[dependencies]\n+clap = { version = \"4\", features = [\"derive\"] }"
+          },
+          "src/main.rs": {
+            "raw": "@@ -1,8 +1,15 @@\n+use clap::Parser;\n+\n+#[derive(Parser)]\n+struct Cli {\n+    command: String,\n+}\n+\n fn main() {\n-    let args: Vec<String> = std::env::args().collect();\n-    if args.len() < 2 {\n-        eprintln!(\"usage: mytool <command>\");\n-        process::exit(1);\n-    }\n+    let cli = Cli::parse();\n+    println!(\"Running: {}\", cli.command);\n }"
+          }
+        },
+        "meta": {
+          "intent": "Try clap derive macros (abandoned: too much codegen)"
+        }
+      },
+      {
+        "step": {
+          "id": "step-002b",
+          "parents": ["step-001"],
+          "actor": "agent:claude-code/session-exp1",
+          "timestamp": "2026-02-10T09:08:00Z"
+        },
+        "change": {
+          "src/main.rs": {
+            "raw": "@@ -1,8 +1,20 @@\n-use std::process;\n+use std::process;\n+use std::env;\n \n fn main() {\n-    let args: Vec<String> = std::env::args().collect();\n-    if args.len() < 2 {\n-        eprintln!(\"usage: mytool <command>\");\n-        process::exit(1);\n-    }\n+    let args: Vec<String> = env::args().collect();\n+    let cmd = args.get(1).map(|s| s.as_str());\n+    match cmd {\n+        Some(\"run\") => run(&args[2..]),\n+        Some(\"help\") | None => print_usage(),\n+        Some(other) => {\n+            eprintln!(\"unknown command: {other}\");\n+            process::exit(1);\n+        }\n+    }\n+}\n+\n+fn run(_args: &[String]) { todo!() }\n+fn print_usage() { println!(\"usage: mytool <run|help>\"); }"
+          }
+        },
+        "meta": {
+          "intent": "Try manual arg parsing with match"
+        }
+      },
+      {
+        "step": {
+          "id": "step-003b",
+          "parents": ["step-002b"],
+          "actor": "tool:clippy/0.1.84",
+          "timestamp": "2026-02-10T09:09:00Z"
+        },
+        "change": {
+          "src/main.rs": {
+            "structural": {
+              "type": "rust.rename",
+              "from": "_args",
+              "to": "args"
+            }
+          }
+        },
+        "meta": {
+          "intent": "Fix clippy: unused variable prefix"
+        }
+      },
+      {
+        "step": {
+          "id": "step-002c",
+          "parents": ["step-001"],
+          "actor": "agent:claude-code/session-exp1",
+          "timestamp": "2026-02-10T09:12:00Z"
+        },
+        "change": {
+          "Cargo.toml": {
+            "raw": "@@ -6,0 +7,2 @@\n+[dependencies]\n+clap = \"4\""
+          },
+          "src/main.rs": {
+            "raw": "@@ -1,8 +1,18 @@\n-use std::process;\n+use clap::{Command, Arg};\n \n fn main() {\n-    let args: Vec<String> = std::env::args().collect();\n-    if args.len() < 2 {\n-        eprintln!(\"usage: mytool <command>\");\n-        process::exit(1);\n-    }\n+    let matches = Command::new(\"mytool\")\n+        .subcommand(Command::new(\"run\")\n+            .about(\"Run the tool\")\n+            .arg(Arg::new(\"verbose\").short('v')))\n+        .subcommand(Command::new(\"help\")\n+            .about(\"Print help\"))\n+        .get_matches();\n+\n+    match matches.subcommand() {\n+        Some((\"run\", sub)) => run(sub),\n+        _ => println!(\"usage: mytool <run|help>\"),\n+    }\n+}\n+\n+fn run(_sub: &clap::ArgMatches) { todo!() }"
+          }
+        },
+        "meta": {
+          "intent": "Try clap builder API (no derive macros)"
+        }
+      },
+      {
+        "step": {
+          "id": "step-003c",
+          "parents": ["step-002c"],
+          "actor": "tool:rustfmt/1.7.0",
+          "timestamp": "2026-02-10T09:13:00Z"
+        },
+        "change": {
+          "src/main.rs": {
+            "raw": "@@ -4,6 +4,10 @@\n-    let matches = Command::new(\"mytool\")\n-        .subcommand(Command::new(\"run\")\n-            .about(\"Run the tool\")\n-            .arg(Arg::new(\"verbose\").short('v')))\n-        .subcommand(Command::new(\"help\")\n-            .about(\"Print help\"))\n+    let matches = Command::new(\"mytool\")\n+        .subcommand(\n+            Command::new(\"run\")\n+                .about(\"Run the tool\")\n+                .arg(Arg::new(\"verbose\").short('v')),\n+        )\n+        .subcommand(Command::new(\"help\").about(\"Print help\"))"
+          }
+        },
+        "meta": {
+          "intent": "Auto-format"
+        }
+      },
+      {
+        "step": {
+          "id": "step-004",
+          "parents": ["step-003b", "step-003c"],
+          "actor": "human:alex",
+          "timestamp": "2026-02-10T09:20:00Z"
+        },
+        "change": {
+          "src/main.rs": {
+            "raw": "@@ -1,18 +1,25 @@\n-use clap::{Command, Arg};\n+use clap::{Arg, Command};\n+use std::env;\n \n fn main() {\n     let matches = Command::new(\"mytool\")\n         .subcommand(\n             Command::new(\"run\")\n                 .about(\"Run the tool\")\n                 .arg(Arg::new(\"verbose\").short('v')),\n         )\n         .subcommand(Command::new(\"help\").about(\"Print help\"))\n         .get_matches();\n \n     match matches.subcommand() {\n-        Some((\"run\", sub)) => run(sub),\n+        Some((\"run\", sub)) => {\n+            let verbose = sub.get_flag(\"verbose\");\n+            run(verbose);\n+        }\n         _ => println!(\"usage: mytool <run|help>\"),\n     }\n }\n \n-fn run(_sub: &clap::ArgMatches) { todo!() }\n+fn run(verbose: bool) {\n+    if verbose { println!(\"verbose mode\"); }\n+    println!(\"running\");\n+}"
+          }
+        },
+        "meta": {
+          "intent": "Merge builder API with manual match dispatch, wire up verbose flag"
+        }
+      }
+    ],
+
+    "meta": {
+      "title": "Explore CLI argument parsing approaches",
+      "source": "agent://claude-code/session-exp1",
+      "actors": {
+        "human:alex": {
+          "name": "Alex",
+          "identities": [
+            {"system": "github", "id": "alexk"}
+          ]
+        },
+        "agent:claude-code/session-exp1": {
+          "name": "Claude Code",
+          "provider": "Anthropic",
+          "model": "claude-sonnet-4-20250514"
+        }
+      }
+    }
+  }
+}

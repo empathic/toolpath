@@ -136,10 +136,20 @@ follows up with `WatcherEvent::TurnUpdated` when tool results arrive:
 use toolpath_convo::{ConversationWatcher, WatcherEvent};
 
 for event in watcher.poll()? {
-    match event {
-        WatcherEvent::Turn(turn) => ui.add_turn(*turn),
-        WatcherEvent::TurnUpdated(turn) => ui.replace_turn(*turn),
-        WatcherEvent::Progress { .. } => {}
+    match &event {
+        WatcherEvent::Turn(turn) => ui.add_turn(turn),
+        WatcherEvent::TurnUpdated(turn) => ui.replace_turn(turn),
+        WatcherEvent::Progress { kind, data } => {
+            match kind.as_str() {
+                "session_rotated" => ui.notify_rotation(&data["from"], &data["to"]),
+                _ => {
+                    // Provider-specific progress data under data["claude"]
+                    if let Some(claude) = data.get("claude") {
+                        ui.show_progress(kind, claude);
+                    }
+                }
+            }
+        }
     }
 }
 ```
@@ -178,6 +188,24 @@ cache read, cache write) into a single aggregate.
 **Session summary** — `ConversationView.provider_id` is `"claude-code"`.
 `ConversationView.files_changed` lists all files mutated during the session
 (deduplicated, first-touch order), derived from `FileWrite`-categorized tool inputs.
+
+**Provider-specific metadata** — Claude log entries often carry extra fields
+(e.g. `subtype`, `data`) that don't map to the common `Turn` schema. These are
+forwarded into `Turn.extra["claude"]` so trait-only consumers can access them
+without importing Claude-specific types:
+
+```rust,ignore
+// State inference from provider metadata
+if let Some(claude) = turn.extra.get("claude") {
+    if claude.get("subtype").and_then(|v| v.as_str()) == Some("init") {
+        // This is a session initialization entry
+    }
+}
+```
+
+For `WatcherEvent::Progress` events, the full entry payload is similarly
+available under `data["claude"]` — carrying fields like `data.type`,
+`data.hookName`, `data.agentId`, and `data.message`.
 
 See [`toolpath-convo`](https://crates.io/crates/toolpath-convo) for the full trait and type definitions.
 

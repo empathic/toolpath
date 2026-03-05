@@ -186,6 +186,10 @@ pub struct Turn {
     pub delegations: Vec<DelegatedWork>,
 
     /// Provider-specific data that doesn't fit the common schema.
+    ///
+    /// Providers namespace their data under a provider key (e.g.
+    /// `extra["claude"]` for Claude Code) to avoid collisions when
+    /// consumers work with multiple providers.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -306,6 +310,35 @@ pub struct SessionLink {
 // ── Events ───────────────────────────────────────────────────────────
 
 /// Events emitted by a [`ConversationWatcher`].
+///
+/// # Dispatch
+///
+/// Use `match` for exhaustive dispatch — the compiler catches new variants:
+///
+/// ```
+/// use toolpath_convo::WatcherEvent;
+///
+/// fn handle_events(events: &[WatcherEvent]) {
+///     for event in events {
+///         match event {
+///             WatcherEvent::Turn(turn) => {
+///                 println!("new turn {}: {}", turn.id, turn.text);
+///             }
+///             WatcherEvent::TurnUpdated(turn) => {
+///                 println!("updated turn {}: {}", turn.id, turn.text);
+///             }
+///             WatcherEvent::Progress { kind, data } => {
+///                 println!("progress ({}): {}", kind, data);
+///             }
+///         }
+///     }
+/// }
+/// ```
+///
+/// Convenience methods ([`as_turn`](WatcherEvent::as_turn),
+/// [`turn_id`](WatcherEvent::turn_id), [`is_update`](WatcherEvent::is_update),
+/// [`as_progress`](WatcherEvent::as_progress)) are useful when `Turn` and
+/// `TurnUpdated` collapse into the same code path or for quick field access.
 #[derive(Debug, Clone)]
 pub enum WatcherEvent {
     /// A turn seen for the first time.
@@ -323,6 +356,35 @@ pub enum WatcherEvent {
         kind: String,
         data: serde_json::Value,
     },
+}
+
+impl WatcherEvent {
+    /// Returns the [`Turn`] payload for both [`Turn`](WatcherEvent::Turn)
+    /// and [`TurnUpdated`](WatcherEvent::TurnUpdated) variants.
+    pub fn as_turn(&self) -> Option<&Turn> {
+        match self {
+            WatcherEvent::Turn(t) | WatcherEvent::TurnUpdated(t) => Some(t),
+            WatcherEvent::Progress { .. } => None,
+        }
+    }
+
+    /// Returns `(kind, data)` for [`Progress`](WatcherEvent::Progress) events.
+    pub fn as_progress(&self) -> Option<(&str, &serde_json::Value)> {
+        match self {
+            WatcherEvent::Progress { kind, data } => Some((kind, data)),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` only for [`TurnUpdated`](WatcherEvent::TurnUpdated).
+    pub fn is_update(&self) -> bool {
+        matches!(self, WatcherEvent::TurnUpdated(_))
+    }
+
+    /// Returns the turn ID for turn-carrying variants.
+    pub fn turn_id(&self) -> Option<&str> {
+        self.as_turn().map(|t| t.id.as_str())
+    }
 }
 
 // ── Traits ───────────────────────────────────────────────────────────
@@ -546,6 +608,66 @@ mod tests {
     }
 
     #[test]
+    fn test_watcher_event_as_turn() {
+        let turn = sample_view().turns[0].clone();
+        let event = WatcherEvent::Turn(Box::new(turn.clone()));
+        assert_eq!(event.as_turn().unwrap().id, "t1");
+
+        let updated = WatcherEvent::TurnUpdated(Box::new(turn));
+        assert_eq!(updated.as_turn().unwrap().id, "t1");
+
+        let progress = WatcherEvent::Progress {
+            kind: "test".into(),
+            data: serde_json::Value::Null,
+        };
+        assert!(progress.as_turn().is_none());
+    }
+
+    #[test]
+    fn test_watcher_event_as_progress() {
+        let progress = WatcherEvent::Progress {
+            kind: "hook_progress".into(),
+            data: serde_json::json!({"hookName": "pre-commit"}),
+        };
+        let (kind, data) = progress.as_progress().unwrap();
+        assert_eq!(kind, "hook_progress");
+        assert_eq!(data["hookName"], "pre-commit");
+
+        let turn = WatcherEvent::Turn(Box::new(sample_view().turns[0].clone()));
+        assert!(turn.as_progress().is_none());
+    }
+
+    #[test]
+    fn test_watcher_event_is_update() {
+        let turn = WatcherEvent::Turn(Box::new(sample_view().turns[0].clone()));
+        assert!(!turn.is_update());
+
+        let updated = WatcherEvent::TurnUpdated(Box::new(sample_view().turns[0].clone()));
+        assert!(updated.is_update());
+
+        let progress = WatcherEvent::Progress {
+            kind: "test".into(),
+            data: serde_json::Value::Null,
+        };
+        assert!(!progress.is_update());
+    }
+
+    #[test]
+    fn test_watcher_event_turn_id() {
+        let turn = WatcherEvent::Turn(Box::new(sample_view().turns[1].clone()));
+        assert_eq!(turn.turn_id(), Some("t2"));
+
+        let updated = WatcherEvent::TurnUpdated(Box::new(sample_view().turns[0].clone()));
+        assert_eq!(updated.turn_id(), Some("t1"));
+
+        let progress = WatcherEvent::Progress {
+            kind: "test".into(),
+            data: serde_json::Value::Null,
+        };
+        assert!(progress.turn_id().is_none());
+    }
+
+    #[test]
     fn test_token_usage_default() {
         let usage = TokenUsage::default();
         assert!(usage.input_tokens.is_none());
@@ -675,7 +797,7 @@ mod tests {
             ToolCategory::Delegation,
         ];
         for cat in variants {
-            let json = serde_json::to_value(&cat).unwrap();
+            let json = serde_json::to_value(cat).unwrap();
             let back: ToolCategory = serde_json::from_value(json).unwrap();
             assert_eq!(back, cat);
         }
