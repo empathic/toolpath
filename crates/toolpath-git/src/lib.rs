@@ -893,7 +893,7 @@ mod native {
             let result = derive(&repo, &[default], &config).unwrap();
             match result {
                 Document::Path(path) => {
-                    assert!(path.steps.len() >= 1);
+                    assert!(!path.steps.is_empty());
                 }
                 _ => panic!("Expected Document::Path"),
             }
@@ -920,7 +920,7 @@ mod native {
             };
 
             let path = derive_path(&repo, &spec, &config).unwrap();
-            assert!(path.steps.len() >= 1);
+            assert!(!path.steps.is_empty());
         }
 
         #[test]

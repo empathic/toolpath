@@ -797,7 +797,7 @@ mod tests {
             ToolCategory::Delegation,
         ];
         for cat in variants {
-            let json = serde_json::to_value(&cat).unwrap();
+            let json = serde_json::to_value(cat).unwrap();
             let back: ToolCategory = serde_json::from_value(json).unwrap();
             assert_eq!(back, cat);
         }
