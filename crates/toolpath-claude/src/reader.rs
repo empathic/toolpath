@@ -211,6 +211,31 @@ impl ConversationReader {
         Ok((entries, current_offset))
     }
 
+    /// Read the first session_id found in a conversation file.
+    ///
+    /// Scans at most 10 lines, returning the first non-empty `session_id`
+    /// field from a parseable `ConversationEntry`. Returns `None` if the
+    /// file doesn't exist, can't be read, or has no session_id in the
+    /// first 10 lines.
+    pub fn read_first_session_id<P: AsRef<Path>>(path: P) -> Option<String> {
+        let file = File::open(path.as_ref()).ok()?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines().take(10) {
+            let line = line.ok()?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(entry) = serde_json::from_str::<ConversationEntry>(&line)
+                && let Some(sid) = &entry.session_id
+                && !sid.is_empty()
+            {
+                return Some(sid.clone());
+            }
+        }
+        None
+    }
+
     /// Get the current file size for a conversation file.
     /// Useful for checking if a file has grown since last read.
     pub fn file_size<P: AsRef<Path>>(path: P) -> Result<u64> {
@@ -456,6 +481,40 @@ mod tests {
         let (entries, _) = ConversationReader::read_from_offset(temp.path(), 0).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].uuid, "u1");
+    }
+
+    #[test]
+    fn test_read_first_session_id() {
+        let mut temp = NamedTempFile::new().unwrap();
+        writeln!(
+            temp,
+            r#"{{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"sess-abc","message":{{"role":"user","content":"Hi"}}}}"#
+        )
+        .unwrap();
+        temp.flush().unwrap();
+
+        let sid = ConversationReader::read_first_session_id(temp.path());
+        assert_eq!(sid, Some("sess-abc".to_string()));
+    }
+
+    #[test]
+    fn test_read_first_session_id_no_session_id() {
+        let mut temp = NamedTempFile::new().unwrap();
+        writeln!(
+            temp,
+            r#"{{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","message":{{"role":"user","content":"Hi"}}}}"#
+        )
+        .unwrap();
+        temp.flush().unwrap();
+
+        let sid = ConversationReader::read_first_session_id(temp.path());
+        assert!(sid.is_none());
+    }
+
+    #[test]
+    fn test_read_first_session_id_nonexistent() {
+        let sid = ConversationReader::read_first_session_id("/nonexistent/file.jsonl");
+        assert!(sid.is_none());
     }
 
     #[test]

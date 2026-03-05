@@ -4,6 +4,7 @@
 //! entries that have already been seen.
 
 use crate::ClaudeConvo;
+use crate::chain;
 use crate::error::Result;
 use crate::types::{Conversation, ConversationEntry, MessageRole};
 use std::collections::HashSet;
@@ -45,6 +46,11 @@ pub struct ConversationWatcher {
     session_id: String,
     seen_uuids: HashSet<String>,
     role_filter: Option<MessageRole>,
+    /// Avoids repeated successor scans when the current session is idle.
+    successor_checked: bool,
+    /// Rotations detected during the last `poll()`, consumed by
+    /// `take_pending_rotations`. Each entry is `(from_session, to_session)`.
+    pending_rotations: Vec<(String, String)>,
 }
 
 impl ConversationWatcher {
@@ -56,6 +62,8 @@ impl ConversationWatcher {
             session_id,
             seen_uuids: HashSet::new(),
             role_filter: None,
+            successor_checked: false,
+            pending_rotations: Vec::new(),
         }
     }
 
@@ -84,29 +92,62 @@ impl ConversationWatcher {
     ///
     /// On the first call, returns all existing entries (optionally filtered by role).
     /// On subsequent calls, returns only entries that haven't been seen before.
+    ///
+    /// When the current session has been rotated to a successor file, the
+    /// watcher automatically follows the chain and returns entries from the
+    /// new file. Call [`take_pending_rotations`] after poll to check whether
+    /// a rotation occurred.
     pub fn poll(&mut self) -> Result<Vec<ConversationEntry>> {
         let convo = self
             .manager
             .read_conversation(&self.project, &self.session_id)?;
-        self.extract_new_entries(&convo)
+        let new_entries = self.extract_new_entries(&convo)?;
+
+        if !new_entries.is_empty() {
+            self.successor_checked = false;
+            return Ok(new_entries);
+        }
+
+        // No new entries — check for a successor session
+        if self.follow_rotation()? {
+            return self.poll();
+        }
+
+        Ok(new_entries)
     }
 
     /// Polls and returns the full conversation along with just the new entries.
     ///
     /// Useful when you need both the full state and the delta.
+    /// Follows session rotations the same way [`poll`] does.
     pub fn poll_with_full(&mut self) -> Result<(Conversation, Vec<ConversationEntry>)> {
         let convo = self
             .manager
             .read_conversation(&self.project, &self.session_id)?;
         let new_entries = self.extract_new_entries(&convo)?;
+
+        if !new_entries.is_empty() {
+            self.successor_checked = false;
+            return Ok((convo, new_entries));
+        }
+
+        // No new entries — check for rotation
+        if self.follow_rotation()? {
+            return self.poll_with_full();
+        }
+
         Ok((convo, new_entries))
     }
 
-    /// Resets the watcher, clearing all seen UUIDs.
+    /// Resets the watcher, clearing all seen UUIDs and rotation state.
     ///
     /// The next poll will return all entries as if it were the first call.
+    /// Does **not** revert `session_id` — if a rotation was already followed,
+    /// the watcher stays on the current (latest) session.
     pub fn reset(&mut self) {
         self.seen_uuids.clear();
+        self.successor_checked = false;
+        self.pending_rotations.clear();
     }
 
     /// Pre-marks entries as seen without returning them.
@@ -130,11 +171,45 @@ impl ConversationWatcher {
         Ok(count)
     }
 
+    /// Returns all rotations detected during the last `poll()`, consuming
+    /// them. Each entry is `(from_session, to_session)`. Multi-hop chains
+    /// produce multiple entries in traversal order.
+    pub fn take_pending_rotations(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.pending_rotations)
+    }
+
+    /// Check for and follow a session rotation. Returns `true` if a
+    /// successor was found and the watcher switched to it.
+    fn follow_rotation(&mut self) -> Result<bool> {
+        if self.successor_checked {
+            return Ok(false);
+        }
+        self.successor_checked = true;
+
+        if let Ok(Some(successor)) =
+            chain::find_successor(self.manager.resolver(), &self.project, &self.session_id)
+        {
+            let old_id = self.session_id.clone();
+            self.pending_rotations.push((old_id, successor.clone()));
+            self.session_id = successor;
+            self.successor_checked = false;
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
     fn extract_new_entries(&mut self, convo: &Conversation) -> Result<Vec<ConversationEntry>> {
         let mut new_entries = Vec::new();
 
         for entry in &convo.entries {
             if self.seen_uuids.contains(&entry.uuid) {
+                continue;
+            }
+
+            // Skip bridge entries — they link sessions, not content
+            if chain::is_bridge_entry(entry, &self.session_id) {
+                self.seen_uuids.insert(entry.uuid.clone());
                 continue;
             }
 
@@ -336,6 +411,137 @@ mod tests {
         assert_eq!(entries[0].uuid, "uuid-1");
         // Both entries should be marked as seen (the assistant one was filtered but still seen)
         assert_eq!(watcher.seen_count(), 2);
+    }
+
+    #[test]
+    fn test_watcher_follows_rotation() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        // Session A: original conversation
+        let entry_a = r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#;
+        fs::write(project_dir.join("session-a.jsonl"), format!("{}\n", entry_a)).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let manager = ClaudeConvo::with_resolver(resolver);
+
+        let mut watcher = ConversationWatcher::new(
+            manager,
+            "/test/project".to_string(),
+            "session-a".to_string(),
+        );
+
+        // First poll: get entry from session-a
+        let entries = watcher.poll().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uuid, "a1");
+        assert_eq!(watcher.session_id(), "session-a");
+
+        // Now create session-b with a bridge entry pointing to session-a
+        let entries_b = vec![
+            r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+            r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New content"}}"#,
+        ];
+        fs::write(
+            project_dir.join("session-b.jsonl"),
+            entries_b.join("\n"),
+        )
+        .unwrap();
+
+        // Second poll: should auto-follow to session-b
+        let entries = watcher.poll().unwrap();
+        assert_eq!(watcher.session_id(), "session-b");
+
+        // Should get only b1 — bridge entry b0 is filtered out
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uuid, "b1");
+        assert_eq!(entries[0].text(), "New content");
+    }
+
+    #[test]
+    fn test_watcher_follows_rotation_with_full() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entry_a = r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#;
+        fs::write(project_dir.join("session-a.jsonl"), format!("{}\n", entry_a)).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let manager = ClaudeConvo::with_resolver(resolver);
+
+        let mut watcher = ConversationWatcher::new(
+            manager,
+            "/test/project".to_string(),
+            "session-a".to_string(),
+        );
+
+        // Consume session-a via poll_with_full
+        let (convo, new_entries) = watcher.poll_with_full().unwrap();
+        assert_eq!(new_entries.len(), 1);
+        assert_eq!(convo.session_id, "session-a");
+
+        // Create successor
+        let entries_b = vec![
+            r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+            r#"{"uuid":"b1","type":"assistant","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"assistant","content":"Continued"}}"#,
+        ];
+        fs::write(project_dir.join("session-b.jsonl"), entries_b.join("\n")).unwrap();
+
+        // poll_with_full follows rotation too
+        let (convo2, new_entries2) = watcher.poll_with_full().unwrap();
+        assert_eq!(watcher.session_id(), "session-b");
+        assert_eq!(convo2.session_id, "session-b");
+        // Only b1 — bridge b0 filtered
+        assert_eq!(new_entries2.len(), 1);
+        assert_eq!(new_entries2[0].uuid, "b1");
+    }
+
+    #[test]
+    fn test_watcher_reset_clears_rotation_state() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entry_a = r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#;
+        fs::write(project_dir.join("session-a.jsonl"), format!("{}\n", entry_a)).unwrap();
+
+        // Session B (successor of A)
+        let entries_b = vec![
+            r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+            r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New"}}"#,
+        ];
+        fs::write(project_dir.join("session-b.jsonl"), entries_b.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let manager = ClaudeConvo::with_resolver(resolver);
+
+        let mut watcher = ConversationWatcher::new(
+            manager,
+            "/test/project".to_string(),
+            "session-a".to_string(),
+        );
+
+        // Consume everything (a1, then follow to b1)
+        let entries = watcher.poll().unwrap();
+        assert_eq!(entries.len(), 1); // a1
+        let entries = watcher.poll().unwrap();
+        assert_eq!(entries.len(), 1); // b1
+        assert_eq!(watcher.session_id(), "session-b");
+
+        // Reset: seen UUIDs and rotation flags cleared
+        watcher.reset();
+        assert_eq!(watcher.seen_count(), 0);
+
+        // Re-poll: should replay entries from session-b (current session)
+        let entries = watcher.poll().unwrap();
+        // b0 is a bridge (session_id != session-b), so only b1
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uuid, "b1");
     }
 
     #[test]

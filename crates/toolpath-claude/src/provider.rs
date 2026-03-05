@@ -6,11 +6,12 @@
 //! with `ToolInvocation.result` populated.
 
 use crate::ClaudeConvo;
+use crate::chain;
 use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
-    WatcherEvent,
+    EnvironmentSnapshot, Role, SessionLink, SessionLinkKind, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn, WatcherEvent,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -226,6 +227,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         total_usage,
         provider_id: Some("claude-code".into()),
         files_changed,
+        session_ids: vec![],
     }
 }
 
@@ -287,6 +289,26 @@ fn entry_to_watcher_event(entry: &ConversationEntry) -> WatcherEvent {
     }
 }
 
+/// Derive predecessor/successor links for a given session.
+///
+/// `succession` maps predecessor → successor.
+/// `reverse` maps successor → predecessor.
+fn links_from_maps(
+    succession: &std::collections::HashMap<String, String>,
+    reverse: &std::collections::HashMap<String, String>,
+    session_id: &str,
+) -> (Option<SessionLink>, Option<SessionLink>) {
+    let successor = succession.get(session_id).map(|succ| SessionLink {
+        session_id: succ.clone(),
+        kind: SessionLinkKind::Rotation,
+    });
+    let predecessor = reverse.get(session_id).map(|pred| SessionLink {
+        session_id: pred.clone(),
+        kind: SessionLinkKind::Rotation,
+    });
+    (predecessor, successor)
+}
+
 // ── ConversationProvider for ClaudeConvo ──────────────────────────────
 
 impl ConversationProvider for ClaudeConvo {
@@ -300,10 +322,48 @@ impl ConversationProvider for ClaudeConvo {
         project: &str,
         conversation_id: &str,
     ) -> toolpath_convo::Result<ConversationView> {
-        let convo = self
-            .read_conversation(project, conversation_id)
+        let succession = chain::build_succession_map(self.resolver(), project)
             .map_err(|e| ConvoError::Provider(e.to_string()))?;
-        Ok(conversation_to_view(&convo))
+        let chain = chain::resolve_chain_with_map(&succession, conversation_id);
+
+        if chain.len() <= 1 {
+            // Fast path: single segment, no merging needed
+            let convo = self
+                .read_conversation(project, conversation_id)
+                .map_err(|e| ConvoError::Provider(e.to_string()))?;
+            return Ok(conversation_to_view(&convo));
+        }
+
+        // Multi-segment: merge all segments into one conversation
+        let mut merged = Conversation::new(conversation_id.to_string());
+
+        for segment_id in &chain {
+            let convo = self
+                .read_conversation(project, segment_id)
+                .map_err(|e| ConvoError::Provider(e.to_string()))?;
+
+            // Use timestamps from first and last segments
+            if merged.started_at.is_none() {
+                merged.started_at = convo.started_at;
+            }
+            merged.last_activity = convo.last_activity.or(merged.last_activity);
+            if merged.project_path.is_none() {
+                merged.project_path = convo.project_path.clone();
+            }
+
+            for entry in &convo.entries {
+                // Skip bridge entries (entries whose session_id points to a
+                // different segment — they're linking metadata, not content)
+                if chain::is_bridge_entry(entry, segment_id) {
+                    continue;
+                }
+                merged.add_entry(entry.clone());
+            }
+        }
+
+        let mut view = conversation_to_view(&merged);
+        view.session_ids = chain;
+        Ok(view)
     }
 
     fn load_metadata(
@@ -314,12 +374,20 @@ impl ConversationProvider for ClaudeConvo {
         let meta = self
             .read_conversation_metadata(project, conversation_id)
             .map_err(|e| ConvoError::Provider(e.to_string()))?;
+
+        let succession = chain::build_succession_map(self.resolver(), project)
+            .map_err(|e| ConvoError::Provider(e.to_string()))?;
+        let reverse = chain::build_reverse_map(&succession);
+        let (predecessor, successor) = links_from_maps(&succession, &reverse, conversation_id);
+
         Ok(ConversationMeta {
             id: meta.session_id,
             started_at: meta.started_at,
             last_activity: meta.last_activity,
             message_count: meta.message_count,
             file_path: Some(meta.file_path),
+            predecessor,
+            successor,
         })
     }
 
@@ -327,14 +395,23 @@ impl ConversationProvider for ClaudeConvo {
         let metas = self
             .list_conversation_metadata(project)
             .map_err(|e| ConvoError::Provider(e.to_string()))?;
+        let succession = chain::build_succession_map(self.resolver(), project)
+            .map_err(|e| ConvoError::Provider(e.to_string()))?;
+        let reverse = chain::build_reverse_map(&succession);
+
         Ok(metas
             .into_iter()
-            .map(|m| ConversationMeta {
-                id: m.session_id,
-                started_at: m.started_at,
-                last_activity: m.last_activity,
-                message_count: m.message_count,
-                file_path: Some(m.file_path),
+            .map(|m| {
+                let (predecessor, successor) = links_from_maps(&succession, &reverse, &m.session_id);
+                ConversationMeta {
+                    id: m.session_id,
+                    started_at: m.started_at,
+                    last_activity: m.last_activity,
+                    message_count: m.message_count,
+                    file_path: Some(m.file_path),
+                    predecessor,
+                    successor,
+                }
             })
             .collect())
     }
@@ -349,6 +426,17 @@ impl toolpath_convo::ConversationWatcher for crate::watcher::ConversationWatcher
             .map_err(|e| ConvoError::Provider(e.to_string()))?;
 
         let mut events: Vec<WatcherEvent> = Vec::new();
+
+        // Check for session rotations and prepend Progress events
+        for (from, to) in self.take_pending_rotations() {
+            events.push(WatcherEvent::Progress {
+                kind: "session_rotated".into(),
+                data: serde_json::json!({
+                    "from": from,
+                    "to": to,
+                }),
+            });
+        }
 
         for entry in &entries {
             let Some(msg) = &entry.message else {
@@ -1107,5 +1195,209 @@ mod tests {
         for turn in &view.turns {
             assert!(turn.delegations.is_empty());
         }
+    }
+
+    // ── Session chain tests ─────────────────────────────────────────
+
+    fn setup_chained_provider() -> (TempDir, ClaudeConvo) {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        // Session A: original conversation
+        let entries_a = vec![
+            r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Fix the bug"}}"#,
+            r#"{"uuid":"a2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","sessionId":"session-a","message":{"role":"assistant","content":"I'll fix that.","model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+        ];
+        fs::write(project_dir.join("session-a.jsonl"), entries_a.join("\n")).unwrap();
+
+        // Session B: continuation with bridge entry
+        let entries_b = vec![
+            // Bridge entry: session_id points back to session-a
+            r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Continue the fix"}}"#,
+            // Real entries in session-b
+            r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"What about the tests?"}}"#,
+            r#"{"uuid":"b2","type":"assistant","timestamp":"2024-01-01T01:00:02Z","sessionId":"session-b","message":{"role":"assistant","content":"Tests pass now.","model":"claude-opus-4-6","usage":{"input_tokens":200,"output_tokens":100}}}"#,
+        ];
+        fs::write(project_dir.join("session-b.jsonl"), entries_b.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        (temp, ClaudeConvo::with_resolver(resolver))
+    }
+
+    #[test]
+    fn test_load_conversation_merges_chain() {
+        let (_temp, provider) = setup_chained_provider();
+
+        // Load from session-a — should merge with session-b
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "session-a")
+                .unwrap();
+
+        // Should have turns from both segments (minus the bridge entry)
+        // session-a: a1 (user), a2 (assistant)
+        // session-b: b1 (user), b2 (assistant) — b0 is bridge, filtered
+        assert_eq!(view.turns.len(), 4);
+        assert_eq!(view.turns[0].text, "Fix the bug");
+        assert_eq!(view.turns[1].text, "I'll fix that.");
+        assert_eq!(view.turns[2].text, "What about the tests?");
+        assert_eq!(view.turns[3].text, "Tests pass now.");
+
+        // Session IDs should be set
+        assert_eq!(view.session_ids, vec!["session-a", "session-b"]);
+    }
+
+    #[test]
+    fn test_load_conversation_skips_bridge_entries() {
+        let (_temp, provider) = setup_chained_provider();
+
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "session-a")
+                .unwrap();
+
+        // Bridge entry text "Continue the fix" should NOT appear
+        for turn in &view.turns {
+            assert_ne!(turn.text, "Continue the fix");
+        }
+    }
+
+    #[test]
+    fn test_load_conversation_single_segment_unchanged() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entries = vec![
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"solo","message":{"role":"user","content":"Hello"}}"#,
+            r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","sessionId":"solo","message":{"role":"assistant","content":"Hi there!"}}"#,
+        ];
+        fs::write(project_dir.join("solo.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "solo").unwrap();
+
+        assert_eq!(view.turns.len(), 2);
+        assert_eq!(view.turns[0].text, "Hello");
+        assert_eq!(view.turns[1].text, "Hi there!");
+        // Single segment — session_ids should be empty
+        assert!(view.session_ids.is_empty());
+    }
+
+    #[test]
+    fn test_list_metadata_populates_links() {
+        let (_temp, provider) = setup_chained_provider();
+
+        let metas = ConversationProvider::list_metadata(&provider, "/test/project").unwrap();
+
+        let meta_a = metas.iter().find(|m| m.id == "session-a").unwrap();
+        let meta_b = metas.iter().find(|m| m.id == "session-b").unwrap();
+
+        // session-a has successor session-b
+        assert!(meta_a.predecessor.is_none());
+        let succ = meta_a.successor.as_ref().unwrap();
+        assert_eq!(succ.session_id, "session-b");
+        assert_eq!(succ.kind, toolpath_convo::SessionLinkKind::Rotation);
+
+        // session-b has predecessor session-a
+        let pred = meta_b.predecessor.as_ref().unwrap();
+        assert_eq!(pred.session_id, "session-a");
+        assert!(meta_b.successor.is_none());
+    }
+
+    #[cfg(feature = "watcher")]
+    #[test]
+    fn test_watcher_emits_rotation_progress() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        // Session A
+        let entry_a = r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#;
+        fs::write(
+            project_dir.join("session-a.jsonl"),
+            format!("{}\n", entry_a),
+        )
+        .unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let manager = ClaudeConvo::with_resolver(resolver);
+
+        let mut watcher = crate::watcher::ConversationWatcher::new(
+            manager,
+            "/test/project".to_string(),
+            "session-a".to_string(),
+        );
+
+        // First poll via trait: consume session-a entries
+        let events = toolpath_convo::ConversationWatcher::poll(&mut watcher).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], WatcherEvent::Turn(_)));
+
+        // Create successor session-b
+        let entries_b = vec![
+            r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+            r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New"}}"#,
+        ];
+        fs::write(
+            project_dir.join("session-b.jsonl"),
+            entries_b.join("\n"),
+        )
+        .unwrap();
+
+        // Second poll via trait: should include rotation Progress event
+        let events = toolpath_convo::ConversationWatcher::poll(&mut watcher).unwrap();
+
+        // First event: Progress(session_rotated) with from/to
+        assert!(events.len() >= 2, "Expected Progress + Turn, got {} events", events.len());
+        match &events[0] {
+            WatcherEvent::Progress { kind, data } => {
+                assert_eq!(kind, "session_rotated");
+                assert_eq!(data["from"], "session-a");
+                assert_eq!(data["to"], "session-b");
+            }
+            other => panic!("Expected Progress, got {:?}", std::mem::discriminant(other)),
+        }
+
+        // Second event: Turn for b1 (bridge entry b0 filtered out)
+        match &events[1] {
+            WatcherEvent::Turn(turn) => {
+                assert_eq!(turn.id, "b1");
+                assert_eq!(turn.text, "New");
+            }
+            other => panic!("Expected Turn(b1), got {:?}", std::mem::discriminant(other)),
+        }
+
+        // No bridge entry should appear as a Turn
+        for event in &events {
+            if let WatcherEvent::Turn(t) = event {
+                assert_ne!(t.id, "b0", "Bridge entry should not appear as a Turn");
+            }
+        }
+    }
+
+    #[test]
+    fn test_load_metadata_populates_links() {
+        let (_temp, provider) = setup_chained_provider();
+
+        let meta_a =
+            ConversationProvider::load_metadata(&provider, "/test/project", "session-a").unwrap();
+        assert!(meta_a.predecessor.is_none());
+        assert_eq!(
+            meta_a.successor.as_ref().unwrap().session_id,
+            "session-b"
+        );
+
+        let meta_b =
+            ConversationProvider::load_metadata(&provider, "/test/project", "session-b").unwrap();
+        assert_eq!(
+            meta_b.predecessor.as_ref().unwrap().session_id,
+            "session-a"
+        );
+        assert!(meta_b.successor.is_none());
     }
 }

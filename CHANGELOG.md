@@ -2,6 +2,27 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.4.0 — toolpath-convo / 0.5.0 — toolpath-claude
+
+### toolpath-convo 0.4.0
+
+- Added `SessionLinkKind` enum and `SessionLink` type for expressing predecessor/successor relationships between session segments
+- Added `ConversationMeta.predecessor` and `ConversationMeta.successor` fields (`Option<SessionLink>`) for session chain navigation
+- Added `ConversationView.session_ids` field (`Vec<String>`) listing all merged segment IDs in chronological order
+- All new fields use `#[serde(default)]` — existing JSON without them deserializes cleanly
+
+### toolpath-claude 0.5.0
+
+- **Breaking (behavioral):** `load_conversation()` now transparently merges session chains — when Claude Code rotates to a new JSONL file, the segments are combined into a single `ConversationView` with bridge entries filtered out
+- `load_metadata()` and `list_metadata()` now populate `predecessor`/`successor` links via the session chain
+- `ConversationView.session_ids` populated with the full chain when multiple segments are merged
+- `ConversationWatcher` automatically follows session rotations — polls seamlessly continue into successor files
+- `ConversationWatcher` trait impl emits `WatcherEvent::Progress { kind: "session_rotated" }` when a rotation is detected
+- Added `ClaudeConvo::session_chain()` and `ClaudeConvo::chain_head()` convenience methods
+- New internal `chain` module with `build_succession_map`, `resolve_chain`, `find_successor`, `is_bridge_entry`
+- Added `ConversationReader::read_first_session_id()` for O(1) bridge detection
+- Thanks to the crab city team for reporting the 52 rotation events that motivated this work
+
 ## 0.3.0 — toolpath-convo / 0.4.0 — toolpath-claude
 
 ### toolpath-convo 0.3.0

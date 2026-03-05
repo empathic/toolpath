@@ -217,6 +217,12 @@ pub struct ConversationView {
     /// Populated by the provider from tool invocation inputs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files_changed: Vec<String>,
+
+    /// All session IDs that were merged to produce this view, in
+    /// chronological order (oldest segment first). Empty or single-element
+    /// for non-chained conversations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_ids: Vec<String>,
 }
 
 impl ConversationView {
@@ -271,6 +277,30 @@ pub struct ConversationMeta {
     pub message_count: usize,
     /// Path to the backing file, if file-based.
     pub file_path: Option<PathBuf>,
+    /// Link to the preceding session segment (if this is a continuation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predecessor: Option<SessionLink>,
+    /// Link to the following session segment (if this was continued).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub successor: Option<SessionLink>,
+}
+
+// ── Session chaining ─────────────────────────────────────────────────
+
+/// Why two session files are linked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionLinkKind {
+    /// The provider rotated to a new file (plan-mode exit, context overflow, etc.).
+    Rotation,
+}
+
+/// A link between two session segments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionLink {
+    /// Session ID of the linked segment.
+    pub session_id: String,
+    /// Why the link exists.
+    pub kind: SessionLinkKind,
 }
 
 // ── Events ───────────────────────────────────────────────────────────
@@ -399,6 +429,7 @@ mod tests {
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
+            session_ids: vec![],
         }
     }
 
@@ -426,6 +457,7 @@ mod tests {
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
+            session_ids: vec![],
         };
         assert!(view.title(50).is_none());
     }
@@ -709,6 +741,7 @@ mod tests {
             }),
             provider_id: Some("claude-code".into()),
             files_changed: vec!["src/main.rs".into(), "src/lib.rs".into()],
+            session_ids: vec![],
         };
         let json = serde_json::to_string(&view).unwrap();
         let back: ConversationView = serde_json::from_str(&json).unwrap();
@@ -739,6 +772,8 @@ mod tests {
             last_activity: None,
             message_count: 5,
             file_path: Some("/tmp/test.jsonl".into()),
+            predecessor: None,
+            successor: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         let back: ConversationMeta = serde_json::from_str(&json).unwrap();

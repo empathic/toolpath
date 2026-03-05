@@ -2,6 +2,7 @@
 
 #[cfg(feature = "watcher")]
 pub mod async_watcher;
+pub(crate) mod chain;
 pub mod derive;
 pub mod error;
 pub mod io;
@@ -218,6 +219,22 @@ impl ClaudeConvo {
         }
     }
 
+    /// Resolves the full session chain containing `session_id`, returned
+    /// in chronological order (oldest segment first).
+    ///
+    /// For single-segment sessions, returns `[session_id]`.
+    pub fn session_chain(&self, project_path: &str, session_id: &str) -> Result<Vec<String>> {
+        chain::resolve_chain(self.resolver(), project_path, session_id)
+    }
+
+    /// Returns the chain head (earliest segment) for `session_id`.
+    ///
+    /// For single-segment sessions, returns `session_id` unchanged.
+    pub fn chain_head(&self, project_path: &str, session_id: &str) -> Result<String> {
+        let chain = self.session_chain(project_path, session_id)?;
+        Ok(chain.into_iter().next().unwrap_or_else(|| session_id.to_string()))
+    }
+
     /// Finds conversations that contain specific text.
     pub fn find_conversations_with_text(
         &self,
@@ -430,5 +447,79 @@ mod tests {
     fn test_default_impl() {
         // Test that Default trait works
         let _manager = ClaudeConvo::default();
+    }
+
+    // ── Session chain convenience methods ────────────────────────────
+
+    fn setup_chained_conversations() -> (TempDir, ClaudeConvo) {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        // session-a: standalone start
+        fs::write(
+            project_dir.join("session-a.jsonl"),
+            r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Start"}}"#,
+        ).unwrap();
+
+        // session-b: successor of a (bridge entry points to a)
+        let b = vec![
+            r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+            r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"Middle"}}"#,
+        ];
+        fs::write(project_dir.join("session-b.jsonl"), b.join("\n")).unwrap();
+
+        // session-c: successor of b
+        let c = vec![
+            r#"{"uuid":"c0","type":"user","timestamp":"2024-01-01T02:00:00Z","sessionId":"session-b","message":{"role":"user","content":"Bridge"}}"#,
+            r#"{"uuid":"c1","type":"user","timestamp":"2024-01-01T02:00:01Z","sessionId":"session-c","message":{"role":"user","content":"End"}}"#,
+        ];
+        fs::write(project_dir.join("session-c.jsonl"), c.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(claude_dir);
+        (temp, ClaudeConvo::with_resolver(resolver))
+    }
+
+    #[test]
+    fn test_session_chain_full() {
+        let (_temp, manager) = setup_chained_conversations();
+        let chain = manager.session_chain("/test/project", "session-a").unwrap();
+        assert_eq!(chain, vec!["session-a", "session-b", "session-c"]);
+    }
+
+    #[test]
+    fn test_session_chain_from_middle() {
+        let (_temp, manager) = setup_chained_conversations();
+        let chain = manager.session_chain("/test/project", "session-b").unwrap();
+        assert_eq!(chain, vec!["session-a", "session-b", "session-c"]);
+    }
+
+    #[test]
+    fn test_session_chain_single() {
+        let (_temp, manager) = setup_test_with_conversation();
+        let chain = manager.session_chain("/test/project", "session-abc").unwrap();
+        assert_eq!(chain, vec!["session-abc"]);
+    }
+
+    #[test]
+    fn test_chain_head_from_tail() {
+        let (_temp, manager) = setup_chained_conversations();
+        let head = manager.chain_head("/test/project", "session-c").unwrap();
+        assert_eq!(head, "session-a");
+    }
+
+    #[test]
+    fn test_chain_head_already_head() {
+        let (_temp, manager) = setup_chained_conversations();
+        let head = manager.chain_head("/test/project", "session-a").unwrap();
+        assert_eq!(head, "session-a");
+    }
+
+    #[test]
+    fn test_chain_head_single_session() {
+        let (_temp, manager) = setup_test_with_conversation();
+        let head = manager.chain_head("/test/project", "session-abc").unwrap();
+        assert_eq!(head, "session-abc");
     }
 }
