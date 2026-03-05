@@ -17,118 +17,16 @@
   var EDGE_INACTIVE = { stroke: "#8a8078", width: 1 };
   var EDGE_BASE = { stroke: "#b5652b", width: 1.5 };
 
-  // --- Default example document (path-01-pr.json) ---
-  var DEFAULT_EXAMPLE = {
-    Path: {
-      path: {
-        id: "path-pr-42",
-        base: {
-          uri: "github:myorg/myrepo",
-          ref: "main",
-          commit: "abc123def456789",
-        },
-        head: "step-004",
-      },
-      steps: [
-        {
-          step: {
-            id: "step-001",
-            actor: "human:alex",
-            timestamp: "2026-01-29T10:00:00Z",
-          },
-          change: {
-            "src/main.rs": {
-              raw: '@@ -12,1 +12,1 @@\n-    println!("Hello world");\n+    println!("Hello, world!");',
-            },
-          },
-        },
-        {
-          step: {
-            id: "step-002a",
-            parents: ["step-001"],
-            actor: "agent:claude-code/session-abc123",
-            timestamp: "2026-01-29T10:03:00Z",
-          },
-          change: {
-            "src/auth/validator.rs": {
-              raw: "@@ -1,5 +1,15 @@\n+use regex::Regex;...",
-            },
-          },
-          meta: { intent: "Regex-based validation (abandoned)" },
-        },
-        {
-          step: {
-            id: "step-002",
-            parents: ["step-001"],
-            actor: "agent:claude-code/session-abc123",
-            timestamp: "2026-01-29T10:05:00Z",
-          },
-          change: {
-            "src/auth/validator.rs": {
-              raw: "@@ -1,5 +1,25 @@\n+pub struct ValidationError...",
-            },
-          },
-          meta: { intent: "Add email validation with custom error type" },
-        },
-        {
-          step: {
-            id: "step-003",
-            parents: ["step-002"],
-            actor: "tool:rustfmt/1.7.0",
-            timestamp: "2026-01-29T10:05:30Z",
-          },
-          change: {
-            "src/auth/validator.rs": {
-              raw: "@@ -15,4 +15,8 @@\n-pub fn validate_email...",
-            },
-          },
-          meta: { intent: "Auto-format" },
-        },
-        {
-          step: {
-            id: "step-004",
-            parents: ["step-003"],
-            actor: "human:alex",
-            timestamp: "2026-01-29T10:15:00Z",
-          },
-          change: {
-            "src/auth/validator.rs": {
-              raw: '@@ -20,2 +20,2 @@\n-message: "must contain @"...',
-            },
-          },
-          meta: { intent: "Refine error messages" },
-        },
-      ],
-      meta: {
-        title: "Add email validation",
-        source: "github:myorg/myrepo/pull/42",
-        refs: [{ rel: "fixes", href: "issue://github/myorg/myrepo/issues/42" }],
-        actors: {
-          "human:alex": {
-            name: "Alex Kesling",
-            identities: [
-              { system: "github", id: "akesling" },
-              { system: "email", id: "toolpath@empathic.dev" },
-            ],
-          },
-          "agent:claude-code/session-abc123": {
-            name: "Claude Code",
-            provider: "anthropic",
-            model: "claude-sonnet-4-5-20250929",
-          },
-          "tool:rustfmt/1.7.0": {
-            name: "rustfmt",
-          },
-        },
-      },
-    },
-  };
+  // --- Examples loaded from window.__VIZ_EXAMPLES__ (injected by Eleventy) ---
+  var VIZ_EXAMPLES = window.__VIZ_EXAMPLES__ || [];
+  // Default to "Path: PR with dead end" (index 7) or first available
+  var DEFAULT_EXAMPLE_INDEX = VIZ_EXAMPLES.length > 7 ? 7 : 0;
 
   // --- DOM refs ---
   var input = document.getElementById("viz-input");
   var highlight = document.getElementById("viz-highlight");
   var fileInput = document.getElementById("viz-file");
-  var exampleBtn = document.getElementById("viz-example");
+  var exampleSelect = document.getElementById("viz-example-select");
   var renderBtn = document.getElementById("viz-render");
   var errorBox = document.getElementById("viz-error");
   var canvas = document.getElementById("viz-canvas");
@@ -818,8 +716,15 @@
   // --- Event wiring ---
   renderBtn.addEventListener("click", render);
 
-  exampleBtn.addEventListener("click", function () {
-    input.value = JSON.stringify(DEFAULT_EXAMPLE, null, 2);
+  exampleSelect.addEventListener("change", function () {
+    var idx = exampleSelect.value;
+    if (idx === "" || !VIZ_EXAMPLES[idx]) return;
+    var content = VIZ_EXAMPLES[idx].content;
+    // Pretty-print if it parses as JSON
+    try {
+      content = JSON.stringify(JSON.parse(content), null, 2);
+    } catch (e) {}
+    input.value = content;
     syncHighlight();
     render();
   });
@@ -871,7 +776,14 @@
   });
 
   // --- Auto-load example on page load ---
-  input.value = JSON.stringify(DEFAULT_EXAMPLE, null, 2);
-  syncHighlight();
-  render();
+  if (VIZ_EXAMPLES.length > 0) {
+    var content = VIZ_EXAMPLES[DEFAULT_EXAMPLE_INDEX].content;
+    try {
+      content = JSON.stringify(JSON.parse(content), null, 2);
+    } catch (e) {}
+    input.value = content;
+    exampleSelect.value = String(DEFAULT_EXAMPLE_INDEX);
+    syncHighlight();
+    render();
+  }
 })();

@@ -104,9 +104,7 @@ impl ConversationWatcher {
     /// new file. Call [`take_pending_rotations`] after poll to check whether
     /// a rotation occurred.
     pub fn poll(&mut self) -> Result<Vec<ConversationEntry>> {
-        let convo = self
-            .manager
-            .read_segment(&self.project, &self.session_id)?;
+        let convo = self.manager.read_segment(&self.project, &self.session_id)?;
         let new_entries = self.extract_new_entries(&convo)?;
 
         if !new_entries.is_empty() {
@@ -127,9 +125,7 @@ impl ConversationWatcher {
     /// Useful when you need both the full state and the delta.
     /// Follows session rotations the same way [`poll`] does.
     pub fn poll_with_full(&mut self) -> Result<(Conversation, Vec<ConversationEntry>)> {
-        let convo = self
-            .manager
-            .read_segment(&self.project, &self.session_id)?;
+        let convo = self.manager.read_segment(&self.project, &self.session_id)?;
         let new_entries = self.extract_new_entries(&convo)?;
 
         if !new_entries.is_empty() {
@@ -167,9 +163,7 @@ impl ConversationWatcher {
 
     /// Skips existing entries - next poll will only return new entries.
     pub fn skip_existing(&mut self) -> Result<usize> {
-        let convo = self
-            .manager
-            .read_segment(&self.project, &self.session_id)?;
+        let convo = self.manager.read_segment(&self.project, &self.session_id)?;
         let count = convo.entries.len();
         for entry in &convo.entries {
             self.seen_uuids.insert(entry.uuid.clone());
@@ -430,7 +424,11 @@ mod tests {
 
         // Session A: original conversation
         let entry_a = r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#;
-        fs::write(project_dir.join("session-a.jsonl"), format!("{}\n", entry_a)).unwrap();
+        fs::write(
+            project_dir.join("session-a.jsonl"),
+            format!("{}\n", entry_a),
+        )
+        .unwrap();
 
         let resolver = PathResolver::new().with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
@@ -452,11 +450,7 @@ mod tests {
             r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
             r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New content"}}"#,
         ];
-        fs::write(
-            project_dir.join("session-b.jsonl"),
-            entries_b.join("\n"),
-        )
-        .unwrap();
+        fs::write(project_dir.join("session-b.jsonl"), entries_b.join("\n")).unwrap();
 
         // Second poll: should auto-follow to session-b
         let entries = watcher.poll().unwrap();
@@ -476,7 +470,11 @@ mod tests {
         fs::create_dir_all(&project_dir).unwrap();
 
         let entry_a = r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#;
-        fs::write(project_dir.join("session-a.jsonl"), format!("{}\n", entry_a)).unwrap();
+        fs::write(
+            project_dir.join("session-a.jsonl"),
+            format!("{}\n", entry_a),
+        )
+        .unwrap();
 
         let resolver = PathResolver::new().with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
@@ -516,7 +514,11 @@ mod tests {
         fs::create_dir_all(&project_dir).unwrap();
 
         let entry_a = r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#;
-        fs::write(project_dir.join("session-a.jsonl"), format!("{}\n", entry_a)).unwrap();
+        fs::write(
+            project_dir.join("session-a.jsonl"),
+            format!("{}\n", entry_a),
+        )
+        .unwrap();
 
         // Session B (successor of A)
         let entries_b = vec![

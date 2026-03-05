@@ -184,7 +184,9 @@ impl ClaudeConvo {
         let mut file_path = std::path::PathBuf::new();
 
         for (i, segment_id) in chain.iter().enumerate() {
-            let meta = self.io.read_conversation_metadata(project_path, segment_id)?;
+            let meta = self
+                .io
+                .read_conversation_metadata(project_path, segment_id)?;
             total_messages += meta.message_count;
 
             if started_at.is_none() || meta.started_at < started_at {
@@ -336,7 +338,11 @@ impl ClaudeConvo {
     ///
     /// For single-segment sessions, returns `[session_id]`.
     #[allow(dead_code)]
-    pub(crate) fn session_chain(&self, project_path: &str, session_id: &str) -> Result<Vec<String>> {
+    pub(crate) fn session_chain(
+        &self,
+        project_path: &str,
+        session_id: &str,
+    ) -> Result<Vec<String>> {
         self.chain_for(project_path, session_id)
     }
 
@@ -346,7 +352,10 @@ impl ClaudeConvo {
     #[allow(dead_code)]
     pub(crate) fn chain_head(&self, project_path: &str, session_id: &str) -> Result<String> {
         let chain = self.session_chain(project_path, session_id)?;
-        Ok(chain.into_iter().next().unwrap_or_else(|| session_id.to_string()))
+        Ok(chain
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| session_id.to_string()))
     }
 
     // ── Private helpers ──────────────────────────────────────────────
@@ -635,7 +644,9 @@ mod tests {
     #[test]
     fn test_session_chain_single() {
         let (_temp, manager) = setup_test_with_conversation();
-        let chain = manager.session_chain("/test/project", "session-abc").unwrap();
+        let chain = manager
+            .session_chain("/test/project", "session-abc")
+            .unwrap();
         assert_eq!(chain, vec!["session-abc"]);
     }
 
@@ -667,9 +678,14 @@ mod tests {
         let (_temp, manager) = setup_chained_conversations();
 
         // Reading from any segment returns the full merged conversation
-        let convo = manager.read_conversation("/test/project", "session-a").unwrap();
+        let convo = manager
+            .read_conversation("/test/project", "session-a")
+            .unwrap();
         assert_eq!(convo.session_id, "session-a");
-        assert_eq!(convo.session_ids, vec!["session-a", "session-b", "session-c"]);
+        assert_eq!(
+            convo.session_ids,
+            vec!["session-a", "session-b", "session-c"]
+        );
         // a1, b1, c1 (bridge entries b0 and c0 filtered out)
         assert_eq!(convo.entries.len(), 3);
         assert_eq!(convo.entries[0].uuid, "a1");
@@ -677,12 +693,19 @@ mod tests {
         assert_eq!(convo.entries[2].uuid, "c1");
 
         // From the middle
-        let convo_b = manager.read_conversation("/test/project", "session-b").unwrap();
-        assert_eq!(convo_b.session_ids, vec!["session-a", "session-b", "session-c"]);
+        let convo_b = manager
+            .read_conversation("/test/project", "session-b")
+            .unwrap();
+        assert_eq!(
+            convo_b.session_ids,
+            vec!["session-a", "session-b", "session-c"]
+        );
         assert_eq!(convo_b.entries.len(), 3);
 
         // From the tail
-        let convo_c = manager.read_conversation("/test/project", "session-c").unwrap();
+        let convo_c = manager
+            .read_conversation("/test/project", "session-c")
+            .unwrap();
         assert_eq!(convo_c.entries.len(), 3);
     }
 
@@ -720,7 +743,9 @@ mod tests {
     fn test_read_conversation_metadata_aggregates_chain() {
         let (_temp, manager) = setup_chained_conversations();
 
-        let meta = manager.read_conversation_metadata("/test/project", "session-a").unwrap();
+        let meta = manager
+            .read_conversation_metadata("/test/project", "session-a")
+            .unwrap();
         assert_eq!(meta.session_id, "session-a");
         // a: 1 msg, b: 2 msgs, c: 2 msgs = 5 total
         assert_eq!(meta.message_count, 5);

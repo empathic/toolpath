@@ -77,6 +77,27 @@ export default function (eleventyConfig) {
     return result;
   });
 
+  // Load all example JSON files for the visualizer dropdown
+  eleventyConfig.addGlobalData("vizExamples", () => {
+    const examples = [
+      { file: "step-01-minimal.json", name: "Step: minimal" },
+      { file: "step-02-agent.json", name: "Step: agent change" },
+      { file: "step-03-formatter.json", name: "Step: formatter" },
+      { file: "step-04-human-refinement.json", name: "Step: human refinement" },
+      { file: "step-05-dead-end.json", name: "Step: dead end" },
+      { file: "step-06-signed.json", name: "Step: signed" },
+      { file: "step-07-merge.json", name: "Step: merge" },
+      { file: "path-01-pr.json", name: "Path: PR with dead end" },
+      { file: "path-02-local-session.json", name: "Path: local session" },
+      { file: "path-03-signed-pr.json", name: "Path: signed PR" },
+      { file: "graph-01-release.json", name: "Graph: release bundle" },
+    ];
+    return examples.map((e) => ({
+      name: e.name,
+      content: readFileSync(`../examples/${e.file}`, "utf-8"),
+    }));
+  });
+
   return {
     dir: {
       input: ".",

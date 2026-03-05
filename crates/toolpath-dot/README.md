@@ -11,7 +11,7 @@ interleave — color-coded by actor type.
 
 Renders any Toolpath `Document` (Step, Path, or Graph) as a Graphviz DOT string. Steps are colored by actor type, dead ends are highlighted, and the DAG structure is preserved visually.
 
-Depends only on `toolpath` -- no external rendering libraries.
+Depends only on `toolpath` -- no external rendering libraries. You'll need [Graphviz](https://graphviz.org/) installed to convert DOT output to images (`dot -Tpng`).
 
 ## Usage
 
@@ -65,6 +65,8 @@ let options = RenderOptions {
 | `ci:*` | Purple (`#e2d5f1`) |
 | Dead ends | Red dashed border (`#ffcccc`) |
 | BASE node | Gray ellipse |
+
+Color-coding makes multi-actor provenance scannable at a glance: you can immediately see where human work ends and agent work begins, and the red dashed borders draw your eye to abandoned approaches without cluttering the main path.
 
 ## Part of Toolpath
 

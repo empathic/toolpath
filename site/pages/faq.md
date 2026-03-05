@@ -7,6 +7,12 @@ permalink: /faq/
 
 # FAQ
 
+## Getting started
+
+- **Using Toolpath as a library?** See [Crates](/crates/) for the Rust API.
+- **Using Toolpath from the command line?** See [CLI](/cli/) for install and workflows.
+- **Just want to see what it looks like?** Load an example in the [Visualizer](/visualizer/).
+
 ## General
 
 ### What is Toolpath?

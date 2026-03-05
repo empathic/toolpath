@@ -29,10 +29,13 @@ path
     filter    --input FILE [--actor PREFIX] [--artifact PATH] [--after TIME] [--before TIME]
   render
     dot       [--input FILE] [--output FILE] [--show-files] [--show-timestamps]
+              [--highlight-dead-ends BOOL]
   merge       FILE... [--title TEXT]
   track
     init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
+              [--actor-def JSON] [--source TEXT] [--session-dir PATH]
     step      --session FILE --seq N --parent-seq N [--actor ACTOR] [--source JSON]
+              [--time ISO8601]
     visit     --session FILE --seq N [--inherit-from N]
     note      --session FILE --intent TEXT
     annotate  --session FILE [--step ID] [--intent TEXT] [--source JSON] [--ref JSON]...
@@ -44,6 +47,16 @@ path
 ```
 
 All commands that produce JSON output accept `--pretty` for formatted output.
+
+## When to reach for each command
+
+- **list** — See what's available before deriving (branches, Claude projects, active sessions)
+- **derive** — Generate a Toolpath document from an existing source (git history, Claude conversations)
+- **query** — Ask questions of an existing document (who did what, what was abandoned, what came before)
+- **render** — Produce a visual from a document (pipe through Graphviz for PNG/SVG)
+- **merge** — Combine multiple documents into a single Graph (e.g. collecting PRs into a release)
+- **track** — Build a Path incrementally as you work (editor integrations, live sessions)
+- **validate** — Check that a document is structurally valid
 
 <svg class="topo topo-wide" viewBox="0 0 900 70" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <path d="M0,50 Q150,15 350,45 Q550,70 700,30 Q800,10 900,40" stroke="#b5652b" stroke-width="1" opacity="0.10" fill="none"/>

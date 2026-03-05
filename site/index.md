@@ -51,6 +51,24 @@ When Claude writes code, `rustfmt` reformats it, and a human refines it, git bla
 
 Toolpath records **who** changed **what**, **why**, what they tried that didn't work, and how to verify all of it.
 
+<div class="scenarios">
+  <h2>When you need it</h2>
+  <div class="objects">
+    <div class="object-card">
+      <h3>Multi-actor PR</h3>
+      <p>Claude wrote the implementation, rustfmt reformatted, you refined the error messages. Toolpath gives each actor their own step so reviewers see who did what.</p>
+    </div>
+    <div class="object-card">
+      <h3>Rotated AI session</h3>
+      <p>Claude Code hit context limits mid-task and rotated to a new session. Toolpath chains the segments together so no work is lost.</p>
+    </div>
+    <div class="object-card">
+      <h3>Release lineage</h3>
+      <p>Three teams contributed PRs to the release. Toolpath merges the provenance into a single Graph so you can trace any line back to the intent behind it.</p>
+    </div>
+  </div>
+</div>
+
 ## Three core objects
 
 <div class="objects">

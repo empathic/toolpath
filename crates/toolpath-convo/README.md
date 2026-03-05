@@ -6,6 +6,8 @@ This crate defines a common vocabulary for representing conversations
 from any AI coding assistant (Claude, Codex, OpenCode, etc.) without
 coupling consumer code to provider-specific data formats.
 
+Write your conversation analysis once, swap providers without changing a line.
+
 ## Overview
 
 **Types** define the common data model:

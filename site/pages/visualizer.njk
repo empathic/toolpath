@@ -24,7 +24,12 @@ permalink: /visualizer/
         Load file
         <input type="file" id="viz-file" accept=".json" hidden />
       </label>
-      <button id="viz-example" class="viz-btn">Load example</button>
+      <select id="viz-example-select" class="viz-btn">
+        <option value="">Load example...</option>
+        {% for ex in vizExamples %}
+        <option value="{{ loop.index0 }}">{{ ex.name }}</option>
+        {% endfor %}
+      </select>
       <button id="viz-render" class="viz-btn viz-btn-primary">Render</button>
     </div>
     <div id="viz-error" class="viz-error" hidden></div>
@@ -73,4 +78,5 @@ permalink: /visualizer/
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-diff.min.js"></script>
 <script src="/js/toolpath-core.js"></script>
+<script>window.__VIZ_EXAMPLES__ = {{ vizExamples | dump | safe }};</script>
 <script src="/js/visualizer.js"></script>

@@ -7,10 +7,11 @@
 
 use crate::ClaudeConvo;
 use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
+#[cfg(any(feature = "watcher", test))]
+use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
     EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
-    WatcherEvent,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -275,6 +276,7 @@ fn extract_files_changed(turns: &[Turn]) -> Vec<String> {
     files
 }
 
+#[cfg(any(feature = "watcher", test))]
 fn entry_to_watcher_event(entry: &ConversationEntry) -> WatcherEvent {
     match entry_to_turn(entry) {
         Some(turn) => WatcherEvent::Turn(Box::new(turn)),
@@ -1163,9 +1165,8 @@ mod tests {
         let (_temp, provider) = setup_chained_provider();
 
         // Load from session-a — should merge with session-b
-        let view =
-            ConversationProvider::load_conversation(&provider, "/test/project", "session-a")
-                .unwrap();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-a")
+            .unwrap();
 
         // Should have turns from both segments (minus the bridge entry)
         // session-a: a1 (user), a2 (assistant)
@@ -1184,9 +1185,8 @@ mod tests {
     fn test_load_conversation_skips_bridge_entries() {
         let (_temp, provider) = setup_chained_provider();
 
-        let view =
-            ConversationProvider::load_conversation(&provider, "/test/project", "session-a")
-                .unwrap();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-a")
+            .unwrap();
 
         // Bridge entry text "Continue the fix" should NOT appear
         for turn in &view.turns {
@@ -1269,17 +1269,17 @@ mod tests {
             r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
             r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"New"}}"#,
         ];
-        fs::write(
-            project_dir.join("session-b.jsonl"),
-            entries_b.join("\n"),
-        )
-        .unwrap();
+        fs::write(project_dir.join("session-b.jsonl"), entries_b.join("\n")).unwrap();
 
         // Second poll via trait: should include rotation Progress event
         let events = toolpath_convo::ConversationWatcher::poll(&mut watcher).unwrap();
 
         // First event: Progress(session_rotated) with from/to
-        assert!(events.len() >= 2, "Expected Progress + Turn, got {} events", events.len());
+        assert!(
+            events.len() >= 2,
+            "Expected Progress + Turn, got {} events",
+            events.len()
+        );
         match &events[0] {
             WatcherEvent::Progress { kind, data } => {
                 assert_eq!(kind, "session_rotated");

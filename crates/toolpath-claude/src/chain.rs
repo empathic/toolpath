@@ -81,11 +81,7 @@ impl ChainIndex {
 
     /// Scan for new files and classify them. Files already in
     /// `known_files` are skipped entirely.
-    pub(crate) fn refresh(
-        &mut self,
-        resolver: &PathResolver,
-        project_path: &str,
-    ) -> Result<()> {
+    pub(crate) fn refresh(&mut self, resolver: &PathResolver, project_path: &str) -> Result<()> {
         let sessions = resolver.list_conversations(project_path)?;
 
         for file_stem in &sessions {
@@ -127,6 +123,7 @@ impl ChainIndex {
     }
 
     /// Immediate successor of `session_id`, if any.
+    #[cfg(any(feature = "watcher", test))]
     pub(crate) fn successor_of(&self, session_id: &str) -> Option<&str> {
         self.succession.get(session_id).map(|s| s.as_str())
     }

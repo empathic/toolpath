@@ -1,5 +1,7 @@
 # toolpath-cli
 
+One binary that ties together everything Toolpath can do: derive provenance from git and Claude, query and filter documents, render DAG visualizations, track live editing sessions, and merge results into release graphs. If you want to use Toolpath without writing Rust, start here.
+
 Unified CLI for deriving, querying, and visualizing Toolpath provenance documents.
 
 ## Installation

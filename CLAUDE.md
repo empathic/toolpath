@@ -73,10 +73,14 @@ cargo run -p toolpath-cli -- validate --input doc.json
 
 ## Testing
 
-Tests live alongside the code (`#[cfg(test)] mod tests`). No integration test directory yet. Key test areas:
+Tests live alongside the code (`#[cfg(test)] mod tests`), plus `toolpath-cli` has integration tests in `tests/`. Per-crate counts:
 
-- `toolpath`: serde roundtrip, builder methods, query functions (12 tests)
-- `toolpath-claude`: path resolution, conversation reading, query, watcher, derive (22 unit + 4 doc tests)
+- `toolpath`: 32 unit + 9 doc tests (serde roundtrip, builders, query)
+- `toolpath-convo`: 28 unit + 1 doc test (types, enrichment, display)
+- `toolpath-git`: 33 unit + 3 doc tests (derive, branch detection, diffstat)
+- `toolpath-claude`: 216 unit + 5 doc tests (path resolution, conversation reading, query, chaining, watcher, derive)
+- `toolpath-dot`: 30 unit + 2 doc tests (render, visual conventions, escaping)
+- `toolpath-cli`: 120 unit + 8 integration tests (all commands, track sessions, merge, validate, roundtrip)
 
 Validate example documents: `for f in examples/*.json; do cargo run -p toolpath-cli -- validate --input "$f"; done`
 
@@ -118,3 +122,4 @@ Build the site after changes: `cd site && pnpm run build` (should produce 7 page
 - `PathOrRef::Path` is `Box<Path>` to avoid a large enum variant size difference
 - The git derivation (`toolpath-git`) uses `git2` (libgit2 bindings), not shelling out to git
 - Claude conversation data lives in `~/.claude/projects/` as JSONL files; `toolpath-claude` reads these directly
+- `toolpath-claude` follows session chains by default — Claude Code rotates JSONL files on context overflow; `read_conversation` merges segments, `list_conversations` returns chain heads. `read_segment`/`list_segments` for single-file access. `ChainIndex` makes this incremental.
