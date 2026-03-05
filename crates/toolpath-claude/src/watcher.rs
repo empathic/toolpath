@@ -101,7 +101,7 @@ impl ConversationWatcher {
     ///
     /// When the current session has been rotated to a successor file, the
     /// watcher automatically follows the chain and returns entries from the
-    /// new file. Call [`take_pending_rotations`] after poll to check whether
+    /// new file. Call [`Self::take_pending_rotations`] after poll to check whether
     /// a rotation occurred.
     pub fn poll(&mut self) -> Result<Vec<ConversationEntry>> {
         let convo = self.manager.read_segment(&self.project, &self.session_id)?;
@@ -123,7 +123,7 @@ impl ConversationWatcher {
     /// Polls and returns the full conversation along with just the new entries.
     ///
     /// Useful when you need both the full state and the delta.
-    /// Follows session rotations the same way [`poll`] does.
+    /// Follows session rotations the same way [`Self::poll`] does.
     pub fn poll_with_full(&mut self) -> Result<(Conversation, Vec<ConversationEntry>)> {
         let convo = self.manager.read_segment(&self.project, &self.session_id)?;
         let new_entries = self.extract_new_entries(&convo)?;

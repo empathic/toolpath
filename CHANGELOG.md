@@ -2,6 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.6.1 — toolpath-claude
+
+### toolpath-claude 0.6.1
+
+- Fix broken intra-doc links (`read_segment`, `list_segments`, `take_pending_rotations`, `poll`)
+- Gate `successor_of` and `entry_to_watcher_event` behind `cfg(any(feature = "watcher", test))` to silence dead-code warnings when building without the `watcher` feature
+
 ## 0.6.0 — toolpath-claude
 
 ### toolpath-claude 0.6.0

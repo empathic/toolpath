@@ -126,7 +126,7 @@ impl ClaudeConvo {
     /// all segments are merged into a single `Conversation` with bridge
     /// entries filtered out and `session_ids` populated.
     ///
-    /// Use [`read_segment`] for single-file access.
+    /// Use [`Self::read_segment`] for single-file access.
     pub fn read_conversation(&self, project_path: &str, session_id: &str) -> Result<Conversation> {
         let chain = self.chain_for(project_path, session_id)?;
 
@@ -216,7 +216,7 @@ impl ClaudeConvo {
     /// Lists logical conversation IDs for a project (chain heads only).
     ///
     /// Chained sessions collapse to a single entry (the head).
-    /// Use [`list_segments`] for all file stems.
+    /// Use [`Self::list_segments`] for all file stems.
     pub fn list_conversations(&self, project_path: &str) -> Result<Vec<String>> {
         self.chain_heads(project_path)
     }
