@@ -48,6 +48,14 @@
     "role": "Renders any Toolpath Document as a Graphviz diagram. Steps are color-coded by actor type, dead ends get red dashed borders, and the DAG structure is preserved visually."
   },
   {
+    "name": "toolpath-md",
+    "version": "0.1.0",
+    "description": "Markdown rendering for LLM consumption",
+    "docs": "https://docs.rs/toolpath-md",
+    "crate": "https://crates.io/crates/toolpath-md",
+    "role": "Renders any Toolpath Document as readable Markdown — a narrative an LLM can reason about. Dead ends are called out explicitly, diffs are included at configurable detail levels, and the output preserves enough anchoring info for an LLM to reference back into the original document."
+  },
+  {
     "name": "toolpath-cli",
     "version": "0.2.1",
     "description": "Unified CLI (binary: path)",

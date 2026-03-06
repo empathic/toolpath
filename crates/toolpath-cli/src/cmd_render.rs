@@ -27,6 +27,24 @@ pub enum RenderFormat {
         #[arg(long, default_value = "true")]
         highlight_dead_ends: bool,
     },
+    /// Render as Markdown (for LLM consumption)
+    Md {
+        /// Input file (reads from stdin if not provided)
+        #[arg(short, long)]
+        input: Option<PathBuf>,
+
+        /// Output file (writes to stdout if not provided)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Detail level: summary (file-level diffstats) or full (inline diffs)
+        #[arg(long, default_value = "summary")]
+        detail: String,
+
+        /// Include YAML front matter with machine-readable metadata
+        #[arg(long)]
+        front_matter: bool,
+    },
 }
 
 pub fn run(format: RenderFormat) -> Result<()> {
@@ -44,6 +62,12 @@ pub fn run(format: RenderFormat) -> Result<()> {
             show_timestamps,
             highlight_dead_ends,
         ),
+        RenderFormat::Md {
+            input,
+            output,
+            detail,
+            front_matter,
+        } => run_md(input, output, &detail, front_matter),
     }
 }
 
@@ -79,6 +103,46 @@ fn run_dot(
         std::fs::write(path, &dot).with_context(|| format!("Failed to write {:?}", path))?;
     } else {
         print!("{}", dot);
+    }
+
+    Ok(())
+}
+
+fn run_md(
+    input: Option<PathBuf>,
+    output: Option<PathBuf>,
+    detail: &str,
+    front_matter: bool,
+) -> Result<()> {
+    let content = if let Some(path) = &input {
+        std::fs::read_to_string(path).with_context(|| format!("Failed to read {:?}", path))?
+    } else {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("Failed to read from stdin")?;
+        buf
+    };
+
+    let doc = Document::from_json(&content).context("Failed to parse Toolpath document")?;
+
+    let detail = match detail {
+        "full" => toolpath_md::Detail::Full,
+        _ => toolpath_md::Detail::Summary,
+    };
+
+    let options = toolpath_md::RenderOptions {
+        detail,
+        front_matter,
+    };
+
+    let md = toolpath_md::render(&doc, &options);
+
+    if let Some(path) = &output {
+        std::fs::write(path, &md).with_context(|| format!("Failed to write {:?}", path))?;
+    } else {
+        print!("{}", md);
     }
 
     Ok(())
@@ -178,5 +242,96 @@ mod tests {
 
         let result = run_dot(Some(f.path().to_path_buf()), None, false, false, false);
         assert!(result.is_ok());
+    }
+
+    // ── run_md ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_run_md_with_input_file() {
+        let doc = make_doc();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "{}", doc.to_json().unwrap()).unwrap();
+        f.flush().unwrap();
+
+        let result = run_md(Some(f.path().to_path_buf()), None, "summary", false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_md_with_output_file() {
+        let doc = make_doc();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "{}", doc.to_json().unwrap()).unwrap();
+        f.flush().unwrap();
+
+        let out = tempfile::NamedTempFile::new().unwrap();
+        let result = run_md(
+            Some(f.path().to_path_buf()),
+            Some(out.path().to_path_buf()),
+            "summary",
+            false,
+        );
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(out.path()).unwrap();
+        assert!(content.contains("# p1"));
+        assert!(content.contains("## Timeline"));
+    }
+
+    #[test]
+    fn test_run_md_full_detail() {
+        let doc = make_doc();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "{}", doc.to_json().unwrap()).unwrap();
+        f.flush().unwrap();
+
+        let out = tempfile::NamedTempFile::new().unwrap();
+        let result = run_md(
+            Some(f.path().to_path_buf()),
+            Some(out.path().to_path_buf()),
+            "full",
+            false,
+        );
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(out.path()).unwrap();
+        assert!(content.contains("```diff"));
+    }
+
+    #[test]
+    fn test_run_md_with_front_matter() {
+        let doc = make_doc();
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "{}", doc.to_json().unwrap()).unwrap();
+        f.flush().unwrap();
+
+        let out = tempfile::NamedTempFile::new().unwrap();
+        let result = run_md(
+            Some(f.path().to_path_buf()),
+            Some(out.path().to_path_buf()),
+            "summary",
+            true,
+        );
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(out.path()).unwrap();
+        assert!(content.starts_with("---\n"));
+        assert!(content.contains("type: path"));
+    }
+
+    #[test]
+    fn test_run_md_invalid_input() {
+        let result = run_md(Some(PathBuf::from("/nonexistent")), None, "summary", false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_md_invalid_json() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "not valid json").unwrap();
+        f.flush().unwrap();
+
+        let result = run_md(Some(f.path().to_path_buf()), None, "summary", false);
+        assert!(result.is_err());
     }
 }

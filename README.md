@@ -46,6 +46,7 @@ crates/
   toolpath-github/    Derive from GitHub pull requests
   toolpath-claude/    Derive from Claude conversation logs
   toolpath-dot/       Graphviz DOT visualization
+  toolpath-md/        Markdown rendering for LLM consumption
   toolpath-cli/       Unified CLI (binary: path)
 ```
 
@@ -62,6 +63,9 @@ path derive git --repo . --branch main --pretty
 
 # Visualize it
 path derive git --repo . --branch main | path render dot | dot -Tpng -o graph.png
+
+# Render as Markdown for an LLM
+path derive git --repo . --branch main | path render md
 
 # Derive from a GitHub pull request
 path derive github --repo owner/repo --pr 42 --pretty
@@ -103,6 +107,7 @@ path
     filter    --input FILE [--actor PREFIX] [--artifact PATH] [--after TIME] [--before TIME]
   render
     dot       [--input FILE] [--output FILE] [--show-files] [--show-timestamps]
+    md        [--input FILE] [--output FILE] [--detail summary|full] [--front-matter]
   merge       FILE... [--title TEXT]
   track
     init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
@@ -164,6 +169,14 @@ let doc = derive(&repo, &["main".into()], &config)?;
 use toolpath_dot::{render, RenderOptions};
 
 let dot_string = render(&doc, &RenderOptions::default());
+```
+
+### Markdown rendering
+
+```rust
+use toolpath_md::{render, RenderOptions};
+
+let md_string = render(&doc, &RenderOptions::default());
 ```
 
 ## Documentation

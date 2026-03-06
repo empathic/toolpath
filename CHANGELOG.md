@@ -2,6 +2,19 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.1.0 — toolpath-md
+
+### toolpath-md 0.1.0
+
+- New crate: render Toolpath documents as Markdown for LLM consumption
+- Handles all three document variants: Step, Path, and Graph
+- Two detail levels: `Summary` (file-level diffstats) and `Full` (inline diffs as fenced code blocks)
+- Optional YAML front matter with machine-readable metadata (step count, actors, artifacts, dead end count)
+- Dead ends are marked inline and summarized in a dedicated section with intent and parent references
+- Topological sort ensures steps appear in causal order regardless of input ordering
+- Actor definitions rendered when present in path/graph metadata
+- CLI: `path render md [--input FILE] [--detail summary|full] [--front-matter]`
+
 ## 0.1.0 — toolpath-github
 
 ### toolpath-github 0.1.0

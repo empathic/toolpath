@@ -17,7 +17,7 @@ set -euo pipefail
 #      toolpath-claude    (depends on toolpath, toolpath-convo)
 #   3. toolpath-cli       (depends on all of the above)
 
-ALL_CRATES=(toolpath toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-claude toolpath-cli)
+ALL_CRATES=(toolpath toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-cli)
 
 DRY_RUN=""
 AUTO_YES=""
@@ -198,12 +198,12 @@ for crate in toolpath toolpath-convo; do
 done
 
 # Tier 2: satellite crates (depend on tier 1, no cross-deps)
-for crate in toolpath-git toolpath-github toolpath-dot toolpath-claude; do
+for crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude; do
     publish "$crate"
 done
 
 # Wait for tier 2 publishes to land before publishing the CLI
-for crate in toolpath-git toolpath-github toolpath-dot toolpath-claude; do
+for crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude; do
     if should_publish "$crate"; then
         wait_for_index "$crate" "$(crate_version "$crate")"
     fi

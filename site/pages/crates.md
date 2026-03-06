@@ -17,6 +17,7 @@ toolpath-cli (binary: path)
  +-- toolpath-github  -> toolpath
  +-- toolpath-claude  -> toolpath, toolpath-convo
  +-- toolpath-dot     -> toolpath
+ +-- toolpath-md      -> toolpath
 ```
 
 No cross-dependencies between satellite crates except `toolpath-claude -> toolpath-convo`.
@@ -95,4 +96,14 @@ use toolpath_dot::{render, RenderOptions};
 
 let dot_string = render(&doc, &RenderOptions::default());
 // Pipe through `dot -Tpng` for an image
+```
+
+### Markdown rendering
+
+```rust
+use toolpath::v1::Document;
+use toolpath_md::{render, RenderOptions};
+
+let md_string = render(&doc, &RenderOptions::default());
+// Feed to an LLM for contextual assistance
 ```

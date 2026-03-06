@@ -1797,6 +1797,7 @@ dependencies = [
  "toolpath-dot",
  "toolpath-git",
  "toolpath-github",
+ "toolpath-md",
 ]
 
 [[package]]
@@ -1835,6 +1836,14 @@ dependencies = [
  "chrono",
  "reqwest",
  "serde",
+ "serde_json",
+ "toolpath",
+]
+
+[[package]]
+name = "toolpath-md"
+version = "0.1.0"
+dependencies = [
  "serde_json",
  "toolpath",
 ]
