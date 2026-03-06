@@ -36,9 +36,7 @@ fn git_fixture() -> (tempfile::TempDir, String) {
     // Commit 1
     let mut index = repo.index().unwrap();
     std::fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
-    index
-        .add_path(std::path::Path::new("main.rs"))
-        .unwrap();
+    index.add_path(std::path::Path::new("main.rs")).unwrap();
     index.write().unwrap();
     let tree1 = repo.find_tree(index.write_tree().unwrap()).unwrap();
     let sig = repo.signature().unwrap();
@@ -49,20 +47,11 @@ fn git_fixture() -> (tempfile::TempDir, String) {
 
     // Commit 2
     std::fs::write(dir.path().join("main.rs"), "fn main() { fixed() }").unwrap();
-    index
-        .add_path(std::path::Path::new("main.rs"))
-        .unwrap();
+    index.add_path(std::path::Path::new("main.rs")).unwrap();
     index.write().unwrap();
     let tree2 = repo.find_tree(index.write_tree().unwrap()).unwrap();
-    repo.commit(
-        Some("HEAD"),
-        &sig,
-        &sig,
-        "fix the bug",
-        &tree2,
-        &[&commit1],
-    )
-    .unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "fix the bug", &tree2, &[&commit1])
+        .unwrap();
 
     // Determine the branch name (main or master depending on git config)
     let head = repo.head().unwrap();
@@ -172,7 +161,10 @@ fn derive_git_has_change_with_diff() {
     // The step should have a change for main.rs with a raw diff
     let change = &step["change"]["main.rs"];
     let raw = change["raw"].as_str().unwrap();
-    assert!(raw.contains("-fn main() {}"), "diff should show old content");
+    assert!(
+        raw.contains("-fn main() {}"),
+        "diff should show old content"
+    );
     assert!(
         raw.contains("+fn main() { fixed() }"),
         "diff should show new content"
@@ -223,7 +215,11 @@ fn derive_git_has_base_uri() {
 
     // base.uri should be a file:// URL pointing to the repo
     let uri = base["uri"].as_str().unwrap();
-    assert!(uri.starts_with("file://"), "Expected file:// URI, got {}", uri);
+    assert!(
+        uri.starts_with("file://"),
+        "Expected file:// URI, got {}",
+        uri
+    );
 
     // base.ref should be a commit hash (40 hex chars)
     let git_ref = base["ref"].as_str().unwrap();

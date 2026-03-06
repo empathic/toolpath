@@ -14,6 +14,7 @@ toolpath-cli (binary: path)
  +-- toolpath           (core types)
  +-- toolpath-convo     (conversation abstraction)
  +-- toolpath-git     -> toolpath
+ +-- toolpath-github  -> toolpath
  +-- toolpath-claude  -> toolpath, toolpath-convo
  +-- toolpath-dot     -> toolpath
 ```

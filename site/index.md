@@ -188,12 +188,14 @@ path query filter --input doc.json --actor "agent:"
 
 Toolpath is a Rust workspace of focused crates:
 
-| Crate                                                | What it does                               |
-| ---------------------------------------------------- | ------------------------------------------ |
-| [`toolpath`](https://docs.rs/toolpath)               | Core types, builders, query API            |
-| [`toolpath-git`](https://docs.rs/toolpath-git)       | Derive from git history                    |
-| [`toolpath-claude`](https://docs.rs/toolpath-claude) | Derive from Claude conversations           |
-| [`toolpath-dot`](https://docs.rs/toolpath-dot)       | Graphviz DOT visualization                 |
-| [`toolpath-cli`](https://docs.rs/toolpath-cli)       | Unified CLI (`cargo install toolpath-cli`) |
+| Crate                                                  | What it does                               |
+| ------------------------------------------------------ | ------------------------------------------ |
+| [`toolpath`](https://docs.rs/toolpath)                 | Core types, builders, query API            |
+| [`toolpath-convo`](https://docs.rs/toolpath-convo)     | Provider-agnostic conversation traits      |
+| [`toolpath-git`](https://docs.rs/toolpath-git)         | Derive from git history                    |
+| [`toolpath-github`](https://docs.rs/toolpath-github)   | Derive from GitHub pull requests           |
+| [`toolpath-claude`](https://docs.rs/toolpath-claude)   | Derive from Claude conversations           |
+| [`toolpath-dot`](https://docs.rs/toolpath-dot)         | Graphviz DOT visualization                 |
+| [`toolpath-cli`](https://docs.rs/toolpath-cli)         | Unified CLI (`cargo install toolpath-cli`) |
 
 See [Crates](/crates/) for details, or [docs.rs](https://docs.rs/toolpath) for API reference.
