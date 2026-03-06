@@ -30,7 +30,7 @@ pub enum DeriveSource {
     },
     /// Derive from a GitHub pull request
     Github {
-        /// PR URL (e.g. https://github.com/owner/repo/pull/42)
+        /// PR URL (e.g. <https://github.com/owner/repo/pull/42>)
         #[arg(index = 1)]
         url: Option<String>,
 
