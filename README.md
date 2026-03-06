@@ -43,6 +43,7 @@ crates/
   toolpath/           Core types, builders, query API
   toolpath-convo/     Provider-agnostic conversation types and traits
   toolpath-git/       Derive from git repository history
+  toolpath-github/    Derive from GitHub pull requests
   toolpath-claude/    Derive from Claude conversation logs
   toolpath-dot/       Graphviz DOT visualization
   toolpath-cli/       Unified CLI (binary: path)
@@ -61,6 +62,9 @@ path derive git --repo . --branch main --pretty
 
 # Visualize it
 path derive git --repo . --branch main | path render dot | dot -Tpng -o graph.png
+
+# Derive from a GitHub pull request
+path derive github --repo owner/repo --pr 42 --pretty
 
 # Derive from Claude conversation logs
 path derive claude --project /path/to/project --pretty
@@ -87,9 +91,11 @@ path validate --input examples/step-01-minimal.json
 path
   list
     git       [--repo PATH] [--remote NAME] [--json]
+    github    --repo OWNER/REPO [--json]
     claude    [--project PATH] [--json]
   derive
     git       --repo PATH --branch NAME[:START] [--base COMMIT] [--remote NAME] [--title TEXT]
+    github    --repo OWNER/REPO --pr NUMBER [--no-ci] [--no-comments]
     claude    --project PATH [--session ID] [--all]
   query
     ancestors --input FILE --step-id ID

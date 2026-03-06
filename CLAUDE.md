@@ -14,6 +14,7 @@ crates/
   toolpath/                     # core types, builders, serde, query API
   toolpath-convo/               # provider-agnostic conversation types and traits
   toolpath-git/                 # derive from git repos (git2)
+  toolpath-github/              # derive from GitHub pull requests (REST API)
   toolpath-claude/              # derive from Claude conversation logs
   toolpath-dot/                 # Graphviz DOT rendering
   toolpath-cli/                 # unified CLI (binary: path)
@@ -30,6 +31,7 @@ toolpath-cli (binary: path)
  ├── toolpath           (core types)
  ├── toolpath-convo     (conversation abstraction)
  ├── toolpath-git     → toolpath
+ ├── toolpath-github  → toolpath
  ├── toolpath-claude  → toolpath, toolpath-convo
  └── toolpath-dot     → toolpath
 ```
@@ -52,6 +54,7 @@ The binary is called `path` (package: `toolpath-cli`):
 
 ```bash
 cargo run -p toolpath-cli -- derive git --repo . --branch main --pretty
+cargo run -p toolpath-cli -- derive github --repo owner/repo --pr 42 --pretty
 cargo run -p toolpath-cli -- derive claude --project /path/to/project
 cargo run -p toolpath-cli -- render dot --input doc.json
 cargo run -p toolpath-cli -- query dead-ends --input doc.json
@@ -59,6 +62,7 @@ cargo run -p toolpath-cli -- query ancestors --input doc.json --step-id step-003
 cargo run -p toolpath-cli -- query filter --input doc.json --actor "agent:"
 cargo run -p toolpath-cli -- merge doc1.json doc2.json --title "Combined"
 cargo run -p toolpath-cli -- list git --repo .
+cargo run -p toolpath-cli -- list github --repo owner/repo
 cargo run -p toolpath-cli -- track init --file src/main.rs --actor "human:alex"
 cargo run -p toolpath-cli -- validate --input doc.json
 ```
@@ -78,6 +82,7 @@ Tests live alongside the code (`#[cfg(test)] mod tests`), plus `toolpath-cli` ha
 - `toolpath`: 32 unit + 9 doc tests (serde roundtrip, builders, query)
 - `toolpath-convo`: 28 unit + 1 doc test (types, enrichment, display)
 - `toolpath-git`: 33 unit + 3 doc tests (derive, branch detection, diffstat)
+- `toolpath-github`: 28 unit + 2 doc tests (mapping, DAG construction, fixtures)
 - `toolpath-claude`: 216 unit + 5 doc tests (path resolution, conversation reading, query, chaining, watcher, derive)
 - `toolpath-dot`: 30 unit + 2 doc tests (render, visual conventions, escaping)
 - `toolpath-cli`: 120 unit + 8 integration tests (all commands, track sessions, merge, validate, roundtrip)
@@ -111,7 +116,7 @@ When changing a crate's public API (new types, new trait impls, new public metho
 
 **Release script** (`scripts/release.sh`) publishes in dependency order:
 - Tier 1: `toolpath`, `toolpath-convo` (no workspace deps)
-- Tier 2: `toolpath-git`, `toolpath-dot`, `toolpath-claude` (depend on tier 1)
+- Tier 2: `toolpath-git`, `toolpath-github`, `toolpath-dot`, `toolpath-claude` (depend on tier 1)
 - Tier 3: `toolpath-cli` (depends on everything)
 
 Build the site after changes: `cd site && pnpm run build` (should produce 7 pages).

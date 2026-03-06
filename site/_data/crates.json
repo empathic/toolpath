@@ -24,6 +24,14 @@
     "role": "Reads git history via libgit2 and maps commits to Steps, branches to Paths. Single branch produces a Path; multiple branches produce a Graph."
   },
   {
+    "name": "toolpath-github",
+    "version": "0.1.0",
+    "description": "Derive from GitHub pull requests",
+    "docs": "https://docs.rs/toolpath-github",
+    "crate": "https://crates.io/crates/toolpath-github",
+    "role": "Reads GitHub PRs via the REST API and maps commits, reviews, comments, and CI checks to Steps. Everything is a Step in the DAG — code changes, review threads, approvals, and CI results."
+  },
+  {
     "name": "toolpath-claude",
     "version": "0.6.2",
     "description": "Derive from Claude conversation logs",

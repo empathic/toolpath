@@ -28,6 +28,28 @@ pub enum DeriveSource {
         #[arg(long)]
         title: Option<String>,
     },
+    /// Derive from a GitHub pull request
+    Github {
+        /// PR URL (e.g. https://github.com/owner/repo/pull/42)
+        #[arg(index = 1)]
+        url: Option<String>,
+
+        /// Repository in owner/repo format (alternative to URL)
+        #[arg(short, long)]
+        repo: Option<String>,
+
+        /// Pull request number (required with --repo)
+        #[arg(long)]
+        pr: Option<u64>,
+
+        /// Exclude CI check runs
+        #[arg(long)]
+        no_ci: bool,
+
+        /// Exclude reviews and comments
+        #[arg(long)]
+        no_comments: bool,
+    },
     /// Derive from Claude conversation logs
     Claude {
         /// Project path (e.g., /Users/alex/myproject)
@@ -53,6 +75,13 @@ pub fn run(source: DeriveSource, pretty: bool) -> Result<()> {
             remote,
             title,
         } => run_git(repo, branch, base, remote, title, pretty),
+        DeriveSource::Github {
+            url,
+            repo,
+            pr,
+            no_ci,
+            no_comments,
+        } => run_github(url, repo, pr, no_ci, no_comments, pretty),
         DeriveSource::Claude {
             project,
             session,
@@ -95,6 +124,63 @@ fn run_git(
         };
 
         let doc = toolpath_git::derive(&repo, &branches, &config)?;
+
+        let json = if pretty {
+            doc.to_json_pretty()?
+        } else {
+            doc.to_json()?
+        };
+
+        println!("{}", json);
+        Ok(())
+    }
+}
+
+fn run_github(
+    url: Option<String>,
+    repo: Option<String>,
+    pr: Option<u64>,
+    no_ci: bool,
+    no_comments: bool,
+    pretty: bool,
+) -> Result<()> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (url, repo, pr, no_ci, no_comments, pretty);
+        anyhow::bail!("'path derive github' requires a native environment with network access");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        // Resolve owner/repo/pr from either a URL or --repo/--pr flags
+        let (owner, repo_name, pr_number) = if let Some(url_str) = &url {
+            let parsed = toolpath_github::parse_pr_url(url_str).ok_or_else(|| {
+                anyhow::anyhow!("Invalid PR URL. Expected: https://github.com/owner/repo/pull/N")
+            })?;
+            (parsed.owner, parsed.repo, parsed.number)
+        } else if let (Some(repo_str), Some(pr_num)) = (&repo, pr) {
+            let (o, r) = repo_str
+                .split_once('/')
+                .ok_or_else(|| anyhow::anyhow!("Repository must be in owner/repo format"))?;
+            (o.to_string(), r.to_string(), pr_num)
+        } else {
+            anyhow::bail!(
+                "Provide a PR URL or both --repo and --pr.\n\
+                 Usage: path derive github https://github.com/owner/repo/pull/42\n\
+                 Usage: path derive github --repo owner/repo --pr 42"
+            );
+        };
+
+        let token = toolpath_github::resolve_token()?;
+        let config = toolpath_github::DeriveConfig {
+            token,
+            include_ci: !no_ci,
+            include_comments: !no_comments,
+            ..Default::default()
+        };
+
+        let path = toolpath_github::derive_pull_request(&owner, &repo_name, pr_number, &config)?;
+        let doc = toolpath::v1::Document::Path(path);
 
         let json = if pretty {
             doc.to_json_pretty()?

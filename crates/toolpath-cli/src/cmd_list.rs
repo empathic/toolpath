@@ -16,6 +16,12 @@ pub enum ListSource {
         #[arg(long, default_value = "origin")]
         remote: String,
     },
+    /// List GitHub pull requests
+    Github {
+        /// Repository in owner/repo format
+        #[arg(short, long)]
+        repo: String,
+    },
     /// List Claude projects or sessions
     Claude {
         /// Project path — if omitted, lists all projects
@@ -27,6 +33,7 @@ pub enum ListSource {
 pub fn run(source: ListSource, json: bool) -> Result<()> {
     match source {
         ListSource::Git { repo, remote } => run_git(repo, remote, json),
+        ListSource::Github { repo } => run_github(repo, json),
         ListSource::Claude { project } => run_claude(project, json),
     }
 }
@@ -81,6 +88,70 @@ fn run_git(repo_path: PathBuf, remote: String, json: bool) -> Result<()> {
             } else {
                 for b in &branches {
                     println!("  {} {} {}", b.head_short, b.name, truncate(&b.subject, 60));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn run_github(repo: String, json: bool) -> Result<()> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (repo, json);
+        anyhow::bail!("'path list github' requires a native environment with network access");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let (owner, repo_name) = repo
+            .split_once('/')
+            .ok_or_else(|| anyhow::anyhow!("Repository must be in owner/repo format"))?;
+
+        let token = toolpath_github::resolve_token()?;
+        let config = toolpath_github::DeriveConfig {
+            token,
+            ..Default::default()
+        };
+
+        let prs = toolpath_github::list_pull_requests(owner, repo_name, &config)?;
+
+        if json {
+            let items: Vec<serde_json::Value> = prs
+                .iter()
+                .map(|pr| {
+                    serde_json::json!({
+                        "number": pr.number,
+                        "title": pr.title,
+                        "state": pr.state,
+                        "author": pr.author,
+                        "head_branch": pr.head_branch,
+                        "base_branch": pr.base_branch,
+                        "created_at": pr.created_at,
+                        "updated_at": pr.updated_at,
+                    })
+                })
+                .collect();
+            let output = serde_json::json!({
+                "source": "github",
+                "repo": format!("{}/{}", owner, repo_name),
+                "pull_requests": items,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("Pull requests for {}/{}:", owner, repo_name);
+            println!();
+            if prs.is_empty() {
+                println!("  (none)");
+            } else {
+                for pr in &prs {
+                    println!(
+                        "  #{:<5} {:>8} {}  {}",
+                        pr.number,
+                        pr.state,
+                        pr.author,
+                        truncate(&pr.title, 50),
+                    );
                 }
             }
         }

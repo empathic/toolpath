@@ -2,6 +2,19 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.1.0 — toolpath-github
+
+### toolpath-github 0.1.0
+
+- New crate: derive Toolpath Path documents from GitHub pull requests via the REST API
+- Every PR event becomes a Step: commits (with per-file diffs), inline review comments, PR discussion comments, review decisions (approve/reject), and CI check runs
+- Platform-agnostic artifact URIs: `review://` for code review artifacts, `ci://` for CI artifacts
+- `derive_pull_request()` fetches all data and builds a complete provenance DAG
+- `list_pull_requests()` lists PRs with summary metadata
+- `resolve_token()` checks `GITHUB_TOKEN` env var, falls back to `gh auth token`
+- Configurable: `--no-ci` and `--no-comments` flags to exclude non-code events
+- CLI: `path derive github --repo owner/repo --pr 42` and `path list github --repo owner/repo`
+
 ## 0.5.0 — toolpath-convo / 0.6.2 — toolpath-claude
 
 ### toolpath-convo 0.5.0
