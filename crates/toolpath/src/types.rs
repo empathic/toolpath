@@ -414,6 +414,28 @@ impl Path {
             meta: None,
         }
     }
+
+    /// Parse steps from a JSONL string (one [`Step`] per line) and set
+    /// them on this path. Empty lines are skipped.
+    pub fn load_jsonl(&mut self, jsonl: &str) -> Result<(), serde_json::Error> {
+        for line in jsonl.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            self.steps.push(serde_json::from_str(line)?);
+        }
+        Ok(())
+    }
+
+    /// Serialize this path's steps as JSONL (one [`Step`] per line).
+    pub fn steps_to_jsonl(&self) -> Result<String, serde_json::Error> {
+        let mut buf = String::new();
+        for step in &self.steps {
+            buf.push_str(&serde_json::to_string(step)?);
+            buf.push('\n');
+        }
+        Ok(buf)
+    }
 }
 
 impl Base {
@@ -782,5 +804,60 @@ mod tests {
         assert!(json.contains("rename_function"));
         assert!(json.contains("\"from\""));
         assert!(json.contains("\"bar\""));
+    }
+
+    // ── Path JSONL ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_path_jsonl_roundtrip() {
+        let path = Path {
+            steps: vec![
+                Step::new("s1", "agent:test", "2026-01-01T00:00:00Z").with_raw_change("f.rs", "@@"),
+                Step::new("s2", "agent:test", "2026-01-01T00:01:00Z")
+                    .with_parent("s1")
+                    .with_raw_change("f.rs", "@@"),
+            ],
+            ..Path::new("p1", None, "s2")
+        };
+
+        let jsonl = path.steps_to_jsonl().unwrap();
+        let mut parsed = Path::new("p1", None, "s2");
+        parsed.load_jsonl(&jsonl).unwrap();
+
+        assert_eq!(parsed.steps.len(), 2);
+        assert_eq!(parsed.steps[0].step.id, "s1");
+        assert_eq!(parsed.steps[1].step.id, "s2");
+        assert_eq!(parsed.steps[1].step.parents, vec!["s1"]);
+    }
+
+    #[test]
+    fn test_path_load_jsonl_empty_lines_skipped() {
+        let s1 =
+            Step::new("s1", "agent:test", "2026-01-01T00:00:00Z").with_raw_change("f.rs", "@@");
+        let s2 = Step::new("s2", "agent:test", "2026-01-01T00:01:00Z")
+            .with_parent("s1")
+            .with_raw_change("f.rs", "@@");
+        let jsonl = format!(
+            "{}\n\n{}\n  \n",
+            serde_json::to_string(&s1).unwrap(),
+            serde_json::to_string(&s2).unwrap(),
+        );
+
+        let mut path = Path::new("p1", None, "s2");
+        path.load_jsonl(&jsonl).unwrap();
+        assert_eq!(path.steps.len(), 2);
+    }
+
+    #[test]
+    fn test_path_load_jsonl_malformed() {
+        let mut path = Path::new("p1", None, "s1");
+        assert!(path.load_jsonl("not valid json\n").is_err());
+    }
+
+    #[test]
+    fn test_path_load_jsonl_empty() {
+        let mut path = Path::new("p1", None, "s1");
+        path.load_jsonl("").unwrap();
+        assert!(path.steps.is_empty());
     }
 }

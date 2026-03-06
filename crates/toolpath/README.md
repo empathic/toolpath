@@ -40,6 +40,7 @@ Step
   step: StepIdentity { id, parents, actor, timestamp }
   change: HashMap<String, ArtifactChange>
   meta?: StepMeta
+
 ```
 
 ## Building documents
@@ -86,6 +87,30 @@ let main_rs = query::filter_by_artifact(&steps, "src/main.rs");
 let all_files = query::all_artifacts(&steps);
 let all_actors = query::all_actors(&steps);
 let index = query::step_index(&steps);
+```
+
+## JSONL
+
+A path's steps can be serialized as JSONL (one step per line) for append-friendly logging:
+
+```rust
+use toolpath::v1::{Path, Step};
+
+let path = Path {
+    steps: vec![
+        Step::new("s1", "agent:my-tool", "2026-01-01T00:00:00Z")
+            .with_raw_change("src/main.rs", "@@ -1 +1 @@\n-old\n+new"),
+    ],
+    ..Path::new("p1", None, "s1")
+};
+
+// Steps → JSONL
+let jsonl = path.steps_to_jsonl().unwrap();
+
+// JSONL → Steps
+let mut parsed = Path::new("p1", None, "s1");
+parsed.load_jsonl(&jsonl).unwrap();
+assert_eq!(parsed.steps.len(), 1);
 ```
 
 ## Serialization
