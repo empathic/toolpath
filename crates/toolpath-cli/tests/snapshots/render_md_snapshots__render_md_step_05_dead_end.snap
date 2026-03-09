@@ -1,0 +1,15 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"step-05-dead-end.json\")"
+---
+# step-002a
+
+**Actor:** `agent:claude-code/session-abc123`
+**Timestamp:** 2026-01-29T10:03:00Z
+**Parents:** `step-001`
+
+> Validate email addresses using regex pattern matching
+
+## Changes
+
+- `src/auth/validator.rs` (+12 -0, rust.add_items)

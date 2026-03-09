@@ -5,9 +5,7 @@ mod source;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
-use toolpath::v1::{
-    ArtifactChange, Document, Graph, Path, PathOrRef, Step, query,
-};
+use toolpath::v1::{ArtifactChange, Document, Graph, Path, PathOrRef, Step, query};
 
 /// Detail level for the rendered markdown.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -328,60 +326,55 @@ fn write_artifact_change(
         .unwrap_or("");
 
     match options.detail {
-        Detail::Summary => {
-            match change_type {
-                "review.comment" | "review.conversation" => {
-                    let display = friendly_artifact_name(artifact);
-                    let body = change
-                        .structural
-                        .as_ref()
-                        .and_then(|s| s.extra.get("body"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let truncated = truncate_str(body, 120);
-                    if truncated.is_empty() {
-                        writeln!(out, "- `{display}` (comment)").unwrap();
-                    } else {
-                        writeln!(out, "- `{display}` \u{2014} \"{truncated}\"").unwrap();
-                    }
-                }
-                "review.decision" => {
-                    let state = change
-                        .structural
-                        .as_ref()
-                        .and_then(|s| s.extra.get("state"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("COMMENTED");
-                    let marker = review_state_marker(state);
-                    let body = change
-                        .raw
-                        .as_deref()
-                        .unwrap_or("");
-                    let truncated = truncate_str(body, 120);
-                    if truncated.is_empty() {
-                        writeln!(out, "- {marker} {state}").unwrap();
-                    } else {
-                        writeln!(out, "- {marker} {state} \u{2014} \"{truncated}\"").unwrap();
-                    }
-                }
-                "ci.run" => {
-                    let name = friendly_artifact_name(artifact);
-                    let conclusion = change
-                        .structural
-                        .as_ref()
-                        .and_then(|s| s.extra.get("conclusion"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    let marker = ci_conclusion_marker(conclusion);
-                    writeln!(out, "- {name} {marker} {conclusion}").unwrap();
-                }
-                _ => {
-                    let display = friendly_artifact_name(artifact);
-                    let annotation = change_annotation(change);
-                    writeln!(out, "- `{display}`{annotation}").unwrap();
+        Detail::Summary => match change_type {
+            "review.comment" | "review.conversation" => {
+                let display = friendly_artifact_name(artifact);
+                let body = change
+                    .structural
+                    .as_ref()
+                    .and_then(|s| s.extra.get("body"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let truncated = truncate_str(body, 120);
+                if truncated.is_empty() {
+                    writeln!(out, "- `{display}` (comment)").unwrap();
+                } else {
+                    writeln!(out, "- `{display}` \u{2014} \"{truncated}\"").unwrap();
                 }
             }
-        }
+            "review.decision" => {
+                let state = change
+                    .structural
+                    .as_ref()
+                    .and_then(|s| s.extra.get("state"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("COMMENTED");
+                let marker = review_state_marker(state);
+                let body = change.raw.as_deref().unwrap_or("");
+                let truncated = truncate_str(body, 120);
+                if truncated.is_empty() {
+                    writeln!(out, "- {marker} {state}").unwrap();
+                } else {
+                    writeln!(out, "- {marker} {state} \u{2014} \"{truncated}\"").unwrap();
+                }
+            }
+            "ci.run" => {
+                let name = friendly_artifact_name(artifact);
+                let conclusion = change
+                    .structural
+                    .as_ref()
+                    .and_then(|s| s.extra.get("conclusion"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let marker = ci_conclusion_marker(conclusion);
+                writeln!(out, "- {name} {marker} {conclusion}").unwrap();
+            }
+            _ => {
+                let display = friendly_artifact_name(artifact);
+                let annotation = change_annotation(change);
+                writeln!(out, "- `{display}`{annotation}").unwrap();
+            }
+        },
         Detail::Full => {
             match change_type {
                 "review.comment" | "review.conversation" => {
@@ -467,12 +460,8 @@ fn write_artifact_change(
                                 .collect();
                             format!(" ({})", pairs.join(", "))
                         };
-                        writeln!(
-                            out,
-                            "Structural: `{}`{extra_str}",
-                            structural.change_type
-                        )
-                        .unwrap();
+                        writeln!(out, "Structural: `{}`{extra_str}", structural.change_type)
+                            .unwrap();
                     }
                     writeln!(out).unwrap();
                 }
@@ -530,7 +519,12 @@ fn write_path_step(
         _ => "",
     };
 
-    writeln!(out, "### {} \u{2014} {}{}", step.step.id, actor_short, markers).unwrap();
+    writeln!(
+        out,
+        "### {} \u{2014} {}{}",
+        step.step.id, actor_short, markers
+    )
+    .unwrap();
     writeln!(out).unwrap();
 
     writeln!(out, "**Timestamp:** {}", step.step.timestamp).unwrap();
@@ -811,10 +805,7 @@ fn write_review_section(out: &mut String, sorted: &[&Step]) {
     }
 }
 
-fn write_actors_section(
-    out: &mut String,
-    actors: &HashMap<String, toolpath::v1::ActorDefinition>,
-) {
+fn write_actors_section(out: &mut String, actors: &HashMap<String, toolpath::v1::ActorDefinition>) {
     writeln!(out, "## Actors").unwrap();
     writeln!(out).unwrap();
 
@@ -1305,8 +1296,7 @@ mod tests {
     fn test_render_path_with_dead_ends() {
         let s1 = make_step("s1", "human:alex", &[]);
         let s2 = make_step_with_intent("s2", "agent:claude", &["s1"], "Good approach");
-        let s2a =
-            make_step_with_intent("s2a", "agent:claude", &["s1"], "Bad approach (abandoned)");
+        let s2a = make_step_with_intent("s2a", "agent:claude", &["s1"], "Bad approach (abandoned)");
         let s3 = make_step("s3", "human:alex", &["s2"]);
         let path = Path {
             path: PathIdentity {
@@ -1776,10 +1766,7 @@ mod tests {
 
     fn make_review_comment_step(id: &str, actor: &str, artifact: &str, body: &str) -> Step {
         let mut extra = std::collections::HashMap::new();
-        extra.insert(
-            "body".to_string(),
-            serde_json::json!(body),
-        );
+        extra.insert("body".to_string(), serde_json::json!(body));
         let mut step = Step::new(id, actor, "2026-01-29T10:00:00Z");
         step.change.insert(
             artifact.to_string(),
@@ -1817,10 +1804,7 @@ mod tests {
 
     fn make_ci_step(id: &str, name: &str, conclusion: &str) -> Step {
         let mut extra = std::collections::HashMap::new();
-        extra.insert(
-            "conclusion".to_string(),
-            serde_json::json!(conclusion),
-        );
+        extra.insert("conclusion".to_string(), serde_json::json!(conclusion));
         extra.insert(
             "url".to_string(),
             serde_json::json!("https://github.com/acme/widgets/actions/runs/123"),
@@ -2045,18 +2029,9 @@ mod tests {
             friendly_artifact_name("review://src/main.rs#L42"),
             "src/main.rs:42"
         );
-        assert_eq!(
-            friendly_artifact_name("ci://checks/test"),
-            "test"
-        );
-        assert_eq!(
-            friendly_artifact_name("review://decision"),
-            "decision"
-        );
-        assert_eq!(
-            friendly_artifact_name("src/main.rs"),
-            "src/main.rs"
-        );
+        assert_eq!(friendly_artifact_name("ci://checks/test"), "test");
+        assert_eq!(friendly_artifact_name("review://decision"), "decision");
+        assert_eq!(friendly_artifact_name("src/main.rs"), "src/main.rs");
     }
 
     #[test]
@@ -2091,7 +2066,10 @@ mod tests {
     #[test]
     fn test_truncate_str() {
         assert_eq!(truncate_str("hello", 10), "hello");
-        assert_eq!(truncate_str("hello world this is long", 10), "hello worl...");
+        assert_eq!(
+            truncate_str("hello world this is long", 10),
+            "hello worl..."
+        );
         assert_eq!(truncate_str("line1\nline2", 20), "line1 line2");
     }
 

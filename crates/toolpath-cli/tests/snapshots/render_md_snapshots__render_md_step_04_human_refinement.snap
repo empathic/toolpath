@@ -1,0 +1,17 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"step-04-human-refinement.json\")"
+---
+# step-004
+
+**Actor:** `human:alex`
+**Timestamp:** 2026-01-29T10:15:00Z
+**Parents:** `step-003`
+
+> Improve error message clarity and use idiomatic .into()
+
+- **refines:** `toolpath://step-002`
+
+## Changes
+
+- `src/auth/validator.rs` (+2 -2, rust.modify_expressions)

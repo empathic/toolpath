@@ -1,0 +1,90 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"graph-01-release.json\")"
+---
+# Release v2.0
+
+- **milestone:** `issue://github/myorg/myrepo/milestone/5`
+- **changelog:** `doc://CHANGELOG.md#v2.0`
+
+| Path | Steps | Actors | Head |
+|------|-------|--------|------|
+| Add email validation | 3 | `agent:claude-code`, `human:alex`, `tool:rustfmt` | `step-003` |
+| Fix session timeout bug | 2 | `agent:claude-code`, `human:bob` | `step-002` |
+
+**External references:**
+- `https://archive.example.com/toolpath/path-pr-44.json`
+- `toolpath://internal/path-pr-45`
+
+---
+
+## Add email validation
+
+**Base:** `github:myorg/myrepo` @ `main`
+**Head:** `step-003`
+**Source:** `github:myorg/myrepo/pull/42`
+**Changes:** +1 −2 across 1 files
+**Steps:** 3 | **Artifacts:** 1 | **Dead ends:** 0
+
+### step-001 — agent:claude-code
+
+**Timestamp:** 2026-01-29T10:00:00Z
+
+> Add email validation with custom error type
+
+- `src/auth/validator.rs` (+1 -0)
+
+### step-002 — tool:rustfmt
+
+**Timestamp:** 2026-01-29T10:00:30Z
+**Parents:** `step-001`
+
+> Auto-format
+
+- `src/auth/validator.rs` (+0 -1)
+
+### step-003 — human:alex [head]
+
+**Timestamp:** 2026-01-29T10:15:00Z
+**Parents:** `step-002`
+
+> Improve error messages for better UX
+
+- `src/auth/validator.rs` (+0 -1)
+
+---
+
+## Fix session timeout bug
+
+**Base:** `github:myorg/myrepo` @ `main`
+**Head:** `step-002`
+**Source:** `github:myorg/myrepo/pull/43`
+**Changes:** +2 −0 across 1 files
+**Steps:** 2 | **Artifacts:** 1 | **Dead ends:** 0
+
+### step-001 — human:bob
+
+**Timestamp:** 2026-01-28T14:00:00Z
+
+> Add session refresh to prevent timeouts
+
+- `src/auth/session.rs` (+1 -0)
+
+### step-002 — agent:claude-code [head]
+
+**Timestamp:** 2026-01-28T14:30:00Z
+**Parents:** `step-001`
+
+> Add edge case handling for expired refresh tokens
+
+- `src/auth/session.rs` (+1 -0)
+
+---
+
+## Actors
+
+- **`agent:claude-code`** — Claude Code (anthropic, claude-sonnet-4-20250514)
+- **`human:alex`** — Alex Kesling
+- **`human:bob`** — Bob Developer
+- **`human:release-manager`** — Release Manager
+- **`tool:rustfmt`** — rustfmt

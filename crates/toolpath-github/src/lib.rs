@@ -438,8 +438,7 @@ mod native {
         // ── Review comment steps ─────────────────────────────────────
         if config.include_comments {
             for rc in review_comments {
-                let step =
-                    review_comment_to_step(rc, &mut actors, &mut actor_associations)?;
+                let step = review_comment_to_step(rc, &mut actors, &mut actor_associations)?;
                 steps.push(step);
             }
 
@@ -650,14 +649,8 @@ mod native {
         let meta = if let Some(reply_to) = rc["in_reply_to_id"].as_u64() {
             let mut step_extra = HashMap::new();
             let mut gh_extra = serde_json::Map::new();
-            gh_extra.insert(
-                "in_reply_to_id".to_string(),
-                serde_json::json!(reply_to),
-            );
-            step_extra.insert(
-                "github".to_string(),
-                serde_json::Value::Object(gh_extra),
-            );
+            gh_extra.insert("in_reply_to_id".to_string(), serde_json::json!(reply_to));
+            step_extra.insert("github".to_string(), serde_json::Value::Object(gh_extra));
             Some(StepMeta {
                 extra: step_extra,
                 ..Default::default()
@@ -930,7 +923,10 @@ mod native {
             github_meta.insert("deletions".to_string(), serde_json::json!(deletions));
         }
         if let Some(changed_files) = pr["changed_files"].as_u64() {
-            github_meta.insert("changed_files".to_string(), serde_json::json!(changed_files));
+            github_meta.insert(
+                "changed_files".to_string(),
+                serde_json::json!(changed_files),
+            );
         }
 
         // Labels
@@ -1168,7 +1164,10 @@ mod native {
             assert!(change.raw.is_some());
             assert!(change.raw.as_deref().unwrap().contains("let x = 42"));
             // author_association captured
-            assert_eq!(assoc.get("human:bob").map(|s| s.as_str()), Some("COLLABORATOR"));
+            assert_eq!(
+                assoc.get("human:bob").map(|s| s.as_str()),
+                Some("COLLABORATOR")
+            );
         }
 
         #[test]
@@ -1230,7 +1229,12 @@ mod native {
             assert_eq!(structural.change_type, "ci.run");
             assert_eq!(structural.extra["conclusion"], "success");
             // html_url captured
-            assert!(structural.extra["url"].as_str().unwrap().contains("actions/runs/500"));
+            assert!(
+                structural.extra["url"]
+                    .as_str()
+                    .unwrap()
+                    .contains("actions/runs/500")
+            );
         }
 
         #[test]
@@ -1238,7 +1242,13 @@ mod native {
             let pr = sample_pr();
             let mut actors = HashMap::new();
             let mut assoc = HashMap::new();
-            register_actor(&mut actors, &mut assoc, "human:alice", "alice", Some("MEMBER"));
+            register_actor(
+                &mut actors,
+                &mut assoc,
+                "human:alice",
+                "alice",
+                Some("MEMBER"),
+            );
 
             let meta = build_path_meta(&pr, &actors, &assoc).unwrap();
 
@@ -1638,9 +1648,21 @@ mod native {
             assert_eq!(path.steps.len(), 3);
 
             // Find steps by id
-            let commit_step = path.steps.iter().find(|s| s.step.id == "step-abc12345").unwrap();
-            let rc1_step = path.steps.iter().find(|s| s.step.id == "step-rc-200").unwrap();
-            let rc2_step = path.steps.iter().find(|s| s.step.id == "step-rc-201").unwrap();
+            let commit_step = path
+                .steps
+                .iter()
+                .find(|s| s.step.id == "step-abc12345")
+                .unwrap();
+            let rc1_step = path
+                .steps
+                .iter()
+                .find(|s| s.step.id == "step-rc-200")
+                .unwrap();
+            let rc2_step = path
+                .steps
+                .iter()
+                .find(|s| s.step.id == "step-rc-201")
+                .unwrap();
 
             // Commit is root
             assert!(commit_step.step.parents.is_empty());

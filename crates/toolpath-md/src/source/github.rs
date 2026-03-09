@@ -9,12 +9,7 @@ use crate::friendly_date_range;
 ///
 /// Returns `None` if the path has no `extra["github"]` with a `number` field.
 pub(super) fn from_path(path: &Path) -> Option<SourceContext> {
-    let gh = path
-        .meta
-        .as_ref()?
-        .extra
-        .get("github")?
-        .as_object()?;
+    let gh = path.meta.as_ref()?.extra.get("github")?.as_object()?;
 
     let identity_line = build_identity_line(gh, &path.steps)?;
     let diffstat = extract_diffstat(gh);
@@ -33,8 +28,14 @@ fn build_identity_line(
     let number = gh.get("number")?.as_u64()?;
     let author = gh.get("author").and_then(serde_json::Value::as_str);
     let state = gh.get("state").and_then(serde_json::Value::as_str);
-    let merged = gh.get("merged").and_then(serde_json::Value::as_bool).unwrap_or(false);
-    let draft = gh.get("draft").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let merged = gh
+        .get("merged")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let draft = gh
+        .get("draft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     let mut line = format!("**PR #{number}**");
     if let Some(a) = author {
@@ -78,8 +79,7 @@ mod tests {
 
     fn make_github_path(github_json: serde_json::Value) -> Path {
         let s1 = Step::new("s1", "human:alice", "2026-02-26T10:00:00Z");
-        let s2 = Step::new("s2", "human:alice", "2026-02-27T14:00:00Z")
-            .with_parent("s1");
+        let s2 = Step::new("s2", "human:alice", "2026-02-27T14:00:00Z").with_parent("s1");
         let mut extra = std::collections::HashMap::new();
         extra.insert("github".to_string(), github_json);
         Path {

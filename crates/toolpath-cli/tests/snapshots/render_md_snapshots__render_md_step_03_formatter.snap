@@ -1,0 +1,15 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"step-03-formatter.json\")"
+---
+# step-003
+
+**Actor:** `tool:rustfmt/1.7.0`
+**Timestamp:** 2026-01-29T10:05:30Z
+**Parents:** `step-002`
+
+> Automatic code formatting
+
+## Changes
+
+- `src/auth/validator.rs` (+8 -3)

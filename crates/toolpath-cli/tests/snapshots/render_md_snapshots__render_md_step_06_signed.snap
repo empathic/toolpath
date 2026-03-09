@@ -1,0 +1,14 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"step-06-signed.json\")"
+---
+# step-001
+
+**Actor:** `human:alex`
+**Timestamp:** 2026-01-29T10:00:00Z
+
+> Fix greeting punctuation
+
+## Changes
+
+- `src/main.rs` (+1 -1)

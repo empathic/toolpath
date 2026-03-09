@@ -1,0 +1,88 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"path-04-exploration.json\")"
+---
+# Explore CLI argument parsing approaches
+
+**Base:** `github:myorg/myrepo` @ `main`
+**Head:** `step-004`
+**Source:** `agent://claude-code/session-exp1`
+**Changes:** +69 −27 across 2 files
+**Steps:** 7 | **Artifacts:** 2 | **Dead ends:** 1
+
+## Timeline
+
+### step-001 — human:alex
+
+**Timestamp:** 2026-02-10T09:00:00Z
+
+> Scaffold CLI entry point with basic arg check
+
+- `src/main.rs` (+7 -1)
+
+### step-002a — agent:claude-code/session-exp1 [dead end]
+
+**Timestamp:** 2026-02-10T09:05:00Z
+**Parents:** `step-001`
+
+> Try clap derive macros (abandoned: too much codegen)
+
+- `Cargo.toml` (+2 -0)
+- `src/main.rs` (+9 -5)
+
+### step-002b — agent:claude-code/session-exp1
+
+**Timestamp:** 2026-02-10T09:08:00Z
+**Parents:** `step-001`
+
+> Try manual arg parsing with match
+
+- `src/main.rs` (+16 -6)
+
+### step-002c — agent:claude-code/session-exp1
+
+**Timestamp:** 2026-02-10T09:12:00Z
+**Parents:** `step-001`
+
+> Try clap builder API (no derive macros)
+
+- `Cargo.toml` (+2 -0)
+- `src/main.rs` (+16 -6)
+
+### step-003b — tool:clippy/0.1.84
+
+**Timestamp:** 2026-02-10T09:09:00Z
+**Parents:** `step-002b`
+
+> Fix clippy: unused variable prefix
+
+- `src/main.rs` (rust.rename)
+
+### step-003c — tool:rustfmt/1.7.0
+
+**Timestamp:** 2026-02-10T09:13:00Z
+**Parents:** `step-002c`
+
+> Auto-format
+
+- `src/main.rs` (+7 -6)
+
+### step-004 — human:alex [head]
+
+**Timestamp:** 2026-02-10T09:20:00Z
+**Parents:** `step-003b`, `step-003c`
+
+> Merge builder API with manual match dispatch, wire up verbose flag
+
+- `src/main.rs` (+10 -3)
+
+## Dead Ends
+
+These steps were attempted but did not contribute to the final result.
+
+- **step-002a** (agent:claude-code/session-exp1) — Try clap derive macros (abandoned: too much codegen) | Parent: `step-001`
+
+## Actors
+
+- **`agent:claude-code/session-exp1`** — Claude Code (Anthropic, claude-sonnet-4-20250514)
+- **`human:alex`** — Alex

@@ -1,0 +1,41 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"path-02-local-session.json\")"
+---
+# Claude Code session: Add service config
+
+**Base:** `file:///home/alex/projects/myrepo`
+**Head:** `step-003`
+**Source:** `agent://claude-code/session-xyz`
+**Changes:** +21 −1 across 1 files
+**Steps:** 3 | **Artifacts:** 1 | **Dead ends:** 0
+
+## Timeline
+
+### step-001 — agent:claude-code/session-xyz
+
+**Timestamp:** 2026-01-29T14:00:00Z
+
+> Add Config struct for service configuration
+
+- **requested_by:** `agent://claude-code/session-xyz/turn/1`
+
+- `src/lib.rs` (+5 -0, rust.add_items)
+
+### step-002 — agent:claude-code/session-xyz
+
+**Timestamp:** 2026-01-29T14:02:00Z
+**Parents:** `step-001`
+
+> Add from_env constructor for Config
+
+- `src/lib.rs` (+12 -0, rust.add_items)
+
+### step-003 — tool:rustfmt/1.7.0 [head]
+
+**Timestamp:** 2026-01-29T14:02:05Z
+**Parents:** `step-002`
+
+> Auto-format
+
+- `src/lib.rs` (+4 -1)

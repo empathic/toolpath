@@ -1,0 +1,62 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"path-01-pr.json\")"
+---
+# Add email validation
+
+**Base:** `github:myorg/myrepo` @ `main`
+**Head:** `step-004`
+**Source:** `github:myorg/myrepo/pull/42`
+- **fixes:** `issue://github/myorg/myrepo/issues/42`
+**Changes:** +3 −3 across 2 files
+**Steps:** 5 | **Artifacts:** 2 | **Dead ends:** 1
+
+## Timeline
+
+### step-001 — human:alex
+
+**Timestamp:** 2026-01-29T10:00:00Z
+
+- `src/main.rs` (+1 -1)
+
+### step-002a — agent:claude-code/session-abc123 [dead end]
+
+**Timestamp:** 2026-01-29T10:03:00Z
+**Parents:** `step-001`
+
+> Regex-based validation (abandoned)
+
+- `src/auth/validator.rs` (+1 -0)
+
+### step-002 — agent:claude-code/session-abc123
+
+**Timestamp:** 2026-01-29T10:05:00Z
+**Parents:** `step-001`
+
+> Add email validation with custom error type
+
+- `src/auth/validator.rs` (+1 -0)
+
+### step-003 — tool:rustfmt/1.7.0
+
+**Timestamp:** 2026-01-29T10:05:30Z
+**Parents:** `step-002`
+
+> Auto-format
+
+- `src/auth/validator.rs` (+0 -1)
+
+### step-004 — human:alex [head]
+
+**Timestamp:** 2026-01-29T10:15:00Z
+**Parents:** `step-003`
+
+> Refine error messages
+
+- `src/auth/validator.rs` (+0 -1)
+
+## Dead Ends
+
+These steps were attempted but did not contribute to the final result.
+
+- **step-002a** (agent:claude-code/session-abc123) — Regex-based validation (abandoned) | Parent: `step-001`

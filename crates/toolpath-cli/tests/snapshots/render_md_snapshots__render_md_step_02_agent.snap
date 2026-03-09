@@ -1,0 +1,20 @@
+---
+source: crates/toolpath-cli/tests/render_md_snapshots.rs
+expression: "render_md(\"step-02-agent.json\")"
+---
+# step-002
+
+**Actor:** `agent:claude-code/session-abc123`
+**Timestamp:** 2026-01-29T10:05:00Z
+**Parents:** `step-001`
+
+> Add email validation to prevent malformed input from reaching the database
+
+- **fixes:** `issue://github/myrepo/issues/42`
+- **implements:** `doc://design/input-validation-2026q1.md`
+- **reasoning:** `agent://claude-code/session-abc123/turn/3`
+
+## Changes
+
+- `src/auth/mod.rs` (+1 -0)
+- `src/auth/validator.rs` (+23 -0, rust.add_items)
