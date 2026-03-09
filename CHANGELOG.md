@@ -2,6 +2,29 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.2.0 — toolpath-github + toolpath-md
+
+### toolpath-github 0.2.0
+
+- Capture `diff_hunk` on review comments as `raw` for code context display
+- Capture PR summary stats in path meta: state, merged, additions, deletions, changed_files, draft, number, author
+- Capture `author_association` (MEMBER, COLLABORATOR, etc.) stored in `extra["github"]["actor_associations"]`
+- Capture `html_url` on CI check runs in structural extra
+- Set review body as `meta.intent` on review decision steps for renderer visibility
+- Thread review comment replies via `in_reply_to_id` — replies branch off the step they reply to instead of trunk-chaining
+
+### toolpath-md 0.2.0
+
+- Render review comment bodies inline in both summary and full modes (no more opaque `review://` URIs)
+- Render CI conclusions with emoji indicators (pass/fail/skip) in summary mode
+- Show diff_hunk code context alongside review comments in full mode
+- Add PR-level diffstat to context block (`**Changes:** +N −M across K files`)
+- Add Review summary section collecting all decisions and inline comments
+- Friendly date range display in context block (e.g. `Feb 26–27, 2026`)
+- PR identity line when GitHub metadata present (`**PR #6** by author · status · dates`)
+- Hide opaque head ID when PR identity is shown
+- Strip `review://` and `ci://checks/` prefixes for natural display names
+
 ## 0.1.0 — toolpath-md
 
 ### toolpath-md 0.1.0

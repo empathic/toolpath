@@ -1,5 +1,7 @@
 #![doc = include_str!("../README.md")]
 
+mod source;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
@@ -117,6 +119,9 @@ pub fn render_path(path: &Path, options: &RenderOptions) -> String {
     if !dead_end_set.is_empty() {
         write_dead_ends_section(&mut out, &sorted, &dead_end_set);
     }
+
+    // Review summary section
+    write_review_section(&mut out, &sorted);
 
     // Actors section (if defined in meta)
     if let Some(meta) = &path.meta
@@ -316,34 +321,162 @@ fn write_artifact_change(
     change: &ArtifactChange,
     options: &RenderOptions,
 ) {
+    let change_type = change
+        .structural
+        .as_ref()
+        .map(|s| s.change_type.as_str())
+        .unwrap_or("");
+
     match options.detail {
         Detail::Summary => {
-            let annotation = change_annotation(change);
-            writeln!(out, "- `{artifact}`{annotation}").unwrap();
+            match change_type {
+                "review.comment" | "review.conversation" => {
+                    let display = friendly_artifact_name(artifact);
+                    let body = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("body"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let truncated = truncate_str(body, 120);
+                    if truncated.is_empty() {
+                        writeln!(out, "- `{display}` (comment)").unwrap();
+                    } else {
+                        writeln!(out, "- `{display}` \u{2014} \"{truncated}\"").unwrap();
+                    }
+                }
+                "review.decision" => {
+                    let state = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("state"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("COMMENTED");
+                    let marker = review_state_marker(state);
+                    let body = change
+                        .raw
+                        .as_deref()
+                        .unwrap_or("");
+                    let truncated = truncate_str(body, 120);
+                    if truncated.is_empty() {
+                        writeln!(out, "- {marker} {state}").unwrap();
+                    } else {
+                        writeln!(out, "- {marker} {state} \u{2014} \"{truncated}\"").unwrap();
+                    }
+                }
+                "ci.run" => {
+                    let name = friendly_artifact_name(artifact);
+                    let conclusion = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("conclusion"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let marker = ci_conclusion_marker(conclusion);
+                    writeln!(out, "- {name} {marker} {conclusion}").unwrap();
+                }
+                _ => {
+                    let display = friendly_artifact_name(artifact);
+                    let annotation = change_annotation(change);
+                    writeln!(out, "- `{display}`{annotation}").unwrap();
+                }
+            }
         }
         Detail::Full => {
-            writeln!(out, "**`{artifact}`**").unwrap();
-            if let Some(raw) = &change.raw {
-                writeln!(out).unwrap();
-                writeln!(out, "```diff").unwrap();
-                writeln!(out, "{raw}").unwrap();
-                writeln!(out, "```").unwrap();
+            match change_type {
+                "review.comment" | "review.conversation" => {
+                    let display = friendly_artifact_name(artifact);
+                    writeln!(out, "**`{display}`**").unwrap();
+                    let body = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("body"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !body.is_empty() {
+                        writeln!(out).unwrap();
+                        for line in body.lines() {
+                            writeln!(out, "> {line}").unwrap();
+                        }
+                    }
+                    // Show diff_hunk if present
+                    if let Some(raw) = &change.raw {
+                        writeln!(out).unwrap();
+                        writeln!(out, "```diff").unwrap();
+                        writeln!(out, "{raw}").unwrap();
+                        writeln!(out, "```").unwrap();
+                    }
+                    writeln!(out).unwrap();
+                }
+                "review.decision" => {
+                    let state = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("state"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("COMMENTED");
+                    let marker = review_state_marker(state);
+                    writeln!(out, "**{marker} {state}**").unwrap();
+                    if let Some(raw) = &change.raw {
+                        writeln!(out).unwrap();
+                        for line in raw.lines() {
+                            writeln!(out, "> {line}").unwrap();
+                        }
+                    }
+                    writeln!(out).unwrap();
+                }
+                "ci.run" => {
+                    let name = friendly_artifact_name(artifact);
+                    let conclusion = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("conclusion"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let marker = ci_conclusion_marker(conclusion);
+                    write!(out, "**{name}** {marker} {conclusion}").unwrap();
+                    if let Some(url) = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("url"))
+                        .and_then(|v| v.as_str())
+                    {
+                        write!(out, " ([details]({url}))").unwrap();
+                    }
+                    writeln!(out).unwrap();
+                    writeln!(out).unwrap();
+                }
+                _ => {
+                    let display = friendly_artifact_name(artifact);
+                    writeln!(out, "**`{display}`**").unwrap();
+                    if let Some(raw) = &change.raw {
+                        writeln!(out).unwrap();
+                        writeln!(out, "```diff").unwrap();
+                        writeln!(out, "{raw}").unwrap();
+                        writeln!(out, "```").unwrap();
+                    }
+                    if let Some(structural) = &change.structural {
+                        writeln!(out).unwrap();
+                        let extra_str = if structural.extra.is_empty() {
+                            String::new()
+                        } else {
+                            let pairs: Vec<String> = structural
+                                .extra
+                                .iter()
+                                .map(|(k, v)| format!("{k}={v}"))
+                                .collect();
+                            format!(" ({})", pairs.join(", "))
+                        };
+                        writeln!(
+                            out,
+                            "Structural: `{}`{extra_str}",
+                            structural.change_type
+                        )
+                        .unwrap();
+                    }
+                    writeln!(out).unwrap();
+                }
             }
-            if let Some(structural) = &change.structural {
-                writeln!(out).unwrap();
-                let extra_str = if structural.extra.is_empty() {
-                    String::new()
-                } else {
-                    let pairs: Vec<String> = structural
-                        .extra
-                        .iter()
-                        .map(|(k, v)| format!("{k}={v}"))
-                        .collect();
-                    format!(" ({})", pairs.join(", "))
-                };
-                writeln!(out, "Structural: `{}`{extra_str}", structural.change_type).unwrap();
-            }
-            writeln!(out).unwrap();
         }
     }
 }
@@ -392,8 +525,8 @@ fn write_path_step(
     // Header line with status markers
     let actor_short = actor_display(&step.step.actor);
     let markers = match (is_dead, is_head) {
-        (true, _) => " \u{274c} dead end",
-        (_, true) => " \u{2705} head",
+        (true, _) => " [dead end]",
+        (_, true) => " [head]",
         _ => "",
     };
 
@@ -444,6 +577,12 @@ fn write_path_step(
 }
 
 fn write_path_context(out: &mut String, path: &Path) {
+    let ctx = source::detect(path);
+
+    if let Some(identity) = &ctx.identity_line {
+        writeln!(out, "{identity}").unwrap();
+    }
+
     if let Some(base) = &path.path.base {
         write!(out, "**Base:** `{}`", base.uri).unwrap();
         if let Some(ref_str) = &base.ref_str {
@@ -452,7 +591,10 @@ fn write_path_context(out: &mut String, path: &Path) {
         writeln!(out).unwrap();
     }
 
-    writeln!(out, "**Head:** `{}`", path.path.head).unwrap();
+    // Only show Head if no source-specific identity line (it's noise for PRs)
+    if ctx.identity_line.is_none() {
+        writeln!(out, "**Head:** `{}`", path.path.head).unwrap();
+    }
 
     if let Some(meta) = &path.meta {
         if let Some(source) = &meta.source {
@@ -466,6 +608,19 @@ fn write_path_context(out: &mut String, path: &Path) {
                 writeln!(out, "- **{}:** `{}`", r.rel, r.href).unwrap();
             }
         }
+    }
+
+    // Diffstat — prefer source metadata, fall back to counting diffs
+    let (total_add, total_del, file_count) = ctx
+        .diffstat
+        .unwrap_or_else(|| count_total_diff_lines(&path.steps));
+
+    if total_add > 0 || total_del > 0 {
+        write!(out, "**Changes:** +{total_add} \u{2212}{total_del}").unwrap();
+        if let Some(f) = file_count {
+            write!(out, " across {f} files").unwrap();
+        }
+        writeln!(out).unwrap();
     }
 
     // Summary stats
@@ -516,6 +671,144 @@ fn write_dead_ends_section(out: &mut String, sorted: &[&Step], dead_end_set: &Ha
         .unwrap();
     }
     writeln!(out).unwrap();
+}
+
+fn write_review_section(out: &mut String, sorted: &[&Step]) {
+    // Collect review decisions and comments
+    struct ReviewDecision<'a> {
+        state: &'a str,
+        actor: &'a str,
+        body: Option<&'a str>,
+    }
+    struct ReviewComment<'a> {
+        artifact: String,
+        actor: &'a str,
+        body: &'a str,
+        diff_hunk: Option<&'a str>,
+    }
+    struct ConversationComment<'a> {
+        actor: &'a str,
+        body: &'a str,
+    }
+
+    let mut decisions: Vec<ReviewDecision<'_>> = Vec::new();
+    let mut comments: Vec<ReviewComment<'_>> = Vec::new();
+    let mut conversations: Vec<ConversationComment<'_>> = Vec::new();
+
+    for step in sorted {
+        for (artifact, change) in &step.change {
+            let change_type = change
+                .structural
+                .as_ref()
+                .map(|s| s.change_type.as_str())
+                .unwrap_or("");
+            match change_type {
+                "review.decision" => {
+                    let state = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("state"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("COMMENTED");
+                    let body = change.raw.as_deref();
+                    decisions.push(ReviewDecision {
+                        state,
+                        actor: &step.step.actor,
+                        body,
+                    });
+                }
+                "review.comment" => {
+                    let body = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("body"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !body.is_empty() {
+                        comments.push(ReviewComment {
+                            artifact: friendly_artifact_name(artifact),
+                            actor: &step.step.actor,
+                            body,
+                            diff_hunk: change.raw.as_deref(),
+                        });
+                    }
+                }
+                "review.conversation" => {
+                    let body = change
+                        .structural
+                        .as_ref()
+                        .and_then(|s| s.extra.get("body"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !body.is_empty() {
+                        conversations.push(ConversationComment {
+                            actor: &step.step.actor,
+                            body,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if decisions.is_empty() && comments.is_empty() && conversations.is_empty() {
+        return;
+    }
+
+    writeln!(out, "## Review").unwrap();
+    writeln!(out).unwrap();
+
+    for d in &decisions {
+        let marker = review_state_marker(d.state);
+        let actor_short = d.actor.split(':').next_back().unwrap_or(d.actor);
+        write!(out, "**{} {}** by {actor_short}", marker, d.state).unwrap();
+        if let Some(body) = d.body
+            && !body.is_empty()
+        {
+            writeln!(out, ":").unwrap();
+            for line in body.lines() {
+                writeln!(out, "> {line}").unwrap();
+            }
+        } else {
+            writeln!(out).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    if !conversations.is_empty() {
+        writeln!(out, "### Discussion").unwrap();
+        writeln!(out).unwrap();
+
+        for c in &conversations {
+            let actor_short = c.actor.split(':').next_back().unwrap_or(c.actor);
+            writeln!(out, "**{actor_short}:**").unwrap();
+            for line in c.body.lines() {
+                writeln!(out, "> {line}").unwrap();
+            }
+            writeln!(out).unwrap();
+        }
+    }
+
+    if !comments.is_empty() {
+        writeln!(out, "### Inline comments").unwrap();
+        writeln!(out).unwrap();
+
+        for c in &comments {
+            let actor_short = c.actor.split(':').next_back().unwrap_or(c.actor);
+            writeln!(out, "**{}** \u{2014} {actor_short}:", c.artifact).unwrap();
+            for line in c.body.lines() {
+                writeln!(out, "> {line}").unwrap();
+            }
+            if let Some(hunk) = c.diff_hunk {
+                writeln!(out).unwrap();
+                writeln!(out, "```diff").unwrap();
+                writeln!(out, "{hunk}").unwrap();
+                writeln!(out, "```").unwrap();
+            }
+            writeln!(out).unwrap();
+        }
+    }
 }
 
 fn write_actors_section(
@@ -624,6 +917,195 @@ fn write_graph_front_matter(out: &mut String, graph: &Graph) {
 /// reference back into the toolpath document.
 fn actor_display(actor: &str) -> &str {
     actor
+}
+
+/// Convert artifact URIs to friendlier display names:
+/// - `review://path/to/file.rs#L42` -> `path/to/file.rs:42`
+/// - `ci://checks/test` -> `test`
+/// - `review://conversation` -> `conversation`
+/// - `review://decision` -> `decision`
+fn friendly_artifact_name(artifact: &str) -> String {
+    if let Some(rest) = artifact.strip_prefix("review://") {
+        if let Some(pos) = rest.rfind("#L") {
+            format!("{}:{}", &rest[..pos], &rest[pos + 2..])
+        } else {
+            rest.to_string()
+        }
+    } else if let Some(rest) = artifact.strip_prefix("ci://checks/") {
+        rest.to_string()
+    } else {
+        artifact.to_string()
+    }
+}
+
+/// Truncate a string to a maximum number of characters, adding "..." if truncated.
+fn truncate_str(s: &str, max: usize) -> String {
+    let s = s.lines().collect::<Vec<_>>().join(" ").trim().to_string();
+    if s.len() <= max {
+        s
+    } else {
+        format!("{}...", &s[..max])
+    }
+}
+
+/// Text marker for review states.
+fn review_state_marker(state: &str) -> &'static str {
+    match state {
+        "APPROVED" => "[approved]",
+        "CHANGES_REQUESTED" => "[changes requested]",
+        "COMMENTED" => "[commented]",
+        "DISMISSED" => "[dismissed]",
+        _ => "[review]",
+    }
+}
+
+/// Count total diff lines across all steps (excluding review/CI artifacts).
+fn count_total_diff_lines(steps: &[Step]) -> (u64, u64, Option<u64>) {
+    let mut total_add: u64 = 0;
+    let mut total_del: u64 = 0;
+    let mut files: HashSet<&str> = HashSet::new();
+    for step in steps {
+        for (artifact, change) in &step.change {
+            // Skip review and CI artifacts
+            if artifact.starts_with("review://") || artifact.starts_with("ci://") {
+                continue;
+            }
+            if let Some(raw) = &change.raw {
+                let (a, d) = count_diff_lines(raw);
+                total_add += a as u64;
+                total_del += d as u64;
+                files.insert(artifact.as_str());
+            }
+        }
+    }
+    let file_count = if files.is_empty() {
+        None
+    } else {
+        Some(files.len() as u64)
+    };
+    (total_add, total_del, file_count)
+}
+
+/// Compute a friendly date range string from step timestamps.
+/// Returns empty string if no timestamps found.
+pub(crate) fn friendly_date_range(steps: &[Step]) -> String {
+    if steps.is_empty() {
+        return String::new();
+    }
+
+    let mut first: Option<&str> = None;
+    let mut last: Option<&str> = None;
+
+    for step in steps {
+        let ts = step.step.timestamp.as_str();
+        if ts.is_empty() || ts.starts_with("1970") {
+            continue;
+        }
+        match first {
+            None => {
+                first = Some(ts);
+                last = Some(ts);
+            }
+            Some(f) => {
+                if ts < f {
+                    first = Some(ts);
+                }
+                if ts > last.unwrap_or("") {
+                    last = Some(ts);
+                }
+            }
+        }
+    }
+
+    let Some(first) = first else {
+        return String::new();
+    };
+    let last = last.unwrap_or(first);
+
+    // Extract YYYY-MM-DD from ISO 8601
+    let first_date = &first[..first.len().min(10)];
+    let last_date = &last[..last.len().min(10)];
+
+    let Some(first_fmt) = format_date(first_date) else {
+        return String::new();
+    };
+
+    if first_date == last_date {
+        return first_fmt;
+    }
+
+    let Some(last_fmt) = format_date(last_date) else {
+        return first_fmt;
+    };
+
+    // Same month and year
+    let first_parts: Vec<&str> = first_date.split('-').collect();
+    let last_parts: Vec<&str> = last_date.split('-').collect();
+
+    if first_parts.len() == 3 && last_parts.len() == 3 {
+        if first_parts[0] == last_parts[0] && first_parts[1] == last_parts[1] {
+            // Same month: "Feb 26\u{2013}27, 2026"
+            let month = month_abbrev(first_parts[1]);
+            let day1 = first_parts[2].trim_start_matches('0');
+            let day2 = last_parts[2].trim_start_matches('0');
+            return format!("{month} {day1}\u{2013}{day2}, {}", first_parts[0]);
+        }
+        if first_parts[0] == last_parts[0] {
+            // Same year: "Feb 26 \u{2013} Mar 1, 2026"
+            let month1 = month_abbrev(first_parts[1]);
+            let day1 = first_parts[2].trim_start_matches('0');
+            let month2 = month_abbrev(last_parts[1]);
+            let day2 = last_parts[2].trim_start_matches('0');
+            return format!(
+                "{month1} {day1} \u{2013} {month2} {day2}, {}",
+                first_parts[0]
+            );
+        }
+    }
+
+    // Different years
+    format!("{first_fmt} \u{2013} {last_fmt}")
+}
+
+/// Format a YYYY-MM-DD date string to "Mon DD, YYYY".
+fn format_date(date: &str) -> Option<String> {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let month = month_abbrev(parts[1]);
+    let day = parts[2].trim_start_matches('0');
+    Some(format!("{month} {day}, {}", parts[0]))
+}
+
+fn month_abbrev(month: &str) -> &'static str {
+    match month {
+        "01" => "Jan",
+        "02" => "Feb",
+        "03" => "Mar",
+        "04" => "Apr",
+        "05" => "May",
+        "06" => "Jun",
+        "07" => "Jul",
+        "08" => "Aug",
+        "09" => "Sep",
+        "10" => "Oct",
+        "11" => "Nov",
+        "12" => "Dec",
+        _ => "???",
+    }
+}
+
+/// Text marker for CI conclusions.
+fn ci_conclusion_marker(conclusion: &str) -> &'static str {
+    match conclusion {
+        "success" => "[pass]",
+        "failure" => "[fail]",
+        "cancelled" | "timed_out" => "[cancelled]",
+        "skipped" => "[skip]",
+        "neutral" => "[neutral]",
+        _ => "[unknown]",
+    }
 }
 
 /// Format a set of actors as a compact comma-separated string.
@@ -816,7 +1298,7 @@ mod tests {
         assert!(md.contains("## Timeline"));
         assert!(md.contains("### s1"));
         assert!(md.contains("### s2"));
-        assert!(md.contains("\u{2705} head")); // head marker
+        assert!(md.contains("[head]"));
     }
 
     #[test]
@@ -838,7 +1320,7 @@ mod tests {
         let opts = RenderOptions::default();
         let md = render_path(&path, &opts);
 
-        assert!(md.contains("\u{274c} dead end"));
+        assert!(md.contains("[dead end]"));
         assert!(md.contains("## Dead Ends"));
         assert!(md.contains("Bad approach (abandoned)"));
     }
@@ -1288,5 +1770,456 @@ mod tests {
         };
         let md = render_graph(&graph, &RenderOptions::default());
         assert!(md.contains("# g1"));
+    }
+
+    // ── review/CI rendering ───────────────────────────────────────────
+
+    fn make_review_comment_step(id: &str, actor: &str, artifact: &str, body: &str) -> Step {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert(
+            "body".to_string(),
+            serde_json::json!(body),
+        );
+        let mut step = Step::new(id, actor, "2026-01-29T10:00:00Z");
+        step.change.insert(
+            artifact.to_string(),
+            ArtifactChange {
+                raw: Some("@@ -1,3 +1,4 @@\n fn example() {\n+    let x = 42;\n }".to_string()),
+                structural: Some(StructuralChange {
+                    change_type: "review.comment".into(),
+                    extra,
+                }),
+            },
+        );
+        step
+    }
+
+    fn make_review_decision_step(id: &str, actor: &str, state: &str, body: &str) -> Step {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("state".to_string(), serde_json::json!(state));
+        let mut step = Step::new(id, actor, "2026-01-29T11:00:00Z");
+        step.change.insert(
+            "review://decision".to_string(),
+            ArtifactChange {
+                raw: if body.is_empty() {
+                    None
+                } else {
+                    Some(body.to_string())
+                },
+                structural: Some(StructuralChange {
+                    change_type: "review.decision".into(),
+                    extra,
+                }),
+            },
+        );
+        step
+    }
+
+    fn make_ci_step(id: &str, name: &str, conclusion: &str) -> Step {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert(
+            "conclusion".to_string(),
+            serde_json::json!(conclusion),
+        );
+        extra.insert(
+            "url".to_string(),
+            serde_json::json!("https://github.com/acme/widgets/actions/runs/123"),
+        );
+        let mut step = Step::new(id, "ci:github-actions", "2026-01-29T12:00:00Z");
+        step.change.insert(
+            format!("ci://checks/{}", name),
+            ArtifactChange {
+                raw: None,
+                structural: Some(StructuralChange {
+                    change_type: "ci.run".into(),
+                    extra,
+                }),
+            },
+        );
+        step
+    }
+
+    #[test]
+    fn test_render_review_comment_summary() {
+        let step = make_review_comment_step(
+            "s1",
+            "human:bob",
+            "review://src/main.rs#L42",
+            "Consider using a constant here.",
+        );
+        let md = render_step(&step, &RenderOptions::default());
+
+        // Should show friendly artifact name and body
+        assert!(md.contains("src/main.rs:42"));
+        assert!(md.contains("Consider using a constant here."));
+        // Should NOT show the opaque review:// URI
+        assert!(!md.contains("review://"));
+    }
+
+    #[test]
+    fn test_render_review_comment_full() {
+        let step = make_review_comment_step(
+            "s1",
+            "human:bob",
+            "review://src/main.rs#L42",
+            "Consider using a constant here.",
+        );
+        let md = render_step(
+            &step,
+            &RenderOptions {
+                detail: Detail::Full,
+                ..Default::default()
+            },
+        );
+
+        // Should show body as blockquote
+        assert!(md.contains("> Consider using a constant here."));
+        // Should show diff_hunk
+        assert!(md.contains("```diff"));
+        assert!(md.contains("let x = 42"));
+    }
+
+    #[test]
+    fn test_render_review_decision_summary() {
+        let step = make_review_decision_step("s1", "human:dave", "APPROVED", "LGTM!");
+        let md = render_step(&step, &RenderOptions::default());
+
+        assert!(md.contains("[approved]"));
+        assert!(md.contains("APPROVED"));
+        assert!(md.contains("LGTM!"));
+    }
+
+    #[test]
+    fn test_render_ci_summary() {
+        let step = make_ci_step("s1", "test", "success");
+        let md = render_step(&step, &RenderOptions::default());
+
+        assert!(md.contains("test"));
+        assert!(md.contains("[pass]"));
+        assert!(md.contains("success"));
+        // Should NOT show ci://checks/ prefix
+        assert!(!md.contains("ci://checks/"));
+    }
+
+    #[test]
+    fn test_render_ci_failure() {
+        let step = make_ci_step("s1", "lint", "failure");
+        let md = render_step(&step, &RenderOptions::default());
+
+        assert!(md.contains("lint"));
+        assert!(md.contains("[fail]"));
+        assert!(md.contains("failure"));
+    }
+
+    #[test]
+    fn test_render_ci_full_with_url() {
+        let step = make_ci_step("s1", "test", "success");
+        let md = render_step(
+            &step,
+            &RenderOptions {
+                detail: Detail::Full,
+                ..Default::default()
+            },
+        );
+
+        assert!(md.contains("details"));
+        assert!(md.contains("actions/runs/123"));
+    }
+
+    #[test]
+    fn test_render_review_section() {
+        let s1 = make_step("s1", "human:alice", &[]);
+        let s2 = make_review_comment_step(
+            "s2",
+            "human:bob",
+            "review://src/main.rs#L42",
+            "Consider using a constant.",
+        );
+        let s3 = make_review_decision_step("s3", "human:dave", "APPROVED", "Ship it!");
+        let mut s2 = s2;
+        s2 = s2.with_parent("s1");
+        let mut s3 = s3;
+        s3 = s3.with_parent("s2");
+        let path = Path {
+            path: PathIdentity {
+                id: "p1".into(),
+                base: None,
+                head: "s3".into(),
+            },
+            steps: vec![s1, s2, s3],
+            meta: None,
+        };
+        let md = render_path(&path, &RenderOptions::default());
+
+        assert!(md.contains("## Review"));
+        assert!(md.contains("APPROVED"));
+        assert!(md.contains("Ship it!"));
+        assert!(md.contains("### Inline comments"));
+        assert!(md.contains("src/main.rs:42"));
+        assert!(md.contains("Consider using a constant."));
+    }
+
+    #[test]
+    fn test_render_no_review_section_without_reviews() {
+        let s1 = make_step("s1", "human:alex", &[]);
+        let path = Path {
+            path: PathIdentity {
+                id: "p1".into(),
+                base: None,
+                head: "s1".into(),
+            },
+            steps: vec![s1],
+            meta: None,
+        };
+        let md = render_path(&path, &RenderOptions::default());
+
+        assert!(!md.contains("## Review"));
+    }
+
+    // ── PR identity and diffstat ──────────────────────────────────────
+
+    #[test]
+    fn test_render_pr_identity() {
+        let s1 = make_step("s1", "human:alice", &[]);
+        let mut extra = std::collections::HashMap::new();
+        let github = serde_json::json!({
+            "number": 42,
+            "author": "alice",
+            "state": "open",
+            "draft": false,
+            "merged": false,
+            "additions": 150,
+            "deletions": 30,
+            "changed_files": 5
+        });
+        extra.insert("github".to_string(), github);
+        let path = Path {
+            path: PathIdentity {
+                id: "pr-42".into(),
+                base: None,
+                head: "s1".into(),
+            },
+            steps: vec![s1],
+            meta: Some(PathMeta {
+                title: Some("Add feature".into()),
+                extra,
+                ..Default::default()
+            }),
+        };
+        let md = render_path(&path, &RenderOptions::default());
+
+        assert!(md.contains("**PR #42**"));
+        assert!(md.contains("by alice"));
+        assert!(md.contains("open"));
+        assert!(md.contains("+150"));
+        assert!(md.contains("\u{2212}30"));
+        assert!(md.contains("5 files"));
+        // Should NOT show opaque head ID
+        assert!(!md.contains("**Head:**"));
+    }
+
+    #[test]
+    fn test_render_no_pr_identity_without_github_meta() {
+        let s1 = make_step("s1", "human:alex", &[]);
+        let path = Path {
+            path: PathIdentity {
+                id: "p1".into(),
+                base: None,
+                head: "s1".into(),
+            },
+            steps: vec![s1],
+            meta: None,
+        };
+        let md = render_path(&path, &RenderOptions::default());
+
+        // Should show Head when no GitHub meta
+        assert!(md.contains("**Head:**"));
+        assert!(!md.contains("**PR #"));
+    }
+
+    // ── friendly helpers ──────────────────────────────────────────────
+
+    #[test]
+    fn test_friendly_artifact_name() {
+        assert_eq!(
+            friendly_artifact_name("review://src/main.rs#L42"),
+            "src/main.rs:42"
+        );
+        assert_eq!(
+            friendly_artifact_name("ci://checks/test"),
+            "test"
+        );
+        assert_eq!(
+            friendly_artifact_name("review://decision"),
+            "decision"
+        );
+        assert_eq!(
+            friendly_artifact_name("src/main.rs"),
+            "src/main.rs"
+        );
+    }
+
+    #[test]
+    fn test_friendly_date_range_same_day() {
+        let s1 = Step::new("s1", "human:alex", "2026-02-26T10:00:00Z");
+        let s2 = Step::new("s2", "human:alex", "2026-02-26T14:00:00Z");
+        assert_eq!(friendly_date_range(&[s1, s2]), "Feb 26, 2026");
+    }
+
+    #[test]
+    fn test_friendly_date_range_same_month() {
+        let s1 = Step::new("s1", "human:alex", "2026-02-26T10:00:00Z");
+        let s2 = Step::new("s2", "human:alex", "2026-02-27T14:00:00Z");
+        assert_eq!(friendly_date_range(&[s1, s2]), "Feb 26\u{2013}27, 2026");
+    }
+
+    #[test]
+    fn test_friendly_date_range_different_months() {
+        let s1 = Step::new("s1", "human:alex", "2026-02-26T10:00:00Z");
+        let s2 = Step::new("s2", "human:alex", "2026-03-01T14:00:00Z");
+        assert_eq!(
+            friendly_date_range(&[s1, s2]),
+            "Feb 26 \u{2013} Mar 1, 2026"
+        );
+    }
+
+    #[test]
+    fn test_friendly_date_range_empty() {
+        assert_eq!(friendly_date_range(&[]), "");
+    }
+
+    #[test]
+    fn test_truncate_str() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+        assert_eq!(truncate_str("hello world this is long", 10), "hello worl...");
+        assert_eq!(truncate_str("line1\nline2", 20), "line1 line2");
+    }
+
+    // ── PR conversation comments ────────────────────────────────────
+
+    fn make_conversation_step(id: &str, actor: &str, body: &str) -> Step {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("body".to_string(), serde_json::json!(body));
+        let mut step = Step::new(id, actor, "2026-01-29T15:00:00Z");
+        step.change.insert(
+            "review://conversation".to_string(),
+            ArtifactChange {
+                raw: None,
+                structural: Some(StructuralChange {
+                    change_type: "review.conversation".into(),
+                    extra,
+                }),
+            },
+        );
+        step
+    }
+
+    #[test]
+    fn test_render_conversation_summary() {
+        let step = make_conversation_step("s1", "human:carol", "Looks good overall!");
+        let md = render_step(&step, &RenderOptions::default());
+
+        assert!(md.contains("conversation"));
+        assert!(md.contains("Looks good overall!"));
+        // Should NOT show review:// prefix
+        assert!(!md.contains("review://"));
+    }
+
+    #[test]
+    fn test_render_conversation_full() {
+        let step = make_conversation_step("s1", "human:carol", "Looks good overall!");
+        let md = render_step(
+            &step,
+            &RenderOptions {
+                detail: Detail::Full,
+                ..Default::default()
+            },
+        );
+
+        assert!(md.contains("> Looks good overall!"));
+        assert!(!md.contains("review://"));
+    }
+
+    #[test]
+    fn test_review_section_includes_conversations() {
+        let s1 = make_step("s1", "human:alice", &[]);
+        let s2 = make_conversation_step("s2", "human:carol", "Looks good overall!");
+        let s3 = make_review_decision_step("s3", "human:dave", "APPROVED", "Ship it!");
+        let s2 = s2.with_parent("s1");
+        let s3 = s3.with_parent("s2");
+        let path = Path {
+            path: PathIdentity {
+                id: "p1".into(),
+                base: None,
+                head: "s3".into(),
+            },
+            steps: vec![s1, s2, s3],
+            meta: None,
+        };
+        let md = render_path(&path, &RenderOptions::default());
+
+        assert!(md.contains("## Review"));
+        assert!(md.contains("### Discussion"));
+        assert!(md.contains("carol"));
+        assert!(md.contains("Looks good overall!"));
+        assert!(md.contains("APPROVED"));
+    }
+
+    #[test]
+    fn test_render_merged_pr() {
+        let s1 = make_step("s1", "human:alice", &[]);
+        let mut extra = std::collections::HashMap::new();
+        let github = serde_json::json!({
+            "number": 7,
+            "author": "alice",
+            "state": "closed",
+            "draft": false,
+            "merged": true,
+            "additions": 42,
+            "deletions": 10,
+            "changed_files": 3
+        });
+        extra.insert("github".to_string(), github);
+        let path = Path {
+            path: PathIdentity {
+                id: "pr-7".into(),
+                base: None,
+                head: "s1".into(),
+            },
+            steps: vec![s1],
+            meta: Some(PathMeta {
+                title: Some("Fix the thing".into()),
+                extra,
+                ..Default::default()
+            }),
+        };
+        let md = render_path(&path, &RenderOptions::default());
+
+        assert!(md.contains("**PR #7**"));
+        assert!(md.contains("by alice"));
+        // merged overrides state=closed
+        assert!(md.contains("merged"));
+        assert!(!md.contains("closed"));
+    }
+
+    #[test]
+    fn test_catch_all_uses_friendly_name() {
+        // An artifact with an unknown structural type should still get a friendly name
+        let mut step = Step::new("s1", "human:alex", "2026-01-29T10:00:00Z");
+        step.change.insert(
+            "review://some/path#L5".to_string(),
+            ArtifactChange {
+                raw: None,
+                structural: Some(StructuralChange {
+                    change_type: "review.custom".into(),
+                    extra: Default::default(),
+                }),
+            },
+        );
+        let md = render_step(&step, &RenderOptions::default());
+
+        // Should use friendly name (some/path:5), not raw review:// URI
+        assert!(md.contains("some/path:5"));
+        assert!(!md.contains("review://"));
     }
 }

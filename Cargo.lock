@@ -1830,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-github"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1842,7 +1842,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-md"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
  "toolpath",

@@ -428,21 +428,23 @@ mod native {
         // ── Commit steps ─────────────────────────────────────────────
         let mut steps: Vec<Step> = Vec::new();
         let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
+        let mut actor_associations: HashMap<String, String> = HashMap::new();
 
         for detail in commit_details {
-            let step = commit_to_step(detail, &mut actors)?;
+            let step = commit_to_step(detail, &mut actors, &mut actor_associations)?;
             steps.push(step);
         }
 
         // ── Review comment steps ─────────────────────────────────────
         if config.include_comments {
             for rc in review_comments {
-                let step = review_comment_to_step(rc, &mut actors)?;
+                let step =
+                    review_comment_to_step(rc, &mut actors, &mut actor_associations)?;
                 steps.push(step);
             }
 
             for pc in pr_comments {
-                let step = pr_comment_to_step(pc, &mut actors)?;
+                let step = pr_comment_to_step(pc, &mut actors, &mut actor_associations)?;
                 steps.push(step);
             }
 
@@ -451,7 +453,7 @@ mod native {
                 if state.is_empty() || state == "PENDING" {
                     continue;
                 }
-                let step = review_to_step(review, &mut actors)?;
+                let step = review_to_step(review, &mut actors, &mut actor_associations)?;
                 steps.push(step);
             }
         }
@@ -466,31 +468,60 @@ mod native {
             }
         }
 
-        // ── Sort by timestamp, then chain into a single trunk ────────
-        // Everything in a PR is part of one timeline. Commits, comments,
-        // reviews, and CI checks all chain linearly — none are dead ends
-        // or alternate explorations. Sort by time, then re-parent each
-        // step to point at the previous one.
+        // ── Sort by timestamp, then chain into trunk + reply threads ─
+        // Most steps chain linearly by time (the trunk). Review comment
+        // replies (in_reply_to_id) branch off the step they reply to.
         steps.sort_by(|a, b| a.step.timestamp.cmp(&b.step.timestamp));
 
+        // Build a map from GitHub comment id -> step id for reply resolution
+        let reply_target: HashMap<u64, String> = steps
+            .iter()
+            .filter_map(|s| {
+                let id_str = s.step.id.strip_prefix("step-rc-")?;
+                let github_id: u64 = id_str.parse().ok()?;
+                Some((github_id, s.step.id.clone()))
+            })
+            .collect();
+
+        // Identify which steps are replies (and to whom)
+        let reply_parents: HashMap<String, String> = steps
+            .iter()
+            .filter_map(|s| {
+                let reply_to = s
+                    .meta
+                    .as_ref()?
+                    .extra
+                    .get("github")?
+                    .get("in_reply_to_id")?
+                    .as_u64()?;
+                let parent_step = reply_target.get(&reply_to)?;
+                Some((s.step.id.clone(), parent_step.clone()))
+            })
+            .collect();
+
+        // Chain trunk steps (non-reply steps) linearly, branch replies
         let mut prev_id: Option<String> = None;
         for step in &mut steps {
-            if let Some(ref prev) = prev_id {
+            if let Some(parent) = reply_parents.get(&step.step.id) {
+                // This step is a reply — parent off the step it replies to
+                step.step.parents = vec![parent.clone()];
+            } else if let Some(ref prev) = prev_id {
                 step.step.parents = vec![prev.clone()];
             } else {
                 step.step.parents = vec![];
             }
-            prev_id = Some(step.step.id.clone());
+            // Only advance trunk pointer for non-reply steps
+            if !reply_parents.contains_key(&step.step.id) {
+                prev_id = Some(step.step.id.clone());
+            }
         }
 
         // ── Build path head ──────────────────────────────────────────
-        let head = steps
-            .last()
-            .map(|s| s.step.id.clone())
-            .unwrap_or_else(|| format!("pr-{}", pr_number));
+        // Head is the last trunk step (not a reply branch)
+        let head = prev_id.unwrap_or_else(|| format!("pr-{}", pr_number));
 
         // ── Build path metadata ──────────────────────────────────────
-        let meta = build_path_meta(pr, &actors)?;
+        let meta = build_path_meta(pr, &actors, &actor_associations)?;
 
         Ok(Path {
             path: PathIdentity {
@@ -513,6 +544,7 @@ mod native {
     fn commit_to_step(
         detail: &serde_json::Value,
         actors: &mut HashMap<String, ActorDefinition>,
+        actor_associations: &mut HashMap<String, String>,
     ) -> Result<Step> {
         let sha = detail["sha"].as_str().unwrap_or_default();
         let short_sha = &sha[..sha.len().min(8)];
@@ -521,7 +553,8 @@ mod native {
         // Actor
         let login = detail["author"]["login"].as_str().unwrap_or("unknown");
         let actor = format!("human:{}", login);
-        register_actor(actors, &actor, login, None);
+        let association = detail["author_association"].as_str();
+        register_actor(actors, actor_associations, &actor, login, association);
 
         // Timestamp
         let timestamp = detail["commit"]["committer"]["date"]
@@ -574,13 +607,15 @@ mod native {
     fn review_comment_to_step(
         rc: &serde_json::Value,
         actors: &mut HashMap<String, ActorDefinition>,
+        actor_associations: &mut HashMap<String, String>,
     ) -> Result<Step> {
         let id = rc["id"].as_u64().unwrap_or(0);
         let step_id = format!("step-rc-{}", id);
 
         let login = rc["user"]["login"].as_str().unwrap_or("unknown");
         let actor = format!("human:{}", login);
-        register_actor(actors, &actor, login, None);
+        let association = rc["author_association"].as_str();
+        register_actor(actors, actor_associations, &actor, login, association);
 
         let timestamp = rc["created_at"]
             .as_str()
@@ -595,6 +630,7 @@ mod native {
         let artifact_uri = format!("review://{}#L{}", path, line);
 
         let body = rc["body"].as_str().unwrap_or("").to_string();
+        let diff_hunk = rc["diff_hunk"].as_str().map(|s| s.to_string());
 
         let mut extra = HashMap::new();
         extra.insert("body".to_string(), serde_json::Value::String(body));
@@ -602,13 +638,33 @@ mod native {
         let change = HashMap::from([(
             artifact_uri,
             ArtifactChange {
-                raw: None,
+                raw: diff_hunk,
                 structural: Some(StructuralChange {
                     change_type: "review.comment".to_string(),
                     extra,
                 }),
             },
         )]);
+
+        // Capture in_reply_to_id for threading
+        let meta = if let Some(reply_to) = rc["in_reply_to_id"].as_u64() {
+            let mut step_extra = HashMap::new();
+            let mut gh_extra = serde_json::Map::new();
+            gh_extra.insert(
+                "in_reply_to_id".to_string(),
+                serde_json::json!(reply_to),
+            );
+            step_extra.insert(
+                "github".to_string(),
+                serde_json::Value::Object(gh_extra),
+            );
+            Some(StepMeta {
+                extra: step_extra,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
 
         Ok(Step {
             step: StepIdentity {
@@ -618,13 +674,14 @@ mod native {
                 timestamp,
             },
             change,
-            meta: None,
+            meta,
         })
     }
 
     fn pr_comment_to_step(
         pc: &serde_json::Value,
         actors: &mut HashMap<String, ActorDefinition>,
+        actor_associations: &mut HashMap<String, String>,
     ) -> Result<Step> {
         let id = pc["id"].as_u64().unwrap_or(0);
         let step_id = format!("step-ic-{}", id);
@@ -636,15 +693,22 @@ mod native {
 
         let login = pc["user"]["login"].as_str().unwrap_or("unknown");
         let actor = format!("human:{}", login);
-        register_actor(actors, &actor, login, None);
+        let association = pc["author_association"].as_str();
+        register_actor(actors, actor_associations, &actor, login, association);
 
         let body = pc["body"].as_str().unwrap_or("").to_string();
+
+        let mut extra = HashMap::new();
+        extra.insert("body".to_string(), serde_json::Value::String(body));
 
         let change = HashMap::from([(
             "review://conversation".to_string(),
             ArtifactChange {
-                raw: Some(body),
-                structural: None,
+                raw: None,
+                structural: Some(StructuralChange {
+                    change_type: "review.conversation".to_string(),
+                    extra,
+                }),
             },
         )]);
 
@@ -663,6 +727,7 @@ mod native {
     fn review_to_step(
         review: &serde_json::Value,
         actors: &mut HashMap<String, ActorDefinition>,
+        actor_associations: &mut HashMap<String, String>,
     ) -> Result<Step> {
         let id = review["id"].as_u64().unwrap_or(0);
         let step_id = format!("step-rv-{}", id);
@@ -674,7 +739,8 @@ mod native {
 
         let login = review["user"]["login"].as_str().unwrap_or("unknown");
         let actor = format!("human:{}", login);
-        register_actor(actors, &actor, login, None);
+        let association = review["author_association"].as_str();
+        register_actor(actors, actor_associations, &actor, login, association);
 
         let state = review["state"].as_str().unwrap_or("COMMENTED").to_string();
         let body = review["body"].as_str().unwrap_or("").to_string();
@@ -685,13 +751,32 @@ mod native {
         let change = HashMap::from([(
             "review://decision".to_string(),
             ArtifactChange {
-                raw: if body.is_empty() { None } else { Some(body) },
+                raw: if body.is_empty() {
+                    None
+                } else {
+                    Some(body.clone())
+                },
                 structural: Some(StructuralChange {
                     change_type: "review.decision".to_string(),
                     extra,
                 }),
             },
         )]);
+
+        // Set intent from review body so the md renderer picks it up
+        let meta = if !body.is_empty() {
+            let intent = if body.len() > 500 {
+                format!("{}...", &body[..500])
+            } else {
+                body
+            };
+            Some(StepMeta {
+                intent: Some(intent),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
 
         Ok(Step {
             step: StepIdentity {
@@ -701,7 +786,7 @@ mod native {
                 timestamp,
             },
             change,
-            meta: None,
+            meta,
         })
     }
 
@@ -736,6 +821,12 @@ mod native {
             "conclusion".to_string(),
             serde_json::Value::String(conclusion),
         );
+        if let Some(html_url) = run["html_url"].as_str() {
+            extra.insert(
+                "url".to_string(),
+                serde_json::Value::String(html_url.to_string()),
+            );
+        }
 
         let artifact_uri = format!("ci://checks/{}", name);
         let change = HashMap::from([(
@@ -764,6 +855,7 @@ mod native {
     fn build_path_meta(
         pr: &serde_json::Value,
         actors: &HashMap<String, ActorDefinition>,
+        actor_associations: &HashMap<String, String>,
     ) -> Result<PathMeta> {
         let title = pr["title"].as_str().map(|s| s.to_string());
         let body = pr["body"].as_str().unwrap_or("");
@@ -789,8 +881,59 @@ mod native {
             })
             .collect();
 
-        // Labels in extra
+        // GitHub-specific metadata in extra["github"]
         let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut github_meta = serde_json::Map::new();
+
+        // PR identity and state
+        if let Some(number) = pr["number"].as_u64() {
+            github_meta.insert("number".to_string(), serde_json::json!(number));
+        }
+        if let Some(author) = pr["user"]["login"].as_str() {
+            github_meta.insert(
+                "author".to_string(),
+                serde_json::Value::String(author.to_string()),
+            );
+        }
+        if let Some(state) = pr["state"].as_str() {
+            github_meta.insert(
+                "state".to_string(),
+                serde_json::Value::String(state.to_string()),
+            );
+        }
+        if let Some(draft) = pr["draft"].as_bool() {
+            github_meta.insert("draft".to_string(), serde_json::json!(draft));
+        }
+
+        // Merge status
+        if let Some(merged) = pr["merged"].as_bool() {
+            github_meta.insert("merged".to_string(), serde_json::json!(merged));
+        }
+        if let Some(merged_at) = pr["merged_at"].as_str() {
+            github_meta.insert(
+                "merged_at".to_string(),
+                serde_json::Value::String(merged_at.to_string()),
+            );
+        }
+        if let Some(merged_by) = pr["merged_by"]["login"].as_str() {
+            github_meta.insert(
+                "merged_by".to_string(),
+                serde_json::Value::String(merged_by.to_string()),
+            );
+        }
+
+        // Diffstat
+        if let Some(additions) = pr["additions"].as_u64() {
+            github_meta.insert("additions".to_string(), serde_json::json!(additions));
+        }
+        if let Some(deletions) = pr["deletions"].as_u64() {
+            github_meta.insert("deletions".to_string(), serde_json::json!(deletions));
+        }
+        if let Some(changed_files) = pr["changed_files"].as_u64() {
+            github_meta.insert("changed_files".to_string(), serde_json::json!(changed_files));
+        }
+
+        // Labels
         if let Some(labels) = pr["labels"].as_array() {
             let label_names: Vec<serde_json::Value> = labels
                 .iter()
@@ -798,10 +941,24 @@ mod native {
                 .map(|s| serde_json::Value::String(s.to_string()))
                 .collect();
             if !label_names.is_empty() {
-                let mut github_meta = serde_json::Map::new();
                 github_meta.insert("labels".to_string(), serde_json::Value::Array(label_names));
-                extra.insert("github".to_string(), serde_json::Value::Object(github_meta));
             }
+        }
+
+        // Actor associations (MEMBER, COLLABORATOR, CONTRIBUTOR, etc.)
+        if !actor_associations.is_empty() {
+            let assoc_map: serde_json::Map<String, serde_json::Value> = actor_associations
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
+            github_meta.insert(
+                "actor_associations".to_string(),
+                serde_json::Value::Object(assoc_map),
+            );
+        }
+
+        if !github_meta.is_empty() {
+            extra.insert("github".to_string(), serde_json::Value::Object(github_meta));
         }
 
         Ok(PathMeta {
@@ -824,9 +981,10 @@ mod native {
 
     fn register_actor(
         actors: &mut HashMap<String, ActorDefinition>,
+        actor_associations: &mut HashMap<String, String>,
         actor_key: &str,
         login: &str,
-        _email: Option<&str>,
+        association: Option<&str>,
     ) {
         actors
             .entry(actor_key.to_string())
@@ -838,6 +996,13 @@ mod native {
                 }],
                 ..Default::default()
             });
+        if let Some(assoc) = association
+            && assoc != "NONE"
+        {
+            actor_associations
+                .entry(actor_key.to_string())
+                .or_insert_with(|| assoc.to_string());
+        }
     }
 
     fn str_field(val: &serde_json::Value, key: &str) -> String {
@@ -858,6 +1023,13 @@ mod native {
                 "title": "Add feature X",
                 "body": "This PR adds feature X.\n\nFixes #10\nCloses #20",
                 "state": "open",
+                "draft": false,
+                "merged": false,
+                "merged_at": null,
+                "merged_by": null,
+                "additions": 150,
+                "deletions": 30,
+                "changed_files": 5,
                 "user": { "login": "alice" },
                 "head": { "ref": "feature-x" },
                 "base": {
@@ -917,6 +1089,8 @@ mod native {
                 "path": path,
                 "line": line,
                 "body": "Consider using a constant here.",
+                "diff_hunk": "@@ -10,6 +10,7 @@\n fn example() {\n+    let x = 42;\n }",
+                "author_association": "COLLABORATOR",
                 "created_at": "2026-01-15T14:00:00Z",
                 "pull_request_review_id": 100,
                 "in_reply_to_id": null
@@ -928,6 +1102,7 @@ mod native {
                 "id": id,
                 "user": { "login": "carol" },
                 "body": "Looks good overall!",
+                "author_association": "CONTRIBUTOR",
                 "created_at": "2026-01-15T16:00:00Z"
             })
         }
@@ -938,6 +1113,7 @@ mod native {
                 "user": { "login": "dave" },
                 "state": state,
                 "body": "Approved with minor comments.",
+                "author_association": "MEMBER",
                 "submitted_at": "2026-01-15T17:00:00Z"
             })
         }
@@ -948,6 +1124,7 @@ mod native {
                 "name": name,
                 "app": { "slug": "github-actions" },
                 "conclusion": conclusion,
+                "html_url": format!("https://github.com/acme/widgets/actions/runs/{}", id),
                 "completed_at": "2026-01-15T13:00:00Z",
                 "started_at": "2026-01-15T12:30:00Z"
             })
@@ -957,8 +1134,9 @@ mod native {
         fn test_commit_to_step() {
             let detail = sample_commit_detail("abc12345deadbeef", None, "Initial commit");
             let mut actors = HashMap::new();
+            let mut assoc = HashMap::new();
 
-            let step = commit_to_step(&detail, &mut actors).unwrap();
+            let step = commit_to_step(&detail, &mut actors, &mut assoc).unwrap();
 
             assert_eq!(step.step.id, "step-abc12345");
             assert_eq!(step.step.actor, "human:alice");
@@ -975,8 +1153,9 @@ mod native {
         fn test_review_comment_to_step() {
             let rc = sample_review_comment(200, "abc12345deadbeef", "src/main.rs", 42);
             let mut actors = HashMap::new();
+            let mut assoc = HashMap::new();
 
-            let step = review_comment_to_step(&rc, &mut actors).unwrap();
+            let step = review_comment_to_step(&rc, &mut actors, &mut assoc).unwrap();
 
             assert_eq!(step.step.id, "step-rc-200");
             assert_eq!(step.step.actor, "human:bob");
@@ -984,29 +1163,40 @@ mod native {
             assert!(step.step.parents.is_empty());
             assert!(step.change.contains_key("review://src/main.rs#L42"));
             assert!(actors.contains_key("human:bob"));
+            // diff_hunk captured as raw
+            let change = &step.change["review://src/main.rs#L42"];
+            assert!(change.raw.is_some());
+            assert!(change.raw.as_deref().unwrap().contains("let x = 42"));
+            // author_association captured
+            assert_eq!(assoc.get("human:bob").map(|s| s.as_str()), Some("COLLABORATOR"));
         }
 
         #[test]
         fn test_pr_comment_to_step() {
             let pc = sample_pr_comment(300);
             let mut actors = HashMap::new();
+            let mut assoc = HashMap::new();
 
-            let step = pr_comment_to_step(&pc, &mut actors).unwrap();
+            let step = pr_comment_to_step(&pc, &mut actors, &mut assoc).unwrap();
 
             assert_eq!(step.step.id, "step-ic-300");
             assert_eq!(step.step.actor, "human:carol");
             assert!(step.step.parents.is_empty());
             assert!(step.change.contains_key("review://conversation"));
             let change = &step.change["review://conversation"];
-            assert_eq!(change.raw.as_deref(), Some("Looks good overall!"));
+            assert!(change.structural.is_some());
+            let structural = change.structural.as_ref().unwrap();
+            assert_eq!(structural.change_type, "review.conversation");
+            assert_eq!(structural.extra["body"], "Looks good overall!");
         }
 
         #[test]
         fn test_review_to_step() {
             let review = sample_review(400, "APPROVED");
             let mut actors = HashMap::new();
+            let mut assoc = HashMap::new();
 
-            let step = review_to_step(&review, &mut actors).unwrap();
+            let step = review_to_step(&review, &mut actors, &mut assoc).unwrap();
 
             assert_eq!(step.step.id, "step-rv-400");
             assert_eq!(step.step.actor, "human:dave");
@@ -1017,6 +1207,11 @@ mod native {
             let structural = change.structural.as_ref().unwrap();
             assert_eq!(structural.change_type, "review.decision");
             assert_eq!(structural.extra["state"], "APPROVED");
+            // review body captured as meta.intent
+            assert_eq!(
+                step.meta.as_ref().unwrap().intent.as_deref(),
+                Some("Approved with minor comments.")
+            );
         }
 
         #[test]
@@ -1034,15 +1229,18 @@ mod native {
             let structural = change.structural.as_ref().unwrap();
             assert_eq!(structural.change_type, "ci.run");
             assert_eq!(structural.extra["conclusion"], "success");
+            // html_url captured
+            assert!(structural.extra["url"].as_str().unwrap().contains("actions/runs/500"));
         }
 
         #[test]
         fn test_build_path_meta() {
             let pr = sample_pr();
             let mut actors = HashMap::new();
-            register_actor(&mut actors, "human:alice", "alice", None);
+            let mut assoc = HashMap::new();
+            register_actor(&mut actors, &mut assoc, "human:alice", "alice", Some("MEMBER"));
 
-            let meta = build_path_meta(&pr, &actors).unwrap();
+            let meta = build_path_meta(&pr, &actors, &assoc).unwrap();
 
             assert_eq!(meta.title.as_deref(), Some("Add feature X"));
             assert!(meta.intent.as_deref().unwrap().contains("feature X"));
@@ -1052,10 +1250,20 @@ mod native {
             assert!(meta.refs[1].href.contains("/issues/20"));
             assert!(meta.actors.is_some());
 
-            // Labels in extra
+            // GitHub extra metadata
             let github = meta.extra.get("github").unwrap();
             let labels = github["labels"].as_array().unwrap();
             assert_eq!(labels.len(), 2);
+            assert_eq!(github["state"], "open");
+            assert_eq!(github["additions"], 150);
+            assert_eq!(github["deletions"], 30);
+            assert_eq!(github["changed_files"], 5);
+            assert_eq!(github["number"], 42);
+            assert_eq!(github["author"], "alice");
+            assert_eq!(github["draft"], false);
+            assert_eq!(github["merged"], false);
+            // Actor associations
+            assert_eq!(github["actor_associations"]["human:alice"], "MEMBER");
         }
 
         #[test]
@@ -1213,8 +1421,9 @@ mod native {
         #[test]
         fn test_register_actor_idempotent() {
             let mut actors = HashMap::new();
-            register_actor(&mut actors, "human:alice", "alice", None);
-            register_actor(&mut actors, "human:alice", "alice", None);
+            let mut assoc = HashMap::new();
+            register_actor(&mut actors, &mut assoc, "human:alice", "alice", None);
+            register_actor(&mut actors, &mut assoc, "human:alice", "alice", None);
             assert_eq!(actors.len(), 1);
         }
 
@@ -1267,8 +1476,9 @@ mod native {
         fn test_review_comment_artifact_uri_format() {
             let rc = sample_review_comment(700, "abc12345", "src/lib.rs", 100);
             let mut actors = HashMap::new();
+            let mut assoc = HashMap::new();
 
-            let step = review_comment_to_step(&rc, &mut actors).unwrap();
+            let step = review_comment_to_step(&rc, &mut actors, &mut assoc).unwrap();
 
             assert!(step.change.contains_key("review://src/lib.rs#L100"));
         }
@@ -1303,11 +1513,14 @@ mod native {
             let mut review = sample_review(800, "APPROVED");
             review["body"] = serde_json::json!("");
             let mut actors = HashMap::new();
+            let mut assoc = HashMap::new();
 
-            let step = review_to_step(&review, &mut actors).unwrap();
+            let step = review_to_step(&review, &mut actors, &mut assoc).unwrap();
             let change = &step.change["review://decision"];
             assert!(change.raw.is_none());
             assert!(change.structural.is_some());
+            // No meta.intent when body is empty
+            assert!(step.meta.is_none());
         }
 
         #[test]
@@ -1323,8 +1536,9 @@ mod native {
                 "files": []
             });
             let mut actors = HashMap::new();
+            let mut assoc = HashMap::new();
 
-            let step = commit_to_step(&detail, &mut actors).unwrap();
+            let step = commit_to_step(&detail, &mut actors, &mut assoc).unwrap();
             assert!(step.change.is_empty());
         }
 
@@ -1372,6 +1586,70 @@ mod native {
             assert_eq!(path.steps[1].step.parents, vec!["step-11111111"]);
             assert_eq!(path.steps[2].step.parents, vec!["step-22222222"]);
             assert_eq!(path.path.head, "step-33333333");
+        }
+
+        #[test]
+        fn test_reply_threading() {
+            let pr = sample_pr();
+            let commit = {
+                let mut c = sample_commit_detail("abc12345deadbeef", None, "Commit");
+                c["commit"]["committer"]["date"] = serde_json::json!("2026-01-15T10:00:00Z");
+                c
+            };
+
+            // Original review comment (id=200)
+            let rc1 = {
+                let mut rc = sample_review_comment(200, "abc12345deadbeef", "src/main.rs", 42);
+                rc["created_at"] = serde_json::json!("2026-01-15T14:00:00Z");
+                rc
+            };
+            // Reply to comment 200 (id=201)
+            let rc2 = serde_json::json!({
+                "id": 201,
+                "user": { "login": "alice" },
+                "commit_id": "abc12345deadbeef",
+                "path": "src/main.rs",
+                "line": 42,
+                "body": "Good point, I'll fix that.",
+                "diff_hunk": "@@ -10,6 +10,7 @@\n fn example() {\n+    let x = 42;\n }",
+                "author_association": "CONTRIBUTOR",
+                "created_at": "2026-01-15T15:00:00Z",
+                "pull_request_review_id": 100,
+                "in_reply_to_id": 200
+            });
+
+            let config = DeriveConfig {
+                token: "test".to_string(),
+                api_url: "https://api.github.com".to_string(),
+                include_ci: false,
+                include_comments: true,
+            };
+
+            let data = PrData {
+                pr: &pr,
+                commit_details: &[commit],
+                reviews: &[],
+                pr_comments: &[],
+                review_comments: &[rc1, rc2],
+                check_runs_by_sha: &HashMap::new(),
+            };
+            let path = derive_from_data(&data, "acme", "widgets", &config).unwrap();
+
+            assert_eq!(path.steps.len(), 3);
+
+            // Find steps by id
+            let commit_step = path.steps.iter().find(|s| s.step.id == "step-abc12345").unwrap();
+            let rc1_step = path.steps.iter().find(|s| s.step.id == "step-rc-200").unwrap();
+            let rc2_step = path.steps.iter().find(|s| s.step.id == "step-rc-201").unwrap();
+
+            // Commit is root
+            assert!(commit_step.step.parents.is_empty());
+            // Original comment is trunk-chained after commit
+            assert_eq!(rc1_step.step.parents, vec!["step-abc12345"]);
+            // Reply branches off the original comment, NOT trunk-chained
+            assert_eq!(rc2_step.step.parents, vec!["step-rc-200"]);
+            // Head is the last trunk step (the original comment, not the reply)
+            assert_eq!(path.path.head, "step-rc-200");
         }
     }
 }
