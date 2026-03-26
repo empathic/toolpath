@@ -38,6 +38,7 @@ jsonschema = { version = "0.46", default-features = false }
 sha2 = "0.10"
 
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
+toolpath-tui = { workspace = true }
 toolpath-claude = { workspace = true, features = ["watcher"] }
 toolpath-gemini = { workspace = true, features = ["watcher"] }
 toolpath-codex = { workspace = true }

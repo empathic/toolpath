@@ -1,0 +1,16 @@
+[package]
+name = "toolpath-tui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/empathic/toolpath"
+description = "Interactive TUI for viewing and redacting Toolpath documents"
+keywords = ["provenance", "toolpath", "tui", "redaction"]
+categories = ["command-line-utilities", "visualization"]
+
+[dependencies]
+toolpath = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }

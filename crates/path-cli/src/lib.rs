@@ -21,6 +21,8 @@ mod cmd_share;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_show;
 mod cmd_track;
+#[cfg(not(target_os = "emscripten"))]
+mod cmd_tui;
 mod cmd_validate;
 mod config;
 #[cfg(not(target_os = "emscripten"))]
@@ -70,6 +72,19 @@ enum Commands {
         #[command(flatten)]
         args: cmd_resume::ResumeArgs,
     },
+    /// Interactively view a Toolpath Path document in a terminal UI
+    #[cfg(not(target_os = "emscripten"))]
+    View {
+        /// Input file (omit to read from stdin)
+        input: Option<std::path::PathBuf>,
+    },
+    /// Interactively redact a Toolpath Path document, emitting the
+    /// redacted document to stdout
+    #[cfg(not(target_os = "emscripten"))]
+    Redact {
+        /// Input file (omit to read from stdin)
+        input: Option<std::path::PathBuf>,
+    },
     /// Query Toolpath documents
     Query {
         #[command(subcommand)]
@@ -106,6 +121,10 @@ pub fn run() -> Result<()> {
         Commands::Share { args } => cmd_share::run(args),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Resume { args } => cmd_resume::run(args),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::View { input } => cmd_tui::run_view(input),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::Redact { input } => cmd_tui::run_redact(input),
         Commands::Query { op } => cmd_query::run(op, cli.pretty),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Auth { op } => cmd_auth::run(op),
