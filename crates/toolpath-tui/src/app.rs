@@ -22,7 +22,6 @@ struct MouseDrag {
 }
 
 /// Undo entry.
-#[allow(dead_code)]
 enum UndoAction {
     ToggleInclude { index: usize, was_included: bool },
     RangeExclude { indices: Vec<usize> },
@@ -65,6 +64,8 @@ pub struct TraceTuiApp {
     mouse_drag: Option<MouseDrag>,
     /// Undo stack.
     undo_stack: Vec<UndoAction>,
+    /// Last search matches (persisted after exiting search mode for n/N navigation).
+    last_search_matches: Vec<usize>,
     /// Whether the user exported.
     exported: Option<String>,
 }
@@ -90,6 +91,7 @@ impl TraceTuiApp {
             visible_width: 120,
             mouse_drag: None,
             undo_stack: Vec::new(),
+            last_search_matches: Vec::new(),
             exported: None,
         }
     }
@@ -377,16 +379,21 @@ impl TraceTuiApp {
     fn handle_search_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Enter => {
-                // Finalize search, jump to first match.
-                if let Mode::Search { matches, .. } = &self.mode
-                    && let Some(&first) = matches.first()
-                {
-                    self.cursor = first;
-                    self.ensure_cursor_visible();
+                // Finalize search, jump to first match, persist matches for n/N.
+                if let Mode::Search { matches, .. } = &self.mode {
+                    self.last_search_matches = matches.clone();
+                    if let Some(&first) = matches.first() {
+                        self.cursor = first;
+                        self.ensure_cursor_visible();
+                    }
                 }
                 self.mode = Mode::Normal;
             }
             KeyCode::Esc => {
+                // Persist matches even on Esc so n/N still works.
+                if let Mode::Search { matches, .. } = &self.mode {
+                    self.last_search_matches = matches.clone();
+                }
                 self.mode = Mode::Normal;
             }
             KeyCode::Backspace => {
@@ -426,10 +433,7 @@ impl TraceTuiApp {
     fn next_search_match(&mut self, reverse: bool) {
         let matches = match &self.mode {
             Mode::Search { matches, .. } => matches.clone(),
-            _ => {
-                // Use last search matches if available.
-                return;
-            }
+            _ => self.last_search_matches.clone(),
         };
         if matches.is_empty() {
             return;
@@ -832,6 +836,7 @@ impl TraceTuiApp {
     }
 
     /// Move visual mode cursor by delta. Anchor stays fixed (always extends).
+    /// Skips newline characters so the cursor doesn't land on invisible positions.
     fn visual_char_move(&mut self, delta: isize) {
         if let SelectionMode::Visual {
             step_index,
@@ -840,8 +845,23 @@ impl TraceTuiApp {
             cursor,
         } = self.selection.clone()
         {
-            let len = self.visual_char_field_len_for(&step_index, &json_pointer);
-            let new_cursor = (cursor as isize + delta).max(0).min(len as isize) as usize;
+            let value = match self.get_field_value(&step_index, &json_pointer) {
+                Some(v) => v,
+                None => return,
+            };
+            let len = value.len();
+            let mut new_cursor = (cursor as isize + delta).max(0).min(len as isize) as usize;
+            // Skip over newline characters.
+            let bytes = value.as_bytes();
+            if delta > 0 {
+                while new_cursor < len && bytes[new_cursor] == b'\n' {
+                    new_cursor += 1;
+                }
+            } else if delta < 0 {
+                while new_cursor > 0 && bytes[new_cursor] == b'\n' {
+                    new_cursor -= 1;
+                }
+            }
             self.selection = SelectionMode::Visual {
                 step_index,
                 json_pointer,
@@ -895,12 +915,19 @@ impl TraceTuiApp {
         } = self.selection.clone()
             && let Some(value) = self.get_field_value(&step_index, json_pointer)
         {
-            let chars: Vec<char> = value.chars().collect();
+            // Work in byte offsets to stay consistent with the rest of the system.
+            let bytes = value.as_bytes();
             let mut pos = cursor;
-            while pos < chars.len() && !chars[pos].is_whitespace() {
+            // Skip non-whitespace.
+            while pos < bytes.len() && !bytes[pos].is_ascii_whitespace() {
                 pos += 1;
+                // Advance past any multi-byte char.
+                while pos < bytes.len() && !value.is_char_boundary(pos) {
+                    pos += 1;
+                }
             }
-            while pos < chars.len() && chars[pos].is_whitespace() {
+            // Skip whitespace.
+            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
                 pos += 1;
             }
             self.visual_char_set_cursor(pos);
@@ -916,45 +943,57 @@ impl TraceTuiApp {
         } = self.selection.clone()
             && let Some(value) = self.get_field_value(&step_index, json_pointer)
         {
-            let chars: Vec<char> = value.chars().collect();
+            // Work in byte offsets to stay consistent with the rest of the system.
+            let bytes = value.as_bytes();
             let mut pos = cursor;
-            while pos > 0 && chars[pos.saturating_sub(1)].is_whitespace() {
+            // Skip whitespace backward.
+            while pos > 0 && bytes[pos - 1].is_ascii_whitespace() {
                 pos -= 1;
             }
-            while pos > 0 && !chars[pos.saturating_sub(1)].is_whitespace() {
+            // Skip non-whitespace backward.
+            while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() {
                 pos -= 1;
+                // Retreat to char boundary.
+                while pos > 0 && !value.is_char_boundary(pos) {
+                    pos -= 1;
+                }
             }
             self.visual_char_set_cursor(pos);
         }
     }
 
+    /// Move visual cursor to the next/prev field. Left/right wraps within a field;
+    /// j/k jumps between distinct fields.
     fn visual_char_next_field(&mut self, direction: isize) {
         if let SelectionMode::Visual {
             step_index,
             ref json_pointer,
+            anchor,
             ..
         } = self.selection.clone()
         {
             let field_lines =
                 model::build_field_lines(&self.entries[step_index].step, self.field_wrap_width());
-            let string_fields: Vec<&model::FieldLine> = field_lines
+
+            // Distinct fields only (first line of each field).
+            let fields: Vec<&model::FieldLine> = field_lines
                 .iter()
                 .filter(|fl| fl.json_pointer.is_some() && fl.value_offset == 0)
                 .collect();
 
-            let current_idx = string_fields
+            let current_idx = fields
                 .iter()
                 .position(|fl| fl.json_pointer.as_deref() == Some(json_pointer));
 
             if let Some(idx) = current_idx {
                 let new_idx = (idx as isize + direction)
                     .max(0)
-                    .min(string_fields.len() as isize - 1) as usize;
-                if let Some(new_ptr) = &string_fields[new_idx].json_pointer {
+                    .min(fields.len() as isize - 1) as usize;
+                if let Some(new_ptr) = &fields[new_idx].json_pointer {
                     self.selection = SelectionMode::Visual {
                         step_index,
                         json_pointer: new_ptr.clone(),
-                        anchor: 0,
+                        anchor,
                         cursor: 0,
                     };
                 }
@@ -981,7 +1020,7 @@ impl TraceTuiApp {
             .unwrap_or(0)
     }
 
-    fn get_field_value(&self, step_index: &usize, json_pointer: &str) -> Option<String> {
+    pub fn get_field_value(&self, step_index: &usize, json_pointer: &str) -> Option<String> {
         let entry = self.entries.get(*step_index)?;
         let value = serde_json::to_value(&entry.step).ok()?;
         let target = value.pointer(json_pointer)?;

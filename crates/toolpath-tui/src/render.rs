@@ -157,7 +157,7 @@ fn render_step_list(app: &TraceTuiApp, frame: &mut Frame, area: Rect) {
         ));
 
         // Pad to terminal width so highlight covers the full row.
-        let content_len: usize = spans.iter().map(|s| s.content.len()).sum();
+        let content_len: usize = spans.iter().map(|s| s.width()).sum();
         if content_len < term_width {
             spans.push(Span::raw(" ".repeat(term_width - content_len)));
         }
@@ -214,12 +214,12 @@ fn render_step_list(app: &TraceTuiApp, frame: &mut Frame, area: Rect) {
                     None
                 };
 
-                // Cursor col — show block cursor on the cursor line OR on
-                // the visual mode cursor position.
+                // Pass cursor position unconditionally — build_field_spans
+                // handles checking if the cursor falls within this line's range.
                 let cursor_col = if is_field_cursor && selection.is_none() {
                     Some(app.text_col)
                 } else if let Some((_, c)) = selection {
-                    Some(c) // show cursor at the moving end of visual selection
+                    Some(c)
                 } else {
                     None
                 };
@@ -277,9 +277,18 @@ fn render_status_bar(app: &TraceTuiApp, frame: &mut Frame, area: Rect) {
     };
 
     let position_text = match &app.selection {
-        SelectionMode::Visual { anchor, cursor, .. } => {
+        SelectionMode::Visual {
+            anchor,
+            cursor,
+            json_pointer,
+            step_index,
+        } => {
             let sel_len = (*anchor).max(*cursor) - (*anchor).min(*cursor) + 1;
-            format!(" col:{cursor} sel:{sel_len}")
+            let flen = app
+                .get_field_value(step_index, json_pointer)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            format!(" cur:{cursor}/{flen} anc:{anchor} sel:{sel_len} ptr:{json_pointer}")
         }
         _ if app.sub_line > 0 => format!(" col:{}", app.text_col),
         _ => String::new(),
@@ -468,18 +477,23 @@ fn build_field_spans<'a>(
         (ls, le)
     });
 
-    // Cursor position in display coords.
-    let cursor_display = cursor_col.map(|col| {
-        let col_in_line = col.saturating_sub(fl.value_offset);
-        value_start_in_display + col_in_line.min(fl.value_len)
+    // Cursor position in display coords — only if cursor falls within this line's range.
+    let cursor_display = cursor_col.and_then(|col| {
+        if col < fl.value_offset || col > fl.value_offset + fl.value_len {
+            return None; // cursor is on a different line
+        }
+        let col_in_line = col - fl.value_offset;
+        Some(value_start_in_display + col_in_line)
     });
 
-    // Walk through display string, determine style at each position.
+    // Walk through display string by char (not byte) to avoid splitting multi-byte chars.
+    let char_indices: Vec<(usize, char)> = full.char_indices().collect();
     let mut spans: Vec<Span<'a>> = Vec::new();
-    let mut pos = 0;
-    while pos < full.len() {
+    let mut i = 0;
+    while i < char_indices.len() {
+        let (byte_pos, _) = char_indices[i];
         let style = char_style(
-            pos,
+            byte_pos,
             value_start_in_display,
             fl.value_len,
             &merged_redactions,
@@ -492,11 +506,12 @@ fn build_field_spans<'a>(
             cursor_style,
         );
 
-        let start = pos;
-        pos += 1;
-        while pos < full.len() {
+        let start_byte = byte_pos;
+        i += 1;
+        while i < char_indices.len() {
+            let (next_byte, _) = char_indices[i];
             let next_style = char_style(
-                pos,
+                next_byte,
                 value_start_in_display,
                 fl.value_len,
                 &merged_redactions,
@@ -511,9 +526,14 @@ fn build_field_spans<'a>(
             if next_style != style {
                 break;
             }
-            pos += 1;
+            i += 1;
         }
-        spans.push(Span::styled(full[start..pos].to_string(), style));
+        let end_byte = if i < char_indices.len() {
+            char_indices[i].0
+        } else {
+            full.len()
+        };
+        spans.push(Span::styled(full[start_byte..end_byte].to_string(), style));
     }
 
     // Cursor at end of value.

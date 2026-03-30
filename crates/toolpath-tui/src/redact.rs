@@ -1,6 +1,6 @@
 //! Pure redaction logic: given step entries with redaction state, produce a redacted document.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use toolpath::v1;
 
@@ -51,7 +51,8 @@ pub fn build_redacted_document(original: &v1::Path, entries: &[StepEntry]) -> v1
             .map(|p| id_remap.get(p).cloned().unwrap_or_else(|| p.clone()))
             .collect();
         // Deduplicate parents (multiple excluded parents may map to same placeholder).
-        step.step.parents.dedup();
+        let mut seen = HashSet::new();
+        step.step.parents.retain(|p| seen.insert(p.clone()));
     }
 
     // Update head.
@@ -86,7 +87,7 @@ fn build_placeholder_step(id: &str, first_excluded: &v1::Step, count: usize) -> 
     let mut extra = HashMap::new();
     extra.insert("count".to_string(), serde_json::json!(count));
     change.insert(
-        "clash://redaction".to_string(),
+        "toolpath://redaction".to_string(),
         v1::ArtifactChange {
             raw: None,
             structural: Some(v1::StructuralChange {
