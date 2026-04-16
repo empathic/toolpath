@@ -33,7 +33,7 @@
   },
   {
     "name": "toolpath-claude",
-    "version": "0.6.2",
+    "version": "0.7.0",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",
@@ -65,7 +65,7 @@
   },
   {
     "name": "toolpath-cli",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

@@ -1793,7 +1793,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-claude"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "assert_cmd",

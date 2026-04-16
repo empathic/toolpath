@@ -7,10 +7,13 @@ All notable changes to the Toolpath workspace are documented here.
 ### Changed
 
 - `toolpath-convo` 0.6.0: adds `derive_path(view, config) -> Path` and `DeriveConfig` (moved in from the unreleased `toolpath-derive` crate). `toolpath-convo` now depends on `toolpath`.
+- `toolpath-convo` 0.6.0: adds `ConversationProjector` trait, `AnyProjector` type-erasing wrapper, `extract_conversation()` for Path → ConversationView, and conversation sub-protocol (`conversation.init`, `conversation.append`, `tool.invoke`, `agent://` URN scheme).
 
 ### Added
 
 - `toolpath-pi` 0.1.0: new crate — reads Pi (pi.dev) coding-agent session JSONL logs, implements `ConversationProvider`, and derives Toolpath `Path` documents via `toolpath-convo`'s shared derivation (`toolpath_convo::derive_path`). Reads from `~/.pi/agent/sessions/` by default; base directory is configurable. Preserves Pi's in-file conversation tree (id/parentId) as a DAG in the derived `Path`, and follows `parentSession` links across session files (bounded depth). CLI subcommands planned: `path derive pi` and `path list pi` (wiring may be merged separately).
+- `toolpath-claude` 0.7.0: `ClaudeProjector` for projecting `ConversationView` back to Claude `Conversation`. Enriched derive: full text, tool invocation steps, `agent://` URNs, token usage, tool results via cross-entry assembly, `conversation.init` steps.
+- `toolpath-cli` 0.3.1: `path project claude` and `path incept` commands for projecting toolpath documents into Claude sessions.
 
 ## 0.3.0 — toolpath-cli
 
