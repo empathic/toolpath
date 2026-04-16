@@ -135,3 +135,124 @@ fn roundtrip_claude_conversation() {
         "projected conversation should have entries",
     );
 }
+
+#[test]
+fn test_cli_project_command() {
+    use std::collections::HashMap;
+    use toolpath::v1::{ArtifactChange, PathIdentity, Step, StepIdentity, StructuralChange};
+
+    // 1. Build a minimal Path document with a conversation.append step.
+    let artifact_key = "agent://claude/test-session";
+
+    let init_step = Step {
+        step: StepIdentity {
+            id: "step-001".to_string(),
+            parents: vec![],
+            actor: "tool:claude-code".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+        },
+        change: {
+            let mut m = HashMap::new();
+            m.insert(
+                artifact_key.to_string(),
+                ArtifactChange {
+                    raw: None,
+                    structural: Some(StructuralChange {
+                        change_type: "conversation.init".to_string(),
+                        extra: HashMap::new(),
+                    }),
+                },
+            );
+            m
+        },
+        meta: None,
+    };
+
+    let append_step = Step {
+        step: StepIdentity {
+            id: "step-002".to_string(),
+            parents: vec!["step-001".to_string()],
+            actor: "human:user".to_string(),
+            timestamp: "2024-01-01T00:00:01Z".to_string(),
+        },
+        change: {
+            let mut m = HashMap::new();
+            let mut extra = HashMap::new();
+            extra.insert("role".to_string(), serde_json::json!("user"));
+            extra.insert("text".to_string(), serde_json::json!("Hello"));
+            m.insert(
+                artifact_key.to_string(),
+                ArtifactChange {
+                    raw: None,
+                    structural: Some(StructuralChange {
+                        change_type: "conversation.append".to_string(),
+                        extra,
+                    }),
+                },
+            );
+            m
+        },
+        meta: None,
+    };
+
+    let path = toolpath::v1::Path {
+        path: PathIdentity {
+            id: "test-path".to_string(),
+            base: None,
+            head: "step-002".to_string(),
+        },
+        steps: vec![init_step, append_step],
+        meta: None,
+    };
+
+    let doc = toolpath::v1::Document::Path(path);
+
+    // 2. Write the Path document to a temp file.
+    let temp = tempfile::TempDir::new().unwrap();
+    let input_path = temp.path().join("input.json");
+    let output_path = temp.path().join("output.jsonl");
+
+    fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
+
+    // 3. Run `path project claude --input <file> --output <file>`.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_path"))
+        .args([
+            "project",
+            "claude",
+            "--input",
+            input_path.to_str().unwrap(),
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute path binary");
+
+    assert!(
+        output.status.success(),
+        "path project claude failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // 4. Verify the output file has valid JSONL entries.
+    let jsonl = fs::read_to_string(&output_path).unwrap();
+    assert!(!jsonl.is_empty(), "Output JSONL should not be empty");
+
+    let mut entry_count = 0;
+    for line in jsonl.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value =
+            serde_json::from_str(line).expect("Each line should be valid JSON");
+        assert!(parsed.is_object(), "Each JSONL entry should be an object");
+        // Verify basic ConversationEntry fields are present.
+        assert!(parsed.get("uuid").is_some(), "Entry should have uuid");
+        assert!(
+            parsed.get("type").is_some(),
+            "Entry should have type"
+        );
+        entry_count += 1;
+    }
+
+    assert!(entry_count > 0, "Output should contain at least one entry");
+}

@@ -29,6 +29,7 @@ rand = "0.9"
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
 toolpath-claude = { workspace = true, features = ["watcher"] }
 toolpath-pi = { workspace = true }
+toolpath-convo = { workspace = true }
 toolpath-github = { workspace = true }
 git2 = { workspace = true }
 
