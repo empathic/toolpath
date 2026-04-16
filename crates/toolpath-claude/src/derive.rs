@@ -1,9 +1,9 @@
 //! Derive Toolpath documents from Claude conversation logs.
 //!
 //! The conversation itself is treated as an artifact under change. Each turn
-//! appends to `claude://<session-id>` via a `conversation.append` structural
-//! operation. File mutations from tool use (Write, Edit) appear as sibling
-//! artifacts in the same step's `change` map.
+//! appends to `agent://claude/<session-id>` via a `conversation.append`
+//! structural operation. Tool invocations produce separate steps with
+//! `tool.invoke` structural changes.
 
 use crate::types::{ContentPart, Conversation, MessageContent, MessageRole};
 use serde_json::json;
@@ -22,15 +22,44 @@ pub struct DeriveConfig {
     pub include_thinking: bool,
 }
 
+/// Map a Claude tool name to a category string.
+fn tool_category_str(name: &str) -> &'static str {
+    match name {
+        "Read" => "file_read",
+        "Glob" | "Grep" => "file_search",
+        "Write" | "Edit" | "NotebookEdit" => "file_write",
+        "Bash" => "shell",
+        "WebFetch" | "WebSearch" => "network",
+        "Task" => "delegation",
+        _ => "unknown",
+    }
+}
+
+/// Whether a tool operates on files (uses `file_path` input as artifact key).
+fn is_file_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "Read" | "Write" | "Edit" | "Glob" | "Grep" | "NotebookEdit"
+    )
+}
+
+/// A collected tool use from a content part.
+struct ToolUseInfo {
+    id: String,
+    name: String,
+    input: serde_json::Value,
+}
+
 /// Derive a single Toolpath Path from a Claude conversation.
 ///
-/// The conversation is modeled as an artifact at `claude://<session-id>`.
+/// The conversation is modeled as an artifact at `agent://claude/<session-id>`.
 /// Each user or assistant turn produces a step whose `change` map contains
-/// a `conversation.append` structural change on that artifact, plus any
-/// file-level artifacts touched by tool use.
+/// a `conversation.append` structural change on that artifact. Assistant turns
+/// with tool uses additionally produce one step per tool type, each containing
+/// `tool.invoke` structural changes.
 pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
     let session_short = safe_prefix(&conversation.session_id, 8);
-    let convo_artifact = format!("claude://{}", conversation.session_id);
+    let convo_artifact = format!("agent://claude/{}", conversation.session_id);
 
     let mut steps = Vec::new();
     let mut last_step_id: Option<String> = None;
@@ -86,10 +115,10 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
             MessageRole::System => continue,
         };
 
-        // Collect conversation text and file changes from this turn
-        let mut file_changes: HashMap<String, ArtifactChange> = HashMap::new();
+        // Collect conversation text and tool uses from this turn
         let mut text_parts: Vec<String> = Vec::new();
-        let mut tool_uses: Vec<String> = Vec::new();
+        let mut thinking_parts: Vec<String> = Vec::new();
+        let mut tool_use_infos: Vec<ToolUseInfo> = Vec::new();
 
         match &message.content {
             Some(MessageContent::Parts(parts)) => {
@@ -100,29 +129,17 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
                         {
                             text_parts.push(text.clone());
                         }
-                        ContentPart::Thinking { thinking, .. }
-                            if config.include_thinking
-                                && !thinking.trim().is_empty() =>
-                        {
-                            text_parts.push(format!("[thinking] {}", thinking));
-                        }
-                        ContentPart::ToolUse { name, input, .. } => {
-                            tool_uses.push(name.clone());
-                            if let Some(file_path) = input.get("file_path").and_then(|v| v.as_str())
-                            {
-                                match name.as_str() {
-                                    "Write" | "Edit" => {
-                                        file_changes.insert(
-                                            file_path.to_string(),
-                                            ArtifactChange {
-                                                raw: None,
-                                                structural: None,
-                                            },
-                                        );
-                                    }
-                                    _ => {}
-                                }
+                        ContentPart::Thinking { thinking, .. } => {
+                            if config.include_thinking && !thinking.trim().is_empty() {
+                                thinking_parts.push(thinking.clone());
                             }
+                        }
+                        ContentPart::ToolUse { id, name, input } => {
+                            tool_use_infos.push(ToolUseInfo {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input: input.clone(),
+                            });
                         }
                         _ => {}
                     }
@@ -134,8 +151,11 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
             _ => {}
         }
 
-        // Skip entries with no conversation content and no file changes
-        if text_parts.is_empty() && tool_uses.is_empty() && file_changes.is_empty() {
+        // Collect tool name list for the summary field
+        let tool_names: Vec<String> = tool_use_infos.iter().map(|t| t.name.clone()).collect();
+
+        // Skip entries with no conversation content and no tool uses
+        if text_parts.is_empty() && thinking_parts.is_empty() && tool_use_infos.is_empty() {
             continue;
         }
 
@@ -144,10 +164,36 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
         convo_extra.insert("role".to_string(), json!(role_str));
         if !text_parts.is_empty() {
             let combined = text_parts.join("\n\n");
-            convo_extra.insert("text".to_string(), json!(truncate(&combined, 2000)));
+            convo_extra.insert("text".to_string(), json!(combined));
         }
-        if !tool_uses.is_empty() {
-            convo_extra.insert("tool_uses".to_string(), json!(tool_uses.clone()));
+        if !thinking_parts.is_empty() {
+            let combined_thinking = thinking_parts.join("\n\n");
+            convo_extra.insert("thinking".to_string(), json!(combined_thinking));
+        }
+        if !tool_names.is_empty() {
+            convo_extra.insert("tool_uses".to_string(), json!(tool_names));
+        }
+
+        // Add model, stop_reason, and usage fields from the message
+        if let Some(model) = &message.model {
+            convo_extra.insert("model".to_string(), json!(model));
+        }
+        if let Some(stop_reason) = &message.stop_reason {
+            convo_extra.insert("stop_reason".to_string(), json!(stop_reason));
+        }
+        if let Some(usage) = &message.usage {
+            if let Some(input_tokens) = usage.input_tokens {
+                convo_extra.insert("input_tokens".to_string(), json!(input_tokens));
+            }
+            if let Some(output_tokens) = usage.output_tokens {
+                convo_extra.insert("output_tokens".to_string(), json!(output_tokens));
+            }
+            if let Some(cache_read) = usage.cache_read_input_tokens {
+                convo_extra.insert("cache_read_tokens".to_string(), json!(cache_read));
+            }
+            if let Some(cache_write) = usage.cache_creation_input_tokens {
+                convo_extra.insert("cache_write_tokens".to_string(), json!(cache_write));
+            }
         }
 
         let convo_change = ArtifactChange {
@@ -160,17 +206,16 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
 
         let mut changes = HashMap::new();
         changes.insert(convo_artifact.clone(), convo_change);
-        changes.extend(file_changes);
 
-        // Build step — no meta.intent; the conversation content already
-        // lives in the structural change and adding it again is redundant.
-        let step_id = format!("step-{}", safe_prefix(&entry.uuid, 8));
+        // Build conversation step using full UUID as step ID
+        let step_id = entry.uuid.clone();
         let parents = if entry.is_sidechain {
             entry
                 .parent_uuid
                 .as_ref()
-                .map(|p| vec![format!("step-{}", safe_prefix(p, 8))])
-                .unwrap_or_default()
+                .cloned()
+                .into_iter()
+                .collect()
         } else {
             last_step_id.iter().cloned().collect()
         };
@@ -187,9 +232,95 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
         };
 
         if !entry.is_sidechain {
-            last_step_id = Some(step_id);
+            last_step_id = Some(step_id.clone());
         }
         steps.push(step);
+
+        // Emit tool invocation steps (one per tool type, grouped)
+        if !tool_use_infos.is_empty() {
+            // Group tool uses by tool name, preserving order of first occurrence
+            let mut tool_groups: Vec<(String, Vec<&ToolUseInfo>)> = Vec::new();
+            let mut group_index: HashMap<String, usize> = HashMap::new();
+
+            for tool_use in &tool_use_infos {
+                if let Some(&idx) = group_index.get(&tool_use.name) {
+                    tool_groups[idx].1.push(tool_use);
+                } else {
+                    let idx = tool_groups.len();
+                    group_index.insert(tool_use.name.clone(), idx);
+                    tool_groups.push((tool_use.name.clone(), vec![tool_use]));
+                }
+            }
+
+            for (tool_name, uses) in &tool_groups {
+                let tool_step_id = format!("{}-tool-{}", entry.uuid, tool_name);
+                let tool_actor = format!("agent:claude-code/tool:{}", tool_name);
+
+                // Register the tool actor
+                actors
+                    .entry(tool_actor.clone())
+                    .or_insert_with(|| ActorDefinition {
+                        name: Some(format!("Claude Code / {}", tool_name)),
+                        ..Default::default()
+                    });
+
+                let mut tool_changes = HashMap::new();
+                let category = tool_category_str(tool_name);
+
+                for tool_use in uses {
+                    // Determine artifact key
+                    let artifact_key = if is_file_tool(tool_name) {
+                        tool_use
+                            .input
+                            .get("file_path")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "agent://claude/{}/tool/{}/{}",
+                                    conversation.session_id, category, tool_use.id
+                                )
+                            })
+                    } else {
+                        format!(
+                            "agent://claude/{}/tool/{}/{}",
+                            conversation.session_id, category, tool_use.id
+                        )
+                    };
+
+                    let mut extra = HashMap::new();
+                    extra.insert("tool_use_id".to_string(), json!(tool_use.id));
+                    extra.insert("name".to_string(), json!(tool_use.name));
+                    extra.insert("input".to_string(), tool_use.input.clone());
+                    extra.insert("category".to_string(), json!(category));
+
+                    tool_changes.insert(
+                        artifact_key,
+                        ArtifactChange {
+                            raw: None,
+                            structural: Some(StructuralChange {
+                                change_type: "tool.invoke".to_string(),
+                                extra,
+                            }),
+                        },
+                    );
+                }
+
+                let tool_step = Step {
+                    step: StepIdentity {
+                        id: tool_step_id,
+                        parents: vec![step_id.clone()],
+                        actor: tool_actor,
+                        timestamp: entry.timestamp.clone(),
+                    },
+                    change: tool_changes,
+                    meta: None,
+                };
+
+                // Tool steps do NOT advance last_step_id
+                steps.push(tool_step);
+            }
+        }
     }
 
     let head = last_step_id.unwrap_or_else(|| "empty".to_string());
@@ -229,6 +360,7 @@ pub fn derive_project(conversations: &[Conversation], config: &DeriveConfig) -> 
 
 /// Truncate a string to at most `max` characters (not bytes), appending "..."
 /// if truncated. Always cuts on a char boundary.
+#[cfg(test)]
 fn truncate(s: &str, max: usize) -> String {
     let char_count = s.chars().count();
     if char_count <= max {
@@ -247,7 +379,7 @@ fn safe_prefix(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContentPart, ConversationEntry, Message, MessageContent};
+    use crate::types::{ContentPart, ConversationEntry, Message, MessageContent, Usage};
 
     fn make_entry(
         uuid: &str,
@@ -319,7 +451,7 @@ mod tests {
     #[test]
     fn test_truncate_multibyte() {
         // Should not panic on multi-byte characters
-        let s = "café résumé naïve";
+        let s = "cafe\u{0301} re\u{0301}sume\u{0301} nai\u{0308}ve";
         let result = truncate(s, 8);
         assert!(result.ends_with("..."));
         assert_eq!(result.chars().count(), 8);
@@ -339,7 +471,35 @@ mod tests {
 
     #[test]
     fn test_safe_prefix_unicode() {
-        assert_eq!(safe_prefix("日本語テスト", 3), "日本語");
+        assert_eq!(safe_prefix("\u{65E5}\u{672C}\u{8A9E}\u{30C6}\u{30B9}\u{30C8}", 3), "\u{65E5}\u{672C}\u{8A9E}");
+    }
+
+    // ── tool helpers ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_tool_category_str() {
+        assert_eq!(tool_category_str("Read"), "file_read");
+        assert_eq!(tool_category_str("Write"), "file_write");
+        assert_eq!(tool_category_str("Edit"), "file_write");
+        assert_eq!(tool_category_str("Glob"), "file_search");
+        assert_eq!(tool_category_str("Grep"), "file_search");
+        assert_eq!(tool_category_str("Bash"), "shell");
+        assert_eq!(tool_category_str("WebFetch"), "network");
+        assert_eq!(tool_category_str("Task"), "delegation");
+        assert_eq!(tool_category_str("SomethingElse"), "unknown");
+    }
+
+    #[test]
+    fn test_is_file_tool() {
+        assert!(is_file_tool("Read"));
+        assert!(is_file_tool("Write"));
+        assert!(is_file_tool("Edit"));
+        assert!(is_file_tool("Glob"));
+        assert!(is_file_tool("Grep"));
+        assert!(is_file_tool("NotebookEdit"));
+        assert!(!is_file_tool("Bash"));
+        assert!(!is_file_tool("WebFetch"));
+        assert!(!is_file_tool("Task"));
     }
 
     // ── derive_path ────────────────────────────────────────────────────
@@ -367,6 +527,9 @@ mod tests {
 
         assert!(path.path.id.starts_with("path-claude-"));
         assert_eq!(path.steps.len(), 2);
+        // Step IDs are full UUIDs
+        assert_eq!(path.steps[0].step.id, "uuid-1111-aaaa");
+        assert_eq!(path.steps[1].step.id, "uuid-2222-bbbb");
         assert_eq!(path.steps[0].step.actor, "human:user");
         assert!(path.steps[1].step.actor.starts_with("agent:"));
     }
@@ -398,10 +561,9 @@ mod tests {
 
         let path = derive_path(&convo, &config);
 
-        // Second step should have first as parent
-        assert!(path.steps[1].step.parents.contains(&path.steps[0].step.id));
-        // Third step should have second as parent
-        assert!(path.steps[2].step.parents.contains(&path.steps[1].step.id));
+        // Parents are full UUIDs
+        assert!(path.steps[1].step.parents.contains(&"uuid-1111".to_string()));
+        assert!(path.steps[2].step.parents.contains(&"uuid-2222".to_string()));
     }
 
     #[test]
@@ -417,8 +579,8 @@ mod tests {
 
         let path = derive_path(&convo, &config);
 
-        // Each step should have the conversation artifact
-        let convo_key = format!("claude://{}", convo.session_id);
+        // Artifact key uses agent:// scheme
+        let convo_key = format!("agent://claude/{}", convo.session_id);
         assert!(path.steps[0].change.contains_key(&convo_key));
 
         let change = &path.steps[0].change[&convo_key];
@@ -491,7 +653,7 @@ mod tests {
     #[test]
     fn test_derive_path_skips_empty_content() {
         let mut entry = make_entry("uuid-1111", MessageRole::User, "", "2024-01-01T00:00:00Z");
-        // Empty text, no tool uses, no file changes → should be skipped
+        // Empty text, no tool uses, no file changes -> should be skipped
         entry.message.as_mut().unwrap().content = Some(MessageContent::Text("   ".to_string()));
 
         let convo = make_conversation(vec![entry]);
@@ -570,11 +732,25 @@ mod tests {
 
         let path = derive_path(&convo, &config);
 
-        assert_eq!(path.steps.len(), 1);
-        // Should have both the conversation artifact and the file artifact
-        assert!(path.steps[0].change.contains_key("/tmp/test.rs"));
-        let convo_key = format!("claude://{}", convo.session_id);
+        // Now produces 2 steps: conversation + tool
+        assert_eq!(path.steps.len(), 2);
+
+        // Conversation step has the conversation artifact
+        let convo_key = format!("agent://claude/{}", convo.session_id);
         assert!(path.steps[0].change.contains_key(&convo_key));
+
+        // Tool step has the file artifact with tool.invoke
+        assert_eq!(path.steps[1].step.id, "uuid-tool-tool-Write");
+        assert_eq!(path.steps[1].step.actor, "agent:claude-code/tool:Write");
+        assert!(path.steps[1].step.parents.contains(&"uuid-tool".to_string()));
+        assert!(path.steps[1].change.contains_key("/tmp/test.rs"));
+
+        let tool_change = &path.steps[1].change["/tmp/test.rs"];
+        let structural = tool_change.structural.as_ref().unwrap();
+        assert_eq!(structural.change_type, "tool.invoke");
+        assert_eq!(structural.extra["name"], "Write");
+        assert_eq!(structural.extra["tool_use_id"], "t1");
+        assert_eq!(structural.extra["category"], "file_write");
     }
 
     #[test]
@@ -610,10 +786,12 @@ mod tests {
         let path = derive_path(&convo, &config);
 
         assert_eq!(path.steps.len(), 3);
-        // Sidechain step should reference e1 as parent, not e2
+        // Sidechain step should reference e1's full UUID as parent
         let sidechain_step = &path.steps[2];
-        let expected_parent = format!("step-{}", safe_prefix("uuid-main-11", 8));
-        assert!(sidechain_step.step.parents.contains(&expected_parent));
+        assert!(sidechain_step
+            .step
+            .parents
+            .contains(&"uuid-main-11".to_string()));
     }
 
     // ── derive_project ─────────────────────────────────────────────────
@@ -661,7 +839,513 @@ mod tests {
 
         let path = derive_path(&convo, &config);
 
-        // Head should point to the last step
-        assert_eq!(path.path.head, path.steps.last().unwrap().step.id);
+        // Head should point to the last conversation step (full UUID)
+        assert_eq!(path.path.head, "uuid-2222");
+    }
+
+    // ── new tests for enriched derive ──────────────────────────────────
+
+    #[test]
+    fn test_derive_path_tool_invocation_actors() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-1".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Working".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "t1".to_string(),
+                        name: "Read".to_string(),
+                        input: serde_json::json!({"file_path": "/foo.rs"}),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let actors = path.meta.as_ref().unwrap().actors.as_ref().unwrap();
+        assert!(actors.contains_key("agent:claude-code/tool:Read"));
+    }
+
+    #[test]
+    fn test_derive_path_token_usage() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-usage".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Text("Response".to_string())),
+                model: Some("claude-sonnet-4-5-20250929".to_string()),
+                id: None,
+                message_type: None,
+                stop_reason: Some("end_turn".to_string()),
+                stop_sequence: None,
+                usage: Some(Usage {
+                    input_tokens: Some(100),
+                    output_tokens: Some(50),
+                    cache_creation_input_tokens: Some(10),
+                    cache_read_input_tokens: Some(80),
+                    cache_creation: None,
+                    service_tier: None,
+                }),
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let change = &path.steps[0].change[&convo_key];
+        let extra = &change.structural.as_ref().unwrap().extra;
+
+        assert_eq!(extra["model"], "claude-sonnet-4-5-20250929");
+        assert_eq!(extra["stop_reason"], "end_turn");
+        assert_eq!(extra["input_tokens"], 100);
+        assert_eq!(extra["output_tokens"], 50);
+        assert_eq!(extra["cache_read_tokens"], 80);
+        assert_eq!(extra["cache_write_tokens"], 10);
+    }
+
+    #[test]
+    fn test_derive_path_full_text_no_truncation() {
+        let long_text = "a".repeat(5000);
+        let entries = vec![make_entry(
+            "uuid-long",
+            MessageRole::User,
+            &long_text,
+            "2024-01-01T00:00:00Z",
+        )];
+        let convo = make_conversation(entries);
+        let config = DeriveConfig::default();
+
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let change = &path.steps[0].change[&convo_key];
+        let text = change.structural.as_ref().unwrap().extra["text"]
+            .as_str()
+            .unwrap();
+        assert_eq!(text.len(), 5000);
+        assert!(!text.ends_with("..."));
+    }
+
+    #[test]
+    fn test_derive_path_multiple_tool_uses_same_type() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-multi".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Reading files".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "t1".to_string(),
+                        name: "Read".to_string(),
+                        input: serde_json::json!({"file_path": "/foo.rs"}),
+                    },
+                    ContentPart::ToolUse {
+                        id: "t2".to_string(),
+                        name: "Read".to_string(),
+                        input: serde_json::json!({"file_path": "/bar.rs"}),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // 1 conversation step + 1 tool step (both Reads grouped)
+        assert_eq!(path.steps.len(), 2);
+        assert_eq!(path.steps[1].step.id, "uuid-multi-tool-Read");
+        // Two artifact changes in the tool step
+        assert_eq!(path.steps[1].change.len(), 2);
+        assert!(path.steps[1].change.contains_key("/foo.rs"));
+        assert!(path.steps[1].change.contains_key("/bar.rs"));
+    }
+
+    #[test]
+    fn test_derive_path_multiple_tool_uses_different_types() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-diff".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Working".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "t1".to_string(),
+                        name: "Read".to_string(),
+                        input: serde_json::json!({"file_path": "/foo.rs"}),
+                    },
+                    ContentPart::ToolUse {
+                        id: "t2".to_string(),
+                        name: "Bash".to_string(),
+                        input: serde_json::json!({"command": "cargo test"}),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // 1 conversation step + 2 tool steps (Read and Bash)
+        assert_eq!(path.steps.len(), 3);
+        assert_eq!(path.steps[1].step.id, "uuid-diff-tool-Read");
+        assert_eq!(path.steps[2].step.id, "uuid-diff-tool-Bash");
+
+        // Bash tool uses agent:// URI since it's not a file tool
+        let bash_change = &path.steps[2].change;
+        assert_eq!(bash_change.len(), 1);
+        let bash_key = bash_change.keys().next().unwrap();
+        assert!(bash_key.starts_with("agent://claude/"));
+        assert!(bash_key.contains("/tool/shell/"));
+    }
+
+    #[test]
+    fn test_derive_path_non_file_tool_artifact_key() {
+        let mut convo = Conversation::new("sess-123".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-bash".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Running".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "tu-42".to_string(),
+                        name: "Bash".to_string(),
+                        input: serde_json::json!({"command": "ls"}),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let tool_step = &path.steps[1];
+        let expected_key = "agent://claude/sess-123/tool/shell/tu-42";
+        assert!(tool_step.change.contains_key(expected_key));
+    }
+
+    #[test]
+    fn test_derive_path_thinking_included_when_configured() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-think".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Thinking {
+                        thinking: "Let me think about this".to_string(),
+                        signature: None,
+                    },
+                    ContentPart::Text {
+                        text: "Here is my answer".to_string(),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        // With thinking enabled
+        let config = DeriveConfig {
+            include_thinking: true,
+            ..Default::default()
+        };
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let extra = &path.steps[0].change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+        assert_eq!(extra["thinking"], "Let me think about this");
+        // Text should be separate from thinking
+        assert_eq!(extra["text"], "Here is my answer");
+    }
+
+    #[test]
+    fn test_derive_path_thinking_excluded_by_default() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-think2".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Thinking {
+                        thinking: "Secret thoughts".to_string(),
+                        signature: None,
+                    },
+                    ContentPart::Text {
+                        text: "Answer".to_string(),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let extra = &path.steps[0].change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+        assert!(!extra.contains_key("thinking"));
+    }
+
+    #[test]
+    fn test_derive_path_tool_step_does_not_advance_parent_chain() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-a1".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Writing".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "t1".to_string(),
+                        name: "Write".to_string(),
+                        input: serde_json::json!({"file_path": "/f.rs"}),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+        convo.add_entry(make_entry(
+            "uuid-u2",
+            MessageRole::User,
+            "Next",
+            "2024-01-01T00:00:01Z",
+        ));
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // Steps: conversation(uuid-a1), tool(uuid-a1-tool-Write), conversation(uuid-u2)
+        assert_eq!(path.steps.len(), 3);
+        // The user step's parent should be the conversation step, not the tool step
+        assert_eq!(path.steps[2].step.parents, vec!["uuid-a1".to_string()]);
+    }
+
+    #[test]
+    fn test_derive_path_tool_input_preserved() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let input_json = serde_json::json!({
+            "file_path": "/src/main.rs",
+            "content": "fn main() {}\n"
+        });
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-inp".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Writing".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "t1".to_string(),
+                        name: "Write".to_string(),
+                        input: input_json.clone(),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let tool_step = &path.steps[1];
+        let change = &tool_step.change["/src/main.rs"];
+        let extra = &change.structural.as_ref().unwrap().extra;
+        assert_eq!(extra["input"], input_json);
     }
 }
