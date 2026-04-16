@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod derive;
+pub mod project;
 
 pub use derive::{derive_path, DeriveConfig};
 
@@ -419,6 +420,8 @@ pub trait ConversationWatcher {
     /// Number of turns seen so far.
     fn seen_count(&self) -> usize;
 }
+
+pub use project::{AnyProjector, ConversationProjector};
 
 // ── Tests ────────────────────────────────────────────────────────────
 
