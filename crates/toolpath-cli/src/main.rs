@@ -6,6 +6,8 @@ mod cmd_query;
 mod cmd_render;
 mod cmd_track;
 mod cmd_validate;
+mod io;
+mod source;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -40,10 +42,7 @@ enum Commands {
         source: cmd_derive::DeriveSource,
     },
     /// Query Toolpath documents
-    Query {
-        #[command(subcommand)]
-        op: cmd_query::QueryOp,
-    },
+    Query(cmd_query::QueryArgs),
     /// Render Toolpath documents to other formats
     Render {
         #[command(subcommand)]
@@ -66,9 +65,9 @@ enum Commands {
     },
     /// Validate a Toolpath document
     Validate {
-        /// Input file
+        /// Input file (use `-` or omit to read from stdin)
         #[arg(short, long)]
-        input: PathBuf,
+        input: Option<PathBuf>,
     },
     /// Print a random Toolpath haiku
     Haiku,
@@ -80,7 +79,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::List { source, json } => cmd_list::run(source, json),
         Commands::Derive { source } => cmd_derive::run(source, cli.pretty),
-        Commands::Query { op } => cmd_query::run(op, cli.pretty),
+        Commands::Query(args) => cmd_query::run(args, cli.pretty),
         Commands::Render { format } => cmd_render::run(format),
         Commands::Merge { inputs, title } => cmd_merge::run(inputs, title, cli.pretty),
         Commands::Track { op } => cmd_track::run(op, cli.pretty),

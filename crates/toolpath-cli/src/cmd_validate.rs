@@ -1,10 +1,10 @@
-use anyhow::{Context, Result};
-use std::path::PathBuf;
+use crate::io::InputSpec;
+use anyhow::Result;
 use toolpath::v1::Document;
 
-pub fn run(input: PathBuf) -> Result<()> {
-    let content =
-        std::fs::read_to_string(&input).with_context(|| format!("Failed to read {:?}", input))?;
+pub fn run(input: Option<std::path::PathBuf>) -> Result<()> {
+    let spec = InputSpec::from_opt(input);
+    let content = spec.read_string()?;
     validate_content(&content)
 }
 
@@ -27,6 +27,7 @@ fn validate_content(content: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::PathBuf;
 
     #[test]
     fn test_validate_valid_step() {
@@ -61,11 +62,11 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         write!(f, r#"{{"Step":{{"step":{{"id":"s1","actor":"human:alex","timestamp":"2026-01-01T00:00:00Z"}},"change":{{}}}}}}"#).unwrap();
         f.flush().unwrap();
-        assert!(run(f.path().to_path_buf()).is_ok());
+        assert!(run(Some(f.path().to_path_buf())).is_ok());
     }
 
     #[test]
     fn test_run_nonexistent_file() {
-        assert!(run(PathBuf::from("/nonexistent/file.json")).is_err());
+        assert!(run(Some(PathBuf::from("/nonexistent/file.json"))).is_err());
     }
 }

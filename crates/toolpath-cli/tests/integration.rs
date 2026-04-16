@@ -278,9 +278,9 @@ fn render_dot_from_stdin() {
 fn query_dead_ends() {
     cmd()
         .arg("query")
-        .arg("dead-ends")
         .arg("--input")
         .arg(examples_dir().join("path-01-pr.json"))
+        .arg("--dead-ends")
         .assert()
         .success()
         .stdout(predicate::str::contains("step-002a"));
@@ -290,10 +290,9 @@ fn query_dead_ends() {
 fn query_ancestors() {
     cmd()
         .arg("query")
-        .arg("ancestors")
         .arg("--input")
         .arg(examples_dir().join("path-01-pr.json"))
-        .arg("--step-id")
+        .arg("--ancestors-of")
         .arg("step-004")
         .assert()
         .success()

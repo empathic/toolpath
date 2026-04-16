@@ -2,6 +2,18 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## 0.4.0 — toolpath-cli
+
+### toolpath-cli 0.4.0
+
+- **Breaking**: `query` subcommands collapsed into a single command with composable flags. Migrate:
+  - `path query ancestors --input f.json --step-id s3` → `path query --input f.json --ancestors-of s3`
+  - `path query dead-ends --input f.json` → `path query --input f.json --dead-ends`
+  - `path query filter --input f.json --actor human:` → `path query --input f.json --actor human:`
+- **Breaking**: `validate --input` is now optional. Omit it or pass `-` to read from stdin.
+- Unified stdin convention: `render`, `merge`, `query`, and `validate` all accept `-i -` (or omit `-i`) to read from stdin. `render --output -` writes to stdout.
+- Internal: shared `io` module centralizes document read/write and pretty-print. Shared `source::require_native` centralizes WebAssembly guard messaging.
+
 ## 0.3.0 — toolpath-cli
 
 ### toolpath-cli 0.3.0

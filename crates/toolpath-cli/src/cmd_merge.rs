@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::io::{self as cli_io, InputSpec, OutputSpec};
+use anyhow::Result;
 use toolpath::v1::{Document, Graph, GraphIdentity, GraphMeta, PathOrRef};
 
 /// Merge multiple Toolpath documents into a single Graph.
@@ -9,33 +10,13 @@ pub fn run(inputs: Vec<String>, title: Option<String>, pretty: bool) -> Result<(
     let mut all_paths = Vec::new();
 
     for input in &inputs {
-        let content = if input == "-" {
-            use std::io::Read;
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .context("Failed to read from stdin")?;
-            buf
-        } else {
-            std::fs::read_to_string(input).with_context(|| format!("Failed to read {:?}", input))?
-        };
-
-        let doc = Document::from_json(&content)
-            .with_context(|| format!("Failed to parse {:?}", input))?;
-
+        let spec = InputSpec::from_str(input);
+        let doc = cli_io::read_document(&spec)?;
         extract_paths(doc, &mut all_paths);
     }
 
     let doc = merge_into_graph(all_paths, title);
-
-    let json = if pretty {
-        doc.to_json_pretty()?
-    } else {
-        doc.to_json()?
-    };
-    println!("{}", json);
-
-    Ok(())
+    cli_io::write_document(&doc, &OutputSpec::Stdout, pretty)
 }
 
 /// Extract paths from a document and append them to the collector.

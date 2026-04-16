@@ -57,7 +57,7 @@
   },
   {
     "name": "toolpath-cli",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

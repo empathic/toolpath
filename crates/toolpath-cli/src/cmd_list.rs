@@ -38,125 +38,117 @@ pub fn run(source: ListSource, json: bool) -> Result<()> {
     }
 }
 
-fn run_git(repo_path: PathBuf, remote: String, json: bool) -> Result<()> {
-    #[cfg(target_os = "emscripten")]
-    {
-        let _ = (repo_path, remote, json);
-        anyhow::bail!(
-            "'path list git' requires a native environment with access to a git repository"
-        );
-    }
-
-    #[cfg(not(target_os = "emscripten"))]
-    {
-        let repo_path = if repo_path.is_absolute() {
-            repo_path
-        } else {
-            std::env::current_dir()?.join(&repo_path)
-        };
-
-        let repo = git2::Repository::open(&repo_path)
-            .with_context(|| format!("Failed to open repository at {:?}", repo_path))?;
-
-        let uri = toolpath_git::get_repo_uri(&repo, &remote)?;
-        let branches = toolpath_git::list_branches(&repo)?;
-
-        if json {
-            let items: Vec<serde_json::Value> = branches
-                .iter()
-                .map(|b| {
-                    serde_json::json!({
-                        "name": b.name,
-                        "head": b.head,
-                        "subject": b.subject,
-                        "author": b.author,
-                        "timestamp": b.timestamp,
-                    })
-                })
-                .collect();
-            let output = serde_json::json!({
-                "source": "git",
-                "uri": uri,
-                "branches": items,
-            });
-            println!("{}", serde_json::to_string_pretty(&output)?);
-        } else {
-            println!("Repository: {}", uri);
-            println!();
-            if branches.is_empty() {
-                println!("  (no local branches)");
-            } else {
-                for b in &branches {
-                    println!("  {} {} {}", b.head_short, b.name, truncate(&b.subject, 60));
-                }
-            }
-        }
-        Ok(())
-    }
+#[cfg(target_os = "emscripten")]
+fn run_git(_repo_path: PathBuf, _remote: String, _json: bool) -> Result<()> {
+    crate::source::require_native("list git")
 }
 
-fn run_github(repo: String, json: bool) -> Result<()> {
-    #[cfg(target_os = "emscripten")]
-    {
-        let _ = (repo, json);
-        anyhow::bail!("'path list github' requires a native environment with network access");
-    }
+#[cfg(not(target_os = "emscripten"))]
+fn run_git(repo_path: PathBuf, remote: String, json: bool) -> Result<()> {
+    let repo_path = if repo_path.is_absolute() {
+        repo_path
+    } else {
+        std::env::current_dir()?.join(&repo_path)
+    };
 
-    #[cfg(not(target_os = "emscripten"))]
-    {
-        let (owner, repo_name) = repo
-            .split_once('/')
-            .ok_or_else(|| anyhow::anyhow!("Repository must be in owner/repo format"))?;
+    let repo = git2::Repository::open(&repo_path)
+        .with_context(|| format!("Failed to open repository at {:?}", repo_path))?;
 
-        let token = toolpath_github::resolve_token()?;
-        let config = toolpath_github::DeriveConfig {
-            token,
-            ..Default::default()
-        };
+    let uri = toolpath_git::get_repo_uri(&repo, &remote)?;
+    let branches = toolpath_git::list_branches(&repo)?;
 
-        let prs = toolpath_github::list_pull_requests(owner, repo_name, &config)?;
-
-        if json {
-            let items: Vec<serde_json::Value> = prs
-                .iter()
-                .map(|pr| {
-                    serde_json::json!({
-                        "number": pr.number,
-                        "title": pr.title,
-                        "state": pr.state,
-                        "author": pr.author,
-                        "head_branch": pr.head_branch,
-                        "base_branch": pr.base_branch,
-                        "created_at": pr.created_at,
-                        "updated_at": pr.updated_at,
-                    })
+    if json {
+        let items: Vec<serde_json::Value> = branches
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "name": b.name,
+                    "head": b.head,
+                    "subject": b.subject,
+                    "author": b.author,
+                    "timestamp": b.timestamp,
                 })
-                .collect();
-            let output = serde_json::json!({
-                "source": "github",
-                "repo": format!("{}/{}", owner, repo_name),
-                "pull_requests": items,
-            });
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            })
+            .collect();
+        let output = serde_json::json!({
+            "source": "git",
+            "uri": uri,
+            "branches": items,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("Repository: {}", uri);
+        println!();
+        if branches.is_empty() {
+            println!("  (no local branches)");
         } else {
-            println!("Pull requests for {}/{}:", owner, repo_name);
-            println!();
-            if prs.is_empty() {
-                println!("  (none)");
-            } else {
-                for pr in &prs {
-                    println!(
-                        "  #{:<5} {:>8} {}  {}",
-                        pr.number,
-                        pr.state,
-                        pr.author,
-                        truncate(&pr.title, 50),
-                    );
-                }
+            for b in &branches {
+                println!("  {} {} {}", b.head_short, b.name, truncate(&b.subject, 60));
             }
         }
-        Ok(())
     }
+    Ok(())
+}
+
+#[cfg(target_os = "emscripten")]
+fn run_github(_repo: String, _json: bool) -> Result<()> {
+    crate::source::require_native("list github")
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn run_github(repo: String, json: bool) -> Result<()> {
+    let (owner, repo_name) = repo
+        .split_once('/')
+        .ok_or_else(|| anyhow::anyhow!("Repository must be in owner/repo format"))?;
+
+    let token = toolpath_github::resolve_token()?;
+    let config = toolpath_github::DeriveConfig {
+        token,
+        ..Default::default()
+    };
+
+    let prs = toolpath_github::list_pull_requests(owner, repo_name, &config)?;
+
+    if json {
+        let items: Vec<serde_json::Value> = prs
+            .iter()
+            .map(|pr| {
+                serde_json::json!({
+                    "number": pr.number,
+                    "title": pr.title,
+                    "state": pr.state,
+                    "author": pr.author,
+                    "head_branch": pr.head_branch,
+                    "base_branch": pr.base_branch,
+                    "created_at": pr.created_at,
+                    "updated_at": pr.updated_at,
+                })
+            })
+            .collect();
+        let output = serde_json::json!({
+            "source": "github",
+            "repo": format!("{}/{}", owner, repo_name),
+            "pull_requests": items,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("Pull requests for {}/{}:", owner, repo_name);
+        println!();
+        if prs.is_empty() {
+            println!("  (none)");
+        } else {
+            for pr in &prs {
+                println!(
+                    "  #{:<5} {:>8} {}  {}",
+                    pr.number,
+                    pr.state,
+                    pr.author,
+                    truncate(&pr.title, 50),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_claude(project: Option<String>, json: bool) -> Result<()> {

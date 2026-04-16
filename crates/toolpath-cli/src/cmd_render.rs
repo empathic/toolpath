@@ -1,17 +1,17 @@
-use anyhow::{Context, Result};
+use crate::io::{self as cli_io, InputSpec, OutputSpec};
+use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
-use toolpath::v1::Document;
 
 #[derive(Subcommand, Debug)]
 pub enum RenderFormat {
     /// Render as Graphviz DOT
     Dot {
-        /// Input file (reads from stdin if not provided)
+        /// Input file (use `-` or omit to read from stdin)
         #[arg(short, long)]
         input: Option<PathBuf>,
 
-        /// Output file (writes to stdout if not provided)
+        /// Output file (use `-` or omit to write to stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
@@ -29,11 +29,11 @@ pub enum RenderFormat {
     },
     /// Render as Markdown (for LLM consumption)
     Md {
-        /// Input file (reads from stdin if not provided)
+        /// Input file (use `-` or omit to read from stdin)
         #[arg(short, long)]
         input: Option<PathBuf>,
 
-        /// Output file (writes to stdout if not provided)
+        /// Output file (use `-` or omit to write to stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
@@ -78,18 +78,7 @@ fn run_dot(
     show_timestamps: bool,
     highlight_dead_ends: bool,
 ) -> Result<()> {
-    let content = if let Some(path) = &input {
-        std::fs::read_to_string(path).with_context(|| format!("Failed to read {:?}", path))?
-    } else {
-        use std::io::Read;
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .context("Failed to read from stdin")?;
-        buf
-    };
-
-    let doc = Document::from_json(&content).context("Failed to parse Toolpath document")?;
+    let doc = cli_io::read_document(&InputSpec::from_opt(input))?;
 
     let options = toolpath_dot::RenderOptions {
         show_files,
@@ -98,14 +87,7 @@ fn run_dot(
     };
 
     let dot = toolpath_dot::render(&doc, &options);
-
-    if let Some(path) = &output {
-        std::fs::write(path, &dot).with_context(|| format!("Failed to write {:?}", path))?;
-    } else {
-        print!("{}", dot);
-    }
-
-    Ok(())
+    OutputSpec::from_opt(output).write_str(&dot)
 }
 
 fn run_md(
@@ -114,18 +96,7 @@ fn run_md(
     detail: &str,
     front_matter: bool,
 ) -> Result<()> {
-    let content = if let Some(path) = &input {
-        std::fs::read_to_string(path).with_context(|| format!("Failed to read {:?}", path))?
-    } else {
-        use std::io::Read;
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .context("Failed to read from stdin")?;
-        buf
-    };
-
-    let doc = Document::from_json(&content).context("Failed to parse Toolpath document")?;
+    let doc = cli_io::read_document(&InputSpec::from_opt(input))?;
 
     let detail = match detail {
         "full" => toolpath_md::Detail::Full,
@@ -138,21 +109,14 @@ fn run_md(
     };
 
     let md = toolpath_md::render(&doc, &options);
-
-    if let Some(path) = &output {
-        std::fs::write(path, &md).with_context(|| format!("Failed to write {:?}", path))?;
-    } else {
-        print!("{}", md);
-    }
-
-    Ok(())
+    OutputSpec::from_opt(output).write_str(&md)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
-    use toolpath::v1::{Path, PathIdentity, Step};
+    use toolpath::v1::{Document, Path, PathIdentity, Step};
 
     fn make_doc() -> Document {
         let s1 =

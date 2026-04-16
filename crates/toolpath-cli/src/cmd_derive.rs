@@ -90,6 +90,19 @@ pub fn run(source: DeriveSource, pretty: bool) -> Result<()> {
     }
 }
 
+#[cfg(target_os = "emscripten")]
+fn run_git(
+    _repo_path: PathBuf,
+    _branches: Vec<String>,
+    _base: Option<String>,
+    _remote: String,
+    _title: Option<String>,
+    _pretty: bool,
+) -> Result<()> {
+    crate::source::require_native("derive git")
+}
+
+#[cfg(not(target_os = "emscripten"))]
 fn run_git(
     repo_path: PathBuf,
     branches: Vec<String>,
@@ -98,44 +111,38 @@ fn run_git(
     title: Option<String>,
     pretty: bool,
 ) -> Result<()> {
-    #[cfg(target_os = "emscripten")]
-    {
-        let _ = (repo_path, branches, base, remote, title, pretty);
-        anyhow::bail!(
-            "'path derive git' requires a native environment with access to a git repository"
-        );
-    }
+    let repo_path = if repo_path.is_absolute() {
+        repo_path
+    } else {
+        std::env::current_dir()?.join(&repo_path)
+    };
 
-    #[cfg(not(target_os = "emscripten"))]
-    {
-        let repo_path = if repo_path.is_absolute() {
-            repo_path
-        } else {
-            std::env::current_dir()?.join(&repo_path)
-        };
+    let repo = git2::Repository::open(&repo_path)
+        .with_context(|| format!("Failed to open repository at {:?}", repo_path))?;
 
-        let repo = git2::Repository::open(&repo_path)
-            .with_context(|| format!("Failed to open repository at {:?}", repo_path))?;
+    let config = toolpath_git::DeriveConfig {
+        remote,
+        title,
+        base,
+    };
 
-        let config = toolpath_git::DeriveConfig {
-            remote,
-            title,
-            base,
-        };
-
-        let doc = toolpath_git::derive(&repo, &branches, &config)?;
-
-        let json = if pretty {
-            doc.to_json_pretty()?
-        } else {
-            doc.to_json()?
-        };
-
-        println!("{}", json);
-        Ok(())
-    }
+    let doc = toolpath_git::derive(&repo, &branches, &config)?;
+    crate::io::write_document(&doc, &crate::io::OutputSpec::Stdout, pretty)
 }
 
+#[cfg(target_os = "emscripten")]
+fn run_github(
+    _url: Option<String>,
+    _repo: Option<String>,
+    _pr: Option<u64>,
+    _no_ci: bool,
+    _no_comments: bool,
+    _pretty: bool,
+) -> Result<()> {
+    crate::source::require_native("derive github")
+}
+
+#[cfg(not(target_os = "emscripten"))]
 fn run_github(
     url: Option<String>,
     repo: Option<String>,
@@ -144,53 +151,36 @@ fn run_github(
     no_comments: bool,
     pretty: bool,
 ) -> Result<()> {
-    #[cfg(target_os = "emscripten")]
-    {
-        let _ = (url, repo, pr, no_ci, no_comments, pretty);
-        anyhow::bail!("'path derive github' requires a native environment with network access");
-    }
+    // Resolve owner/repo/pr from either a URL or --repo/--pr flags
+    let (owner, repo_name, pr_number) = if let Some(url_str) = &url {
+        let parsed = toolpath_github::parse_pr_url(url_str).ok_or_else(|| {
+            anyhow::anyhow!("Invalid PR URL. Expected: https://github.com/owner/repo/pull/N")
+        })?;
+        (parsed.owner, parsed.repo, parsed.number)
+    } else if let (Some(repo_str), Some(pr_num)) = (&repo, pr) {
+        let (o, r) = repo_str
+            .split_once('/')
+            .ok_or_else(|| anyhow::anyhow!("Repository must be in owner/repo format"))?;
+        (o.to_string(), r.to_string(), pr_num)
+    } else {
+        anyhow::bail!(
+            "Provide a PR URL or both --repo and --pr.\n\
+             Usage: path derive github https://github.com/owner/repo/pull/42\n\
+             Usage: path derive github --repo owner/repo --pr 42"
+        );
+    };
 
-    #[cfg(not(target_os = "emscripten"))]
-    {
-        // Resolve owner/repo/pr from either a URL or --repo/--pr flags
-        let (owner, repo_name, pr_number) = if let Some(url_str) = &url {
-            let parsed = toolpath_github::parse_pr_url(url_str).ok_or_else(|| {
-                anyhow::anyhow!("Invalid PR URL. Expected: https://github.com/owner/repo/pull/N")
-            })?;
-            (parsed.owner, parsed.repo, parsed.number)
-        } else if let (Some(repo_str), Some(pr_num)) = (&repo, pr) {
-            let (o, r) = repo_str
-                .split_once('/')
-                .ok_or_else(|| anyhow::anyhow!("Repository must be in owner/repo format"))?;
-            (o.to_string(), r.to_string(), pr_num)
-        } else {
-            anyhow::bail!(
-                "Provide a PR URL or both --repo and --pr.\n\
-                 Usage: path derive github https://github.com/owner/repo/pull/42\n\
-                 Usage: path derive github --repo owner/repo --pr 42"
-            );
-        };
+    let token = toolpath_github::resolve_token()?;
+    let config = toolpath_github::DeriveConfig {
+        token,
+        include_ci: !no_ci,
+        include_comments: !no_comments,
+        ..Default::default()
+    };
 
-        let token = toolpath_github::resolve_token()?;
-        let config = toolpath_github::DeriveConfig {
-            token,
-            include_ci: !no_ci,
-            include_comments: !no_comments,
-            ..Default::default()
-        };
-
-        let path = toolpath_github::derive_pull_request(&owner, &repo_name, pr_number, &config)?;
-        let doc = toolpath::v1::Document::Path(path);
-
-        let json = if pretty {
-            doc.to_json_pretty()?
-        } else {
-            doc.to_json()?
-        };
-
-        println!("{}", json);
-        Ok(())
-    }
+    let path = toolpath_github::derive_pull_request(&owner, &repo_name, pr_number, &config)?;
+    let doc = toolpath::v1::Document::Path(path);
+    crate::io::write_document(&doc, &crate::io::OutputSpec::Stdout, pretty)
 }
 
 fn run_claude(project: String, session: Option<String>, all: bool, pretty: bool) -> Result<()> {
@@ -231,12 +221,7 @@ fn run_claude_with_manager(
 
     for path in &docs {
         let doc = toolpath::v1::Document::Path(path.clone());
-        let json = if pretty {
-            doc.to_json_pretty()?
-        } else {
-            doc.to_json()?
-        };
-        println!("{}", json);
+        crate::io::write_document(&doc, &crate::io::OutputSpec::Stdout, pretty)?;
     }
 
     Ok(())

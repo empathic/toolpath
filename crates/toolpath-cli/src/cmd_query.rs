@@ -1,75 +1,64 @@
-use anyhow::{Context, Result};
-use clap::Subcommand;
+use crate::io::{self as cli_io, InputSpec};
+use anyhow::Result;
+use clap::Args;
 use std::path::PathBuf;
 use toolpath::v1::{Document, query};
 
-#[derive(Subcommand, Debug)]
-pub enum QueryOp {
-    /// Walk the parent chain from a step
-    Ancestors {
-        /// Input file
-        #[arg(short, long)]
-        input: PathBuf,
+#[derive(Args, Debug)]
+pub struct QueryArgs {
+    /// Input file (use `-` or omit to read from stdin)
+    #[arg(short, long)]
+    pub input: Option<PathBuf>,
 
-        /// Step ID to trace from
-        #[arg(long)]
-        step_id: String,
-    },
-    /// Find steps not on the path to head
-    DeadEnds {
-        /// Input file
-        #[arg(short, long)]
-        input: PathBuf,
-    },
-    /// Filter steps by criteria
-    Filter {
-        /// Input file
-        #[arg(short, long)]
-        input: PathBuf,
+    /// Walk the parent chain from this step id
+    #[arg(long, value_name = "STEP_ID", conflicts_with = "dead_ends")]
+    pub ancestors_of: Option<String>,
 
-        /// Actor prefix (e.g., "human:", "agent:claude")
-        #[arg(long)]
-        actor: Option<String>,
+    /// Show steps not on the path to head
+    #[arg(long)]
+    pub dead_ends: bool,
 
-        /// Artifact path
-        #[arg(long)]
-        artifact: Option<String>,
+    /// Filter by actor prefix (e.g., "human:", "agent:claude")
+    #[arg(long)]
+    pub actor: Option<String>,
 
-        /// Start time (ISO 8601)
-        #[arg(long)]
-        after: Option<String>,
+    /// Filter by artifact path
+    #[arg(long)]
+    pub artifact: Option<String>,
 
-        /// End time (ISO 8601)
-        #[arg(long)]
-        before: Option<String>,
-    },
+    /// Filter: only steps at or after this ISO-8601 timestamp
+    #[arg(long)]
+    pub after: Option<String>,
+
+    /// Filter: only steps at or before this ISO-8601 timestamp
+    #[arg(long)]
+    pub before: Option<String>,
 }
 
-pub fn run(op: QueryOp, pretty: bool) -> Result<()> {
-    match op {
-        QueryOp::Ancestors { input, step_id } => run_ancestors(input, step_id, pretty),
-        QueryOp::DeadEnds { input } => run_dead_ends(input, pretty),
-        QueryOp::Filter {
-            input,
-            actor,
-            artifact,
-            after,
-            before,
-        } => run_filter(input, actor, artifact, after, before, pretty),
-    }
-}
+pub fn run(args: QueryArgs, pretty: bool) -> Result<()> {
+    let doc = cli_io::read_document(&InputSpec::from_opt(args.input))?;
+    let (steps, head) = extract_steps(&doc);
 
-fn read_doc(path: &PathBuf) -> Result<Document> {
-    let content =
-        std::fs::read_to_string(path).with_context(|| format!("Failed to read {:?}", path))?;
-    Document::from_json(&content).with_context(|| format!("Failed to parse {:?}", path))
+    let selected: Vec<&toolpath::v1::Step> = if let Some(step_id) = args.ancestors_of {
+        let ancestor_ids = query::ancestors(steps, &step_id);
+        steps
+            .iter()
+            .filter(|s| ancestor_ids.contains(&s.step.id))
+            .collect()
+    } else if args.dead_ends {
+        let head = head.ok_or_else(|| anyhow::anyhow!("Document has no head step"))?;
+        query::dead_ends(steps, head)
+    } else {
+        apply_filters(steps, &args.actor, &args.artifact, &args.after, &args.before)
+    };
+
+    print_steps(&selected, pretty)
 }
 
 fn extract_steps(doc: &Document) -> (&[toolpath::v1::Step], Option<&str>) {
     match doc {
         Document::Path(p) => (p.steps.as_slice(), Some(p.path.head.as_str())),
         Document::Graph(g) => {
-            // For graphs, use the first inline path
             for p in &g.paths {
                 if let toolpath::v1::PathOrRef::Path(path) = p {
                     return (path.steps.as_slice(), Some(path.path.head.as_str()));
@@ -81,6 +70,44 @@ fn extract_steps(doc: &Document) -> (&[toolpath::v1::Step], Option<&str>) {
     }
 }
 
+fn apply_filters<'a>(
+    steps: &'a [toolpath::v1::Step],
+    actor: &Option<String>,
+    artifact: &Option<String>,
+    after: &Option<String>,
+    before: &Option<String>,
+) -> Vec<&'a toolpath::v1::Step> {
+    let mut result: Vec<&toolpath::v1::Step> = steps.iter().collect();
+
+    if let Some(actor_prefix) = actor {
+        let ids: std::collections::HashSet<&str> = query::filter_by_actor(steps, actor_prefix)
+            .iter()
+            .map(|s| s.step.id.as_str())
+            .collect();
+        result.retain(|s| ids.contains(s.step.id.as_str()));
+    }
+
+    if let Some(art) = artifact {
+        let ids: std::collections::HashSet<&str> = query::filter_by_artifact(steps, art)
+            .iter()
+            .map(|s| s.step.id.as_str())
+            .collect();
+        result.retain(|s| ids.contains(s.step.id.as_str()));
+    }
+
+    if after.is_some() || before.is_some() {
+        let start = after.as_deref().unwrap_or("");
+        let end = before.as_deref().unwrap_or("9999-12-31T23:59:59Z");
+        let ids: std::collections::HashSet<&str> = query::filter_by_time_range(steps, start, end)
+            .iter()
+            .map(|s| s.step.id.as_str())
+            .collect();
+        result.retain(|s| ids.contains(s.step.id.as_str()));
+    }
+
+    result
+}
+
 fn print_steps(steps: &[&toolpath::v1::Step], pretty: bool) -> Result<()> {
     let json = if pretty {
         serde_json::to_string_pretty(&steps)?
@@ -89,67 +116,6 @@ fn print_steps(steps: &[&toolpath::v1::Step], pretty: bool) -> Result<()> {
     };
     println!("{}", json);
     Ok(())
-}
-
-fn run_ancestors(input: PathBuf, step_id: String, pretty: bool) -> Result<()> {
-    let doc = read_doc(&input)?;
-    let (steps, _) = extract_steps(&doc);
-    let ancestor_ids = query::ancestors(steps, &step_id);
-
-    let ancestor_steps: Vec<&toolpath::v1::Step> = steps
-        .iter()
-        .filter(|s| ancestor_ids.contains(&s.step.id))
-        .collect();
-
-    print_steps(&ancestor_steps, pretty)
-}
-
-fn run_dead_ends(input: PathBuf, pretty: bool) -> Result<()> {
-    let doc = read_doc(&input)?;
-    let (steps, head) = extract_steps(&doc);
-    let head = head.ok_or_else(|| anyhow::anyhow!("Document has no head step"))?;
-
-    let dead = query::dead_ends(steps, head);
-    print_steps(&dead, pretty)
-}
-
-fn run_filter(
-    input: PathBuf,
-    actor: Option<String>,
-    artifact: Option<String>,
-    after: Option<String>,
-    before: Option<String>,
-    pretty: bool,
-) -> Result<()> {
-    let doc = read_doc(&input)?;
-    let (steps, _) = extract_steps(&doc);
-
-    let mut result: Vec<&toolpath::v1::Step> = steps.iter().collect();
-
-    if let Some(ref actor_prefix) = actor {
-        let filtered = query::filter_by_actor(steps, actor_prefix);
-        let ids: std::collections::HashSet<&str> =
-            filtered.iter().map(|s| s.step.id.as_str()).collect();
-        result.retain(|s| ids.contains(s.step.id.as_str()));
-    }
-
-    if let Some(ref art) = artifact {
-        let filtered = query::filter_by_artifact(steps, art);
-        let ids: std::collections::HashSet<&str> =
-            filtered.iter().map(|s| s.step.id.as_str()).collect();
-        result.retain(|s| ids.contains(s.step.id.as_str()));
-    }
-
-    if after.is_some() || before.is_some() {
-        let start = after.as_deref().unwrap_or("");
-        let end = before.as_deref().unwrap_or("9999-12-31T23:59:59Z");
-        let filtered = query::filter_by_time_range(steps, start, end);
-        let ids: std::collections::HashSet<&str> =
-            filtered.iter().map(|s| s.step.id.as_str()).collect();
-        result.retain(|s| ids.contains(s.step.id.as_str()));
-    }
-
-    print_steps(&result, pretty)
 }
 
 #[cfg(test)]
@@ -186,6 +152,18 @@ mod tests {
         write!(f, "{}", doc.to_json().unwrap()).unwrap();
         f.flush().unwrap();
         f
+    }
+
+    fn args_with_input(path: PathBuf) -> QueryArgs {
+        QueryArgs {
+            input: Some(path),
+            ancestors_of: None,
+            dead_ends: false,
+            actor: None,
+            artifact: None,
+            after: None,
+            before: None,
+        }
     }
 
     #[test]
@@ -232,114 +210,97 @@ mod tests {
     fn test_run_ancestors() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_ancestors(f.path().to_path_buf(), "s3".to_string(), false);
-        assert!(result.is_ok());
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.ancestors_of = Some("s3".to_string());
+        assert!(run(args, false).is_ok());
     }
 
     #[test]
     fn test_run_dead_ends() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_dead_ends(f.path().to_path_buf(), false);
-        assert!(result.is_ok());
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.dead_ends = true;
+        assert!(run(args, false).is_ok());
     }
 
     #[test]
     fn test_run_filter_by_actor() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_filter(
-            f.path().to_path_buf(),
-            Some("human:".to_string()),
-            None,
-            None,
-            None,
-            false,
-        );
-        assert!(result.is_ok());
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.actor = Some("human:".to_string());
+        assert!(run(args, false).is_ok());
     }
 
     #[test]
     fn test_run_filter_by_artifact() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_filter(
-            f.path().to_path_buf(),
-            None,
-            Some("src/main.rs".to_string()),
-            None,
-            None,
-            false,
-        );
-        assert!(result.is_ok());
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.artifact = Some("src/main.rs".to_string());
+        assert!(run(args, false).is_ok());
     }
 
     #[test]
     fn test_run_filter_by_time_range() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_filter(
-            f.path().to_path_buf(),
-            None,
-            None,
-            Some("2026-01-01T10:30:00Z".to_string()),
-            Some("2026-01-01T11:30:00Z".to_string()),
-            false,
-        );
-        assert!(result.is_ok());
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.after = Some("2026-01-01T10:30:00Z".to_string());
+        args.before = Some("2026-01-01T11:30:00Z".to_string());
+        assert!(run(args, false).is_ok());
     }
 
     #[test]
     fn test_run_filter_pretty() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_filter(f.path().to_path_buf(), None, None, None, None, true);
-        assert!(result.is_ok());
+        let args = args_with_input(f.path().to_path_buf());
+        assert!(run(args, true).is_ok());
     }
 
     #[test]
     fn test_run_filter_after_only() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_filter(
-            f.path().to_path_buf(),
-            None,
-            None,
-            Some("2026-01-01T11:00:00Z".to_string()),
-            None,
-            false,
-        );
-        assert!(result.is_ok());
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.after = Some("2026-01-01T11:00:00Z".to_string());
+        assert!(run(args, false).is_ok());
     }
 
     #[test]
     fn test_run_dead_ends_on_step_doc() {
         let doc = Document::Step(Step::new("s1", "human:alex", "2026-01-01T00:00:00Z"));
         let f = write_temp_doc(&doc);
-        let result = run_dead_ends(f.path().to_path_buf(), false);
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.dead_ends = true;
         // Should fail because Step has no head
-        assert!(result.is_err());
+        assert!(run(args, false).is_err());
     }
 
     #[test]
     fn test_run_ancestors_pretty() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_ancestors(f.path().to_path_buf(), "s3".to_string(), true);
-        assert!(result.is_ok());
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.ancestors_of = Some("s3".to_string());
+        assert!(run(args, true).is_ok());
     }
 
     #[test]
     fn test_run_dead_ends_pretty() {
         let doc = make_path_doc();
         let f = write_temp_doc(&doc);
-        let result = run_dead_ends(f.path().to_path_buf(), true);
-        assert!(result.is_ok());
+        let mut args = args_with_input(f.path().to_path_buf());
+        args.dead_ends = true;
+        assert!(run(args, true).is_ok());
     }
 
     #[test]
-    fn test_read_doc_invalid_path() {
-        let result = read_doc(&PathBuf::from("/nonexistent/file.json"));
-        assert!(result.is_err());
+    fn test_run_nonexistent_input() {
+        let mut args = args_with_input(PathBuf::from("/nonexistent/file.json"));
+        args.dead_ends = true;
+        assert!(run(args, false).is_err());
     }
 }
