@@ -40,3 +40,4 @@ toolpath-pi = { workspace = true }
 assert_cmd = "2"
 predicates = "3"
 insta = { workspace = true }
+toolpath-convo = { workspace = true }

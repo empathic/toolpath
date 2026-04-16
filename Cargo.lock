@@ -1825,6 +1825,7 @@ dependencies = [
  "tempfile",
  "toolpath",
  "toolpath-claude",
+ "toolpath-convo",
  "toolpath-dot",
  "toolpath-git",
  "toolpath-github",
