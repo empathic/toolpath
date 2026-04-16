@@ -48,7 +48,7 @@ A vocabulary built on toolpath's grammar for modeling conversations. Any provide
 Metadata about the session itself. One step at the start of a path.
 
 Actor: `tool:<provider-name>` (e.g., `tool:claude-code` — the harness, not the model)
-Artifact: `<provider>://<session-id>`
+Artifact: `agent://<provider>/<session-id>` (virtual artifact)
 
 Extra fields:
 - `version` — agent/harness version string
@@ -62,7 +62,7 @@ Extra fields:
 A single conversational turn (user message or assistant response).
 
 Actor: `human:<name>` for user turns, `agent:<model-or-agent-id>` for assistant turns
-Artifact: `<provider>://<session-id>`
+Artifact: `agent://<provider>/<session-id>` (virtual artifact)
 
 Extra fields:
 - `role` — `"user"` or `"assistant"`
@@ -80,7 +80,7 @@ Extra fields:
 One or more tool invocations of the same tool type within a turn.
 
 Actor: `agent:<agent-id>/tool:<ToolName>` (e.g., `agent:claude-code/tool:Read`)
-Artifact key: the target of the tool action — file path for file tools, URN for other tools
+Artifact key: file path for file tools, virtual artifact URN for others (e.g., `agent://claude/<session-id>/tool/shell/<tool-use-id>`)
 
 Each artifact change has a structural change with:
 - `type` — `"tool.invoke"`
@@ -98,12 +98,26 @@ Each artifact change has a structural change with:
 - `agent:<id>/tool:<ToolName>` — the tool subsystem of an agent
 - `tool:<name>` — a standalone tool or harness (not a model)
 
-### Artifact URN Schemes
+### Artifact URN Scheme
 
-- `<provider>://<session-id>` — the conversation itself (e.g., `claude://abc-123`)
-- File paths — for file read/write/edit tool invocations
-- `shell://<context>` — for shell command executions
-- `web://<url>` — for network tool invocations
+Non-file tool invocations and conversation sessions are **virtual artifacts** — they don't correspond to files on disk but are tracked as artifacts in the toolpath document for provenance. All virtual artifacts use the `agent://` scheme with provider as a path segment:
+
+```
+agent://<provider>/<session-id>                          — the conversation itself
+agent://<provider>/<session-id>/tool/shell/<tool-use-id> — a shell invocation
+agent://<provider>/<session-id>/tool/web/<tool-use-id>   — a web fetch
+agent://<provider>/<session-id>/tool/task/<tool-use-id>  — a delegation
+```
+
+Examples:
+```
+agent://claude/abc-123-def                          — a Claude conversation
+agent://claude/abc-123-def/tool/shell/tu_98765      — a Bash invocation in that session
+agent://codex/session-456                           — a Codex conversation
+agent://gemini/session-789/tool/web/tu_11111        — a web fetch in a Gemini session
+```
+
+File tools (Read, Write, Edit, Glob, Grep) use the actual file path as the artifact key — they change real file artifacts, not conversation-scoped resources.
 
 ### Step Structure
 
@@ -256,7 +270,7 @@ The projection maps ConversationView back to Claude's native types:
 - **Tool results** → separate `ConversationEntry` with `MessageRole::User`, content parts of type `ContentPart::ToolResult` (Claude's tool-result-only user entry pattern)
 - **Token usage** → `Message.usage` fields
 - **UUIDs** → step IDs become entry UUIDs
-- **Session ID** → extracted from conversation artifact URN (`claude://<session-id>`)
+- **Session ID** → extracted from conversation artifact URN (`agent://claude/<session-id>`)
 - **Parent chain** → `parentUuid` from step parents
 
 ### Best-effort mapping for non-Claude sources
@@ -314,13 +328,18 @@ Not asserted (acceptable losses):
 
 ## Migration / Compatibility
 
-The enriched derive produces a different (richer) toolpath output than the current derive. This is a **minor version bump** for `toolpath-claude` since the output is additive — existing consumers that only read `conversation.append` still work, they just see more steps and richer data.
+The enriched derive produces a different (richer) toolpath output than the current derive. This is a **minor version bump** for `toolpath-claude` (pre-1.0, so minor = potentially breaking):
+
+- **Breaking:** Conversation artifact key changes from `claude://<session-id>` to `agent://claude/<session-id>`. Consumers that pattern-match on `claude://` artifact keys must update.
+- **Breaking:** Tool invocations are now separate steps (previously inlined as name lists in `conversation.append`). Consumers counting steps or iterating them will see more steps.
+- **Breaking:** Step IDs use full UUIDs instead of 8-char prefixes. Any consumer storing or referencing step IDs will see different values.
+- **Additive:** Richer `conversation.append` extra fields (full text, thinking, usage, stop_reason, model).
+- **Additive:** `conversation.init` steps (previously skipped).
 
 `toolpath-convo` gets a minor version bump for the new trait, extraction function, and `toolpath` dependency.
 
 ## Open Questions
 
-1. **Artifact URN for shell/network tools** — exact scheme TBD. `shell://` and `web://` are placeholders. May want `urn:toolpath:shell:<hash>` or similar.
-2. **Thinking signatures** — Claude's thinking blocks carry cryptographic signatures. These could map to `StepMeta.signatures` but the semantics differ (signing a content block vs. the whole step). Defer to a follow-up.
-3. **Session chains** — Claude Code rotates JSONL files on context overflow. The enriched derive should produce multiple paths (one per segment) or a single merged path. Current behavior merges; projection needs to handle both.
-4. **Delegation / sub-agents** — Tool invocations of type `Task` (delegation) spawn sub-agent sessions. These are currently modeled as `DelegatedWork` in ConversationView. The sub-protocol should define how delegations appear in the step DAG. Defer to a follow-up.
+1. **Thinking signatures** — Claude's thinking blocks carry cryptographic signatures. These could map to `StepMeta.signatures` but the semantics differ (signing a content block vs. the whole step). Defer to a follow-up.
+2. **Session chains** — Claude Code rotates JSONL files on context overflow. The enriched derive should produce multiple paths (one per segment) or a single merged path. Current behavior merges; projection needs to handle both.
+3. **Delegation / sub-agents** — Tool invocations of type `Task` (delegation) spawn sub-agent sessions. These are currently modeled as `DelegatedWork` in ConversationView. The sub-protocol should define how delegations appear in the step DAG. Defer to a follow-up.
