@@ -108,6 +108,29 @@ fn roundtrip_claude_conversation() {
                 "turn {i}, tool {j}: name mismatch: {} vs {}",
                 et.name, ot.name,
             );
+
+            // Tool results must survive the round-trip
+            match (&et.result, &ot.result) {
+                (Some(ext_r), Some(orig_r)) => {
+                    assert_eq!(
+                        ext_r.content, orig_r.content,
+                        "turn {i}, tool {j} ({}): result content mismatch",
+                        et.name,
+                    );
+                    assert_eq!(
+                        ext_r.is_error, orig_r.is_error,
+                        "turn {i}, tool {j} ({}): is_error mismatch",
+                        et.name,
+                    );
+                }
+                (None, None) => {}
+                (Some(_), None) => {
+                    panic!("turn {i}, tool {j} ({}): extracted has result but original does not", et.name);
+                }
+                (None, Some(_)) => {
+                    panic!("turn {i}, tool {j} ({}): original has result but extracted does not", et.name);
+                }
+            }
         }
     }
 
