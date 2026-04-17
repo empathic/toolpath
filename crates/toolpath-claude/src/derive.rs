@@ -133,15 +133,104 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
         steps.push(init);
     }
 
-    for entry in &conversation.entries {
-        if entry.uuid.is_empty() {
+    for (entry_idx, entry) in conversation.entries.iter().enumerate() {
+        // Determine if this is a conversational entry (user/assistant with message)
+        // or a non-message event entry
+        let message = entry.message.as_ref();
+        let is_conversational = message.is_some_and(|m| {
+            matches!(m.role, MessageRole::User | MessageRole::Assistant)
+        });
+
+        if !is_conversational {
+            // Event entry — capture as conversation.event step
+            let step_id = if entry.uuid.is_empty() {
+                format!("{}-event-{}", conversation.session_id, entry_idx)
+            } else {
+                entry.uuid.clone()
+            };
+
+            let parents = if let Some(parent) = &entry.parent_uuid {
+                vec![parent.clone()]
+            } else if let Some(ref last) = last_step_id {
+                vec![last.clone()]
+            } else {
+                vec![]
+            };
+
+            // Register tool:claude-code actor for event entries
+            actors
+                .entry("tool:claude-code".to_string())
+                .or_insert_with(|| ActorDefinition {
+                    name: Some("Claude Code".to_string()),
+                    ..Default::default()
+                });
+
+            let mut event_extra = HashMap::new();
+            event_extra.insert("entry_type".to_string(), json!(entry.entry_type));
+
+            if let Some(cwd) = &entry.cwd {
+                event_extra.insert("cwd".to_string(), json!(cwd));
+            }
+            if let Some(version) = &entry.version {
+                event_extra.insert("version".to_string(), json!(version));
+            }
+            if let Some(git_branch) = &entry.git_branch {
+                event_extra.insert("git_branch".to_string(), json!(git_branch));
+            }
+            if let Some(user_type) = &entry.user_type {
+                event_extra.insert("user_type".to_string(), json!(user_type));
+            }
+            if let Some(snapshot) = &entry.snapshot {
+                event_extra.insert("snapshot".to_string(), snapshot.clone());
+            }
+            if let Some(tool_use_result) = &entry.tool_use_result {
+                event_extra.insert("tool_use_result".to_string(), tool_use_result.clone());
+            }
+            if let Some(message_id) = &entry.message_id {
+                event_extra.insert("message_id".to_string(), json!(message_id));
+            }
+            // Include system message text if present
+            if let Some(msg) = message {
+                let text = msg.text();
+                if !text.is_empty() {
+                    event_extra.insert("text".to_string(), json!(text));
+                }
+            }
+            // Entry-level extras
+            if !entry.extra.is_empty() {
+                event_extra.insert("entry_extra".to_string(), json!(entry.extra));
+            }
+
+            let event_step = Step {
+                step: StepIdentity {
+                    id: step_id,
+                    parents,
+                    actor: "tool:claude-code".into(),
+                    timestamp: entry.timestamp.clone(),
+                },
+                change: {
+                    let mut m = HashMap::new();
+                    m.insert(
+                        convo_artifact.clone(),
+                        ArtifactChange {
+                            raw: None,
+                            structural: Some(StructuralChange {
+                                change_type: "conversation.event".to_string(),
+                                extra: event_extra,
+                            }),
+                        },
+                    );
+                    m
+                },
+                meta: None,
+            };
+
+            // Event steps do NOT advance last_step_id
+            steps.push(event_step);
             continue;
         }
 
-        let message = match &entry.message {
-            Some(m) => m,
-            None => continue,
-        };
+        let message = message.unwrap();
 
         let (actor, role_str) = match message.role {
             MessageRole::User => {
@@ -180,7 +269,8 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
                 });
                 (actor_key, "assistant")
             }
-            MessageRole::System => continue,
+            // is_conversational guarantees User or Assistant
+            MessageRole::System => unreachable!(),
         };
 
         // Collect conversation text and tool uses from this turn
@@ -763,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_path_skips_system_messages() {
+    fn test_derive_path_captures_system_messages_as_events() {
         let entries = vec![
             make_entry(
                 "uuid-1111",
@@ -782,9 +872,20 @@ mod tests {
         let config = DeriveConfig::default();
 
         let path = derive_path(&convo, &config);
-        // System message should be skipped
-        assert_eq!(path.steps.len(), 1);
-        assert_eq!(path.steps[0].step.actor, "human:user");
+        // System message captured as event, plus user message
+        assert_eq!(path.steps.len(), 2);
+        // First step is the system event
+        assert_eq!(path.steps[0].step.actor, "tool:claude-code");
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let structural = path.steps[0].change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap();
+        assert_eq!(structural.change_type, "conversation.event");
+        assert_eq!(structural.extra["entry_type"], "system");
+        assert_eq!(structural.extra["text"], "System prompt");
+        // Second step is the user message
+        assert_eq!(path.steps[1].step.actor, "human:user");
     }
 
     #[test]
@@ -1957,5 +2058,282 @@ mod tests {
             actors["tool:claude-code"].name.as_deref(),
             Some("Claude Code")
         );
+    }
+
+    // ── conversation.event steps (non-message entries) ────────────────
+
+    fn make_event_entry(
+        uuid: &str,
+        entry_type: &str,
+        timestamp: &str,
+    ) -> ConversationEntry {
+        ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: entry_type.to_string(),
+            uuid: uuid.to_string(),
+            timestamp: timestamp.to_string(),
+            session_id: Some("test-session".to_string()),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            message: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        }
+    }
+
+    #[test]
+    fn test_derive_path_attachment_entry_captured_as_event() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(make_entry(
+            "uuid-1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        ));
+        convo.add_entry(make_event_entry(
+            "uuid-attach-1",
+            "attachment",
+            "2024-01-01T00:00:01Z",
+        ));
+        convo.add_entry(make_entry(
+            "uuid-2",
+            MessageRole::Assistant,
+            "Hi",
+            "2024-01-01T00:00:02Z",
+        ));
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // 3 steps: user, attachment event, assistant
+        assert_eq!(path.steps.len(), 3);
+
+        let event_step = &path.steps[1];
+        assert_eq!(event_step.step.id, "uuid-attach-1");
+        assert_eq!(event_step.step.actor, "tool:claude-code");
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let structural = event_step.change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap();
+        assert_eq!(structural.change_type, "conversation.event");
+        assert_eq!(structural.extra["entry_type"], "attachment");
+    }
+
+    #[test]
+    fn test_derive_path_system_entry_captured_as_event() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(make_entry(
+            "uuid-sys",
+            MessageRole::System,
+            "Turn duration: 5s",
+            "2024-01-01T00:00:00Z",
+        ));
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        assert_eq!(path.steps.len(), 1);
+        let event_step = &path.steps[0];
+        assert_eq!(event_step.step.actor, "tool:claude-code");
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let structural = event_step.change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap();
+        assert_eq!(structural.change_type, "conversation.event");
+        assert_eq!(structural.extra["entry_type"], "system");
+        assert_eq!(structural.extra["text"], "Turn duration: 5s");
+    }
+
+    #[test]
+    fn test_derive_path_empty_uuid_entry_gets_synthetic_id() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut event = make_event_entry("", "permission-mode", "2024-01-01T00:00:00Z");
+        event.uuid = String::new();
+        convo.add_entry(event);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        assert_eq!(path.steps.len(), 1);
+        // Synthetic ID: {session_id}-event-{index}
+        assert_eq!(
+            path.steps[0].step.id,
+            "test-session-12345678-event-0"
+        );
+    }
+
+    #[test]
+    fn test_derive_path_event_steps_dont_advance_parent_chain() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(make_entry(
+            "uuid-u1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        ));
+        convo.add_entry(make_event_entry(
+            "uuid-attach",
+            "attachment",
+            "2024-01-01T00:00:01Z",
+        ));
+        convo.add_entry(make_entry(
+            "uuid-a1",
+            MessageRole::Assistant,
+            "Hi",
+            "2024-01-01T00:00:02Z",
+        ));
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        assert_eq!(path.steps.len(), 3);
+        // The assistant step's parent should be the USER step, not the event step
+        assert_eq!(
+            path.steps[2].step.parents,
+            vec!["uuid-u1".to_string()]
+        );
+        // The head should be the assistant step, not the event step
+        assert_eq!(path.path.head, "uuid-a1");
+    }
+
+    #[test]
+    fn test_derive_path_event_step_extras_contain_metadata() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut event = make_event_entry(
+            "uuid-ev1",
+            "file-history-snapshot",
+            "2024-01-01T00:00:00Z",
+        );
+        event.cwd = Some("/home/user/project".to_string());
+        event.version = Some("1.5.0".to_string());
+        event.git_branch = Some("main".to_string());
+        event.user_type = Some("external".to_string());
+        event.snapshot = Some(serde_json::json!({"files": ["/src/main.rs"]}));
+        event.message_id = Some("msg-123".to_string());
+        convo.add_entry(event);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // First step is init (because cwd is present), second is the event
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        // Find the event step (skip init)
+        let event_step = path
+            .steps
+            .iter()
+            .find(|s| {
+                s.change
+                    .get(&convo_key)
+                    .and_then(|c| c.structural.as_ref())
+                    .is_some_and(|sc| sc.change_type == "conversation.event")
+            })
+            .expect("should have a conversation.event step");
+        let extra = &event_step.change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+
+        assert_eq!(extra["entry_type"], "file-history-snapshot");
+        assert_eq!(extra["cwd"], "/home/user/project");
+        assert_eq!(extra["version"], "1.5.0");
+        assert_eq!(extra["git_branch"], "main");
+        assert_eq!(extra["user_type"], "external");
+        assert_eq!(extra["snapshot"], serde_json::json!({"files": ["/src/main.rs"]}));
+        assert_eq!(extra["message_id"], "msg-123");
+    }
+
+    #[test]
+    fn test_derive_path_event_entry_extra_preserved() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut event = make_event_entry(
+            "uuid-ev2",
+            "attachment",
+            "2024-01-01T00:00:00Z",
+        );
+        let mut extras = HashMap::new();
+        extras.insert("hookName".to_string(), serde_json::json!("pre-tool-use"));
+        extras.insert("toolName".to_string(), serde_json::json!("Bash"));
+        event.extra = extras;
+        convo.add_entry(event);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let extra = &path.steps[0].change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+
+        let entry_extra = extra.get("entry_extra").expect("entry_extra should be present");
+        assert_eq!(entry_extra["hookName"], "pre-tool-use");
+        assert_eq!(entry_extra["toolName"], "Bash");
+    }
+
+    #[test]
+    fn test_derive_path_event_with_parent_uuid() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(make_entry(
+            "uuid-u1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        ));
+        let mut event = make_event_entry(
+            "uuid-ev-parent",
+            "attachment",
+            "2024-01-01T00:00:01Z",
+        );
+        event.parent_uuid = Some("uuid-u1".to_string());
+        convo.add_entry(event);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // Event step should use its own parent_uuid
+        assert_eq!(
+            path.steps[1].step.parents,
+            vec!["uuid-u1".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_derive_path_event_with_tool_use_result() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut event = make_event_entry(
+            "uuid-ev-tur",
+            "attachment",
+            "2024-01-01T00:00:00Z",
+        );
+        event.tool_use_result = Some(serde_json::json!({
+            "tool_use_id": "tu-123",
+            "content": "hook output"
+        }));
+        convo.add_entry(event);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let extra = &path.steps[0].change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+
+        assert_eq!(extra["tool_use_result"]["tool_use_id"], "tu-123");
+        assert_eq!(extra["tool_use_result"]["content"], "hook output");
     }
 }
