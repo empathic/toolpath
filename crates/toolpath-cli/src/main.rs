@@ -1,5 +1,6 @@
 mod cmd_derive;
 mod cmd_haiku;
+mod cmd_incept;
 mod cmd_list;
 mod cmd_merge;
 mod cmd_project;
@@ -70,6 +71,11 @@ enum Commands {
         #[command(subcommand)]
         target: cmd_project::ProjectTarget,
     },
+    /// Project a toolpath document into a Claude session that Claude Code can resume
+    Incept {
+        #[command(flatten)]
+        args: cmd_incept::InceptArgs,
+    },
     /// Validate a Toolpath document
     Validate {
         /// Input file
@@ -91,6 +97,7 @@ fn main() -> Result<()> {
         Commands::Merge { inputs, title } => cmd_merge::run(inputs, title, cli.pretty),
         Commands::Track { op } => cmd_track::run(op, cli.pretty),
         Commands::Project { target } => cmd_project::run(target),
+        Commands::Incept { args } => cmd_incept::run(args),
         Commands::Validate { input } => cmd_validate::run(input),
         Commands::Haiku => {
             cmd_haiku::run();
