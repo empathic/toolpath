@@ -5,6 +5,7 @@
 //! structural operation. Tool invocations produce separate steps with
 //! `tool.invoke` structural changes.
 
+use crate::provider::to_view;
 use crate::types::{ContentPart, Conversation, MessageContent, MessageRole};
 use serde_json::json;
 use std::collections::HashMap;
@@ -61,9 +62,76 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
     let session_short = safe_prefix(&conversation.session_id, 8);
     let convo_artifact = format!("agent://claude/{}", conversation.session_id);
 
+    // Build a ConversationView with cross-entry tool result assembly
+    let view = to_view(conversation);
+    let turn_by_id: HashMap<&str, &toolpath_convo::Turn> =
+        view.turns.iter().map(|t| (t.id.as_str(), t)).collect();
+
     let mut steps = Vec::new();
     let mut last_step_id: Option<String> = None;
     let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
+
+    // Generate conversation.init step from first entry metadata
+    let init_step = {
+        let mut init_extra = HashMap::new();
+        for entry in &conversation.entries {
+            if let Some(cwd) = &entry.cwd {
+                init_extra.insert("working_dir".to_string(), json!(cwd));
+            }
+            if let Some(branch) = &entry.git_branch {
+                init_extra.insert("vcs_branch".to_string(), json!(branch));
+            }
+            if let Some(version) = &entry.version {
+                init_extra.insert("version".to_string(), json!(version));
+            }
+            if !init_extra.is_empty() {
+                break;
+            }
+        }
+
+        if !init_extra.is_empty() {
+            let mut changes = HashMap::new();
+            changes.insert(
+                convo_artifact.clone(),
+                ArtifactChange {
+                    raw: None,
+                    structural: Some(StructuralChange {
+                        change_type: "conversation.init".to_string(),
+                        extra: init_extra,
+                    }),
+                },
+            );
+
+            let step = Step {
+                step: StepIdentity {
+                    id: format!("{}-init", conversation.session_id),
+                    parents: vec![],
+                    actor: "tool:claude-code".into(),
+                    timestamp: conversation
+                        .entries
+                        .first()
+                        .map(|e| e.timestamp.clone())
+                        .unwrap_or_default(),
+                },
+                change: changes,
+                meta: None,
+            };
+            last_step_id = Some(step.step.id.clone());
+            Some(step)
+        } else {
+            None
+        }
+    };
+
+    if let Some(init) = init_step {
+        actors
+            .entry("tool:claude-code".to_string())
+            .or_insert_with(|| ActorDefinition {
+                name: Some("Claude Code".to_string()),
+                ..Default::default()
+            });
+        steps.push(init);
+    }
 
     for entry in &conversation.entries {
         if entry.uuid.is_empty() {
@@ -293,6 +361,16 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
                     extra.insert("name".to_string(), json!(tool_use.name));
                     extra.insert("input".to_string(), tool_use.input.clone());
                     extra.insert("category".to_string(), json!(category));
+
+                    // Look up assembled tool result from ConversationView
+                    if let Some(turn) = turn_by_id.get(entry.uuid.as_str())
+                        && let Some(invocation) =
+                            turn.tool_uses.iter().find(|tu| tu.id == tool_use.id)
+                        && let Some(result) = &invocation.result
+                    {
+                        extra.insert("result".to_string(), json!(result.content));
+                        extra.insert("is_error".to_string(), json!(result.is_error));
+                    }
 
                     tool_changes.insert(
                         artifact_key,
@@ -1347,5 +1425,305 @@ mod tests {
         let change = &tool_step.change["/src/main.rs"];
         let extra = &change.structural.as_ref().unwrap().extra;
         assert_eq!(extra["input"], input_json);
+    }
+
+    // ── tool result assembly ──────────────────────────────────────────
+
+    #[test]
+    fn test_derive_path_tool_result_assembled() {
+        use crate::types::ToolResultContent;
+
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+
+        // Assistant entry with a tool use
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-assist-1".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Let me read that file".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "tu-read-1".to_string(),
+                        name: "Read".to_string(),
+                        input: serde_json::json!({"file_path": "/src/lib.rs"}),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        // Tool-result-only user entry
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "user".to_string(),
+            uuid: "uuid-result-1".to_string(),
+            timestamp: "2024-01-01T00:00:01Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::User,
+                content: Some(MessageContent::Parts(vec![ContentPart::ToolResult {
+                    tool_use_id: "tu-read-1".to_string(),
+                    content: ToolResultContent::Text("fn main() {}".to_string()),
+                    is_error: false,
+                }])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // Should produce 2 steps: conversation + tool (tool-result-only entry skipped)
+        assert_eq!(path.steps.len(), 2);
+
+        // The tool step should have the result assembled
+        let tool_step = &path.steps[1];
+        assert_eq!(tool_step.step.id, "uuid-assist-1-tool-Read");
+        let change = &tool_step.change["/src/lib.rs"];
+        let extra = &change.structural.as_ref().unwrap().extra;
+        assert_eq!(extra["result"], "fn main() {}");
+        assert_eq!(extra["is_error"], false);
+    }
+
+    #[test]
+    fn test_derive_path_tool_result_error() {
+        use crate::types::ToolResultContent;
+
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-assist-err".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Parts(vec![
+                    ContentPart::Text {
+                        text: "Running command".to_string(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "tu-bash-1".to_string(),
+                        name: "Bash".to_string(),
+                        input: serde_json::json!({"command": "cargo test"}),
+                    },
+                ])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        // Tool result with error
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "user".to_string(),
+            uuid: "uuid-result-err".to_string(),
+            timestamp: "2024-01-01T00:00:01Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::User,
+                content: Some(MessageContent::Parts(vec![ContentPart::ToolResult {
+                    tool_use_id: "tu-bash-1".to_string(),
+                    content: ToolResultContent::Text("compilation failed".to_string()),
+                    is_error: true,
+                }])),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let tool_step = &path.steps[1];
+        let bash_key = tool_step.change.keys().next().unwrap();
+        let extra = &tool_step.change[bash_key].structural.as_ref().unwrap().extra;
+        assert_eq!(extra["result"], "compilation failed");
+        assert_eq!(extra["is_error"], true);
+    }
+
+    // ── conversation.init step ────────────────────────────────────────
+
+    #[test]
+    fn test_derive_path_init_step_with_cwd() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut entry = make_entry(
+            "uuid-1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        );
+        entry.cwd = Some("/home/user/project".to_string());
+        entry.version = Some("1.2.3".to_string());
+        convo.add_entry(entry);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // Should have init step + conversation step
+        assert_eq!(path.steps.len(), 2);
+
+        let init = &path.steps[0];
+        assert_eq!(init.step.id, "test-session-12345678-init");
+        assert_eq!(init.step.actor, "tool:claude-code");
+        assert!(init.step.parents.is_empty());
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let structural = init.change[&convo_key].structural.as_ref().unwrap();
+        assert_eq!(structural.change_type, "conversation.init");
+        assert_eq!(structural.extra["working_dir"], "/home/user/project");
+        assert_eq!(structural.extra["version"], "1.2.3");
+    }
+
+    #[test]
+    fn test_derive_path_init_step_is_parent_of_first() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut entry = make_entry(
+            "uuid-1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        );
+        entry.cwd = Some("/project".to_string());
+        convo.add_entry(entry);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // The first conversation step should have init as parent
+        assert_eq!(path.steps.len(), 2);
+        assert_eq!(
+            path.steps[1].step.parents,
+            vec!["test-session-12345678-init".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_derive_path_init_step_with_git_branch() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut entry = make_entry(
+            "uuid-1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        );
+        entry.git_branch = Some("feature/foo".to_string());
+        convo.add_entry(entry);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        assert_eq!(path.steps.len(), 2);
+        let init = &path.steps[0];
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let structural = init.change[&convo_key].structural.as_ref().unwrap();
+        assert_eq!(structural.extra["vcs_branch"], "feature/foo");
+    }
+
+    #[test]
+    fn test_derive_path_no_init_step_without_metadata() {
+        // Standard make_entry has no cwd/version/git_branch
+        let entries = vec![make_entry(
+            "uuid-1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        )];
+        let convo = make_conversation(entries);
+        let config = DeriveConfig::default();
+
+        let path = derive_path(&convo, &config);
+
+        // No init step should be generated
+        assert_eq!(path.steps.len(), 1);
+        assert_eq!(path.steps[0].step.id, "uuid-1");
+    }
+
+    #[test]
+    fn test_derive_path_init_step_actor_registered() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut entry = make_entry(
+            "uuid-1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        );
+        entry.cwd = Some("/project".to_string());
+        convo.add_entry(entry);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let actors = path.meta.as_ref().unwrap().actors.as_ref().unwrap();
+        assert!(actors.contains_key("tool:claude-code"));
+        assert_eq!(
+            actors["tool:claude-code"].name.as_deref(),
+            Some("Claude Code")
+        );
     }
 }
