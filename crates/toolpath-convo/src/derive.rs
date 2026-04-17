@@ -327,6 +327,7 @@ mod tests {
             provider_id: Some("pi".to_string()),
             files_changed: vec![],
             session_ids: vec![],
+            events: vec![],
         }
     }
 
