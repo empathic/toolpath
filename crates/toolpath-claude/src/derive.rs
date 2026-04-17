@@ -264,6 +264,27 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
             }
         }
 
+        // Per-entry metadata for round-trip fidelity
+        if let Some(cwd) = &entry.cwd {
+            convo_extra.insert("cwd".to_string(), json!(cwd));
+        }
+        if let Some(version) = &entry.version {
+            convo_extra.insert("version".to_string(), json!(version));
+        }
+        if let Some(git_branch) = &entry.git_branch {
+            convo_extra.insert("git_branch".to_string(), json!(git_branch));
+        }
+        if let Some(user_type) = &entry.user_type {
+            convo_extra.insert("user_type".to_string(), json!(user_type));
+        }
+        if let Some(request_id) = &entry.request_id {
+            convo_extra.insert("request_id".to_string(), json!(request_id));
+        }
+        // Entry-level extras (isMeta, slug, entrypoint, promptId, etc.)
+        if !entry.extra.is_empty() {
+            convo_extra.insert("entry_extra".to_string(), json!(entry.extra));
+        }
+
         let convo_change = ArtifactChange {
             raw: None,
             structural: Some(StructuralChange {
@@ -1702,6 +1723,217 @@ mod tests {
         // No init step should be generated
         assert_eq!(path.steps.len(), 1);
         assert_eq!(path.steps[0].step.id, "uuid-1");
+    }
+
+    // ── per-entry metadata capture ──────────────────────────────────
+
+    #[test]
+    fn test_derive_path_captures_cwd_and_git_branch() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut entry = make_entry(
+            "uuid-meta-1",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        );
+        entry.cwd = Some("/home/user/project".to_string());
+        entry.git_branch = Some("main".to_string());
+        convo.add_entry(entry);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        // Find the conversation.append step (skip init step)
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let append_step = path
+            .steps
+            .iter()
+            .find(|s| {
+                s.change
+                    .get(&convo_key)
+                    .and_then(|c| c.structural.as_ref())
+                    .is_some_and(|sc| sc.change_type == "conversation.append")
+            })
+            .expect("should have a conversation.append step");
+        let extra = &append_step.change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+
+        assert_eq!(extra["cwd"], "/home/user/project");
+        assert_eq!(extra["git_branch"], "main");
+    }
+
+    #[test]
+    fn test_derive_path_captures_version() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut entry = make_entry(
+            "uuid-meta-2",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        );
+        entry.version = Some("1.5.0".to_string());
+        convo.add_entry(entry);
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let append_step = path
+            .steps
+            .iter()
+            .find(|s| {
+                s.change
+                    .get(&convo_key)
+                    .and_then(|c| c.structural.as_ref())
+                    .is_some_and(|sc| sc.change_type == "conversation.append")
+            })
+            .expect("should have a conversation.append step");
+        let extra = &append_step.change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+
+        assert_eq!(extra["version"], "1.5.0");
+    }
+
+    #[test]
+    fn test_derive_path_captures_user_type_and_request_id() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "assistant".to_string(),
+            uuid: "uuid-meta-3".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::Assistant,
+                content: Some(MessageContent::Text("Response".to_string())),
+                model: Some("claude-sonnet-4-5-20250929".to_string()),
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: Some("external".to_string()),
+            request_id: Some("req-abc-123".to_string()),
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: Default::default(),
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let extra = &path.steps[0].change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+
+        assert_eq!(extra["user_type"], "external");
+        assert_eq!(extra["request_id"], "req-abc-123");
+    }
+
+    #[test]
+    fn test_derive_path_captures_entry_extra() {
+        let mut convo = Conversation::new("test-session-12345678".to_string());
+        let mut entry_extra = HashMap::new();
+        entry_extra.insert(
+            "entrypoint".to_string(),
+            serde_json::json!("cli"),
+        );
+        entry_extra.insert(
+            "isMeta".to_string(),
+            serde_json::json!(true),
+        );
+        entry_extra.insert(
+            "slug".to_string(),
+            serde_json::json!("my-slug"),
+        );
+
+        convo.add_entry(ConversationEntry {
+            parent_uuid: None,
+            is_sidechain: false,
+            entry_type: "user".to_string(),
+            uuid: "uuid-meta-4".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            session_id: Some("test-session".to_string()),
+            message: Some(Message {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text("Hello".to_string())),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            cwd: None,
+            git_branch: None,
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: entry_extra,
+        });
+
+        let config = DeriveConfig::default();
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let extra = &path.steps[0].change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+
+        let entry_extra_val = extra.get("entry_extra").expect("entry_extra should be present");
+        assert_eq!(entry_extra_val["entrypoint"], "cli");
+        assert_eq!(entry_extra_val["isMeta"], true);
+        assert_eq!(entry_extra_val["slug"], "my-slug");
+    }
+
+    #[test]
+    fn test_derive_path_missing_metadata_not_included() {
+        // Standard make_entry has no cwd/version/git_branch/user_type/request_id/extra
+        let entries = vec![make_entry(
+            "uuid-meta-5",
+            MessageRole::User,
+            "Hello",
+            "2024-01-01T00:00:00Z",
+        )];
+        let convo = make_conversation(entries);
+        let config = DeriveConfig::default();
+
+        let path = derive_path(&convo, &config);
+
+        let convo_key = format!("agent://claude/{}", convo.session_id);
+        let extra = &path.steps[0].change[&convo_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+
+        // None of the per-entry metadata fields should be present
+        assert!(!extra.contains_key("cwd"));
+        assert!(!extra.contains_key("version"));
+        assert!(!extra.contains_key("git_branch"));
+        assert!(!extra.contains_key("user_type"));
+        assert!(!extra.contains_key("request_id"));
+        assert!(!extra.contains_key("entry_extra"));
     }
 
     #[test]
