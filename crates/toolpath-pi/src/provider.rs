@@ -718,6 +718,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         provider_id: Some("pi".to_string()),
         files_changed,
         session_ids,
+        events: vec![],
     }
 }
 
