@@ -240,8 +240,11 @@ fn build_assistant_content(turn: &Turn) -> MessageContent {
     let has_tool_uses = !turn.tool_uses.is_empty();
 
     if !has_thinking && !has_tool_uses {
-        // Simple text-only assistant response
-        return MessageContent::Text(turn.text.clone());
+        // Claude Code expects assistant content to always be an array,
+        // even for simple text-only responses.
+        return MessageContent::Parts(vec![ContentPart::Text {
+            text: turn.text.clone(),
+        }]);
     }
 
     let mut parts: Vec<ContentPart> = Vec::new();
@@ -574,8 +577,8 @@ mod tests {
         let msg = asst_entry.message.as_ref().unwrap();
         assert_eq!(msg.role, MessageRole::Assistant);
         assert_eq!(msg.text(), "Hi there!");
-        // Simple text: should be MessageContent::Text, not Parts
-        assert!(matches!(msg.content, Some(MessageContent::Text(_))));
+        // Claude Code requires assistant content to always be an array
+        assert!(matches!(msg.content, Some(MessageContent::Parts(_))));
     }
 
     // ── Test 2: User turn with environment → cwd and git_branch ──────
@@ -643,10 +646,10 @@ mod tests {
         }
     }
 
-    // ── Test 4: Simple text-only assistant → MessageContent::Text ────
+    // ── Test 4: Simple text-only assistant → always Parts (Claude Code requires arrays) ─
 
     #[test]
-    fn test_simple_text_only_assistant_produces_text_not_parts() {
+    fn test_simple_text_only_assistant_produces_parts_array() {
         let turn = assistant_turn("a1", "Just a plain answer.");
 
         let view = make_view("sess-1", vec![turn]);
@@ -654,9 +657,14 @@ mod tests {
 
         let entry = &content_entries(&convo)[0];
         let msg = entry.message.as_ref().unwrap();
-        assert!(
-            matches!(&msg.content, Some(MessageContent::Text(t)) if t == "Just a plain answer.")
-        );
+        // Claude Code expects assistant content to always be an array
+        match &msg.content {
+            Some(MessageContent::Parts(parts)) => {
+                assert_eq!(parts.len(), 1);
+                assert!(matches!(&parts[0], ContentPart::Text { text } if text == "Just a plain answer."));
+            }
+            other => panic!("Expected Parts([Text]), got {:?}", other),
+        }
     }
 
     // ── Test 5: Tool results emitted as separate user entries ─────────
