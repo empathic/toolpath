@@ -12,7 +12,10 @@ use std::collections::{HashMap, HashSet};
 use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
-use crate::{ConversationView, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn};
+use crate::{
+    ConversationView, EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation,
+    ToolResult, Turn,
+};
 
 /// Extract a [`ConversationView`] from a toolpath [`Path`] document.
 ///
@@ -163,6 +166,54 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
 
     let token_usage = build_token_usage(extra);
 
+    let environment = {
+        let cwd = extra
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch = extra
+            .get("git_branch")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if cwd.is_some() || branch.is_some() {
+            Some(EnvironmentSnapshot {
+                working_dir: cwd,
+                vcs_branch: branch,
+                vcs_revision: None,
+            })
+        } else {
+            None
+        }
+    };
+
+    let turn_extra = {
+        let mut claude_data = serde_json::Map::new();
+        if let Some(v) = extra.get("version") {
+            claude_data.insert("version".to_string(), v.clone());
+        }
+        if let Some(v) = extra.get("user_type") {
+            claude_data.insert("user_type".to_string(), v.clone());
+        }
+        if let Some(v) = extra.get("request_id") {
+            claude_data.insert("request_id".to_string(), v.clone());
+        }
+        if let Some(entry_extra) = extra.get("entry_extra").and_then(|v| v.as_object()) {
+            for (k, v) in entry_extra {
+                claude_data.insert(k.clone(), v.clone());
+            }
+        }
+        if claude_data.is_empty() {
+            HashMap::new()
+        } else {
+            let mut map = HashMap::new();
+            map.insert(
+                "claude".to_string(),
+                serde_json::Value::Object(claude_data),
+            );
+            map
+        }
+    };
+
     let parent_id = step.step.parents.first().cloned();
 
     Turn {
@@ -176,9 +227,9 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         model,
         stop_reason,
         token_usage,
-        environment: None,
+        environment,
         delegations: Vec::new(),
-        extra: HashMap::new(),
+        extra: turn_extra,
     }
 }
 
@@ -851,6 +902,133 @@ mod tests {
 
         let view = extract_conversation(&path);
         assert!(view.turns.is_empty());
+    }
+
+    #[test]
+    fn test_environment_from_cwd_and_git_branch() {
+        let path = make_path(vec![make_step(
+            "step-001",
+            "human:alex",
+            "2026-01-01T00:00:00Z",
+            vec![],
+            vec![(
+                "agent://claude-code/sess-1",
+                "conversation.append",
+                extras(&[
+                    ("role", serde_json::json!("user")),
+                    ("text", serde_json::json!("hello")),
+                    ("cwd", serde_json::json!("/home/alex/project")),
+                    ("git_branch", serde_json::json!("feature/cool")),
+                ]),
+            )],
+        )]);
+
+        let view = extract_conversation(&path);
+        let env = view.turns[0].environment.as_ref().unwrap();
+        assert_eq!(env.working_dir.as_deref(), Some("/home/alex/project"));
+        assert_eq!(env.vcs_branch.as_deref(), Some("feature/cool"));
+        assert!(env.vcs_revision.is_none());
+    }
+
+    #[test]
+    fn test_environment_none_when_absent() {
+        let path = make_path(vec![make_step(
+            "step-001",
+            "human:alex",
+            "2026-01-01T00:00:00Z",
+            vec![],
+            vec![(
+                "agent://claude-code/sess-1",
+                "conversation.append",
+                extras(&[
+                    ("role", serde_json::json!("user")),
+                    ("text", serde_json::json!("hello")),
+                ]),
+            )],
+        )]);
+
+        let view = extract_conversation(&path);
+        assert!(view.turns[0].environment.is_none());
+    }
+
+    #[test]
+    fn test_extra_claude_metadata() {
+        let path = make_path(vec![make_step(
+            "step-001",
+            "agent:claude-opus-4-6",
+            "2026-01-01T00:00:00Z",
+            vec![],
+            vec![(
+                "agent://claude-code/sess-1",
+                "conversation.append",
+                extras(&[
+                    ("role", serde_json::json!("assistant")),
+                    ("text", serde_json::json!("hi")),
+                    ("version", serde_json::json!("1.0.30")),
+                    ("user_type", serde_json::json!("pro")),
+                    ("request_id", serde_json::json!("req-abc-123")),
+                ]),
+            )],
+        )]);
+
+        let view = extract_conversation(&path);
+        let claude = view.turns[0].extra.get("claude").unwrap();
+        assert_eq!(claude["version"], serde_json::json!("1.0.30"));
+        assert_eq!(claude["user_type"], serde_json::json!("pro"));
+        assert_eq!(claude["request_id"], serde_json::json!("req-abc-123"));
+    }
+
+    #[test]
+    fn test_entry_extra_merged_into_claude() {
+        let path = make_path(vec![make_step(
+            "step-001",
+            "agent:claude-opus-4-6",
+            "2026-01-01T00:00:00Z",
+            vec![],
+            vec![(
+                "agent://claude-code/sess-1",
+                "conversation.append",
+                extras(&[
+                    ("role", serde_json::json!("assistant")),
+                    ("text", serde_json::json!("hi")),
+                    (
+                        "entry_extra",
+                        serde_json::json!({
+                            "entrypoint": "cli",
+                            "isMeta": true,
+                            "slug": "my-project"
+                        }),
+                    ),
+                ]),
+            )],
+        )]);
+
+        let view = extract_conversation(&path);
+        let claude = view.turns[0].extra.get("claude").unwrap();
+        assert_eq!(claude["entrypoint"], serde_json::json!("cli"));
+        assert_eq!(claude["isMeta"], serde_json::json!(true));
+        assert_eq!(claude["slug"], serde_json::json!("my-project"));
+    }
+
+    #[test]
+    fn test_extra_empty_when_no_metadata() {
+        let path = make_path(vec![make_step(
+            "step-001",
+            "human:alex",
+            "2026-01-01T00:00:00Z",
+            vec![],
+            vec![(
+                "agent://claude-code/sess-1",
+                "conversation.append",
+                extras(&[
+                    ("role", serde_json::json!("user")),
+                    ("text", serde_json::json!("hello")),
+                ]),
+            )],
+        )]);
+
+        let view = extract_conversation(&path);
+        assert!(view.turns[0].extra.is_empty());
     }
 
     #[test]
