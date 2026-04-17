@@ -61,9 +61,7 @@ fn test_read_session_parses_fixture() {
     let temp = TempDir::new().unwrap();
     let manager = manager_for(&temp);
     write_fixture(manager.resolver().sessions_dir());
-    let session = manager
-        .read_session(PROJECT_CWD, "demo-session-1")
-        .unwrap();
+    let session = manager.read_session(PROJECT_CWD, "demo-session-1").unwrap();
     assert_eq!(session.header.id, "demo-session-1");
     // 1 header + 4 messages
     assert_eq!(session.entries.len(), 5);
@@ -74,9 +72,7 @@ fn test_to_view_produces_expected_turns() {
     let temp = TempDir::new().unwrap();
     let manager = manager_for(&temp);
     write_fixture(manager.resolver().sessions_dir());
-    let session = manager
-        .read_session(PROJECT_CWD, "demo-session-1")
-        .unwrap();
+    let session = manager.read_session(PROJECT_CWD, "demo-session-1").unwrap();
     let view = manager.to_view(&session);
 
     // Turn count: user + assistant + toolResult + assistant = 4
@@ -94,9 +90,7 @@ fn test_derive_path_from_fixture() {
     let temp = TempDir::new().unwrap();
     let manager = manager_for(&temp);
     write_fixture(manager.resolver().sessions_dir());
-    let session = manager
-        .read_session(PROJECT_CWD, "demo-session-1")
-        .unwrap();
+    let session = manager.read_session(PROJECT_CWD, "demo-session-1").unwrap();
 
     let path = toolpath_pi::derive_path(&session, &DeriveConfig::default());
 
@@ -126,9 +120,7 @@ fn test_derive_roundtrip_serde() {
     let temp = TempDir::new().unwrap();
     let manager = manager_for(&temp);
     write_fixture(manager.resolver().sessions_dir());
-    let session = manager
-        .read_session(PROJECT_CWD, "demo-session-1")
-        .unwrap();
+    let session = manager.read_session(PROJECT_CWD, "demo-session-1").unwrap();
 
     let path = toolpath_pi::derive_path(&session, &DeriveConfig::default());
     let doc = toolpath::v1::Document::Path(path);
@@ -137,8 +129,7 @@ fn test_derive_roundtrip_serde() {
     // Compare as structured JSON values — HashMap-based `extra`/`actors` have
     // non-deterministic key order when re-serialized, so a string compare is flaky.
     let a: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let b: serde_json::Value =
-        serde_json::from_str(&parsed.to_json_pretty().unwrap()).unwrap();
+    let b: serde_json::Value = serde_json::from_str(&parsed.to_json_pretty().unwrap()).unwrap();
     assert_eq!(a, b);
 }
 

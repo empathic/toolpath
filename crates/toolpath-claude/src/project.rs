@@ -164,10 +164,7 @@ fn user_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
             .environment
             .as_ref()
             .and_then(|e| e.working_dir.clone()),
-        git_branch: turn
-            .environment
-            .as_ref()
-            .and_then(|e| e.vcs_branch.clone()),
+        git_branch: turn.environment.as_ref().and_then(|e| e.vcs_branch.clone()),
         message: Some(Message {
             role: MessageRole::User,
             content: Some(content),
@@ -288,10 +285,7 @@ fn tool_result_entry(turn: &Turn, session_id: &str) -> Option<ConversationEntry>
     }
 
     let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
-    extra.insert(
-        "sourceToolAssistantUUID".to_string(),
-        json!(turn.id),
-    );
+    extra.insert("sourceToolAssistantUUID".to_string(), json!(turn.id));
 
     Some(ConversationEntry {
         uuid: format!("{}-result", turn.id),
@@ -397,10 +391,7 @@ fn other_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
 ///
 /// Reconstructs the original JSONL entry from the event's data map.
 /// For system events with text, a message is created.
-fn project_event(
-    event: &toolpath_convo::ConversationEvent,
-    session_id: &str,
-) -> ConversationEntry {
+fn project_event(event: &toolpath_convo::ConversationEvent, session_id: &str) -> ConversationEntry {
     let mut extra = HashMap::new();
 
     // Extract entry_extra and merge into top-level extras
@@ -661,7 +652,9 @@ mod tests {
         match &msg.content {
             Some(MessageContent::Parts(parts)) => {
                 assert_eq!(parts.len(), 1);
-                assert!(matches!(&parts[0], ContentPart::Text { text } if text == "Just a plain answer."));
+                assert!(
+                    matches!(&parts[0], ContentPart::Text { text } if text == "Just a plain answer.")
+                );
             }
             other => panic!("Expected Parts([Text]), got {:?}", other),
         }
@@ -773,10 +766,7 @@ mod tests {
         let mut t3 = user_turn("u2", "Second");
         t3.parent_id = Some("a1".to_string());
 
-        let view = make_view(
-            "my-session",
-            vec![user_turn("u1", "First"), t2, t3],
-        );
+        let view = make_view("my-session", vec![user_turn("u1", "First"), t2, t3]);
         let convo = ClaudeProjector.project(&view).unwrap();
 
         assert_eq!(convo.session_id, "my-session");

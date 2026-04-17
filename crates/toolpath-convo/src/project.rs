@@ -52,7 +52,9 @@ where
     P::Output: 'static,
 {
     fn project_erased(&self, view: &ConversationView) -> Result<Box<dyn Any>> {
-        self.0.project(view).map(|out| Box::new(out) as Box<dyn Any>)
+        self.0
+            .project(view)
+            .map(|out| Box::new(out) as Box<dyn Any>)
     }
 }
 

@@ -224,10 +224,7 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
             HashMap::new()
         } else {
             let mut map = HashMap::new();
-            map.insert(
-                "claude".to_string(),
-                serde_json::Value::Object(claude_data),
-            );
+            map.insert("claude".to_string(), serde_json::Value::Object(claude_data));
             map
         }
     };
@@ -252,9 +249,18 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
 }
 
 fn build_token_usage(extra: &HashMap<String, serde_json::Value>) -> Option<TokenUsage> {
-    let input = extra.get("input_tokens").and_then(|v| v.as_u64()).map(|n| n as u32);
-    let output = extra.get("output_tokens").and_then(|v| v.as_u64()).map(|n| n as u32);
-    let cache_read = extra.get("cache_read_tokens").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let input = extra
+        .get("input_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
+    let output = extra
+        .get("output_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
+    let cache_read = extra
+        .get("cache_read_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
     let cache_write = extra
         .get("cache_write_tokens")
         .and_then(|v| v.as_u64())
@@ -358,10 +364,7 @@ mod tests {
     use toolpath::v1::{ArtifactChange, PathIdentity, StructuralChange};
 
     fn make_path(steps: Vec<Step>) -> Path {
-        let head = steps
-            .last()
-            .map(|s| s.step.id.clone())
-            .unwrap_or_default();
+        let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
         Path {
             path: PathIdentity {
                 id: "test-path".into(),
@@ -621,7 +624,10 @@ mod tests {
                 extras(&[
                     ("role", serde_json::json!("assistant")),
                     ("text", serde_json::json!("The answer is 42.")),
-                    ("thinking", serde_json::json!("Let me think about this carefully...")),
+                    (
+                        "thinking",
+                        serde_json::json!("Let me think about this carefully..."),
+                    ),
                 ]),
             )],
         )]);
@@ -1133,7 +1139,10 @@ mod tests {
 
         assert_eq!(view.events[0].id, "step-001");
         assert_eq!(view.events[0].event_type, "attachment");
-        assert_eq!(view.events[0].data["cwd"], serde_json::json!("/home/alex/project"));
+        assert_eq!(
+            view.events[0].data["cwd"],
+            serde_json::json!("/home/alex/project")
+        );
         assert_eq!(view.events[0].data["version"], serde_json::json!("1.0.30"));
         assert!(view.events[0].parent_id.is_none());
 

@@ -165,10 +165,7 @@ pub fn read_session_from_file(path: &Path) -> Result<PiSession> {
     for line in reader.lines() {
         line_no += 1;
         let line = line.map_err(|e| {
-            PiError::invalid_session_file(
-                path.to_path_buf(),
-                format!("read line {line_no}: {e}"),
-            )
+            PiError::invalid_session_file(path.to_path_buf(), format!("read line {line_no}: {e}"))
         })?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -283,18 +280,14 @@ fn read_header_only(path: &Path) -> Result<SessionHeader> {
     let reader = BufReader::new(file);
 
     for line in reader.lines() {
-        let line = line.map_err(|e| {
-            PiError::invalid_session_file(path.to_path_buf(), format!("read: {e}"))
-        })?;
+        let line = line
+            .map_err(|e| PiError::invalid_session_file(path.to_path_buf(), format!("read: {e}")))?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
         let entry: Entry = serde_json::from_str(trimmed).map_err(|e| {
-            PiError::invalid_session_file(
-                path.to_path_buf(),
-                format!("malformed header json: {e}"),
-            )
+            PiError::invalid_session_file(path.to_path_buf(), format!("malformed header json: {e}"))
         })?;
         return match entry {
             Entry::Session(h) => Ok(h),
@@ -327,9 +320,8 @@ pub fn count_entries(path: &Path) -> Result<usize> {
     let reader = BufReader::new(file);
     let mut total = 0usize;
     for line in reader.lines() {
-        let line = line.map_err(|e| {
-            PiError::invalid_session_file(path.to_path_buf(), format!("read: {e}"))
-        })?;
+        let line = line
+            .map_err(|e| PiError::invalid_session_file(path.to_path_buf(), format!("read: {e}")))?;
         if !line.trim().is_empty() {
             total += 1;
         }
@@ -368,11 +360,7 @@ pub fn list_session_files(resolver: &PathResolver, project: &str) -> Result<Vec<
 ///
 /// Matches by header `id` or by filename stem (`<date>_<uuid>.jsonl` where
 /// `<uuid>` equals `session_id`).
-pub fn read_session(
-    resolver: &PathResolver,
-    project: &str,
-    session_id: &str,
-) -> Result<PiSession> {
+pub fn read_session(resolver: &PathResolver, project: &str, session_id: &str) -> Result<PiSession> {
     let project_dir = resolver.project_dir(project);
     if !project_dir.exists() {
         return Err(PiError::project_not_found(project));
@@ -552,10 +540,7 @@ mod tests {
         let s = read_session_from_file(&path).unwrap();
         // Header + one message; unknown entry skipped.
         assert_eq!(s.entries.len(), 2);
-        let has_message = s
-            .entries
-            .iter()
-            .any(|e| matches!(e, Entry::Message { .. }));
+        let has_message = s.entries.iter().any(|e| matches!(e, Entry::Message { .. }));
         assert!(has_message);
     }
 
@@ -565,10 +550,7 @@ mod tests {
         let parent_path = tmp.path().join("parent.jsonl");
         write_jsonl(
             &parent_path,
-            &[
-                &header_line("parent-sess"),
-                &msg_line("p1", None, "t", "p"),
-            ],
+            &[&header_line("parent-sess"), &msg_line("p1", None, "t", "p")],
         );
         let child_path = tmp.path().join("child.jsonl");
         write_jsonl(

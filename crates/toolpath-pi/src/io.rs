@@ -35,7 +35,11 @@ pub fn list_sessions(resolver: &PathResolver, project: &str) -> Result<Vec<Sessi
         let entry = match entry {
             Ok(e) => e,
             Err(err) => {
-                eprintln!("warning: skipping entry in {}: {}", project_dir.display(), err);
+                eprintln!(
+                    "warning: skipping entry in {}: {}",
+                    project_dir.display(),
+                    err
+                );
                 continue;
             }
         };
@@ -69,10 +73,7 @@ pub fn list_sessions(resolver: &PathResolver, project: &str) -> Result<Vec<Sessi
             .as_deref()
             .and_then(parse_header_id_and_timestamp);
 
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
         let total_nonempty = match count_nonempty_lines(&path) {
             Ok(n) => n,
@@ -205,10 +206,7 @@ mod tests {
         let projects = list_projects(&resolver).unwrap();
         assert_eq!(
             projects,
-            vec![
-                "/Users/alex/proj".to_string(),
-                "/home/bob/repo".to_string(),
-            ]
+            vec!["/Users/alex/proj".to_string(), "/home/bob/repo".to_string(),]
         );
     }
 
@@ -437,7 +435,10 @@ mod tests {
             &proj_dir.join("good.jsonl"),
             "{\"type\":\"session\",\"id\":\"good\",\"timestamp\":\"2026-04-16T10:00:00Z\"}\n",
         );
-        write_file(&proj_dir.join("weird.jsonl"), "not-json at all\nmore junk\n");
+        write_file(
+            &proj_dir.join("weird.jsonl"),
+            "not-json at all\nmore junk\n",
+        );
         let resolver = resolver_with(temp.path());
         let sessions = list_sessions(&resolver, "/p").unwrap();
         // Both files should appear; weird one falls back on filename + mtime.

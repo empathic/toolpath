@@ -19,8 +19,8 @@ pub mod watcher;
 pub use async_watcher::{AsyncConversationWatcher, WatcherConfig, WatcherHandle};
 pub use error::{ConvoError, Result};
 pub use io::ConvoIO;
-pub use project::ClaudeProjector;
 pub use paths::PathResolver;
+pub use project::ClaudeProjector;
 pub use query::{ConversationQuery, HistoryQuery};
 pub use reader::ConversationReader;
 pub use types::{

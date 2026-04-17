@@ -297,11 +297,7 @@ fn list_pi_projects(manager: &toolpath_pi::PiConvo, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn list_pi_sessions(
-    manager: &toolpath_pi::PiConvo,
-    project_path: &str,
-    json: bool,
-) -> Result<()> {
+fn list_pi_sessions(manager: &toolpath_pi::PiConvo, project_path: &str, json: bool) -> Result<()> {
     let sessions = manager
         .list_sessions(project_path)
         .map_err(|e| anyhow::anyhow!("{}", e))?;

@@ -399,7 +399,9 @@ mod tests {
             Entry::Message { base, message, .. } => {
                 assert_eq!(base.id, "aa11bb22");
                 match message {
-                    AgentMessage::User { content, timestamp, .. } => {
+                    AgentMessage::User {
+                        content, timestamp, ..
+                    } => {
                         assert_eq!(*timestamp, 1_700_000_000_000);
                         match content {
                             MessageContent::Text(s) => assert_eq!(s, "hello"),
@@ -430,7 +432,10 @@ mod tests {
         });
         let entry: Entry = serde_json::from_value(raw).unwrap();
         match entry {
-            Entry::Message { message: AgentMessage::User { content, .. }, .. } => match content {
+            Entry::Message {
+                message: AgentMessage::User { content, .. },
+                ..
+            } => match content {
                 MessageContent::Blocks(blocks) => {
                     assert_eq!(blocks.len(), 1);
                     assert!(matches!(&blocks[0], ContentBlock::Text { text, .. } if text == "hi"));
@@ -468,7 +473,16 @@ mod tests {
         });
         let entry: Entry = serde_json::from_value(raw).unwrap();
         match &entry {
-            Entry::Message { message: AgentMessage::Assistant { content, usage, stop_reason, .. }, .. } => {
+            Entry::Message {
+                message:
+                    AgentMessage::Assistant {
+                        content,
+                        usage,
+                        stop_reason,
+                        ..
+                    },
+                ..
+            } => {
                 assert_eq!(content.len(), 2);
                 assert_eq!(usage.total_tokens, 33);
                 assert_eq!(*stop_reason, StopReason::Known(KnownStopReason::ToolUse));
@@ -601,7 +615,9 @@ mod tests {
         });
         let entry: Entry = serde_json::from_value(raw).unwrap();
         match &entry {
-            Entry::ModelChange { provider, model_id, .. } => {
+            Entry::ModelChange {
+                provider, model_id, ..
+            } => {
                 assert_eq!(provider, "anthropic");
                 assert_eq!(model_id, "claude-opus-4-7");
             }
@@ -672,7 +688,9 @@ mod tests {
         });
         let entry: Entry = serde_json::from_value(raw).unwrap();
         match &entry {
-            Entry::BranchSummary { from_id, summary, .. } => {
+            Entry::BranchSummary {
+                from_id, summary, ..
+            } => {
                 assert_eq!(from_id, "aa00");
                 assert_eq!(summary, "branched off");
             }
@@ -693,7 +711,9 @@ mod tests {
         });
         let entry: Entry = serde_json::from_value(raw).unwrap();
         match &entry {
-            Entry::Custom { custom_type, data, .. } => {
+            Entry::Custom {
+                custom_type, data, ..
+            } => {
                 assert_eq!(custom_type, "telemetry");
                 assert_eq!(data.get("k").and_then(|v| v.as_str()), Some("v"));
             }
@@ -715,7 +735,12 @@ mod tests {
         });
         let entry: Entry = serde_json::from_value(raw).unwrap();
         match &entry {
-            Entry::CustomMessage { custom_type, display, content, .. } => {
+            Entry::CustomMessage {
+                custom_type,
+                display,
+                content,
+                ..
+            } => {
                 assert_eq!(custom_type, "hint");
                 assert!(*display);
                 assert!(matches!(content, MessageContent::Text(s) if s == "some hint"));
@@ -727,7 +752,8 @@ mod tests {
 
     #[test]
     fn test_content_block_text() {
-        let v: ContentBlock = serde_json::from_value(json!({"type": "text", "text": "hi"})).unwrap();
+        let v: ContentBlock =
+            serde_json::from_value(json!({"type": "text", "text": "hi"})).unwrap();
         assert!(matches!(&v, ContentBlock::Text { text, .. } if text == "hi"));
         let s = serde_json::to_string(&v).unwrap();
         assert!(s.contains("\"type\":\"text\""));
@@ -742,7 +768,9 @@ mod tests {
         }))
         .unwrap();
         match &v {
-            ContentBlock::Image { data, mime_type, .. } => {
+            ContentBlock::Image {
+                data, mime_type, ..
+            } => {
                 assert_eq!(data, "ZGF0YQ==");
                 assert_eq!(mime_type, "image/png");
             }
@@ -769,7 +797,12 @@ mod tests {
         }))
         .unwrap();
         match &v {
-            ContentBlock::ToolCall { id, name, arguments, .. } => {
+            ContentBlock::ToolCall {
+                id,
+                name,
+                arguments,
+                ..
+            } => {
                 assert_eq!(id, "tc1");
                 assert_eq!(name, "read");
                 assert_eq!(arguments.get("path").and_then(|p| p.as_str()), Some("/x"));
@@ -864,15 +897,24 @@ mod tests {
         assert!(matches!(entries[0], Entry::Session(_)));
         assert!(matches!(
             &entries[1],
-            Entry::Message { message: AgentMessage::User { .. }, .. }
+            Entry::Message {
+                message: AgentMessage::User { .. },
+                ..
+            }
         ));
         assert!(matches!(
             &entries[2],
-            Entry::Message { message: AgentMessage::Assistant { .. }, .. }
+            Entry::Message {
+                message: AgentMessage::Assistant { .. },
+                ..
+            }
         ));
         assert!(matches!(
             &entries[3],
-            Entry::Message { message: AgentMessage::ToolResult { .. }, .. }
+            Entry::Message {
+                message: AgentMessage::ToolResult { .. },
+                ..
+            }
         ));
     }
 }

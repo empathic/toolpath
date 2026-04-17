@@ -137,9 +137,8 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
         // Determine if this is a conversational entry (user/assistant with message)
         // or a non-message event entry
         let message = entry.message.as_ref();
-        let is_conversational = message.is_some_and(|m| {
-            matches!(m.role, MessageRole::User | MessageRole::Assistant)
-        });
+        let is_conversational =
+            message.is_some_and(|m| matches!(m.role, MessageRole::User | MessageRole::Assistant));
 
         if !is_conversational {
             // Event entry — capture as conversation.event step
@@ -282,9 +281,7 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
             Some(MessageContent::Parts(parts)) => {
                 for part in parts {
                     match part {
-                        ContentPart::Text { text }
-                            if !text.trim().is_empty() =>
-                        {
+                        ContentPart::Text { text } if !text.trim().is_empty() => {
                             text_parts.push(text.clone());
                         }
                         ContentPart::Thinking { thinking, .. } => {
@@ -389,12 +386,7 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
         // Build conversation step using full UUID as step ID
         let step_id = entry.uuid.clone();
         let parents = if entry.is_sidechain {
-            entry
-                .parent_uuid
-                .as_ref()
-                .cloned()
-                .into_iter()
-                .collect()
+            entry.parent_uuid.as_ref().cloned().into_iter().collect()
         } else {
             last_step_id.iter().cloned().collect()
         };
@@ -660,7 +652,10 @@ mod tests {
 
     #[test]
     fn test_safe_prefix_unicode() {
-        assert_eq!(safe_prefix("\u{65E5}\u{672C}\u{8A9E}\u{30C6}\u{30B9}\u{30C8}", 3), "\u{65E5}\u{672C}\u{8A9E}");
+        assert_eq!(
+            safe_prefix("\u{65E5}\u{672C}\u{8A9E}\u{30C6}\u{30B9}\u{30C8}", 3),
+            "\u{65E5}\u{672C}\u{8A9E}"
+        );
     }
 
     // ── tool helpers ──────────────────────────────────────────────────
@@ -751,8 +746,18 @@ mod tests {
         let path = derive_path(&convo, &config);
 
         // Parents are full UUIDs
-        assert!(path.steps[1].step.parents.contains(&"uuid-1111".to_string()));
-        assert!(path.steps[2].step.parents.contains(&"uuid-2222".to_string()));
+        assert!(
+            path.steps[1]
+                .step
+                .parents
+                .contains(&"uuid-1111".to_string())
+        );
+        assert!(
+            path.steps[2]
+                .step
+                .parents
+                .contains(&"uuid-2222".to_string())
+        );
     }
 
     #[test]
@@ -942,7 +947,12 @@ mod tests {
         // Tool step has the file artifact with tool.invoke
         assert_eq!(path.steps[1].step.id, "uuid-tool-tool-Write");
         assert_eq!(path.steps[1].step.actor, "agent:claude-code/tool:Write");
-        assert!(path.steps[1].step.parents.contains(&"uuid-tool".to_string()));
+        assert!(
+            path.steps[1]
+                .step
+                .parents
+                .contains(&"uuid-tool".to_string())
+        );
         assert!(path.steps[1].change.contains_key("/tmp/test.rs"));
 
         let tool_change = &path.steps[1].change["/tmp/test.rs"];
@@ -988,10 +998,12 @@ mod tests {
         assert_eq!(path.steps.len(), 3);
         // Sidechain step should reference e1's full UUID as parent
         let sidechain_step = &path.steps[2];
-        assert!(sidechain_step
-            .step
-            .parents
-            .contains(&"uuid-main-11".to_string()));
+        assert!(
+            sidechain_step
+                .step
+                .parents
+                .contains(&"uuid-main-11".to_string())
+        );
     }
 
     // ── derive_project ─────────────────────────────────────────────────
@@ -1724,7 +1736,11 @@ mod tests {
 
         let tool_step = &path.steps[1];
         let bash_key = tool_step.change.keys().next().unwrap();
-        let extra = &tool_step.change[bash_key].structural.as_ref().unwrap().extra;
+        let extra = &tool_step.change[bash_key]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
         assert_eq!(extra["result"], "compilation failed");
         assert_eq!(extra["is_error"], true);
     }
@@ -1734,12 +1750,7 @@ mod tests {
     #[test]
     fn test_derive_path_init_step_with_cwd() {
         let mut convo = Conversation::new("test-session-12345678".to_string());
-        let mut entry = make_entry(
-            "uuid-1",
-            MessageRole::User,
-            "Hello",
-            "2024-01-01T00:00:00Z",
-        );
+        let mut entry = make_entry("uuid-1", MessageRole::User, "Hello", "2024-01-01T00:00:00Z");
         entry.cwd = Some("/home/user/project".to_string());
         entry.version = Some("1.2.3".to_string());
         convo.add_entry(entry);
@@ -1765,12 +1776,7 @@ mod tests {
     #[test]
     fn test_derive_path_init_step_is_parent_of_first() {
         let mut convo = Conversation::new("test-session-12345678".to_string());
-        let mut entry = make_entry(
-            "uuid-1",
-            MessageRole::User,
-            "Hello",
-            "2024-01-01T00:00:00Z",
-        );
+        let mut entry = make_entry("uuid-1", MessageRole::User, "Hello", "2024-01-01T00:00:00Z");
         entry.cwd = Some("/project".to_string());
         convo.add_entry(entry);
 
@@ -1788,12 +1794,7 @@ mod tests {
     #[test]
     fn test_derive_path_init_step_with_git_branch() {
         let mut convo = Conversation::new("test-session-12345678".to_string());
-        let mut entry = make_entry(
-            "uuid-1",
-            MessageRole::User,
-            "Hello",
-            "2024-01-01T00:00:00Z",
-        );
+        let mut entry = make_entry("uuid-1", MessageRole::User, "Hello", "2024-01-01T00:00:00Z");
         entry.git_branch = Some("feature/foo".to_string());
         convo.add_entry(entry);
 
@@ -1950,18 +1951,9 @@ mod tests {
     fn test_derive_path_captures_entry_extra() {
         let mut convo = Conversation::new("test-session-12345678".to_string());
         let mut entry_extra = HashMap::new();
-        entry_extra.insert(
-            "entrypoint".to_string(),
-            serde_json::json!("cli"),
-        );
-        entry_extra.insert(
-            "isMeta".to_string(),
-            serde_json::json!(true),
-        );
-        entry_extra.insert(
-            "slug".to_string(),
-            serde_json::json!("my-slug"),
-        );
+        entry_extra.insert("entrypoint".to_string(), serde_json::json!("cli"));
+        entry_extra.insert("isMeta".to_string(), serde_json::json!(true));
+        entry_extra.insert("slug".to_string(), serde_json::json!("my-slug"));
 
         convo.add_entry(ConversationEntry {
             parent_uuid: None,
@@ -2001,7 +1993,9 @@ mod tests {
             .unwrap()
             .extra;
 
-        let entry_extra_val = extra.get("entry_extra").expect("entry_extra should be present");
+        let entry_extra_val = extra
+            .get("entry_extra")
+            .expect("entry_extra should be present");
         assert_eq!(entry_extra_val["entrypoint"], "cli");
         assert_eq!(entry_extra_val["isMeta"], true);
         assert_eq!(entry_extra_val["slug"], "my-slug");
@@ -2040,12 +2034,7 @@ mod tests {
     #[test]
     fn test_derive_path_init_step_actor_registered() {
         let mut convo = Conversation::new("test-session-12345678".to_string());
-        let mut entry = make_entry(
-            "uuid-1",
-            MessageRole::User,
-            "Hello",
-            "2024-01-01T00:00:00Z",
-        );
+        let mut entry = make_entry("uuid-1", MessageRole::User, "Hello", "2024-01-01T00:00:00Z");
         entry.cwd = Some("/project".to_string());
         convo.add_entry(entry);
 
@@ -2062,11 +2051,7 @@ mod tests {
 
     // ── conversation.event steps (non-message entries) ────────────────
 
-    fn make_event_entry(
-        uuid: &str,
-        entry_type: &str,
-        timestamp: &str,
-    ) -> ConversationEntry {
+    fn make_event_entry(uuid: &str, entry_type: &str, timestamp: &str) -> ConversationEntry {
         ConversationEntry {
             parent_uuid: None,
             is_sidechain: false,
@@ -2119,10 +2104,7 @@ mod tests {
         assert_eq!(event_step.step.actor, "tool:claude-code");
 
         let convo_key = format!("agent://claude/{}", convo.session_id);
-        let structural = event_step.change[&convo_key]
-            .structural
-            .as_ref()
-            .unwrap();
+        let structural = event_step.change[&convo_key].structural.as_ref().unwrap();
         assert_eq!(structural.change_type, "conversation.event");
         assert_eq!(structural.extra["entry_type"], "attachment");
     }
@@ -2145,10 +2127,7 @@ mod tests {
         assert_eq!(event_step.step.actor, "tool:claude-code");
 
         let convo_key = format!("agent://claude/{}", convo.session_id);
-        let structural = event_step.change[&convo_key]
-            .structural
-            .as_ref()
-            .unwrap();
+        let structural = event_step.change[&convo_key].structural.as_ref().unwrap();
         assert_eq!(structural.change_type, "conversation.event");
         assert_eq!(structural.extra["entry_type"], "system");
         assert_eq!(structural.extra["text"], "Turn duration: 5s");
@@ -2166,10 +2145,7 @@ mod tests {
 
         assert_eq!(path.steps.len(), 1);
         // Synthetic ID: {session_id}-event-{index}
-        assert_eq!(
-            path.steps[0].step.id,
-            "test-session-12345678-event-0"
-        );
+        assert_eq!(path.steps[0].step.id, "test-session-12345678-event-0");
     }
 
     #[test]
@@ -2198,10 +2174,7 @@ mod tests {
 
         assert_eq!(path.steps.len(), 3);
         // The assistant step's parent should be the USER step, not the event step
-        assert_eq!(
-            path.steps[2].step.parents,
-            vec!["uuid-u1".to_string()]
-        );
+        assert_eq!(path.steps[2].step.parents, vec!["uuid-u1".to_string()]);
         // The head should be the assistant step, not the event step
         assert_eq!(path.path.head, "uuid-a1");
     }
@@ -2209,11 +2182,8 @@ mod tests {
     #[test]
     fn test_derive_path_event_step_extras_contain_metadata() {
         let mut convo = Conversation::new("test-session-12345678".to_string());
-        let mut event = make_event_entry(
-            "uuid-ev1",
-            "file-history-snapshot",
-            "2024-01-01T00:00:00Z",
-        );
+        let mut event =
+            make_event_entry("uuid-ev1", "file-history-snapshot", "2024-01-01T00:00:00Z");
         event.cwd = Some("/home/user/project".to_string());
         event.version = Some("1.5.0".to_string());
         event.git_branch = Some("main".to_string());
@@ -2249,18 +2219,17 @@ mod tests {
         assert_eq!(extra["version"], "1.5.0");
         assert_eq!(extra["git_branch"], "main");
         assert_eq!(extra["user_type"], "external");
-        assert_eq!(extra["snapshot"], serde_json::json!({"files": ["/src/main.rs"]}));
+        assert_eq!(
+            extra["snapshot"],
+            serde_json::json!({"files": ["/src/main.rs"]})
+        );
         assert_eq!(extra["message_id"], "msg-123");
     }
 
     #[test]
     fn test_derive_path_event_entry_extra_preserved() {
         let mut convo = Conversation::new("test-session-12345678".to_string());
-        let mut event = make_event_entry(
-            "uuid-ev2",
-            "attachment",
-            "2024-01-01T00:00:00Z",
-        );
+        let mut event = make_event_entry("uuid-ev2", "attachment", "2024-01-01T00:00:00Z");
         let mut extras = HashMap::new();
         extras.insert("hookName".to_string(), serde_json::json!("pre-tool-use"));
         extras.insert("toolName".to_string(), serde_json::json!("Bash"));
@@ -2277,7 +2246,9 @@ mod tests {
             .unwrap()
             .extra;
 
-        let entry_extra = extra.get("entry_extra").expect("entry_extra should be present");
+        let entry_extra = extra
+            .get("entry_extra")
+            .expect("entry_extra should be present");
         assert_eq!(entry_extra["hookName"], "pre-tool-use");
         assert_eq!(entry_extra["toolName"], "Bash");
     }
@@ -2291,11 +2262,7 @@ mod tests {
             "Hello",
             "2024-01-01T00:00:00Z",
         ));
-        let mut event = make_event_entry(
-            "uuid-ev-parent",
-            "attachment",
-            "2024-01-01T00:00:01Z",
-        );
+        let mut event = make_event_entry("uuid-ev-parent", "attachment", "2024-01-01T00:00:01Z");
         event.parent_uuid = Some("uuid-u1".to_string());
         convo.add_entry(event);
 
@@ -2303,20 +2270,13 @@ mod tests {
         let path = derive_path(&convo, &config);
 
         // Event step should use its own parent_uuid
-        assert_eq!(
-            path.steps[1].step.parents,
-            vec!["uuid-u1".to_string()]
-        );
+        assert_eq!(path.steps[1].step.parents, vec!["uuid-u1".to_string()]);
     }
 
     #[test]
     fn test_derive_path_event_with_tool_use_result() {
         let mut convo = Conversation::new("test-session-12345678".to_string());
-        let mut event = make_event_entry(
-            "uuid-ev-tur",
-            "attachment",
-            "2024-01-01T00:00:00Z",
-        );
+        let mut event = make_event_entry("uuid-ev-tur", "attachment", "2024-01-01T00:00:00Z");
         event.tool_use_result = Some(serde_json::json!({
             "tool_use_id": "tu-123",
             "content": "hook output"

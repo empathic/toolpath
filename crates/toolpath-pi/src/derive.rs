@@ -63,9 +63,7 @@ pub fn derive_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{
-        AgentMessage, Entry, EntryBase, MessageContent, SessionHeader,
-    };
+    use crate::types::{AgentMessage, Entry, EntryBase, MessageContent, SessionHeader};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -149,7 +147,10 @@ mod tests {
     fn test_derive_graph_with_title() {
         let s = make_session("sess-alpha");
         let g = derive_graph(&[s], Some("My Release"), &DeriveConfig::default());
-        assert_eq!(g.meta.as_ref().and_then(|m| m.title.as_deref()), Some("My Release"));
+        assert_eq!(
+            g.meta.as_ref().and_then(|m| m.title.as_deref()),
+            Some("My Release")
+        );
     }
 
     #[test]

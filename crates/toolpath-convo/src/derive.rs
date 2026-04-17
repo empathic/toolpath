@@ -56,10 +56,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let base = config
         .base_uri
         .clone()
-        .map(|uri| Base {
-            uri,
-            ref_str: None,
-        })
+        .map(|uri| Base { uri, ref_str: None })
         .or_else(|| {
             view.turns
                 .iter()
@@ -195,10 +192,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         steps.push(step);
     }
 
-    let head = steps
-        .last()
-        .map(|s| s.step.id.clone())
-        .unwrap_or_default();
+    let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
 
     // Meta
     let title = config
@@ -270,11 +264,7 @@ fn record_actor(
         }
     } else {
         // system:*, other:*
-        let name = actor
-            .split_once(':')
-            .map(|x| x.1)
-            .unwrap_or("")
-            .to_string();
+        let name = actor.split_once(':').map(|x| x.1).unwrap_or("").to_string();
         ActorDefinition {
             name: Some(name),
             ..Default::default()

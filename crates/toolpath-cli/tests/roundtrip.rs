@@ -4,10 +4,10 @@ use std::fs;
 
 use tempfile::TempDir;
 
-use toolpath_claude::derive::{derive_path, DeriveConfig};
+use toolpath_claude::derive::{DeriveConfig, derive_path};
 use toolpath_claude::project::ClaudeProjector;
 use toolpath_claude::{ClaudeConvo, PathResolver};
-use toolpath_convo::{extract_conversation, ConversationProjector};
+use toolpath_convo::{ConversationProjector, extract_conversation};
 
 const FIXTURE: &str = r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-rt","cwd":"/test/project","gitBranch":"main","message":{"role":"user","content":"Fix the authentication bug in login.rs"}}
 {"uuid":"uuid-2","type":"assistant","parentUuid":"uuid-1","timestamp":"2024-01-01T00:00:01Z","sessionId":"session-rt","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The bug is in the token validation"},{"type":"text","text":"I'll fix that. Let me read the file first."},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"src/login.rs"}}],"model":"claude-opus-4-6","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":50}}}
@@ -36,7 +36,9 @@ fn roundtrip_claude_conversation() {
     let (_temp, convo) = setup_fixture();
 
     // Step 1: Read the original conversation and produce a reference view.
-    let conversation = convo.read_conversation("/test/project", "session-rt").unwrap();
+    let conversation = convo
+        .read_conversation("/test/project", "session-rt")
+        .unwrap();
     let original_view = toolpath_claude::provider::to_view(&conversation);
 
     // Step 2: Derive a toolpath Path from the conversation.
@@ -84,10 +86,7 @@ fn roundtrip_claude_conversation() {
             ext.role, orig.role,
         );
 
-        assert_eq!(
-            ext.text, orig.text,
-            "turn {i}: text mismatch",
-        );
+        assert_eq!(ext.text, orig.text, "turn {i}: text mismatch",);
 
         assert_eq!(
             ext.tool_uses.len(),
@@ -97,12 +96,7 @@ fn roundtrip_claude_conversation() {
             orig.tool_uses.len(),
         );
 
-        for (j, (et, ot)) in ext
-            .tool_uses
-            .iter()
-            .zip(orig.tool_uses.iter())
-            .enumerate()
-        {
+        for (j, (et, ot)) in ext.tool_uses.iter().zip(orig.tool_uses.iter()).enumerate() {
             assert_eq!(
                 et.name, ot.name,
                 "turn {i}, tool {j}: name mismatch: {} vs {}",
@@ -125,10 +119,16 @@ fn roundtrip_claude_conversation() {
                 }
                 (None, None) => {}
                 (Some(_), None) => {
-                    panic!("turn {i}, tool {j} ({}): extracted has result but original does not", et.name);
+                    panic!(
+                        "turn {i}, tool {j} ({}): extracted has result but original does not",
+                        et.name
+                    );
                 }
                 (None, Some(_)) => {
-                    panic!("turn {i}, tool {j} ({}): original has result but extracted does not", et.name);
+                    panic!(
+                        "turn {i}, tool {j} ({}): original has result but extracted does not",
+                        et.name
+                    );
                 }
             }
         }
@@ -136,8 +136,14 @@ fn roundtrip_claude_conversation() {
 
     // ── Assertions: token usage ─────────────────────────────────────
 
-    let ext_usage = extracted_view.total_usage.as_ref().expect("extracted view should have total_usage");
-    let orig_usage = original_view.total_usage.as_ref().expect("original view should have total_usage");
+    let ext_usage = extracted_view
+        .total_usage
+        .as_ref()
+        .expect("extracted view should have total_usage");
+    let orig_usage = original_view
+        .total_usage
+        .as_ref()
+        .expect("original view should have total_usage");
     assert_eq!(
         ext_usage.input_tokens, orig_usage.input_tokens,
         "input token mismatch",
@@ -268,10 +274,7 @@ fn test_cli_project_command() {
         let parsed: serde_json::Value =
             serde_json::from_str(line).expect("Each line should be valid JSON");
         assert!(parsed.is_object(), "Each JSONL entry should be an object");
-        assert!(
-            parsed.get("type").is_some(),
-            "Entry should have type"
-        );
+        assert!(parsed.get("type").is_some(), "Entry should have type");
         // Preamble entries (permission-mode) don't have uuid;
         // conversation entries do.
         let entry_type = parsed["type"].as_str().unwrap_or("");

@@ -440,9 +440,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 let role: Role;
 
                 match message {
-                    AgentMessage::User {
-                        content, extra, ..
-                    } => {
+                    AgentMessage::User { content, extra, .. } => {
                         role = Role::User;
                         text = extract_user_text(content);
                         if !extra.is_empty() {
@@ -471,7 +469,10 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                         let turn_idx = turns.len();
                         for block in content {
                             if let ContentBlock::ToolCall {
-                                id, name, arguments, ..
+                                id,
+                                name,
+                                arguments,
+                                ..
                             } = block
                             {
                                 let category = classify_tool(name);
@@ -1014,7 +1015,10 @@ mod tests {
         assert_eq!(classify_tool("grep"), Some(ToolCategory::FileSearch));
         assert_eq!(classify_tool("webfetch"), Some(ToolCategory::Network));
         assert_eq!(classify_tool("Task"), Some(ToolCategory::Delegation));
-        assert_eq!(classify_tool("some-agent-run"), Some(ToolCategory::Delegation));
+        assert_eq!(
+            classify_tool("some-agent-run"),
+            Some(ToolCategory::Delegation)
+        );
         assert_eq!(classify_tool("obscure"), None);
     }
 
@@ -1100,10 +1104,7 @@ mod tests {
         assert_eq!(v.turns[0].role, Role::Other("bash".to_string()));
         assert!(v.turns[0].text.starts_with("$ ls"));
         assert_eq!(v.turns[0].tool_uses.len(), 1);
-        assert_eq!(
-            v.turns[0].tool_uses[0].category,
-            Some(ToolCategory::Shell)
-        );
+        assert_eq!(v.turns[0].tool_uses[0].category, Some(ToolCategory::Shell));
     }
 
     #[test]

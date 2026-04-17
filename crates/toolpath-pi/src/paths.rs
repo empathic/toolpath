@@ -184,13 +184,7 @@ mod tests {
 
     #[test]
     fn test_encode_roundtrip() {
-        for cwd in [
-            "/Users/alex/proj",
-            "/",
-            "/a",
-            "/a/b/c",
-            "/home/user/repo",
-        ] {
+        for cwd in ["/Users/alex/proj", "/", "/a", "/a/b/c", "/home/user/repo"] {
             let encoded = encode_project(cwd);
             let decoded = decode_project(&encoded);
             assert_eq!(decoded, cwd, "roundtrip failed for {cwd}");
@@ -273,18 +267,14 @@ mod tests {
         let projects = resolver.list_projects().unwrap();
         assert_eq!(
             projects,
-            vec![
-                "/Users/alex/proj".to_string(),
-                "/home/bob/repo".to_string(),
-            ]
+            vec!["/Users/alex/proj".to_string(), "/home/bob/repo".to_string(),]
         );
     }
 
     #[test]
     fn test_exists_returns_false_for_missing_dir() {
         let temp = TempDir::new().unwrap();
-        let resolver =
-            PathResolver::new().with_sessions_dir(temp.path().join("nope"));
+        let resolver = PathResolver::new().with_sessions_dir(temp.path().join("nope"));
         assert!(!resolver.exists());
     }
 

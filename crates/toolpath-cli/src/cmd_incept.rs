@@ -199,7 +199,10 @@ mod tests {
         let result = run(args);
         // May fail if ~/.claude doesn't exist in CI, but in dev it should work
         if result.is_err() {
-            eprintln!("Skipping incept test (no ~/.claude): {}", result.unwrap_err());
+            eprintln!(
+                "Skipping incept test (no ~/.claude): {}",
+                result.unwrap_err()
+            );
             return;
         }
     }

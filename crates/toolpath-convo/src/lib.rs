@@ -4,7 +4,7 @@ pub mod derive;
 pub mod extract;
 pub mod project;
 
-pub use derive::{derive_path, DeriveConfig};
+pub use derive::{DeriveConfig, derive_path};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

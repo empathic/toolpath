@@ -529,16 +529,14 @@ mod tests {
     #[test]
     fn test_run_pi_most_recent() {
         let (_temp, manager) = setup_pi_manager();
-        let result =
-            run_pi_with_manager(&manager, "/test/project".to_string(), None, false, false);
+        let result = run_pi_with_manager(&manager, "/test/project".to_string(), None, false, false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_run_pi_all() {
         let (_temp, manager) = setup_pi_manager();
-        let result =
-            run_pi_with_manager(&manager, "/test/project".to_string(), None, true, false);
+        let result = run_pi_with_manager(&manager, "/test/project".to_string(), None, true, false);
         assert!(result.is_ok());
     }
 
