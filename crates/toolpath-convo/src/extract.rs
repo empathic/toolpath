@@ -13,8 +13,8 @@ use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
 use crate::{
-    ConversationView, EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation,
-    ToolResult, Turn,
+    ConversationEvent, ConversationView, EnvironmentSnapshot, Role, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn,
 };
 
 /// Extract a [`ConversationView`] from a toolpath [`Path`] document.
@@ -33,6 +33,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
         provider_id: None,
         files_changed: Vec::new(),
         session_ids: Vec::new(),
+        events: Vec::new(),
     };
 
     // Map from step ID → index into view.turns, for parent lookups.
@@ -56,6 +57,23 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     let idx = view.turns.len();
                     step_to_turn.insert(&step.step.id, idx);
                     view.turns.push(turn);
+                }
+                "conversation.event" => {
+                    let event_type = structural
+                        .extra
+                        .get("entry_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    let event = ConversationEvent {
+                        id: step.step.id.clone(),
+                        timestamp: step.step.timestamp.clone(),
+                        parent_id: step.step.parents.first().cloned(),
+                        event_type,
+                        data: structural.extra.clone(),
+                    };
+                    view.events.push(event);
                 }
                 "tool.invoke" => {
                     let invocation = build_tool_invocation(&structural.extra);
@@ -1069,5 +1087,115 @@ mod tests {
         let view = extract_conversation(&path);
         // agent:// URL should NOT appear in files_changed even with file_write category.
         assert!(view.files_changed.is_empty());
+    }
+
+    #[test]
+    fn test_conversation_event_extracted() {
+        let path = make_path(vec![
+            make_step(
+                "step-001",
+                "tool:claude-code",
+                "2026-01-01T00:00:00Z",
+                vec![],
+                vec![(
+                    "agent://claude-code/sess-1",
+                    "conversation.event",
+                    extras(&[
+                        ("entry_type", serde_json::json!("attachment")),
+                        ("cwd", serde_json::json!("/home/alex/project")),
+                        ("version", serde_json::json!("1.0.30")),
+                        (
+                            "entry_extra",
+                            serde_json::json!({"attachment": {"fileName": "test.png"}}),
+                        ),
+                    ]),
+                )],
+            ),
+            make_step(
+                "step-002",
+                "tool:claude-code",
+                "2026-01-01T00:00:01Z",
+                vec!["step-001"],
+                vec![(
+                    "agent://claude-code/sess-1",
+                    "conversation.event",
+                    extras(&[
+                        ("entry_type", serde_json::json!("file-history-snapshot")),
+                        ("snapshot", serde_json::json!({"files": []})),
+                    ]),
+                )],
+            ),
+        ]);
+
+        let view = extract_conversation(&path);
+        assert!(view.turns.is_empty());
+        assert_eq!(view.events.len(), 2);
+
+        assert_eq!(view.events[0].id, "step-001");
+        assert_eq!(view.events[0].event_type, "attachment");
+        assert_eq!(view.events[0].data["cwd"], serde_json::json!("/home/alex/project"));
+        assert_eq!(view.events[0].data["version"], serde_json::json!("1.0.30"));
+        assert!(view.events[0].parent_id.is_none());
+
+        assert_eq!(view.events[1].id, "step-002");
+        assert_eq!(view.events[1].event_type, "file-history-snapshot");
+        assert_eq!(view.events[1].parent_id.as_deref(), Some("step-001"));
+        assert!(view.events[1].data.contains_key("snapshot"));
+    }
+
+    #[test]
+    fn test_conversation_event_with_unknown_type() {
+        let path = make_path(vec![make_step(
+            "step-001",
+            "tool:claude-code",
+            "2026-01-01T00:00:00Z",
+            vec![],
+            vec![(
+                "agent://claude-code/sess-1",
+                "conversation.event",
+                extras(&[("cwd", serde_json::json!("/tmp"))]),
+            )],
+        )]);
+
+        let view = extract_conversation(&path);
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].event_type, "unknown");
+    }
+
+    #[test]
+    fn test_conversation_event_mixed_with_turns() {
+        let path = make_path(vec![
+            make_step(
+                "step-001",
+                "tool:claude-code",
+                "2026-01-01T00:00:00Z",
+                vec![],
+                vec![(
+                    "agent://claude-code/sess-1",
+                    "conversation.event",
+                    extras(&[("entry_type", serde_json::json!("system"))]),
+                )],
+            ),
+            make_step(
+                "step-002",
+                "human:alex",
+                "2026-01-01T00:00:01Z",
+                vec!["step-001"],
+                vec![(
+                    "agent://claude-code/sess-1",
+                    "conversation.append",
+                    extras(&[
+                        ("role", serde_json::json!("user")),
+                        ("text", serde_json::json!("hello")),
+                    ]),
+                )],
+            ),
+        ]);
+
+        let view = extract_conversation(&path);
+        assert_eq!(view.turns.len(), 1);
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.turns[0].text, "hello");
+        assert_eq!(view.events[0].event_type, "system");
     }
 }

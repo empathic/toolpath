@@ -39,6 +39,7 @@ use toolpath_convo::{
 ///     provider_id: None,
 ///     files_changed: vec![],
 ///     session_ids: vec![],
+///     events: vec![],
 /// };
 ///
 /// let projector = ClaudeProjector;
@@ -60,30 +61,13 @@ impl ConversationProjector for ClaudeProjector {
 fn project_view(view: &ConversationView) -> std::result::Result<Conversation, String> {
     let mut convo = Conversation::new(view.id.clone());
 
-    // Emit permission-mode preamble
-    let perm_entry = ConversationEntry {
-        uuid: String::new(),
-        entry_type: "permission-mode".into(),
-        timestamp: String::new(),
-        session_id: Some(view.id.clone()),
-        parent_uuid: None,
-        is_sidechain: false,
-        message: None,
-        cwd: None,
-        git_branch: None,
-        version: None,
-        user_type: None,
-        request_id: None,
-        tool_use_result: None,
-        snapshot: None,
-        message_id: None,
-        extra: {
-            let mut m = HashMap::new();
-            m.insert("permissionMode".to_string(), json!("default"));
-            m
-        },
-    };
-    convo.add_entry(perm_entry);
+    // Emit permission-mode preamble as raw JSON (not a ConversationEntry —
+    // real permission-mode lines have only type/permissionMode/sessionId)
+    convo.preamble.push(json!({
+        "type": "permission-mode",
+        "permissionMode": "default",
+        "sessionId": view.id,
+    }));
 
     for turn in &view.turns {
         match &turn.role {
@@ -114,6 +98,12 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 convo.add_entry(entry);
             }
         }
+    }
+
+    // Emit non-message events
+    for event in &view.events {
+        let entry = project_event(event, &view.id);
+        convo.add_entry(entry);
     }
 
     Ok(convo)
@@ -400,6 +390,83 @@ fn other_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
     }
 }
 
+/// Build a `ConversationEntry` from a [`ConversationEvent`].
+///
+/// Reconstructs the original JSONL entry from the event's data map.
+/// For system events with text, a message is created.
+fn project_event(
+    event: &toolpath_convo::ConversationEvent,
+    session_id: &str,
+) -> ConversationEntry {
+    let mut extra = HashMap::new();
+
+    // Extract entry_extra and merge into top-level extras
+    if let Some(entry_extra) = event.data.get("entry_extra").and_then(|v| v.as_object()) {
+        for (k, v) in entry_extra {
+            extra.insert(k.clone(), v.clone());
+        }
+    }
+
+    // If the event has text (system messages), create a message
+    let message = event
+        .data
+        .get("text")
+        .and_then(|v| v.as_str())
+        .map(|text| Message {
+            role: if event.event_type == "system" {
+                MessageRole::System
+            } else {
+                MessageRole::User
+            },
+            content: Some(MessageContent::Text(text.to_string())),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        });
+
+    ConversationEntry {
+        uuid: event.id.clone(),
+        entry_type: event.event_type.clone(),
+        timestamp: event.timestamp.clone(),
+        session_id: Some(session_id.into()),
+        parent_uuid: event.parent_id.clone(),
+        is_sidechain: false,
+        message,
+        cwd: event
+            .data
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        git_branch: event
+            .data
+            .get("git_branch")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        version: event
+            .data
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        user_type: event
+            .data
+            .get("user_type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        request_id: None,
+        tool_use_result: event.data.get("tool_use_result").cloned(),
+        snapshot: event.data.get("snapshot").cloned(),
+        message_id: event
+            .data
+            .get("message_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        extra,
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -417,6 +484,7 @@ mod tests {
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
+            events: vec![],
         }
     }
 
@@ -456,31 +524,26 @@ mod tests {
         }
     }
 
-    /// Helper: skip the permission-mode preamble and return remaining entries.
+    /// Helper: return all conversation entries (preamble is separate).
     fn content_entries(convo: &Conversation) -> &[ConversationEntry] {
-        assert!(
-            !convo.entries.is_empty(),
-            "expected at least the permission-mode entry"
-        );
-        assert_eq!(convo.entries[0].entry_type, "permission-mode");
-        &convo.entries[1..]
+        &convo.entries
     }
 
     // ── Permission-mode preamble ─────────────────────────────────────
 
     #[test]
-    fn test_permission_mode_entry_is_first() {
+    fn test_permission_mode_in_preamble() {
         let view = make_view("sess-1", vec![user_turn("u1", "Hello")]);
         let convo = ClaudeProjector.project(&view).unwrap();
 
-        assert!(convo.entries.len() >= 2); // perm + user
-        let perm = &convo.entries[0];
-        assert_eq!(perm.entry_type, "permission-mode");
-        assert_eq!(perm.uuid, "");
-        assert_eq!(perm.timestamp, "");
-        assert_eq!(perm.session_id.as_deref(), Some("sess-1"));
-        assert!(perm.message.is_none());
-        assert_eq!(perm.extra.get("permissionMode"), Some(&json!("default")));
+        assert_eq!(convo.preamble.len(), 1);
+        let perm = &convo.preamble[0];
+        assert_eq!(perm["type"], "permission-mode");
+        assert_eq!(perm["permissionMode"], "default");
+        assert_eq!(perm["sessionId"], "sess-1");
+        // Should NOT have uuid, timestamp, isSidechain etc.
+        assert!(perm.get("uuid").is_none());
+        assert!(perm.get("timestamp").is_none());
     }
 
     // ── Test 1: Basic conversation (user + assistant, no tools) ───────

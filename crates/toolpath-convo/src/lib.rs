@@ -101,6 +101,26 @@ pub struct DelegatedWork {
     pub result: Option<String>,
 }
 
+/// A non-conversational event from the session (hook result, snapshot, etc.)
+///
+/// These are provider-specific entries that aren't turns but need to
+/// be preserved for round-trip fidelity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationEvent {
+    /// Unique identifier (may be synthetic for entries without UUIDs).
+    pub id: String,
+    /// When this event occurred.
+    pub timestamp: String,
+    /// Parent event or turn ID (for ordering).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Event type (e.g., "attachment", "system", "file-history-snapshot").
+    pub event_type: String,
+    /// Event data — provider-specific key-value pairs.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub data: HashMap<String, serde_json::Value>,
+}
+
 /// Toolpath's classification of what a tool invocation does.
 ///
 /// This is toolpath's ontology, not a provider-specific label. Provider
@@ -233,6 +253,12 @@ pub struct ConversationView {
     /// for non-chained conversations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub session_ids: Vec<String>,
+
+    /// Non-conversational events (hooks, snapshots, metadata) in order.
+    /// These are provider-specific entries that aren't turns but need to
+    /// be preserved for round-trip fidelity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<ConversationEvent>,
 }
 
 impl ConversationView {
@@ -501,6 +527,7 @@ mod tests {
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
+            events: vec![],
         }
     }
 
@@ -529,6 +556,7 @@ mod tests {
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
+            events: vec![],
         };
         assert!(view.title(50).is_none());
     }
@@ -873,6 +901,7 @@ mod tests {
             provider_id: Some("claude-code".into()),
             files_changed: vec!["src/main.rs".into(), "src/lib.rs".into()],
             session_ids: vec![],
+            events: vec![],
         };
         let json = serde_json::to_string(&view).unwrap();
         let back: ConversationView = serde_json::from_str(&json).unwrap();
@@ -909,5 +938,92 @@ mod tests {
         let json = serde_json::to_string(&meta).unwrap();
         let back: ConversationMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(back.message_count, 5);
+    }
+
+    #[test]
+    fn test_conversation_event_serde_roundtrip() {
+        let event = ConversationEvent {
+            id: "evt-1".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: Some("t1".into()),
+            event_type: "attachment".into(),
+            data: {
+                let mut m = HashMap::new();
+                m.insert("cwd".into(), serde_json::json!("/project"));
+                m.insert("version".into(), serde_json::json!("1.0"));
+                m
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ConversationEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "evt-1");
+        assert_eq!(back.event_type, "attachment");
+        assert_eq!(back.parent_id.as_deref(), Some("t1"));
+        assert_eq!(back.data["cwd"], serde_json::json!("/project"));
+    }
+
+    #[test]
+    fn test_conversation_event_empty_data_omitted() {
+        let event = ConversationEvent {
+            id: "evt-2".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: None,
+            event_type: "system".into(),
+            data: HashMap::new(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(!json.contains("data"));
+        assert!(!json.contains("parent_id"));
+    }
+
+    #[test]
+    fn test_conversation_view_with_events_serde() {
+        let view = ConversationView {
+            id: "s1".into(),
+            started_at: None,
+            last_activity: None,
+            turns: vec![],
+            total_usage: None,
+            provider_id: None,
+            files_changed: vec![],
+            session_ids: vec![],
+            events: vec![ConversationEvent {
+                id: "evt-1".into(),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                parent_id: None,
+                event_type: "attachment".into(),
+                data: HashMap::new(),
+            }],
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(json.contains("events"));
+        let back: ConversationView = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.events.len(), 1);
+        assert_eq!(back.events[0].event_type, "attachment");
+    }
+
+    #[test]
+    fn test_conversation_view_empty_events_omitted() {
+        let view = ConversationView {
+            id: "s1".into(),
+            started_at: None,
+            last_activity: None,
+            turns: vec![],
+            total_usage: None,
+            provider_id: None,
+            files_changed: vec![],
+            session_ids: vec![],
+            events: vec![],
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(!json.contains("events"));
+    }
+
+    #[test]
+    fn test_conversation_view_old_format_no_events() {
+        // Old-format JSON without events field should deserialize with empty vec
+        let json = r#"{"id":"s1","started_at":null,"last_activity":null,"turns":[]}"#;
+        let view: ConversationView = serde_json::from_str(&json).unwrap();
+        assert!(view.events.is_empty());
     }
 }

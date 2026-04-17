@@ -88,6 +88,7 @@ where
 ///     provider_id: None,
 ///     files_changed: vec![],
 ///     session_ids: vec![],
+///     events: vec![],
 /// };
 ///
 /// let projector = AnyProjector::new(TurnCounter);
@@ -153,6 +154,7 @@ mod tests {
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
+            events: vec![],
         }
     }
 
@@ -188,6 +190,7 @@ mod tests {
             provider_id: Some("test-provider".into()),
             files_changed: vec![],
             session_ids: vec![],
+            events: vec![],
         }
     }
 
@@ -334,6 +337,7 @@ mod tests {
             id: "s3".into(),
             started_at: None,
             last_activity: None,
+            events: vec![],
             turns: vec![Turn {
                 id: "t1".into(),
                 parent_id: None,
@@ -405,6 +409,7 @@ mod tests {
             id: "s4".into(),
             started_at: None,
             last_activity: None,
+            events: vec![],
             turns: vec![
                 Turn {
                     id: "t1".into(),

@@ -59,8 +59,14 @@ fn run_claude(input: PathBuf, output: Option<PathBuf>) -> Result<()> {
             .project(&view)
             .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
 
-        // Serialize each entry as a JSONL line.
-        let mut lines: Vec<String> = Vec::with_capacity(conversation.entries.len());
+        // Serialize preamble + entries as JSONL lines.
+        let mut lines: Vec<String> =
+            Vec::with_capacity(conversation.preamble.len() + conversation.entries.len());
+        for raw in &conversation.preamble {
+            let line = serde_json::to_string(raw)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize preamble: {}", e))?;
+            lines.push(line);
+        }
         for entry in &conversation.entries {
             let line = serde_json::to_string(entry)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize entry: {}", e))?;

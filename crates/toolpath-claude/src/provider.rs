@@ -241,6 +241,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         provider_id: Some("claude-code".into()),
         files_changed,
         session_ids: vec![],
+        events: vec![],
     }
 }
 

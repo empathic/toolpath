@@ -268,12 +268,16 @@ fn test_cli_project_command() {
         let parsed: serde_json::Value =
             serde_json::from_str(line).expect("Each line should be valid JSON");
         assert!(parsed.is_object(), "Each JSONL entry should be an object");
-        // Verify basic ConversationEntry fields are present.
-        assert!(parsed.get("uuid").is_some(), "Entry should have uuid");
         assert!(
             parsed.get("type").is_some(),
             "Entry should have type"
         );
+        // Preamble entries (permission-mode) don't have uuid;
+        // conversation entries do.
+        let entry_type = parsed["type"].as_str().unwrap_or("");
+        if entry_type != "permission-mode" {
+            assert!(parsed.get("uuid").is_some(), "Entry should have uuid");
+        }
         entry_count += 1;
     }
 
