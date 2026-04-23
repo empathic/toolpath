@@ -206,6 +206,8 @@ let md_string = render(&doc, &RenderOptions::default());
 - [CHANGELOG.md](CHANGELOG.md) -- Release history
 - [schema/toolpath.schema.json](schema/toolpath.schema.json) -- JSON Schema
 - [examples/](examples/) -- 11 example documents covering steps, paths, and graphs
+- [docs/agents/formats/](docs/agents/formats/README.md) -- Reference for the on-disk
+  formats emitted by agents we derive from (Claude Code today; more as they land)
 
 ## Requirements
 

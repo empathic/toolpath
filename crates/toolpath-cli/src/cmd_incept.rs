@@ -1,5 +1,10 @@
 //! `path incept` — project a toolpath document into a Claude session
 //! that Claude Code can load and resume.
+//!
+//! Format rules this command obeys are documented at
+//! `docs/agents/formats/claude-code/writing-compatible-jsonl.md`. When a new
+//! empirical constraint is discovered here, capture it there in the same
+//! change.
 
 use anyhow::Result;
 use std::io::Read;

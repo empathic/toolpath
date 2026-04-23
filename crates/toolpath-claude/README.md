@@ -16,6 +16,12 @@ Reads Claude Code conversation data from `~/.claude/projects/` and provides:
 - **Derivation**: Map conversations to Toolpath Path documents
 - **Watching**: Monitor conversation files for live updates (feature-gated)
 
+For the on-disk format itself — envelope fields, entry types, session chains,
+compaction, and the empirical rules for writing Claude-compatible JSONL — see
+[`docs/agents/formats/claude-code/`](https://github.com/empathic/toolpath/tree/main/docs/agents/formats/claude-code).
+That directory is the authoritative reference; this crate is its reference
+implementation.
+
 ## Derivation
 
 Convert Claude conversations into Toolpath documents:
