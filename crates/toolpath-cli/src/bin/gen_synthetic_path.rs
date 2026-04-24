@@ -60,11 +60,7 @@ const LOREM: &[&str] = &[
     "sed ut perspiciatis unde omnis iste natus error sit voluptatem",
 ];
 
-const TOOLS: &[(&str, f64)] = &[
-    ("Edit", 0.50),
-    ("Write", 0.30),
-    ("MultiEdit", 0.20),
-];
+const TOOLS: &[(&str, f64)] = &[("Edit", 0.50), ("Write", 0.30), ("MultiEdit", 0.20)];
 
 const FILES: &[&str] = &[
     "src/main.rs",
@@ -101,7 +97,10 @@ fn pick_tool(rng: &mut StdRng) -> &'static str {
 
 fn synth_diff(rng: &mut StdRng, path: &str) -> String {
     let lines = rng.random_range(3..12);
-    let mut s = format!("--- a/{}\n+++ b/{}\n@@ -1,{} +1,{} @@\n", path, path, lines, lines);
+    let mut s = format!(
+        "--- a/{}\n+++ b/{}\n@@ -1,{} +1,{} @@\n",
+        path, path, lines, lines
+    );
     for i in 0..lines {
         if rng.random_bool(0.5) {
             s.push_str(&format!("-old_line_{} = value;\n", i));

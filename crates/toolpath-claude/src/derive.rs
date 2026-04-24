@@ -1687,22 +1687,26 @@ mod tests {
         // steps[0] = assistant turn, steps[1] = tool step (siblings).
         let tool_step = &path.steps[1];
         let ch = &tool_step.change["/src/login.rs"];
-        let raw = ch.raw.as_deref().expect("edit tool should emit unified diff");
+        let raw = ch
+            .raw
+            .as_deref()
+            .expect("edit tool should emit unified diff");
         // Leading `/` is stripped from the header so `a/`/`b/` don't double up
         // (git-style prefixes already denote the repo root). See #36.
         assert!(raw.contains("--- a/src/login.rs"), "{}", raw);
         assert!(raw.contains("+++ b/src/login.rs"), "{}", raw);
-        assert!(!raw.contains("a//"), "header should not double-slash: {}", raw);
+        assert!(
+            !raw.contains("a//"),
+            "header should not double-slash: {}",
+            raw
+        );
         assert!(raw.contains("-validate_token()"), "{}", raw);
         assert!(raw.contains("+validate_token_v2()"), "{}", raw);
 
         // Sanity-check the parent wiring that the chat view relies on:
         // the tool step's parent is the assistant step, and they share
         // the same `entry.uuid` root so the frontend splice works.
-        assert_eq!(
-            tool_step.step.parents,
-            vec![path.steps[0].step.id.clone()]
-        );
+        assert_eq!(tool_step.step.parents, vec![path.steps[0].step.id.clone()]);
     }
 
     // ── tool result assembly ──────────────────────────────────────────

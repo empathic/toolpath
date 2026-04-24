@@ -362,11 +362,7 @@ pub fn tray_open_trace(
                 basename_slug(&project),
                 short(&session_id)
             );
-            (
-                value,
-                format!("Claude: {}", basename(&project)),
-                filename,
-            )
+            (value, format!("Claude: {}", basename(&project)), filename)
         }
         "pi" => {
             let value = crate::commands::derive::derive_pi(
@@ -380,11 +376,7 @@ pub fn tray_open_trace(
                 basename_slug(&project),
                 short(&session_id)
             );
-            (
-                value,
-                format!("pi.dev: {}", basename(&project)),
-                filename,
-            )
+            (value, format!("pi.dev: {}", basename(&project)), filename)
         }
         // Not wired up in the desktop backend yet. The popover disables
         // rows for these, but we still reject politely if one slips through.
@@ -574,7 +566,10 @@ mod tests {
         // produce a well-formed snapshot with all five provider slots.
         let s = collect_stats();
         let providers: Vec<_> = s.counts.iter().map(|c| c.provider).collect();
-        assert_eq!(providers, vec!["claude", "gemini", "codex", "opencode", "pi"]);
+        assert_eq!(
+            providers,
+            vec!["claude", "gemini", "codex", "opencode", "pi"]
+        );
     }
 
     #[test]

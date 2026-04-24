@@ -326,7 +326,10 @@ fn file_write_change(
         extra.insert("edits".to_string(), serde_json::Value::Array(edits.clone()));
     }
 
-    (file_write_diff(&tool.name, input, path, before_state), extra)
+    (
+        file_write_diff(&tool.name, input, path, before_state),
+        extra,
+    )
 }
 
 /// Compute a unified diff string for a file-write tool invocation, given the
@@ -675,8 +678,8 @@ mod tests {
             "file_path": "hello.txt",
             "content": "hi\nthere\n",
         });
-        let raw = file_write_diff("Write", &input, "hello.txt", None)
-            .expect("write should emit diff");
+        let raw =
+            file_write_diff("Write", &input, "hello.txt", None).expect("write should emit diff");
         assert!(raw.contains("+hi"));
         assert!(raw.contains("+there"));
         // No `-` lines — nothing was there before.
