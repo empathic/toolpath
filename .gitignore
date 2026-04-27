@@ -1,4 +1,10 @@
 /target
+crates/*/target
+# `toolpath-cli` is excluded from the workspace and generates its own
+# Cargo.lock when built directly. As a deprecated 3-line shim that's only
+# built at release time, the lockfile carries no useful reproducibility
+# signal beyond what path-cli's published version already pins.
+crates/toolpath-cli/Cargo.lock
 /local
 site/wasm/
 .claude/worktrees/

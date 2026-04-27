@@ -12,7 +12,7 @@ nav: home
       Git blame, but for everything that happens to code &mdash; including the stuff git doesn't see.
     </p>
     <div class="hero-install">
-      <span class="prompt">$ </span>cargo install toolpath-cli
+      <span class="prompt">$ </span>cargo install path-cli
       <button id="try-it-btn" class="try-it-btn">Try in browser</button>
     </div>
   </div>
@@ -160,7 +160,7 @@ No parents (it's the first step). No meta. One file, one perspective. Still vali
 
 ```bash
 # Install
-cargo install toolpath-cli
+cargo install path-cli
 
 # Derive provenance from this repo's git history
 path derive git --repo . --branch main --pretty
@@ -188,14 +188,14 @@ path query filter --input doc.json --actor "agent:"
 
 Toolpath is a Rust workspace of focused crates:
 
-| Crate                                                | What it does                               |
-| ---------------------------------------------------- | ------------------------------------------ |
-| [`toolpath`](https://docs.rs/toolpath)               | Core types, builders, query API            |
-| [`toolpath-convo`](https://docs.rs/toolpath-convo)   | Provider-agnostic conversation traits      |
-| [`toolpath-git`](https://docs.rs/toolpath-git)       | Derive from git history                    |
-| [`toolpath-github`](https://docs.rs/toolpath-github) | Derive from GitHub pull requests           |
-| [`toolpath-claude`](https://docs.rs/toolpath-claude) | Derive from Claude conversations           |
-| [`toolpath-dot`](https://docs.rs/toolpath-dot)       | Graphviz DOT visualization                 |
-| [`toolpath-cli`](https://docs.rs/toolpath-cli)       | Unified CLI (`cargo install toolpath-cli`) |
+| Crate                                                | What it does                           |
+| ---------------------------------------------------- | -------------------------------------- |
+| [`toolpath`](https://docs.rs/toolpath)               | Core types, builders, query API        |
+| [`toolpath-convo`](https://docs.rs/toolpath-convo)   | Provider-agnostic conversation traits  |
+| [`toolpath-git`](https://docs.rs/toolpath-git)       | Derive from git history                |
+| [`toolpath-github`](https://docs.rs/toolpath-github) | Derive from GitHub pull requests       |
+| [`toolpath-claude`](https://docs.rs/toolpath-claude) | Derive from Claude conversations       |
+| [`toolpath-dot`](https://docs.rs/toolpath-dot)       | Graphviz DOT visualization             |
+| [`path-cli`](https://docs.rs/path-cli)               | Unified CLI (`cargo install path-cli`) |
 
 See [Crates](/crates/) for details, or [docs.rs](https://docs.rs/toolpath) for API reference.

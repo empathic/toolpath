@@ -66,7 +66,7 @@ pub(crate) fn prompt_line(prompt: &str) -> Result<String> {
 
 pub(crate) fn http_client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
-        .user_agent(concat!("toolpath-cli/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("failed to build HTTP client")

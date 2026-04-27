@@ -31,10 +31,12 @@ step-1 -- step-2 --+
 ## Install
 
 ```bash
-cargo install toolpath-cli
+cargo install path-cli
 ```
 
 This installs a binary called `path`.
+
+> The older `toolpath-cli` crate name still works — `cargo install toolpath-cli` is now a thin shim that pulls in `path-cli` and installs the same binary. New users should reach for `path-cli` directly; the shim will eventually be retired.
 
 ## Workspace
 
@@ -51,7 +53,8 @@ crates/
   toolpath-pi/        Derive from Pi (pi.dev) agent sessions
   toolpath-dot/       Graphviz DOT visualization
   toolpath-md/        Markdown rendering for LLM consumption
-  toolpath-cli/       Unified CLI (binary: path)
+  path-cli/           Unified CLI (binary: path)
+  toolpath-cli/       Deprecated shim that re-exports path-cli
 ```
 
 See each crate's README for library-level documentation.

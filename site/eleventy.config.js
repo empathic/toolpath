@@ -84,7 +84,10 @@ export default function (eleventyConfig) {
       { file: "path-01-pr.path.json", name: "Path: PR with dead end" },
       { file: "path-02-local-session.path.json", name: "Path: local session" },
       { file: "path-03-signed-pr.path.json", name: "Path: signed PR" },
-      { file: "path-04-exploration.path.json", name: "Path: exploration & merge" },
+      {
+        file: "path-04-exploration.path.json",
+        name: "Path: exploration & merge",
+      },
       { file: "graph-01-release.json", name: "Graph: release bundle" },
     ];
     return examples.map((e) => ({

@@ -20,9 +20,10 @@ set -euo pipefail
 #       toolpath-codex    (depends on toolpath, toolpath-convo)
 #       toolpath-opencode (depends on toolpath, toolpath-convo)
 #       toolpath-pi       (depends on toolpath, toolpath-convo)
-#   3. toolpath-cli       (depends on all of the above)
+#   3. path-cli           (depends on all of the above)
+#   4. toolpath-cli       (deprecated shim that depends on path-cli)
 
-ALL_CRATES=(toolpath toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi toolpath-cli)
+ALL_CRATES=(toolpath toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi path-cli toolpath-cli)
 
 DRY_RUN=""
 AUTO_YES=""
@@ -50,8 +51,18 @@ if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
     fi
 fi
 
+# `toolpath-cli` is the only crate that lives outside the workspace (excluded so
+# its `path` bin doesn't collide with `path-cli`'s in the shared workspace
+# target dir). Anything that shells out to cargo for a specific package needs
+# to know where its manifest lives.
+manifest_arg_for() {
+    if [[ "$1" == "toolpath-cli" ]]; then
+        echo "--manifest-path crates/toolpath-cli/Cargo.toml"
+    fi
+}
+
 get_version() {
-    cargo metadata --format-version 1 --no-deps \
+    cargo metadata --format-version 1 --no-deps $(manifest_arg_for "$1") \
         | python3 -c "
 import json, sys
 meta = json.load(sys.stdin)
@@ -188,7 +199,12 @@ publish() {
         return
     fi
     echo "--- publishing $crate $version ---"
-    cargo publish -p "$crate" $DRY_RUN $ALLOW_DIRTY
+    if [[ "$crate" == "toolpath-cli" ]]; then
+        # Excluded from the workspace; publish from its own manifest.
+        (cd crates/toolpath-cli && cargo publish $DRY_RUN $ALLOW_DIRTY)
+    else
+        cargo publish -p "$crate" $DRY_RUN $ALLOW_DIRTY
+    fi
     echo
 }
 
@@ -218,6 +234,12 @@ for crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-clau
 done
 
 # Tier 3: CLI binary (depends on everything above)
+publish path-cli
+if should_publish path-cli; then
+    wait_for_index path-cli "$(crate_version path-cli)"
+fi
+
+# Tier 4: deprecated shim that re-exports path-cli (so `cargo install toolpath-cli` keeps working)
 publish toolpath-cli
 
 echo "=== done ==="

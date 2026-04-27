@@ -1257,6 +1257,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "path-cli"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "chrono",
+ "clap",
+ "git2",
+ "insta",
+ "predicates",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "toolpath",
+ "toolpath-claude",
+ "toolpath-codex",
+ "toolpath-convo",
+ "toolpath-dot",
+ "toolpath-gemini",
+ "toolpath-git",
+ "toolpath-github",
+ "toolpath-md",
+ "toolpath-opencode",
+ "toolpath-pi",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1942,36 +1972,6 @@ dependencies = [
  "tokio",
  "toolpath",
  "toolpath-convo",
-]
-
-[[package]]
-name = "toolpath-cli"
-version = "0.5.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "chrono",
- "clap",
- "git2",
- "insta",
- "predicates",
- "rand",
- "reqwest",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "toolpath",
- "toolpath-claude",
- "toolpath-codex",
- "toolpath-convo",
- "toolpath-dot",
- "toolpath-gemini",
- "toolpath-git",
- "toolpath-github",
- "toolpath-md",
- "toolpath-opencode",
- "toolpath-pi",
 ]
 
 [[package]]

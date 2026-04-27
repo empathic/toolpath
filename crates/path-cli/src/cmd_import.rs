@@ -1031,8 +1031,7 @@ fn derive_pi_with_manager(
                         .ok_or_else(|| {
                             anyhow::anyhow!("No Pi sessions found for project: {}", p)
                         })?;
-                    let doc =
-                        Document::Path(toolpath_pi::derive::derive_path(&session, &config));
+                    let doc = Document::Path(toolpath_pi::derive::derive_path(&session, &config));
                     let cache_id = make_id("pi", &doc_inner_id(&doc));
                     return Ok(vec![DerivedDoc { cache_id, doc }]);
                 }
@@ -1403,9 +1402,8 @@ mod tests {
     #[test]
     fn derive_claude_all_emits_one_cache_entry_per_session() {
         let (_t, mgr) = setup_claude_manager_with_two_sessions();
-        let out =
-            derive_claude_with_manager(&mgr, Some("/test/project".to_string()), None, true)
-                .unwrap();
+        let out = derive_claude_with_manager(&mgr, Some("/test/project".to_string()), None, true)
+            .unwrap();
         assert_eq!(out.len(), 2);
         // Distinct cache ids so both can land in the cache without collision.
         assert_ne!(out[0].cache_id, out[1].cache_id);

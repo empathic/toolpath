@@ -11,7 +11,7 @@
 //! Usage:
 //!
 //! ```text
-//! cargo run -p toolpath-cli --bin gen_synthetic_path -- \
+//! cargo run -p path-cli --bin gen_synthetic_path -- \
 //!     --steps 10000 --out bench/fixtures/synthetic-10k.path.json
 //! ```
 //!

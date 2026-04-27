@@ -88,11 +88,19 @@
     "role": "Renders any Toolpath Document as readable Markdown — a narrative an LLM can reason about. Dead ends are called out explicitly, diffs are included at configurable detail levels, and the output preserves enough anchoring info for an LLM to reference back into the original document."
   },
   {
-    "name": "toolpath-cli",
+    "name": "path-cli",
     "version": "0.5.0",
     "description": "Unified CLI (binary: path)",
+    "docs": "https://docs.rs/path-cli",
+    "crate": "https://crates.io/crates/path-cli",
+    "role": "One binary called `path` that ties everything together: import, export, cache, query, render, merge, track, validate. Pathbase round-trip via `import pathbase` / `export pathbase`."
+  },
+  {
+    "name": "toolpath-cli",
+    "version": "0.5.1",
+    "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",
-    "role": "One binary called `path` that ties everything together: import, export, cache, query, render, merge, track, validate. Pathbase round-trip via `import pathbase` / `export pathbase`."
+    "role": "Shim crate that re-exports `path-cli` so `cargo install toolpath-cli` keeps installing the same `path` binary. Pin to `path-cli` directly for new installs; this shim will be retired in a future release."
   }
 ]

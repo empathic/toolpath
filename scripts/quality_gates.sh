@@ -62,7 +62,7 @@ gate_doc() {
 gate_examples() {
     local failed=0
     for f in "$ROOT"/examples/*.json; do
-        if ! cargo run --quiet -p toolpath-cli -- validate --input "$f" 2>&1; then
+        if ! cargo run --quiet -p path-cli -- validate --input "$f" 2>&1; then
             failed=1
         fi
     done

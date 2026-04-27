@@ -2,7 +2,7 @@
 //! `.path.jsonl` file at the same basename. Used to regenerate the JSONL
 //! example files under `examples/` whenever their JSON counterparts change.
 //!
-//! Usage: `cargo run -p toolpath-cli --example convert-path-to-jsonl -- <in.path.json> <out.path.jsonl>`
+//! Usage: `cargo run -p path-cli --example convert-path-to-jsonl -- <in.path.json> <out.path.jsonl>`
 
 use std::fs;
 use toolpath::v1::{Document, Path};

@@ -172,7 +172,7 @@ When in doubt: copy a real entry's envelope shape field-for-field.
 from a Toolpath document. Its implementation is the working example of
 every rule in this doc:
 
-- CLI entry point: [`crates/toolpath-cli/src/cmd_incept.rs`](../../../../crates/toolpath-cli/src/cmd_incept.rs)
+- CLI entry point: [`crates/path-cli/src/cmd_incept.rs`](../../../../crates/path-cli/src/cmd_incept.rs)
 - Projection logic: `ClaudeProjector` in
   [`crates/toolpath-claude/src/project.rs`](../../../../crates/toolpath-claude/src/project.rs)
   (implements `toolpath_convo::ConversationProjector`)

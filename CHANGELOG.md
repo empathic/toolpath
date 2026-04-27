@@ -2,6 +2,18 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.5.0 + toolpath-cli 0.5.1
+
+### path-cli 0.5.0 (new crate name)
+
+- Renamed the unified CLI crate from `toolpath-cli` to `path-cli` so the package name matches the binary it installs (`path`). No code changes vs. `toolpath-cli` 0.5.0 — the source moved verbatim to `crates/path-cli/`.
+- Extracted a `pub fn run() -> anyhow::Result<()>` library so the deprecated `toolpath-cli` shim can re-export it without duplicating source. The `path` and `gen_synthetic_path` binaries are now thin wrappers around the library.
+
+### toolpath-cli 0.5.1 (deprecation shim)
+
+- `toolpath-cli` is now a tiny shim crate whose only job is to make `cargo install toolpath-cli` keep working — it depends on `path-cli` and ships the same `path` binary. Existing users see no behavioral change on upgrade. The shim will be retired in a future release; pin to `path-cli` directly to avoid the eventual removal.
+- The dev-only `gen_synthetic_path` helper is no longer shipped from this crate; it lives in `path-cli` only.
+
 ## toolpath-claude 0.8.0 + toolpath-gemini 0.2.0 + toolpath-pi 0.2.0
 
 ### toolpath-claude 0.8.0

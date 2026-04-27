@@ -11,8 +11,9 @@ members = [
     "crates/toolpath-dot",
     "crates/toolpath-md",
     "crates/toolpath-pi",
-    "crates/toolpath-cli",
+    "crates/path-cli",
 ]
+exclude = ["crates/toolpath-cli"]
 resolver = "2"
 
 [workspace.package]
@@ -31,6 +32,7 @@ toolpath-github = { version = "0.2.0", path = "crates/toolpath-github" }
 toolpath-dot = { version = "0.1.2", path = "crates/toolpath-dot" }
 toolpath-md = { version = "0.2.0", path = "crates/toolpath-md" }
 toolpath-pi = { version = "0.2.0", path = "crates/toolpath-pi" }
+path-cli = { version = "0.5.0", path = "crates/path-cli" }
 
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -108,5 +108,5 @@ This crate is part of the [Toolpath](https://github.com/empathic/toolpath) works
 - [`toolpath-dot`](https://crates.io/crates/toolpath-dot) — Graphviz DOT visualization
 - [`toolpath-git`](https://crates.io/crates/toolpath-git) — derive from git history
 - [`toolpath-claude`](https://crates.io/crates/toolpath-claude) — derive from Claude conversations
-- [`toolpath-cli`](https://crates.io/crates/toolpath-cli) — unified CLI (`cargo install toolpath-cli`)
+- [`path-cli`](https://crates.io/crates/path-cli) — unified CLI (`cargo install path-cli`)
 - [RFC](https://github.com/empathic/toolpath/blob/main/RFC.md) — full format specification

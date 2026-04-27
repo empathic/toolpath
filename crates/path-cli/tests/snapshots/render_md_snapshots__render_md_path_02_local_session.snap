@@ -1,5 +1,5 @@
 ---
-source: crates/toolpath-cli/tests/render_md_snapshots.rs
+source: crates/path-cli/tests/render_md_snapshots.rs
 expression: "render_md(\"path-02-local-session.path.json\")"
 ---
 # Claude Code session: Add service config

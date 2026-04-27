@@ -362,10 +362,7 @@ fn list_claude_sessions(
     Ok(())
 }
 
-fn list_claude_sessions_all(
-    manager: &toolpath_claude::ClaudeConvo,
-    fmt: ListFormat,
-) -> Result<()> {
+fn list_claude_sessions_all(manager: &toolpath_claude::ClaudeConvo, fmt: ListFormat) -> Result<()> {
     let projects = manager
         .list_projects()
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -415,9 +412,7 @@ fn emit_claude_tsv(m: &toolpath_claude::ConversationMetadata) {
         "{}\t{}\t{}\t{}\t{}",
         sanitize_tsv(&m.project_path),
         sanitize_tsv(&m.session_id),
-        m.last_activity
-            .map(|t| t.to_rfc3339())
-            .unwrap_or_default(),
+        m.last_activity.map(|t| t.to_rfc3339()).unwrap_or_default(),
         m.message_count,
         m.first_user_message
             .as_deref()
@@ -540,10 +535,7 @@ fn list_gemini_sessions(
     Ok(())
 }
 
-fn list_gemini_sessions_all(
-    manager: &toolpath_gemini::GeminiConvo,
-    fmt: ListFormat,
-) -> Result<()> {
+fn list_gemini_sessions_all(manager: &toolpath_gemini::GeminiConvo, fmt: ListFormat) -> Result<()> {
     let projects = manager
         .list_projects()
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -594,9 +586,7 @@ fn emit_gemini_tsv(m: &toolpath_gemini::ConversationMetadata) {
         "{}\t{}\t{}\t{}\t{}",
         sanitize_tsv(&m.project_path),
         sanitize_tsv(&m.session_uuid),
-        m.last_activity
-            .map(|t| t.to_rfc3339())
-            .unwrap_or_default(),
+        m.last_activity.map(|t| t.to_rfc3339()).unwrap_or_default(),
         m.message_count,
         m.first_user_message
             .as_deref()
@@ -643,9 +633,7 @@ fn run_codex(fmt: ListFormat) -> Result<()> {
                 println!(
                     "{}\t{}\t{}\t{}\t{}",
                     sanitize_tsv(&m.id),
-                    m.last_activity
-                        .map(|t| t.to_rfc3339())
-                        .unwrap_or_default(),
+                    m.last_activity.map(|t| t.to_rfc3339()).unwrap_or_default(),
                     m.line_count,
                     m.cwd
                         .as_ref()
@@ -743,16 +731,10 @@ fn run_opencode(project: Option<String>, fmt: ListFormat) -> Result<()> {
                     println!(
                         "{}\t{}\t{}\t{}\t{}",
                         sanitize_tsv(&m.id),
-                        m.last_activity
-                            .map(|t| t.to_rfc3339())
-                            .unwrap_or_default(),
+                        m.last_activity.map(|t| t.to_rfc3339()).unwrap_or_default(),
                         m.message_count,
                         sanitize_tsv(&m.directory.to_string_lossy()),
-                        sanitize_tsv(
-                            m.first_user_message
-                                .as_deref()
-                                .unwrap_or(m.title.as_str()),
-                        ),
+                        sanitize_tsv(m.first_user_message.as_deref().unwrap_or(m.title.as_str()),),
                     );
                 }
             }
@@ -1015,7 +997,11 @@ mod tests {
         let (dir, repo) = init_temp_repo();
         create_commit(&repo, "initial commit", "file.txt", "hello", None);
 
-        let result = run_git(dir.path().to_path_buf(), "origin".to_string(), ListFormat::Pretty);
+        let result = run_git(
+            dir.path().to_path_buf(),
+            "origin".to_string(),
+            ListFormat::Pretty,
+        );
         assert!(result.is_ok());
     }
 
@@ -1024,7 +1010,11 @@ mod tests {
         let (dir, repo) = init_temp_repo();
         create_commit(&repo, "initial commit", "file.txt", "hello", None);
 
-        let result = run_git(dir.path().to_path_buf(), "origin".to_string(), ListFormat::Json);
+        let result = run_git(
+            dir.path().to_path_buf(),
+            "origin".to_string(),
+            ListFormat::Json,
+        );
         assert!(result.is_ok());
     }
 
@@ -1033,14 +1023,22 @@ mod tests {
         let (dir, repo) = init_temp_repo();
         create_commit(&repo, "initial commit", "file.txt", "hello", None);
 
-        let result = run_git(dir.path().to_path_buf(), "origin".to_string(), ListFormat::Tsv);
+        let result = run_git(
+            dir.path().to_path_buf(),
+            "origin".to_string(),
+            ListFormat::Tsv,
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_run_git_invalid_repo() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_git(dir.path().to_path_buf(), "origin".to_string(), ListFormat::Pretty);
+        let result = run_git(
+            dir.path().to_path_buf(),
+            "origin".to_string(),
+            ListFormat::Pretty,
+        );
         assert!(result.is_err());
     }
 

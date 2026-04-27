@@ -7,11 +7,13 @@ permalink: /cli/
 
 # CLI
 
-The `toolpath-cli` crate installs a binary called `path`.
+The `path-cli` crate installs a binary called `path`.
 
 ```bash
-cargo install toolpath-cli
+cargo install path-cli
 ```
+
+> The older `toolpath-cli` crate name is preserved as a deprecated shim — `cargo install toolpath-cli` still installs the same `path` binary, but new users should reach for `path-cli` directly.
 
 ## Commands
 

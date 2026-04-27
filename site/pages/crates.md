@@ -10,7 +10,7 @@ permalink: /crates/
 Toolpath is a Rust workspace of focused, composable crates. The core crate has zero dependencies beyond serde; satellite crates add derivation sources and rendering.
 
 ```
-toolpath-cli (binary: path)
+path-cli (binary: path)
  +-- toolpath           (core types)
  +-- toolpath-convo   -> toolpath (conversation abstraction + shared derivation)
  +-- toolpath-git     -> toolpath
@@ -22,6 +22,9 @@ toolpath-cli (binary: path)
  +-- toolpath-pi      -> toolpath, toolpath-convo
  +-- toolpath-dot     -> toolpath
  +-- toolpath-md      -> toolpath
+
+toolpath-cli (deprecated shim, binary: path)
+ +-- path-cli
 ```
 
 Cross-dependencies between satellite crates: `toolpath-claude -> toolpath-convo`, `toolpath-gemini -> toolpath-convo`, `toolpath-codex -> toolpath-convo`, `toolpath-opencode -> toolpath-convo`, `toolpath-pi -> toolpath-convo`.

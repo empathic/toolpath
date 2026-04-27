@@ -84,4 +84,4 @@ This crate is part of the [Toolpath](https://github.com/empathic/toolpath) works
 - [`toolpath-claude`](https://crates.io/crates/toolpath-claude) — Claude Code provider
 - [`toolpath-gemini`](https://crates.io/crates/toolpath-gemini) — Gemini CLI provider
 - [`toolpath-pi`](https://crates.io/crates/toolpath-pi) — Pi (pi.dev) provider
-- [`toolpath-cli`](https://crates.io/crates/toolpath-cli) — unified CLI (`cargo install toolpath-cli`)
+- [`path-cli`](https://crates.io/crates/path-cli) — unified CLI (`cargo install path-cli`)

@@ -22,7 +22,8 @@ crates/
   toolpath-pi/                  # derive from Pi (pi.dev) agent session logs
   toolpath-dot/                 # Graphviz DOT rendering
   toolpath-md/                  # Markdown rendering for LLM consumption
-  toolpath-cli/                 # unified CLI (binary: path)
+  path-cli/                     # unified CLI (binary: path)
+  toolpath-cli/                 # deprecated shim that re-exports path-cli (excluded from the workspace; see below)
 schema/toolpath.schema.json     # JSON Schema for the format
 examples/*.json                 # 12 example documents (step, path, graph)
 RFC.md                          # full format specification
@@ -32,7 +33,7 @@ FAQ.md                          # design rationale, FAQ, and open questions
 ## Dependency graph
 
 ```
-toolpath-cli (binary: path)
+path-cli (binary: path)
  ├── toolpath           (core types)
  ├── toolpath-convo   → toolpath (conversation abstraction + shared derivation)
  ├── toolpath-git     → toolpath
@@ -44,6 +45,9 @@ toolpath-cli (binary: path)
  ├── toolpath-pi      → toolpath, toolpath-convo
  ├── toolpath-dot     → toolpath
  └── toolpath-md      → toolpath
+
+toolpath-cli (deprecated shim, binary: path)
+ └── path-cli
 ```
 
 Cross-dependencies between satellite crates: `toolpath-claude → toolpath-convo`, `toolpath-gemini → toolpath-convo`, `toolpath-codex → toolpath-convo`, `toolpath-opencode → toolpath-convo`, `toolpath-pi → toolpath-convo`.
@@ -62,49 +66,49 @@ Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
 
 ## CLI usage
 
-The binary is called `path` (package: `toolpath-cli`):
+The binary is called `path` (package: `path-cli`; the older `toolpath-cli` package is a deprecated shim that still installs the same binary for users running `cargo install toolpath-cli`):
 
 ```bash
 # Import from external formats into the local toolpath cache (~/.toolpath/documents/)
-cargo run -p toolpath-cli -- import git --repo . --branch main
-cargo run -p toolpath-cli -- import github https://github.com/owner/repo/pull/42
-cargo run -p toolpath-cli -- import claude --project /path/to/project
-cargo run -p toolpath-cli -- import gemini --project /path/to/project
-cargo run -p toolpath-cli -- import codex --session <uuid>
-cargo run -p toolpath-cli -- import opencode --session ses_<id>
-cargo run -p toolpath-cli -- import pi --project /path/to/project
-cargo run -p toolpath-cli -- import pathbase <trace-id-or-url>
-cargo run -p toolpath-cli -- import claude --project . --no-cache | path render md --input -
+cargo run -p path-cli -- import git --repo . --branch main
+cargo run -p path-cli -- import github https://github.com/owner/repo/pull/42
+cargo run -p path-cli -- import claude --project /path/to/project
+cargo run -p path-cli -- import gemini --project /path/to/project
+cargo run -p path-cli -- import codex --session <uuid>
+cargo run -p path-cli -- import opencode --session ses_<id>
+cargo run -p path-cli -- import pi --project /path/to/project
+cargo run -p path-cli -- import pathbase <trace-id-or-url>
+cargo run -p path-cli -- import claude --project . --no-cache | path render md --input -
 
 # Export toolpath documents into external formats. <ref> is a cache id or a file path.
-cargo run -p toolpath-cli -- export claude --input <ref> --project /tmp/sandbox
-cargo run -p toolpath-cli -- export claude --input <ref> --output conv.jsonl
-cargo run -p toolpath-cli -- export pathbase --input <ref>
+cargo run -p path-cli -- export claude --input <ref> --project /tmp/sandbox
+cargo run -p path-cli -- export claude --input <ref> --output conv.jsonl
+cargo run -p path-cli -- export pathbase --input <ref>
 
 # Manage the cache
-cargo run -p toolpath-cli -- cache ls
-cargo run -p toolpath-cli -- cache rm <cache-id>
+cargo run -p path-cli -- cache ls
+cargo run -p path-cli -- cache rm <cache-id>
 
 # Inspect / analyze
-cargo run -p toolpath-cli -- render dot --input doc.json
-cargo run -p toolpath-cli -- render md --input doc.json --detail full
-cargo run -p toolpath-cli -- query dead-ends --input doc.json
-cargo run -p toolpath-cli -- query ancestors --input doc.json --step-id step-003
-cargo run -p toolpath-cli -- query filter --input doc.json --actor "agent:"
-cargo run -p toolpath-cli -- merge doc1.json doc2.json --title "Combined"
-cargo run -p toolpath-cli -- list git --repo .
-cargo run -p toolpath-cli -- list github --repo owner/repo
-cargo run -p toolpath-cli -- list opencode
-cargo run -p toolpath-cli -- list pi
-cargo run -p toolpath-cli -- list pi --project /path/to/project
-cargo run -p toolpath-cli -- list claude --format tsv  # one session per line, fzf-friendly
-cargo run -p toolpath-cli -- show claude --project /path/to/project --session <session-id>  # markdown summary; used by fzf preview
-cargo run -p toolpath-cli -- track init --file src/main.rs --actor "human:alex"
-cargo run -p toolpath-cli -- validate --input doc.json
-cargo run -p toolpath-cli -- auth login
-cargo run -p toolpath-cli -- auth status
-cargo run -p toolpath-cli -- auth whoami
-cargo run -p toolpath-cli -- auth logout
+cargo run -p path-cli -- render dot --input doc.json
+cargo run -p path-cli -- render md --input doc.json --detail full
+cargo run -p path-cli -- query dead-ends --input doc.json
+cargo run -p path-cli -- query ancestors --input doc.json --step-id step-003
+cargo run -p path-cli -- query filter --input doc.json --actor "agent:"
+cargo run -p path-cli -- merge doc1.json doc2.json --title "Combined"
+cargo run -p path-cli -- list git --repo .
+cargo run -p path-cli -- list github --repo owner/repo
+cargo run -p path-cli -- list opencode
+cargo run -p path-cli -- list pi
+cargo run -p path-cli -- list pi --project /path/to/project
+cargo run -p path-cli -- list claude --format tsv  # one session per line, fzf-friendly
+cargo run -p path-cli -- show claude --project /path/to/project --session <session-id>  # markdown summary; used by fzf preview
+cargo run -p path-cli -- track init --file src/main.rs --actor "human:alex"
+cargo run -p path-cli -- validate --input doc.json
+cargo run -p path-cli -- auth login
+cargo run -p path-cli -- auth status
+cargo run -p path-cli -- auth whoami
+cargo run -p path-cli -- auth logout
 ```
 
 `path derive`, `path incept`, and `path project` are deprecated aliases for `path import` / `path export claude` and print a deprecation warning to stderr. They will be removed in the release after next.
@@ -129,7 +133,7 @@ overrides the credentials directory. Server URL comes from `--url`, then
 
 ## Testing
 
-Tests live alongside the code (`#[cfg(test)] mod tests`), plus `toolpath-cli` has integration tests in `tests/`. Per-crate counts:
+Tests live alongside the code (`#[cfg(test)] mod tests`), plus `path-cli` has integration tests in `tests/`. Per-crate counts:
 
 - `toolpath`: 32 unit + 9 doc tests (serde roundtrip, builders, query)
 - `toolpath-convo`: 58 unit + 1 doc test (types, enrichment, display, ConversationView -> Path derivation)
@@ -141,9 +145,10 @@ Tests live alongside the code (`#[cfg(test)] mod tests`), plus `toolpath-cli` ha
 - `toolpath-opencode`: 43 unit + 1 doc test (SQLite reader, JSON payload serde, provider assembly, snapshot-based derive, tool-input fallback for gitignored paths)
 - `toolpath-pi`: 123 unit + 4 doc tests (types, paths, error, reader, io, provider)
 - `toolpath-dot`: 30 unit + 2 doc tests (render, visual conventions, escaping)
-- `toolpath-cli`: 174 unit + 26 integration tests (import/export/cache, track sessions, merge, validate, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, fzf-friendly TSV output)
+- `path-cli`: 174 unit + 26 integration tests (import/export/cache, track sessions, merge, validate, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, fzf-friendly TSV output)
+- `toolpath-cli`: 0 tests (it's a one-line `path_cli::run()` shim crate that exists only so `cargo install toolpath-cli` keeps installing the `path` binary)
 
-Validate example documents: `for f in examples/*.json; do cargo run -p toolpath-cli -- validate --input "$f"; done`
+Validate example documents: `for f in examples/*.json; do cargo run -p path-cli -- validate --input "$f"; done`
 
 ## Feature flags
 
@@ -178,7 +183,10 @@ When changing a crate's public API (new types, new trait impls, new public metho
 **Release script** (`scripts/release.sh`) publishes in dependency order:
 - Tier 1: `toolpath` (no workspace deps)
 - Tier 2: `toolpath-convo` (depends on `toolpath`); then `toolpath-git`, `toolpath-github`, `toolpath-dot`, `toolpath-md`, `toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-opencode`, `toolpath-pi`
-- Tier 3: `toolpath-cli` (depends on everything)
+- Tier 3: `path-cli` (depends on everything above)
+- Tier 4: `toolpath-cli` (deprecated shim that depends on `path-cli`; ships only the `path` binary)
+
+The `toolpath-cli` shim lives **outside** the workspace (`exclude = ["crates/toolpath-cli"]` in the root `Cargo.toml`). Both `toolpath-cli` and `path-cli` produce a binary literally named `path`, and cargo can't write two bin targets to the same workspace `target/debug/path` — so the shim opts out and gets its own `crates/toolpath-cli/target/` (covered by the `crates/*/target` line in `.gitignore`). Practical consequences: `cargo build --workspace`, `cargo test --workspace`, and `cargo run -p toolpath-cli` from the repo root **do not** include the shim. To touch it, use `--manifest-path crates/toolpath-cli/Cargo.toml`. The release script special-cases the shim in `get_version` and `publish` so the workflow is otherwise unchanged.
 
 Build the site after changes: `cd site && pnpm run build` (should produce 7 pages).
 

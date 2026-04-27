@@ -1,5 +1,5 @@
 ---
-source: crates/toolpath-cli/tests/render_md_snapshots.rs
+source: crates/path-cli/tests/render_md_snapshots.rs
 expression: "render_md(\"graph-01-release.json\")"
 ---
 # Release v2.0

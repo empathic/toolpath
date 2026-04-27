@@ -81,7 +81,7 @@ fi
 # --- Build --------------------------------------------------------------------
 
 cd "$ROOT"
-cargo build --target wasm32-unknown-emscripten -p toolpath-cli --profile "$PROFILE"
+cargo build --target wasm32-unknown-emscripten -p path-cli --profile "$PROFILE"
 
 mkdir -p site/wasm
 cp "target/wasm32-unknown-emscripten/$PROFILE_DIR/path.js"   site/wasm/path.js
