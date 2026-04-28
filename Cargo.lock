@@ -2002,7 +2002,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-dot"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "toolpath",
 ]
@@ -2024,7 +2024,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-git"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2035,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-github"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-md"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
  "toolpath",

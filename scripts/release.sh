@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publish all workspace crates to crates.io in dependency order.
+# Verify (default) or publish (--execute) all workspace crates to crates.io
+# in dependency order.
+#
+# Default mode is a dry run — it packages each crate, runs `cargo publish
+# --dry-run` against the real crates.io view, and reports what *would*
+# happen. Nothing is uploaded. This catches publish-time resolution issues
+# (e.g. deps pinning incompatible major versions of a shared crate) that
+# `cargo build/test --workspace` cannot see, because workspace builds use
+# local path-deps while `cargo publish` resolves against the registry.
+#
+# Pass --execute to actually publish.
 #
 # Usage:
-#   scripts/release.sh              # publish for real (prompts for confirmation)
-#   scripts/release.sh --dry-run    # verify packaging without uploading
-#   scripts/release.sh --yes        # skip confirmation prompt
+#   scripts/release.sh                  # dry-run (default; safe)
+#   scripts/release.sh --execute        # publish for real (prompts)
+#   scripts/release.sh --execute --yes  # publish for real, skip prompt
+#   scripts/release.sh --dry-run        # alias for default (back-compat)
 #
 # Dependency order:
 #   1. toolpath           (no workspace deps)
@@ -25,29 +36,38 @@ set -euo pipefail
 
 ALL_CRATES=(toolpath toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi path-cli toolpath-cli)
 
-DRY_RUN=""
+EXECUTE=0
 AUTO_YES=""
 for arg in "$@"; do
     case "$arg" in
-        --dry-run) DRY_RUN="--dry-run" ;;
-        --yes|-y) AUTO_YES=1 ;;
-        *) echo "unknown argument: $arg"; exit 1 ;;
+        --execute)  EXECUTE=1 ;;
+        --dry-run)  ;;  # back-compat: dry-run is the default
+        --yes|-y)   AUTO_YES=1 ;;
+        -h|--help)
+            sed -n '4,28p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *) echo "unknown argument: $arg"; echo "see --help"; exit 1 ;;
     esac
 done
 
-if [[ -n "$DRY_RUN" ]]; then
-    echo "=== DRY RUN ==="
-    echo
+if (( EXECUTE )); then
+    DRY_RUN=""
+    echo "=== mode: EXECUTE — will publish to crates.io ==="
+else
+    DRY_RUN="--dry-run"
+    echo "=== mode: dry-run (pass --execute to publish for real) ==="
 fi
+echo
 
 ALLOW_DIRTY=""
 if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
-    if [[ -n "$DRY_RUN" ]]; then
-        ALLOW_DIRTY="--allow-dirty"
-    else
+    if (( EXECUTE )); then
         echo "error: working directory has uncommitted changes"
         echo "commit or stash before publishing"
         exit 1
+    else
+        ALLOW_DIRTY="--allow-dirty"
     fi
 fi
 
@@ -82,7 +102,7 @@ already_published() {
 wait_for_index() {
     local crate="$1"
     local version="$2"
-    if [[ -n "$DRY_RUN" ]]; then
+    if ! (( EXECUTE )); then
         return
     fi
     echo "    waiting for $crate $version to appear on crates.io index..."
@@ -97,7 +117,7 @@ wait_for_index() {
 }
 
 # --- Survey: check what needs publishing ---
-# Uses parallel indexed arrays instead of associative arrays (bash 3.2 compat)
+# Uses parallel indexed arrays instead of associative arrays (bash 3.2 compat).
 
 echo "=== surveying crates ==="
 
@@ -109,10 +129,7 @@ for i in "${!ALL_CRATES[@]}"; do
     crate="${ALL_CRATES[$i]}"
     version=$(get_version "$crate")
     VERSIONS+=("$version")
-    if [[ -n "$DRY_RUN" ]]; then
-        STATUSES+=("publish")
-        TO_PUBLISH+=("$crate")
-    elif already_published "$crate" "$version"; then
+    if already_published "$crate" "$version"; then
         STATUSES+=("skip")
     else
         STATUSES+=("publish")
@@ -141,9 +158,9 @@ for i in "${!ALL_CRATES[@]}"; do
 done
 echo
 
-# --- Confirmation ---
+# --- Confirmation (only when actually publishing) ---
 
-if [[ -z "$DRY_RUN" && -z "$AUTO_YES" ]]; then
+if (( EXECUTE )) && [[ -z "$AUTO_YES" ]]; then
     read -rp "proceed? [y/N] " answer
     if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
         echo "aborted."
@@ -152,14 +169,72 @@ if [[ -z "$DRY_RUN" && -z "$AUTO_YES" ]]; then
     echo
 fi
 
-# --- Pre-flight: run tests and clippy ---
+# --- Pre-flight: workspace tests and clippy ---
 
 echo "=== pre-flight checks ==="
 cargo test --workspace --quiet
 cargo clippy --workspace --quiet -- -D warnings
 cargo doc --workspace --no-deps --quiet
-echo "all checks passed"
+echo "workspace checks ok"
 echo
+
+# --- Pre-flight: per-crate publish dry-run ---
+#
+# Workspace `cargo build/test` resolve every dep through local path entries,
+# bypassing crates.io entirely. `cargo publish --dry-run` resolves against
+# the registry — exactly the view that matters at publish time. This loop
+# catches issues like "satellite-crate-A on crates.io still pins old toolpath,
+# while we depend directly on a newer toolpath" before any real upload.
+#
+# Failures classed as chicken-and-egg (the failing dep is itself in this
+# release's TO_PUBLISH set, so it'll land on the registry mid-publish) are
+# tolerated; everything else aborts.
+
+echo "=== publish dry-runs ==="
+PREFLIGHT_FAILED=()
+for crate in "${TO_PUBLISH[@]}"; do
+    logfile=$(mktemp -t release-dryrun.XXXXXX)
+    rc=0
+    if [[ "$crate" == "toolpath-cli" ]]; then
+        (cd crates/toolpath-cli && cargo publish --dry-run $ALLOW_DIRTY) > "$logfile" 2>&1 || rc=$?
+    else
+        cargo publish --dry-run $ALLOW_DIRTY -p "$crate" > "$logfile" 2>&1 || rc=$?
+    fi
+    if (( rc == 0 )); then
+        echo "    $crate: ok"
+    else
+        # Cargo phrases "dep not on registry yet" several ways depending on
+        # context. Try each known shape; whichever produces a match wins.
+        missing=$(sed -nE \
+            -e 's/.*no matching package named `([^`]+)`.*/\1/p' \
+            -e 's/.*failed to select a version for the requirement `([^ `]+).*/\1/p' \
+            -e 's/.*could not find `([^`]+)` in registry.*/\1/p' \
+            "$logfile" | head -1)
+        if [[ -n "$missing" ]] && printf '%s\n' "${TO_PUBLISH[@]}" | grep -qFx "$missing"; then
+            echo "    $crate: deferred (depends on $missing being published in this run)"
+        else
+            echo "    $crate: FAILED"
+            tail -40 "$logfile" | sed 's/^/        /'
+            PREFLIGHT_FAILED+=("$crate")
+        fi
+    fi
+    rm -f "$logfile"
+done
+if (( ${#PREFLIGHT_FAILED[@]} > 0 )); then
+    echo
+    echo "publish dry-run failed for: ${PREFLIGHT_FAILED[*]}"
+    echo "aborting before any real publishing happens."
+    exit 1
+fi
+echo "publish dry-runs ok"
+echo
+
+# In dry-run mode (the default), the dry-run pre-flight above is the whole
+# point of the script. Stop here.
+if ! (( EXECUTE )); then
+    echo "=== dry-run done — pass --execute to publish ==="
+    exit 0
+fi
 
 # --- Helpers to look up survey results ---
 
@@ -201,9 +276,9 @@ publish() {
     echo "--- publishing $crate $version ---"
     if [[ "$crate" == "toolpath-cli" ]]; then
         # Excluded from the workspace; publish from its own manifest.
-        (cd crates/toolpath-cli && cargo publish $DRY_RUN $ALLOW_DIRTY)
+        (cd crates/toolpath-cli && cargo publish $ALLOW_DIRTY)
     else
-        cargo publish -p "$crate" $DRY_RUN $ALLOW_DIRTY
+        cargo publish -p "$crate" $ALLOW_DIRTY
     fi
     echo
 }

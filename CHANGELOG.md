@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## path-cli 0.5.0 + toolpath-cli 0.5.1
+## path-cli 0.5.0 + toolpath-cli 0.5.1 + workspace re-alignment
 
 ### path-cli 0.5.0 (new crate name)
 
@@ -13,6 +13,10 @@ All notable changes to the Toolpath workspace are documented here.
 
 - `toolpath-cli` is now a tiny shim crate whose only job is to make `cargo install toolpath-cli` keep working — it depends on `path-cli` and ships the same `path` binary. Existing users see no behavioral change on upgrade. The shim will be retired in a future release; pin to `path-cli` directly to avoid the eventual removal.
 - The dev-only `gen_synthetic_path` helper is no longer shipped from this crate; it lives in `path-cli` only.
+
+### toolpath-dot 0.1.3, toolpath-md 0.2.1, toolpath-git 0.1.4, toolpath-github 0.2.1 (publish re-alignment)
+
+Patch bumps with no source changes. These four satellite crates were last released when `toolpath` was at 0.1.5, so their on-registry manifests still pin `toolpath = "0.1.5"`. Without these bumps, publishing any new crate (like `path-cli`) that depends on both `toolpath = "0.2.0"` and one of these four would drag two majors of `toolpath` into cargo's publish-time resolution and fail with E0308 type mismatches between `toolpath::types::Document` and `toolpath::v1::Document`. Each crate still uses `toolpath = { workspace = true }`, so the new published versions automatically pick up the workspace's current `toolpath = "0.2.0"` and the skew is closed.
 
 ## toolpath-claude 0.8.0 + toolpath-gemini 0.2.0 + toolpath-pi 0.2.0
 
