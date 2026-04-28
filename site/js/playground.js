@@ -257,7 +257,7 @@
             ANSI.bold +
             "    Finished" +
             ANSI.reset +
-            " cargo pushed really hard but `toolpath-cli v" +
+            " cargo pushed really hard but `path-cli v" +
             v +
             "` is still installed",
         };
@@ -268,7 +268,7 @@
           ANSI.bold +
           "    Ignored" +
           ANSI.reset +
-          " package `toolpath-cli v" +
+          " package `path-cli v" +
           v +
           "` is already installed, use --force to override",
       };
@@ -1353,7 +1353,7 @@
 
     // Show cargo install, then load wasm in background
     shell.term.write(copperBold("path") + " " + pencil("$") + " ");
-    shell.autoType("cargo install toolpath-cli", function () {
+    shell.autoType("cargo install path-cli", function () {
       shell.term.write("\r\n");
       shell.term.write(
         dim("Type help for commands. Example documents are preloaded.") +
