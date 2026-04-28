@@ -571,7 +571,17 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         )?;
 
         let visibility = if is_public { "public" } else { "secret" };
-        let url = format!("{base_url}/{owner}/{repo}/{}", created.slug);
+        // For secret paths the slug URL is an owner-facing stub — the listing
+        // doesn't surface secrets, and a non-owner hitting `/<owner>/<repo>/<slug>`
+        // gets a dead end. The UUID URL `/<owner>/<repo>/paths/<id>` is the
+        // canonical share token (anyone with it can fetch the path; no one
+        // without it can guess at it). For public paths the slug URL is the
+        // listable canonical address, so we keep it.
+        let url = if is_public {
+            format!("{base_url}/{owner}/{repo}/{}", created.slug)
+        } else {
+            format!("{base_url}/{owner}/{repo}/paths/{}", created.id)
+        };
         println!("{url}");
         eprintln!(
             "Uploaded {} → {}/{}/{} ({} path, {} bytes)",

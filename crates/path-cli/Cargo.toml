@@ -44,8 +44,14 @@ toolpath-opencode = { workspace = true }
 toolpath-pi = { workspace = true }
 toolpath-convo = { workspace = true }
 toolpath-github = { workspace = true }
+pathbase-client = { workspace = true }
 git2 = { workspace = true }
 reqwest = { workspace = true }
+# For constructing a pre-authed reqwest::Client to pass to
+# `pathbase_client::Client::new_with_client`. Pinned to the version
+# pathbase-client (and progenitor-client 0.14) generates against.
+reqwest_async = { package = "reqwest", version = "0.13", features = ["json"] }
+tokio = { workspace = true }
 
 [target.'cfg(target_os = "emscripten")'.dependencies]
 toolpath-claude = { workspace = true }

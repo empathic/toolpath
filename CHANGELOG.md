@@ -16,7 +16,6 @@ committed OpenAPI spec.
 - `build.rs` downgrades the spec from OAS 3.1 to 3.0 in-memory (nullable arrays → `nullable: true`, permissive schemas for empty media-type bodies) before handing it to the generator. The committed spec stays faithful to what the server publishes.
 - `scripts/refresh-pathbase-openapi.sh` repulls the spec from `pathbase-dev.fly.dev` (or `$PATHBASE_URL`) and pretty-prints it for stable diffs.
 - The CLI auth-redeem endpoint (`POST /api/v1/auth/cli/redeem`) is real in production but absent from the OpenAPI spec, so it is **not** available through this client; `path-cli`'s hand-rolled redeem call remains the source of truth.
-- The crate compiles but is not yet wired into `path-cli` (which is sync). For now it serves as compile-time spec drift detection; future work will swap `cmd_pathbase.rs`'s hand-rolled HTTP for the generated client once `path-cli` grows a tokio runtime.
 
 ### path-cli 0.7.0 → 0.8.0
 
@@ -33,7 +32,13 @@ committed OpenAPI spec.
   - `--repo owner/name`: target a specific repo instead of `<you>/pathstash`.
   - `--slug`: override the auto-derived slug (otherwise sanitized from the toolpath document id).
   - `--public`: flip `is_public` to `true` (default: secret/unlisted).
+- The URL printed on stdout now reflects how the path is actually shareable:
+  - Secret upload (default): `<base>/<owner>/<repo>/paths/<uuid>` — the UUID is the share token; the slug URL would be a dead stub for non-owners.
+  - Public upload (`--public`): `<base>/<owner>/<repo>/<slug>` — the listable canonical address.
+  - Anonymous: whatever URL the server returns from `AnonUploadResponse` (always UUID-shaped).
 - The auth flow (`path auth login` / `whoami` / `logout`) is unchanged; the redeem endpoint stays hand-rolled because the OpenAPI spec doesn't list it.
+- Internally, the four documented path operations now go through the typed `pathbase-client` crate. A `OnceLock`-cached current-thread tokio runtime in `cmd_pathbase.rs` bridges sync callers into the async generated client. Two reqwest versions are intentionally in the dep tree — 0.12 blocking for the auth flow, 0.13 async via `pathbase-client`.
+- `scripts/test-pathbase-live.sh <url>`: live-server smoke test. Always runs the same two scenarios in the same order (anon roundtrip, then authed pathstash roundtrip). Preconditions (server reachable, logged into the URL) are checked up-front; failure modes are explicit; no environment-conditional branching.
 
 ### toolpath-cli 0.7.0 → 0.8.0 (deprecation shim)
 
