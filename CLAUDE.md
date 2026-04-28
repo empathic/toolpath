@@ -25,8 +25,8 @@ crates/
   path-cli/                     # unified CLI (binary: path)
   toolpath-cli/                 # deprecated shim that re-exports path-cli (excluded from the workspace; see below)
   pathbase-client/              # progenitor-derived client for the Pathbase HTTP API
+                                # (spec at crates/pathbase-client/openapi.json; refresh via scripts/refresh-pathbase-openapi.sh)
 schema/toolpath.schema.json     # JSON Schema for the toolpath format
-schema/pathbase-openapi.json    # OpenAPI spec for the Pathbase API (run scripts/refresh-pathbase-openapi.sh to refetch)
 examples/*.json                 # 12 example documents (step, path, graph)
 RFC.md                          # full format specification
 FAQ.md                          # design rationale, FAQ, and open questions

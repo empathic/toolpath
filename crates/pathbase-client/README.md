@@ -2,7 +2,7 @@
 
 Auto-generated typed Rust client for the [Pathbase](https://pathbase.dev) HTTP API.
 
-The client is derived at build time from `schema/pathbase-openapi.json` (in the workspace root) via [progenitor](https://github.com/oxidecomputer/progenitor). Spec drift surfaces as a `cargo build` failure rather than a runtime "HTML where JSON was expected" error.
+The client is derived at build time from `openapi.json` (committed alongside the crate) via [progenitor](https://github.com/oxidecomputer/progenitor). Spec drift surfaces as a `cargo build` failure rather than a runtime "HTML where JSON was expected" error.
 
 ## What's in here
 
@@ -23,12 +23,14 @@ The full surface mirrors the OpenAPI document. Only the operations actually docu
 
 ## Refreshing the spec
 
+From the workspace root:
+
 ```bash
-scripts/refresh-pathbase-openapi.sh        # uses pathbase-dev.fly.dev
-PATHBASE_URL=https://pathbase.dev scripts/refresh-pathbase-openapi.sh
+scripts/refresh-pathbase-openapi.sh                              # defaults to https://pathbase.dev
+PATHBASE_URL=https://staging.example.com scripts/refresh-pathbase-openapi.sh
 ```
 
-After refresh, `cargo build -p pathbase-client` regenerates against the new spec.
+The script overwrites `crates/pathbase-client/openapi.json` (the same file `build.rs` reads). After refresh, `cargo build -p pathbase-client` regenerates the client against the new spec.
 
 ## License
 

@@ -1410,7 +1410,7 @@ mod tests {
         // The anon endpoint returns URLs like `/anon/pathstash/paths/<uuid>`.
         // Parser must recognize the literal `paths` as a route delimiter.
         let (_, ref_) = parse_pathbase_ref(
-            "https://pathbase-dev.fly.dev/anon/pathstash/paths/abc-123",
+            "https://pathbase.dev/anon/pathstash/paths/abc-123",
             None,
         )
         .unwrap();

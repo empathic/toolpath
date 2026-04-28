@@ -4,11 +4,8 @@
 # state. Fails up-front if its preconditions aren't met.
 #
 # Usage:
-#   scripts/test-pathbase-live.sh <pathbase-url>
-#
-# Examples:
-#   scripts/test-pathbase-live.sh https://pathbase-dev.fly.dev
-#   scripts/test-pathbase-live.sh https://pathbase.dev
+#   scripts/test-pathbase-live.sh                    # defaults to https://pathbase.dev
+#   scripts/test-pathbase-live.sh <pathbase-url>     # override (e.g. a staging deployment)
 #
 # Preconditions (checked before any test runs):
 #   - <pathbase-url> reachable, returns 2xx on /api/v1/health.
@@ -29,12 +26,12 @@ set -euo pipefail
 
 # ── Args ──────────────────────────────────────────────────────────────────
 
-if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 <pathbase-url>" >&2
-    echo "  e.g. $0 https://pathbase-dev.fly.dev" >&2
+if [[ $# -gt 1 ]]; then
+    echo "Usage: $0 [<pathbase-url>]" >&2
     exit 64
 fi
-URL="${1%/}"
+URL="${1:-https://pathbase.dev}"
+URL="${URL%/}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXAMPLE="$ROOT/examples/path-01-pr.path.json"
 EXPECTED_STEPS=5  # path-01-pr.path.json has 5 steps; recheck if the fixture changes

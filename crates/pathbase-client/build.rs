@@ -1,4 +1,4 @@
-//! Generate a typed Pathbase client from `schema/pathbase-openapi.json`.
+//! Generate a typed Pathbase client from `openapi.json`.
 //!
 //! Pathbase emits OpenAPI 3.1, but progenitor's `openapiv3` crate only
 //! understands 3.0. We downgrade in-place: `"type": ["string", "null"]`
@@ -12,8 +12,10 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 fn main() {
-    let spec_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/pathbase-openapi.json");
+    // Spec lives next to the crate so `cargo publish` packages it with the
+    // rest of the source. (When the crate is unpacked from crates.io, the
+    // workspace's schema/ directory doesn't exist.)
+    let spec_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("openapi.json");
     println!("cargo:rerun-if-changed={}", spec_path.display());
 
     let spec_text = fs::read_to_string(&spec_path)

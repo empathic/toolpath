@@ -14,7 +14,7 @@ committed OpenAPI spec.
 
 - New workspace member: an auto-generated typed Rust client for the [Pathbase](https://pathbase.dev) HTTP API. Derived at build time from `schema/pathbase-openapi.json` (also new in this release) via [progenitor](https://github.com/oxidecomputer/progenitor). Spec drift surfaces as a `cargo build` failure rather than runtime HTML-instead-of-JSON.
 - `build.rs` downgrades the spec from OAS 3.1 to 3.0 in-memory (nullable arrays → `nullable: true`, permissive schemas for empty media-type bodies) before handing it to the generator. The committed spec stays faithful to what the server publishes.
-- `scripts/refresh-pathbase-openapi.sh` repulls the spec from `pathbase-dev.fly.dev` (or `$PATHBASE_URL`) and pretty-prints it for stable diffs.
+- `scripts/refresh-pathbase-openapi.sh` repulls the spec (default `https://pathbase.dev`; override via `$PATHBASE_URL`) and pretty-prints it for stable diffs. Writes to `crates/pathbase-client/openapi.json` so the spec ships inside the published crate.
 - The CLI auth-redeem endpoint (`POST /api/v1/auth/cli/redeem`) is real in production but absent from the OpenAPI spec, so it is **not** available through this client; `path-cli`'s hand-rolled redeem call remains the source of truth.
 
 ### path-cli 0.7.0 → 0.8.0
