@@ -37,7 +37,7 @@ committed OpenAPI spec.
   - Public upload (`--public`): `<base>/<owner>/<repo>/<slug>` — the listable canonical address.
   - Anonymous: whatever URL the server returns from `AnonUploadResponse` (always UUID-shaped).
 - The auth flow (`path auth login` / `whoami` / `logout`) is unchanged; the redeem endpoint stays hand-rolled because the OpenAPI spec doesn't list it.
-- Internally, the four documented path operations now go through the typed `pathbase-client` crate. A `OnceLock`-cached current-thread tokio runtime in `cmd_pathbase.rs` bridges sync callers into the async generated client. Two reqwest versions are intentionally in the dep tree — 0.12 blocking for the auth flow, 0.13 async via `pathbase-client`.
+- Internally, the four documented path operations now go through the typed `pathbase-client` crate. A `OnceLock`-cached current-thread tokio runtime in `cmd_pathbase.rs` bridges sync callers into the async generated client. The whole module — auth, paths, downloads, async upload — runs on a single reqwest version (the workspace dep was unified to 0.13 to match what `pathbase-client`/`progenitor-client 0.14` generate against).
 - `scripts/test-pathbase-live.sh <url>`: live-server smoke test. Always runs the same two scenarios in the same order (anon roundtrip, then authed pathstash roundtrip). Preconditions (server reachable, logged into the URL) are checked up-front; failure modes are explicit; no environment-conditional branching.
 
 ### toolpath-cli 0.7.0 → 0.8.0 (deprecation shim)

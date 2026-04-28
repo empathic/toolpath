@@ -5,6 +5,18 @@
 //! becomes `"type": "string", "nullable": true`, and the document version
 //! is rewritten to `3.0.3`. The committed spec stays faithful to what the
 //! server actually publishes.
+//!
+//! **Exit strategy:** delete `downgrade_to_oas_30` when either of the
+//! following ships and we're consuming it:
+//!
+//! - progenitor / openapiv3 grow first-class OAS 3.1 support — tracking
+//!   <https://github.com/oxidecomputer/progenitor/issues/762> and
+//!   <https://github.com/oxidecomputer/progenitor/issues/1268>.
+//! - The Pathbase server emits OAS 3.0 instead of 3.1.
+//!
+//! Once the canonical document parses without preprocessing, the
+//! `downgrade_to_oas_30` / `rewrite_nullable_types` /
+//! `fill_empty_media_types` helpers come out and `build.rs` is ~15 lines.
 use std::env;
 use std::fs;
 use std::path::PathBuf;

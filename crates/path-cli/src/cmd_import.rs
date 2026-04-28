@@ -140,9 +140,9 @@ pub enum ImportSource {
         #[arg(long)]
         base: Option<PathBuf>,
     },
-    /// Import from Pathbase (download a previously uploaded trace)
+    /// Import from Pathbase (download a previously uploaded path)
     Pathbase {
-        /// Trace id or full pathbase URL
+        /// Full Pathbase URL or bare `<owner>/<repo>/<slug>` triple
         #[arg(index = 1)]
         target: String,
 
@@ -1248,29 +1248,25 @@ fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<Deriv
 
         let token = stored.as_ref().map(|s| s.token.as_str());
 
-        let (cache_id, body) = match ref_ {
-            PathRef::Repo { owner, repo, slug } => {
-                let body = paths_download(&base_url, token, &owner, &repo, &slug)?;
-                let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{slug}"));
-                (cache_id, body)
-            }
-        };
-
+        let PathRef { owner, repo, slug } = ref_;
+        let body = paths_download(&base_url, token, &owner, &repo, &slug)?;
+        let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{slug}"));
         let doc = Graph::from_json(&body)
             .map_err(|e| anyhow::anyhow!("server returned a non-toolpath document: {e}"))?;
         Ok(vec![DerivedDoc { cache_id, doc }])
     }
 }
 
-/// What the user pointed at on the import side.
+/// What the user pointed at on the import side. The Pathbase API
+/// addresses paths as `<owner>/<repo>/<slug>` triples; that's the only
+/// shape we accept today. (Anon paths surface a UUID-as-slug under the
+/// `anon` user, so they fold cleanly into the same struct.)
 #[cfg(not(target_os = "emscripten"))]
 #[derive(Debug, PartialEq)]
-enum PathRef {
-    Repo {
-        owner: String,
-        repo: String,
-        slug: String,
-    },
+struct PathRef {
+    owner: String,
+    repo: String,
+    slug: String,
 }
 
 /// Parse a positional ref for `path import pathbase`. Returns `(override_base, ref)`.
@@ -1342,7 +1338,7 @@ fn extract_triple(segs: &[&str]) -> Option<PathRef> {
     if owner.is_empty() || repo.is_empty() || slug.is_empty() {
         return None;
     }
-    Some(PathRef::Repo {
+    Some(PathRef {
         owner: owner.to_string(),
         repo: repo.to_string(),
         slug: slug.to_string(),
@@ -1360,7 +1356,7 @@ mod tests {
         assert_eq!(base.as_deref(), Some("https://pathbase.dev"));
         assert_eq!(
             ref_,
-            PathRef::Repo {
+            PathRef {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
                 slug: "my-path".into(),
@@ -1375,7 +1371,7 @@ mod tests {
         assert_eq!(base.as_deref(), Some("https://other.example"));
         assert_eq!(
             ref_,
-            PathRef::Repo {
+            PathRef {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
                 slug: "my-path".into(),
@@ -1389,7 +1385,7 @@ mod tests {
         assert_eq!(base, None);
         assert_eq!(
             ref_,
-            PathRef::Repo {
+            PathRef {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
                 slug: "my-path".into(),
@@ -1402,21 +1398,18 @@ mod tests {
         let (base, ref_) =
             parse_pathbase_ref("https://pathbase.dev/alex/pathstash/my-path/", None).unwrap();
         assert_eq!(base.as_deref(), Some("https://pathbase.dev"));
-        assert!(matches!(ref_, PathRef::Repo { .. }));
+        assert_eq!(ref_.slug, "my-path");
     }
 
     #[test]
     fn parse_pathbase_ref_anon_url_with_paths_delimiter() {
         // The anon endpoint returns URLs like `/anon/pathstash/paths/<uuid>`.
         // Parser must recognize the literal `paths` as a route delimiter.
-        let (_, ref_) = parse_pathbase_ref(
-            "https://pathbase.dev/anon/pathstash/paths/abc-123",
-            None,
-        )
-        .unwrap();
+        let (_, ref_) =
+            parse_pathbase_ref("https://pathbase.dev/anon/pathstash/paths/abc-123", None).unwrap();
         assert_eq!(
             ref_,
-            PathRef::Repo {
+            PathRef {
                 owner: "anon".into(),
                 repo: "pathstash".into(),
                 slug: "abc-123".into(),

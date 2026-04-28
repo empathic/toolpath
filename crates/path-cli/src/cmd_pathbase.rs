@@ -50,10 +50,16 @@ pub(crate) struct AnonUploadResponse {
 /// `id` is the public share-token UUID. For secret paths the canonical
 /// share URL is `<base>/<owner>/<repo>/paths/<id>` — the slug URL is the
 /// owner-facing stub and isn't a reliable share link.
+///
+/// `is_public` is echoed from the server response (not the request) so
+/// the caller can react to server-side overrides (rate limits, policy,
+/// future feature flags) instead of trusting that what we asked for is
+/// what landed.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CreatedPath {
     pub id: String,
     pub slug: String,
+    pub is_public: bool,
 }
 
 // ── URL + prompt helpers ────────────────────────────────────────────────
@@ -156,12 +162,13 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
 // ── pathbase-client bridge ─────────────────────────────────────────────
 //
 // Pathbase's documented surface is talked to through the typed
-// `pathbase-client` crate, which is generated at build time from
-// `schema/pathbase-openapi.json`. The generated client is async; path-cli
-// is sync, so we tunnel through a `OnceLock`-cached current-thread tokio
-// runtime via [`block_on`]. Two reqwest versions are in the dep tree —
-// 0.12 blocking for the auth flow above (since the redeem endpoint isn't
-// in the spec), 0.13 async for everything below — and that's deliberate.
+// `pathbase-client` crate, generated at build time from `openapi.json`.
+// The generated client is async; the rest of path-cli is sync, so we
+// tunnel through a `OnceLock`-cached current-thread tokio runtime via
+// [`block_on`]. The whole module — auth, paths, downloads, async upload
+// — runs on a single reqwest version (0.13). The auth flow stays
+// hand-rolled only because the redeem endpoint isn't in the OpenAPI
+// spec, not because of any HTTP-stack difference.
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::sync::OnceLock;
@@ -181,15 +188,15 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// pre-bake the header into the http client and hand it via
 /// `Client::new_with_client`.
 fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_client::Client> {
-    let mut builder = reqwest_async::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(30));
     if let Some(t) = token {
-        let mut headers = reqwest_async::header::HeaderMap::new();
-        let mut auth = reqwest_async::header::HeaderValue::from_str(&format!("Bearer {t}"))
+        let mut headers = reqwest::header::HeaderMap::new();
+        let mut auth = reqwest::header::HeaderValue::from_str(&format!("Bearer {t}"))
             .context("invalid characters in auth token")?;
         auth.set_sensitive(true);
-        headers.insert(reqwest_async::header::AUTHORIZATION, auth);
+        headers.insert(reqwest::header::AUTHORIZATION, auth);
         builder = builder.default_headers(headers);
     }
     let client = builder.build().context("build pathbase http client")?;
@@ -265,6 +272,7 @@ pub(crate) fn paths_post(
             Ok(CreatedPath {
                 id: inner.id.to_string(),
                 slug: inner.slug,
+                is_public: inner.is_public,
             })
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
@@ -322,6 +330,16 @@ pub(crate) fn repos_post(base_url: &str, token: &str, name: &str) -> Result<()> 
 /// raw toolpath JSON for a path. Public paths and unlisted-but-shared
 /// paths both download without authentication; only fully private paths
 /// (gated by an ACL beyond `is_public=false`) require auth.
+///
+/// **Why this doesn't go through `pathbase-client`.** progenitor's
+/// generated client decodes the response body into
+/// `serde_json::Map<String, Value>` (per the spec's
+/// `application/json` content type) and we'd then re-serialize to get a
+/// String back. That's a wasted round-trip — and the BTreeMap-backed
+/// `serde_json::Map` reorders keys, so the bytes the caller sees aren't
+/// the bytes the server sent. For a "give me back the document I just
+/// uploaded" endpoint, byte-fidelity matters. We use blocking reqwest
+/// directly and forward the response body verbatim.
 pub(crate) fn paths_download(
     base_url: &str,
     token: Option<&str>,
@@ -329,29 +347,33 @@ pub(crate) fn paths_download(
     repo: &str,
     slug: &str,
 ) -> Result<String> {
-    let client = pathbase_client(base_url, token)?;
-    match block_on(client.download_path(owner, repo, slug)) {
-        Ok(resp) => {
-            let map = resp.into_inner();
-            // The generated client decodes the JSON body into a Map; we
-            // re-serialize so the existing caller (which calls
-            // `Document::from_json`) sees the same wire shape it always did.
-            serde_json::to_string(&map).context("re-serializing downloaded document")
-        }
-        Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
-            404 => bail!("path {owner}/{repo}/{slug} not found on {base_url}"),
-            code => bail!("download of {owner}/{repo}/{slug} failed (HTTP {code})"),
-        },
-        Err(pathbase_client::Error::UnexpectedResponse(resp)) => match resp.status().as_u16() {
-            401 => bail!(
-                "this path is private and requires authentication — run `path auth login --url {base_url}` and retry"
-            ),
-            code => {
-                bail!("download of {owner}/{repo}/{slug} returned unexpected status: HTTP {code}")
-            }
-        },
-        Err(e) => Err(anyhow!("download of {owner}/{repo}/{slug} failed: {e}")),
+    let client = http_client()?;
+    let mut req = client.get(format!(
+        "{base_url}/api/v1/repos/{owner}/{repo}/paths/{slug}/download"
+    ));
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
     }
+    let resp = req
+        .send()
+        .with_context(|| format!("connect to {base_url}"))?;
+
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        bail!(
+            "this path is private and requires authentication — run `path auth login --url {base_url}` and retry"
+        );
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        bail!("path {owner}/{repo}/{slug} not found on {base_url}");
+    }
+    if !status.is_success() {
+        let msg = error_message(&text).unwrap_or(text);
+        bail!("download of {owner}/{repo}/{slug} failed ({status}): {msg}");
+    }
+    Ok(text)
 }
 
 // ── File storage ────────────────────────────────────────────────────────
@@ -649,17 +671,17 @@ mod tests {
     }
 
     #[test]
-    fn paths_download_returns_body_on_success() {
+    fn paths_download_returns_body_byte_for_byte() {
+        // Key ordering matters: the server's bytes must come back unmodified.
+        // With the round-trip removed (raw blocking GET, no Map decode), this
+        // is a straight string equality. If progenitor ever sneaks back in
+        // for this endpoint, the BTreeMap-backed Map reorders keys and this
+        // assertion catches it.
         let body = r#"{"Step":{"step":{"id":"s1","actor":"human:x","timestamp":"2024-01-01T00:00:00Z"},"change":{}}}"#;
         let server = MockServer::start("HTTP/1.1 200 OK", body);
         let got =
             paths_download(&server.base(), Some("tok"), "alex", "pathstash", "my-path").unwrap();
-        // Progenitor decodes into a `serde_json::Map` (BTreeMap-backed) and we
-        // re-serialize, which alphabetizes keys. Compare structurally rather
-        // than as raw strings.
-        let expected: serde_json::Value = serde_json::from_str(body).unwrap();
-        let actual: serde_json::Value = serde_json::from_str(&got).unwrap();
-        assert_eq!(actual, expected);
+        assert_eq!(got, body);
 
         let req = String::from_utf8(server.request()).unwrap();
         assert!(

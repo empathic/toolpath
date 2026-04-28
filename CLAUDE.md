@@ -81,7 +81,7 @@ cargo run -p path-cli -- import gemini --project /path/to/project
 cargo run -p path-cli -- import codex --session <uuid>
 cargo run -p path-cli -- import opencode --session ses_<id>
 cargo run -p path-cli -- import pi --project /path/to/project
-cargo run -p path-cli -- import pathbase <trace-id-or-url>
+cargo run -p path-cli -- import pathbase <pathbase-url-or-owner/repo/slug>
 cargo run -p path-cli -- import claude --project . --no-cache | path render md --input -
 
 # Export toolpath documents into external formats. <ref> is a cache id or a file path.
@@ -117,7 +117,7 @@ cargo run -p path-cli -- auth logout
 
 `path derive`, `path incept`, and `path project` are deprecated aliases for `path import` / `path export claude` and print a deprecation warning to stderr. They will be removed in the release after next.
 
-The **cache** at `~/.toolpath/documents/<cache-id>.json` is the single landing zone for every `import` (and for `import pathbase` downloads). Cache id is `<source>-<inner-id>` — e.g. `claude-abc123`, `git-main`, `pathbase-trc_01H…`. Files are `0600`, parent directory `0700`. `$TOOLPATH_CONFIG_DIR` overrides the root. Default behavior: error on cache hit; pass `--force` to overwrite. `--no-cache` sends the JSON to stdout for shell composition.
+The **cache** at `~/.toolpath/documents/<cache-id>.json` is the single landing zone for every `import` (and for `import pathbase` downloads). Cache id is `<source>-<inner-id>` — e.g. `claude-abc123`, `git-main`, `pathbase-alex-pathstash-path-pr-42` (Pathbase paths key on `<owner>-<repo>-<slug>`, anon paths on `anon-pathstash-<uuid>`). Files are `0600`, parent directory `0700`. `$TOOLPATH_CONFIG_DIR` overrides the root. Default behavior: error on cache hit; pass `--force` to overwrite. `--no-cache` sends the JSON to stdout for shell composition.
 
 `path auth login` prints `<base>/auth/cli`; the user opens it, logs in, and
 pastes the 8-character code back into the CLI. The CLI calls

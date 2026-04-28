@@ -100,8 +100,9 @@ path export claude --input claude-<session-id> --project /path/to/resume
 path auth login
 path export pathbase --input claude-<session-id>
 
-# Pull a trace from Pathbase back into the local cache
-path import pathbase <trace-id-or-url>
+# Pull a path from Pathbase back into the local cache
+# (full URL or bare `<owner>/<repo>/<slug>` triple)
+path import pathbase https://pathbase.dev/alex/pathstash/path-pr-42
 
 # Query for dead ends (abandoned approaches)
 path query dead-ends --input doc.json

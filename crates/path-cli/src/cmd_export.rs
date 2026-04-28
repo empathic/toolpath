@@ -559,7 +559,6 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         };
 
         let slug = args.slug.unwrap_or_else(|| derive_slug(&doc));
-        let is_public = args.public;
         let created = paths_post(
             &base_url,
             &session.token,
@@ -567,21 +566,32 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
             &repo,
             &slug,
             &body,
-            is_public,
+            args.public,
         )?;
 
-        let visibility = if is_public { "public" } else { "secret" };
-        // For secret paths the slug URL is an owner-facing stub — the listing
-        // doesn't surface secrets, and a non-owner hitting `/<owner>/<repo>/<slug>`
-        // gets a dead end. The UUID URL `/<owner>/<repo>/paths/<id>` is the
-        // canonical share token (anyone with it can fetch the path; no one
-        // without it can guess at it). For public paths the slug URL is the
-        // listable canonical address, so we keep it.
-        let url = if is_public {
-            format!("{base_url}/{owner}/{repo}/{}", created.slug)
+        // The visibility we surface is what the server actually applied,
+        // not what we requested. If a server-side policy ever clamps
+        // `is_public` (rate limits, account flags, future feature flags),
+        // we render the URL form the path can actually be reached at.
+        if created.is_public != args.public {
+            eprintln!(
+                "note: requested is_public={} but server applied is_public={}",
+                args.public, created.is_public
+            );
+        }
+        let visibility = if created.is_public {
+            "public"
         } else {
-            format!("{base_url}/{owner}/{repo}/paths/{}", created.id)
+            "secret"
         };
+        let url = pathbase_share_url(
+            &base_url,
+            &owner,
+            &repo,
+            &created.slug,
+            &created.id,
+            created.is_public,
+        );
         println!("{url}");
         eprintln!(
             "Uploaded {} → {}/{}/{} ({} path, {} bytes)",
@@ -596,8 +606,43 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
     }
 }
 
-/// Pick a URL-safe slug from the document. Defaults to the inner id; falls
-/// back to a timestamp-stamped placeholder if the id is empty or non-ascii.
+/// Pick the canonical share URL for a path uploaded via `export pathbase`.
+///
+/// - **Secret** (`is_public = false`): `<base>/<owner>/<repo>/paths/<id>`.
+///   The UUID is the share token. The slug URL would be an owner-facing
+///   stub — non-owners hitting it get a dead end, and the secret listing
+///   doesn't surface it.
+/// - **Public** (`is_public = true`): `<base>/<owner>/<repo>/<slug>`. The
+///   listable canonical address; appears in the user's repo listing.
+///
+/// This is the entire URL-grammar policy of `export pathbase`, isolated
+/// here so it's directly testable without standing up a mock server.
+#[cfg(not(target_os = "emscripten"))]
+fn pathbase_share_url(
+    base_url: &str,
+    owner: &str,
+    repo: &str,
+    slug: &str,
+    id: &str,
+    is_public: bool,
+) -> String {
+    if is_public {
+        format!("{base_url}/{owner}/{repo}/{slug}")
+    } else {
+        format!("{base_url}/{owner}/{repo}/paths/{id}")
+    }
+}
+
+/// Pick a URL-safe slug from the document.
+///
+/// Primary path: sanitize the inner id (Path id / Step id / Graph id) into
+/// `[a-z0-9_-]`-only form, lower-cased. Most toolpath documents have ids
+/// like `path-claude-abc123`, which sanitize to themselves.
+///
+/// Fallback (id sanitizes to empty — non-ascii, all punctuation, etc.):
+/// hash the canonical JSON of the document and use a short hex prefix.
+/// Two uploads of the same content produce the same slug, so re-uploads
+/// stay deterministic instead of drifting on `chrono::Utc::now()`.
 #[cfg(not(target_os = "emscripten"))]
 fn derive_slug(doc: &toolpath::v1::Graph) -> String {
     let raw = match doc.single_path() {
@@ -615,11 +660,14 @@ fn derive_slug(doc: &toolpath::v1::Graph) -> String {
         })
         .collect();
     let trimmed = slug.trim_matches('-').to_string();
-    if trimmed.is_empty() {
-        format!("path-{}", chrono::Utc::now().timestamp())
-    } else {
-        trimmed
+    if !trimmed.is_empty() {
+        return trimmed;
     }
+
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(doc).unwrap_or_default();
+    let hex = format!("{:x}", Sha256::digest(&bytes));
+    format!("path-{}", &hex[..12])
 }
 
 /// Extract `scheme://host[:port]` from a URL, dropping any path/query.
@@ -1132,5 +1180,90 @@ mod tests {
             meta: None,
         });
         assert_eq!(derive_slug(&doc), "claude-path-42");
+    }
+
+    #[test]
+    fn derive_slug_falls_back_to_content_hash_when_id_empties_out() {
+        // An id consisting entirely of non-url-safe characters sanitizes to
+        // empty; we fall back to a deterministic content-hash slug.
+        use toolpath::v1::{Graph, Path, PathIdentity};
+        let doc = Graph::from_path(Path {
+            path: PathIdentity {
+                id: "✨🚀🦀".into(),
+                base: None,
+                head: "h".into(),
+                graph_ref: None,
+            },
+            steps: vec![],
+            meta: None,
+        });
+        let s1 = derive_slug(&doc);
+        let s2 = derive_slug(&doc);
+        assert_eq!(s1, s2, "fallback slug must be deterministic across calls");
+        assert!(s1.starts_with("path-"), "got {s1}");
+        // 12-char hex prefix after the `path-` stem.
+        assert_eq!(s1.len(), "path-".len() + 12, "got {s1}");
+        assert!(
+            s1.chars().skip(5).all(|c| c.is_ascii_hexdigit()),
+            "got {s1}"
+        );
+    }
+
+    #[test]
+    fn share_url_is_uuid_for_secret_uploads() {
+        // Secret paths share by UUID — the slug URL would be a dead stub.
+        let url = pathbase_share_url(
+            "https://pathbase.example",
+            "alex",
+            "pathstash",
+            "ignored-slug",
+            "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
+            false,
+        );
+        assert_eq!(
+            url,
+            "https://pathbase.example/alex/pathstash/paths/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537"
+        );
+    }
+
+    #[test]
+    fn share_url_is_slug_for_public_uploads() {
+        // Public paths share by slug — the listable canonical address.
+        let url = pathbase_share_url(
+            "https://pathbase.example",
+            "alex",
+            "pathstash",
+            "my-slug",
+            "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
+            true,
+        );
+        assert_eq!(url, "https://pathbase.example/alex/pathstash/my-slug");
+    }
+
+    #[test]
+    fn share_url_strips_trailing_slash_assumption() {
+        // Sanity: the function does not double-slash if base_url has none.
+        // (resolve_url already trims trailing slashes upstream — this
+        // documents that pathbase_share_url is just doing concatenation.)
+        let url = pathbase_share_url("https://x.test", "u", "r", "s", "id", true);
+        assert_eq!(url, "https://x.test/u/r/s");
+    }
+
+    #[test]
+    fn derive_slug_fallback_differs_across_documents() {
+        use toolpath::v1::{Graph, Path, PathIdentity};
+        let mk = |head: &str| {
+            Graph::from_path(Path {
+                path: PathIdentity {
+                    id: "—".into(), // sanitizes to empty for both
+                    base: None,
+                    head: head.into(),
+                    graph_ref: None,
+                },
+                steps: vec![],
+                meta: None,
+            })
+        };
+        assert_ne!(derive_slug(&mk("a")), derive_slug(&mk("b")));
     }
 }
