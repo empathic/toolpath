@@ -546,11 +546,22 @@ fn cache_ls_after_import_lists_entry() {
 }
 
 #[test]
-fn export_pathbase_without_login_errors_clearly() {
+fn export_pathbase_repo_flag_requires_login() {
+    // `export pathbase` without --repo falls through to the anonymous
+    // endpoint; --repo is the explicitly-authenticated path, so it must
+    // refuse without credentials.
     let cfg = tempfile::tempdir().unwrap();
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["export", "pathbase", "--input"])
+        .args([
+            "export",
+            "pathbase",
+            "--repo",
+            "alex/pathstash",
+            "--url",
+            "http://127.0.0.1:1",
+            "--input",
+        ])
         .arg(examples_dir().join("path-01-pr.path.json"))
         .assert()
         .failure()
@@ -558,14 +569,17 @@ fn export_pathbase_without_login_errors_clearly() {
 }
 
 #[test]
-fn import_pathbase_without_login_errors_clearly() {
+fn import_pathbase_rejects_legacy_trace_id() {
+    // The old `/traces/<id>` shape is gone; passing a bare token that
+    // isn't a `<owner>/<repo>/<slug>` triple should fail at parse time
+    // with a clear message rather than blowing up downstream.
     let cfg = tempfile::tempdir().unwrap();
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
         .args(["import", "pathbase", "trc_nonexistent"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Not logged in"));
+        .stderr(predicate::str::contains("<owner>/<repo>/<slug>"));
 }
 
 #[test]

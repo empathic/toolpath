@@ -1,0 +1,25 @@
+[package]
+name = "pathbase-client"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+description = "Auto-generated typed client for the Pathbase HTTP API (derived from schema/pathbase-openapi.json via progenitor)."
+
+[dependencies]
+progenitor-client = "0.14"
+# Pinned to the version progenitor-client 0.14 generates against — do not
+# unify with the workspace's reqwest dep until that catches up.
+reqwest = { version = "0.13", features = ["json", "stream"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { version = "1", features = ["serde"] }
+bytes = "1"
+futures = "0.3"
+
+[build-dependencies]
+progenitor = "0.14"
+openapiv3 = "2"
+serde_json = { workspace = true }
+prettyplease = "0.2"
+syn = "2"

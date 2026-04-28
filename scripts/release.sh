@@ -21,6 +21,7 @@ set -euo pipefail
 #
 # Dependency order:
 #   1. toolpath           (no workspace deps)
+#      pathbase-client    (no workspace deps; built from schema/pathbase-openapi.json)
 #   2a. toolpath-convo    (depends on toolpath)
 #   2b. toolpath-git      (depends on toolpath)
 #       toolpath-github   (depends on toolpath)
@@ -34,7 +35,7 @@ set -euo pipefail
 #   3. path-cli           (depends on all of the above)
 #   4. toolpath-cli       (deprecated shim that depends on path-cli)
 
-ALL_CRATES=(toolpath toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi path-cli toolpath-cli)
+ALL_CRATES=(toolpath pathbase-client toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi path-cli toolpath-cli)
 
 EXECUTE=0
 AUTO_YES=""

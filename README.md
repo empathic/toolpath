@@ -53,6 +53,7 @@ crates/
   toolpath-pi/        Derive from Pi (pi.dev) agent sessions
   toolpath-dot/       Graphviz DOT visualization
   toolpath-md/        Markdown rendering for LLM consumption
+  pathbase-client/    Progenitor-derived typed client for the Pathbase HTTP API
   path-cli/           Unified CLI (binary: path)
   toolpath-cli/       Deprecated shim that re-exports path-cli
 ```

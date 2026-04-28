@@ -35,11 +35,20 @@ pub(crate) struct User {
     pub avatar_url: Option<String>,
 }
 
-/// Reference returned after uploading a trace.
+/// Response from `POST /api/v1/anon/paths` (matches the OpenAPI
+/// `AnonUploadResponse` shape).
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct TraceRef {
+pub(crate) struct AnonUploadResponse {
     pub id: String,
     pub url: String,
+}
+
+/// Subset of the `TracePath` response from `POST /api/v1/repos/{owner}/{repo}/paths`
+/// that the CLI actually uses. The spec carries more fields (timestamps,
+/// step_count, repo_id, …); we only deserialize what we need.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CreatedPath {
+    pub slug: String,
 }
 
 // ── URL + prompt helpers ────────────────────────────────────────────────
@@ -139,40 +148,67 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
     Ok(user)
 }
 
-/// `POST /api/v1/traces` — upload a toolpath document.
-pub(crate) fn traces_post(base_url: &str, token: &str, body: &str) -> Result<TraceRef> {
+/// `POST /api/v1/anon/paths` — public, rate-limited, 5 MB cap. No auth.
+/// Anon paths are not listable by any user; for listable uploads use
+/// [`paths_post`] against an authenticated session.
+pub(crate) fn anon_paths_post(base_url: &str, document_json: &str) -> Result<AnonUploadResponse> {
+    let document: serde_json::Value =
+        serde_json::from_str(document_json).context("parse toolpath document")?;
+    let body = serde_json::json!({ "document": document });
+
     let client = http_client()?;
     let resp = client
-        .post(format!("{base_url}/api/v1/traces"))
-        .bearer_auth(token)
+        .post(format!("{base_url}/api/v1/anon/paths"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body.to_string())
+        .body(serde_json::to_string(&body)?)
         .send()
         .with_context(|| format!("connect to {base_url}"))?;
 
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
 
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        bail!("stored session is no longer valid — run `path auth login` again");
+    if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+        bail!(
+            "anon upload exceeds the 5 MB cap — log in (`path auth login`) for a listable upload without that limit"
+        );
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        bail!("anon upload rate-limited; retry shortly or log in");
     }
     if !status.is_success() {
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
-            .unwrap_or_else(|| text.clone());
-        bail!("upload failed ({status}): {msg}");
+        let msg = error_message(&text).unwrap_or_else(|| text.clone());
+        bail!("anon upload failed ({status}): {msg}");
     }
 
-    serde_json::from_str(&text).with_context(|| format!("parsing upload response: {text}"))
+    serde_json::from_str(&text).with_context(|| format!("parsing anon upload response: {text}"))
 }
 
-/// `GET /api/v1/traces/{id}` — download a toolpath document body (JSON).
-pub(crate) fn traces_get(base_url: &str, token: &str, id: &str) -> Result<String> {
+/// `POST /api/v1/repos/{owner}/{repo}/paths` — listable upload to a
+/// repo the authenticated user owns. `is_public=false` writes a
+/// pathstash-style secret/unlisted path.
+pub(crate) fn paths_post(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    slug: &str,
+    document_json: &str,
+    is_public: bool,
+) -> Result<CreatedPath> {
+    let document: serde_json::Value =
+        serde_json::from_str(document_json).context("parse toolpath document")?;
+    let body = serde_json::json!({
+        "slug": slug,
+        "document": document,
+        "is_public": is_public,
+    });
+
     let client = http_client()?;
     let resp = client
-        .get(format!("{base_url}/api/v1/traces/{id}"))
+        .post(format!("{base_url}/api/v1/repos/{owner}/{repo}/paths"))
         .bearer_auth(token)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_string(&body)?)
         .send()
         .with_context(|| format!("connect to {base_url}"))?;
 
@@ -182,18 +218,82 @@ pub(crate) fn traces_get(base_url: &str, token: &str, id: &str) -> Result<String
     if status == reqwest::StatusCode::UNAUTHORIZED {
         bail!("stored session is no longer valid — run `path auth login` again");
     }
-    if status == reqwest::StatusCode::NOT_FOUND {
-        bail!("trace {id} not found on {base_url}");
-    }
     if !status.is_success() {
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
-            .unwrap_or_else(|| text.clone());
-        bail!("download failed ({status}): {msg}");
+        let msg = error_message(&text).unwrap_or_else(|| text.clone());
+        bail!("upload to {owner}/{repo} failed ({status}): {msg}");
     }
 
+    serde_json::from_str(&text).with_context(|| format!("parsing path-create response: {text}"))
+}
+
+/// `POST /api/v1/repos` — create a repo owned by the authenticated user.
+/// Treats 409 (already exists) as success so callers can use this
+/// idempotently to ensure pathstash exists before uploading to it.
+pub(crate) fn repos_post(base_url: &str, token: &str, name: &str) -> Result<()> {
+    let client = http_client()?;
+    let resp = client
+        .post(format!("{base_url}/api/v1/repos"))
+        .bearer_auth(token)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::json!({ "name": name }).to_string())
+        .send()
+        .with_context(|| format!("connect to {base_url}"))?;
+
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+
+    if status.is_success() || status == reqwest::StatusCode::CONFLICT {
+        return Ok(());
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        bail!("stored session is no longer valid — run `path auth login` again");
+    }
+    let msg = error_message(&text).unwrap_or_else(|| text.clone());
+    bail!("creating repo {name} failed ({status}): {msg}");
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/paths/{slug}/download` — fetch the
+/// raw toolpath JSON for a path.
+pub(crate) fn paths_download(
+    base_url: &str,
+    token: Option<&str>,
+    owner: &str,
+    repo: &str,
+    slug: &str,
+) -> Result<String> {
+    let client = http_client()?;
+    let mut req = client.get(format!(
+        "{base_url}/api/v1/repos/{owner}/{repo}/paths/{slug}/download"
+    ));
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
+        .with_context(|| format!("connect to {base_url}"))?;
+
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        bail!(
+            "this path is private and requires authentication — run `path auth login --url {base_url}` and retry"
+        );
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        bail!("path {owner}/{repo}/{slug} not found on {base_url}");
+    }
+    if !status.is_success() {
+        let msg = error_message(&text).unwrap_or_else(|| text.clone());
+        bail!("download failed ({status}): {msg}");
+    }
     Ok(text)
+}
+
+fn error_message(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
 }
 
 // ── File storage ────────────────────────────────────────────────────────
@@ -241,12 +341,6 @@ pub(crate) fn clear_session(path: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(anyhow!("remove {}: {e}", path.display())),
     }
-}
-
-/// Load the stored session or bail with a helpful message.
-pub(crate) fn require_session() -> Result<StoredSession> {
-    let path = credentials_path()?;
-    load_session(&path)?.ok_or_else(|| anyhow!("Not logged in. Run `path auth login`."))
 }
 
 #[cfg(test)]
@@ -398,50 +492,99 @@ mod tests {
     }
 
     #[test]
-    fn traces_post_returns_id_and_url_on_success() {
-        let server = MockServer::start(
-            "HTTP/1.1 200 OK",
-            r#"{"id":"trc_01H","url":"https://pathbase.dev/traces/trc_01H"}"#,
-        );
-        let trace = traces_post(&server.base(), "tok", r#"{"Step":{}}"#).unwrap();
-        assert_eq!(trace.id, "trc_01H");
-        assert_eq!(trace.url, "https://pathbase.dev/traces/trc_01H");
+    fn paths_post_wraps_document_with_slug_and_is_public() {
+        let server = MockServer::start("HTTP/1.1 201 Created", r#"{"slug":"my-path"}"#);
+        let created = paths_post(
+            &server.base(),
+            "tok",
+            "alex",
+            "pathstash",
+            "my-path",
+            r#"{"Step":{}}"#,
+            false,
+        )
+        .unwrap();
+        assert_eq!(created.slug, "my-path");
 
         let req = String::from_utf8(server.request()).unwrap();
-        assert!(req.starts_with("POST /api/v1/traces "), "got: {req}");
+        assert!(
+            req.starts_with("POST /api/v1/repos/alex/pathstash/paths "),
+            "got: {req}"
+        );
         assert!(
             req.to_lowercase().contains("authorization: bearer tok"),
             "got: {req}"
         );
-        assert!(req.contains(r#"{"Step":{}}"#));
+        assert!(req.contains(r#""slug":"my-path""#), "got: {req}");
+        assert!(req.contains(r#""is_public":false"#), "got: {req}");
+        assert!(req.contains(r#""document":{"Step":{}}"#), "got: {req}");
     }
 
     #[test]
-    fn traces_post_401_surfaces_relogin_message() {
+    fn paths_post_401_surfaces_relogin_message() {
         let server = MockServer::start("HTTP/1.1 401 Unauthorized", r#"{"error":"bad"}"#);
-        let err = traces_post(&server.base(), "tok", "{}").unwrap_err();
+        let err =
+            paths_post(&server.base(), "tok", "alex", "pathstash", "s", "{}", false).unwrap_err();
         assert!(err.to_string().contains("run `path auth login`"));
     }
 
     #[test]
-    fn traces_post_5xx_includes_server_message() {
+    fn paths_post_5xx_includes_server_message() {
         let server = MockServer::start(
             "HTTP/1.1 500 Internal Server Error",
             r#"{"error":"database is on fire"}"#,
         );
-        let err = traces_post(&server.base(), "tok", "{}").unwrap_err();
+        let err =
+            paths_post(&server.base(), "tok", "alex", "pathstash", "s", "{}", false).unwrap_err();
         assert!(err.to_string().contains("database is on fire"), "{err}");
     }
 
     #[test]
-    fn traces_get_returns_body_on_success() {
+    fn anon_paths_post_wraps_document_and_omits_auth() {
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            r#"{"id":"abc","url":"https://pathbase.dev/anon/abc"}"#,
+        );
+        let resp = anon_paths_post(&server.base(), r#"{"Step":{}}"#).unwrap();
+        assert_eq!(resp.id, "abc");
+        assert_eq!(resp.url, "https://pathbase.dev/anon/abc");
+
+        let req = String::from_utf8(server.request()).unwrap();
+        assert!(req.starts_with("POST /api/v1/anon/paths "), "got: {req}");
+        assert!(
+            !req.to_lowercase().contains("authorization:"),
+            "anon must not send auth header: {req}"
+        );
+        assert!(req.contains(r#""document":{"Step":{}}"#), "got: {req}");
+    }
+
+    #[test]
+    fn anon_paths_post_413_advises_login() {
+        let server = MockServer::start("HTTP/1.1 413 Payload Too Large", "");
+        let err = anon_paths_post(&server.base(), "{}").unwrap_err();
+        assert!(err.to_string().contains("5 MB"), "{err}");
+        assert!(err.to_string().contains("path auth login"), "{err}");
+    }
+
+    #[test]
+    fn repos_post_treats_409_as_success() {
+        let server = MockServer::start("HTTP/1.1 409 Conflict", r#"{"error":"already exists"}"#);
+        repos_post(&server.base(), "tok", "pathstash").unwrap();
+    }
+
+    #[test]
+    fn paths_download_returns_body_on_success() {
         let body = r#"{"Step":{"step":{"id":"s1","actor":"human:x","timestamp":"2024-01-01T00:00:00Z"},"change":{}}}"#;
         let server = MockServer::start("HTTP/1.1 200 OK", body);
-        let got = traces_get(&server.base(), "tok", "trc_01H").unwrap();
+        let got =
+            paths_download(&server.base(), Some("tok"), "alex", "pathstash", "my-path").unwrap();
         assert_eq!(got, body);
 
         let req = String::from_utf8(server.request()).unwrap();
-        assert!(req.starts_with("GET /api/v1/traces/trc_01H "), "got: {req}");
+        assert!(
+            req.starts_with("GET /api/v1/repos/alex/pathstash/paths/my-path/download "),
+            "got: {req}"
+        );
         assert!(
             req.to_lowercase().contains("authorization: bearer tok"),
             "got: {req}"
@@ -449,9 +592,10 @@ mod tests {
     }
 
     #[test]
-    fn traces_get_404_says_not_found() {
+    fn paths_download_404_says_not_found() {
         let server = MockServer::start("HTTP/1.1 404 Not Found", "");
-        let err = traces_get(&server.base(), "tok", "trc_nope").unwrap_err();
+        let err = paths_download(&server.base(), Some("tok"), "alex", "pathstash", "missing")
+            .unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
 }

@@ -1238,29 +1238,49 @@ fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<Deriv
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        use crate::cmd_pathbase::{require_session, traces_get};
+        use crate::cmd_pathbase::{credentials_path, load_session, paths_download, resolve_url};
 
-        let (base, id) = parse_pathbase_ref(&target, url_flag.as_deref())?;
-        let session = require_session()?;
-        // If the ref gave us an explicit base URL (via a full URL or --url),
-        // use that. Otherwise fall back to the stored session's server.
-        let base_url = base.unwrap_or_else(|| session.url.clone());
-        let body = traces_get(&base_url, &session.token, &id)?;
+        let (base, ref_) = parse_pathbase_ref(&target, url_flag.as_deref())?;
+        let stored = load_session(&credentials_path()?)?;
+        let base_url = base
+            .or_else(|| stored.as_ref().map(|s| s.url.clone()))
+            .unwrap_or_else(|| resolve_url(None));
+
+        let token = stored.as_ref().map(|s| s.token.as_str());
+
+        let (cache_id, body) = match ref_ {
+            PathRef::Repo { owner, repo, slug } => {
+                let body = paths_download(&base_url, token, &owner, &repo, &slug)?;
+                let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{slug}"));
+                (cache_id, body)
+            }
+        };
+
         let doc = Graph::from_json(&body)
             .map_err(|e| anyhow::anyhow!("server returned a non-toolpath document: {e}"))?;
-        let cache_id = make_id("pathbase", &id);
         Ok(vec![DerivedDoc { cache_id, doc }])
     }
 }
 
-/// Parse a positional ref for `path import pathbase`. Returns `(override_base, id)`.
-///
-/// If the ref is a full URL like `https://pathbase.dev/traces/trc_01H...`, the
-/// host prefix replaces the server URL and the trailing segment is the id.
-/// Otherwise the ref is a bare id; `--url` (via `url_flag`) or `$PATHBASE_URL`
-/// / default apply via the caller's session.
+/// What the user pointed at on the import side.
 #[cfg(not(target_os = "emscripten"))]
-fn parse_pathbase_ref(target: &str, url_flag: Option<&str>) -> Result<(Option<String>, String)> {
+#[derive(Debug, PartialEq)]
+enum PathRef {
+    Repo {
+        owner: String,
+        repo: String,
+        slug: String,
+    },
+}
+
+/// Parse a positional ref for `path import pathbase`. Returns `(override_base, ref)`.
+///
+/// Accepted shapes:
+/// - Full URL: `https://host/<owner>/<repo>/<slug>` — host overrides the
+///   server URL.
+/// - `owner/repo/slug` — bare triple, used with `--url` or the stored session.
+#[cfg(not(target_os = "emscripten"))]
+fn parse_pathbase_ref(target: &str, url_flag: Option<&str>) -> Result<(Option<String>, PathRef)> {
     use crate::cmd_pathbase::resolve_url;
 
     let scheme = if target.starts_with("https://") {
@@ -1275,27 +1295,58 @@ fn parse_pathbase_ref(target: &str, url_flag: Option<&str>) -> Result<(Option<St
         let rest = &target[scheme.len()..];
         let (host, path) = match rest.split_once('/') {
             Some((h, p)) => (h, p),
-            None => anyhow::bail!("URL has no trace id segment: {target}"),
+            None => anyhow::bail!("URL has no path segments: {target}"),
         };
         if host.is_empty() {
             anyhow::bail!("URL is missing a host: {target}");
         }
-        let path = path
-            .split(['?', '#'])
-            .next()
-            .unwrap_or("")
-            .trim_end_matches('/');
-        let id = path
-            .rsplit('/')
-            .find(|s| !s.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("URL has no trace id segment: {target}"))?
-            .to_string();
-        let base = format!("{scheme}{host}");
-        Ok((Some(base), id))
+        let path = path.split(['?', '#']).next().unwrap_or("");
+        let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let triple = extract_triple(&segs).ok_or_else(|| {
+            anyhow::anyhow!("expected URL ending in /<owner>/<repo>/<slug>, got {target}")
+        })?;
+        Ok((Some(format!("{scheme}{host}")), triple))
     } else {
         let base = url_flag.map(|u| resolve_url(Some(u.to_string())));
-        Ok((base, target.to_string()))
+        let segs: Vec<&str> = target.split('/').filter(|s| !s.is_empty()).collect();
+        let triple = extract_triple(&segs)
+            .ok_or_else(|| anyhow::anyhow!("expected `<owner>/<repo>/<slug>`, got `{target}`"))?;
+        Ok((base, triple))
     }
+}
+
+/// Pull (owner, repo, slug) from a slash-split URL path. Two real shapes
+/// in the wild:
+///
+/// - `/<owner>/<repo>/<slug>` — short authed URL (3 segs).
+/// - `/<owner>/<repo>/paths/<slug>` — what the anon endpoint returns
+///   (owner=anon), and likely the canonical SvelteKit route for repo-scoped
+///   paths too (4 segs with literal `paths` second-to-last).
+///
+/// Heuristic: if the second-to-last segment is the literal `paths`, treat
+/// it as a route delimiter and look back two more segments for owner/repo.
+/// Otherwise take the last three segments.
+#[cfg(not(target_os = "emscripten"))]
+fn extract_triple(segs: &[&str]) -> Option<PathRef> {
+    let n = segs.len();
+    if n < 3 {
+        return None;
+    }
+
+    let (owner, repo, slug) = if n >= 4 && segs[n - 2] == "paths" {
+        (segs[n - 4], segs[n - 3], segs[n - 1])
+    } else {
+        (segs[n - 3], segs[n - 2], segs[n - 1])
+    };
+
+    if owner.is_empty() || repo.is_empty() || slug.is_empty() {
+        return None;
+    }
+    Some(PathRef::Repo {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        slug: slug.to_string(),
+    })
 }
 
 #[cfg(all(test, not(target_os = "emscripten")))]
@@ -1303,31 +1354,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_pathbase_ref_full_url() {
-        let (base, id) = parse_pathbase_ref("https://pathbase.dev/traces/trc_01H", None).unwrap();
+    fn parse_pathbase_ref_full_url_owner_repo_slug() {
+        let (base, ref_) =
+            parse_pathbase_ref("https://pathbase.dev/alex/pathstash/my-path", None).unwrap();
         assert_eq!(base.as_deref(), Some("https://pathbase.dev"));
-        assert_eq!(id, "trc_01H");
+        assert_eq!(
+            ref_,
+            PathRef::Repo {
+                owner: "alex".into(),
+                repo: "pathstash".into(),
+                slug: "my-path".into(),
+            }
+        );
     }
 
     #[test]
-    fn parse_pathbase_ref_bare_id_with_url_flag() {
-        let (base, id) = parse_pathbase_ref("trc_01H", Some("https://other.example/")).unwrap();
+    fn parse_pathbase_ref_bare_triple_with_url_flag() {
+        let (base, ref_) =
+            parse_pathbase_ref("alex/pathstash/my-path", Some("https://other.example/")).unwrap();
         assert_eq!(base.as_deref(), Some("https://other.example"));
-        assert_eq!(id, "trc_01H");
+        assert_eq!(
+            ref_,
+            PathRef::Repo {
+                owner: "alex".into(),
+                repo: "pathstash".into(),
+                slug: "my-path".into(),
+            }
+        );
     }
 
     #[test]
-    fn parse_pathbase_ref_bare_id_no_flag() {
-        let (base, id) = parse_pathbase_ref("trc_01H", None).unwrap();
+    fn parse_pathbase_ref_bare_triple_no_flag() {
+        let (base, ref_) = parse_pathbase_ref("alex/pathstash/my-path", None).unwrap();
         assert_eq!(base, None);
-        assert_eq!(id, "trc_01H");
+        assert_eq!(
+            ref_,
+            PathRef::Repo {
+                owner: "alex".into(),
+                repo: "pathstash".into(),
+                slug: "my-path".into(),
+            }
+        );
     }
 
     #[test]
     fn parse_pathbase_ref_url_with_trailing_slash() {
-        let (base, id) = parse_pathbase_ref("https://pathbase.dev/traces/trc_01H/", None).unwrap();
+        let (base, ref_) =
+            parse_pathbase_ref("https://pathbase.dev/alex/pathstash/my-path/", None).unwrap();
         assert_eq!(base.as_deref(), Some("https://pathbase.dev"));
-        assert_eq!(id, "trc_01H");
+        assert!(matches!(ref_, PathRef::Repo { .. }));
+    }
+
+    #[test]
+    fn parse_pathbase_ref_anon_url_with_paths_delimiter() {
+        // The anon endpoint returns URLs like `/anon/pathstash/paths/<uuid>`.
+        // Parser must recognize the literal `paths` as a route delimiter.
+        let (_, ref_) = parse_pathbase_ref(
+            "https://pathbase-dev.fly.dev/anon/pathstash/paths/abc-123",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            ref_,
+            PathRef::Repo {
+                owner: "anon".into(),
+                repo: "pathstash".into(),
+                slug: "abc-123".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pathbase_ref_rejects_too_few_segments() {
+        assert!(parse_pathbase_ref("https://pathbase.dev/just-one", None).is_err());
+        assert!(parse_pathbase_ref("just/two", None).is_err());
     }
 
     fn setup_claude_manager() -> (tempfile::TempDir, toolpath_claude::ClaudeConvo) {

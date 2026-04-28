@@ -88,16 +88,24 @@
     "role": "Renders a Toolpath Graph as readable Markdown — a narrative an LLM can reason about. Dead ends are called out explicitly, diffs are included at configurable detail levels, and the output preserves enough anchoring info for an LLM to reference back into the original document."
   },
   {
+    "name": "pathbase-client",
+    "version": "0.1.0",
+    "description": "Auto-generated typed client for the Pathbase HTTP API",
+    "docs": "https://docs.rs/pathbase-client",
+    "crate": "https://crates.io/crates/pathbase-client",
+    "role": "Progenitor-derived typed client for `pathbase.dev`'s HTTP surface, generated at build time from `schema/pathbase-openapi.json`. Spec drift surfaces as a build failure rather than runtime HTML-instead-of-JSON. The CLI auth-redeem endpoint isn't in the spec; that one call stays hand-rolled."
+  },
+  {
     "name": "path-cli",
-    "version": "0.7.0",
+    "version": "0.8.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
-    "role": "One binary called `path` that ties everything together: import, export, cache, query, render, merge, track, validate. Pathbase round-trip via `import pathbase` / `export pathbase`."
+    "role": "One binary called `path` that ties everything together: import, export, cache, query, render, merge, track, validate. Pathbase round-trip via `import pathbase` / `export pathbase` (authed default → secret pathstash; anon fallback when not logged in)."
   },
   {
     "name": "toolpath-cli",
-    "version": "0.7.0",
+    "version": "0.8.0",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

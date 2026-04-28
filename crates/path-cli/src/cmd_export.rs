@@ -51,7 +51,17 @@ pub enum ExportTarget {
         #[arg(short, long, conflicts_with = "project")]
         output: Option<PathBuf>,
     },
-    /// Upload a toolpath document to Pathbase
+    /// Upload a toolpath document to Pathbase.
+    ///
+    /// Default behavior depends on whether you're logged in:
+    /// - Logged in (default): writes a secret/unlisted path under your
+    ///   `pathstash` repo. Listable from your account; not publicly visible.
+    /// - Not logged in: falls through to the public anonymous endpoint.
+    ///   Anon paths are not listable and capped at 5 MB.
+    ///
+    /// Use `--repo`/`--slug`/`--public` to override the pathstash default
+    /// when authenticated. Use `--anon` to force the anonymous endpoint
+    /// even when credentials are present.
     Pathbase {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
         #[arg(short, long)]
@@ -60,7 +70,43 @@ pub enum ExportTarget {
         /// Pathbase server URL (defaults to the stored session's server)
         #[arg(long)]
         url: Option<String>,
+
+        /// Force the anonymous endpoint, ignoring any stored credentials
+        #[arg(long, conflicts_with_all = ["repo", "public"])]
+        anon: bool,
+
+        /// Target a specific repo as `owner/name` instead of `<you>/pathstash`
+        #[arg(long, value_parser = parse_repo_spec)]
+        repo: Option<RepoSpec>,
+
+        /// Override the auto-derived slug (defaults to the toolpath document id)
+        #[arg(long)]
+        slug: Option<String>,
+
+        /// Make the uploaded path publicly listable (default: secret/unlisted)
+        #[arg(long)]
+        public: bool,
     },
+}
+
+/// `owner/name` pair for `--repo`.
+#[derive(Debug, Clone)]
+pub struct RepoSpec {
+    pub owner: String,
+    pub name: String,
+}
+
+fn parse_repo_spec(s: &str) -> std::result::Result<RepoSpec, String> {
+    let (owner, name) = s
+        .split_once('/')
+        .ok_or_else(|| format!("expected owner/name, got `{s}`"))?;
+    if owner.is_empty() || name.is_empty() {
+        return Err(format!("expected owner/name, got `{s}`"));
+    }
+    Ok(RepoSpec {
+        owner: owner.to_string(),
+        name: name.to_string(),
+    })
 }
 
 pub fn run(target: ExportTarget) -> Result<()> {
@@ -75,8 +121,32 @@ pub fn run(target: ExportTarget) -> Result<()> {
             project,
             output,
         } => run_gemini(input, project, output),
-        ExportTarget::Pathbase { input, url } => run_pathbase(input, url),
+        ExportTarget::Pathbase {
+            input,
+            url,
+            anon,
+            repo,
+            slug,
+            public,
+        } => run_pathbase(PathbaseExportArgs {
+            input,
+            url,
+            anon,
+            repo,
+            slug,
+            public,
+        }),
     }
+}
+
+#[derive(Debug)]
+struct PathbaseExportArgs {
+    input: String,
+    url: Option<String>,
+    anon: bool,
+    repo: Option<RepoSpec>,
+    slug: Option<String>,
+    public: bool,
 }
 
 fn run_claude(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
@@ -407,31 +477,68 @@ fn gemini_main_stem(convo: &toolpath_gemini::types::Conversation) -> String {
 
 // ── Pathbase ──────────────────────────────────────────────────────────
 
-fn run_pathbase(input: String, url_flag: Option<String>) -> Result<()> {
+fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, url_flag);
+        let _ = args;
         anyhow::bail!("'path export pathbase' requires a native environment with network access");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        use crate::cmd_pathbase::{require_session, resolve_url, traces_post};
+        use crate::cmd_pathbase::{
+            anon_paths_post, api_me, credentials_path, load_session, paths_post, repos_post,
+            resolve_url,
+        };
 
-        let file = cache_ref(&input)?;
+        let file = cache_ref(&args.input)?;
         let body = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read {}", file.display()))?;
         // Validate locally so we give a clean error rather than relying on
         // the server to reject malformed payloads.
-        toolpath::v1::Graph::from_json(&body)
+        let doc = toolpath::v1::Graph::from_json(&body)
             .map_err(|e| anyhow::anyhow!("Invalid toolpath document: {}", e))?;
 
-        let session = require_session()?;
-        let base_url = match url_flag {
-            Some(u) => resolve_url(Some(u)),
-            None => session.url.clone(),
+        let stored = load_session(&credentials_path()?)?;
+        let base_url = match (&args.url, &stored) {
+            (Some(u), _) => resolve_url(Some(u.clone())),
+            (None, Some(s)) => s.url.clone(),
+            (None, None) => resolve_url(None),
         };
 
+        // Anonymous mode: explicit --anon, or no credentials at all and no
+        // override flags steering us toward an authed endpoint.
+        let go_anon = args.anon || (stored.is_none() && args.repo.is_none() && args.slug.is_none());
+
+        if go_anon {
+            if !args.anon && stored.is_none() {
+                eprintln!(
+                    "note: not logged in — uploading anonymously (not listable). Run `path auth login --url {base_url}` for a listable upload."
+                );
+            }
+            let resp = anon_paths_post(&base_url, &body)?;
+            // Server returns either a full URL or a path-only string; in the
+            // latter case prefix the base so the user gets a clickable link.
+            let printable = if resp.url.starts_with("http://") || resp.url.starts_with("https://") {
+                resp.url.clone()
+            } else if resp.url.starts_with('/') {
+                format!("{base_url}{}", resp.url)
+            } else {
+                format!("{base_url}/{}", resp.url)
+            };
+            println!("{printable}");
+            eprintln!(
+                "Uploaded {} → anon path {} ({} bytes)",
+                file.display(),
+                resp.id,
+                body.len()
+            );
+            return Ok(());
+        }
+
+        let session = stored.ok_or_else(|| {
+            anyhow::anyhow!("Not logged in. Run `path auth login` or pass `--anon`.")
+        })?;
         if host_of(&base_url) != host_of(&session.url) {
             eprintln!(
                 "warning: uploading to {} with a token issued by {}; expect 401 unless this is the same deployment",
@@ -439,15 +546,69 @@ fn run_pathbase(input: String, url_flag: Option<String>) -> Result<()> {
             );
         }
 
-        let trace = traces_post(&base_url, &session.token, &body)?;
-        println!("{}", trace.url);
+        let (owner, repo) = match args.repo {
+            Some(spec) => (spec.owner, spec.name),
+            None => {
+                // Pathstash default: own the repo "pathstash" under our username,
+                // creating it on demand. api_me is the source of truth for the
+                // username (display name in stored.user can drift).
+                let user = api_me(&base_url, &session.token)?;
+                repos_post(&base_url, &session.token, "pathstash")?;
+                (user.username, "pathstash".to_string())
+            }
+        };
+
+        let slug = args.slug.unwrap_or_else(|| derive_slug(&doc));
+        let is_public = args.public;
+        let created = paths_post(
+            &base_url,
+            &session.token,
+            &owner,
+            &repo,
+            &slug,
+            &body,
+            is_public,
+        )?;
+
+        let visibility = if is_public { "public" } else { "secret" };
+        let url = format!("{base_url}/{owner}/{repo}/{}", created.slug);
+        println!("{url}");
         eprintln!(
-            "Uploaded {} → {} ({} bytes)",
+            "Uploaded {} → {}/{}/{} ({} path, {} bytes)",
             file.display(),
-            trace.id,
+            owner,
+            repo,
+            created.slug,
+            visibility,
             body.len()
         );
         Ok(())
+    }
+}
+
+/// Pick a URL-safe slug from the document. Defaults to the inner id; falls
+/// back to a timestamp-stamped placeholder if the id is empty or non-ascii.
+#[cfg(not(target_os = "emscripten"))]
+fn derive_slug(doc: &toolpath::v1::Graph) -> String {
+    let raw = match doc.single_path() {
+        Some(p) => p.path.id.as_str(),
+        None => doc.graph.id.as_str(),
+    };
+    let slug: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = slug.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        format!("path-{}", chrono::Utc::now().timestamp())
+    } else {
+        trimmed
     }
 }
 
@@ -888,7 +1049,10 @@ mod tests {
     }
 
     #[test]
-    fn pathbase_requires_login() {
+    fn pathbase_repo_flag_requires_login() {
+        // With explicit --repo (i.e. an authenticated upload), missing
+        // credentials must surface the "Not logged in" error rather than
+        // silently falling through to the anonymous endpoint.
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(
@@ -903,10 +1067,60 @@ mod tests {
         unsafe {
             std::env::set_var(crate::config::CONFIG_DIR_ENV, temp.path());
         }
-        let err = run_pathbase(input_path.to_string_lossy().to_string(), None).unwrap_err();
+        let err = run_pathbase(PathbaseExportArgs {
+            input: input_path.to_string_lossy().to_string(),
+            url: Some("http://127.0.0.1:1".to_string()),
+            anon: false,
+            repo: Some(RepoSpec {
+                owner: "alex".to_string(),
+                name: "pathstash".to_string(),
+            }),
+            slug: None,
+            public: false,
+        })
+        .unwrap_err();
         unsafe {
             std::env::remove_var(crate::config::CONFIG_DIR_ENV);
         }
-        assert!(err.to_string().contains("Not logged in"));
+        assert!(
+            err.to_string().contains("Not logged in"),
+            "expected `Not logged in` error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_repo_spec_accepts_owner_slash_name() {
+        let spec = parse_repo_spec("alex/pathstash").unwrap();
+        assert_eq!(spec.owner, "alex");
+        assert_eq!(spec.name, "pathstash");
+    }
+
+    #[test]
+    fn parse_repo_spec_rejects_missing_slash() {
+        assert!(parse_repo_spec("alex").is_err());
+        assert!(parse_repo_spec("/pathstash").is_err());
+        assert!(parse_repo_spec("alex/").is_err());
+    }
+
+    #[test]
+    fn derive_slug_uses_path_id() {
+        let doc = make_path_doc();
+        assert_eq!(derive_slug(&doc), "test-path");
+    }
+
+    #[test]
+    fn derive_slug_sanitizes_non_url_safe_chars() {
+        use toolpath::v1::{Graph, Path, PathIdentity};
+        let doc = Graph::from_path(Path {
+            path: PathIdentity {
+                id: "claude/Path 42!".into(),
+                base: None,
+                head: "h".into(),
+                graph_ref: None,
+            },
+            steps: vec![],
+            meta: None,
+        });
+        assert_eq!(derive_slug(&doc), "claude-path-42");
     }
 }

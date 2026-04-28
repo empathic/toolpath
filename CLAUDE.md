@@ -24,7 +24,9 @@ crates/
   toolpath-md/                  # Markdown rendering for LLM consumption
   path-cli/                     # unified CLI (binary: path)
   toolpath-cli/                 # deprecated shim that re-exports path-cli (excluded from the workspace; see below)
-schema/toolpath.schema.json     # JSON Schema for the format
+  pathbase-client/              # progenitor-derived client for the Pathbase HTTP API
+schema/toolpath.schema.json     # JSON Schema for the toolpath format
+schema/pathbase-openapi.json    # OpenAPI spec for the Pathbase API (run scripts/refresh-pathbase-openapi.sh to refetch)
 examples/*.json                 # 12 example documents (step, path, graph)
 RFC.md                          # full format specification
 FAQ.md                          # design rationale, FAQ, and open questions
@@ -45,6 +47,8 @@ path-cli (binary: path)
  ├── toolpath-pi      → toolpath, toolpath-convo
  ├── toolpath-dot     → toolpath
  └── toolpath-md      → toolpath
+
+pathbase-client      (no toolpath deps; built from schema/pathbase-openapi.json)
 
 toolpath-cli (deprecated shim, binary: path)
  └── path-cli
@@ -122,6 +126,13 @@ writes to `~/.toolpath/credentials.json` (0600, parent dir 0700) and sends as
 `Authorization: Bearer <token>` on future requests. `$TOOLPATH_CONFIG_DIR`
 overrides the credentials directory. Server URL comes from `--url`, then
 `$PATHBASE_URL`, then `https://pathbase.dev`.
+
+The CLI redeem endpoint (`POST /api/v1/auth/cli/redeem`) is real and works
+in production but is **not listed in `schema/pathbase-openapi.json`** — the
+OpenAPI spec only covers the documented surface. Don't be surprised that
+the progenitor-derived `pathbase-client` lacks a `redeem` method; the
+hand-rolled redeem call in `cmd_pathbase.rs` is the source of truth until
+the server publishes that operation.
 
 ## Key conventions
 
