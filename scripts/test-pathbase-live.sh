@@ -85,7 +85,7 @@ assert_imports_with_steps() {
     local tmp; tmp="$(mktemp -d -t "pb-live-${label}-import.XXXXXX")"
     TMP_DIRS+=("$tmp")
     local stderr; stderr="$(TOOLPATH_CONFIG_DIR="$tmp" "$PATH_BIN" import pathbase "$trace_url" --force 2>&1 1>/dev/null)"
-    if ! grep -qE "^Imported path .* \\(${expected_steps} steps\\)" <<<"$stderr"; then
+    if ! grep -qE "^Imported graph .* \\(1 path, ${expected_steps} steps\\)" <<<"$stderr"; then
         echo "FAIL[$label]: import did not report ${expected_steps} steps" >&2
         echo "$stderr" >&2
         exit 1
