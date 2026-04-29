@@ -128,6 +128,7 @@ fn derive_path_from_view(
     let base = base_uri.map(|uri| Base {
         uri,
         ref_str: base_ref,
+        branch: None,
     });
 
     // Top-level path meta: actors, title, source, opencode metadata.

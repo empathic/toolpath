@@ -21,6 +21,7 @@ mod config;
 #[cfg(not(target_os = "emscripten"))]
 mod fzf;
 mod io;
+mod schema;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

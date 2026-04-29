@@ -99,7 +99,7 @@ fn run_ancestors(input: PathBuf, step_id: String, pretty: bool) -> Result<()> {
 fn run_dead_ends(input: PathBuf, pretty: bool) -> Result<()> {
     let doc = read_doc(&input)?;
     let (steps, head) = extract_steps(&doc);
-    let head = head.ok_or_else(|| anyhow::anyhow!("Document has no head step"))?;
+    let head = head.ok_or_else(|| anyhow::anyhow!("Graph has no head step"))?;
 
     let dead = query::dead_ends(steps, head);
     print_steps(&dead, pretty)

@@ -293,6 +293,7 @@ fn main() -> Result<()> {
             base: Some(Base {
                 uri: "file:///synthetic".into(),
                 ref_str: None,
+                branch: None,
             }),
             head,
             graph_ref: None,

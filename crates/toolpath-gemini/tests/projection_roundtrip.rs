@@ -47,9 +47,7 @@ fn roundtrip(source: &Conversation) -> (ConversationView, Conversation, Path) {
     let doc = Graph::from_path(path.clone());
     let json = serde_json::to_string(&doc).expect("serialize Graph");
     let back: Graph = serde_json::from_str(&json).expect("parse Graph");
-    let reparsed = back
-        .into_single_path()
-        .expect("single-path graph");
+    let reparsed = back.into_single_path().expect("single-path graph");
 
     let view_back = extract_conversation(&reparsed);
     let projector = GeminiProjector::new()

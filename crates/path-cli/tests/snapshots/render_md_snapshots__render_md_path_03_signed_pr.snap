@@ -1,10 +1,11 @@
 ---
 source: crates/path-cli/tests/render_md_snapshots.rs
+assertion_line: 51
 expression: "render_md(\"path-03-signed-pr.path.json\")"
 ---
 # Add email validation
 
-**Base:** `github:myorg/myrepo` @ `main`
+**Base:** `github:myorg/myrepo` @ `abc123def456789` (`main`)
 **Head:** `step-003`
 **Source:** `github:myorg/myrepo/pull/42`
 - **fixes:** `issue://github/myorg/myrepo/issues/42`

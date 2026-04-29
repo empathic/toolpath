@@ -1,10 +1,11 @@
 ---
 source: crates/path-cli/tests/render_md_snapshots.rs
+assertion_line: 47
 expression: "render_md(\"path-02-local-session.path.json\")"
 ---
 # Claude Code session: Add service config
 
-**Base:** `file:///home/alex/projects/myrepo`
+**Base:** `file:///home/alex/projects/myrepo` @ `def789abc123456`
 **Head:** `step-003`
 **Source:** `agent://claude-code/session-xyz`
 **Changes:** +21 −1 across 1 files

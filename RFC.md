@@ -569,13 +569,15 @@ The path provides:
 
 ### Base Context
 
-The `path.base` object anchors the path to a specific state. The `uri` field
-determines the type of base:
+The `path.base` object anchors the path to a specific state. The `uri`
+field identifies the origin (repository, filesystem, or another toolpath
+document). All other fields are optional.
 
-| Field  | Description                                           |
-| ------ | ----------------------------------------------------- |
-| `uri`  | Repository or toolpath reference                      |
-| `ref`  | VCS state identifier (commit, revision, tag, etc.)    |
+| Field    | Description                                              |
+| -------- | -------------------------------------------------------- |
+| `uri`    | Origin identifier                                        |
+| `ref`    | State identifier (e.g., commit hash, revision, tag)      |
+| `branch` | Branch name the path was opened against, if applicable   |
 
 #### VCS Base
 
@@ -585,16 +587,19 @@ For paths branching from a VCS state:
 {
   "base": {
     "uri": "github:myorg/myrepo",
-    "ref": "abc123def456"
+    "ref": "abc123def456",
+    "branch": "main"
   }
 }
 ```
 
-The `ref` field holds whatever identifier the VCS uses for a specific state:
-- Git: commit hash, tag, or branch name
-- SVN: revision number
-- Mercurial: changeset ID
-- Fossil: checkin hash
+`ref` is whatever the origin uses to name a specific reproducible state —
+commit hash, tag, revision number, changeset ID, checkin hash, etc. It's
+optional: a base may identify only a repository or working directory
+without pinning a particular state.
+
+`branch` records the branch the path was opened against, when one
+exists. Independent of `ref`: both, either, or neither may appear.
 
 #### Toolpath Base
 
@@ -815,7 +820,7 @@ A PR is a single-path graph rooted at the target branch:
     {
       "path": {
         "id": "pr-123",
-        "base": { "uri": "github:myorg/myrepo", "ref": "abc123" },
+        "base": { "uri": "github:myorg/myrepo", "ref": "abc123", "branch": "main" },
         "head": "step-final"
       },
       "steps": [...],

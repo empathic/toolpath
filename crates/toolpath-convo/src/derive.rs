@@ -56,7 +56,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let base = config
         .base_uri
         .clone()
-        .map(|uri| Base { uri, ref_str: None })
+        .map(|uri| Base {
+            uri,
+            ref_str: None,
+            branch: None,
+        })
         .or_else(|| {
             view.turns
                 .iter()
@@ -67,7 +71,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     } else {
                         wd
                     };
-                    Base { uri, ref_str: None }
+                    Base {
+                        uri,
+                        ref_str: None,
+                        branch: None,
+                    }
                 })
         });
 

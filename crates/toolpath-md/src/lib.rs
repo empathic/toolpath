@@ -593,6 +593,9 @@ fn write_path_context(out: &mut String, path: &Path) {
         if let Some(ref_str) = &base.ref_str {
             write!(out, " @ `{ref_str}`").unwrap();
         }
+        if let Some(branch) = &base.branch {
+            write!(out, " (`{branch}`)").unwrap();
+        }
         writeln!(out).unwrap();
     }
 
@@ -871,6 +874,9 @@ fn write_path_front_matter(out: &mut String, path: &Path) {
         writeln!(out, "base: {}", base.uri).unwrap();
         if let Some(ref_str) = &base.ref_str {
             writeln!(out, "base_ref: {ref_str}").unwrap();
+        }
+        if let Some(branch) = &base.branch {
+            writeln!(out, "base_branch: {branch}").unwrap();
         }
     }
     writeln!(out, "steps: {}", path.steps.len()).unwrap();

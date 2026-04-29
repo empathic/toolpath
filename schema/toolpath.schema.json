@@ -277,17 +277,22 @@
 
     "base": {
       "type": "object",
-      "description": "Root context for a path. URI can be a VCS reference (github:, gitlab:, file:) or a toolpath reference (toolpath:path-id/step-id)",
+      "description": "Root context for a path. The URI identifies the origin (repository, filesystem, or another toolpath document); all other fields are optional.",
       "properties": {
         "uri": {
           "type": "string",
-          "description": "Base reference: VCS repo (e.g., 'github:org/repo') or toolpath step (e.g., 'toolpath:path-main/step-005')",
+          "description": "Origin identifier: a repository (e.g., 'github:org/repo'), a filesystem location (e.g., 'file:///path/to/repo'), or another toolpath step ('toolpath:path-id/step-id').",
           "examples": ["github:org/repo", "svn://server/repo", "file:///path/to/repo", "toolpath:path-main/step-005"]
         },
         "ref": {
           "type": "string",
-          "description": "VCS state identifier: commit hash, revision number, changeset ID, tag, or branch name. Interpretation depends on the VCS.",
-          "examples": ["abc123def456", "12345", "v1.0", "main"]
+          "description": "State identifier the origin uses to name a specific reproducible state — commit hash, tag, revision number, changeset ID, etc. Interpretation depends on the origin.",
+          "examples": ["abc123def456", "12345", "v1.0"]
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch name the path was opened against, when one applies.",
+          "examples": ["main", "release/v2", "feature/auth"]
         }
       },
       "required": ["uri"],
@@ -304,7 +309,7 @@
         },
         "base": {
           "$ref": "#/$defs/base",
-          "description": "Root context this path branches from"
+          "description": "Root context this path branches from. Optional: paths derived from a sealed agent session or a synthetic single-step graph may have no upstream VCS state to anchor to."
         },
         "head": {
           "type": "string",
@@ -319,7 +324,7 @@
           ]
         }
       },
-      "required": ["id", "base", "head"],
+      "required": ["id", "head"],
       "additionalProperties": false
     },
 

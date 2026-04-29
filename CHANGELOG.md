@@ -2,6 +2,89 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## `path.base` reconciliation — `branch` field, schema-validating `path validate`
+
+**Breaking** (pre-1.0). `path.base` gains a `branch` field and `ref`'s
+semantics are tightened. `path validate` now actually validates against
+`schema/toolpath.schema.json`, not just the Rust types.
+
+The `commit` field on `path.base` that several example fixtures carried
+since the simplification commit was being silently dropped on every
+serde round-trip — `Base` had no slot for it. The fix splits those two
+distinct pieces of state into proper fields:
+
+- `ref` is the state identifier the origin uses to name a specific
+  reproducible state (commit hash, revision number, tag, changeset ID,
+  etc.). Branch names no longer overload this slot.
+- `branch` is the branch the path was opened against, when one applies.
+
+`toolpath-github`'s derive was the load-bearing bug: it was writing the
+PR base's branch name into `ref` and discarding the SHA. After this
+change `ref` carries the SHA and `branch` carries the branch name.
+
+### toolpath 0.3.0 → 0.4.0
+
+- `Base` gains `branch: Option<String>` plus a `with_branch` builder.
+  Existing `Base::vcs` and `Base::toolpath` constructors still apply;
+  they default `branch` to `None`.
+
+### toolpath-github 0.2.1 → 0.3.0
+
+- **Behavioral change.** `Base.ref` is now populated from
+  `pr.base.sha` (the commit hash); `Base.branch` is now populated from
+  `pr.base.ref` (the branch name). Documents derived by previous
+  versions had the SHA missing and the branch name in `ref` —
+  re-deriving any PR will produce the corrected shape.
+
+### toolpath-git 0.2.0 → 0.3.0
+
+- `Base.branch` is now populated from the branch spec name.
+
+### toolpath-codex 0.1.0 → 0.2.0
+
+- `Base.branch` is now populated from `session_meta.git.branch` when
+  present.
+
+### toolpath-md 0.3.0 → 0.4.0
+
+- Markdown rendering surfaces `Base.branch` alongside `ref`:
+  `**Base:** <uri> @ <ref> (<branch>)`. YAML rendering adds
+  `base_branch:` line.
+
+### path-cli 0.6.0 → 0.7.0
+
+- New `jsonschema` runtime dep. `path validate` now schema-validates
+  canonical `.path.json` documents against the embedded
+  `schema/toolpath.schema.json` after the type round-trip; previously
+  it only round-tripped through the Rust types (which silently drop
+  unknown fields). JSONL still validates via strict streaming parse.
+- New `tests/schema_examples.rs` integration test schema-validates
+  every `examples/*.json` fixture so future drift is caught at
+  `cargo test` time.
+
+### toolpath-cli 0.6.0 → 0.7.0 (deprecation shim)
+
+- Lockstep bump with `path-cli`. No behavioral change.
+
+### Schema (`schema/toolpath.schema.json`)
+
+- `base.branch` added (optional). `base.uri` is the only required
+  field.
+- `pathIdentity.base` is no longer required, matching the Rust
+  `Option<Base>` and the RFC's minimal-step example.
+- Descriptions softened: `base` is an "origin identifier" rather than
+  strictly "VCS reference"; `ref`/`branch` document what they are
+  without claiming the field can only describe a VCS state.
+
+### Examples
+
+- The four PR-shaped fixtures (`path-01-pr.path.json`,
+  `path-03-signed-pr.path.json`, `graph-01-release.json` × 2 paths)
+  carry their original commit SHAs in `ref` again, with `"main"` moved
+  to `branch`. `.path.jsonl` siblings updated to match.
+- `path-02-local-session.path.json` had its standalone `commit` field
+  renamed to `ref`.
+
 ## Format simplification — single-root Graph
 
 **Breaking.** `Graph` is now the only root document type. Every `.path.json`

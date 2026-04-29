@@ -200,11 +200,7 @@ fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Resul
 
 fn doc_summary(doc: &Graph) -> String {
     if let Some(p) = doc.single_path() {
-        format!(
-            "graph {} (1 path, {} steps)",
-            doc.graph.id,
-            p.steps.len()
-        )
+        format!("graph {} (1 path, {} steps)", doc.graph.id, p.steps.len())
     } else {
         format!("graph {} ({} paths)", doc.graph.id, doc.paths.len())
     }
@@ -1029,9 +1025,7 @@ fn derive_pi_with_manager(
                         .ok_or_else(|| {
                             anyhow::anyhow!("No Pi sessions found for project: {}", p)
                         })?;
-                    let doc = Graph::from_path(toolpath_pi::derive::derive_path(
-                        &session, &config,
-                    ));
+                    let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                     let cache_id = make_id("pi", &doc_inner_id(&doc));
                     return Ok(vec![DerivedDoc { cache_id, doc }]);
                 }
@@ -1042,8 +1036,7 @@ fn derive_pi_with_manager(
                     .most_recent_session(&p)
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No Pi sessions found for project: {}", p))?;
-                let doc =
-                    Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
+                let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                 let cache_id = make_id("pi", &doc_inner_id(&doc));
                 return Ok(vec![DerivedDoc { cache_id, doc }]);
             }

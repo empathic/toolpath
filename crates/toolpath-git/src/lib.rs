@@ -167,11 +167,7 @@ mod native {
     /// Branch strings are parsed as [`BranchSpec`]s (supporting `"name:start"` syntax).
     /// A single branch yields a single-path graph (one entry in `paths`); multiple
     /// branches yield a multi-path graph.
-    pub fn derive(
-        repo: &Repository,
-        branches: &[String],
-        config: &DeriveConfig,
-    ) -> Result<Graph> {
+    pub fn derive(repo: &Repository, branches: &[String], config: &DeriveConfig) -> Result<Graph> {
         let branch_specs: Vec<BranchSpec> = branches.iter().map(|s| BranchSpec::parse(s)).collect();
 
         if branch_specs.len() == 1 {
@@ -245,6 +241,7 @@ mod native {
                 base: Some(Base {
                     uri: repo_uri,
                     ref_str: Some(base_commit.id().to_string()),
+                    branch: Some(spec.name.clone()),
                 }),
                 head: head_step_id,
                 graph_ref: None,

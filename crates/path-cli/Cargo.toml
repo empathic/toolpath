@@ -1,6 +1,6 @@
 [package]
 name = "path-cli"
-version = "0.6.0"
+version = "0.7.0"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -34,6 +34,7 @@ similar = { workspace = true }
 chrono = { workspace = true }
 tempfile = { workspace = true }
 rand = "0.9"
+jsonschema = { version = "0.46", default-features = false }
 
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
 toolpath-claude = { workspace = true, features = ["watcher"] }

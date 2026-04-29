@@ -600,7 +600,11 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
     Path {
         path: PathIdentity {
             id: format!("path-claude-{}", session_short),
-            base: base_uri.map(|uri| Base { uri, ref_str: None }),
+            base: base_uri.map(|uri| Base {
+                uri,
+                ref_str: None,
+                branch: None,
+            }),
             head,
             graph_ref: None,
         },

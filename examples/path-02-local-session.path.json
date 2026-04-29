@@ -8,7 +8,7 @@
         "id": "path-session-xyz",
         "base": {
           "uri": "file:///home/alex/projects/myrepo",
-          "commit": "def789abc123456"
+          "ref": "def789abc123456"
         },
         "head": "step-003"
       },

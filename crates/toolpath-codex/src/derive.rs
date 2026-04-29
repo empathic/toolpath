@@ -102,10 +102,14 @@ fn derive_path_from_view(
     let base_ref = meta
         .as_ref()
         .and_then(|m| m.git.as_ref().and_then(|g| g.commit_hash.clone()));
+    let base_branch = meta
+        .as_ref()
+        .and_then(|m| m.git.as_ref().and_then(|g| g.branch.clone()));
 
     let base = base_uri.map(|uri| Base {
         uri,
         ref_str: base_ref,
+        branch: base_branch,
     });
 
     // Top-level path meta: actors, title, source, and a Codex extras

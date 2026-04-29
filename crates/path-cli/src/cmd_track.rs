@@ -309,6 +309,7 @@ fn init_session(config: InitConfig) -> Result<PathBuf> {
     let base = config.base_uri.map(|uri| v1::Base {
         uri,
         ref_str: config.base_ref,
+        branch: None,
     });
 
     let mut path_doc = v1::Path::new(&session_id, base, "none");
@@ -849,6 +850,7 @@ mod tests {
         let base = v1::Base {
             uri: "github:org/repo".to_string(),
             ref_str: Some("main".to_string()),
+            branch: None,
         };
         let path_doc = v1::Path::new("track-base-test", Some(base), "none");
         let state = TrackState {
@@ -1817,6 +1819,7 @@ mod tests {
         let base = v1::Base {
             uri: "github:org/repo".to_string(),
             ref_str: Some("abc123".to_string()),
+            branch: None,
         };
         let mut path_doc = v1::Path::new("track-test-doc", Some(base), "step-001");
         path_doc.steps.push(

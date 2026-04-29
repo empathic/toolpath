@@ -8,8 +8,8 @@
         "id": "path-pr-42",
         "base": {
           "uri": "github:myorg/myrepo",
-          "ref": "main",
-          "commit": "abc123def456"
+          "ref": "abc123def456",
+          "branch": "main"
         },
         "head": "step-003"
       },
@@ -76,8 +76,8 @@
         "id": "path-pr-43",
         "base": {
           "uri": "github:myorg/myrepo",
-          "ref": "main",
-          "commit": "def456789abc"
+          "ref": "def456789abc",
+          "branch": "main"
         },
         "head": "step-002"
       },

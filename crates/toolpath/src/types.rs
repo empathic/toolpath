@@ -127,11 +127,17 @@ pub struct PathIdentity {
 /// Root context for a path
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Base {
-    /// Repository or toolpath reference (e.g., "github:org/repo" or "toolpath:path-id/step-id")
+    /// Origin identifier: repo (e.g., "github:org/repo"), filesystem
+    /// location ("file:///…"), or another toolpath step
+    /// ("toolpath:path-id/step-id").
     pub uri: String,
-    /// VCS state identifier: commit hash, revision number, tag, etc.
+    /// State identifier the origin uses to name a specific reproducible
+    /// state — commit hash, revision number, tag, changeset ID, etc.
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     pub ref_str: Option<String>,
+    /// Branch name the path was opened against, when one applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// Path metadata
@@ -421,6 +427,7 @@ impl Base {
         Self {
             uri: uri.into(),
             ref_str: Some(ref_str.into()),
+            branch: None,
         }
     }
 
@@ -429,7 +436,14 @@ impl Base {
         Self {
             uri: format!("toolpath:{}/{}", path_id.into(), step_id.into()),
             ref_str: None,
+            branch: None,
         }
+    }
+
+    /// Attach a VCS branch name to this base.
+    pub fn with_branch(mut self, branch: impl Into<String>) -> Self {
+        self.branch = Some(branch.into());
+        self
     }
 }
 
@@ -534,10 +548,47 @@ mod tests {
         let vcs_base = Base::vcs("github:org/repo", "abc123");
         assert_eq!(vcs_base.uri, "github:org/repo");
         assert_eq!(vcs_base.ref_str, Some("abc123".to_string()));
+        assert_eq!(vcs_base.branch, None);
 
         let toolpath_base = Base::toolpath("path-main", "step-005");
         assert_eq!(toolpath_base.uri, "toolpath:path-main/step-005");
         assert_eq!(toolpath_base.ref_str, None);
+        assert_eq!(toolpath_base.branch, None);
+    }
+
+    #[test]
+    fn test_base_branch_roundtrip() {
+        let base = Base {
+            uri: "github:org/repo".into(),
+            ref_str: Some("abc123def456".into()),
+            branch: Some("main".into()),
+        };
+        let json = serde_json::to_string(&base).unwrap();
+        assert!(json.contains(r#""branch":"main""#));
+        assert!(json.contains(r#""ref":"abc123def456""#));
+
+        let parsed: Base = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.uri, "github:org/repo");
+        assert_eq!(parsed.ref_str.as_deref(), Some("abc123def456"));
+        assert_eq!(parsed.branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn test_base_branch_omitted_when_none() {
+        let base = Base {
+            uri: "github:org/repo".into(),
+            ref_str: Some("abc123".into()),
+            branch: None,
+        };
+        let json = serde_json::to_string(&base).unwrap();
+        assert!(!json.contains("branch"));
+    }
+
+    #[test]
+    fn test_base_with_branch_constructor() {
+        let base = Base::vcs("github:org/repo", "abc123").with_branch("main");
+        assert_eq!(base.branch.as_deref(), Some("main"));
+        assert_eq!(base.ref_str.as_deref(), Some("abc123"));
     }
 
     // ── Graph serialization ────────────────────────────────────────────
@@ -594,10 +645,7 @@ mod tests {
         let p2 = Path::new("p2", None, "s2");
         let graph = Graph {
             graph: GraphIdentity { id: "g".into() },
-            paths: vec![
-                PathOrRef::Path(Box::new(p1)),
-                PathOrRef::Path(Box::new(p2)),
-            ],
+            paths: vec![PathOrRef::Path(Box::new(p1)), PathOrRef::Path(Box::new(p2))],
             meta: None,
         };
         assert!(graph.single_path().is_none());

@@ -289,11 +289,8 @@ enum ParsedLine {
 }
 
 fn parse_line(line: &str, line_num: usize) -> Result<ParsedLine, JsonlError> {
-    let value: serde_json::Value =
-        serde_json::from_str(line).map_err(|source| JsonlError::MalformedJson {
-            line_num,
-            source,
-        })?;
+    let value: serde_json::Value = serde_json::from_str(line)
+        .map_err(|source| JsonlError::MalformedJson { line_num, source })?;
     let obj = value
         .as_object()
         .ok_or(JsonlError::NotAnObject { line_num })?;
@@ -483,13 +480,14 @@ fn apply_signature(
         return Ok(());
     }
     if let Some(step_id) = body.target.strip_prefix("step:") {
-        let idx = step_idx
-            .get(step_id)
-            .copied()
-            .ok_or_else(|| JsonlError::OrphanStepSignature {
-                line_num,
-                step_id: step_id.to_string(),
-            })?;
+        let idx =
+            step_idx
+                .get(step_id)
+                .copied()
+                .ok_or_else(|| JsonlError::OrphanStepSignature {
+                    line_num,
+                    step_id: step_id.to_string(),
+                })?;
         let step = &mut steps[idx];
         let meta = step.meta.get_or_insert_with(StepMeta::default);
         meta.signatures.push(body.signature);
@@ -701,10 +699,8 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_step(id: &str, parent: Option<&str>) -> Step {
-        let mut s = Step::new(id, "human:alex", "2026-01-01T00:00:00Z").with_raw_change(
-            "src/main.rs",
-            "@@ -1 +1 @@\n-a\n+b",
-        );
+        let mut s = Step::new(id, "human:alex", "2026-01-01T00:00:00Z")
+            .with_raw_change("src/main.rs", "@@ -1 +1 @@\n-a\n+b");
         if let Some(p) = parent {
             s = s.with_parent(p);
         }

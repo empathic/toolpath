@@ -527,7 +527,8 @@ mod native {
                 id: format!("pr-{}", pr_number),
                 base: Some(Base {
                     uri: format!("github:{}/{}", owner, repo),
-                    ref_str: Some(pr["base"]["ref"].as_str().unwrap_or("main").to_string()),
+                    ref_str: pr["base"]["sha"].as_str().map(|s| s.to_string()),
+                    branch: pr["base"]["ref"].as_str().map(|s| s.to_string()),
                 }),
                 head,
                 graph_ref: None,
@@ -1031,6 +1032,7 @@ mod native {
                 "head": { "ref": "feature-x" },
                 "base": {
                     "ref": "main",
+                    "sha": "abc123def456",
                     "repo": {
                         "owner": { "login": "acme" },
                         "name": "widgets"
@@ -1323,6 +1325,10 @@ mod native {
             assert_eq!(path.path.base.as_ref().unwrap().uri, "github:acme/widgets");
             assert_eq!(
                 path.path.base.as_ref().unwrap().ref_str.as_deref(),
+                Some("abc123def456")
+            );
+            assert_eq!(
+                path.path.base.as_ref().unwrap().branch.as_deref(),
                 Some("main")
             );
 
