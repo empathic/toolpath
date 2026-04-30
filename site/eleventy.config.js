@@ -35,6 +35,42 @@ export default function (eleventyConfig) {
   eleventyConfig.addPassthroughCopy("js");
   eleventyConfig.addPassthroughCopy("wasm");
 
+  // Self-hosted fonts (latin subset only) — pulled from @fontsource packages
+  // at install time, copied to /fonts/ at build time. Filenames are stable
+  // so <link rel="preload"> and @font-face URLs match.
+  eleventyConfig.addPassthroughCopy({
+    "node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2":
+      "fonts/plex-mono-400.woff2",
+    "node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2":
+      "fonts/plex-mono-500.woff2",
+    "node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2":
+      "fonts/plex-mono-600.woff2",
+    "node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-700-normal.woff2":
+      "fonts/plex-mono-700.woff2",
+    "node_modules/@fontsource/source-serif-4/files/source-serif-4-latin-400-normal.woff2":
+      "fonts/source-serif-400.woff2",
+    "node_modules/@fontsource/source-serif-4/files/source-serif-4-latin-400-italic.woff2":
+      "fonts/source-serif-400-italic.woff2",
+    "node_modules/@fontsource/source-serif-4/files/source-serif-4-latin-600-normal.woff2":
+      "fonts/source-serif-600.woff2",
+  });
+
+  // Self-hosted vendor JS — no third-party CDNs at runtime.
+  eleventyConfig.addPassthroughCopy({
+    "node_modules/d3/dist/d3.min.js": "vendor/d3.min.js",
+    "node_modules/dagre-d3/dist/dagre-d3.min.js": "vendor/dagre-d3.min.js",
+    "node_modules/@xterm/xterm/lib/xterm.js": "vendor/xterm.js",
+    "node_modules/@xterm/xterm/css/xterm.css": "vendor/xterm.css",
+    "node_modules/@xterm/addon-fit/lib/addon-fit.js":
+      "vendor/xterm-addon-fit.js",
+    "node_modules/prismjs/components/prism-core.min.js": "vendor/prism.js",
+    "node_modules/prismjs/components/prism-json.min.js": "vendor/prism-json.js",
+    "node_modules/prismjs/components/prism-diff.min.js": "vendor/prism-diff.js",
+  });
+
+  // Brand book is a dev reference, not site content
+  eleventyConfig.ignores.add("BRAND.md");
+
   eleventyConfig.amendLibrary("md", (mdLib) => {
     mdLib.set({ highlight: prismHighlight });
     mdLib.use(markdownItAnchor, {

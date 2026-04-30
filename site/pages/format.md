@@ -198,9 +198,10 @@ Paths can be inline or referenced externally:
 ```
 
 <svg class="topo topo-wide" viewBox="0 0 900 70" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M0,35 Q150,10 300,40 Q450,65 600,25 Q750,0 900,35" stroke="#b5652b" stroke-width="1" opacity="0.10" fill="none"/>
-  <path d="M0,40 Q160,18 310,45 Q460,68 610,32 Q760,5 900,42" stroke="#8a8078" stroke-width="1" opacity="0.08" fill="none"/>
-  <path d="M0,45 Q170,25 320,48 Q470,70 620,38 Q770,10 900,48" stroke="#b5652b" stroke-width="1" opacity="0.06" fill="none"/>
+  <style>.topo-accent{stroke:var(--accent);}.topo-pencil{stroke:var(--text-secondary);}</style>
+  <path d="M0,35 Q150,10 300,40 Q450,65 600,25 Q750,0 900,35" class="topo-accent" stroke-width="1" opacity="0.16" fill="none"/>
+  <path d="M0,40 Q160,18 310,45 Q460,68 610,32 Q760,5 900,42" class="topo-pencil" stroke-width="1" opacity="0.12" fill="none"/>
+  <path d="M0,45 Q170,25 320,48 Q470,70 620,38 Q770,10 900,48" class="topo-accent" stroke-width="1" opacity="0.10" fill="none"/>
 </svg>
 
 ## Artifacts

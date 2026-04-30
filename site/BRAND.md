@@ -26,106 +26,126 @@ load-bearing.
 
 Toolpath sits in the Empathic family of three sibling brands:
 
-| Sibling          | Voice                                       | Palette signal      |
-| ---------------- | ------------------------------------------- | ------------------- |
-| `empathic/site`  | Parent. Reticle SVG hero, scope-and-target. | Cool warm-cast      |
-| `empathic/pathbase` | Night Garden. Forest floor, growth.       | Emerald + gold      |
-| **Toolpath**     | Workshop Terminal. Tools, marks, contour.   | **Copper + parchment** |
+| Sibling             | Voice                                       | Palette signal         |
+| ------------------- | ------------------------------------------- | ---------------------- |
+| `empathic/site`     | Parent. Reticle SVG hero, scope-and-target. | Cool warm-cast         |
+| `empathic/pathbase` | Night Garden. Forest floor, growth.         | Emerald + gold         |
+| **Toolpath**        | Workshop Terminal. Tools, marks, contour.   | **Copper + parchment** |
 
-What's shared across the family: monospace type, sharp corners, dark +
-light themes, tracked-uppercase chrome, 940px container, 48px nav, the
+What's shared across the family: sharp corners, dark + light themes,
+tracked-uppercase mono chrome, 940px container, 48px nav, the
 `@layer reset, base, layout, components` cascade. What's distinct: the
-palette and the iconography of the primary visual element. Toolpath's
-distinctive marks are **copper**, the **DAG-as-topographic-map**, and the
-**FIG_NNN margin label** convention.
+palette, the iconography of the primary visual element, **and the body
+type**. Toolpath is documentation-heavy in a way the other two aren't,
+so its body prose is set in a serif (Source Serif 4) for long-form
+readability while the chrome stays mono. Toolpath's distinctive marks
+are **copper**, the **DAG-as-topographic-map**, the **FIG_NNN margin
+label** convention, and the **mono-chrome / serif-body register split**.
 
 ## Canonical tokens
 
 A single source of truth. Components reference tokens, never hex.
 
-| Token              | Dark                          | Light                       | Purpose                                                   |
-| ------------------ | ----------------------------- | --------------------------- | --------------------------------------------------------- |
-| `--accent`         | `#c97e3f`                     | `#b5652b`                   | Links, buttons, wordmark, DAG edges. The tool mark.       |
-| `--accent-dim`     | `rgba(201, 126, 63, 0.10)`    | `rgba(181, 101, 43, 0.08)`  | Tinted surfaces (code blocks, hovered cards)              |
-| `--bg`             | `#14110d`                     | `#f6f1eb`                   | Page background                                           |
-| `--bg-surface`     | `#1c1813`                     | `#ece5db`                   | Cards, code blocks, panels                                |
-| `--bg-elevated`    | `#251f18`                     | `#dfd6c8`                   | Hovered/active surfaces                                   |
-| `--text`           | `#ccc6bb`                     | `#2d2a26`                   | Primary body and headings                                 |
-| `--text-secondary` | `#8a7d6e`                     | `#6e655c`                   | Captions, labels, table headers, inactive chrome          |
-| `--text-dim`       | `#5c5346`                     | `#9a8e80`                   | Hints, placeholders, contour visuals                      |
-| `--alert`          | `#c44030`                     | `#9a3020`                   | Errors, dead ends, destructive actions                    |
-| `--border`         | `rgba(255, 240, 220, 0.07)`   | `rgba(45, 42, 38, 0.08)`    | Default 1px separators                                    |
-| `--border-strong`  | `rgba(255, 240, 220, 0.16)`   | `rgba(45, 42, 38, 0.18)`    | Focus rings, emphasized separators                        |
-| `--selection-bg`   | `#c97e3f`                     | `#b5652b`                   | Text selection background                                 |
-| `--selection-text` | `#14110d`                     | `#f6f1eb`                   | Text selection foreground                                 |
+| Token              | Dark                        | Light                      | Purpose                                             |
+| ------------------ | --------------------------- | -------------------------- | --------------------------------------------------- |
+| `--accent`         | `#c97e3f`                   | `#b5652b`                  | Links, buttons, wordmark, DAG edges. The tool mark. |
+| `--accent-dim`     | `rgba(201, 126, 63, 0.10)`  | `rgba(181, 101, 43, 0.08)` | Tinted surfaces (code blocks, hovered cards)        |
+| `--bg`             | `#14110d`                   | `#f6f1eb`                  | Page background                                     |
+| `--bg-surface`     | `#1c1813`                   | `#ece5db`                  | Cards, code blocks, panels                          |
+| `--bg-elevated`    | `#251f18`                   | `#dfd6c8`                  | Hovered/active surfaces                             |
+| `--text`           | `#ccc6bb`                   | `#2d2a26`                  | Primary body and headings                           |
+| `--text-secondary` | `#8a7d6e`                   | `#6e655c`                  | Captions, labels, table headers, inactive chrome    |
+| `--text-dim`       | `#5c5346`                   | `#9a8e80`                  | Hints, placeholders, contour visuals                |
+| `--alert`          | `#c44030`                   | `#9a3020`                  | Errors, dead ends, destructive actions              |
+| `--border`         | `rgba(255, 240, 220, 0.07)` | `rgba(45, 42, 38, 0.08)`   | Default 1px separators                              |
+| `--border-strong`  | `rgba(255, 240, 220, 0.16)` | `rgba(45, 42, 38, 0.18)`   | Focus rings, emphasized separators                  |
+| `--selection-bg`   | `#c97e3f`                   | `#b5652b`                  | Text selection background                           |
+| `--selection-text` | `#14110d`                   | `#f6f1eb`                  | Text selection foreground                           |
 
 Borders are derived from text color at low alpha so they stack cleanly
 on `bg-surface` and `bg-elevated` without re-specification.
 
 ### Spacing
 
-| Token         | Value             | Purpose                                       |
-| ------------- | ----------------- | --------------------------------------------- |
-| `--space-xs`  | `0.25rem` (4px)   | Inline gaps, icon-to-label spacing            |
-| `--space-sm`  | `0.5rem` (8px)    | Between related elements                      |
-| `--space-md`  | `1rem` (16px)     | Component internal padding                    |
-| `--space-lg`  | `1.5rem` (24px)   | Container padding, section gutters            |
-| `--space-xl`  | `2.5rem` (40px)   | Between major sections                        |
-| `--space-2xl` | `4rem` (64px)     | Hero / page-level breathing room              |
+| Token         | Value           | Purpose                            |
+| ------------- | --------------- | ---------------------------------- |
+| `--space-xs`  | `0.25rem` (4px) | Inline gaps, icon-to-label spacing |
+| `--space-sm`  | `0.5rem` (8px)  | Between related elements           |
+| `--space-md`  | `1rem` (16px)   | Component internal padding         |
+| `--space-lg`  | `1.5rem` (24px) | Container padding, section gutters |
+| `--space-xl`  | `2.5rem` (40px) | Between major sections             |
+| `--space-2xl` | `4rem` (64px)   | Hero / page-level breathing room   |
 
 ### Layout primitives
 
-| Token         | Value            | Purpose                                       |
-| ------------- | ---------------- | --------------------------------------------- |
-| `--max-w`     | `940px`          | Content max-width (matches family)            |
-| `--nav-h`     | `48px`           | Navigation height                             |
-| `--measure`   | `40rem` (~62ch)  | Prose column for long-form reading            |
+| Token       | Value           | Purpose                            |
+| ----------- | --------------- | ---------------------------------- |
+| `--max-w`   | `940px`         | Content max-width (matches family) |
+| `--nav-h`   | `48px`          | Navigation height                  |
+| `--measure` | `40rem` (~62ch) | Prose column for long-form reading |
 
 ## Typography
 
-Monospace everywhere. No serif body, no sans display. The full register
-collapses into one typeface, distinguished by size, weight, and
-tracking — the typography of a UNIX man page set with a careful hand.
+Two registers, one role each. Monospace owns the chrome, the headings,
+the code, and every label. A scholarly serif owns the body prose. The
+split is principled, not decorative — and it is the one place where
+Toolpath's type system diverges from its siblings.
 
-**Why mono, specifically for Toolpath.** Toolpath lives at the CLI.
-Its primary outputs are JSONL, JSON Schema, `git log`, and `path render`
-ASCII trees. Its primary inputs are conversation logs and diff hunks —
-already monospace at rest. The site is the bridge between those native
-forms and a reader; the typography should not change voice when the
-content does. Berkeley Mono is preferred where licensed (desktop app,
+**Why mono for chrome.** Toolpath lives at the CLI. Its primary outputs
+are JSONL, JSON Schema, `git log`, and `path render` ASCII trees. Its
+primary inputs are conversation logs and diff hunks — already monospace
+at rest. Nav, buttons, headings, table headers, code blocks, and
+figure labels stay mono so the site never changes voice from the tool
+it documents. Berkeley Mono is preferred where licensed (desktop app,
 internal builds); IBM Plex Mono is the canonical free fallback for the
-web site, which ships without Berkeley.
+web site.
+
+**Why serif for body.** Unlike `empathic/site` and `pathbase` — which
+are mostly chrome — Toolpath publishes long-form documentation: the
+RFC, the format spec, the FAQ, per-crate references. Reading several
+thousand words of monospace at length is fatiguing. Source Serif 4 is
+chosen for its mid-century technical-publishing lineage (closer to
+Century Schoolbook than to a literary serif) — it reads as _journal
+paper_, not as _novel_. Body prose, list items, blockquotes, and table
+data cells are all serif.
 
 ```
-font-family:
-  "Berkeley Mono", "IBM Plex Mono", "SF Mono", ui-monospace,
-  "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+/* Mono — chrome, headings, code, labels */
+"Berkeley Mono", "IBM Plex Mono", "SF Mono", ui-monospace,
+"Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+
+/* Serif — body prose only */
+"Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
 ```
 
 ### Canonical hierarchy
 
-One table. Every text element pinned to family/size/weight/tracking/color.
-Both themes are implicit — colors resolve through tokens.
+One table. Every text element pinned to family / size / weight /
+tracking / color. Both themes are implicit — colors resolve through
+tokens.
 
-| Element              | Family | Size                      | Weight | Tracking          | Color              |
-| -------------------- | ------ | ------------------------- | ------ | ----------------- | ------------------ |
-| Wordmark             | mono   | `0.85rem`                 | 700    | `0.12em` upper    | `--accent`         |
-| Page heading (h1)    | mono   | `1.5rem`                  | 700    | `0.08em` upper    | `--accent`         |
-| Hero heading         | mono   | `clamp(1.8rem,5vw,3rem)`  | 400    | `0.04em` upper    | `--text`           |
-| Section (h2)         | mono   | `1.1rem`                  | 600    | `0.06em` upper    | `--text`           |
-| Subsection (h3)      | mono   | `0.95rem`                 | 600    | `0.05em` upper    | `--text`           |
-| Sub-subsection (h4)  | mono   | `0.85rem`                 | 600    | `0.04em` upper    | `--text-secondary` |
-| Body                 | mono   | `15px`                    | 400    | `0`               | `--text`           |
-| Code                 | mono   | `0.85em`                  | 400    | `0`               | `--text`           |
-| Caption / label      | mono   | `0.72rem`                 | 600    | `0.10em` upper    | `--text-secondary` |
-| Page-title kicker    | mono   | `0.625rem` (10px)         | 500    | `0.22em` upper    | `--text-dim`       |
-| Table header         | mono   | `0.72rem`                 | 600    | `0.08em` upper    | `--text-secondary` |
-| Nav link             | mono   | `0.69rem` (11px)          | 500    | `0.05em` upper    | `--text-secondary` |
-| Figure label (FIG_NNN) | mono | `0.7rem`                  | 600    | `0.08em` upper    | `--accent`         |
+| Element                             | Family    | Size                       | Weight  | Tracking       | Color              |
+| ----------------------------------- | --------- | -------------------------- | ------- | -------------- | ------------------ |
+| Wordmark                            | mono      | `0.85rem`                  | 700     | `0.12em` upper | `--accent`         |
+| Page heading (h1)                   | mono      | `1.5rem`                   | 700     | `0.08em` upper | `--accent`         |
+| Hero heading                        | mono      | `clamp(1.8rem,5vw,2.6rem)` | 700     | `0.08em` upper | `--accent`         |
+| Section (h2)                        | mono      | `1.1rem`                   | 600     | `0.06em` upper | `--text`           |
+| Subsection (h3)                     | mono      | `0.95rem`                  | 600     | `0.05em` upper | `--text`           |
+| Sub-subsection (h4)                 | mono      | `0.85rem`                  | 600     | `0.04em` upper | `--text-secondary` |
+| **Body / list / blockquote / `td`** | **serif** | **`17px`**                 | **400** | **`0`**        | **`--text`**       |
+| Tagline / subtitle                  | serif     | `1.05–1.1rem`              | 400     | `0`            | `--text-secondary` |
+| Code                                | mono      | `0.85em`                   | 400     | `0`            | `--text`           |
+| Caption / label                     | mono      | `0.72rem`                  | 600     | `0.10em` upper | `--text-secondary` |
+| Page-title kicker                   | mono      | `0.625rem` (10px)          | 500     | `0.22em` upper | `--text-dim`       |
+| Table header (`th`)                 | mono      | `0.72rem`                  | 600     | `0.08em` upper | `--text-secondary` |
+| Nav link                            | mono      | `0.69rem` (11px)           | 500     | `0.05em` upper | `--text-secondary` |
+| Footer                              | mono      | `0.72rem`                  | 400     | `0.04em`       | `--text-dim`       |
+| Figure label (FIG_NNN)              | mono      | `0.62rem`                  | 600     | `0.16em` upper | `--accent`         |
 
-Body line-height is **1.75** everywhere body copy lives; headings are
-**1.2–1.3**. Body is left-aligned; never justified, never centered.
-Hyphens are off — monospace lines break clean.
+Body line-height is **1.65**; headings are **1.2–1.3**. Body is
+left-aligned; never justified, never centered. Hyphens off — clean
+breaks. The `15px` `html` font-size is the **rem anchor for chrome**,
+not the body display size; body explicitly overrides to `17px` serif.
 
 ## The diagram
 
@@ -146,21 +166,21 @@ margin-labeled figures all belong together.
 Actor type drives node color. Active hands are copper; passive
 instruments are pencil; abandonment is muted red.
 
-| Actor      | Fill                 | Stroke               | Stroke style | Reading                              |
-| ---------- | -------------------- | -------------------- | ------------ | ------------------------------------ |
-| `human:*`  | `--accent` at 18%    | `--accent`           | solid        | The originating hand                 |
-| `agent:*`  | `--accent` at 30%    | `--accent`           | solid        | Heavier fill — agents do more per step |
-| `tool:*`   | `--text-dim` at 15%  | `--text-secondary`   | solid        | Passive instrument (rustfmt, prettier) |
-| `ci:*`     | `--text-dim` at 15%  | `--text-secondary`   | dashed       | Automation — the dash signals "no hand" |
-| dead end   | `--alert` at 18%     | `--alert`            | dashed       | Off the ancestry of `path.head`       |
+| Actor     | Fill                | Stroke             | Stroke style | Reading                                 |
+| --------- | ------------------- | ------------------ | ------------ | --------------------------------------- |
+| `human:*` | `--accent` at 18%   | `--accent`         | solid        | The originating hand                    |
+| `agent:*` | `--accent` at 30%   | `--accent`         | solid        | Heavier fill — agents do more per step  |
+| `tool:*`  | `--text-dim` at 15% | `--text-secondary` | solid        | Passive instrument (rustfmt, prettier)  |
+| `ci:*`    | `--text-dim` at 15% | `--text-secondary` | dashed       | Automation — the dash signals "no hand" |
+| dead end  | `--alert` at 18%    | `--alert`          | dashed       | Off the ancestry of `path.head`         |
 
 ### Edges
 
-| Edge          | Color              | Width   | Reading                              |
-| ------------- | ------------------ | ------- | ------------------------------------ |
-| Active path   | `--text`           | 1.5px   | The route that became `path.head`    |
-| Base          | `--accent`         | 1px     | Default — the toolpath line          |
-| Inactive      | `--text-secondary` | 1px     | Branches that didn't survive         |
+| Edge        | Color              | Width | Reading                           |
+| ----------- | ------------------ | ----- | --------------------------------- |
+| Active path | `--text`           | 1.5px | The route that became `path.head` |
+| Base        | `--accent`         | 1px   | Default — the toolpath line       |
+| Inactive    | `--text-secondary` | 1px   | Branches that didn't survive      |
 
 Arrowheads are small (8–10px), filled, in the same color as the edge.
 No bezier curves — orthogonal or straight only. Right-angle bends echo
@@ -327,16 +347,16 @@ the example first, derive the principle second.
 ### Material vocabulary
 
 Reach for: **carve, layer, trace, mill, plunge, mark, cut, fixture,
-machine.** Avoid: *journey, ecosystem, holistic, leverage, paradigm,
-seamless.* The vocabulary is the vocabulary of making things; it
+machine.** Avoid: _journey, ecosystem, holistic, leverage, paradigm,
+seamless._ The vocabulary is the vocabulary of making things; it
 reinforces that Toolpath records the act of making.
 
 ### Body copy
 
-| Good                                                                 | Bad                                                                  |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| A step records a single change to one or more artifacts by one actor. | Steps are our way of representing the concept of changes in the system. |
-| Dead ends are implicit — steps not on the ancestry of `path.head`.   | We have a flexible, opinionated approach to handling abandoned work. |
+| Good                                                                                                                          | Bad                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| A step records a single change to one or more artifacts by one actor.                                                         | Steps are our way of representing the concept of changes in the system.             |
+| Dead ends are implicit — steps not on the ancestry of `path.head`.                                                            | We have a flexible, opinionated approach to handling abandoned work.                |
 | When Claude writes code, rustfmt reformats it, and a human refines it, git blame attributes everything to the human's commit. | In modern software development workflows, attribution can sometimes be challenging. |
 
 ### CLI voice
@@ -345,6 +365,7 @@ Toolpath is primarily a CLI. Three surfaces need brand discipline:
 
 **Error messages.** Name the artifact, say what failed, suggest the
 fix. One sentence each.
+
 ```
 Good:  error: cache hit at ~/.toolpath/documents/claude-abc123.json (use --force to overwrite)
 Bad:   Error: An issue was encountered while attempting to write the cache.
@@ -352,6 +373,7 @@ Bad:   Error: An issue was encountered while attempting to write the cache.
 
 **`--help` text.** Imperative one-liners. Arguments before flags.
 Always include one example invocation. No marketing.
+
 ```
 Good:  Import a Claude conversation into the local toolpath cache.
        Usage: path import claude --project <DIR> [--session <ID>]
@@ -376,7 +398,7 @@ voice of the masthead — keep them short (1–3 words).
 `TOOLPATH` set in the display monospace, weight 700, tracked at
 `0.12em`, colored `--accent`. Always uppercase. Always copper. Always
 tracked wide enough that each letter reads as a coordinate on the
-grid — the tracking *is* the mark.
+grid — the tracking _is_ the mark.
 
 Preferred lockup: wordmark left, optional tagline right in regular
 weight `--text-secondary`.
@@ -398,9 +420,16 @@ no monogram; the full word is the mark.
   own warm cast at slightly cooler hues (`#bf7e48` accent, `#0a0a0c`
   bg). Toolpath's copper is warmer (`#b5652b` / `#c97e3f`); its dark
   ground is browner (`#14110d`). Family resemblance, not identity.
-- **We are not a serif journal.** An earlier direction leaned on
-  Source Serif and IBM Plex Sans Condensed in three registers.
-  Monospace-only replaced it; switching back is a regression.
+- **We are not a three-register journal.** An earlier direction
+  leaned on IBM Plex Sans Condensed for headings and Source Serif for
+  body. Headings have collapsed into the mono register that runs
+  through the rest of the chrome; only the body kept its serif.
+  Reaching for a third typeface, or putting the serif back into nav
+  or buttons, is a regression.
+- **We are not all-mono.** A tempting simplification is "monospace
+  everywhere" to fully match the family. We tried it. Long-form prose
+  in mono is hard on the eyes — and Toolpath publishes more long-form
+  prose than its siblings. The hybrid is deliberate.
 - **We are not decorative.** No illustrations of people, no stock
   photography, no abstract gradient compositions. The diagram is the
   illustration; the contour is the texture; the wordmark is the logo.
@@ -417,9 +446,12 @@ breaks at the first edge case.
 - **Don't add drop shadows or gradients.** Depth comes from surface
   layering. Shadows imply elevation; Toolpath shows strata, not
   altitude.
-- **Don't reach for serifs or sans-serifs in the site.** The medium is
-  monospace because the content is. Switching voice halfway through a
-  page breaks the contract.
+- **Don't put serif in chrome, and don't put mono in body prose.**
+  The register split is load-bearing. Nav, buttons, headings, table
+  headers, code, and labels are mono because the content they wrap is
+  mono. Body prose is serif because long-form reading at 17px in a
+  monospace makes eyes tired. Mixing the two breaks the contract on
+  both ends.
 - **Don't hardcode hex in components.** Every color is a token. Themes
   flip cleanly only when nothing leaks below the token layer.
 - **Don't use color alone to encode hierarchy.** Reach for size,
@@ -481,16 +513,16 @@ hardcode a different list at the component level.
 
 Syntax highlighting stays inside the warm palette. Token colors:
 
-| Prism token       | Color       |
-| ----------------- | ----------- |
-| `comment`         | `--text-secondary` italic |
-| `keyword`         | `#7a4b8a` (warm violet, dark) / `#5b3268` (light) |
-| `string`, `url`   | `#6e7d3a` (moss, dark) / `#4d5a26` (light) |
-| `number`          | `#8b5e3c` (dark) / `#7a4520` (light) |
-| `function`, `class-name` | `--accent` |
-| `property`        | `#9e5019` (dark) / `#8a3f10` (light) |
-| `operator`, `punctuation` | `--text-secondary` |
-| `namespace`       | `--text-dim` |
+| Prism token               | Color                                             |
+| ------------------------- | ------------------------------------------------- |
+| `comment`                 | `--text-secondary` italic                         |
+| `keyword`                 | `#7a4b8a` (warm violet, dark) / `#5b3268` (light) |
+| `string`, `url`           | `#6e7d3a` (moss, dark) / `#4d5a26` (light)        |
+| `number`                  | `#8b5e3c` (dark) / `#7a4520` (light)              |
+| `function`, `class-name`  | `--accent`                                        |
+| `property`                | `#9e5019` (dark) / `#8a3f10` (light)              |
+| `operator`, `punctuation` | `--text-secondary`                                |
+| `namespace`               | `--text-dim`                                      |
 
 These are the only non-token colors permitted in the site, and they
 appear only inside `<code>` blocks.
@@ -508,29 +540,42 @@ appear only inside `<code>` blocks.
 
 ### Asset inventory
 
-| Asset                 | Path                                    |
-| --------------------- | --------------------------------------- |
-| Wordmark SVG          | `site/assets/wordmark.svg` (TBD)        |
-| Favicon (16 / 32)     | `site/favicon-{16,32}.png`              |
-| Favicon SVG           | `site/favicon.svg`                      |
-| Apple touch icon      | `site/apple-touch-icon.png` (180×180)   |
-| OG image template     | `site/assets/og-template.svg` (1200×630)|
-| Berkeley Mono fonts   | `site/fonts/BerkeleyMono-*.woff2` (gitignored, internal builds) |
+Fonts and JS libraries are self-hosted — no third-party CDNs at runtime.
+Sources are pulled from npm at build time and copied to `_site/` via
+`eleventyConfig.addPassthroughCopy`. Filenames are stable so
+`<link rel="preload">` and `@font-face` URLs match across builds.
 
-Missing assets above are tracked as TBD; the brand book is the
-authoritative list of what should exist.
+| Asset                               | Source (build-time)                          | Output path                                          |
+| ----------------------------------- | -------------------------------------------- | ---------------------------------------------------- |
+| IBM Plex Mono 400/500/600/700       | `@fontsource/ibm-plex-mono` (latin subset)   | `/fonts/plex-mono-{w}.woff2`                         |
+| Source Serif 4 400/600 + 400 italic | `@fontsource/source-serif-4` (latin)         | `/fonts/source-serif-{w}[-italic].woff2`             |
+| Berkeley Mono (preferred, licensed) | drop-in at `site/fonts/BerkeleyMono-*.woff2` | `/fonts/BerkeleyMono-*.woff2` (gitignored)           |
+| d3 v7                               | `d3` (npm)                                   | `/vendor/d3.min.js`                                  |
+| dagre-d3 v0.6                       | `dagre-d3` (npm)                             | `/vendor/dagre-d3.min.js`                            |
+| xterm v6 + addon-fit                | `@xterm/xterm`, `@xterm/addon-fit`           | `/vendor/xterm{,-addon-fit}.js`, `/vendor/xterm.css` |
+| prismjs (core+json+diff)            | `prismjs`                                    | `/vendor/prism{,-json,-diff}.js`                     |
+| Wordmark SVG                        | (TBD)                                        | `/assets/wordmark.svg`                               |
+| Favicon (16 / 32)                   | (TBD)                                        | `/favicon-{16,32}.png`                               |
+| Favicon SVG                         | (TBD)                                        | `/favicon.svg`                                       |
+| Apple touch icon                    | (TBD)                                        | `/apple-touch-icon.png` (180×180)                    |
+| OG image template                   | (TBD)                                        | `/assets/og-template.svg` (1200×630)                 |
+
+**Preload contract.** The four most-used font weights (Source Serif 400,
+Plex Mono 400/600/700) are emitted as `<link rel="preload" as="font"
+crossorigin>` in `<head>` so the browser starts fetching them in
+parallel with the stylesheet — no late swap on hard refresh.
 
 ## Summary
 
-| Attribute      | Choice                                                       |
-| -------------- | ------------------------------------------------------------ |
-| Palette        | Warm copper accent, charred-wood / parchment grounds         |
-| Themes         | Dark + light, both warm-cast, token-driven                   |
-| Typography     | Monospace only (Berkeley Mono → IBM Plex Mono fallback)      |
-| Hierarchy      | Tracked uppercase chrome (10–12px); 15px / 1.75 body         |
-| Container      | 940px max-width, 48px nav, 24px gutter, sharp corners        |
-| Diagram        | Topographic DAG; copper actors, pencil tools, red dead ends  |
-| Distinctives   | Topographic divider, FIG_NNN margin labels, contour motif    |
-| Voice          | Direct, precise, material — UNIX man page on warm stock      |
-| Cascade        | `@layer reset, base, layout, components` — non-negotiable    |
-| Don'ts         | Cool colors, rounded corners, shadows, gradients, hex in components |
+| Attribute    | Choice                                                                   |
+| ------------ | ------------------------------------------------------------------------ |
+| Palette      | Warm copper accent, charred-wood / parchment grounds                     |
+| Themes       | Dark + light, both warm-cast, token-driven                               |
+| Typography   | Mono chrome / mono headings (IBM Plex Mono); serif body (Source Serif 4) |
+| Hierarchy    | Tracked uppercase chrome (10–12px); 17px / 1.65 serif body               |
+| Container    | 940px max-width, 48px nav, 24px gutter, sharp corners                    |
+| Diagram      | Topographic DAG; copper actors, pencil tools, red dead ends              |
+| Distinctives | Topographic divider, FIG_NNN margin labels, contour motif                |
+| Voice        | Direct, precise, material — UNIX man page on warm stock                  |
+| Cascade      | `@layer reset, base, layout, components` — non-negotiable                |
+| Don'ts       | Cool colors, rounded corners, shadows, gradients, hex in components      |

@@ -46,11 +46,12 @@ Cross-dependencies between satellite crates: `toolpath-claude -> toolpath-convo`
 {% endfor %}
 
 <svg class="topo topo-wide" viewBox="0 0 900 90" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M0,70 Q100,30 250,60 Q400,85 500,40 Q600,10 750,55 Q850,80 900,50" stroke="#b5652b" stroke-width="1" opacity="0.10" fill="none"/>
-  <path d="M0,75 Q120,40 260,65 Q410,88 510,48 Q620,18 760,60 Q860,82 900,58" stroke="#8a8078" stroke-width="1" opacity="0.07" fill="none"/>
-  <ellipse cx="500" cy="38" rx="60" ry="20" stroke="#b5652b" stroke-width="1" opacity="0.12" fill="none"/>
-  <ellipse cx="502" cy="36" rx="35" ry="12" stroke="#b5652b" stroke-width="1" opacity="0.18" fill="none"/>
-  <circle cx="503" cy="35" r="3" fill="#b5652b" opacity="0.20"/>
+  <style>.topo-accent{stroke:var(--accent);}.topo-pencil{stroke:var(--text-secondary);}.topo-accent-fill{fill:var(--accent);}</style>
+  <path d="M0,70 Q100,30 250,60 Q400,85 500,40 Q600,10 750,55 Q850,80 900,50" class="topo-accent" stroke-width="1" opacity="0.16" fill="none"/>
+  <path d="M0,75 Q120,40 260,65 Q410,88 510,48 Q620,18 760,60 Q860,82 900,58" class="topo-pencil" stroke-width="1" opacity="0.11" fill="none"/>
+  <ellipse cx="500" cy="38" rx="60" ry="20" class="topo-accent" stroke-width="1" opacity="0.18" fill="none"/>
+  <ellipse cx="502" cy="36" rx="35" ry="12" class="topo-accent" stroke-width="1" opacity="0.26" fill="none"/>
+  <circle cx="503" cy="35" r="3" class="topo-accent-fill" opacity="0.30"/>
 </svg>
 
 ## Using the libraries

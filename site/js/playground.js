@@ -383,31 +383,49 @@
     // Kill ring for Ctrl+K/U/W/Y and vi yank
     this.killRing = "";
 
+    function getVar(name) {
+      return getComputedStyle(document.documentElement)
+        .getPropertyValue(name)
+        .trim();
+    }
+    function buildTheme() {
+      var bg = getVar("--bg-surface");
+      var fg = getVar("--text");
+      var accent = getVar("--accent");
+      var pencil = getVar("--text-secondary");
+      var alert = getVar("--alert");
+      var synString = getVar("--syn-string");
+      var synProperty = getVar("--syn-property");
+      // Selection: accent at ~30% alpha (8-digit hex when accent is 6-digit hex).
+      var sel = /^#[0-9a-fA-F]{6}$/.test(accent) ? accent + "4D" : accent;
+      return {
+        background: bg,
+        foreground: fg,
+        cursor: accent,
+        cursorAccent: bg,
+        selectionBackground: sel,
+        selectionForeground: fg,
+        black: fg,
+        red: alert,
+        green: synString,
+        yellow: accent,
+        blue: pencil,
+        magenta: synProperty,
+        cyan: pencil,
+        white: bg,
+        brightBlack: pencil,
+        brightRed: alert,
+        brightGreen: synString,
+        brightYellow: accent,
+        brightBlue: pencil,
+        brightMagenta: synProperty,
+        brightCyan: pencil,
+        brightWhite: bg,
+      };
+    }
+    this.buildTheme = buildTheme;
     this.term = new window.Terminal({
-      theme: {
-        background: "#ece5db",
-        foreground: "#2d2a26",
-        cursor: "#b5652b",
-        cursorAccent: "#ece5db",
-        selectionBackground: "#b5652b30",
-        selectionForeground: "#2d2a26",
-        black: "#2d2a26",
-        red: "#c44030",
-        green: "#6e7d3a",
-        yellow: "#b5652b",
-        blue: "#8a8078",
-        magenta: "#9e5019",
-        cyan: "#8a8078",
-        white: "#f6f1eb",
-        brightBlack: "#8a8078",
-        brightRed: "#c44030",
-        brightGreen: "#6e7d3a",
-        brightYellow: "#b5652b",
-        brightBlue: "#8a8078",
-        brightMagenta: "#9e5019",
-        brightCyan: "#8a8078",
-        brightWhite: "#f6f1eb",
-      },
+      theme: buildTheme(),
       fontFamily: "'IBM Plex Mono', monospace",
       fontSize: 14,
       rows: 20,
@@ -416,6 +434,13 @@
       scrollback: 500,
       convertEol: true,
       allowProposedApi: true,
+    });
+
+    var self_theme = this;
+    window.addEventListener("toolpath:theme-change", function () {
+      try {
+        self_theme.term.options = { theme: buildTheme() };
+      } catch (e) {}
     });
 
     this.fitAddon = new window.FitAddon.FitAddon();

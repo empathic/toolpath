@@ -5,17 +5,25 @@
   "use strict";
 
   // --- Brand palette ---
-  var COLORS = {
-    human: { fill: "#b5652b18", stroke: "#b5652b" },
-    agent: { fill: "#b5652b30", stroke: "#b5652b" },
-    tool: { fill: "#8a807815", stroke: "#8a8078" },
-    ci: { fill: "#8a807815", stroke: "#8a8078" },
-    dead: { fill: "#c4403018", stroke: "#c44030" },
-    base: { fill: "#ece5db", stroke: "#8a8078" },
+  // All colors expressed as CSS expressions so the cascade resolves them
+  // per theme. color-mix() handles the per-actor opacity tints.
+  var MIX = function (varName, pct) {
+    return "color-mix(in srgb, var(" + varName + ") " + pct + "%, transparent)";
   };
-  var EDGE_ACTIVE = { stroke: "#2d2a26", width: 2 };
-  var EDGE_INACTIVE = { stroke: "#8a8078", width: 1 };
-  var EDGE_BASE = { stroke: "#b5652b", width: 1.5 };
+  var COLORS = {
+    human: { fill: MIX("--accent", 18), stroke: "var(--accent)" },
+    agent: { fill: MIX("--accent", 30), stroke: "var(--accent)" },
+    tool: {
+      fill: MIX("--text-secondary", 15),
+      stroke: "var(--text-secondary)",
+    },
+    ci: { fill: MIX("--text-secondary", 15), stroke: "var(--text-secondary)" },
+    dead: { fill: MIX("--alert", 18), stroke: "var(--alert)" },
+    base: { fill: "var(--bg-elevated)", stroke: "var(--text-secondary)" },
+  };
+  var EDGE_ACTIVE = { stroke: "var(--text)", width: 2 };
+  var EDGE_INACTIVE = { stroke: "var(--text-secondary)", width: 1 };
+  var EDGE_BASE = { stroke: "var(--accent)", width: 1.5 };
 
   // --- Examples loaded from window.__VIZ_EXAMPLES__ (injected by Eleventy) ---
   var VIZ_EXAMPLES = window.__VIZ_EXAMPLES__ || [];
@@ -144,7 +152,10 @@
         g.setNode(clusterId, {
           label: cluster.pathInfo ? cluster.pathInfo.id : "cluster-" + ci,
           clusterLabelPos: "top",
-          style: "fill: transparent; stroke: #b5652b26; stroke-dasharray: 4,3;",
+          style:
+            "fill: transparent; stroke: " +
+            MIX("--accent", 15) +
+            "; stroke-dasharray: 4,3;",
         });
       }
 
@@ -175,7 +186,9 @@
           label: "$ref: " + cluster.pathInfo.id,
           shape: "rect",
           style:
-            "fill: #8a807815; stroke: #8a8078; stroke-dasharray: 4,3; stroke-width: 1px;",
+            "fill: " +
+            MIX("--text-secondary", 15) +
+            "; stroke: var(--text-secondary); stroke-dasharray: 4,3; stroke-width: 1px;",
           labelStyle:
             "font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-style: italic;",
         });
@@ -380,21 +393,21 @@
 
       var html = [];
       html.push("<div><strong>" + escapeHtml(s.step.id) + "</strong>");
-      if (isHead) html.push(' <span style="color:#b5652b">(HEAD)</span>');
+      if (isHead) html.push(' <span style="color:var(--accent)">(HEAD)</span>');
       if (isDead) html.push(' <span class="tt-dead">(dead end)</span>');
       html.push("</div>");
       var displayName = actorDisplayName(s.step.actor, clusterActors);
       html.push(
         '<div class="tt-label">Actor</div><div>' +
           escapeHtml(displayName) +
-          ' <span style="color:#8a8078">' +
+          ' <span style="color:var(--text-secondary)">' +
           escapeHtml(s.step.actor) +
           "</span></div>",
       );
       var idSummary = actorIdentitySummary(s.step.actor, clusterActors);
       if (idSummary) {
         html.push(
-          '<div style="color:#8a8078;font-size:0.68rem">' +
+          '<div style="color:var(--text-secondary);font-size:0.68rem">' +
             escapeHtml(idSummary) +
             "</div>",
         );
@@ -502,7 +515,7 @@
         if (actorDef.provider) providerParts.push(actorDef.provider);
         if (actorDef.model) providerParts.push(actorDef.model);
         html.push(
-          '<div style="color:#8a8078">' +
+          '<div style="color:var(--text-secondary)">' +
             escapeHtml(providerParts.join(" / ")) +
             "</div>",
         );
@@ -510,7 +523,7 @@
       if (actorDef.identities && actorDef.identities.length > 0) {
         actorDef.identities.forEach(function (id) {
           html.push(
-            '<div style="color:#8a8078">' +
+            '<div style="color:var(--text-secondary)">' +
               escapeHtml(id.system) +
               ": " +
               escapeHtml(id.id) +

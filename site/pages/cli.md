@@ -61,9 +61,10 @@ All commands that produce JSON output accept `--pretty` for formatted output.
 - **validate** — Check that a document is structurally valid
 
 <svg class="topo topo-wide" viewBox="0 0 900 70" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M0,50 Q150,15 350,45 Q550,70 700,30 Q800,10 900,40" stroke="#b5652b" stroke-width="1" opacity="0.10" fill="none"/>
-  <path d="M0,55 Q160,22 360,50 Q560,72 710,36 Q810,16 900,46" stroke="#8a8078" stroke-width="1" opacity="0.07" fill="none"/>
-  <path d="M0,60 Q170,30 370,55 Q565,74 715,42 Q815,22 900,52" stroke="#b5652b" stroke-width="1" opacity="0.05" fill="none"/>
+  <style>.topo-accent{stroke:var(--accent);}.topo-pencil{stroke:var(--text-secondary);}</style>
+  <path d="M0,50 Q150,15 350,45 Q550,70 700,30 Q800,10 900,40" class="topo-accent" stroke-width="1" opacity="0.16" fill="none"/>
+  <path d="M0,55 Q160,22 360,50 Q560,72 710,36 Q810,16 900,46" class="topo-pencil" stroke-width="1" opacity="0.11" fill="none"/>
+  <path d="M0,60 Q170,30 370,55 Q565,74 715,42 Q815,22 900,52" class="topo-accent" stroke-width="1" opacity="0.09" fill="none"/>
 </svg>
 
 ## Typical workflows

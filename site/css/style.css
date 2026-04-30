@@ -1,489 +1,857 @@
-/* --- Reset & base --- */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* ============================================================
+   Self-hosted fonts. Files vendored from @fontsource packages
+   via eleventy passthroughCopy at build time. Filenames are
+   stable so <link rel="preload"> tags in <head> match the
+   @font-face URLs exactly.
 
-:root {
-  --graphite: #2d2a26;
-  --copper: #b5652b;
-  --copper-light: #b5652b15;
-  --ground: #f6f1eb;
-  --grain: #ece5db;
-  --pencil: #8a8078;
-  --border: #b5652b26;
-  --white: #ffffff;
+   font-display: optional on every preloaded weight — with
+   preload the woff2 lands inside the browser's initial ~100ms
+   block window, so the web font is used and no swap is ever
+   visible. If the file misses that window (very slow link),
+   the browser keeps the fallback for the rest of the session
+   instead of swapping mid-render. The italic isn't preloaded
+   (rare on the critical path), so it stays font-display: swap.
+   ============================================================ */
 
-  --display:
-    "IBM Plex Sans Condensed", "Helvetica Neue", "Arial Narrow", sans-serif;
-  --serif: "Source Serif 4", "Georgia", "Times New Roman", serif;
-  --mono: "IBM Plex Mono", "SF Mono", "Menlo", "Consolas", monospace;
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/plex-mono-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: optional;
 }
-
-html {
-  font-size: 17px;
-  line-height: 1.55;
-  color: var(--graphite);
-  background: var(--ground);
-}
-body {
-  font-family: var(--serif);
-  max-width: 64rem;
-  margin: 0 auto;
-  padding: 0 1.5rem;
-}
-
-/* --- Typography --- */
-h1 {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 1.5rem;
-  line-height: 1.2;
-  color: var(--copper);
-  margin: 2rem 0 1rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-h2 {
-  font-family: var(--display);
-  font-weight: 600;
-  font-size: 1.1rem;
-  line-height: 1.25;
-  color: var(--graphite);
-  margin: 2.5rem 0 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.3rem;
-}
-h3 {
-  font-family: var(--display);
-  font-weight: 600;
-  font-size: 0.95rem;
-  line-height: 1.25;
-  color: var(--graphite);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  margin: 1.5rem 0 0.4rem;
-}
-h4 {
-  font-family: var(--mono);
-  font-weight: 600;
-  font-size: 0.85rem;
-  line-height: 1.3;
-  color: var(--pencil);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin: 1.25rem 0 0.4rem;
-}
-
-p {
-  margin: 0.75rem 0;
-}
-a {
-  color: var(--copper);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
-a:hover {
-  text-decoration-thickness: 2px;
-}
-
-ul,
-ol {
-  margin: 0.75rem 0 0.75rem 1.5rem;
-}
-li {
-  margin: 0.25rem 0;
-}
-strong {
-  font-weight: 600;
-}
-
-/* --- Heading anchors --- */
-h1 > a.header-anchor,
-h2 > a.header-anchor,
-h3 > a.header-anchor,
-h4 > a.header-anchor {
-  color: inherit;
-  text-decoration: none;
-}
-h1 > a.header-anchor:hover,
-h2 > a.header-anchor:hover,
-h3 > a.header-anchor:hover,
-h4 > a.header-anchor:hover {
-  text-decoration: underline;
-  text-decoration-color: var(--copper);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
-}
-
-/* --- Syntax highlighting (Prism) --- */
-.token.property {
-  color: #9e5019;
-}
-.token.string,
-.token.url {
-  color: #6e7d3a;
-}
-.token.number {
-  color: #8b5e3c;
-}
-.token.keyword,
-.token.selector {
-  color: #7a4b8a;
-}
-.token.function,
-.token.class-name {
-  color: #b5652b;
-}
-.token.operator {
-  color: var(--pencil);
-}
-.token.punctuation {
-  color: #a09888;
-}
-.token.comment {
-  color: var(--pencil);
-  font-style: italic;
-}
-.token.namespace {
-  opacity: 0.7;
-}
-
-/* --- Code --- */
-code {
-  font-family: var(--mono);
-  font-size: 0.85em;
-  background: var(--grain);
-  padding: 0.15em 0.35em;
-  color: var(--graphite);
-}
-pre {
-  background: var(--grain);
-  border-left: 3px solid #b5652b4d;
-  padding: 1rem 1.25rem;
-  overflow-x: auto;
-  margin: 1rem 0;
-  line-height: 1.5;
-}
-pre code {
-  background: none;
-  padding: 0;
-  font-size: 0.84rem;
-}
-
-/* --- Tables --- */
-table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 1rem 0;
-  font-size: 0.95rem;
-}
-th,
-td {
-  text-align: left;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid #b5652b1a;
-}
-th {
-  font-family: var(--display);
-  font-weight: 600;
-  font-size: 0.8rem;
-  color: var(--pencil);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-/* --- Navigation --- */
-.site-nav {
-  display: flex;
-  align-items: center;
-  gap: 2rem;
-  padding: 1.25rem 0;
-  border-bottom: 1px solid var(--border);
-  font-family: var(--mono);
-  font-size: 0.8rem;
-}
-.nav-logo {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 0.85rem;
-  text-decoration: none;
-  color: var(--copper);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-.nav-links {
-  display: flex;
-  gap: 1.25rem;
-}
-.nav-links a {
-  font-family: var(--display);
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/plex-mono-500.woff2") format("woff2");
   font-weight: 500;
-  text-decoration: none;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.78rem;
-  color: var(--pencil);
+  font-style: normal;
+  font-display: optional;
 }
-.nav-links a:hover,
-.nav-links a[aria-current] {
-  color: var(--copper);
-}
-.nav-github {
-  opacity: 0.6;
-}
-.nav-github:hover {
-  opacity: 1;
-}
-
-/* --- Divider --- */
-.divider {
-  background: repeating-linear-gradient(
-    to right,
-    var(--copper) 0 6px,
-    transparent 6px 12px
-  );
-  height: 6px;
-  opacity: 0.3;
-  margin: 0;
-}
-
-/* --- Footer --- */
-.site-footer {
-  margin-top: 4rem;
-  padding: 1.5rem 0;
-  border-top: 1px solid var(--border);
-  font-family: var(--display);
-  font-size: 0.78rem;
-  color: var(--pencil);
-  text-align: center;
-  letter-spacing: 0.02em;
-}
-.site-footer a {
-  color: var(--pencil);
-}
-.site-footer a:hover {
-  color: var(--copper);
-}
-
-/* --- Hero --- */
-.hero {
-  padding: 3.5rem 0 2.5rem;
-  border-bottom: none;
-  margin-bottom: 0;
-}
-.hero h1 {
-  font-size: 2.4rem;
-  margin: 0 0 0.75rem;
-  line-height: 1.1;
-  letter-spacing: 0.14em;
-}
-.hero .tagline {
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 1.1rem;
-  color: var(--pencil);
-  margin: 0 0 1.5rem;
-  max-width: 42rem;
-  line-height: 1.5;
-}
-.hero .tagline strong {
-  color: var(--graphite);
-}
-.hero-install {
-  font-family: var(--mono);
-  font-size: 0.9rem;
-  background: var(--grain);
-  border-left: 3px solid #b5652b4d;
-  padding: 0.6rem 1rem;
-  display: inline-block;
-}
-.hero-install .prompt {
-  color: var(--pencil);
-  user-select: none;
-}
-.try-it-btn {
-  font-family: var(--mono);
-  font-size: 0.78rem;
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/plex-mono-600.woff2") format("woff2");
   font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--copper);
-  background: transparent;
-  border: 1px solid var(--copper);
-  padding: 0.25rem 0.7rem;
-  margin-left: 1rem;
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    color 0.15s;
-  vertical-align: middle;
+  font-style: normal;
+  font-display: optional;
 }
-.try-it-btn:hover {
-  background: var(--copper);
-  color: var(--ground);
-}
-.try-it-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.hero + .divider {
-  margin-bottom: 2rem;
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/plex-mono-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: optional;
 }
 
-/* --- Objects grid --- */
-.objects {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
-  gap: 1.25rem;
-  margin: 1.5rem 0;
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/fonts/source-serif-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: optional;
 }
-.object-card {
-  background: var(--grain);
-  border: 1px solid var(--border);
-  padding: 1.25rem;
-}
-.object-card h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
-  color: var(--copper);
-  letter-spacing: 0.05em;
-}
-.object-card p {
-  margin: 0;
-  font-size: 0.92rem;
-  color: var(--pencil);
-}
-
-/* --- Crate cards --- */
-.crate-card {
-  background: var(--grain);
-  border: 1px solid var(--border);
-  padding: 1.25rem 1.5rem;
-  margin: 1.25rem 0;
-}
-.crate-card h3 {
-  margin: 0 0 0.15rem;
-  font-size: 0.95rem;
-  color: var(--copper);
-  letter-spacing: 0.03em;
-}
-.crate-card .version {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  color: var(--pencil);
-  margin-bottom: 0.5rem;
-}
-.crate-card .role {
-  font-size: 0.92rem;
-  color: var(--pencil);
-  margin: 0.5rem 0;
-}
-.crate-links {
-  display: flex;
-  gap: 1rem;
-  font-size: 0.85rem;
-  font-family: var(--mono);
-}
-
-/* --- DAG diagram --- */
-.dag-figure {
-  background: var(--grain);
-  border: 1px solid var(--border);
-  padding: 1.5rem 1.5rem 1rem;
-  margin: 1.25rem 0;
-  overflow-x: auto;
-}
-.dag-svg {
-  display: block;
-  width: 100%;
-  max-width: 680px;
-  height: auto;
-  margin: 0 auto;
-}
-
-/* --- Subtitle --- */
-.subtitle {
-  font-family: var(--serif);
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/fonts/source-serif-400-italic.woff2") format("woff2");
+  font-weight: 400;
   font-style: italic;
-  font-size: 1.05rem;
-  color: var(--pencil);
-  margin-bottom: 2rem;
-  line-height: 1.5;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/fonts/source-serif-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: optional;
 }
 
-/* --- Topographic illustrations --- */
-.topo {
-  display: block;
-  pointer-events: none;
+/* Metric-matched fallbacks. The browser uses these only when the web
+   font isn't available; size-adjust + ascent-override + descent-override
+   make the fallback's box dimensions match the web font's, eliminating
+   layout shift across any web-font ↔ fallback transition. Critical for
+   first paint on cold caches. */
+@font-face {
+  font-family: "Source Serif 4 Fallback";
+  src: local("Georgia"), local("Times New Roman");
+  size-adjust: 102%;
+  ascent-override: 89%;
+  descent-override: 24%;
+  line-gap-override: 0%;
 }
-.topo-hero {
-  width: clamp(200px, 40%, 380px);
-  height: auto;
-  flex-shrink: 0;
-}
-.topo-wide {
-  width: 100%;
-  height: auto;
-  margin: 1rem 0;
-}
-.topo-float-right {
-  float: right;
-  width: 180px;
-  height: auto;
-  margin: 0 0 1rem 1.5rem;
-}
-.topo-float-right.topo-sm {
-  width: 130px;
-}
-
-/* Hero layout with topo */
-.hero {
-  display: flex;
-  align-items: center;
-  gap: 2rem;
-}
-.hero-content {
-  flex: 1;
-  min-width: 0;
+@font-face {
+  font-family: "IBM Plex Mono Fallback";
+  src:
+    local("Menlo"), local("Consolas"), local("DejaVu Sans Mono"),
+    local("Courier New");
+  size-adjust: 97%;
+  ascent-override: 80%;
+  descent-override: 21%;
+  line-gap-override: 0%;
 }
 
-/* --- Page title --- */
-.page-title {
-  margin-top: 2rem;
-}
+@layer reset, base, layout, components;
 
-/* --- Responsive --- */
-@media (max-width: 640px) {
-  html {
-    font-size: 16px;
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
   }
+  img,
+  svg {
+    display: block;
+    max-width: 100%;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  button {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+  }
+  ul,
+  ol {
+    list-style: none;
+  }
+}
+
+@layer base {
+  :root {
+    /* Stack order: web font → metric-matched fallback → system fonts.
+       The metric-matched entry only resolves if the system has one of
+       its `local()` candidates; on macOS/Windows it always does. */
+    --font:
+      "Berkeley Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", "SF Mono",
+      ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas,
+      monospace;
+    --serif:
+      "Source Serif 4", "Source Serif 4 Fallback", "Source Serif Pro", Georgia,
+      "Times New Roman", serif;
+
+    --max-w: 940px;
+    --measure: 40rem;
+    --nav-h: 48px;
+
+    --space-xs: 0.25rem;
+    --space-sm: 0.5rem;
+    --space-md: 1rem;
+    --space-lg: 1.5rem;
+    --space-xl: 2.5rem;
+    --space-2xl: 4rem;
+
+    /* Dark theme — charred-wood ground, warm copper */
+    --accent: #c97e3f;
+    --accent-dim: rgba(201, 126, 63, 0.1);
+    --bg: #14110d;
+    --bg-surface: #1c1813;
+    --bg-elevated: #251f18;
+    --text: #ccc6bb;
+    --text-secondary: #8a7d6e;
+    --text-dim: #5c5346;
+    --alert: #c44030;
+    --border: rgba(255, 240, 220, 0.07);
+    --border-strong: rgba(255, 240, 220, 0.16);
+    --selection-bg: #c97e3f;
+    --selection-text: #14110d;
+
+    /* Prism token colors — dark theme */
+    --syn-keyword: #b87bc4;
+    --syn-string: #98a655;
+    --syn-number: #d29466;
+    --syn-property: #d68a4f;
+    --syn-function: var(--accent);
+  }
+
+  [data-theme="light"] {
+    --accent: #b5652b;
+    --accent-dim: rgba(181, 101, 43, 0.08);
+    --bg: #f6f1eb;
+    --bg-surface: #ece5db;
+    --bg-elevated: #dfd6c8;
+    --text: #2d2a26;
+    --text-secondary: #6e655c;
+    --text-dim: #9a8e80;
+    --alert: #9a3020;
+    --border: rgba(45, 42, 38, 0.08);
+    --border-strong: rgba(45, 42, 38, 0.18);
+    --selection-bg: #b5652b;
+    --selection-text: #f6f1eb;
+
+    --syn-keyword: #5b3268;
+    --syn-string: #4d5a26;
+    --syn-number: #7a4520;
+    --syn-property: #8a3f10;
+    --syn-function: var(--accent);
+  }
+
+  html {
+    font-size: 15px; /* rem anchor for chrome — NOT body display */
+    color: var(--text);
+    background: var(--bg);
+    scroll-behavior: smooth;
+    scroll-padding-top: var(--nav-h);
+  }
+
+  /* Font load coordination. The inline <head> script adds
+     `.fonts-loading` to <html> and removes it once every preloaded
+     weight has resolved (or a 1500ms timeout fires). Hiding the body
+     during that window — instead of letting each weight transition
+     independently — collapses the multi-stage FOUT into a single
+     render commit. The page still has its bg color from <html>, so
+     it doesn't flash white. */
+  html.fonts-loading body {
+    visibility: hidden;
+  }
+
+  body {
+    /* Body prose is serif for long-form readability. Chrome, headings,
+       code, and labels stay mono (set explicitly per element below). */
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: var(--selection-bg);
+    color: var(--selection-text);
+  }
+
+  /* --- Typography --- */
+  h1,
+  h2,
+  h3,
+  h4 {
+    /* Headings stay mono — they're the masthead voice, matching the family. */
+    font-family: var(--font);
+  }
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 2rem 0 1rem;
+  }
+  h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text);
+    margin: 2.5rem 0 0.6rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3rem;
+  }
+  h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text);
+    margin: 1.5rem 0 0.4rem;
+  }
+  h4 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin: 1.25rem 0 0.4rem;
+  }
+
+  p {
+    margin: 0.75rem 0;
+  }
+  strong {
+    font-weight: 600;
+    color: var(--text);
+  }
+  em {
+    font-style: italic;
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+  a:hover {
+    text-decoration-thickness: 2px;
+  }
+
+  ul,
+  ol {
+    margin: 0.75rem 0 0.75rem 1.5rem;
+  }
+  li {
+    margin: 0.25rem 0;
+  }
+  ul {
+    list-style: disc;
+  }
+  ol {
+    list-style: decimal;
+  }
+
+  /* --- Heading anchors --- */
+  h1 > a.header-anchor,
+  h2 > a.header-anchor,
+  h3 > a.header-anchor,
+  h4 > a.header-anchor {
+    color: inherit;
+    text-decoration: none;
+  }
+  h1 > a.header-anchor:hover,
+  h2 > a.header-anchor:hover,
+  h3 > a.header-anchor:hover,
+  h4 > a.header-anchor:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+  }
+
+  /* --- Code --- */
+  code {
+    font-family: var(--font);
+    font-size: 0.85em;
+    background: var(--bg-surface);
+    padding: 0.15em 0.35em;
+    color: var(--text);
+  }
+  pre {
+    background: var(--bg-surface);
+    border-left: 3px solid var(--accent);
+    padding: var(--space-md) 1.25rem;
+    overflow-x: auto;
+    margin: 1rem 0;
+    line-height: 1.55;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: 0.85em;
+  }
+
+  /* --- Prism syntax tokens --- */
+  .token.comment {
+    color: var(--text-secondary);
+    font-style: italic;
+  }
+  .token.keyword,
+  .token.selector {
+    color: var(--syn-keyword);
+  }
+  .token.string,
+  .token.url {
+    color: var(--syn-string);
+  }
+  .token.number {
+    color: var(--syn-number);
+  }
+  .token.property {
+    color: var(--syn-property);
+  }
+  .token.function,
+  .token.class-name {
+    color: var(--syn-function);
+  }
+  .token.operator,
+  .token.punctuation {
+    color: var(--text-secondary);
+  }
+  .token.namespace {
+    color: var(--text-dim);
+  }
+
+  /* --- Tables --- */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.95rem;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    font-family: var(--font);
+    font-weight: 600;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+}
+
+@layer layout {
+  body {
+    /* Push content below the fixed nav; outer page gutter lives here so
+       it lines up with the nav's matching internal gutter. */
+    padding: var(--nav-h) var(--space-lg) 0;
+  }
+
+  main {
+    max-width: var(--max-w);
+    margin: 0 auto;
+    padding: var(--space-lg) 0 var(--space-2xl);
+  }
+
+  .page-title {
+    font-family: var(--font);
+    font-size: 0.625rem;
+    letter-spacing: 0.22em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin: 1rem 0 1.5rem;
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  @media (max-width: 600px) {
+    body {
+      padding-left: 1.25rem;
+      padding-right: 1.25rem;
+    }
+    main {
+      padding: var(--space-md) 0 var(--space-2xl);
+    }
+  }
+}
+
+@layer components {
+  /* --- Navigation --- */
+  .site-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    height: var(--nav-h);
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    /* Nav is chrome — mono throughout, regardless of body type. */
+    font-family: var(--font);
+  }
+  .site-nav-inner {
+    /* +2*space-lg matches the body's outer side padding so nav and main
+       share content edges on viewports wider than the container. */
+    max-width: calc(var(--max-w) + 2 * var(--space-lg));
+    margin: 0 auto;
+    width: 100%;
+    padding: 0 var(--space-lg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-md);
+    height: 100%;
+  }
+  .nav-logo {
+    font-weight: 700;
+    font-size: 0.85rem;
+    text-decoration: none;
+    color: var(--accent);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .nav-links a {
+    font-weight: 500;
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.69rem;
+    padding: 6px 8px;
+    color: var(--text-secondary);
+  }
+  .nav-links a:hover,
+  .nav-links a[aria-current] {
+    color: var(--text);
+  }
+  .nav-github {
+    color: var(--text-dim);
+  }
+  .nav-github:hover {
+    color: var(--accent);
+  }
+
+  /* --- Theme toggle --- */
+  .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 8px;
+    color: var(--text-dim);
+    line-height: 1;
+  }
+  .theme-toggle:hover {
+    color: var(--accent);
+  }
+  .theme-toggle svg {
+    display: none;
+    width: 14px;
+    height: 14px;
+  }
+  /* Default: system pref shows the desktop (monitor) icon */
+  [data-theme-pref="system"] .theme-toggle .icon-system-desktop {
+    display: block;
+  }
+  /* Touch / coarse-pointer devices: show the phone icon for system pref */
+  @media (hover: none) and (pointer: coarse) {
+    [data-theme-pref="system"] .theme-toggle .icon-system-desktop {
+      display: none;
+    }
+    [data-theme-pref="system"] .theme-toggle .icon-system-mobile {
+      display: block;
+    }
+  }
+  [data-theme-pref="dark"] .theme-toggle .icon-dark {
+    display: block;
+  }
+  [data-theme-pref="light"] .theme-toggle .icon-light {
+    display: block;
+  }
+
+  /* --- Mobile menu --- */
+  .nav-menu-btn {
+    display: none;
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 6px;
+    color: var(--text-secondary);
+  }
+  .nav-menu-btn:hover {
+    color: var(--text);
+  }
+  @media (max-width: 700px) {
+    .nav-links a:not(.nav-github):not(.theme-toggle) {
+      display: none;
+    }
+    .nav-menu-btn {
+      display: block;
+    }
+    [data-menu-open] .nav-links {
+      position: absolute;
+      top: var(--nav-h);
+      left: 0;
+      right: 0;
+      flex-direction: column;
+      align-items: stretch;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0.5rem var(--space-lg) 0.75rem;
+      gap: 0;
+    }
+    [data-menu-open] .nav-links a:not(.nav-github):not(.theme-toggle) {
+      display: block;
+      padding: 0.5rem 0;
+    }
+  }
+  @media (max-width: 600px) {
+    .site-nav-inner {
+      padding: 0 1.25rem;
+    }
+  }
+
+  /* --- Topographic divider --- */
+  .divider {
+    background: repeating-linear-gradient(
+      to right,
+      var(--accent) 0 6px,
+      transparent 6px 12px
+    );
+    height: 6px;
+    opacity: 0.4;
+    margin: 0;
+    border: none;
+  }
+
+  /* --- Footer --- */
+  .site-footer {
+    margin-top: var(--space-2xl);
+    padding: var(--space-lg) 0;
+    border-top: 1px solid var(--border);
+    font-family: var(--font);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-align: center;
+    letter-spacing: 0.04em;
+  }
+  .site-footer a {
+    color: var(--text-dim);
+  }
+  .site-footer a:hover {
+    color: var(--accent);
+  }
+
+  /* --- Hero --- */
   .hero {
-    flex-direction: column;
+    padding: var(--space-2xl) 0 var(--space-xl);
+    border-bottom: none;
+    margin-bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-xl);
+  }
+  .hero-content {
+    flex: 1;
+    min-width: 0;
   }
   .hero h1 {
-    font-size: 1.6rem;
+    font-size: clamp(1.8rem, 5vw, 2.6rem);
+    font-weight: 700;
+    margin: 0 0 var(--space-md);
+    line-height: 1.15;
+    letter-spacing: 0.08em;
+  }
+  .hero .tagline {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    margin: 0 0 var(--space-lg);
+    max-width: 42rem;
+    line-height: 1.7;
+  }
+  .hero .tagline strong {
+    color: var(--text);
+  }
+  .hero-install {
+    font-family: var(--font);
+    font-size: 0.85rem;
+    background: var(--bg-surface);
+    border-left: 3px solid var(--accent);
+    padding: 0.6rem 1rem;
+    display: inline-block;
+    color: var(--text);
+  }
+  .hero-install .prompt {
+    color: var(--text-secondary);
+    user-select: none;
+  }
+  .try-it-btn {
+    font-family: var(--font);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--accent);
+    padding: 0.3rem 0.8rem;
+    margin-left: 0.75rem;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      color 0.15s;
+    vertical-align: middle;
+  }
+  .try-it-btn:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
+  .try-it-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .hero + .divider {
+    margin-bottom: var(--space-lg);
+  }
+
+  /* --- Subtitle (page intro paragraph) --- */
+  .subtitle {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-lg);
+    line-height: 1.7;
+  }
+
+  /* --- Object / scenario / crate cards --- */
+  .objects {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: var(--space-md);
+    margin: var(--space-md) 0;
+  }
+  .object-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    padding: var(--space-md) 1.25rem;
+  }
+  .object-card h3 {
+    margin: 0 0 var(--space-sm);
+    font-size: 0.9rem;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+  .object-card p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.65;
+  }
+
+  .crate-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    padding: 1.25rem var(--space-lg);
+    margin: 1.25rem 0;
+  }
+  .crate-card h3 {
+    margin: 0 0 0.15rem;
+    font-size: 0.95rem;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  .crate-card .version {
+    font-family: var(--font);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    margin-bottom: var(--space-sm);
+    letter-spacing: 0.04em;
+  }
+  .crate-card .role {
+    /* Prose — inherits serif from body */
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    margin: var(--space-sm) 0;
+    line-height: 1.6;
+  }
+  .crate-links {
+    display: flex;
+    gap: var(--space-md);
+    font-family: var(--font);
+    font-size: 0.78rem;
+  }
+
+  /* --- Figures (DAG, schematics) --- */
+  .dag-figure {
+    position: relative;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    padding: var(--space-lg) var(--space-lg) var(--space-md);
+    margin: 1.25rem 0;
+    overflow-x: auto;
+  }
+  .dag-svg {
+    display: block;
+    width: 100%;
+    max-width: 680px;
+    height: auto;
+    margin: 0 auto;
+  }
+  .fig-label {
+    position: absolute;
+    top: var(--space-md);
+    left: var(--space-sm);
+    font-family: var(--font);
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    transform-origin: center;
+    white-space: nowrap;
+  }
+  .dag-figure {
+    padding-left: 2.5rem;
+  }
+
+  /* --- Topographic decorative SVGs --- */
+  .topo {
+    display: block;
+    pointer-events: none;
   }
   .topo-hero {
-    width: 80%;
-    max-width: 300px;
+    width: clamp(200px, 40%, 380px);
+    height: auto;
+    flex-shrink: 0;
+  }
+  .topo-wide {
+    width: 100%;
+    height: auto;
+    margin: var(--space-md) 0;
   }
   .topo-float-right {
-    float: none;
-    width: 60%;
-    max-width: 200px;
-    margin: 1rem auto;
+    float: right;
+    width: 180px;
+    height: auto;
+    margin: 0 0 var(--space-md) var(--space-lg);
   }
-  .site-nav {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
+  .topo-float-right.topo-sm {
+    width: 130px;
   }
-  .objects {
-    grid-template-columns: 1fr;
+  /* Tokens consumed by inline SVG style="" attributes */
+  .topo-line-accent {
+    stroke: var(--accent);
+  }
+  .topo-line-pencil {
+    stroke: var(--text-secondary);
+  }
+  .topo-fill-accent {
+    fill: var(--accent);
+  }
+
+  /* --- Scenarios --- */
+  .scenarios {
+    margin: var(--space-xl) 0;
+  }
+
+  /* --- Responsive --- */
+  @media (max-width: 640px) {
+    html {
+      font-size: 14px;
+    }
+    .hero {
+      flex-direction: column;
+      gap: var(--space-md);
+      padding: var(--space-xl) 0 var(--space-lg);
+    }
+    .hero h1 {
+      font-size: 1.6rem;
+    }
+    .topo-hero {
+      width: 80%;
+      max-width: 300px;
+    }
+    .topo-float-right {
+      float: none;
+      width: 60%;
+      max-width: 200px;
+      margin: var(--space-md) auto;
+    }
+    .objects {
+      grid-template-columns: 1fr;
+    }
+    .try-it-btn {
+      margin-left: 0;
+      margin-top: var(--space-sm);
+    }
   }
 }
