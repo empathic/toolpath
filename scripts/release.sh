@@ -170,6 +170,38 @@ if (( EXECUTE )) && [[ -z "$AUTO_YES" ]]; then
     echo
 fi
 
+# --- Pre-flight: registry compatibility check ---
+#
+# `cargo publish --dry-run` skips already-published crates (cannot
+# re-upload them) and defers crates whose deps are themselves being
+# published this run, so the pairing "old already-published satellite
+# + about-to-publish new foundation" is invisible to dry-run. This
+# check fills that gap: for every workspace crate already on the
+# registry at its current local version, fetch its on-registry manifest
+# and verify each workspace-sibling requirement is satisfied by the
+# workspace's about-to-publish version of that sibling. If a foundation
+# bump (e.g. toolpath 0.2 -> 0.4) leaves an old satellite still pinning
+# the previous major, the cascade gets caught here instead of at real
+# publish time (where it manifests as an E0308 dual-version graph).
+
+echo "=== registry compatibility check ==="
+WS_ARGS=()
+for i in "${!ALL_CRATES[@]}"; do
+    WS_ARGS+=("${ALL_CRATES[$i]}=${VERSIONS[$i]}")
+done
+SKIP_ARGS=()
+for i in "${!ALL_CRATES[@]}"; do
+    if [[ "${STATUSES[$i]}" == "skip" ]]; then
+        SKIP_ARGS+=("${ALL_CRATES[$i]}")
+    fi
+done
+if [[ ${#SKIP_ARGS[@]} -eq 0 ]]; then
+    echo "    no already-published crates to check"
+else
+    python3 scripts/check-registry-compat.py "${WS_ARGS[@]}" --skip "${SKIP_ARGS[@]}"
+fi
+echo
+
 # --- Pre-flight: workspace tests and clippy ---
 
 echo "=== pre-flight checks ==="
@@ -284,10 +316,14 @@ publish() {
     echo
 }
 
-# Tier 1: foundation crate (no workspace deps)
+# Tier 1: foundation crates (no workspace deps)
 publish toolpath
+publish pathbase-client
 if should_publish toolpath; then
     wait_for_index toolpath "$(crate_version toolpath)"
+fi
+if should_publish pathbase-client; then
+    wait_for_index pathbase-client "$(crate_version pathbase-client)"
 fi
 
 # Tier 2a: toolpath-convo (depends on toolpath). Published before the other

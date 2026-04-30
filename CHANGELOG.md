@@ -2,6 +2,61 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Conversation-stack realignment onto `toolpath` 0.4
+
+Republish of every `toolpath-convo`-consuming crate so they pin the
+current `toolpath` 0.4.x line. Source-only fix — no API changes — but
+required because the previously-published satellites pinned `toolpath
+^0.2`, which dragged a second `toolpath` major into any consumer's
+graph that combined them with `toolpath 0.4` (and outright broke
+publish-verify for `toolpath-pi` 0.3.0).
+
+### toolpath-convo 0.7.0 → 0.8.0
+
+- No source change. Republished so the on-registry manifest pins
+  `toolpath` 0.4 (the workspace dep was already 0.4 locally; the old
+  0.7.0 manifest still recorded `toolpath ^0.2`). Every downstream
+  satellite needs to follow.
+
+### toolpath-claude 0.8.0 → 0.9.0
+
+- Republished against `toolpath-convo` 0.8.0 / `toolpath` 0.4.
+
+### toolpath-gemini 0.2.0 → 0.3.0
+
+- Republished against `toolpath-convo` 0.8.0 / `toolpath` 0.4.
+
+### toolpath-codex 0.2.0 → 0.3.0
+
+- `toolpath-codex` 0.2.0 was published earlier in the same release
+  run that bumped `toolpath` to 0.4, before this realignment was
+  caught. Its on-registry manifest still references the old
+  `toolpath-convo` 0.7.0 (which itself pins `toolpath ^0.2`), so any
+  consumer pulling it in alongside `toolpath` 0.4 ends up with both
+  `toolpath` 0.2 and 0.4 in the graph. 0.3.0 is the first release
+  that resolves cleanly. Yank 0.2.0 if you want to force the upgrade.
+- No source change relative to 0.2.0.
+
+### toolpath-opencode 0.1.0 → 0.2.0
+
+- Republished against `toolpath-convo` 0.8.0 / `toolpath` 0.4.
+
+### toolpath-pi 0.3.0 (no version change)
+
+- 0.3.0 failed publish-verify in the previous release run with
+  `E0308: mismatched types` between `toolpath::v1::Path` 0.2.0 and
+  0.4.0 — `toolpath-pi`'s `derive_path` is the only satellite that
+  delegates straight through to `toolpath_convo::derive_path` at the
+  return-type boundary, so it was the one that surfaced the dual-
+  version graph at compile time. With `toolpath-convo` 0.8.0 pinning
+  `toolpath` 0.4, the dual graph collapses and 0.3.0 publishes
+  cleanly.
+
+### path-cli 0.8.0, toolpath-cli 0.8.0 (no version change)
+
+- Neither was published in the failed run. Their workspace deps now
+  resolve to the realigned satellite versions automatically.
+
 ## Pathbase rewire
 
 **Breaking** (pre-1.0). `path import pathbase` / `path export pathbase`
