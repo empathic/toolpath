@@ -43,6 +43,7 @@
   var detailTitle = document.getElementById("viz-detail-title");
   var detailBody = document.getElementById("viz-detail-body");
   var detailClose = document.getElementById("viz-detail-close");
+  var detailResize = document.getElementById("viz-detail-resize");
   var zoomInBtn = document.getElementById("viz-zoom-in");
   var zoomOutBtn = document.getElementById("viz-zoom-out");
   var fitBtn = document.getElementById("viz-fit");
@@ -140,6 +141,22 @@
     var showTimestamps = showTs.checked;
     var showFilesList = showFiles.checked;
 
+    // Detect bases shared across clusters so we can render a single BASE node
+    // for paths that branched from the same commit. The shared node sits at
+    // the graph level (no cluster parent) so dagre lays it out above the
+    // clusters that point into it.
+    function baseKey(b) {
+      if (!b) return null;
+      return [b.uri || "", b.ref || "", b.branch || ""].join("|");
+    }
+    var baseCounts = {};
+    clusters.forEach(function (c) {
+      var k = baseKey(c.base);
+      if (k) baseCounts[k] = (baseCounts[k] || 0) + 1;
+    });
+    var sharedBaseNodeFor = {}; // key → nodeId (emitted on first encounter)
+    var clusterBaseNodeId = {}; // cluster index → nodeId for edges below
+
     clusters.forEach(function (cluster, ci) {
       var prefix = clusters.length > 1 ? "c" + ci + "/" : "";
       var ancestorSet = cluster.headId
@@ -147,43 +164,13 @@
         : null;
       deadSets[ci] = ancestorSet;
 
-      if (clusters.length > 1) {
-        var clusterId = "cluster_" + ci;
-        g.setNode(clusterId, {
-          label: cluster.pathInfo ? cluster.pathInfo.id : "cluster-" + ci,
-          clusterLabelPos: "top",
-          style:
-            "fill: transparent; stroke: " +
-            MIX("--accent", 15) +
-            "; stroke-dasharray: 4,3;",
-        });
-      }
-
-      // Add BASE node if present
-      if (cluster.base) {
-        var baseId = prefix + "__BASE__";
-        g.setNode(baseId, {
-          label: "BASE",
-          shape: "ellipse",
-          style:
-            "fill: " +
-            COLORS.base.fill +
-            "; stroke: " +
-            COLORS.base.stroke +
-            "; stroke-width: 2px;",
-          labelStyle:
-            "font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600;",
-        });
-        if (clusters.length > 1) {
-          g.setParent(baseId, "cluster_" + ci);
-        }
-      }
-
+      // For $ref clusters: skip the cluster border and emit a single
+      // standalone placeholder. The cluster border + detached node
+      // combination read as broken.
       if (cluster.isRef) {
-        // Placeholder for $ref
-        var refId = prefix + cluster.pathInfo.id;
+        var refId = "ref_" + ci;
         g.setNode(refId, {
-          label: "$ref: " + cluster.pathInfo.id,
+          label: "$ref → " + truncate(cluster.pathInfo.id, 40),
           shape: "rect",
           style:
             "fill: " +
@@ -193,6 +180,69 @@
             "font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-style: italic;",
         });
         return;
+      }
+
+      if (clusters.length > 1) {
+        var clusterId = "cluster_" + ci;
+        g.setNode(clusterId, {
+          label:
+            cluster.title ||
+            (cluster.pathInfo && cluster.pathInfo.id) ||
+            "cluster-" + ci,
+          clusterLabelPos: "top",
+          style:
+            "fill: transparent; stroke: " +
+            MIX("--accent", 15) +
+            "; stroke-dasharray: 4,3;",
+        });
+      }
+
+      // BASE node — shared across clusters when their base.uri+ref+branch
+      // match, otherwise per-cluster. Shared BASEs sit at graph level so
+      // multiple clusters can point into them.
+      if (cluster.base) {
+        var bk = baseKey(cluster.base);
+        var isShared = baseCounts[bk] > 1;
+        var baseNodeId;
+        if (isShared) {
+          if (!sharedBaseNodeFor[bk]) {
+            baseNodeId = "shared_base_" + Object.keys(sharedBaseNodeFor).length;
+            sharedBaseNodeFor[bk] = baseNodeId;
+            g.setNode(baseNodeId, {
+              label: "BASE",
+              shape: "ellipse",
+              style:
+                "fill: " +
+                COLORS.base.fill +
+                "; stroke: " +
+                COLORS.base.stroke +
+                "; stroke-width: 2px;",
+              labelStyle:
+                "font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600;",
+            });
+            // No setParent → graph-level so it can feed multiple clusters.
+          } else {
+            baseNodeId = sharedBaseNodeFor[bk];
+          }
+        } else {
+          baseNodeId = prefix + "__BASE__";
+          g.setNode(baseNodeId, {
+            label: "BASE",
+            shape: "ellipse",
+            style:
+              "fill: " +
+              COLORS.base.fill +
+              "; stroke: " +
+              COLORS.base.stroke +
+              "; stroke-width: 2px;",
+            labelStyle:
+              "font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600;",
+          });
+          if (clusters.length > 1) {
+            g.setParent(baseNodeId, "cluster_" + ci);
+          }
+        }
+        clusterBaseNodeId[ci] = baseNodeId;
       }
 
       // Find root steps (no parents)
@@ -305,7 +355,7 @@
 
       // Connect BASE to root steps
       if (cluster.base) {
-        var baseNodeId = prefix + "__BASE__";
+        var baseNodeId = clusterBaseNodeId[ci];
         rootSteps.forEach(function (rootId) {
           // Only connect if the root node exists in the graph
           if (g.node(rootId)) {
@@ -789,6 +839,94 @@
   // Keyboard shortcut: Escape closes detail
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") hideDetail();
+  });
+
+  // --- Detail panel resize ---
+  // Drag the left edge to resize the right drawer. Width is persisted in
+  // localStorage and applied via the --viz-detail-width CSS variable so the
+  // mobile @media rule (width: 100vw under 640px) cleanly wins.
+  var DETAIL_WIDTH_STORAGE_KEY = "toolpath:viz:detail-width";
+  var DETAIL_WIDTH_MIN = 280;
+  function detailWidthMax() {
+    return Math.min(900, Math.floor(window.innerWidth * 0.9));
+  }
+  function clampDetailWidth(w) {
+    return Math.max(DETAIL_WIDTH_MIN, Math.min(detailWidthMax(), w));
+  }
+  function applyDetailWidth(w) {
+    detail.style.setProperty("--viz-detail-width", w + "px");
+  }
+
+  var currentDetailWidth = 380;
+  try {
+    var saved = parseInt(
+      localStorage.getItem(DETAIL_WIDTH_STORAGE_KEY) || "",
+      10,
+    );
+    if (Number.isFinite(saved) && saved > 0) {
+      currentDetailWidth = clampDetailWidth(saved);
+      applyDetailWidth(currentDetailWidth);
+    }
+  } catch (e) {
+    // localStorage may be blocked; fall back to default width.
+  }
+
+  var resizing = false;
+  var resizeRaf = 0;
+
+  detailResize.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    resizing = true;
+    document.body.dataset.vizResizing = "1";
+    detailResize.setPointerCapture(e.pointerId);
+  });
+
+  detailResize.addEventListener("pointermove", function (e) {
+    if (!resizing) return;
+    // Drawer is anchored to right: 0, so width = innerWidth - clientX.
+    var w = clampDetailWidth(window.innerWidth - e.clientX);
+    if (w === currentDetailWidth) return;
+    currentDetailWidth = w;
+    if (!resizeRaf) {
+      resizeRaf = requestAnimationFrame(function () {
+        resizeRaf = 0;
+        applyDetailWidth(currentDetailWidth);
+      });
+    }
+  });
+
+  function endResize(e) {
+    if (!resizing) return;
+    resizing = false;
+    delete document.body.dataset.vizResizing;
+    try {
+      detailResize.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      // Safe to ignore — capture may already be released.
+    }
+    if (resizeRaf) {
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = 0;
+      applyDetailWidth(currentDetailWidth);
+    }
+    try {
+      localStorage.setItem(
+        DETAIL_WIDTH_STORAGE_KEY,
+        String(currentDetailWidth),
+      );
+    } catch (err) {
+      // localStorage blocked — width stays for this session only.
+    }
+  }
+  detailResize.addEventListener("pointerup", endResize);
+  detailResize.addEventListener("pointercancel", endResize);
+
+  window.addEventListener("resize", function () {
+    var clamped = clampDetailWidth(currentDetailWidth);
+    if (clamped !== currentDetailWidth) {
+      currentDetailWidth = clamped;
+      applyDetailWidth(currentDetailWidth);
+    }
   });
 
   // --- Auto-load example on page load ---

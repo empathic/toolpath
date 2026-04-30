@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "eleventy --serve",
-    "build": "eleventy"
+    "build": "eleventy",
+    "test": "node --test 'test/**/*.test.mjs'"
   },
   "devDependencies": {
     "@11ty/eleventy": "^3.0.0",

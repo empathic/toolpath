@@ -58,63 +58,53 @@
   };
 
   // --- Document parsing ---
+  // Toolpath documents are a single Graph at the root:
+  //   { graph: {...}, paths: [...] }
+  // What used to be a bare Step or Path document is now a single-path Graph.
   TC.parseDoc = function (text) {
     var doc = JSON.parse(text);
-    if (doc.Step) return { type: "Step", data: doc };
-    if (doc.Path) return { type: "Path", data: doc };
-    if (doc.Graph) return { type: "Graph", data: doc };
+    if (
+      doc &&
+      typeof doc === "object" &&
+      doc.graph &&
+      Array.isArray(doc.paths)
+    ) {
+      return { type: "Graph", data: doc };
+    }
     throw new Error(
-      "Unknown document type. Expected top-level key: Step, Path, or Graph.",
+      "Unrecognized document shape. Expected a Graph with top-level 'graph' and 'paths'.",
     );
   };
 
   // Normalize into array of { pathInfo, steps, headId, base, actors } clusters
   TC.normalizeClusters = function (parsed) {
     var clusters = [];
-    if (parsed.type === "Step") {
-      var stepMeta = parsed.data.Step.meta || {};
-      clusters.push({
-        pathInfo: null,
-        steps: [parsed.data.Step],
-        headId: null,
-        base: null,
-        actors: stepMeta.actors || null,
-      });
-    } else if (parsed.type === "Path") {
-      var p = parsed.data.Path;
-      var pathActors = (p.meta && p.meta.actors) || null;
-      clusters.push({
-        pathInfo: p.path,
-        steps: p.steps,
-        headId: p.path.head,
-        base: p.path.base || null,
-        actors: pathActors,
-      });
-    } else if (parsed.type === "Graph") {
-      var g = parsed.data.Graph;
-      var graphActors = (g.meta && g.meta.actors) || null;
-      (g.paths || []).forEach(function (entry) {
-        if (entry["$ref"]) {
-          clusters.push({
-            pathInfo: { id: entry["$ref"] },
-            steps: [],
-            headId: null,
-            base: null,
-            isRef: true,
-            actors: graphActors,
-          });
-        } else {
-          var entryActors = (entry.meta && entry.meta.actors) || graphActors;
-          clusters.push({
-            pathInfo: entry.path,
-            steps: entry.steps || [],
-            headId: entry.path.head,
-            base: entry.path.base || null,
-            actors: entryActors,
-          });
-        }
-      });
-    }
+    var g = parsed.data;
+    var graphActors = (g.meta && g.meta.actors) || null;
+    (g.paths || []).forEach(function (entry) {
+      if (entry["$ref"]) {
+        clusters.push({
+          pathInfo: { id: entry["$ref"] },
+          steps: [],
+          headId: null,
+          base: null,
+          isRef: true,
+          actors: graphActors,
+          title: null,
+        });
+      } else {
+        var entryActors = (entry.meta && entry.meta.actors) || graphActors;
+        var entryTitle = (entry.meta && entry.meta.title) || null;
+        clusters.push({
+          pathInfo: entry.path,
+          steps: entry.steps || [],
+          headId: entry.path && entry.path.head ? entry.path.head : null,
+          base: (entry.path && entry.path.base) || null,
+          actors: entryActors,
+          title: entryTitle,
+        });
+      }
+    });
     return clusters;
   };
 
@@ -158,41 +148,28 @@
     });
   };
 
-  // Extract {steps, headId, id, meta} from any parsed document type
+  // Extract {steps, headId, id, meta} from a parsed Graph document.
+  // headId is set only for single-path graphs (the natural focal point);
+  // multi-path graphs leave headId null and let the caller pick per-path.
   TC.extractSteps = function (parsed) {
-    if (parsed.type === "Step") {
-      return {
-        steps: [parsed.data.Step],
-        headId: null,
-        id: parsed.data.Step.step.id,
-        meta: parsed.data.Step.meta || null,
-      };
+    var g = parsed.data;
+    var paths = g.paths || [];
+    var allSteps = [];
+    paths.forEach(function (entry) {
+      if (!entry["$ref"] && entry.steps) {
+        allSteps = allSteps.concat(entry.steps);
+      }
+    });
+    var headId = null;
+    if (paths.length === 1 && !paths[0]["$ref"] && paths[0].path) {
+      headId = paths[0].path.head || null;
     }
-    if (parsed.type === "Path") {
-      var p = parsed.data.Path;
-      return {
-        steps: p.steps,
-        headId: p.path.head,
-        id: p.path.id,
-        meta: p.meta || null,
-      };
-    }
-    if (parsed.type === "Graph") {
-      var g = parsed.data.Graph;
-      var allSteps = [];
-      (g.paths || []).forEach(function (entry) {
-        if (!entry["$ref"] && entry.steps) {
-          allSteps = allSteps.concat(entry.steps);
-        }
-      });
-      return {
-        steps: allSteps,
-        headId: null,
-        id: g.graph.id,
-        meta: g.meta || null,
-      };
-    }
-    return { steps: [], headId: null, id: null, meta: null };
+    return {
+      steps: allSteps,
+      headId: headId,
+      id: g.graph ? g.graph.id : null,
+      meta: g.meta || null,
+    };
   };
 
   window.ToolpathCore = TC;

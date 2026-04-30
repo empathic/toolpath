@@ -1,188 +1,199 @@
 {
   "graph": {
-    "id": "graph-release-v2.0"
+    "id": "graph-parallel-attempts-rate-limiter"
   },
   "paths": [
     {
       "path": {
-        "id": "path-pr-42",
+        "id": "path-claude",
         "base": {
-          "uri": "github:myorg/myrepo",
-          "ref": "abc123def456",
+          "uri": "github:empathic/toolpath",
+          "ref": "9f2c4ab",
           "branch": "main"
         },
-        "head": "step-003"
+        "head": "claude-3"
       },
       "steps": [
         {
           "step": {
-            "id": "step-001",
+            "id": "claude-1",
             "actor": "agent:claude-code",
-            "timestamp": "2026-01-29T10:00:00Z"
+            "timestamp": "2026-04-25T09:00:00Z"
           },
           "change": {
-            "src/auth/validator.rs": {
-              "raw": "@@ -1,5 +1,25 @@\n+pub struct ValidationError {...}"
+            "src/limit/token_bucket.rs": {
+              "raw": "@@ -0,0 +1,12 @@\n+pub struct TokenBucket {\n+    capacity: u32,\n+    tokens: u32,\n+    refill_per_sec: u32,\n+    last_refill: Instant,\n+}\n+\n+impl TokenBucket {\n+    pub fn new(capacity: u32, refill_per_sec: u32) -> Self {\n+        Self { capacity, tokens: capacity, refill_per_sec, last_refill: Instant::now() }\n+    }\n+}"
             }
           },
           "meta": {
-            "intent": "Add email validation with custom error type"
+            "intent": "Scaffold TokenBucket struct"
           }
         },
         {
           "step": {
-            "id": "step-002",
-            "parents": [
-              "step-001"
-            ],
-            "actor": "tool:rustfmt",
-            "timestamp": "2026-01-29T10:00:30Z"
+            "id": "claude-2",
+            "parents": ["claude-1"],
+            "actor": "agent:claude-code",
+            "timestamp": "2026-04-25T09:04:00Z"
           },
           "change": {
-            "src/auth/validator.rs": {
-              "raw": "@@ -15,2 +15,5 @@\n-pub fn validate..."
+            "src/limit/token_bucket.rs": {
+              "raw": "@@ -12,0 +13,14 @@\n+    pub fn try_acquire(&mut self) -> bool {\n+        self.refill();\n+        if self.tokens > 0 {\n+            self.tokens -= 1;\n+            true\n+        } else {\n+            false\n+        }\n+    }\n+\n+    fn refill(&mut self) {\n+        let elapsed = self.last_refill.elapsed().as_secs() as u32;\n+        self.tokens = (self.tokens + elapsed * self.refill_per_sec).min(self.capacity);\n+    }"
+            }
+          },
+          "meta": {
+            "intent": "Implement try_acquire and lazy refill"
+          }
+        },
+        {
+          "step": {
+            "id": "claude-3",
+            "parents": ["claude-2"],
+            "actor": "agent:claude-code",
+            "timestamp": "2026-04-25T09:08:00Z"
+          },
+          "change": {
+            "src/limit/token_bucket.rs": {
+              "raw": "@@ -26,0 +27,9 @@\n+#[cfg(test)]\n+mod tests {\n+    use super::*;\n+    #[test]\n+    fn drains_then_refills() {\n+        let mut b = TokenBucket::new(2, 1);\n+        assert!(b.try_acquire() && b.try_acquire() && !b.try_acquire());\n+    }\n+}"
+            }
+          },
+          "meta": {
+            "intent": "Add drain/refill test"
+          }
+        }
+      ],
+      "meta": {
+        "title": "Token bucket with lazy refill"
+      }
+    },
+    {
+      "path": {
+        "id": "path-gemini",
+        "base": {
+          "uri": "github:empathic/toolpath",
+          "ref": "9f2c4ab",
+          "branch": "main"
+        },
+        "head": "gemini-2"
+      },
+      "steps": [
+        {
+          "step": {
+            "id": "gemini-1",
+            "actor": "agent:gemini-cli",
+            "timestamp": "2026-04-25T09:01:00Z"
+          },
+          "change": {
+            "src/limit/fixed_window.rs": {
+              "raw": "@@ -0,0 +1,18 @@\n+use std::collections::HashMap;\n+use std::time::{Duration, Instant};\n+\n+pub struct FixedWindow {\n+    window: Duration,\n+    limit: u32,\n+    counters: HashMap<String, (Instant, u32)>,\n+}\n+\n+impl FixedWindow {\n+    pub fn new(window: Duration, limit: u32) -> Self {\n+        Self { window, limit, counters: HashMap::new() }\n+    }\n+}"
+            }
+          },
+          "meta": {
+            "intent": "Per-key fixed window with HashMap"
+          }
+        },
+        {
+          "step": {
+            "id": "gemini-2",
+            "parents": ["gemini-1"],
+            "actor": "agent:gemini-cli",
+            "timestamp": "2026-04-25T09:06:00Z"
+          },
+          "change": {
+            "src/limit/fixed_window.rs": {
+              "raw": "@@ -18,0 +19,12 @@\n+    pub fn check(&mut self, key: &str) -> bool {\n+        let now = Instant::now();\n+        let entry = self.counters.entry(key.to_string()).or_insert((now, 0));\n+        if now.duration_since(entry.0) >= self.window {\n+            *entry = (now, 0);\n+        }\n+        if entry.1 < self.limit {\n+            entry.1 += 1;\n+            true\n+        } else {\n+            false\n+        }\n+    }"
+            }
+          },
+          "meta": {
+            "intent": "Implement check() with window reset"
+          }
+        }
+      ],
+      "meta": {
+        "title": "Fixed window per key"
+      }
+    },
+    {
+      "path": {
+        "id": "path-codex",
+        "base": {
+          "uri": "github:empathic/toolpath",
+          "ref": "9f2c4ab",
+          "branch": "main"
+        },
+        "head": "codex-3"
+      },
+      "steps": [
+        {
+          "step": {
+            "id": "codex-1",
+            "actor": "agent:codex-cli",
+            "timestamp": "2026-04-25T09:02:00Z"
+          },
+          "change": {
+            "src/limit/sliding.rs": {
+              "raw": "@@ -0,0 +1,9 @@\n+use std::collections::VecDeque;\n+use std::time::{Duration, Instant};\n+\n+pub struct SlidingWindow {\n+    window: Duration,\n+    limit: usize,\n+    hits: VecDeque<Instant>,\n+}"
+            }
+          },
+          "meta": {
+            "intent": "Sliding window with VecDeque of timestamps"
+          }
+        },
+        {
+          "step": {
+            "id": "codex-2",
+            "parents": ["codex-1"],
+            "actor": "agent:codex-cli",
+            "timestamp": "2026-04-25T09:05:00Z"
+          },
+          "change": {
+            "src/limit/sliding.rs": {
+              "raw": "@@ -9,0 +10,11 @@\n+impl SlidingWindow {\n+    pub fn try_acquire(&mut self) -> bool {\n+        let now = Instant::now();\n+        while self.hits.front().map_or(false, |t| now.duration_since(*t) >= self.window) {\n+            self.hits.pop_front();\n+        }\n+        if self.hits.len() < self.limit {\n+            self.hits.push_back(now);\n+            return true;\n+        }\n+        false\n+    }"
+            }
+          },
+          "meta": {
+            "intent": "try_acquire: evict expired, then admit"
+          }
+        },
+        {
+          "step": {
+            "id": "codex-3",
+            "parents": ["codex-2"],
+            "actor": "tool:rustfmt",
+            "timestamp": "2026-04-25T09:05:30Z"
+          },
+          "change": {
+            "src/limit/sliding.rs": {
+              "raw": "@@ -10,1 +10,3 @@\n-impl SlidingWindow { pub fn try_acquire(&mut self) -> bool {\n+impl SlidingWindow {\n+    pub fn try_acquire(&mut self) -> bool {"
             }
           },
           "meta": {
             "intent": "Auto-format"
           }
-        },
-        {
-          "step": {
-            "id": "step-003",
-            "parents": [
-              "step-002"
-            ],
-            "actor": "human:alex",
-            "timestamp": "2026-01-29T10:15:00Z"
-          },
-          "change": {
-            "src/auth/validator.rs": {
-              "raw": "@@ -20,2 +20,2 @@\n-message: \"must contain @\"..."
-            }
-          },
-          "meta": {
-            "intent": "Improve error messages for better UX"
-          }
         }
       ],
       "meta": {
-        "title": "Add email validation",
-        "source": "github:myorg/myrepo/pull/42"
+        "title": "Sliding window via timestamp queue"
       }
-    },
-    {
-      "path": {
-        "id": "path-pr-43",
-        "base": {
-          "uri": "github:myorg/myrepo",
-          "ref": "def456789abc",
-          "branch": "main"
-        },
-        "head": "step-002"
-      },
-      "steps": [
-        {
-          "step": {
-            "id": "step-001",
-            "actor": "human:bob",
-            "timestamp": "2026-01-28T14:00:00Z"
-          },
-          "change": {
-            "src/auth/session.rs": {
-              "raw": "@@ -45,3 +45,8 @@\n+fn refresh_token(...)"
-            }
-          },
-          "meta": {
-            "intent": "Add session refresh to prevent timeouts"
-          }
-        },
-        {
-          "step": {
-            "id": "step-002",
-            "parents": [
-              "step-001"
-            ],
-            "actor": "agent:claude-code",
-            "timestamp": "2026-01-28T14:30:00Z"
-          },
-          "change": {
-            "src/auth/session.rs": {
-              "raw": "@@ -50,5 +50,15 @@\n+// Handle edge cases..."
-            }
-          },
-          "meta": {
-            "intent": "Add edge case handling for expired refresh tokens"
-          }
-        }
-      ],
-      "meta": {
-        "title": "Fix session timeout bug",
-        "source": "github:myorg/myrepo/pull/43"
-      }
-    },
-    {
-      "$ref": "https://archive.example.com/toolpath/path-pr-44.json"
-    },
-    {
-      "$ref": "toolpath://internal/path-pr-45"
     }
   ],
   "meta": {
-    "title": "Release v2.0",
-    "refs": [
-      {
-        "rel": "milestone",
-        "href": "issue://github/myorg/myrepo/milestone/5"
-      },
-      {
-        "rel": "changelog",
-        "href": "doc://CHANGELOG.md#v2.0"
-      }
-    ],
+    "title": "Parallel agent attempts: implement rate limiter",
     "actors": {
-      "human:alex": {
-        "name": "Alex Kesling",
-        "identities": [
-          {
-            "system": "github",
-            "id": "akesling"
-          },
-          {
-            "system": "email",
-            "id": "alex@empathic.dev"
-          }
-        ]
-      },
-      "human:bob": {
-        "name": "Bob Developer",
-        "identities": [
-          {
-            "system": "github",
-            "id": "bobdev"
-          }
-        ]
-      },
-      "human:release-manager": {
-        "name": "Release Manager",
-        "identities": [
-          {
-            "system": "github",
-            "id": "releasebot"
-          }
-        ],
-        "keys": [
-          {
-            "type": "gpg",
-            "fingerprint": "RELEASE1234567890ABCD",
-            "href": "https://keys.openpgp.org/vks/v1/by-fingerprint/..."
-          }
-        ]
-      },
       "agent:claude-code": {
         "name": "Claude Code",
         "provider": "anthropic",
-        "model": "claude-sonnet-4-20250514"
+        "model": "claude-sonnet-4-6"
+      },
+      "agent:gemini-cli": {
+        "name": "Gemini CLI",
+        "provider": "google",
+        "model": "gemini-2.5-pro"
+      },
+      "agent:codex-cli": {
+        "name": "Codex CLI",
+        "provider": "openai",
+        "model": "gpt-5-codex"
       },
       "tool:rustfmt": {
         "name": "rustfmt",
@@ -193,15 +204,6 @@
           }
         ]
       }
-    },
-    "signatures": [
-      {
-        "signer": "human:release-manager",
-        "key": "gpg:RELEASE1234567890ABCD",
-        "scope": "release",
-        "timestamp": "2026-01-30T09:00:00Z",
-        "sig": "-----BEGIN PGP SIGNATURE-----\n\niQIzBAABCAAdFiEE...(release signature)...\n-----END PGP SIGNATURE-----"
-      }
-    ]
+    }
   }
 }

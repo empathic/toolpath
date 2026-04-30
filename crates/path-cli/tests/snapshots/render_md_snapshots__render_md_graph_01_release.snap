@@ -1,91 +1,116 @@
 ---
 source: crates/path-cli/tests/render_md_snapshots.rs
-assertion_line: 58
 expression: "render_md(\"graph-01-release.json\")"
 ---
-# Release v2.0
-
-- **milestone:** `issue://github/myorg/myrepo/milestone/5`
-- **changelog:** `doc://CHANGELOG.md#v2.0`
+# Parallel agent attempts: implement rate limiter
 
 | Path | Steps | Actors | Head |
 |------|-------|--------|------|
-| Add email validation | 3 | `agent:claude-code`, `human:alex`, `tool:rustfmt` | `step-003` |
-| Fix session timeout bug | 2 | `agent:claude-code`, `human:bob` | `step-002` |
-
-**External references:**
-- `https://archive.example.com/toolpath/path-pr-44.json`
-- `toolpath://internal/path-pr-45`
+| Token bucket with lazy refill | 3 | `agent:claude-code` | `claude-3` |
+| Fixed window per key | 2 | `agent:gemini-cli` | `gemini-2` |
+| Sliding window via timestamp queue | 3 | `agent:codex-cli`, `tool:rustfmt` | `codex-3` |
 
 ---
 
-## Add email validation
+## Token bucket with lazy refill
 
-**Base:** `github:myorg/myrepo` @ `abc123def456` (`main`)
-**Head:** `step-003`
-**Source:** `github:myorg/myrepo/pull/42`
-**Changes:** +1 −2 across 1 files
+**Base:** `github:empathic/toolpath` @ `9f2c4ab` (`main`)
+**Head:** `claude-3`
+**Changes:** +35 −0 across 1 files
 **Steps:** 3 | **Artifacts:** 1 | **Dead ends:** 0
 
-### step-001 — agent:claude-code
+### claude-1 — agent:claude-code
 
-**Timestamp:** 2026-01-29T10:00:00Z
+**Timestamp:** 2026-04-25T09:00:00Z
 
-> Add email validation with custom error type
+> Scaffold TokenBucket struct
 
-- `src/auth/validator.rs` (+1 -0)
+- `src/limit/token_bucket.rs` (+12 -0)
 
-### step-002 — tool:rustfmt
+### claude-2 — agent:claude-code
 
-**Timestamp:** 2026-01-29T10:00:30Z
-**Parents:** `step-001`
+**Timestamp:** 2026-04-25T09:04:00Z
+**Parents:** `claude-1`
+
+> Implement try_acquire and lazy refill
+
+- `src/limit/token_bucket.rs` (+14 -0)
+
+### claude-3 — agent:claude-code [head]
+
+**Timestamp:** 2026-04-25T09:08:00Z
+**Parents:** `claude-2`
+
+> Add drain/refill test
+
+- `src/limit/token_bucket.rs` (+9 -0)
+
+---
+
+## Fixed window per key
+
+**Base:** `github:empathic/toolpath` @ `9f2c4ab` (`main`)
+**Head:** `gemini-2`
+**Changes:** +27 −0 across 1 files
+**Steps:** 2 | **Artifacts:** 1 | **Dead ends:** 0
+
+### gemini-1 — agent:gemini-cli
+
+**Timestamp:** 2026-04-25T09:01:00Z
+
+> Per-key fixed window with HashMap
+
+- `src/limit/fixed_window.rs` (+14 -0)
+
+### gemini-2 — agent:gemini-cli [head]
+
+**Timestamp:** 2026-04-25T09:06:00Z
+**Parents:** `gemini-1`
+
+> Implement check() with window reset
+
+- `src/limit/fixed_window.rs` (+13 -0)
+
+---
+
+## Sliding window via timestamp queue
+
+**Base:** `github:empathic/toolpath` @ `9f2c4ab` (`main`)
+**Head:** `codex-3`
+**Changes:** +22 −1 across 1 files
+**Steps:** 3 | **Artifacts:** 1 | **Dead ends:** 0
+
+### codex-1 — agent:codex-cli
+
+**Timestamp:** 2026-04-25T09:02:00Z
+
+> Sliding window with VecDeque of timestamps
+
+- `src/limit/sliding.rs` (+8 -0)
+
+### codex-2 — agent:codex-cli
+
+**Timestamp:** 2026-04-25T09:05:00Z
+**Parents:** `codex-1`
+
+> try_acquire: evict expired, then admit
+
+- `src/limit/sliding.rs` (+12 -0)
+
+### codex-3 — tool:rustfmt [head]
+
+**Timestamp:** 2026-04-25T09:05:30Z
+**Parents:** `codex-2`
 
 > Auto-format
 
-- `src/auth/validator.rs` (+0 -1)
-
-### step-003 — human:alex [head]
-
-**Timestamp:** 2026-01-29T10:15:00Z
-**Parents:** `step-002`
-
-> Improve error messages for better UX
-
-- `src/auth/validator.rs` (+0 -1)
-
----
-
-## Fix session timeout bug
-
-**Base:** `github:myorg/myrepo` @ `def456789abc` (`main`)
-**Head:** `step-002`
-**Source:** `github:myorg/myrepo/pull/43`
-**Changes:** +2 −0 across 1 files
-**Steps:** 2 | **Artifacts:** 1 | **Dead ends:** 0
-
-### step-001 — human:bob
-
-**Timestamp:** 2026-01-28T14:00:00Z
-
-> Add session refresh to prevent timeouts
-
-- `src/auth/session.rs` (+1 -0)
-
-### step-002 — agent:claude-code [head]
-
-**Timestamp:** 2026-01-28T14:30:00Z
-**Parents:** `step-001`
-
-> Add edge case handling for expired refresh tokens
-
-- `src/auth/session.rs` (+1 -0)
+- `src/limit/sliding.rs` (+2 -1)
 
 ---
 
 ## Actors
 
-- **`agent:claude-code`** — Claude Code (anthropic, claude-sonnet-4-20250514)
-- **`human:alex`** — Alex Kesling
-- **`human:bob`** — Bob Developer
-- **`human:release-manager`** — Release Manager
+- **`agent:claude-code`** — Claude Code (anthropic, claude-sonnet-4-6)
+- **`agent:codex-cli`** — Codex CLI (openai, gpt-5-codex)
+- **`agent:gemini-cli`** — Gemini CLI (google, gemini-2.5-pro)
 - **`tool:rustfmt`** — rustfmt

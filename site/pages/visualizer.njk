@@ -16,7 +16,7 @@ permalink: /visualizer/
       <div class="viz-editor">
         <pre id="viz-highlight" class="viz-highlight" aria-hidden="true"></pre>
         <textarea id="viz-input" class="viz-textarea" rows="6" spellcheck="false"
-          placeholder="Paste a Toolpath JSON document (Step, Path, or Graph)..."></textarea>
+          placeholder="Paste a Toolpath JSON document (a Graph at the root)..."></textarea>
       </div>
     </div>
     <div class="viz-buttons">
@@ -54,6 +54,7 @@ permalink: /visualizer/
   </div>
 
   <div id="viz-detail" class="viz-detail" hidden>
+    <div id="viz-detail-resize" class="viz-detail-resize" aria-hidden="true" title="Drag to resize"></div>
     <div class="viz-detail-header">
       <strong id="viz-detail-title"></strong>
       <button id="viz-detail-close" class="viz-ctrl">&times;</button>
