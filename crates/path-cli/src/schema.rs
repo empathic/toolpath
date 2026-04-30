@@ -1,14 +1,15 @@
 //! JSON Schema validation against the canonical `toolpath.schema.json`.
 //!
-//! The schema bytes are baked into the binary via `include_str!` so that
-//! `path validate` is self-contained — users don't need a checked-out repo
-//! for the validator to work.
+//! The schema bytes are sourced from [`toolpath::SCHEMA_JSON`], which is
+//! `include_str!`-baked into the `toolpath` crate. Hosting the const in the
+//! types crate (rather than vendoring a copy here) keeps the schema next
+//! to the types it describes and means there's exactly one source of truth.
 
 use std::sync::OnceLock;
 
 use jsonschema::Validator;
 
-const SCHEMA_SOURCE: &str = include_str!("../../../schema/toolpath.schema.json");
+const SCHEMA_SOURCE: &str = toolpath::SCHEMA_JSON;
 
 fn validator() -> &'static Validator {
     static VALIDATOR: OnceLock<Validator> = OnceLock::new();

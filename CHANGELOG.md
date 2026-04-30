@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## Conversation-stack realignment onto `toolpath` 0.4
+## Conversation-stack realignment onto `toolpath` 0.4 + path-cli schema vendoring
 
 Republish of every `toolpath-convo`-consuming crate so they pin the
 current `toolpath` 0.4.x line. Source-only fix — no API changes — but
@@ -10,6 +10,33 @@ required because the previously-published satellites pinned `toolpath
 ^0.2`, which dragged a second `toolpath` major into any consumer's
 graph that combined them with `toolpath 0.4` (and outright broke
 publish-verify for `toolpath-pi` 0.3.0).
+
+Also fixes a `path-cli` packaging bug: the schema-validation feature
+added in 0.7.0 used `include_str!("../../../schema/toolpath.schema.json")`
+to embed the schema, but cargo only packages files inside the crate
+directory. The path resolved fine in workspace builds but fails at
+`cargo publish` verify time, where the unpacked tarball has no path
+back to the workspace root. Hidden by the same dry-run blind spot
+(`path-cli` is always "deferred" in dry-runs because its deps are
+also being published in the same wave). 0.7.0 never reached
+crates.io; the latest live `path-cli` is 0.5.0.
+
+The fix relocates the schema into the foundational `toolpath` crate
+as a `pub const SCHEMA_JSON: &str`. `path-cli`'s schema validator
+sources from there. `schema/toolpath.schema.json` at the workspace
+root is now a symlink into `crates/toolpath/schema/` — preserves
+URLs, RFC references, and `tests/schema_examples.rs` runtime reads
+without duplicating the file.
+
+### toolpath 0.4.0 → 0.4.1
+
+- New `pub const SCHEMA_JSON: &str` exporting the canonical JSON
+  Schema for Toolpath documents. Schema file moves to
+  `crates/toolpath/schema/toolpath.schema.json` (inside the crate's
+  package boundary so `include_str!` and `cargo publish` agree);
+  workspace-root `schema/toolpath.schema.json` becomes a symlink to
+  preserve external URL references and existing tests' runtime path.
+- Additive (no API change otherwise).
 
 ### toolpath-convo 0.7.0 → 0.8.0
 
@@ -56,6 +83,9 @@ publish-verify for `toolpath-pi` 0.3.0).
 
 - Neither was published in the failed run. Their workspace deps now
   resolve to the realigned satellite versions automatically.
+- `path-cli` no longer `include_str!`s the schema directly; it
+  consumes `toolpath::SCHEMA_JSON` instead, which fixes the
+  publish-verify failure that was masked by the dry-run blind spot.
 
 ## Pathbase rewire
 

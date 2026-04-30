@@ -4,6 +4,15 @@ mod jsonl;
 mod query;
 mod types;
 
+/// The canonical JSON Schema for Toolpath documents, baked into the binary.
+///
+/// This is the same file as `schema/toolpath.schema.json` at the workspace
+/// root (a symlink that resolves into this crate's `schema/` directory so
+/// the schema lives inside the package boundary for `cargo publish`). The
+/// schema describes the wire format produced by [`v1::Graph`] / [`v1::Path`]
+/// / [`v1::Step`] serde and consumed by `path validate`.
+pub const SCHEMA_JSON: &str = include_str!("../schema/toolpath.schema.json");
+
 pub mod v1 {
     //! Versioned public API for Toolpath types and queries.
     //!
