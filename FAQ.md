@@ -69,17 +69,35 @@ provenance chain.
 
 ## Format Design
 
-### Why is Document externally tagged?
+### Why is the document root always a Graph?
 
-The `Document` enum uses external tagging: every Toolpath JSON file has exactly
-one top-level key — `"Step"`, `"Path"`, or `"Graph"` — that identifies the
-document type.
+Earlier drafts wrapped the JSON root in `{"Step": ...}`, `{"Path": ...}`, or
+`{"Graph": ...}` so the document type was unambiguous from the first key. That
+design pushed discriminator logic into every consumer — CLI commands,
+renderers, schema, fixtures, docs — and most "documents" in practice were
+Paths or single-step Paths anyway.
+
+Collapsing to a single root type removes a class of "which kind is this?"
+branching and makes file shape uniform. What used to be a bare Step or Path is
+now a single-path Graph:
 
 ```json
-{ "Step":  { "step": {...}, "change": {...} } }
-{ "Path":  { "path": {...}, "steps": [...] } }
-{ "Graph": { "graph": {...}, "paths": [...] } }
+{
+  "graph": { "id": "..." },
+  "paths": [
+    {
+      "path": { "id": "...", "head": "step-001" },
+      "steps": [
+        { "step": { "id": "step-001", ... }, "change": { ... } }
+      ]
+    }
+  ]
+}
 ```
+
+One schema, one parser path, one mental model. The cost is two extra wrapper
+objects in trivially small documents — a fair trade for never having to detect
+the document type.
 
 ### Why use Unified Diff for the `raw` perspective?
 

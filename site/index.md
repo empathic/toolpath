@@ -159,22 +159,30 @@ A valid Toolpath document can be tiny:
 
 ```json
 {
-  "Step": {
-    "step": {
-      "id": "step-001",
-      "actor": "human:alex",
-      "timestamp": "2026-01-29T10:00:00Z"
-    },
-    "change": {
-      "src/main.rs": {
-        "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
-      }
+  "graph": { "id": "graph-step-001" },
+  "paths": [
+    {
+      "path": { "id": "path-step-001", "head": "step-001" },
+      "steps": [
+        {
+          "step": {
+            "id": "step-001",
+            "actor": "human:alex",
+            "timestamp": "2026-01-29T10:00:00Z"
+          },
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
+            }
+          }
+        }
+      ]
     }
-  }
+  ]
 }
 ```
 
-No parents (it's the first step). No meta. One file, one perspective. Still valid.
+No parents (it's the first step). No meta. One file, one perspective. Every document is a Graph at the root — single-step documents like this one are a Graph holding one Path holding one Step.
 
 ## Quick start
 

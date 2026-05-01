@@ -57,9 +57,11 @@ They complement each other: you might use Toolpath to record the full history of
 
 ## Format design
 
-### Why is Document externally tagged?
+### Why is the document root always a Graph?
 
-Every Toolpath JSON file has exactly one top-level key &mdash; `"Step"`, `"Path"`, or `"Graph"` &mdash; that identifies the document type. This makes the type unambiguous without inspecting inner fields. PascalCase variant names visually distinguish the type tag from the lowercase structural fields inside.
+Earlier drafts wrapped the JSON root in `{"Step": ...}`, `{"Path": ...}`, or `{"Graph": ...}` so the type was unambiguous from the first key. That pushed discriminator logic into every consumer &mdash; CLI commands, renderers, schema, fixtures, docs &mdash; and most "documents" in practice were Paths or single-step Paths anyway.
+
+Collapsing to a single root type removes a class of "which kind is this?" branching and makes file shape uniform. What used to be a bare Step or Path is now a single-path Graph. One schema, one parser path, one mental model. The cost is two extra wrapper objects in trivially small documents, which is a fair trade for never having to detect the document type.
 
 ### Why Unified Diff for the `raw` perspective?
 
