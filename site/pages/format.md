@@ -5,197 +5,85 @@ nav: format
 permalink: /format/
 ---
 
-# The Toolpath format
+# Toolpath at a glance
 
 <p class="subtitle">
-Three objects. One DAG. Full provenance.
+A format for what happens between commits.
 </p>
 
-Toolpath defines three object types at decreasing levels of granularity. Every Toolpath JSON document is externally tagged with exactly one top-level key:
+Yesterday's tooling was a footnote. You manually ran `rustfmt` and it was incidental to the actual change. Coding agents now make a majority of the decisions on a PR — what to write, when to abandon an approach, how to phrase the test. That's a new class of information about how artifacts come to be: dense, branching, multi-actor. Nothing was built to capture it.
 
-```json
-{ "Step":  { "step": {...}, "change": {...} } }
-{ "Path":  { "path": {...}, "steps": [...] } }
-{ "Graph": { "graph": {...}, "paths": [...] } }
-```
+Git stores the final snapshot. Chat logs live in proprietary formats. Tool decisions vanish into telemetry. There's no neutral format for **saving** what actually happened, **transforming** it between systems, or **analyzing** it after the fact.
 
-## Step
+Toolpath is that format.
 
-The core primitive. A step records a single change to one or more artifacts by one actor.
+## The shape
 
-Every step has three top-level keys:
+> *A story is made up of many paths, one step at a time.*
 
-| Key      | What it holds                                                  |
-| -------- | -------------------------------------------------------------- |
-| `step`   | Identity and lineage: id, parents, actor, timestamp            |
-| `change` | The actual modifications: artifact URLs mapped to perspectives |
-| `meta`   | Everything else: intent, refs, actors, signatures (optional)   |
+Every document is a **Graph**. A Graph holds **Paths**. A Path holds **Steps**. A Step is one **transformation**.
 
-### Parents
+| Layer   | Holds                | Represents                                                |
+| ------- | -------------------- | --------------------------------------------------------- |
+| `graph` | `paths[]`            | A collection of stories — a release, a project, a bundle  |
+| `path`  | `steps[]`            | One story — a PR, a coding session, a branch              |
+| `step`  | `change{}`           | One transformation — touching one or more artifacts       |
 
-The `step.parents` array establishes the DAG:
+`Step` and `Path` are inner types — they appear inside `graph.paths` and `path.steps`, never as the JSON root on their own. Even a document recording a single change is a Graph that holds one Path that holds one Step. One root type, one parser path.
 
-| Parents                | Meaning                            |
-| ---------------------- | ---------------------------------- |
-| `[]` or omitted        | Root step (no parents)             |
-| `["step-001"]`         | Single parent (linear history)     |
-| `["step-A", "step-B"]` | Merge (derived from parallel work) |
+A step's `change` maps artifact URLs to perspectives — a unified diff under `raw`, a structural AST operation under `structural`, or both. The `meta` object is optional at every level: minimal documents need only `step` and `change`.
 
-### Example
+## What a document looks like
+
+A complete Toolpath document is small enough to read in one breath:
 
 ```json
 {
-  "Step": {
-    "step": {
-      "id": "step-003",
-      "parents": ["step-002"],
-      "actor": "agent:claude-code",
-      "timestamp": "2026-01-29T15:30:00Z"
-    },
-    "change": {
-      "src/auth/validator.rs": {
-        "raw": "@@ -1,5 +1,25 @@\n use std::error::Error;\n+..."
-      }
-    },
-    "meta": {
-      "intent": "Add email validation to prevent malformed input",
-      "refs": [{ "rel": "fixes", "href": "issue://github/repo/issues/42" }]
+  "graph": { "id": "graph-step-001" },
+  "paths": [
+    {
+      "path": { "id": "path-step-001", "head": "step-001" },
+      "steps": [
+        {
+          "step": {
+            "id": "step-001",
+            "actor": "human:alex",
+            "timestamp": "2026-01-29T10:00:00Z"
+          },
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
+            }
+          }
+        }
+      ]
     }
-  }
+  ]
 }
 ```
 
-## Path
+That's the canonical fixture [`step-01-minimal.json`](https://github.com/empathic/toolpath/blob/main/examples/step-01-minimal.json) — one author, one timestamp, one file changed, one diff. Every Toolpath document looks like this. The objects nest the same way. Bigger documents just hold more of them.
 
-A path collects steps and provides a root context. Think of it as a PR, a coding session, or a branch.
+## A real example
 
-| Key     | What it holds                                             |
-| ------- | --------------------------------------------------------- |
-| `path`  | Identity, base context, and head reference                |
-| `steps` | Array of step objects (the full DAG, including dead ends) |
-| `meta`  | Path-level metadata: title, actors, signatures (optional) |
+The minimal example above shows the shape. To see what a Toolpath document looks like when actual work has happened, open the **exploration** fixture in the visualizer. It's a single Path with seven steps and the four DAG features that recur everywhere:
 
-### Base context
+- **`path.base`** anchors the document to a starting commit. Bare paths in `change` (`src/main.rs`) are relative to that base.
+- **`path.head`** points at the current tip — `step-004`. Walking back from the head gives the active history; everything else is exploration.
+- **`step-002a`** and **`step-002b`** both branch from `step-001` — that's a **fork**. The Path keeps both, even though only one becomes part of the active history.
+- **`step-002a`** is also a **dead end** — nothing on its descendant chain reaches `path.head`. Dead ends aren't marked anywhere in the document; they fall out structurally as `all_steps − ancestors(head)`.
+- **`step-004`** lists two parents (`step-003b`, `step-003c`) — that's a **merge** of two parallel branches.
 
-The `path.base` anchors the path to a specific state:
+→ Open it in the [visualizer](/visualizer/) (it's the default example) and the structure clicks immediately.
 
-```json
-{
-  "base": {
-    "uri": "github:myorg/myrepo",
-    "ref": "abc123def456"
-  }
-}
-```
+## File extensions
 
-| URI scheme                 | Meaning                         |
-| -------------------------- | ------------------------------- |
-| `github:org/repo`          | GitHub repository               |
-| `file:///path`             | Local filesystem                |
-| `toolpath:path-id/step-id` | Branch from another path's step |
+| Extension     | Shape               | Use it when                                                        |
+| ------------- | ------------------- | ------------------------------------------------------------------ |
+| `.path.json`  | Graph (canonical)   | Sealed documents — PRs, releases, archived sessions                |
+| `.path.jsonl` | Graph (streaming)   | Live capture — one Path appended line-by-line as work happens      |
 
-### Dead ends
-
-Dead ends are implicit. A step is a dead end if it has no descendants leading to `path.head`. No explicit marking required &mdash; the DAG structure determines it.
-
-```
-active_steps = ancestors(path.head)
-dead_ends = all_steps - active_steps
-```
-
-### Example
-
-```json
-{
-  "Path": {
-    "path": {
-      "id": "path-pr-42",
-      "base": {
-        "uri": "github:myorg/myrepo",
-        "ref": "abc123def456"
-      },
-      "head": "step-004"
-    },
-    "steps": [
-      {
-        "step": { "id": "step-001", "actor": "human:alex", "timestamp": "..." },
-        "change": { "src/main.rs": { "raw": "..." } },
-        "meta": { "intent": "Initial change" }
-      },
-      {
-        "step": {
-          "id": "step-002a",
-          "parents": ["step-001"],
-          "actor": "agent:claude-code",
-          "timestamp": "..."
-        },
-        "change": { "src/validator.rs": { "raw": "..." } },
-        "meta": { "intent": "Regex approach (abandoned)" }
-      },
-      {
-        "step": {
-          "id": "step-002",
-          "parents": ["step-001"],
-          "actor": "agent:claude-code",
-          "timestamp": "..."
-        },
-        "change": { "src/validator.rs": { "raw": "..." } },
-        "meta": { "intent": "Custom error type approach" }
-      },
-      {
-        "step": {
-          "id": "step-003",
-          "parents": ["step-002"],
-          "actor": "tool:rustfmt",
-          "timestamp": "..."
-        },
-        "change": { "src/validator.rs": { "raw": "..." } },
-        "meta": { "intent": "Auto-format" }
-      },
-      {
-        "step": {
-          "id": "step-004",
-          "parents": ["step-003"],
-          "actor": "human:alex",
-          "timestamp": "..."
-        },
-        "change": { "src/validator.rs": { "raw": "..." } },
-        "meta": { "intent": "Refine error messages" }
-      }
-    ],
-    "meta": {
-      "title": "Add email validation"
-    }
-  }
-}
-```
-
-Step `step-002a` is a dead end: it forks from `step-001` but has no descendants leading to the head (`step-004`).
-
-## Graph
-
-A graph collects related paths. Think of it as a release, a sprint, or a project.
-
-| Key     | What it holds                                              |
-| ------- | ---------------------------------------------------------- |
-| `graph` | Identity (id)                                              |
-| `paths` | Array of inline Path objects or `$ref` references          |
-| `meta`  | Graph-level metadata: title, actors, signatures (optional) |
-
-Paths can be inline or referenced externally:
-
-```json
-{
-  "Graph": {
-    "graph": { "id": "graph-release-v2" },
-    "paths": [
-      { "path": {...}, "steps": [...] },
-      { "$ref": "https://archive.example.com/toolpath/path-44.json" }
-    ],
-    "meta": { "title": "Release v2.0" }
-  }
-}
-```
+A `.path.jsonl` stream encodes exactly one inline Path and seals to a single-path Graph at the file boundary. Multi-path graphs and `$ref`-only entries can't be represented in JSONL — those require canonical `.path.json`.
 
 <svg class="topo topo-wide" viewBox="0 0 900 70" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <style>.topo-accent{stroke:var(--accent);}.topo-pencil{stroke:var(--text-secondary);}</style>
@@ -204,53 +92,11 @@ Paths can be inline or referenced externally:
   <path d="M0,45 Q170,25 320,48 Q470,70 620,38 Q770,10 900,48" class="topo-accent" stroke-width="1" opacity="0.10" fill="none"/>
 </svg>
 
-## Artifacts
+## Where to next
 
-Artifact keys in `change` are URLs. Bare paths are relative to `path.base`:
-
-| Key format         | Interpretation               |
-| ------------------ | ---------------------------- |
-| `src/foo.rs`       | Relative to `path.base` root |
-| `file:///abs/path` | Absolute file path           |
-| `https://...`      | Web resource                 |
-| `s3://...`         | S3 object                    |
-
-## Change perspectives
-
-Each artifact maps to one or more perspectives on the modification:
-
-| Perspective  | Description                            | Example                           |
-| ------------ | -------------------------------------- | --------------------------------- |
-| `raw`        | Unified Diff (same as `diff -u` / git) | `@@ -1,5 +1,10 @@\n...`           |
-| `structural` | Language-aware AST operations          | `{"type": "rust.add_items", ...}` |
-
-Consumers use the perspective they understand. A dumb text tool uses `raw`. An IDE might use `structural`.
-
-## Actors
-
-Actors follow the pattern `type:name`:
-
-```
-human:alex
-agent:claude-code
-tool:rustfmt/1.7.0
-ci:github-actions/workflow-123
-```
-
-Full actor definitions (identity, keys) live in `meta.actors`.
-
-## Signatures
-
-Toolpath supports multi-party, scoped cryptographic signatures using JCS (RFC 8785) canonicalization:
-
-| Scope      | What it attests                |
-| ---------- | ------------------------------ |
-| `author`   | "I authored this change"       |
-| `reviewer` | "I reviewed and approved this" |
-| `witness`  | "I observed this happened"     |
-| `ci`       | "CI verified this"             |
-| `release`  | "This is an official release"  |
-
-## Full specification
-
-The complete format specification is in the [RFC](/rfc/). A JSON Schema is available at [schema/toolpath.schema.json](https://github.com/empathic/toolpath/blob/main/schema/toolpath.schema.json).
+- **[Full specification](/rfc/)** — the normative details: signatures, perspectives, the `meta` object, ID uniqueness, JSONL streaming.
+- **[JSON Schema](https://github.com/empathic/toolpath/blob/main/schema/toolpath.schema.json)** — authoritative shape; what `path validate` checks against.
+- **[Examples](https://github.com/empathic/toolpath/tree/main/examples)** — the fixtures used throughout these docs and tested in CI.
+- **[CLI](/cli/)** — `path import`, `path render`, `path query`, `path validate`.
+- **[Visualizer](/visualizer/)** — paste a document, see the DAG.
+- **[Design notes](/faq/)** — why the format is shaped the way it is.

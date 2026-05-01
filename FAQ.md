@@ -69,18 +69,6 @@ provenance chain.
 
 ## Format Design
 
-### Why is Document externally tagged?
-
-The `Document` enum uses external tagging: every Toolpath JSON file has exactly
-one top-level key — `"Step"`, `"Path"`, or `"Graph"` — that identifies the
-document type.
-
-```json
-{ "Step":  { "step": {...}, "change": {...} } }
-{ "Path":  { "path": {...}, "steps": [...] } }
-{ "Graph": { "graph": {...}, "paths": [...] } }
-```
-
 ### Why use Unified Diff for the `raw` perspective?
 
 Unified Diff (the format produced by `diff -u` and used by git) is:

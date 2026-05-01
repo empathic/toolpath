@@ -57,10 +57,6 @@ They complement each other: you might use Toolpath to record the full history of
 
 ## Format design
 
-### Why is Document externally tagged?
-
-Every Toolpath JSON file has exactly one top-level key &mdash; `"Step"`, `"Path"`, or `"Graph"` &mdash; that identifies the document type. This makes the type unambiguous without inspecting inner fields. PascalCase variant names visually distinguish the type tag from the lowercase structural fields inside.
-
 ### Why Unified Diff for the `raw` perspective?
 
 Unified Diff (the format produced by `diff -u` and used by git) is widely understood, human-readable, well-specified, and backward-compatible with existing tooling. Future versions may add alternative perspectives, but `raw` is always Unified Diff.

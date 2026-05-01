@@ -8,8 +8,9 @@ nav: home
   <div class="hero-content">
     <h1>Toolpath</h1>
     <p class="tagline">
-      <strong>Know your tools.</strong> A tool-agnostic format for tracking artifact transformation provenance.
-      Git blame, but for everything that happens to code &mdash; including the stuff git doesn't see.
+      <strong>What happens between commits?</strong> Toolpath records the
+      decisions that get lost at merge time.  Record, transform, and analyze
+      sessions in a tool agnostic way.
     </p>
     <div class="hero-install">
       <span class="prompt">$ </span>cargo install path-cli
@@ -52,24 +53,33 @@ Explore Toolpath documents in your browser. Real <code>path</code> commands, rea
 
 ## The problem
 
-When Claude writes code, `rustfmt` reformats it, and a human refines it, git blame attributes everything to the human's commit. The actual provenance is lost. Dead ends disappear. Tool contributions collapse into whoever typed `git commit`.
+When Claude writes code, `rustfmt` reformats it, and a human refines it, git
+blame attributes everything to the human's commit. The actual provenance is
+lost. Dead ends disappear. Tool contributions collapse into whoever typed `git
+commit`.
 
-Toolpath records **who** changed **what**, **why**, what they tried that didn't work, and how to verify all of it.
+Toolpath records **who** changed **what**, **why**, what they tried that didn't
+work, and how to verify all of it.
 
 <div class="scenarios">
   <h2>When you need it</h2>
   <div class="objects">
     <div class="object-card">
       <h3>Multi-actor PR</h3>
-      <p>Claude wrote the implementation, rustfmt reformatted, you refined the error messages. Toolpath gives each actor their own step so reviewers see who did what.</p>
+      <p>Claude wrote the implementation, rustfmt reformatted, you refined the
+      error messages. Toolpath gives each actor their own step so reviewers see
+      who did what.</p>
     </div>
     <div class="object-card">
       <h3>Rotated AI session</h3>
-      <p>Claude Code hit context limits mid-task and rotated to a new session. Toolpath chains the segments together so no work is lost.</p>
+      <p>Claude Code hit context limits mid-task and rotated to a new session.
+      Toolpath chains the segments together so no work is lost.</p>
     </div>
     <div class="object-card">
       <h3>Release lineage</h3>
-      <p>Three teams contributed PRs to the release. Toolpath merges the provenance into a single Graph so you can trace any line back to the intent behind it.</p>
+      <p>Three teams contributed PRs to the release. Toolpath merges the
+      provenance into a single Graph so you can trace any line back to the
+      intent behind it.</p>
     </div>
   </div>
 </div>
@@ -79,7 +89,8 @@ Toolpath records **who** changed **what**, **why**, what they tried that didn't 
 <div class="objects">
   <div class="object-card">
     <h3>Step</h3>
-    <p>A single change to artifact(s) by one actor. One commit, one edit, one format pass.</p>
+    <p>A single change to artifact(s) by one actor. One commit, one edit, one
+    format pass.</p>
   </div>
   <div class="object-card">
     <h3>Path</h3>
@@ -91,7 +102,8 @@ Toolpath records **who** changed **what**, **why**, what they tried that didn't 
   </div>
 </div>
 
-Steps form a DAG via parent references. Dead ends are implicit: steps not in the ancestry of `path.head`.
+Steps form a DAG via parent references. Dead ends are implicit: steps not in the
+ancestry of `path.head`.
 
 <div class="dag-figure">
 <span class="fig-label">FIG_001 &nbsp; STEP DAG</span>
@@ -159,22 +171,30 @@ A valid Toolpath document can be tiny:
 
 ```json
 {
-  "Step": {
-    "step": {
-      "id": "step-001",
-      "actor": "human:alex",
-      "timestamp": "2026-01-29T10:00:00Z"
-    },
-    "change": {
-      "src/main.rs": {
-        "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
-      }
+  "graph": { "id": "graph-step-001" },
+  "paths": [
+    {
+      "path": { "id": "path-step-001", "head": "step-001" },
+      "steps": [
+        {
+          "step": {
+            "id": "step-001",
+            "actor": "human:alex",
+            "timestamp": "2026-01-29T10:00:00Z"
+          },
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
+            }
+          }
+        }
+      ]
     }
-  }
+  ]
 }
 ```
 
-No parents (it's the first step). No meta. One file, one perspective. Still valid.
+No parents (it's the first step). No meta. One file, one perspective. Every document is a Graph at the root — single-step documents like this one are a Graph holding one Path holding one Step.
 
 ## Quick start
 
