@@ -35,40 +35,40 @@ set -euo pipefail
 #   3. path-cli           (depends on all of the above)
 #   4. toolpath-cli       (deprecated shim that depends on path-cli)
 
-ALL_CRATES=(toolpath pathbase-client toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi path-cli toolpath-cli)
+_all_crates=(toolpath pathbase-client toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi path-cli toolpath-cli)
 
-EXECUTE=0
-AUTO_YES=""
-for arg in "$@"; do
-    case "$arg" in
-        --execute)  EXECUTE=1 ;;
+_execute=0
+_auto_yes=""
+for _arg in "$@"; do
+    case "${_arg}" in
+        --execute)  _execute=1 ;;
         --dry-run)  ;;  # back-compat: dry-run is the default
-        --yes|-y)   AUTO_YES=1 ;;
+        --yes|-y)   _auto_yes=1 ;;
         -h|--help)
             sed -n '4,28p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
-        *) echo "unknown argument: $arg"; echo "see --help"; exit 1 ;;
+        *) echo "unknown argument: ${_arg}"; echo "see --help"; exit 1 ;;
     esac
 done
 
-if (( EXECUTE )); then
-    DRY_RUN=""
+if (( _execute )); then
+    _dry_run=""
     echo "=== mode: EXECUTE — will publish to crates.io ==="
 else
-    DRY_RUN="--dry-run"
+    _dry_run="--dry-run"
     echo "=== mode: dry-run (pass --execute to publish for real) ==="
 fi
 echo
 
-ALLOW_DIRTY=""
+_allow_dirty=""
 if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
-    if (( EXECUTE )); then
+    if (( _execute )); then
         echo "error: working directory has uncommitted changes"
         echo "commit or stash before publishing"
         exit 1
     else
-        ALLOW_DIRTY="--allow-dirty"
+        _allow_dirty="--allow-dirty"
     fi
 fi
 
@@ -76,14 +76,12 @@ fi
 # its `path` bin doesn't collide with `path-cli`'s in the shared workspace
 # target dir). Anything that shells out to cargo for a specific package needs
 # to know where its manifest lives.
-manifest_arg_for() {
-    if [[ "$1" == "toolpath-cli" ]]; then
-        echo "--manifest-path crates/toolpath-cli/Cargo.toml"
-    fi
-}
-
 get_version() {
-    cargo metadata --format-version 1 --no-deps $(manifest_arg_for "$1") \
+    local _manifest_args=()
+    if [[ "$1" == "toolpath-cli" ]]; then
+        _manifest_args=(--manifest-path crates/toolpath-cli/Cargo.toml)
+    fi
+    cargo metadata --format-version 1 --no-deps "${_manifest_args[@]+"${_manifest_args[@]}"}" \
         | python3 -c "
 import json, sys
 meta = json.load(sys.stdin)
@@ -95,26 +93,26 @@ for pkg in meta['packages']:
 }
 
 already_published() {
-    local crate="$1"
-    local version="$2"
-    cargo search "$crate" 2>/dev/null | grep -q "^${crate} = \"${version}\""
+    local _crate="$1"
+    local _version="$2"
+    cargo search "${_crate}" 2>/dev/null | grep -q "^${_crate} = \"${_version}\""
 }
 
 wait_for_index() {
-    local crate="$1"
-    local version="$2"
-    if ! (( EXECUTE )); then
+    local _crate="$1"
+    local _version="$2"
+    if ! (( _execute )); then
         return
     fi
-    echo "    waiting for $crate $version to appear on crates.io index..."
-    for i in $(seq 1 30); do
-        if already_published "$crate" "$version"; then
-            echo "    $crate $version is live"
+    echo "    waiting for ${_crate} ${_version} to appear on crates.io index..."
+    for _i in $(seq 1 30); do
+        if already_published "${_crate}" "${_version}"; then
+            echo "    ${_crate} ${_version} is live"
             return
         fi
         sleep 2
     done
-    echo "warning: timed out waiting for $crate $version (continuing anyway)"
+    echo "warning: timed out waiting for ${_crate} ${_version} (continuing anyway)"
 }
 
 # --- Survey: check what needs publishing ---
@@ -122,27 +120,27 @@ wait_for_index() {
 
 echo "=== surveying crates ==="
 
-VERSIONS=()    # version for each crate (parallel to ALL_CRATES)
-STATUSES=()    # "publish" or "skip" for each crate (parallel to ALL_CRATES)
-TO_PUBLISH=()
+_versions=()    # version for each crate (parallel to _all_crates)
+_statuses=()    # "publish" or "skip" for each crate (parallel to _all_crates)
+_to_publish=()
 
-for i in "${!ALL_CRATES[@]}"; do
-    crate="${ALL_CRATES[$i]}"
-    version=$(get_version "$crate")
-    VERSIONS+=("$version")
-    if already_published "$crate" "$version"; then
-        STATUSES+=("skip")
+for _i in "${!_all_crates[@]}"; do
+    _crate="${_all_crates[${_i}]}"
+    _version=$(get_version "${_crate}")
+    _versions+=("${_version}")
+    if already_published "${_crate}" "${_version}"; then
+        _statuses+=("skip")
     else
-        STATUSES+=("publish")
-        TO_PUBLISH+=("$crate")
+        _statuses+=("publish")
+        _to_publish+=("${_crate}")
     fi
 done
 
 echo
-if [[ ${#TO_PUBLISH[@]} -eq 0 ]]; then
+if [[ ${#_to_publish[@]} -eq 0 ]]; then
     echo "all crates are already published at their current versions:"
-    for i in "${!ALL_CRATES[@]}"; do
-        echo "  ${ALL_CRATES[$i]} ${VERSIONS[$i]}  (up to date)"
+    for _i in "${!_all_crates[@]}"; do
+        echo "  ${_all_crates[${_i}]} ${_versions[${_i}]}  (up to date)"
     done
     echo
     echo "nothing to do."
@@ -150,20 +148,20 @@ if [[ ${#TO_PUBLISH[@]} -eq 0 ]]; then
 fi
 
 echo "publish plan:"
-for i in "${!ALL_CRATES[@]}"; do
-    if [[ "${STATUSES[$i]}" == "publish" ]]; then
-        echo "  ${ALL_CRATES[$i]} ${VERSIONS[$i]}  -> publish"
+for _i in "${!_all_crates[@]}"; do
+    if [[ "${_statuses[${_i}]}" == "publish" ]]; then
+        echo "  ${_all_crates[${_i}]} ${_versions[${_i}]}  -> publish"
     else
-        echo "  ${ALL_CRATES[$i]} ${VERSIONS[$i]}  (already published, skip)"
+        echo "  ${_all_crates[${_i}]} ${_versions[${_i}]}  (already published, skip)"
     fi
 done
 echo
 
 # --- Confirmation (only when actually publishing) ---
 
-if (( EXECUTE )) && [[ -z "$AUTO_YES" ]]; then
-    read -rp "proceed? [y/N] " answer
-    if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
+if (( _execute )) && [[ -z "${_auto_yes}" ]]; then
+    read -rp "proceed? [y/N] " _answer
+    if [[ "${_answer}" != "y" && "${_answer}" != "Y" ]]; then
         echo "aborted."
         exit 1
     fi
@@ -185,20 +183,20 @@ fi
 # publish time (where it manifests as an E0308 dual-version graph).
 
 echo "=== registry compatibility check ==="
-WS_ARGS=()
-for i in "${!ALL_CRATES[@]}"; do
-    WS_ARGS+=("${ALL_CRATES[$i]}=${VERSIONS[$i]}")
+_ws_args=()
+for _i in "${!_all_crates[@]}"; do
+    _ws_args+=("${_all_crates[${_i}]}=${_versions[${_i}]}")
 done
-SKIP_ARGS=()
-for i in "${!ALL_CRATES[@]}"; do
-    if [[ "${STATUSES[$i]}" == "skip" ]]; then
-        SKIP_ARGS+=("${ALL_CRATES[$i]}")
+_skip_args=()
+for _i in "${!_all_crates[@]}"; do
+    if [[ "${_statuses[${_i}]}" == "skip" ]]; then
+        _skip_args+=("${_all_crates[${_i}]}")
     fi
 done
-if [[ ${#SKIP_ARGS[@]} -eq 0 ]]; then
+if [[ ${#_skip_args[@]} -eq 0 ]]; then
     echo "    no already-published crates to check"
 else
-    python3 scripts/check-registry-compat.py "${WS_ARGS[@]}" --skip "${SKIP_ARGS[@]}"
+    python3 scripts/check-registry-compat.py "${_ws_args[@]}" --skip "${_skip_args[@]}"
 fi
 echo
 
@@ -220,42 +218,43 @@ echo
 # while we depend directly on a newer toolpath" before any real upload.
 #
 # Failures classed as chicken-and-egg (the failing dep is itself in this
-# release's TO_PUBLISH set, so it'll land on the registry mid-publish) are
+# release's _to_publish set, so it'll land on the registry mid-publish) are
 # tolerated; everything else aborts.
 
 echo "=== publish dry-runs ==="
-PREFLIGHT_FAILED=()
-for crate in "${TO_PUBLISH[@]}"; do
-    logfile=$(mktemp -t release-dryrun.XXXXXX)
-    rc=0
-    if [[ "$crate" == "toolpath-cli" ]]; then
-        (cd crates/toolpath-cli && cargo publish --dry-run $ALLOW_DIRTY) > "$logfile" 2>&1 || rc=$?
+_preflight_failed=()
+for _crate in "${_to_publish[@]}"; do
+    _logfile=$(mktemp -t release-dryrun.XXXXXX)
+    _rc=0
+    if [[ "${_crate}" == "toolpath-cli" ]]; then
+        (cd crates/toolpath-cli && cargo publish --dry-run ${_allow_dirty}) > "${_logfile}" 2>&1 || _rc=$?
     else
-        cargo publish --dry-run $ALLOW_DIRTY -p "$crate" > "$logfile" 2>&1 || rc=$?
+        cargo publish --dry-run ${_allow_dirty} -p "${_crate}" > "${_logfile}" 2>&1 || _rc=$?
     fi
-    if (( rc == 0 )); then
-        echo "    $crate: ok"
+    if (( _rc == 0 )); then
+        echo "    ${_crate}: ok"
     else
         # Cargo phrases "dep not on registry yet" several ways depending on
         # context. Try each known shape; whichever produces a match wins.
-        missing=$(sed -nE \
+        # shellcheck disable=SC2016  # backticks in single quotes are literal sed input, not command substitution
+        _missing=$(sed -nE \
             -e 's/.*no matching package named `([^`]+)`.*/\1/p' \
             -e 's/.*failed to select a version for the requirement `([^ `]+).*/\1/p' \
             -e 's/.*could not find `([^`]+)` in registry.*/\1/p' \
-            "$logfile" | head -1)
-        if [[ -n "$missing" ]] && printf '%s\n' "${TO_PUBLISH[@]}" | grep -qFx "$missing"; then
-            echo "    $crate: deferred (depends on $missing being published in this run)"
+            "${_logfile}" | head -1)
+        if [[ -n "${_missing}" ]] && printf '%s\n' "${_to_publish[@]}" | grep -qFx "${_missing}"; then
+            echo "    ${_crate}: deferred (depends on ${_missing} being published in this run)"
         else
-            echo "    $crate: FAILED"
-            tail -40 "$logfile" | sed 's/^/        /'
-            PREFLIGHT_FAILED+=("$crate")
+            echo "    ${_crate}: FAILED"
+            tail -40 "${_logfile}" | sed 's/^/        /'
+            _preflight_failed+=("${_crate}")
         fi
     fi
-    rm -f "$logfile"
+    rm -f "${_logfile}"
 done
-if (( ${#PREFLIGHT_FAILED[@]} > 0 )); then
+if (( ${#_preflight_failed[@]} > 0 )); then
     echo
-    echo "publish dry-run failed for: ${PREFLIGHT_FAILED[*]}"
+    echo "publish dry-run failed for: ${_preflight_failed[*]}"
     echo "aborting before any real publishing happens."
     exit 1
 fi
@@ -264,7 +263,7 @@ echo
 
 # In dry-run mode (the default), the dry-run pre-flight above is the whole
 # point of the script. Stop here.
-if ! (( EXECUTE )); then
+if ! (( _execute )); then
     echo "=== dry-run done — pass --execute to publish ==="
     exit 0
 fi
@@ -272,46 +271,46 @@ fi
 # --- Helpers to look up survey results ---
 
 crate_index() {
-    local name="$1"
-    for i in "${!ALL_CRATES[@]}"; do
-        if [[ "${ALL_CRATES[$i]}" == "$name" ]]; then
-            echo "$i"
+    local _name="$1"
+    for _i in "${!_all_crates[@]}"; do
+        if [[ "${_all_crates[${_i}]}" == "${_name}" ]]; then
+            echo "${_i}"
             return
         fi
     done
-    echo "error: unknown crate $name" >&2
+    echo "error: unknown crate ${_name}" >&2
     exit 1
 }
 
 should_publish() {
-    local idx
-    idx=$(crate_index "$1")
-    [[ "${STATUSES[$idx]}" == "publish" ]]
+    local _idx
+    _idx=$(crate_index "$1")
+    [[ "${_statuses[${_idx}]}" == "publish" ]]
 }
 
 crate_version() {
-    local idx
-    idx=$(crate_index "$1")
-    echo "${VERSIONS[$idx]}"
+    local _idx
+    _idx=$(crate_index "$1")
+    echo "${_versions[${_idx}]}"
 }
 
 # --- Publish in dependency order ---
 
 publish() {
-    local crate="$1"
-    local version
-    version=$(crate_version "$crate")
-    if ! should_publish "$crate"; then
-        echo "--- $crate $version already published, skipping ---"
+    local _crate="$1"
+    local _version
+    _version=$(crate_version "${_crate}")
+    if ! should_publish "${_crate}"; then
+        echo "--- ${_crate} ${_version} already published, skipping ---"
         echo
         return
     fi
-    echo "--- publishing $crate $version ---"
-    if [[ "$crate" == "toolpath-cli" ]]; then
+    echo "--- publishing ${_crate} ${_version} ---"
+    if [[ "${_crate}" == "toolpath-cli" ]]; then
         # Excluded from the workspace; publish from its own manifest.
-        (cd crates/toolpath-cli && cargo publish $ALLOW_DIRTY)
+        (cd crates/toolpath-cli && cargo publish ${_allow_dirty})
     else
-        cargo publish -p "$crate" $ALLOW_DIRTY
+        cargo publish -p "${_crate}" ${_allow_dirty}
     fi
     echo
 }
@@ -335,13 +334,13 @@ if should_publish toolpath-convo; then
 fi
 
 # Tier 2b: satellite crates (depend on tier 1 and/or toolpath-convo)
-for crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi; do
-    publish "$crate"
+for _crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi; do
+    publish "${_crate}"
 done
 
-for crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi; do
-    if should_publish "$crate"; then
-        wait_for_index "$crate" "$(crate_version "$crate")"
+for _crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-pi; do
+    if should_publish "${_crate}"; then
+        wait_for_index "${_crate}" "$(crate_version "${_crate}")"
     fi
 done
 

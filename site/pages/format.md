@@ -19,15 +19,15 @@ Toolpath is that format.
 
 ## The shape
 
-> *A story is made up of many paths, one step at a time.*
+> _A story is made up of many paths, one step at a time._
 
 Every document is a **Graph**. A Graph holds **Paths**. A Path holds **Steps**. A Step is one **transformation**.
 
-| Layer   | Holds                | Represents                                                |
-| ------- | -------------------- | --------------------------------------------------------- |
-| `graph` | `paths[]`            | A collection of stories — a release, a project, a bundle  |
-| `path`  | `steps[]`            | One story — a PR, a coding session, a branch              |
-| `step`  | `change{}`           | One transformation — touching one or more artifacts       |
+| Layer   | Holds      | Represents                                               |
+| ------- | ---------- | -------------------------------------------------------- |
+| `graph` | `paths[]`  | A collection of stories — a release, a project, a bundle |
+| `path`  | `steps[]`  | One story — a PR, a coding session, a branch             |
+| `step`  | `change{}` | One transformation — touching one or more artifacts      |
 
 `Step` and `Path` are inner types — they appear inside `graph.paths` and `path.steps`, never as the JSON root on their own. Even a document recording a single change is a Graph that holds one Path that holds one Step. One root type, one parser path.
 
@@ -78,10 +78,10 @@ The minimal example above shows the shape. To see what a Toolpath document looks
 
 ## File extensions
 
-| Extension     | Shape               | Use it when                                                        |
-| ------------- | ------------------- | ------------------------------------------------------------------ |
-| `.path.json`  | Graph (canonical)   | Sealed documents — PRs, releases, archived sessions                |
-| `.path.jsonl` | Graph (streaming)   | Live capture — one Path appended line-by-line as work happens      |
+| Extension     | Shape             | Use it when                                                   |
+| ------------- | ----------------- | ------------------------------------------------------------- |
+| `.path.json`  | Graph (canonical) | Sealed documents — PRs, releases, archived sessions           |
+| `.path.jsonl` | Graph (streaming) | Live capture — one Path appended line-by-line as work happens |
 
 A `.path.jsonl` stream encodes exactly one inline Path and seals to a single-path Graph at the file boundary. Multi-path graphs and `$ref`-only entries can't be represented in JSONL — those require canonical `.path.json`.
 

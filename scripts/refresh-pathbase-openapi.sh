@@ -10,15 +10,15 @@
 # schema/) so `cargo publish` packages it alongside the source.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-URL="${PATHBASE_URL:-https://pathbase.dev}"
-DEST="$ROOT/crates/pathbase-client/openapi.json"
+_root="$(cd "$(dirname "$0")/.." && pwd)"
+_url="${PATHBASE_URL:-https://pathbase.dev}"
+_dest="${_root}/crates/pathbase-client/openapi.json"
 
-echo "refresh: GET $URL/api/v1/openapi.json"
-TMP="$(mktemp -t pathbase-openapi.XXXXXX.json)"
-trap 'rm -f "$TMP"' EXIT
-curl -fsSL "$URL/api/v1/openapi.json" -o "$TMP"
+echo "refresh: GET ${_url}/api/v1/openapi.json"
+_tmp="$(mktemp -t pathbase-openapi.XXXXXX.json)"
+trap 'rm -f "${_tmp}"' EXIT
+curl -fsSL "${_url}/api/v1/openapi.json" -o "${_tmp}"
 
 # Pretty-print with jq for stable diffs.
-jq . "$TMP" > "$DEST"
-echo "refresh: wrote $DEST ($(wc -l < "$DEST") lines)"
+jq . "${_tmp}" > "${_dest}"
+echo "refresh: wrote ${_dest} ($(wc -l < "${_dest}") lines)"

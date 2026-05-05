@@ -956,7 +956,6 @@ fn serialize_codex_jsonl(session: &toolpath_codex::Session) -> Result<String> {
     Ok(out)
 }
 
-
 // ── Opencode ──────────────────────────────────────────────────────────
 
 fn run_opencode(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {

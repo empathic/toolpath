@@ -1,49 +1,49 @@
 #!/bin/bash
 set -e
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WASM_JS="$ROOT/site/wasm/path.js"
-WASM_BIN="$ROOT/site/wasm/path.wasm"
-EMSDK_DIR="$ROOT/local/emsdk"
+_root="$(cd "$(dirname "$0")/.." && pwd)"
+_wasm_js="${_root}/site/wasm/path.js"
+_wasm_bin="${_root}/site/wasm/path.wasm"
+_emsdk_dir="${_root}/local/emsdk"
 
 # --- Parse flags --------------------------------------------------------------
 # --if-changed   Skip build if outputs are newer than all Rust sources
 # --dev          Use dev profile (fast incremental builds, no LTO/strip)
 
-DEV=false
-IF_CHANGED=false
-for arg in "$@"; do
-  case "$arg" in
-    --dev)        DEV=true ;;
-    --if-changed) IF_CHANGED=true ;;
+_dev=false
+_if_changed=false
+for _arg in "$@"; do
+  case "${_arg}" in
+    --dev)        _dev=true ;;
+    --if-changed) _if_changed=true ;;
   esac
 done
 
-if $DEV; then
-  PROFILE=dev
-  PROFILE_DIR=debug
-  SENTINEL="$ROOT/target/.wasm-dev-built"
+if ${_dev}; then
+  _profile=dev
+  _profile_dir=debug
+  _sentinel="${_root}/target/.wasm-dev-built"
 else
-  PROFILE=wasm
-  PROFILE_DIR=wasm
-  SENTINEL="$ROOT/target/.wasm-built"
+  _profile=wasm
+  _profile_dir=wasm
+  _sentinel="${_root}/target/.wasm-built"
 fi
 
 # --- Staleness check ----------------------------------------------------------
 
 wasm_is_stale() {
-  [ ! -f "$WASM_JS" ] || [ ! -f "$WASM_BIN" ] || [ ! -f "$SENTINEL" ] && return 0
+  [ ! -f "${_wasm_js}" ] || [ ! -f "${_wasm_bin}" ] || [ ! -f "${_sentinel}" ] && return 0
 
-  [ -n "$(find "$ROOT/crates" "$ROOT/Cargo.toml" "$ROOT/.cargo/config.toml" \
+  [ -n "$(find "${_root}/crates" "${_root}/Cargo.toml" "${_root}/.cargo/config.toml" \
       \( -name '*.rs' -o -name 'Cargo.toml' \) \
-      -newer "$SENTINEL" 2>/dev/null | head -1)" ]
+      -newer "${_sentinel}" 2>/dev/null | head -1)" ]
 }
 
-if $IF_CHANGED; then
+if ${_if_changed}; then
   if ! wasm_is_stale; then
     exit 0
   fi
-  echo "wasm: Rust sources changed, rebuilding ($PROFILE)..."
+  echo "wasm: Rust sources changed, rebuilding (${_profile})..."
 fi
 
 # --- Ensure emsdk is available ------------------------------------------------
@@ -55,18 +55,20 @@ ensure_emsdk() {
   fi
 
   # Local install exists? Activate it.
-  if [ -f "$EMSDK_DIR/emsdk_env.sh" ]; then
+  if [ -f "${_emsdk_dir}/emsdk_env.sh" ]; then
     echo "wasm: Activating local emsdk..."
-    source "$EMSDK_DIR/emsdk_env.sh" 2>/dev/null
+    # shellcheck source=/dev/null
+    source "${_emsdk_dir}/emsdk_env.sh" 2>/dev/null
     return 0
   fi
 
   # Bootstrap: clone + install + activate
   echo "wasm: Installing emsdk to target/emsdk (one-time)..."
-  git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
-  "$EMSDK_DIR/emsdk" install latest
-  "$EMSDK_DIR/emsdk" activate latest
-  source "$EMSDK_DIR/emsdk_env.sh" 2>/dev/null
+  git clone --depth 1 https://github.com/emscripten-core/emsdk.git "${_emsdk_dir}"
+  "${_emsdk_dir}/emsdk" install latest
+  "${_emsdk_dir}/emsdk" activate latest
+  # shellcheck source=/dev/null
+  source "${_emsdk_dir}/emsdk_env.sh" 2>/dev/null
 }
 
 ensure_emsdk
@@ -80,13 +82,13 @@ fi
 
 # --- Build --------------------------------------------------------------------
 
-cd "$ROOT"
-cargo build --target wasm32-unknown-emscripten -p path-cli --profile "$PROFILE"
+cd "${_root}"
+cargo build --target wasm32-unknown-emscripten -p path-cli --profile "${_profile}"
 
 mkdir -p site/wasm
-cp "target/wasm32-unknown-emscripten/$PROFILE_DIR/path.js"   site/wasm/path.js
-cp "target/wasm32-unknown-emscripten/$PROFILE_DIR/path.wasm" site/wasm/path.wasm
-touch "$SENTINEL"
+cp "target/wasm32-unknown-emscripten/${_profile_dir}/path.js"   site/wasm/path.js
+cp "target/wasm32-unknown-emscripten/${_profile_dir}/path.wasm" site/wasm/path.wasm
+touch "${_sentinel}"
 
-echo "wasm: Built site/wasm/path.{js,wasm}  ($PROFILE)"
+echo "wasm: Built site/wasm/path.{js,wasm}  (${_profile})"
 ls -lh site/wasm/

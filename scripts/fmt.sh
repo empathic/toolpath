@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "fmt: cargo fmt"
-cargo fmt --all --manifest-path "$ROOT/Cargo.toml"
+cargo fmt --all --manifest-path "${_root}/Cargo.toml"
 
 echo "fmt: prettier (site/)"
-cd "$ROOT/site"
+cd "${_root}/site"
 npx --yes prettier --write --no-color "**/*.{md,css,json,js}"

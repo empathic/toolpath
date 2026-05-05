@@ -30,47 +30,47 @@ if [[ $# -gt 1 ]]; then
     echo "Usage: $0 [<pathbase-url>]" >&2
     exit 64
 fi
-URL="${1:-https://pathbase.dev}"
-URL="${URL%/}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-EXAMPLE="$ROOT/examples/path-01-pr.path.json"
-EXPECTED_STEPS=5  # path-01-pr.path.json has 5 steps; recheck if the fixture changes
+_url="${1:-https://pathbase.dev}"
+_url="${_url%/}"
+_root="$(cd "$(dirname "$0")/.." && pwd)"
+_example="${_root}/examples/path-01-pr.path.json"
+_expected_steps=5  # path-01-pr.path.json has 5 steps; recheck if the fixture changes
 
-cd "$ROOT"
+cd "${_root}"
 
 # ── Build ─────────────────────────────────────────────────────────────────
 
 echo "=== build ==="
 cargo build -q -p path-cli
-PATH_BIN="$ROOT/target/debug/path"
+_path_bin="${_root}/target/debug/path"
 
 # ── Preconditions ────────────────────────────────────────────────────────
 
 echo
 echo "=== preconditions ==="
 
-echo "  fixture: $EXAMPLE"
-[[ -f "$EXAMPLE" ]] || { echo "FAIL: missing fixture" >&2; exit 1; }
+echo "  fixture: ${_example}"
+[[ -f "${_example}" ]] || { echo "FAIL: missing fixture" >&2; exit 1; }
 
-echo "  reachable: $URL/api/v1/health"
-if ! curl -fsS "$URL/api/v1/health" >/dev/null; then
-    echo "FAIL: $URL/api/v1/health did not return 2xx" >&2
+echo "  reachable: ${_url}/api/v1/health"
+if ! curl -fsS "${_url}/api/v1/health" >/dev/null; then
+    echo "FAIL: ${_url}/api/v1/health did not return 2xx" >&2
     exit 1
 fi
 
-echo "  authed: $URL"
-AUTH_STATUS=$("$PATH_BIN" auth status 2>&1 || true)
-if ! grep -qF "Logged in to $URL" <<<"$AUTH_STATUS"; then
-    echo "FAIL: not logged into $URL" >&2
-    echo "  run: path auth login --url $URL" >&2
+echo "  authed: ${_url}"
+_auth_status=$("${_path_bin}" auth status 2>&1 || true)
+if ! grep -qF "Logged in to ${_url}" <<<"${_auth_status}"; then
+    echo "FAIL: not logged into ${_url}" >&2
+    echo "  run: path auth login --url ${_url}" >&2
     exit 1
 fi
 
 # Cleanup: holds temp config dirs created in each scenario.
-TMP_DIRS=()
+_tmp_dirs=()
 cleanup() {
-    for d in "${TMP_DIRS[@]+"${TMP_DIRS[@]}"}"; do
-        rm -rf -- "$d"
+    for _d in "${_tmp_dirs[@]+"${_tmp_dirs[@]}"}"; do
+        rm -rf -- "${_d}"
     done
 }
 trap cleanup EXIT
@@ -81,16 +81,16 @@ trap cleanup EXIT
 # with the expected step count. Stdout from `import pathbase` is the
 # cached file path; stderr summary contains "<n> steps".
 assert_imports_with_steps() {
-    local label="$1" trace_url="$2" expected_steps="$3"
-    local tmp; tmp="$(mktemp -d -t "pb-live-${label}-import.XXXXXX")"
-    TMP_DIRS+=("$tmp")
-    local stderr; stderr="$(TOOLPATH_CONFIG_DIR="$tmp" "$PATH_BIN" import pathbase "$trace_url" --force 2>&1 1>/dev/null)"
-    if ! grep -qE "^Imported graph .* \\(1 path, ${expected_steps} steps\\)" <<<"$stderr"; then
-        echo "FAIL[$label]: import did not report ${expected_steps} steps" >&2
-        echo "$stderr" >&2
+    local _label="$1" _trace_url="$2" _expected_steps="$3"
+    local _tmp; _tmp="$(mktemp -d -t "pb-live-${_label}-import.XXXXXX")"
+    _tmp_dirs+=("${_tmp}")
+    local _stderr; _stderr="$(TOOLPATH_CONFIG_DIR="${_tmp}" "${_path_bin}" import pathbase "${_trace_url}" --force 2>&1 1>/dev/null)"
+    if ! grep -qE "^Imported graph .* \\(1 path, ${_expected_steps} steps\\)" <<<"${_stderr}"; then
+        echo "FAIL[${_label}]: import did not report ${_expected_steps} steps" >&2
+        echo "${_stderr}" >&2
         exit 1
     fi
-    echo "  import OK ($expected_steps steps)"
+    echo "  import OK (${_expected_steps} steps)"
 }
 
 # ── 1. Anonymous round-trip ──────────────────────────────────────────────
@@ -98,35 +98,35 @@ assert_imports_with_steps() {
 echo
 echo "=== 1. anonymous round-trip ==="
 
-ANON_CFG="$(mktemp -d -t pb-live-anon.XXXXXX)"
-TMP_DIRS+=("$ANON_CFG")
+_anon_cfg="$(mktemp -d -t pb-live-anon.XXXXXX)"
+_tmp_dirs+=("${_anon_cfg}")
 
-ANON_URL=$(TOOLPATH_CONFIG_DIR="$ANON_CFG" PATHBASE_URL="$URL" \
-    "$PATH_BIN" export pathbase --input "$EXAMPLE")
+_anon_url=$(TOOLPATH_CONFIG_DIR="${_anon_cfg}" PATHBASE_URL="${_url}" \
+    "${_path_bin}" export pathbase --input "${_example}")
 
-case "$ANON_URL" in
-    "$URL"/anon/*) echo "  upload OK: $ANON_URL" ;;
-    *) echo "FAIL[anon]: expected $URL/anon/... URL, got: $ANON_URL" >&2; exit 1 ;;
+case "${_anon_url}" in
+    "${_url}"/anon/*) echo "  upload OK: ${_anon_url}" ;;
+    *) echo "FAIL[anon]: expected ${_url}/anon/... URL, got: ${_anon_url}" >&2; exit 1 ;;
 esac
 
-assert_imports_with_steps "anon" "$ANON_URL" "$EXPECTED_STEPS"
+assert_imports_with_steps "anon" "${_anon_url}" "${_expected_steps}"
 
 # ── 2. Authenticated pathstash round-trip ────────────────────────────────
 
 echo
 echo "=== 2. authed pathstash round-trip ==="
 
-AUTHED_URL=$(PATHBASE_URL="$URL" "$PATH_BIN" export pathbase --input "$EXAMPLE")
+_authed_url=$(PATHBASE_URL="${_url}" "${_path_bin}" export pathbase --input "${_example}")
 
-case "$AUTHED_URL" in
-    "$URL"/anon/*)
-        echo "FAIL[authed]: authed upload landed on anon endpoint: $AUTHED_URL" >&2
+case "${_authed_url}" in
+    "${_url}"/anon/*)
+        echo "FAIL[authed]: authed upload landed on anon endpoint: ${_authed_url}" >&2
         exit 1 ;;
-    "$URL"/*/pathstash/*) echo "  upload OK: $AUTHED_URL" ;;
-    *) echo "FAIL[authed]: expected $URL/<user>/pathstash/<slug>, got: $AUTHED_URL" >&2; exit 1 ;;
+    "${_url}"/*/pathstash/*) echo "  upload OK: ${_authed_url}" ;;
+    *) echo "FAIL[authed]: expected ${_url}/<user>/pathstash/<slug>, got: ${_authed_url}" >&2; exit 1 ;;
 esac
 
-assert_imports_with_steps "authed" "$AUTHED_URL" "$EXPECTED_STEPS"
+assert_imports_with_steps "authed" "${_authed_url}" "${_expected_steps}"
 
 echo
 echo "=== PASS ==="

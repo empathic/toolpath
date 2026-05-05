@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WASM_SCRIPT="$ROOT/scripts/build-wasm.sh"
+_root="$(cd "$(dirname "$0")/.." && pwd)"
+_wasm_script="${_root}/scripts/build-wasm.sh"
 
 # --- Wasm watcher (polls every 2s for Rust source changes) -------------------
 wasm_watch() {
-  local flags=("$@")
+  local _flags=("$@")
   while true; do
-    "$WASM_SCRIPT" --if-changed "${flags[@]}" 2>&1 | while IFS= read -r line; do echo "$line"; done
+    "${_wasm_script}" --if-changed "${_flags[@]}" 2>&1 | while IFS= read -r _line; do echo "${_line}"; done
     sleep 2
   done
 }
 
 # --- Wasm build (best-effort: warn but don't block if emcc missing) ----------
 wasm_build_or_warn() {
-  if "$WASM_SCRIPT" "$@" 2>&1; then
+  if "${_wasm_script}" "$@" 2>&1; then
     return 0
   else
     echo ""
@@ -26,14 +26,14 @@ wasm_build_or_warn() {
   fi
 }
 
-cd "$ROOT/site"
+cd "${_root}/site"
 
 case "${1:-dev}" in
   dev)
     wasm_build_or_warn --dev --if-changed
     wasm_watch --dev &
-    WASM_PID=$!
-    trap 'kill $WASM_PID 2>/dev/null' EXIT
+    _wasm_pid=$!
+    trap 'kill ${_wasm_pid} 2>/dev/null' EXIT
     pnpm run dev
     ;;
   build)

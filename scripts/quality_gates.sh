@@ -5,7 +5,7 @@
 # Usage:
 #   scripts/quality_gates.sh [--verbose] [[-]gate ...]
 #
-# Gates: format, clippy, test, doc, examples, site
+# Gates: format, shellcheck, clippy, test, doc, examples, site
 # No args runs all gates. Prefix with - to exclude a gate.
 #
 # Options:
@@ -20,7 +20,7 @@
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ── Colors (when stdout is a terminal) ────────────────────────────────────────
 
@@ -33,77 +33,95 @@ fi
 # ── Temp dir for captured output ──────────────────────────────────────────────
 
 _tmpdir=$(mktemp -d)
-trap 'rm -rf "$_tmpdir"' EXIT
+trap 'rm -rf "${_tmpdir}"' EXIT
 
 # ── Gate definitions ──────────────────────────────────────────────────────────
+#
+# All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
+# run_gate; shellcheck can't see the call sites and flags them as unused.
 
-_all_gates=(format clippy test doc examples site)
+_all_gates=(format shellcheck clippy test doc examples site)
 
+# shellcheck disable=SC2329
 gate_format() {
     echo "--- cargo fmt ---"
-    cargo fmt --all --manifest-path "$ROOT/Cargo.toml" --check 2>&1
+    cargo fmt --all --manifest-path "${_root}/Cargo.toml" --check 2>&1
     echo "--- prettier ---"
-    cd "$ROOT/site"
+    cd "${_root}/site" || return 1
     npx --yes prettier --check --no-color "**/*.{md,css,json,js}" 2>&1
 }
 
+# shellcheck disable=SC2329
+gate_shellcheck() {
+    if ! command -v shellcheck >/dev/null 2>&1; then
+        echo "shellcheck not found on PATH; install it (e.g. \`brew install shellcheck\`)" >&2
+        return 1
+    fi
+    shellcheck "${_root}"/scripts/*.sh 2>&1
+}
+
+# shellcheck disable=SC2329
 gate_clippy() {
     cargo clippy --workspace -- -D warnings 2>&1
 }
 
+# shellcheck disable=SC2329
 gate_test() {
     cargo test --workspace 2>&1
 }
 
+# shellcheck disable=SC2329
 gate_doc() {
     cargo doc --workspace --no-deps 2>&1
 }
 
+# shellcheck disable=SC2329
 gate_examples() {
-    local failed=0
-    for f in "$ROOT"/examples/*.json; do
-        if ! cargo run --quiet -p path-cli -- validate --input "$f" 2>&1; then
-            failed=1
+    local _failed=0
+    for _f in "${_root}"/examples/*.json; do
+        if ! cargo run --quiet -p path-cli -- validate --input "${_f}" 2>&1; then
+            _failed=1
         fi
     done
-    return $failed
+    return "${_failed}"
 }
 
+# shellcheck disable=SC2329
 gate_site() {
-    cd "$ROOT/site" && pnpm run build 2>&1
+    cd "${_root}/site" && pnpm run build 2>&1
 }
 
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 run_gate() {
-    local name=$1
+    local _name=$1
 
-    if [[ $_verbose -eq 1 ]]; then
-        echo "${_bld}── $name ──${_rst}"
-        local start=$SECONDS
-        if "gate_$name"; then
-            local elapsed=$(( SECONDS - start ))
-            echo "${_grn}PASS${_rst}: $name (${elapsed}s)"
+    if [[ ${_verbose} -eq 1 ]]; then
+        echo "${_bld}── ${_name} ──${_rst}"
+        local _start=${SECONDS}
+        if "gate_${_name}"; then
+            local _elapsed=$(( SECONDS - _start ))
+            echo "${_grn}PASS${_rst}: ${_name} (${_elapsed}s)"
             echo ""
             return 0
         else
-            local elapsed=$(( SECONDS - start ))
-            echo "${_red}FAIL${_rst}: $name (${elapsed}s)"
+            local _elapsed=$(( SECONDS - _start ))
+            echo "${_red}FAIL${_rst}: ${_name} (${_elapsed}s)"
             echo ""
             return 1
         fi
     else
-        local logfile="$_tmpdir/$name.log"
-        printf "%s: " "$name"
-        local start=$SECONDS
-        if "gate_$name" > "$logfile" 2>&1; then
-            local elapsed=$(( SECONDS - start ))
-            echo "${_grn}PASS${_rst} (${elapsed}s)"
+        local _logfile="${_tmpdir}/${_name}.log"
+        printf "%s: " "${_name}"
+        local _start=${SECONDS}
+        if "gate_${_name}" > "${_logfile}" 2>&1; then
+            local _elapsed=$(( SECONDS - _start ))
+            echo "${_grn}PASS${_rst} (${_elapsed}s)"
             return 0
         else
-            local elapsed=$(( SECONDS - start ))
-            echo "${_red}FAIL${_rst} (${elapsed}s)"
-            tail -50 "$logfile" | sed 's/^/    /'
+            local _elapsed=$(( SECONDS - _start ))
+            echo "${_red}FAIL${_rst} (${_elapsed}s)"
+            tail -50 "${_logfile}" | sed 's/^/    /'
             return 1
         fi
     fi
@@ -112,74 +130,74 @@ run_gate() {
 # ── Parse args ────────────────────────────────────────────────────────────────
 
 _valid_gate() {
-    local name=$1
-    for g in "${_all_gates[@]}"; do [[ "$name" == "$g" ]] && return 0; done
+    local _name=$1
+    for _g in "${_all_gates[@]}"; do [[ "${_name}" == "${_g}" ]] && return 0; done
     return 1
 }
 
 _verbose=0
-gates=()
-excludes=()
-for arg in "$@"; do
-    if [[ "$arg" == "--verbose" ]]; then
+_gates=()
+_excludes=()
+for _arg in "$@"; do
+    if [[ "${_arg}" == "--verbose" ]]; then
         _verbose=1
         continue
-    elif [[ "$arg" == -* ]]; then
-        name="${arg#-}"
-        if ! _valid_gate "$name"; then
-            echo "Unknown gate: $name"
+    elif [[ "${_arg}" == -* ]]; then
+        _name="${_arg#-}"
+        if ! _valid_gate "${_name}"; then
+            echo "Unknown gate: ${_name}"
             echo "Valid gates: ${_all_gates[*]}"
             exit 2
         fi
-        excludes+=("$name")
+        _excludes+=("${_name}")
     else
-        if ! _valid_gate "$arg"; then
-            echo "Unknown gate: $arg"
+        if ! _valid_gate "${_arg}"; then
+            echo "Unknown gate: ${_arg}"
             echo "Valid gates: ${_all_gates[*]}"
             exit 2
         fi
-        gates+=("$arg")
+        _gates+=("${_arg}")
     fi
 done
 
 # Default: all gates
-if [[ ${#gates[@]} -eq 0 ]]; then
-    gates=("${_all_gates[@]}")
+if [[ ${#_gates[@]} -eq 0 ]]; then
+    _gates=("${_all_gates[@]}")
 fi
 
 # Apply exclusions
-if [[ ${#excludes[@]} -gt 0 ]]; then
-    filtered=()
-    for g in "${gates[@]}"; do
-        excluded=0
-        for e in "${excludes[@]}"; do
-            [[ "$g" == "$e" ]] && excluded=1 && break
+if [[ ${#_excludes[@]} -gt 0 ]]; then
+    _filtered=()
+    for _g in "${_gates[@]}"; do
+        _excluded=0
+        for _e in "${_excludes[@]}"; do
+            [[ "${_g}" == "${_e}" ]] && _excluded=1 && break
         done
-        [[ $excluded -eq 0 ]] && filtered+=("$g")
+        [[ ${_excluded} -eq 0 ]] && _filtered+=("${_g}")
     done
-    gates=("${filtered[@]}")
+    _gates=("${_filtered[@]}")
 fi
 
 # ── Run gates ─────────────────────────────────────────────────────────────────
 
-passed=0
-total=${#gates[@]}
+_passed=0
+_total=${#_gates[@]}
 
-echo "${_bld}Running: ${gates[*]}${_rst} ${_dim}(skip with -gate, e.g. -site)${_rst}"
+echo "${_bld}Running: ${_gates[*]}${_rst} ${_dim}(skip with -gate, e.g. -site)${_rst}"
 echo ""
 
-for gate in "${gates[@]}"; do
-    if run_gate "$gate"; then
-        ((passed++))
+for _gate in "${_gates[@]}"; do
+    if run_gate "${_gate}"; then
+        ((_passed++))
     fi
 done
 
 echo ""
 
-if [[ $passed -eq $total ]]; then
-    echo "${_grn}${passed}/${total} passed${_rst}"
+if [[ ${_passed} -eq ${_total} ]]; then
+    echo "${_grn}${_passed}/${_total} passed${_rst}"
     exit 0
 else
-    echo "${_red}${passed}/${total} passed${_rst}"
+    echo "${_red}${_passed}/${_total} passed${_rst}"
     exit 1
 fi
