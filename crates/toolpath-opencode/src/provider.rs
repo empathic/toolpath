@@ -1,8 +1,8 @@
 //! Implementation of `toolpath-convo` traits for opencode sessions.
 //!
 //! Unlike Codex's streaming event model, opencode's parts are
-//! self-contained: each [`ToolPart`] already carries both the tool
-//! input and the tool output/error in its [`ToolState`]. So the
+//! self-contained: each [`crate::types::ToolPart`] already carries both
+//! the tool input and the tool output/error in its [`ToolState`]. So the
 //! mapping is mostly a direct translation per part, with minimal
 //! cross-part assembly:
 //!

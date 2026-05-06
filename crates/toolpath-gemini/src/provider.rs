@@ -33,7 +33,7 @@ fn gemini_role_to_role(role: &GeminiRole) -> Role {
 /// Classify a Gemini CLI tool name into toolpath's category ontology.
 ///
 /// Returns `None` for unrecognized tools. Keep this table in sync with
-/// https://geminicli.com/docs/reference/tools.
+/// <https://geminicli.com/docs/reference/tools>.
 pub fn tool_category(name: &str) -> Option<ToolCategory> {
     match name {
         "read_file" | "read_many_files" | "list_directory" | "get_internal_docs"

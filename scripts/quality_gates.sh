@@ -67,19 +67,19 @@ gate_clippy() {
 
 # shellcheck disable=SC2329
 gate_test() {
-    cargo test --workspace 2>&1
+    RUSTFLAGS="-D warnings" cargo test --workspace 2>&1
 }
 
 # shellcheck disable=SC2329
 gate_doc() {
-    cargo doc --workspace --no-deps 2>&1
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps 2>&1
 }
 
 # shellcheck disable=SC2329
 gate_examples() {
     local _failed=0
     for _f in "${_root}"/examples/*.json; do
-        if ! cargo run --quiet -p path-cli -- validate --input "${_f}" 2>&1; then
+        if ! RUSTFLAGS="-D warnings" cargo run --quiet -p path-cli -- validate --input "${_f}" 2>&1; then
             _failed=1
         fi
     done

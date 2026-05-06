@@ -1,5 +1,5 @@
 //! [`CodexProjector`] — maps a [`ConversationView`] back to a Codex
-//! [`Session`].
+//! [`crate::Session`].
 //!
 //! This is the inverse of [`crate::provider::to_view`]: where `to_view`
 //! reads a Codex rollout JSONL into a provider-agnostic view,

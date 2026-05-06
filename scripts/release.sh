@@ -203,9 +203,9 @@ echo
 # --- Pre-flight: workspace tests and clippy ---
 
 echo "=== pre-flight checks ==="
-cargo test --workspace --quiet
+RUSTFLAGS="-D warnings" cargo test --workspace --quiet
 cargo clippy --workspace --quiet -- -D warnings
-cargo doc --workspace --no-deps --quiet
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet
 echo "workspace checks ok"
 echo
 
