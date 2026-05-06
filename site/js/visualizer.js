@@ -909,11 +909,21 @@
   function loadFile(file) {
     if (!file) return;
     // No extension/MIME gate — Toolpath docs ship as .json, .path, .path.json,
-    // and .path.jsonl, plus the picker has always accepted anything. Let
-    // JSON.parse in render() surface a clean error if the bytes aren't JSON.
+    // and .path.jsonl, plus the picker has always accepted anything. Validate
+    // JSON before clobbering the textarea so a stray binary or text file
+    // doesn't replace the user's current document with garbage.
     var reader = new FileReader();
     reader.onload = function () {
-      input.value = reader.result;
+      var text = reader.result;
+      try {
+        JSON.parse(text);
+      } catch (err) {
+        var label = file.name ? " (" + file.name + ")" : "";
+        showError("Not valid JSON" + label + ": " + err.message);
+        return;
+      }
+      hideError();
+      input.value = text;
       syncHighlight();
       updateFormatBtnLabel();
       updateScrollbarOffset();
