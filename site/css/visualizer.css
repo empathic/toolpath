@@ -4,6 +4,31 @@
     margin-top: var(--space-md);
   }
 
+  /* Drop-target state — set on .viz-layout while a file drag is over the
+     visualizer. The accent outline frames the page; the overlay pseudo
+     announces the drop intent without rebuilding the DOM. */
+  .viz-layout.viz-drag-active {
+    position: relative;
+    outline: 2px dashed var(--accent);
+    outline-offset: 4px;
+  }
+  .viz-layout.viz-drag-active::after {
+    content: "Drop Toolpath JSON here";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    font-family: var(--font);
+    font-size: 1rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    pointer-events: none;
+    z-index: 40;
+  }
+
   /* --- Input section --- */
   .viz-editor {
     position: relative;
@@ -39,8 +64,8 @@
     border: none;
     color: transparent;
     caret-color: var(--text);
-    padding: 0.75rem 1rem;
-    resize: vertical;
+    padding: 0.75rem 1rem 1rem;
+    resize: none;
     position: relative;
     z-index: 1;
   }
@@ -52,6 +77,91 @@
   }
   .viz-textarea::placeholder {
     color: var(--text-dim);
+  }
+  /* Brand scrollbar — matches the terminal-on-surface look from
+     playground.css. Firefox honors scrollbar-width/color; WebKit (Chrome,
+     Safari, Edge) uses the pseudo-elements below. macOS overlay scrollbars
+     ignore both and stay system-default, which is fine. */
+  .viz-textarea {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 25%, transparent)
+      transparent;
+  }
+  .viz-textarea::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .viz-textarea::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .viz-textarea::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-secondary) 25%, transparent);
+  }
+  .viz-textarea:hover::-webkit-scrollbar-thumb,
+  .viz-textarea::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--text-secondary) 60%, transparent);
+  }
+  /* Custom resize handle — full-width hit zone along the bottom of the
+     editor with a centered dotted grip that matches the brand palette.
+     Replaces the native textarea resizer (disabled via resize: none).
+     Drag logic + height persistence lives in visualizer.js. */
+  .viz-editor-resize {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 8px;
+    cursor: ns-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+    touch-action: none;
+  }
+  .viz-editor-resize::after {
+    content: "";
+    width: 32px;
+    border-top: 2px dotted var(--text-secondary);
+    opacity: 0.4;
+    transition:
+      opacity 120ms ease,
+      border-top-color 120ms ease;
+  }
+  .viz-editor-resize:hover::after,
+  body[data-viz-editor-resizing] .viz-editor-resize::after {
+    opacity: 1;
+    border-top-color: var(--accent);
+  }
+  body[data-viz-editor-resizing] {
+    cursor: ns-resize;
+    user-select: none;
+  }
+
+  /* Format toggle — floats in the editor's upper-right. Sits above the
+     textarea via z-index so it stays clickable; small + low-contrast so it
+     reads as a chrome control rather than a primary action. The right offset
+     adds --viz-scrollbar-w (set from JS by measuring the textarea's
+     scrollbar) so the button clears classic scrollbars on Windows/Linux
+     while still hugging the edge when overlay scrollbars are in use. */
+  .viz-format-toggle {
+    position: absolute;
+    top: 0.4rem;
+    right: calc(0.4rem + var(--viz-scrollbar-w, 0px));
+    z-index: 2;
+    font-family: var(--font);
+    font-size: 0.65rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    cursor: pointer;
+    line-height: 1;
+  }
+  .viz-format-toggle:hover {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .viz-buttons {

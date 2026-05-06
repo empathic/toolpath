@@ -35,6 +35,7 @@
   var highlight = document.getElementById("viz-highlight");
   var fileInput = document.getElementById("viz-file");
   var exampleSelect = document.getElementById("viz-example-select");
+  var formatBtn = document.getElementById("viz-format");
   var renderBtn = document.getElementById("viz-render");
   var errorBox = document.getElementById("viz-error");
   var canvas = document.getElementById("viz-canvas");
@@ -774,10 +775,118 @@
     highlight.scrollTop = input.scrollTop;
   }
 
-  input.addEventListener("input", syncHighlight);
+  // --- Format toggle ---
+  // Button label reflects the *current* state of the textarea: "Pretty" when
+  // the text has internal newlines, "Compact" otherwise. We trim before
+  // sniffing so trailing newlines (common on files saved by editors) don't
+  // mislabel compact docs as pretty. Clicking flips to the other format.
+  function updateFormatBtnLabel() {
+    var hasNewline = input.value.trim().indexOf("\n") !== -1;
+    formatBtn.textContent = hasNewline ? "Pretty" : "Compact";
+  }
+
+  // Push the toggle left by the textarea's scrollbar width so it doesn't
+  // overlap the scrollbar. offsetWidth - clientWidth reads as 0 on systems
+  // with overlay scrollbars (default macOS) and ~15-17px with classic
+  // scrollbars (Windows, Linux, macOS with "Always show"). Re-measure when
+  // content changes, since the scrollbar appears/disappears with overflow.
+  function updateScrollbarOffset() {
+    var w = Math.max(0, input.offsetWidth - input.clientWidth);
+    input.parentElement.style.setProperty("--viz-scrollbar-w", w + "px");
+  }
+
+  formatBtn.addEventListener("click", function () {
+    var text = input.value.trim();
+    if (!text) return;
+    var parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      showError("Can't reformat — JSON is invalid: " + e.message);
+      return;
+    }
+    hideError();
+    var isPretty = input.value.trim().indexOf("\n") !== -1;
+    input.value = isPretty
+      ? JSON.stringify(parsed)
+      : JSON.stringify(parsed, null, 2);
+    syncHighlight();
+    updateFormatBtnLabel();
+    updateScrollbarOffset();
+  });
+
+  input.addEventListener("input", function () {
+    syncHighlight();
+    updateFormatBtnLabel();
+    updateScrollbarOffset();
+  });
   input.addEventListener("scroll", function () {
     highlight.scrollTop = input.scrollTop;
   });
+  window.addEventListener("resize", updateScrollbarOffset);
+
+  // --- Editor vertical resize ---
+  // Custom drag handle replaces the native textarea grip. Height is applied
+  // directly to the textarea (the editor container auto-fits) and persisted
+  // to localStorage so the size sticks across reloads.
+  var editorResize = document.getElementById("viz-editor-resize");
+  var EDITOR_HEIGHT_KEY = "toolpath:viz:editor-height";
+  var EDITOR_HEIGHT_MIN = 80;
+  function applyEditorHeight(h) {
+    input.style.height = h + "px";
+    updateScrollbarOffset();
+  }
+  try {
+    var savedH = parseInt(localStorage.getItem(EDITOR_HEIGHT_KEY) || "", 10);
+    if (Number.isFinite(savedH) && savedH >= EDITOR_HEIGHT_MIN) {
+      applyEditorHeight(savedH);
+    }
+  } catch (e) {
+    // localStorage may be blocked; fall back to default rows="6" sizing.
+  }
+
+  if (editorResize) {
+    var editorResizing = false;
+    var startY = 0;
+    var startH = 0;
+    editorResize.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+      editorResizing = true;
+      startY = e.clientY;
+      startH = input.getBoundingClientRect().height;
+      document.body.dataset.vizEditorResizing = "1";
+      try {
+        editorResize.setPointerCapture(e.pointerId);
+      } catch (err) {
+        // Some browsers refuse pointer capture on synthetic events; OK.
+      }
+    });
+    editorResize.addEventListener("pointermove", function (e) {
+      if (!editorResizing) return;
+      var newH = Math.max(EDITOR_HEIGHT_MIN, startH + (e.clientY - startY));
+      applyEditorHeight(newH);
+    });
+    function endEditorResize(e) {
+      if (!editorResizing) return;
+      editorResizing = false;
+      delete document.body.dataset.vizEditorResizing;
+      try {
+        editorResize.releasePointerCapture(e.pointerId);
+      } catch (err) {
+        // Capture may already be released.
+      }
+      try {
+        var h = parseInt(input.style.height, 10);
+        if (Number.isFinite(h)) {
+          localStorage.setItem(EDITOR_HEIGHT_KEY, String(h));
+        }
+      } catch (err) {
+        // localStorage blocked — height persists for this session only.
+      }
+    }
+    editorResize.addEventListener("pointerup", endEditorResize);
+    editorResize.addEventListener("pointercancel", endEditorResize);
+  }
 
   // --- Event wiring ---
   renderBtn.addEventListener("click", render);
@@ -792,20 +901,76 @@
     } catch (e) {}
     input.value = content;
     syncHighlight();
+    updateFormatBtnLabel();
+    updateScrollbarOffset();
     render();
   });
 
-  fileInput.addEventListener("change", function () {
-    var file = fileInput.files[0];
+  function loadFile(file) {
     if (!file) return;
+    // No extension/MIME gate — Toolpath docs ship as .json, .path, .path.json,
+    // and .path.jsonl, plus the picker has always accepted anything. Let
+    // JSON.parse in render() surface a clean error if the bytes aren't JSON.
     var reader = new FileReader();
     reader.onload = function () {
       input.value = reader.result;
       syncHighlight();
+      updateFormatBtnLabel();
+      updateScrollbarOffset();
       render();
     };
+    reader.onerror = function () {
+      showError("Failed to read file: " + (file.name || ""));
+    };
     reader.readAsText(file);
+  }
+
+  fileInput.addEventListener("change", function () {
+    loadFile(fileInput.files[0]);
+    // Reset so re-selecting the same file fires `change` again.
+    fileInput.value = "";
   });
+
+  // --- Drag and drop ---
+  // Drop zone covers the whole visualizer layout. We only react to drags that
+  // carry files, and use an enter/leave counter because dragenter/dragleave
+  // also fire when the cursor crosses child element boundaries.
+  var dropZone = document.querySelector(".viz-layout");
+  if (dropZone) {
+    var dragDepth = 0;
+    function dragHasFiles(e) {
+      var types = e.dataTransfer && e.dataTransfer.types;
+      if (!types) return false;
+      for (var i = 0; i < types.length; i++) {
+        if (types[i] === "Files") return true;
+      }
+      return false;
+    }
+    dropZone.addEventListener("dragenter", function (e) {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      dropZone.classList.add("viz-drag-active");
+    });
+    dropZone.addEventListener("dragover", function (e) {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+    dropZone.addEventListener("dragleave", function (e) {
+      if (!dragHasFiles(e)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dropZone.classList.remove("viz-drag-active");
+    });
+    dropZone.addEventListener("drop", function (e) {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      dragDepth = 0;
+      dropZone.classList.remove("viz-drag-active");
+      var files = e.dataTransfer.files;
+      if (files && files.length > 0) loadFile(files[0]);
+    });
+  }
 
   detailClose.addEventListener("click", hideDetail);
 
@@ -938,6 +1103,10 @@
     input.value = content;
     exampleSelect.value = String(DEFAULT_EXAMPLE_INDEX);
     syncHighlight();
+    updateFormatBtnLabel();
     render();
+  } else {
+    updateFormatBtnLabel();
   }
+  updateScrollbarOffset();
 })();
