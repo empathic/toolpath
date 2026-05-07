@@ -14,6 +14,8 @@ mod cmd_project;
 mod cmd_query;
 mod cmd_render;
 #[cfg(not(target_os = "emscripten"))]
+mod cmd_share;
+#[cfg(not(target_os = "emscripten"))]
 mod cmd_show;
 mod cmd_track;
 mod cmd_validate;
@@ -114,6 +116,12 @@ enum Commands {
         #[command(subcommand)]
         op: cmd_auth::AuthOp,
     },
+    /// Share an agent session to Pathbase via an interactive picker
+    #[cfg(not(target_os = "emscripten"))]
+    Share {
+        #[command(flatten)]
+        args: cmd_share::ShareArgs,
+    },
 
     // ── Deprecated aliases ────────────────────────────────────────────
     #[command(hide = true, about = "[deprecated] Use `path import`")]
@@ -158,6 +166,8 @@ pub fn run() -> Result<()> {
         }
         #[cfg(not(target_os = "emscripten"))]
         Commands::Auth { op } => cmd_auth::run(op),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::Share { args } => cmd_share::run(args),
 
         Commands::Derive { source } => cmd_derive::run(source, cli.pretty),
         Commands::Incept { args } => cmd_incept::run(args),

@@ -663,3 +663,15 @@ fn derive_alias_still_works_with_warning() {
         .stdout(predicate::str::contains("\"paths\":"))
         .stderr(predicate::str::contains("deprecated"));
 }
+
+#[test]
+fn share_help_lists_unified_picker_flags() {
+    cmd()
+        .args(["share", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--harness"))
+        .stdout(predicate::str::contains("--session"))
+        .stdout(predicate::str::contains("--project"))
+        .stdout(predicate::str::contains("--anon"));
+}
