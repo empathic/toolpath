@@ -229,6 +229,7 @@ struct PathbaseExportArgs {
 /// Pathbase upload knobs that don't depend on where the body came from.
 /// Identical to [`PathbaseExportArgs`] minus the `input` field — the body
 /// is supplied by the caller (read from cache, derived in memory, …).
+#[cfg(not(target_os = "emscripten"))]
 #[derive(Debug)]
 pub(crate) struct PathbaseUploadArgs {
     pub(crate) url: Option<String>,
