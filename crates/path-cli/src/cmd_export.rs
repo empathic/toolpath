@@ -153,12 +153,12 @@ pub enum ExportTarget {
 
 /// `owner/name` pair for `--repo`.
 #[derive(Debug, Clone)]
-pub struct RepoSpec {
-    pub owner: String,
-    pub name: String,
+pub(crate) struct RepoSpec {
+    pub(crate) owner: String,
+    pub(crate) name: String,
 }
 
-fn parse_repo_spec(s: &str) -> std::result::Result<RepoSpec, String> {
+pub(crate) fn parse_repo_spec(s: &str) -> std::result::Result<RepoSpec, String> {
     let (owner, name) = s
         .split_once('/')
         .ok_or_else(|| format!("expected owner/name, got `{s}`"))?;
@@ -224,6 +224,18 @@ struct PathbaseExportArgs {
     repo: Option<RepoSpec>,
     slug: Option<String>,
     public: bool,
+}
+
+/// Pathbase upload knobs that don't depend on where the body came from.
+/// Identical to [`PathbaseExportArgs`] minus the `input` field — the body
+/// is supplied by the caller (read from cache, derived in memory, …).
+#[derive(Debug)]
+pub(crate) struct PathbaseUploadArgs {
+    pub(crate) url: Option<String>,
+    pub(crate) anon: bool,
+    pub(crate) repo: Option<RepoSpec>,
+    pub(crate) slug: Option<String>,
+    pub(crate) public: bool,
 }
 
 fn run_claude(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
@@ -1208,124 +1220,141 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        use crate::cmd_pathbase::{
-            anon_paths_post, api_me, credentials_path, load_session, paths_post, repos_post,
-            resolve_url,
-        };
-
         let file = cache_ref(&args.input)?;
         let body = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read {}", file.display()))?;
-        // Validate locally so we give a clean error rather than relying on
-        // the server to reject malformed payloads.
-        let doc = toolpath::v1::Graph::from_json(&body)
-            .map_err(|e| anyhow::anyhow!("Invalid toolpath document: {}", e))?;
-
-        let stored = load_session(&credentials_path()?)?;
-        let base_url = match (&args.url, &stored) {
-            (Some(u), _) => resolve_url(Some(u.clone())),
-            (None, Some(s)) => s.url.clone(),
-            (None, None) => resolve_url(None),
+        let upload = PathbaseUploadArgs {
+            url: args.url,
+            anon: args.anon,
+            repo: args.repo,
+            slug: args.slug,
+            public: args.public,
         };
+        let summary_source = file.display().to_string();
+        run_pathbase_inner(upload, &body, &summary_source)
+    }
+}
 
-        // Anonymous mode: explicit --anon, or no credentials at all and no
-        // override flags steering us toward an authed endpoint.
-        let go_anon = args.anon || (stored.is_none() && args.repo.is_none() && args.slug.is_none());
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn run_pathbase_inner(
+    args: PathbaseUploadArgs,
+    body: &str,
+    summary_source: &str,
+) -> Result<()> {
+    use crate::cmd_pathbase::{
+        anon_paths_post, api_me, credentials_path, load_session, paths_post, repos_post,
+        resolve_url,
+    };
 
-        if go_anon {
-            if !args.anon && stored.is_none() {
-                eprintln!(
-                    "note: not logged in — uploading anonymously (not listable). Run `path auth login --url {base_url}` for a listable upload."
-                );
-            }
-            let resp = anon_paths_post(&base_url, &body)?;
-            // Server returns either a full URL or a path-only string; in the
-            // latter case prefix the base so the user gets a clickable link.
-            let printable = if resp.url.starts_with("http://") || resp.url.starts_with("https://") {
-                resp.url.clone()
-            } else if resp.url.starts_with('/') {
-                format!("{base_url}{}", resp.url)
-            } else {
-                format!("{base_url}/{}", resp.url)
-            };
-            println!("{printable}");
+    // Validate locally so we give a clean error rather than relying on
+    // the server to reject malformed payloads.
+    let doc = toolpath::v1::Graph::from_json(body)
+        .map_err(|e| anyhow::anyhow!("Invalid toolpath document: {}", e))?;
+
+    let stored = load_session(&credentials_path()?)?;
+    let base_url = match (&args.url, &stored) {
+        (Some(u), _) => resolve_url(Some(u.clone())),
+        (None, Some(s)) => s.url.clone(),
+        (None, None) => resolve_url(None),
+    };
+
+    // Anonymous mode: explicit --anon, or no credentials at all and no
+    // override flags steering us toward an authed endpoint.
+    let go_anon = args.anon || (stored.is_none() && args.repo.is_none() && args.slug.is_none());
+
+    if go_anon {
+        if !args.anon && stored.is_none() {
             eprintln!(
-                "Uploaded {} → anon path {} ({} bytes)",
-                file.display(),
-                resp.id,
-                body.len()
-            );
-            return Ok(());
-        }
-
-        let session = stored.ok_or_else(|| {
-            anyhow::anyhow!("Not logged in. Run `path auth login` or pass `--anon`.")
-        })?;
-        if host_of(&base_url) != host_of(&session.url) {
-            eprintln!(
-                "warning: uploading to {} with a token issued by {}; expect 401 unless this is the same deployment",
-                base_url, session.url
+                "note: not logged in — uploading anonymously (not listable). Run `path auth login --url {base_url}` for a listable upload."
             );
         }
-
-        let (owner, repo) = match args.repo {
-            Some(spec) => (spec.owner, spec.name),
-            None => {
-                // Pathstash default: own the repo "pathstash" under our username,
-                // creating it on demand. api_me is the source of truth for the
-                // username (display name in stored.user can drift).
-                let user = api_me(&base_url, &session.token)?;
-                repos_post(&base_url, &session.token, "pathstash")?;
-                (user.username, "pathstash".to_string())
-            }
-        };
-
-        let slug = args.slug.unwrap_or_else(|| derive_slug(&doc));
-        let created = paths_post(
-            &base_url,
-            &session.token,
-            &owner,
-            &repo,
-            &slug,
-            &body,
-            args.public,
-        )?;
-
-        // The visibility we surface is what the server actually applied,
-        // not what we requested. If a server-side policy ever clamps
-        // `is_public` (rate limits, account flags, future feature flags),
-        // we render the URL form the path can actually be reached at.
-        if created.is_public != args.public {
-            eprintln!(
-                "note: requested is_public={} but server applied is_public={}",
-                args.public, created.is_public
-            );
-        }
-        let visibility = if created.is_public {
-            "public"
+        let resp = anon_paths_post(&base_url, body)?;
+        // Server returns either a full URL or a path-only string; in the
+        // latter case prefix the base so the user gets a clickable link.
+        let printable = if resp.url.starts_with("http://") || resp.url.starts_with("https://") {
+            resp.url.clone()
+        } else if resp.url.starts_with('/') {
+            format!("{base_url}{}", resp.url)
         } else {
-            "secret"
+            format!("{base_url}/{}", resp.url)
         };
-        let url = pathbase_share_url(
-            &base_url,
-            &owner,
-            &repo,
-            &created.slug,
-            &created.id,
-            created.is_public,
-        );
-        println!("{url}");
+        println!("{printable}");
         eprintln!(
-            "Uploaded {} → {}/{}/{} ({} path, {} bytes)",
-            file.display(),
-            owner,
-            repo,
-            created.slug,
-            visibility,
+            "Uploaded {} → anon path {} ({} bytes)",
+            summary_source,
+            resp.id,
             body.len()
         );
-        Ok(())
+        return Ok(());
     }
+
+    let session = stored.ok_or_else(|| {
+        anyhow::anyhow!("Not logged in. Run `path auth login` or pass `--anon`.")
+    })?;
+    if host_of(&base_url) != host_of(&session.url) {
+        eprintln!(
+            "warning: uploading to {} with a token issued by {}; expect 401 unless this is the same deployment",
+            base_url, session.url
+        );
+    }
+
+    let (owner, repo) = match args.repo {
+        Some(spec) => (spec.owner, spec.name),
+        None => {
+            // Pathstash default: own the repo "pathstash" under our username,
+            // creating it on demand. api_me is the source of truth for the
+            // username (display name in stored.user can drift).
+            let user = api_me(&base_url, &session.token)?;
+            repos_post(&base_url, &session.token, "pathstash")?;
+            (user.username, "pathstash".to_string())
+        }
+    };
+
+    let slug = args.slug.unwrap_or_else(|| derive_slug(&doc));
+    let created = paths_post(
+        &base_url,
+        &session.token,
+        &owner,
+        &repo,
+        &slug,
+        body,
+        args.public,
+    )?;
+
+    // The visibility we surface is what the server actually applied,
+    // not what we requested. If a server-side policy ever clamps
+    // `is_public` (rate limits, account flags, future feature flags),
+    // we render the URL form the path can actually be reached at.
+    if created.is_public != args.public {
+        eprintln!(
+            "note: requested is_public={} but server applied is_public={}",
+            args.public, created.is_public
+        );
+    }
+    let visibility = if created.is_public {
+        "public"
+    } else {
+        "secret"
+    };
+    let url = pathbase_share_url(
+        &base_url,
+        &owner,
+        &repo,
+        &created.slug,
+        &created.id,
+        created.is_public,
+    );
+    println!("{url}");
+    eprintln!(
+        "Uploaded {} → {}/{}/{} ({} path, {} bytes)",
+        summary_source,
+        owner,
+        repo,
+        created.slug,
+        visibility,
+        body.len()
+    );
+    Ok(())
 }
 
 /// Pick the canonical share URL for a path uploaded via `export pathbase`.
