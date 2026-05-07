@@ -173,6 +173,223 @@ impl HarnessBundle {
     }
 }
 
+/// Aggregate sessions across the harnesses in `bundle`, ranked so that
+/// rows whose project (or recorded cwd) canonicalizes to `cwd` come
+/// first, sorted by descending `last_activity`.
+///
+/// Filters: `harness_filter` keeps only rows from one harness; `project_filter`
+/// keeps only rows whose project (for keyed) or cwd (for session-keyed)
+/// canonicalizes to that path.
+#[allow(dead_code)] // call sites land in Tasks 7-8
+pub(crate) fn gather_sessions(
+    bundle: &HarnessBundle,
+    cwd: &std::path::Path,
+    harness_filter: Option<Harness>,
+    project_filter: Option<&std::path::Path>,
+) -> Vec<SessionRow> {
+    let mut rows = Vec::new();
+    let canonical_cwd = canonicalize_or_self(cwd);
+    let canonical_project = project_filter.map(canonicalize_or_self);
+
+    let want = |h: Harness| harness_filter.is_none_or(|f| f == h);
+
+    if want(Harness::Claude)
+        && let Some(mgr) = &bundle.claude
+    {
+        collect_claude(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
+    if want(Harness::Gemini)
+        && let Some(mgr) = &bundle.gemini
+    {
+        collect_gemini(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
+    if want(Harness::Pi)
+        && let Some(mgr) = &bundle.pi
+    {
+        collect_pi(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
+
+    rows.sort_by(|a, b| {
+        b.matches_cwd
+            .cmp(&a.matches_cwd)
+            .then_with(|| b.last_activity.cmp(&a.last_activity))
+    });
+    rows
+}
+
+fn canonicalize_or_self(p: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+fn paths_match(a: &std::path::Path, b: &std::path::Path) -> bool {
+    canonicalize_or_self(a) == canonicalize_or_self(b)
+}
+
+fn collect_claude(
+    mgr: &toolpath_claude::ClaudeConvo,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<SessionRow>,
+) {
+    let projects = match mgr.list_projects() {
+        Ok(ps) if !ps.is_empty() => ps,
+        Ok(_) => return,
+        Err(e) if is_not_found_claude(&e) => return,
+        Err(e) => {
+            eprintln!("warning: claude aggregation failed: {e}");
+            return;
+        }
+    };
+    for project in projects {
+        let project_path = std::path::Path::new(&project);
+        if let Some(filter) = project_filter
+            && !paths_match(project_path, filter)
+        {
+            continue;
+        }
+        let metas = match mgr.list_conversation_metadata(&project) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("warning: claude project {project} failed: {e}");
+                continue;
+            }
+        };
+        let matches_cwd = paths_match(project_path, canonical_cwd);
+        for m in metas {
+            out.push(SessionRow {
+                harness: Harness::Claude,
+                project: Some(m.project_path),
+                cwd: None,
+                session_id: m.session_id,
+                title: m
+                    .first_user_message
+                    .unwrap_or_else(|| "(no prompt)".to_string()),
+                last_activity: m.last_activity,
+                message_count: m.message_count,
+                matches_cwd,
+            });
+        }
+    }
+}
+
+fn collect_gemini(
+    mgr: &toolpath_gemini::GeminiConvo,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<SessionRow>,
+) {
+    let projects = match mgr.list_projects() {
+        Ok(ps) if !ps.is_empty() => ps,
+        Ok(_) => return,
+        Err(e) if is_not_found_gemini(&e) => return,
+        Err(e) => {
+            eprintln!("warning: gemini aggregation failed: {e}");
+            return;
+        }
+    };
+    for project in projects {
+        let project_path = std::path::Path::new(&project);
+        if let Some(filter) = project_filter
+            && !paths_match(project_path, filter)
+        {
+            continue;
+        }
+        let metas = match mgr.list_conversation_metadata(&project) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("warning: gemini project {project} failed: {e}");
+                continue;
+            }
+        };
+        let matches_cwd = paths_match(project_path, canonical_cwd);
+        for m in metas {
+            out.push(SessionRow {
+                harness: Harness::Gemini,
+                project: Some(m.project_path),
+                cwd: None,
+                session_id: m.session_uuid,
+                title: m
+                    .first_user_message
+                    .unwrap_or_else(|| "(no prompt)".to_string()),
+                last_activity: m.last_activity,
+                message_count: m.message_count,
+                matches_cwd,
+            });
+        }
+    }
+}
+
+fn collect_pi(
+    mgr: &toolpath_pi::PiConvo,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<SessionRow>,
+) {
+    let projects = match mgr.list_projects() {
+        Ok(ps) if !ps.is_empty() => ps,
+        Ok(_) => return,
+        Err(e) if is_not_found_pi(&e) => return,
+        Err(e) => {
+            eprintln!("warning: pi aggregation failed: {e}");
+            return;
+        }
+    };
+    for project in projects {
+        let project_path = std::path::Path::new(&project);
+        if let Some(filter) = project_filter
+            && !paths_match(project_path, filter)
+        {
+            continue;
+        }
+        let metas = match mgr.list_sessions(&project) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("warning: pi project {project} failed: {e}");
+                continue;
+            }
+        };
+        let matches_cwd = paths_match(project_path, canonical_cwd);
+        for m in metas {
+            // SessionMeta.timestamp is a String; parse to DateTime when possible.
+            let last_activity = chrono::DateTime::parse_from_rfc3339(&m.timestamp)
+                .ok()
+                .map(|d| d.with_timezone(&Utc));
+            out.push(SessionRow {
+                harness: Harness::Pi,
+                project: Some(project.clone()),
+                cwd: None,
+                session_id: m.id,
+                title: m
+                    .first_user_message
+                    .unwrap_or_else(|| "(no prompt)".to_string()),
+                last_activity,
+                message_count: m.entry_count,
+                matches_cwd,
+            });
+        }
+    }
+}
+
+fn is_not_found_claude(err: &toolpath_claude::ConvoError) -> bool {
+    use toolpath_claude::ConvoError;
+    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, ConvoError::NoHomeDirectory)
+        || matches!(err, ConvoError::ClaudeDirectoryNotFound(_))
+}
+
+fn is_not_found_gemini(err: &toolpath_gemini::ConvoError) -> bool {
+    use toolpath_gemini::ConvoError;
+    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, ConvoError::NoHomeDirectory)
+        || matches!(err, ConvoError::GeminiDirectoryNotFound(_))
+}
+
+fn is_not_found_pi(err: &toolpath_pi::PiError) -> bool {
+    use toolpath_pi::PiError;
+    matches!(err, PiError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, PiError::ProjectNotFound(_))
+}
+
 pub fn run(args: ShareArgs) -> Result<()> {
     let _ = args;
     anyhow::bail!("`path share` is not yet implemented")
@@ -229,5 +446,94 @@ mod tests {
         ] {
             assert_eq!(Harness::from_arg(arg), harness);
         }
+    }
+
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn write_claude_session(claude_dir: &Path, project_slug: &str, session: &str, prompt: &str) {
+        let project_dir = claude_dir.join("projects").join(project_slug);
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let user = format!(
+            r#"{{"type":"user","uuid":"u-{session}","timestamp":"2024-01-02T00:00:00Z","cwd":"/test/project","message":{{"role":"user","content":"{prompt}"}}}}"#
+        );
+        let asst = format!(
+            r#"{{"type":"assistant","uuid":"a-{session}","timestamp":"2024-01-02T00:00:01Z","message":{{"role":"assistant","content":"hi"}}}}"#
+        );
+        std::fs::write(
+            project_dir.join(format!("{session}.jsonl")),
+            format!("{user}\n{asst}\n"),
+        )
+        .unwrap();
+    }
+
+    fn claude_only_bundle(home: &Path) -> HarnessBundle {
+        let claude_dir = home.join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        HarnessBundle {
+            claude: Some(toolpath_claude::ClaudeConvo::with_resolver(resolver)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gather_sessions_includes_claude_rows_for_a_project() {
+        let temp = TempDir::new().unwrap();
+        write_claude_session(
+            &temp.path().join(".claude"),
+            "-test-project",
+            "abc-session-one",
+            "Add a feature",
+        );
+        let bundle = claude_only_bundle(temp.path());
+        let cwd = Path::new("/test/project");
+        let rows = gather_sessions(&bundle, cwd, None, None);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].harness, Harness::Claude);
+        assert_eq!(rows[0].session_id, "abc-session-one");
+        assert_eq!(rows[0].project.as_deref(), Some("/test/project"));
+        assert!(rows[0].matches_cwd, "cwd should match the project path");
+    }
+
+    #[test]
+    fn gather_sessions_marks_non_matching_project_rows() {
+        let temp = TempDir::new().unwrap();
+        write_claude_session(
+            &temp.path().join(".claude"),
+            "-test-project",
+            "abc-session-one",
+            "Add a feature",
+        );
+        let bundle = claude_only_bundle(temp.path());
+        let cwd = Path::new("/some/other/place");
+        let rows = gather_sessions(&bundle, cwd, None, None);
+
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].matches_cwd);
+    }
+
+    #[test]
+    fn gather_sessions_skips_harness_with_no_home_dir() {
+        // Empty bundle => no rows, no panic.
+        let bundle = HarnessBundle::default();
+        let rows = gather_sessions(&bundle, Path::new("/anywhere"), None, None);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn gather_sessions_filters_by_harness() {
+        let temp = TempDir::new().unwrap();
+        write_claude_session(
+            &temp.path().join(".claude"),
+            "-test-project",
+            "abc-session-one",
+            "hi",
+        );
+        let bundle = claude_only_bundle(temp.path());
+        let cwd = Path::new("/test/project");
+        let rows = gather_sessions(&bundle, cwd, Some(Harness::Codex), None);
+        assert!(rows.is_empty(), "filter to codex must drop claude rows");
     }
 }
