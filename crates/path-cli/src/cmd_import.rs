@@ -171,9 +171,9 @@ pub fn run(args: ImportArgs, pretty: bool) -> Result<()> {
     emit(&docs, args.force, args.no_cache, pretty)
 }
 
-struct DerivedDoc {
-    cache_id: String,
-    doc: Graph,
+pub(crate) struct DerivedDoc {
+    pub(crate) cache_id: String,
+    pub(crate) doc: Graph,
 }
 
 fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Result<()> {
@@ -447,6 +447,27 @@ fn derive_claude_with_manager(
     wrap_paths_claude(paths)
 }
 
+/// Derive a single Claude conversation given an explicit project + session.
+/// Used by `cmd_share` after its picker has resolved the pair; mirrors the
+/// `(Some(p), Some(s), _)` arm in [`derive_claude_with_manager`].
+#[allow(dead_code)] // wired up by cmd_share in a follow-up task
+pub(crate) fn derive_claude_pair(project: &str, session: &str) -> Result<DerivedDoc> {
+    let manager = toolpath_claude::ClaudeConvo::new();
+    let cfg = toolpath_claude::derive::DeriveConfig {
+        project_path: Some(project.to_string()),
+        include_thinking: false,
+    };
+    let convo = manager
+        .read_conversation(project, session)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let path = toolpath_claude::derive::derive_path(&convo, &cfg);
+    let cache_id = make_id("claude", &path.path.id);
+    Ok(DerivedDoc {
+        cache_id,
+        doc: Graph::from_path(path),
+    })
+}
+
 fn wrap_paths_claude(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
     Ok(paths
         .into_iter()
@@ -637,6 +658,29 @@ fn derive_gemini_with_manager(
     wrap_paths_gemini(paths)
 }
 
+/// Derive a single Gemini conversation given an explicit project + session.
+#[allow(dead_code)] // wired up by cmd_share in a follow-up task
+pub(crate) fn derive_gemini_pair(
+    project: &str,
+    session: &str,
+    include_thinking: bool,
+) -> Result<DerivedDoc> {
+    let manager = toolpath_gemini::GeminiConvo::new();
+    let cfg = toolpath_gemini::derive::DeriveConfig {
+        project_path: Some(project.to_string()),
+        include_thinking,
+    };
+    let convo = manager
+        .read_conversation(project, session)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let path = toolpath_gemini::derive::derive_path(&convo, &cfg);
+    let cache_id = make_id("gemini", &path.path.id);
+    Ok(DerivedDoc {
+        cache_id,
+        doc: Graph::from_path(path),
+    })
+}
+
 fn wrap_paths_gemini(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
     Ok(paths
         .into_iter()
@@ -791,6 +835,22 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
     wrap_paths_codex(paths)
 }
 
+/// Derive a single Codex session given an explicit session id.
+#[allow(dead_code)] // wired up by cmd_share in a follow-up task
+pub(crate) fn derive_codex_one(session: &str) -> Result<DerivedDoc> {
+    let manager = toolpath_codex::CodexConvo::new();
+    let config = toolpath_codex::derive::DeriveConfig { project_path: None };
+    let s = manager
+        .read_session(session)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let path = toolpath_codex::derive::derive_path(&s, &config);
+    let cache_id = make_id("codex", &path.path.id);
+    Ok(DerivedDoc {
+        cache_id,
+        doc: Graph::from_path(path),
+    })
+}
+
 fn wrap_paths_codex(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
     Ok(paths
         .into_iter()
@@ -917,6 +977,30 @@ fn derive_opencode(
         }
         wrap_paths_opencode(paths)
     }
+}
+
+/// Derive a single opencode session given an explicit session id.
+#[cfg(not(target_os = "emscripten"))]
+#[allow(dead_code)] // wired up by cmd_share in a follow-up task
+pub(crate) fn derive_opencode_one(
+    session: &str,
+    no_snapshot_diffs: bool,
+) -> Result<DerivedDoc> {
+    let manager = toolpath_opencode::OpencodeConvo::new();
+    let config = toolpath_opencode::derive::DeriveConfig {
+        no_snapshot_diffs,
+        ..Default::default()
+    };
+    let s = manager
+        .read_session(session)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let path =
+        toolpath_opencode::derive::derive_path_with_resolver(&s, &config, manager.resolver());
+    let cache_id = make_id("opencode", &path.path.id);
+    Ok(DerivedDoc {
+        cache_id,
+        doc: Graph::from_path(path),
+    })
 }
 
 fn wrap_paths_opencode(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
@@ -1069,6 +1153,28 @@ fn derive_pi_with_manager(
         docs.push(DerivedDoc { cache_id, doc });
     }
     Ok(docs)
+}
+
+/// Derive a single Pi session given an explicit project + session.
+#[allow(dead_code)] // wired up by cmd_share in a follow-up task
+pub(crate) fn derive_pi_pair(
+    project: &str,
+    session: &str,
+    base: Option<PathBuf>,
+) -> Result<DerivedDoc> {
+    let manager = if let Some(path) = base {
+        let resolver = toolpath_pi::PathResolver::new().with_sessions_dir(&path);
+        toolpath_pi::PiConvo::with_resolver(resolver)
+    } else {
+        toolpath_pi::PiConvo::new()
+    };
+    let config = toolpath_pi::DeriveConfig::default();
+    let session = manager
+        .read_session(project, session)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
+    let cache_id = make_id("pi", &doc_inner_id(&doc));
+    Ok(DerivedDoc { cache_id, doc })
 }
 
 #[cfg(not(target_os = "emscripten"))]
