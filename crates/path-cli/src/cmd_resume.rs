@@ -213,9 +213,8 @@ const ALL_HARNESSES: &[crate::cmd_share::Harness] = &[
 /// Decide which harness to resume in.
 ///
 /// - If `arg` is `Some`, validate the named harness is on PATH and return it.
-/// - Otherwise, enumerate installed harnesses and either return the only one,
-///   or launch the fzf picker. `source` is used to label the source row in the
-///   picker UI and to short-circuit when exactly one harness is installed.
+/// - Otherwise, enumerate installed harnesses and launch the fzf picker.
+///   `source` is used to label the source row in the picker UI.
 ///
 /// `path_override` is `None` in production; tests pass `Some(dir)` to fake `$PATH`.
 pub(crate) fn pick_harness(
@@ -246,10 +245,6 @@ pub(crate) fn pick_harness(
         anyhow::bail!(
             "no installed harnesses found on PATH; install one of: claude, gemini, codex, opencode, pi"
         );
-    }
-
-    if installed.len() == 1 {
-        return Ok(installed[0]);
     }
 
     interactive_pick(&installed, source)
