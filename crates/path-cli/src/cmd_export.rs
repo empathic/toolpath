@@ -1277,21 +1277,23 @@ pub(crate) fn run_pathbase_inner(
     let (token, username) = match auth {
         AuthMode::Anon => {
             let resp = anon_paths_post(&base_url, body)?;
-            let printable = if resp.url.starts_with("http://") || resp.url.starts_with("https://")
-            {
+            let printable = if resp.url.starts_with("http://") || resp.url.starts_with("https://") {
                 resp.url.clone()
             } else if resp.url.starts_with('/') {
                 format!("{base_url}{}", resp.url)
             } else {
                 format!("{base_url}/{}", resp.url)
             };
-            println!("{printable}");
+            // Summary first on stderr, then the URL on stdout — the
+            // share URL is the primary product, so it's the last line
+            // the user (or a script piping the output) sees.
             eprintln!(
                 "Uploaded {} → anon path {} ({} bytes)",
                 summary_source,
                 resp.id,
                 body.len()
             );
+            println!("{printable}");
             return Ok(());
         }
         AuthMode::Authed { token, username } => (token, username),
@@ -1333,7 +1335,8 @@ pub(crate) fn run_pathbase_inner(
         &created.id,
         created.is_public,
     );
-    println!("{url}");
+    // Summary first on stderr, URL last on stdout — same ordering as
+    // the anon path so the share URL is consistently the final line.
     eprintln!(
         "Uploaded {} → {}/{}/{} ({} path, {} bytes)",
         summary_source,
@@ -1343,6 +1346,7 @@ pub(crate) fn run_pathbase_inner(
         visibility,
         body.len()
     );
+    println!("{url}");
     Ok(())
 }
 
