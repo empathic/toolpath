@@ -875,6 +875,37 @@ fn share_no_cache_skips_write() {
 }
 
 #[test]
+fn share_logged_out_anon_default() {
+    // No --anon flag and no credentials file => share() falls through to the
+    // anonymous endpoint and emits a "not logged in — uploading anonymously"
+    // notice on stderr. This covers the logged-out branch in
+    // cmd_export::run_pathbase_inner that the explicit --anon tests skip.
+    let (port, server, _temp, project, home) = share_anon_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+
+    cmd()
+        .env("HOME", &home)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("not logged in"))
+        .stderr(predicate::str::contains("uploading anonymously"));
+
+    server.join().unwrap();
+}
+
+#[test]
 fn share_filters_by_project_with_no_matches_errors() {
     let cfg = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
