@@ -803,6 +803,116 @@ fn share_anon_fixture() -> (
     (port, server, temp, project, home)
 }
 
+/// Spawn a one-shot mock anon-upload server on a free port. Returns the
+/// port and the join handle. Used by tests that need multiple sequential
+/// uploads (the default fixture builds the claude session too, which we
+/// don't want to redo between runs).
+fn one_shot_anon_server() -> (u16, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let body = r#"{"id":"abc","url":"https://example.test/anon/abc"}"#;
+        let resp = format!(
+            "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+    });
+    (port, server)
+}
+
+/// `path share` re-run after a conversation has grown should overwrite
+/// the cache file with the fresh derive — otherwise the cache and the
+/// uploaded body would disagree (upload uses the in-memory fresh body,
+/// cache file would be stale). Lock that contract in.
+#[test]
+fn share_rewrites_cache_when_session_has_grown() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let claude_dir = temp.path().join(".claude");
+    let project_slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let project_dir = claude_dir.join("projects").join(&project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let session_file = project_dir.join("session-grow.jsonl");
+    let cwd_str = project.display().to_string();
+    let initial = format!(
+        r#"{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd_str}","message":{{"role":"user","content":"first"}}}}
+{{"type":"assistant","uuid":"a-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"reply-1"}}}}
+"#
+    );
+    std::fs::write(&session_file, &initial).unwrap();
+
+    let cfg = tempfile::tempdir().unwrap();
+    let home = temp.path();
+
+    // First share: cache picks up the 2-turn conversation.
+    let (port1, server1) = one_shot_anon_server();
+    cmd()
+        .env("HOME", home)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["share", "--harness", "claude", "--session", "session-grow", "--project"])
+        .arg(&project)
+        .args(["--anon", "--url"])
+        .arg(format!("http://127.0.0.1:{port1}"))
+        .assert()
+        .success();
+    server1.join().unwrap();
+
+    let docs = cfg.path().join("documents");
+    let cache_files: Vec<_> = std::fs::read_dir(&docs)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(cache_files.len(), 1, "expected one cache entry after first share");
+    let cache_path = cache_files[0].path();
+    let cache_v1 = std::fs::read_to_string(&cache_path).unwrap();
+    assert!(cache_v1.contains("reply-1"), "v1 cache must contain reply-1");
+    assert!(!cache_v1.contains("reply-2"), "v1 cache must not contain reply-2 yet");
+
+    // Conversation continues: append two more turns to the session JSONL.
+    let mut grown = initial.clone();
+    grown.push_str(&format!(
+        r#"{{"type":"user","uuid":"u-2","timestamp":"2024-01-02T00:00:00Z","cwd":"{cwd_str}","message":{{"role":"user","content":"second"}}}}
+{{"type":"assistant","uuid":"a-2","timestamp":"2024-01-02T00:00:01Z","message":{{"role":"assistant","content":"reply-2"}}}}
+"#
+    ));
+    std::fs::write(&session_file, &grown).unwrap();
+
+    // Second share: must overwrite the cache file with the grown derive,
+    // not silently keep the v1 contents while uploading v2.
+    let (port2, server2) = one_shot_anon_server();
+    cmd()
+        .env("HOME", home)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["share", "--harness", "claude", "--session", "session-grow", "--project"])
+        .arg(&project)
+        .args(["--anon", "--url"])
+        .arg(format!("http://127.0.0.1:{port2}"))
+        .assert()
+        .success();
+    server2.join().unwrap();
+
+    let cache_v2 = std::fs::read_to_string(&cache_path).unwrap();
+    assert!(
+        cache_v2.contains("reply-2"),
+        "v2 cache should contain the new turn, got: {cache_v2}"
+    );
+    assert_ne!(
+        cache_v1, cache_v2,
+        "cache file must be rewritten when the session has grown"
+    );
+}
+
 #[test]
 fn share_writes_cache_by_default() {
     let (port, server, _temp, project, home) = share_anon_fixture();

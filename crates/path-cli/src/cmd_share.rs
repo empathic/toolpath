@@ -57,10 +57,6 @@ pub struct ShareArgs {
     #[arg(long)]
     pub project: Option<PathBuf>,
 
-    /// Overwrite the cache entry if it already exists
-    #[arg(long)]
-    pub force: bool,
-
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
@@ -594,7 +590,6 @@ pub fn run(args: ShareArgs) -> Result<()> {
         } else {
             None
         },
-        force: args.force,
         no_cache: args.no_cache,
     };
     // Show the conversation title in the confirmation line; the session id
@@ -798,31 +793,20 @@ fn share_explicit(
     let summary = format!("{} session {}", harness.name(), derived.cache_id);
 
     if !args.no_cache {
-        // Cache write is incidental for share — the upload uses the
-        // in-memory body. If an entry with this id already exists from
-        // a prior run, reuse it (with a notice) instead of hard-failing
-        // the way `path import` does. `--force` still overwrites.
-        let existing = crate::cmd_cache::cache_path(&derived.cache_id)
-            .ok()
-            .filter(|p| p.exists());
-        match (existing, args.force) {
-            (Some(path), false) => eprintln!(
-                "Reusing cached {} session → {} ({}); pass --force to overwrite",
-                harness.name(),
-                derived.cache_id,
-                path.display()
-            ),
-            _ => {
-                let path =
-                    crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, args.force)?;
-                eprintln!(
-                    "Imported {} session → {} ({})",
-                    harness.name(),
-                    derived.cache_id,
-                    path.display()
-                );
-            }
-        }
+        // The cache entry should always reflect what was just uploaded.
+        // `path share` is "ship the current state of this session"; if
+        // the conversation has grown since a prior share, the in-memory
+        // body has the new turns but a stale cache file would not — and
+        // the upload uses the fresh body, not the cache. Always
+        // overwrite so cache and upload agree (use `--no-cache` to skip
+        // the cache write entirely).
+        let path = crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        eprintln!(
+            "Cached {} session → {} ({})",
+            harness.name(),
+            derived.cache_id,
+            path.display()
+        );
     }
 
     let body = derived.doc.to_json()?;
