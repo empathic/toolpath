@@ -156,6 +156,11 @@ pub(crate) fn api_logout(base_url: &str, token: &str) -> Result<()> {
     Ok(())
 }
 
+/// Errors are intentionally terse one-liners — callers compose them
+/// into either a fallback notice ("note: <err>; falling back to
+/// anonymous") or a propagated error with actionable next-step hints.
+/// Don't bake the hints in here; otherwise the fallback notice gets
+/// telephone-pole long.
 pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
     let client = http_client()?;
     let resp = client
@@ -168,24 +173,13 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
     let body = resp.text().unwrap_or_default();
 
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        bail!(
-            "{base_url} rejected your stored credentials ({status}). \
-             Run `path auth login --url {base_url}` to authenticate against this server, \
-             or pass `--anon` to upload anonymously."
-        );
+        bail!("{base_url} rejected the stored credentials ({status})");
     }
     if !status.is_success() {
-        bail!(
-            "GET {base_url}/api/v1/auth/me returned {status}: {}",
-            short_body(&body)
-        );
+        bail!("{base_url} returned {status} on /api/v1/auth/me");
     }
-    serde_json::from_str(&body).map_err(|e| {
-        anyhow!(
-            "{base_url} returned a non-JSON response from /api/v1/auth/me ({status}): {} \
-             ({e}). The URL may not be a Pathbase deployment.",
-            short_body(&body)
-        )
+    serde_json::from_str(&body).map_err(|_| {
+        anyhow!("{base_url} isn't a Pathbase deployment (non-JSON /api/v1/auth/me response)")
     })
 }
 
@@ -251,14 +245,13 @@ pub(crate) fn preflight_auth(base_url: &str, anon: bool, needs_auth: bool) -> Re
             token: session.token,
             username: user.username,
         }),
-        Err(e) if needs_auth => Err(e.context(
-            "--repo / --public / --slug require an authenticated upload, so falling back \
-             to anonymous wasn't an option. Drop those flags to upload anonymously.",
-        )),
+        Err(e) if needs_auth => Err(e.context(format!(
+            "--repo / --public / --slug require an authenticated upload. \
+             Run `path auth login --url {base_url}` to authenticate against this \
+             server, or drop those flags to upload anonymously."
+        ))),
         Err(e) => {
-            eprintln!(
-                "note: authenticated upload not available — falling back to anonymous.\n  reason: {e}"
-            );
+            eprintln!("note: {e}; falling back to anonymous upload.");
             Ok(AuthMode::Anon)
         }
     }
@@ -1044,29 +1037,34 @@ mod tests {
         assert!(matches!(mode, AuthMode::Anon));
     }
 
-    /// Test-helper guard for `std::env::set_var`. Restores the prior value
-    /// on drop so tests don't leak state. Tests touching env vars run
-    /// serially because `cargo test` shares process env across the suite;
-    /// the existing pathbase tests don't depend on TOOLPATH_CONFIG_DIR so
-    /// this guard's blast radius is just the preflight tests above.
+    /// Test-helper guard for `std::env::set_var`. Process env is shared
+    /// across all `cargo test` threads, so concurrent tests that mutate
+    /// the same key would race — `EnvGuard` serializes them via a global
+    /// mutex held for the guard's lifetime. Drop restores the prior value.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct EnvGuard {
         key: String,
         prior: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
     impl EnvGuard {
         fn set(key: &str, val: &str) -> Self {
+            // PoisonError on a previously-panicked test still gives us a
+            // valid lock — recover the inner guard and proceed.
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let prior = std::env::var_os(key);
-            // SAFETY: tests are single-threaded with respect to each other
-            // for the env vars these guards control; the cargo test harness
-            // runs them concurrently across env vars but the only env var
-            // these tests touch is TOOLPATH_CONFIG_DIR, and no other tests
-            // in this crate touch it.
+            // SAFETY: ENV_LOCK serializes EnvGuard-using tests against
+            // each other. The only env var these tests touch is
+            // TOOLPATH_CONFIG_DIR, and no other tests in this crate
+            // mutate or read it from the test process.
             unsafe {
                 std::env::set_var(key, val);
             }
             Self {
                 key: key.to_string(),
                 prior,
+                _lock: lock,
             }
         }
     }
