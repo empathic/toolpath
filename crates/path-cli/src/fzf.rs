@@ -37,9 +37,25 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-/// Run fzf with the supplied lines on stdin. Returns the selected lines, or
-/// an empty vec if the user cancelled (Esc / Ctrl-C / no match).
-pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<Vec<String>> {
+/// Outcome of an fzf invocation.
+///
+/// Distinguishes a deliberate user cancel (Esc / Ctrl-C, fzf exit 130) from
+/// the no-match case (fzf exit 1). Callers that want to surface a non-zero
+/// exit on cancel can match on `Cancelled`; callers that just want the picked
+/// lines treat both `NoMatch` and `Cancelled` as "empty selection".
+pub enum PickResult {
+    /// fzf exited 0 with at least one selected line.
+    Selected(Vec<String>),
+    /// fzf exited 1: input was non-empty but nothing matched the query.
+    NoMatch,
+    /// fzf exited 130: the user pressed Esc / Ctrl-C / Ctrl-D.
+    Cancelled,
+}
+
+/// Run fzf with the supplied lines on stdin. Returns a `PickResult` so the
+/// caller can distinguish a successful selection from no-match vs. an
+/// explicit user cancel (which some callers map to a non-zero exit).
+pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
     let mut args: Vec<String> = vec![
         "--delimiter=\t".into(),
         format!("--with-nth={}", opts.with_nth),
@@ -85,9 +101,12 @@ pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<Vec<String>> {
     match output.status.code() {
         Some(0) => {
             let text = String::from_utf8_lossy(&output.stdout);
-            Ok(text.lines().map(|s| s.to_string()).collect())
+            Ok(PickResult::Selected(
+                text.lines().map(|s| s.to_string()).collect(),
+            ))
         }
-        Some(1) | Some(130) => Ok(Vec::new()),
+        Some(1) => Ok(PickResult::NoMatch),
+        Some(130) => Ok(PickResult::Cancelled),
         _ => anyhow::bail!("fzf exited with status {:?}", output.status),
     }
 }

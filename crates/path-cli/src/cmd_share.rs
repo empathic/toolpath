@@ -538,10 +538,19 @@ pub fn run(args: ShareArgs) -> Result<()> {
         tiebreak: "index",
         multi: false,
     };
-    let selected = crate::fzf::pick(&lines, &opts)?;
-    let line = match selected.into_iter().next() {
-        Some(l) => l,
-        None => return Ok(()), // user cancelled
+    let line = match crate::fzf::pick(&lines, &opts)? {
+        crate::fzf::PickResult::Selected(v) => match v.into_iter().next() {
+            Some(l) => l,
+            // Selected with an empty payload should not happen (fzf exits 0
+            // only when at least one row was confirmed), but treat it like
+            // no-match for safety.
+            None => return Ok(()),
+        },
+        // No row matched the query — exit 0, same as today, no extra noise.
+        crate::fzf::PickResult::NoMatch => return Ok(()),
+        // Esc / Ctrl-C: deliberate user cancel. Signal to the shell with
+        // exit 130 so it's distinguishable from a successful share.
+        crate::fzf::PickResult::Cancelled => std::process::exit(130),
     };
     let (h, key, session) = parse_picker_row(&line)
         .ok_or_else(|| anyhow::anyhow!("internal: failed to parse picker row"))?;

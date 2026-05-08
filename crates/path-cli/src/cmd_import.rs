@@ -519,7 +519,10 @@ fn pick_claude_in_project(
         tiebreak: "index",
         multi: true,
     };
-    let selected = fzf::pick(&lines, &opts)?;
+    let selected = match fzf::pick(&lines, &opts)? {
+        fzf::PickResult::Selected(v) => v,
+        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    };
     Ok(Some(parse_project_session(&selected)))
 }
 
@@ -565,7 +568,10 @@ fn pick_claude_global(
         tiebreak: "index",
         multi: true,
     };
-    let selected = fzf::pick(&lines, &opts)?;
+    let selected = match fzf::pick(&lines, &opts)? {
+        fzf::PickResult::Selected(v) => v,
+        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    };
     Ok(Some(parse_project_session(&selected)))
 }
 
@@ -727,7 +733,10 @@ fn pick_gemini_in_project(
         tiebreak: "index",
         multi: true,
     };
-    let selected = fzf::pick(&lines, &opts)?;
+    let selected = match fzf::pick(&lines, &opts)? {
+        fzf::PickResult::Selected(v) => v,
+        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    };
     Ok(Some(parse_project_session(&selected)))
 }
 
@@ -773,7 +782,10 @@ fn pick_gemini_global(
         tiebreak: "index",
         multi: true,
     };
-    let selected = fzf::pick(&lines, &opts)?;
+    let selected = match fzf::pick(&lines, &opts)? {
+        fzf::PickResult::Selected(v) => v,
+        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    };
     Ok(Some(parse_project_session(&selected)))
 }
 
@@ -898,7 +910,10 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
         tiebreak: "index",
         multi: true,
     };
-    let selected = fzf::pick(&lines, &opts)?;
+    let selected = match fzf::pick(&lines, &opts)? {
+        fzf::PickResult::Selected(v) => v,
+        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    };
     Ok(Some(parse_single_id(&selected)))
 }
 
@@ -1053,7 +1068,10 @@ fn pick_opencode(
         tiebreak: "index",
         multi: true,
     };
-    let selected = fzf::pick(&lines, &opts)?;
+    let selected = match fzf::pick(&lines, &opts)? {
+        fzf::PickResult::Selected(v) => v,
+        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    };
     Ok(Some(parse_single_id(&selected)))
 }
 
@@ -1207,7 +1225,10 @@ fn pick_pi_in_project(
         tiebreak: "index",
         multi: true,
     };
-    let selected = fzf::pick(&lines, &opts)?;
+    let selected = match fzf::pick(&lines, &opts)? {
+        fzf::PickResult::Selected(v) => v,
+        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    };
     Ok(Some(parse_project_session(&selected)))
 }
 
@@ -1253,7 +1274,10 @@ fn pick_pi_global(manager: &toolpath_pi::PiConvo) -> Result<Option<Vec<(String, 
         tiebreak: "index",
         multi: true,
     };
-    let selected = fzf::pick(&lines, &opts)?;
+    let selected = match fzf::pick(&lines, &opts)? {
+        fzf::PickResult::Selected(v) => v,
+        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    };
     Ok(Some(parse_project_session(&selected)))
 }
 
