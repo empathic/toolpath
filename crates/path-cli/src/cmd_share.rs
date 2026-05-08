@@ -552,7 +552,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
         // exit 130 so it's distinguishable from a successful share.
         crate::fzf::PickResult::Cancelled => std::process::exit(130),
     };
-    let (h, key, session) = parse_picker_row(&line)
+    let (h, key, session, title) = parse_picker_row(&line)
         .ok_or_else(|| anyhow::anyhow!("internal: failed to parse picker row"))?;
 
     let explicit = ShareArgs {
@@ -571,7 +571,10 @@ pub fn run(args: ShareArgs) -> Result<()> {
         force: args.force,
         no_cache: args.no_cache,
     };
-    eprintln!("Picked {} session {}", h.name(), session);
+    // Show the conversation title in the confirmation line; the session id
+    // is opaque and doesn't help the user verify they picked the right
+    // thing. `{:?}` adds the surrounding quotes per the spec.
+    eprintln!("Picked {} session {:?}", h.name(), title);
     share_explicit(h, &session, &explicit)
 }
 
@@ -810,9 +813,11 @@ fn format_picker_row(row: &SessionRow) -> String {
     )
 }
 
-/// Inverse of [`format_picker_row`] — pulls (harness, key, session) back
-/// out of the line fzf returned. Returns `None` if the line is malformed.
-fn parse_picker_row(line: &str) -> Option<(Harness, String, String)> {
+/// Inverse of [`format_picker_row`] — pulls (harness, key, session, title)
+/// back out of the line fzf returned. Returns `None` if the line is
+/// malformed. The title is column 9 of the TSV; it lives in the visible
+/// portion so it round-trips through fzf unchanged.
+fn parse_picker_row(line: &str) -> Option<(Harness, String, String, String)> {
     let mut parts = line.split('\t');
     let h = Harness::parse(parts.next()?)?;
     let key = parts.next()?.to_string();
@@ -820,7 +825,10 @@ fn parse_picker_row(line: &str) -> Option<(Harness, String, String)> {
     if session.is_empty() {
         return None;
     }
-    Some((h, key, session))
+    // Skip cols 4..8 (symbol, when, msgs, scope, project_short) to reach
+    // the title at col 9.
+    let title = parts.nth(5).unwrap_or("").to_string();
+    Some((h, key, session, title))
 }
 
 fn tab_safe(s: &str) -> String {
@@ -1089,10 +1097,13 @@ mod tests {
             matches_cwd: true,
         };
         let line = format_picker_row(&row);
-        let (harness, key, session) = parse_picker_row(&line).unwrap();
+        let (harness, key, session, title) = parse_picker_row(&line).unwrap();
         assert_eq!(harness, Harness::Claude);
         assert_eq!(key, "/tmp/proj");
         assert_eq!(session, "sess-abc");
+        // tab_safe replaces the tab with a space, but the title content
+        // otherwise round-trips.
+        assert_eq!(title, "Hello world");
     }
 
     #[test]
@@ -1108,10 +1119,28 @@ mod tests {
             matches_cwd: false,
         };
         let line = format_picker_row(&row);
-        let (harness, key, session) = parse_picker_row(&line).unwrap();
+        let (harness, key, session, title) = parse_picker_row(&line).unwrap();
         assert_eq!(harness, Harness::Codex);
         assert_eq!(key, "/work/proj"); // codex has no project; cwd carried as the keyed slot
         assert_eq!(session, "0190abcd");
+        assert_eq!(title, "(no prompt)");
+    }
+
+    #[test]
+    fn parse_picker_row_carries_title_with_unicode() {
+        let row = SessionRow {
+            harness: Harness::Gemini,
+            project: Some("/work/proj".to_string()),
+            cwd: None,
+            session_id: "11111111-2222-3333-4444-555555555555".to_string(),
+            title: "Add the share command — finally".to_string(),
+            last_activity: None,
+            message_count: 42,
+            matches_cwd: true,
+        };
+        let line = format_picker_row(&row);
+        let (_, _, _, title) = parse_picker_row(&line).unwrap();
+        assert_eq!(title, "Add the share command — finally");
     }
 
     #[test]
