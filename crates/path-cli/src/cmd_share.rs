@@ -208,6 +208,16 @@ pub(crate) fn gather_sessions(
     {
         collect_pi(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
+    if want(Harness::Codex)
+        && let Some(mgr) = &bundle.codex
+    {
+        collect_codex(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
+    if want(Harness::Opencode)
+        && let Some(mgr) = &bundle.opencode
+    {
+        collect_opencode(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
 
     rows.sort_by(|a, b| {
         b.matches_cwd
@@ -370,6 +380,93 @@ fn collect_pi(
     }
 }
 
+fn collect_codex(
+    mgr: &toolpath_codex::CodexConvo,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<SessionRow>,
+) {
+    let metas = match mgr.list_sessions() {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => return,
+        Err(e) if is_not_found_codex(&e) => return,
+        Err(e) => {
+            eprintln!("warning: codex aggregation failed: {e}");
+            return;
+        }
+    };
+    for m in metas {
+        let cwd_str = m.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
+        if let Some(filter) = project_filter {
+            let stored = match cwd_str.as_deref() {
+                Some(s) => std::path::PathBuf::from(s),
+                None => continue,
+            };
+            if !paths_match(&stored, filter) {
+                continue;
+            }
+        }
+        let matches_cwd = m
+            .cwd
+            .as_deref()
+            .map(|p| paths_match(p, canonical_cwd))
+            .unwrap_or(false);
+        out.push(SessionRow {
+            harness: Harness::Codex,
+            project: None,
+            cwd: cwd_str,
+            session_id: m.id,
+            title: m
+                .first_user_message
+                .unwrap_or_else(|| "(no prompt)".to_string()),
+            last_activity: m.last_activity,
+            message_count: m.line_count,
+            matches_cwd,
+        });
+    }
+}
+
+fn collect_opencode(
+    mgr: &toolpath_opencode::OpencodeConvo,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<SessionRow>,
+) {
+    let metas = match mgr.io().list_session_metadata(None) {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => return,
+        Err(e) if is_not_found_opencode(&e) => return,
+        Err(e) => {
+            eprintln!("warning: opencode aggregation failed: {e}");
+            return;
+        }
+    };
+    for m in metas {
+        if let Some(filter) = project_filter
+            && !paths_match(&m.directory, filter)
+        {
+            continue;
+        }
+        let matches_cwd = paths_match(&m.directory, canonical_cwd);
+        let cwd_str = m.directory.to_string_lossy().into_owned();
+        let title = match (&m.first_user_message, m.title.is_empty()) {
+            (Some(s), _) if !s.is_empty() => s.clone(),
+            (_, false) => m.title.clone(),
+            _ => "(no prompt)".to_string(),
+        };
+        out.push(SessionRow {
+            harness: Harness::Opencode,
+            project: None,
+            cwd: Some(cwd_str),
+            session_id: m.id,
+            title,
+            last_activity: m.last_activity,
+            message_count: m.message_count,
+            matches_cwd,
+        });
+    }
+}
+
 fn is_not_found_claude(err: &toolpath_claude::ConvoError) -> bool {
     use toolpath_claude::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
@@ -388,6 +485,21 @@ fn is_not_found_pi(err: &toolpath_pi::PiError) -> bool {
     use toolpath_pi::PiError;
     matches!(err, PiError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, PiError::ProjectNotFound(_))
+}
+
+fn is_not_found_codex(err: &toolpath_codex::ConvoError) -> bool {
+    use toolpath_codex::ConvoError;
+    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, ConvoError::NoHomeDirectory)
+        || matches!(err, ConvoError::CodexDirectoryNotFound(_))
+}
+
+fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
+    use toolpath_opencode::ConvoError;
+    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, ConvoError::NoHomeDirectory)
+        || matches!(err, ConvoError::OpencodeDirectoryNotFound(_))
+        || matches!(err, ConvoError::DatabaseNotFound(_))
 }
 
 pub fn run(args: ShareArgs) -> Result<()> {
@@ -535,5 +647,70 @@ mod tests {
         let cwd = Path::new("/test/project");
         let rows = gather_sessions(&bundle, cwd, Some(Harness::Codex), None);
         assert!(rows.is_empty(), "filter to codex must drop claude rows");
+    }
+
+    fn codex_only_bundle(home: &Path) -> HarnessBundle {
+        let codex_dir = home.join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let resolver = toolpath_codex::PathResolver::new().with_codex_dir(&codex_dir);
+        HarnessBundle {
+            codex: Some(toolpath_codex::CodexConvo::with_resolver(resolver)),
+            ..Default::default()
+        }
+    }
+
+    fn write_codex_session(codex_dir: &Path, id: &str, cwd: &str) {
+        // Date-bucketed layout: ~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl
+        let dir = codex_dir.join("sessions/2026/05/07");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(format!("rollout-2026-05-07T00-00-00-{id}.jsonl"));
+        let meta = format!(
+            r#"{{"timestamp":"2026-05-07T00:00:00Z","type":"session_meta","payload":{{"id":"{id}","timestamp":"2026-05-07T00:00:00Z","cwd":"{cwd}","originator":"codex-tui","cli_version":"test","source":"cli","model_provider":"openai"}}}}"#
+        );
+        let user = format!(
+            r#"{{"timestamp":"2026-05-07T00:00:01Z","type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"hi"}}]}}}}"#
+        );
+        std::fs::write(file, format!("{meta}\n{user}\n")).unwrap();
+    }
+
+    #[test]
+    fn gather_sessions_includes_codex_rows_with_cwd_match() {
+        let temp = TempDir::new().unwrap();
+        write_codex_session(
+            &temp.path().join(".codex"),
+            "00000000-0000-0000-0000-0000000000aa",
+            "/work/proj",
+        );
+        let bundle = codex_only_bundle(temp.path());
+        let rows = gather_sessions(&bundle, Path::new("/work/proj"), None, None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].harness, Harness::Codex);
+        assert_eq!(rows[0].cwd.as_deref(), Some("/work/proj"));
+        assert!(rows[0].matches_cwd);
+    }
+
+    #[test]
+    fn gather_sessions_ranks_cwd_matches_first() {
+        // Two claude sessions: one in cwd (older), one elsewhere (newer).
+        // Despite the elsewhere row being newer, the cwd-match must come first.
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        write_claude_session(&claude_dir, "-cwd-project", "in-cwd-session", "hi");
+        // Bump activity on the not-in-cwd session by writing a later timestamp.
+        let not_dir = claude_dir.join("projects").join("-other-project");
+        std::fs::create_dir_all(&not_dir).unwrap();
+        std::fs::write(
+            not_dir.join("not-in-cwd-session.jsonl"),
+            r#"{"type":"user","uuid":"u-x","timestamp":"2030-01-01T00:00:00Z","cwd":"/other/project","message":{"role":"user","content":"later"}}"#.to_string()
+                + "\n",
+        )
+        .unwrap();
+        let bundle = claude_only_bundle(temp.path());
+        let rows = gather_sessions(&bundle, Path::new("/cwd/project"), None, None);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].session_id, "in-cwd-session");
+        assert!(rows[0].matches_cwd);
+        assert!(!rows[1].matches_cwd);
     }
 }
