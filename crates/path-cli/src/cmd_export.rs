@@ -1293,8 +1293,10 @@ pub(crate) fn run_pathbase_inner(
         .ok_or_else(|| anyhow::anyhow!("Not logged in. Run `path auth login` or pass `--anon`."))?;
     if host_of(&base_url) != host_of(&session.url) {
         eprintln!(
-            "warning: uploading to {} with a token issued by {}; expect 401 unless this is the same deployment",
-            base_url, session.url
+            "warning: stored credentials are for {}, but you're uploading to {}.\n\
+             If this fails, pass `--anon` to upload anonymously, or run\n\
+             `path auth login --url {}` to authenticate against this server.",
+            session.url, base_url, base_url
         );
     }
 

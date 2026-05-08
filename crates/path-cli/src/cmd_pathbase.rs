@@ -149,14 +149,46 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
         .send()
         .with_context(|| format!("connect to {base_url}"))?;
 
-    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-        bail!("stored session is no longer valid — run `path auth login` again");
+    let status = resp.status();
+    let body = resp.text().unwrap_or_default();
+
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        bail!(
+            "{base_url} rejected your stored credentials ({status}). \
+             Run `path auth login --url {base_url}` to authenticate against this server, \
+             or pass `--anon` to upload anonymously."
+        );
     }
-    if !resp.status().is_success() {
-        bail!("server returned {}", resp.status());
+    if !status.is_success() {
+        bail!(
+            "GET {base_url}/api/v1/auth/me returned {status}: {}",
+            short_body(&body)
+        );
     }
-    let user: User = resp.json().context("parsing /auth/me response")?;
-    Ok(user)
+    serde_json::from_str(&body).map_err(|e| {
+        anyhow!(
+            "{base_url} returned a non-JSON response from /api/v1/auth/me ({status}): {} \
+             ({e}). The URL may not be a Pathbase deployment.",
+            short_body(&body)
+        )
+    })
+}
+
+/// Trim a response body to a single-line snippet for error messages.
+/// Replaces newlines, collapses long bodies down to ~200 chars with an ellipsis.
+fn short_body(body: &str) -> String {
+    const MAX: usize = 200;
+    let cleaned: String = body.replace(['\n', '\r'], " ");
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return "<empty body>".to_string();
+    }
+    if trimmed.chars().count() > MAX {
+        let head: String = trimmed.chars().take(MAX - 1).collect();
+        format!("{head}…")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 // ── pathbase-client bridge ─────────────────────────────────────────────
@@ -276,7 +308,11 @@ pub(crate) fn paths_post(
             })
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
-            401 => bail!("stored session is no longer valid — run `path auth login` again"),
+            401 => bail!(
+                "{base_url} rejected your stored credentials (HTTP 401). \
+                 Run `path auth login --url {base_url}` to authenticate against this server, \
+                 or pass `--anon` to upload anonymously."
+            ),
             code => bail!("upload to {owner}/{repo} failed (HTTP {code})"),
         },
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
@@ -311,7 +347,11 @@ pub(crate) fn repos_post(base_url: &str, token: &str, name: &str) -> Result<()> 
     match block_on(client.create_repo(&body)) {
         Ok(_) => Ok(()),
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
-            401 => bail!("stored session is no longer valid — run `path auth login` again"),
+            401 => bail!(
+                "{base_url} rejected your stored credentials (HTTP 401). \
+                 Run `path auth login --url {base_url}` to authenticate against this server, \
+                 or pass `--anon` to upload anonymously."
+            ),
             409 => Ok(()),
             code => bail!("creating repo {name} failed (HTTP {code})"),
         },
@@ -445,6 +485,25 @@ mod tests {
     fn resolve_url_prefers_cli_flag() {
         let got = resolve_url(Some("https://example.com/".into()));
         assert_eq!(got, "https://example.com");
+    }
+
+    #[test]
+    fn short_body_handles_empty_and_whitespace() {
+        assert_eq!(short_body(""), "<empty body>");
+        assert_eq!(short_body("   \n\t  "), "<empty body>");
+    }
+
+    #[test]
+    fn short_body_collapses_newlines_to_spaces() {
+        assert_eq!(short_body("line1\nline2\r\nline3"), "line1 line2  line3");
+    }
+
+    #[test]
+    fn short_body_truncates_long_input_with_ellipsis() {
+        let long = "x".repeat(500);
+        let s = short_body(&long);
+        assert_eq!(s.chars().count(), 200);
+        assert!(s.ends_with('…'));
     }
 
     #[test]
@@ -621,9 +680,15 @@ mod tests {
     #[test]
     fn paths_post_401_surfaces_relogin_message() {
         let server = MockServer::start("HTTP/1.1 401 Unauthorized", r#"{"error":"bad"}"#);
+        let base = server.base();
         let err =
-            paths_post(&server.base(), "tok", "alex", "pathstash", "s", "{}", false).unwrap_err();
-        assert!(err.to_string().contains("run `path auth login`"));
+            paths_post(&base, "tok", "alex", "pathstash", "s", "{}", false).unwrap_err();
+        let msg = err.to_string();
+        // Should name the URL the credentials are being rejected by, point at
+        // `path auth login --url`, and offer `--anon` as the bypass.
+        assert!(msg.contains(&base), "expected base URL in error: {msg}");
+        assert!(msg.contains("path auth login --url"), "expected re-auth hint: {msg}");
+        assert!(msg.contains("--anon"), "expected --anon hint: {msg}");
     }
 
     #[test]
