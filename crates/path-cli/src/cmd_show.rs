@@ -38,12 +38,20 @@ pub enum ShowSource {
         /// Session id, UUID, or filename stem
         #[arg(short, long)]
         session: String,
+
+        /// Compatibility shim for the unified `path share` preview template; ignored.
+        #[arg(long, hide = true)]
+        project: Option<std::path::PathBuf>,
     },
     /// Show an opencode session as a markdown summary
     Opencode {
         /// Session id (`ses_…`)
         #[arg(short, long)]
         session: String,
+
+        /// Compatibility shim for the unified `path share` preview template; ignored.
+        #[arg(long, hide = true)]
+        project: Option<std::path::PathBuf>,
     },
     /// Show a Pi (pi.dev) session as a markdown summary
     Pi {
@@ -96,7 +104,10 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             };
             Ok(toolpath_gemini::derive::derive_path(&convo, &cfg))
         }
-        ShowSource::Codex { session } => {
+        ShowSource::Codex {
+            session,
+            project: _,
+        } => {
             let manager = toolpath_codex::CodexConvo::new();
             let s = manager
                 .read_session(&session)
@@ -104,7 +115,10 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             let cfg = toolpath_codex::derive::DeriveConfig { project_path: None };
             Ok(toolpath_codex::derive::derive_path(&s, &cfg))
         }
-        ShowSource::Opencode { session } => {
+        ShowSource::Opencode {
+            session,
+            project: _,
+        } => {
             let manager = toolpath_opencode::OpencodeConvo::new();
             let s = manager
                 .read_session(&session)
