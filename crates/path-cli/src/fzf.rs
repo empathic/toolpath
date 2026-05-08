@@ -69,7 +69,7 @@ pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
 
     if let Some(preview) = opts.preview {
         args.push(format!("--preview={}", preview));
-        args.push("--preview-window=right:60%:wrap".into());
+        args.push(format!("--preview-window={}", opts.preview_window));
     }
 
     if let Some(header) = opts.header {
@@ -119,6 +119,9 @@ pub struct PickOptions<'a> {
     pub prompt: &'a str,
     /// Optional `--preview` command. Use `{1}`, `{2}` ... to substitute fields.
     pub preview: Option<&'a str>,
+    /// `--preview-window` placement. Defaults to `right:60%:wrap` (side-by-side);
+    /// pass `up:60%:wrap` for a stacked layout that fits narrow terminals.
+    pub preview_window: &'a str,
     /// Optional header line shown above the list.
     pub header: Option<&'a str>,
     /// Tiebreak ordering — `index` preserves input order.
@@ -133,6 +136,7 @@ impl Default for PickOptions<'_> {
             with_nth: "2..",
             prompt: "> ",
             preview: None,
+            preview_window: "right:60%:wrap",
             header: None,
             tiebreak: "index",
             multi: false,

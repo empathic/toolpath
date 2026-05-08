@@ -740,7 +740,9 @@ fn share_explicit_args_uploads_via_anon() {
         .arg(format!("http://127.0.0.1:{port}"))
         .assert()
         .success()
-        .stdout(predicate::str::contains("https://example.test/anon/abc-123"))
+        .stdout(predicate::str::contains(
+            "https://example.test/anon/abc-123",
+        ))
         .stderr(predicate::str::contains("Uploaded"));
 
     server.join().unwrap();
@@ -749,8 +751,13 @@ fn share_explicit_args_uploads_via_anon() {
 /// Helper for the cache tests. Spawns a one-shot mock anon-upload server
 /// on a free port and returns (port, server-thread-handle, fixture-temp,
 /// project-path, $HOME-path).
-fn share_anon_fixture() -> (u16, std::thread::JoinHandle<()>, tempfile::TempDir, PathBuf, PathBuf)
-{
+fn share_anon_fixture() -> (
+    u16,
+    std::thread::JoinHandle<()>,
+    tempfile::TempDir,
+    PathBuf,
+    PathBuf,
+) {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
@@ -918,7 +925,9 @@ fn share_filters_by_project_with_no_matches_errors() {
         .arg(&nonexistent)
         .assert()
         .failure()
-        .stderr(predicate::str::contains("No agent sessions found in project"));
+        .stderr(predicate::str::contains(
+            "No agent sessions found in project",
+        ));
 }
 
 #[test]

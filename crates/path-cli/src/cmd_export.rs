@@ -1289,9 +1289,8 @@ pub(crate) fn run_pathbase_inner(
         return Ok(());
     }
 
-    let session = stored.ok_or_else(|| {
-        anyhow::anyhow!("Not logged in. Run `path auth login` or pass `--anon`.")
-    })?;
+    let session = stored
+        .ok_or_else(|| anyhow::anyhow!("Not logged in. Run `path auth login` or pass `--anon`."))?;
     if host_of(&base_url) != host_of(&session.url) {
         eprintln!(
             "warning: uploading to {} with a token issued by {}; expect 401 unless this is the same deployment",

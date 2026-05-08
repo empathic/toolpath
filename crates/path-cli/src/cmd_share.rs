@@ -534,6 +534,10 @@ pub fn run(args: ShareArgs) -> Result<()> {
         with_nth: "4..",
         prompt: "share> ",
         preview: Some("path show {1} --project {2} --session {3}"),
+        // Stacked layout: preview above the list, list below. Fits narrow
+        // terminals better than the default side-by-side and gives the
+        // session preview the full terminal width to render `path show`.
+        preview_window: "up:60%:wrap",
         header: Some(&header),
         tiebreak: "index",
         multi: false,
@@ -604,7 +608,10 @@ fn pathbase_host_for_picker(args: &ShareArgs) -> String {
     }
 }
 
-fn bail_no_sessions(bundle: &HarnessBundle, project_filter: Option<&std::path::Path>) -> Result<()> {
+fn bail_no_sessions(
+    bundle: &HarnessBundle,
+    project_filter: Option<&std::path::Path>,
+) -> Result<()> {
     if let Some(p) = project_filter {
         anyhow::bail!(
             "No agent sessions found in project {}. Run without --project to see sessions across all projects.",
@@ -616,14 +623,26 @@ fn bail_no_sessions(bundle: &HarnessBundle, project_filter: Option<&std::path::P
     // Pad harness names so the path column lines up: "opencode:" is the
     // longest at 9 chars (8 + colon).
     let home = home_dir();
-    summary.push_str(&format_status_line("claude", &harness_status_claude(bundle, home.as_deref())));
-    summary.push_str(&format_status_line("gemini", &harness_status_gemini(bundle, home.as_deref())));
-    summary.push_str(&format_status_line("codex", &harness_status_codex(bundle, home.as_deref())));
+    summary.push_str(&format_status_line(
+        "claude",
+        &harness_status_claude(bundle, home.as_deref()),
+    ));
+    summary.push_str(&format_status_line(
+        "gemini",
+        &harness_status_gemini(bundle, home.as_deref()),
+    ));
+    summary.push_str(&format_status_line(
+        "codex",
+        &harness_status_codex(bundle, home.as_deref()),
+    ));
     summary.push_str(&format_status_line(
         "opencode",
         &harness_status_opencode(bundle, home.as_deref()),
     ));
-    summary.push_str(&format_status_line("pi", &harness_status_pi(bundle, home.as_deref())));
+    summary.push_str(&format_status_line(
+        "pi",
+        &harness_status_pi(bundle, home.as_deref()),
+    ));
     eprint!("{summary}");
     anyhow::bail!("no shareable sessions");
 }
@@ -710,7 +729,10 @@ fn harness_status_codex(bundle: &HarnessBundle, home: Option<&std::path::Path>) 
     }
 }
 
-fn harness_status_opencode(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
+fn harness_status_opencode(
+    bundle: &HarnessBundle,
+    home: Option<&std::path::Path>,
+) -> HarnessStatus {
     let Some(mgr) = &bundle.opencode else {
         return HarnessStatus::unresolved();
     };
@@ -866,11 +888,9 @@ fn derive_one(
         Harness::Claude => {
             crate::cmd_import::derive_claude_pair(project.expect("project_keyed"), session)
         }
-        Harness::Gemini => crate::cmd_import::derive_gemini_pair(
-            project.expect("project_keyed"),
-            session,
-            false,
-        ),
+        Harness::Gemini => {
+            crate::cmd_import::derive_gemini_pair(project.expect("project_keyed"), session, false)
+        }
         Harness::Pi => {
             crate::cmd_import::derive_pi_pair(project.expect("project_keyed"), session, None)
         }
@@ -1203,7 +1223,10 @@ mod tests {
     #[test]
     fn home_relative_passes_through_paths_outside_home() {
         let home = Path::new("/Users/alex");
-        assert_eq!(home_relative(Path::new("/tmp/elsewhere"), Some(home)), "/tmp/elsewhere");
+        assert_eq!(
+            home_relative(Path::new("/tmp/elsewhere"), Some(home)),
+            "/tmp/elsewhere"
+        );
     }
 
     #[test]
