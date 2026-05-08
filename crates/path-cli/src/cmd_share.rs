@@ -546,14 +546,14 @@ pub fn run(args: ShareArgs) -> Result<()> {
     let (h, key, session) = parse_picker_row(&line)
         .ok_or_else(|| anyhow::anyhow!("internal: failed to parse picker row"))?;
 
-    let mut explicit = ShareArgs {
+    let explicit = ShareArgs {
         url: args.url.clone(),
         anon: args.anon,
         repo: args.repo.clone(),
         slug: args.slug.clone(),
         public: args.public,
         harness: Some(harness_to_arg(h)),
-        session: Some(session.clone()),
+        session: None, // unused by share_explicit
         project: if h.project_keyed() {
             Some(PathBuf::from(&key))
         } else {
@@ -562,13 +562,8 @@ pub fn run(args: ShareArgs) -> Result<()> {
         force: args.force,
         no_cache: args.no_cache,
     };
-    eprintln!(
-        "Picked {} session {}",
-        h.name(),
-        explicit.session.as_deref().unwrap_or("?")
-    );
-    let session_id = explicit.session.take().unwrap();
-    share_explicit(h, &session_id, &explicit)
+    eprintln!("Picked {} session {}", h.name(), session);
+    share_explicit(h, &session, &explicit)
 }
 
 fn harness_to_arg(h: Harness) -> HarnessArg {
