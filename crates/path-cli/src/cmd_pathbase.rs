@@ -153,7 +153,10 @@ pub(crate) fn api_logout(base_url: &str, token: &str) -> Result<()> {
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
             bail!("server returned {}", resp.status())
         }
-        Err(e) => Err(anyhow!("connect to {base_url}: {e}")),
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("connect to {base_url}: {}", reqwest_hint(&e))
+        }
+        Err(e) => Err(anyhow!("connect to {base_url}: {}", full_chain(&e))),
     }
 }
 
@@ -191,7 +194,10 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
         Err(pathbase_client::Error::InvalidResponsePayload(_, _)) => {
             bail!("{base_url} isn't a Pathbase deployment (non-JSON /api/v1/users/me response)")
         }
-        Err(e) => Err(anyhow!("connect to {base_url}: {e}")),
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("connect to {base_url}: {}", reqwest_hint(&e))
+        }
+        Err(e) => Err(anyhow!("connect to {base_url}: {}", full_chain(&e))),
     }
 }
 
@@ -373,7 +379,10 @@ pub(crate) fn anon_paths_post(base_url: &str, document_json: &str) -> Result<Ano
                 bail!("anon upload failed ({status}): {msg}")
             }
         }
-        Err(e) => Err(anyhow!("anon upload failed: {e}")),
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("anon upload failed: {}", reqwest_hint(&e))
+        }
+        Err(e) => Err(anyhow!("anon upload failed: {}", full_chain(&e))),
     }
 }
 
@@ -424,7 +433,10 @@ pub(crate) fn paths_post(
                 bail!("upload to {owner}/{repo} failed ({status}): {msg}")
             }
         }
-        Err(e) => Err(anyhow!("upload to {owner}/{repo} failed: {e}")),
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("upload to {owner}/{repo} failed: {}", reqwest_hint(&e))
+        }
+        Err(e) => Err(anyhow!("upload to {owner}/{repo} failed: {}", full_chain(&e))),
     }
 }
 
@@ -432,6 +444,41 @@ fn error_message(body: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+}
+
+/// Walk an error's `source()` chain and join each link's `Display`
+/// with `: `. progenitor's `CommunicationError(reqwest::Error)`
+/// renders as "error sending request" by default — the actually-useful
+/// detail (timeout / connection refused / TLS handshake) sits two or
+/// three levels down in `source()`. This surfaces it.
+fn full_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut s = err.to_string();
+    let mut cur = err.source();
+    while let Some(c) = cur {
+        s.push_str(": ");
+        s.push_str(&c.to_string());
+        cur = c.source();
+    }
+    s
+}
+
+/// Classify a `reqwest::Error` into a short hint so users can tell
+/// "took too long" from "couldn't connect" from "server hung up." Falls
+/// back to the full source chain when no specific hint applies.
+fn reqwest_hint(err: &reqwest::Error) -> String {
+    if err.is_timeout() {
+        return "request timed out after 30s — try again, or shrink the upload".to_string();
+    }
+    if err.is_connect() {
+        return format!("couldn't connect to server: {}", full_chain(err));
+    }
+    if err.is_body() {
+        return format!("body error: {}", full_chain(err));
+    }
+    if err.is_decode() {
+        return format!("response decode error: {}", full_chain(err));
+    }
+    full_chain(err)
 }
 
 /// `POST /api/v1/repos` — create a repo owned by the authenticated user.
@@ -461,7 +508,10 @@ pub(crate) fn repos_post(base_url: &str, token: &str, name: &str) -> Result<()> 
             409 => Ok(()),
             code => bail!("creating repo {name} returned unexpected status: HTTP {code}"),
         },
-        Err(e) => Err(anyhow!("creating repo {name} failed: {e}")),
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("creating repo {name} failed: {}", reqwest_hint(&e))
+        }
+        Err(e) => Err(anyhow!("creating repo {name} failed: {}", full_chain(&e))),
     }
 }
 
@@ -504,7 +554,14 @@ pub(crate) fn paths_download(
             let msg = error_message(&body).unwrap_or_else(|| short_body(&body));
             bail!("download of {owner}/{repo}/{slug} failed ({status}): {msg}")
         }
-        Err(e) => Err(anyhow!("download of {owner}/{repo}/{slug} failed: {e}")),
+        Err(pathbase_client::Error::CommunicationError(e)) => bail!(
+            "download of {owner}/{repo}/{slug} failed: {}",
+            reqwest_hint(&e)
+        ),
+        Err(e) => Err(anyhow!(
+            "download of {owner}/{repo}/{slug} failed: {}",
+            full_chain(&e)
+        )),
     }
 }
 
@@ -859,7 +916,10 @@ mod tests {
             paths_download(&server.base(), Some("tok"), "alex", "pathstash", "my-path").unwrap();
         let got_v: serde_json::Value = serde_json::from_str(&got).unwrap();
         let want_v: serde_json::Value = serde_json::from_str(body).unwrap();
-        assert_eq!(got_v, want_v, "downloaded body should parse to the same value");
+        assert_eq!(
+            got_v, want_v,
+            "downloaded body should parse to the same value"
+        );
 
         let req = String::from_utf8(server.request()).unwrap();
         assert!(
