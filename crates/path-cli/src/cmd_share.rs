@@ -610,21 +610,141 @@ fn bail_no_sessions(bundle: &HarnessBundle, project_filter: Option<&std::path::P
     }
 
     let mut summary = String::from("No agent sessions found.\n");
-    summary.push_str(&probe_summary_line("claude", bundle.claude.is_some()));
-    summary.push_str(&probe_summary_line("gemini", bundle.gemini.is_some()));
-    summary.push_str(&probe_summary_line("codex", bundle.codex.is_some()));
-    summary.push_str(&probe_summary_line("opencode", bundle.opencode.is_some()));
-    summary.push_str(&probe_summary_line("pi", bundle.pi.is_some()));
+    // Pad harness names so the path column lines up: "opencode:" is the
+    // longest at 9 chars (8 + colon).
+    let home = home_dir();
+    summary.push_str(&format_status_line("claude", &harness_status_claude(bundle, home.as_deref())));
+    summary.push_str(&format_status_line("gemini", &harness_status_gemini(bundle, home.as_deref())));
+    summary.push_str(&format_status_line("codex", &harness_status_codex(bundle, home.as_deref())));
+    summary.push_str(&format_status_line(
+        "opencode",
+        &harness_status_opencode(bundle, home.as_deref()),
+    ));
+    summary.push_str(&format_status_line("pi", &harness_status_pi(bundle, home.as_deref())));
     eprint!("{summary}");
     anyhow::bail!("no shareable sessions");
 }
 
-fn probe_summary_line(name: &str, present: bool) -> String {
-    if present {
-        format!("  {name}: 0 sessions\n")
-    } else {
-        format!("  {name}: not configured\n")
+/// Cross-platform `$HOME` lookup matching the providers' internal helpers.
+/// Returns `None` only when neither `$HOME` nor `$USERPROFILE` is set.
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+/// Human-readable status of a harness's on-disk store: either the (possibly
+/// home-relative) path with a "(0 sessions)" hint, or the path with a
+/// "not found" hint when the directory/database is absent.
+#[derive(Debug, PartialEq, Eq)]
+struct HarnessStatus {
+    /// Display path (tilde-prefixed when under `$HOME`).
+    path: String,
+    /// True when the path exists on disk.
+    exists: bool,
+}
+
+impl HarnessStatus {
+    fn render(&self) -> String {
+        if self.exists {
+            format!("{} (0 sessions)", self.path)
+        } else {
+            format!("{} not found", self.path)
+        }
     }
+
+    /// Status when the resolver itself failed (e.g. no $HOME).
+    fn unresolved() -> Self {
+        Self {
+            path: "<no home directory>".to_string(),
+            exists: false,
+        }
+    }
+}
+
+/// Format a single status line, padding the harness name so that the path
+/// column lines up across all five rows. The longest name is "opencode" (8).
+fn format_status_line(name: &str, status: &HarnessStatus) -> String {
+    format!("  {:<9} {}\n", format!("{name}:"), status.render())
+}
+
+fn harness_status_claude(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
+    let Some(mgr) = &bundle.claude else {
+        return HarnessStatus::unresolved();
+    };
+    match mgr.resolver().projects_dir() {
+        Ok(p) => HarnessStatus {
+            path: home_relative(&p, home),
+            exists: p.exists(),
+        },
+        Err(_) => HarnessStatus::unresolved(),
+    }
+}
+
+fn harness_status_gemini(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
+    let Some(mgr) = &bundle.gemini else {
+        return HarnessStatus::unresolved();
+    };
+    match mgr.resolver().tmp_dir() {
+        Ok(p) => HarnessStatus {
+            path: home_relative(&p, home),
+            exists: p.exists(),
+        },
+        Err(_) => HarnessStatus::unresolved(),
+    }
+}
+
+fn harness_status_codex(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
+    let Some(mgr) = &bundle.codex else {
+        return HarnessStatus::unresolved();
+    };
+    match mgr.resolver().sessions_root() {
+        Ok(p) => HarnessStatus {
+            path: home_relative(&p, home),
+            exists: p.exists(),
+        },
+        Err(_) => HarnessStatus::unresolved(),
+    }
+}
+
+fn harness_status_opencode(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
+    let Some(mgr) = &bundle.opencode else {
+        return HarnessStatus::unresolved();
+    };
+    match mgr.resolver().db_path() {
+        Ok(p) => HarnessStatus {
+            path: home_relative(&p, home),
+            exists: p.exists(),
+        },
+        Err(_) => HarnessStatus::unresolved(),
+    }
+}
+
+fn harness_status_pi(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
+    let Some(mgr) = &bundle.pi else {
+        return HarnessStatus::unresolved();
+    };
+    let p = mgr.resolver().sessions_dir().to_path_buf();
+    HarnessStatus {
+        path: home_relative(&p, home),
+        exists: p.exists(),
+    }
+}
+
+/// Display `path` as `~/relative/part` when it's under `home`, otherwise
+/// return its absolute lossy form. Pure helper — does no filesystem I/O.
+fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    if let Some(home) = home
+        && let Ok(rest) = path.strip_prefix(home)
+    {
+        // strip_prefix returns the empty path when path == home; treat that
+        // as plain "~".
+        if rest.as_os_str().is_empty() {
+            return "~".to_string();
+        }
+        return format!("~/{}", rest.display());
+    }
+    path.display().to_string()
 }
 
 fn share_explicit(harness: Harness, session: &str, args: &ShareArgs) -> Result<()> {
@@ -992,5 +1112,117 @@ mod tests {
         assert_eq!(harness, Harness::Codex);
         assert_eq!(key, "/work/proj"); // codex has no project; cwd carried as the keyed slot
         assert_eq!(session, "0190abcd");
+    }
+
+    #[test]
+    fn home_relative_strips_home_prefix() {
+        let home = Path::new("/Users/alex");
+        assert_eq!(
+            home_relative(Path::new("/Users/alex/.claude/projects"), Some(home)),
+            "~/.claude/projects"
+        );
+    }
+
+    #[test]
+    fn home_relative_returns_tilde_for_home_itself() {
+        let home = Path::new("/Users/alex");
+        assert_eq!(home_relative(home, Some(home)), "~");
+    }
+
+    #[test]
+    fn home_relative_passes_through_paths_outside_home() {
+        let home = Path::new("/Users/alex");
+        assert_eq!(home_relative(Path::new("/tmp/elsewhere"), Some(home)), "/tmp/elsewhere");
+    }
+
+    #[test]
+    fn home_relative_passes_through_when_no_home() {
+        assert_eq!(home_relative(Path::new("/foo/bar"), None), "/foo/bar");
+    }
+
+    #[test]
+    fn harness_status_renders_existing_path_with_zero_sessions() {
+        let s = HarnessStatus {
+            path: "~/.claude/projects".to_string(),
+            exists: true,
+        };
+        assert_eq!(s.render(), "~/.claude/projects (0 sessions)");
+    }
+
+    #[test]
+    fn harness_status_renders_missing_path_as_not_found() {
+        let s = HarnessStatus {
+            path: "~/.gemini/tmp".to_string(),
+            exists: false,
+        };
+        assert_eq!(s.render(), "~/.gemini/tmp not found");
+    }
+
+    #[test]
+    fn format_status_line_pads_for_alignment() {
+        let s = HarnessStatus {
+            path: "~/.codex/sessions".to_string(),
+            exists: true,
+        };
+        // "claude:" (7) needs 2 trailing spaces; "opencode:" (9) needs 0;
+        // "pi:" (3) needs 6. The visible-path column should always start at
+        // the same offset.
+        let claude_line = format_status_line("claude", &s);
+        let opencode_line = format_status_line("opencode", &s);
+        let pi_line = format_status_line("pi", &s);
+        let offset = |line: &str| line.find('~').unwrap();
+        assert_eq!(offset(&claude_line), offset(&opencode_line));
+        assert_eq!(offset(&claude_line), offset(&pi_line));
+    }
+
+    #[test]
+    fn harness_status_for_missing_claude_dir_reports_not_found() {
+        // Bundle whose claude resolver points at a directory that doesn't
+        // exist on disk; the status should still resolve a path and report
+        // it as missing rather than going through the `unresolved` branch.
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude"); // never created
+        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let bundle = HarnessBundle {
+            claude: Some(toolpath_claude::ClaudeConvo::with_resolver(resolver)),
+            ..Default::default()
+        };
+        let status = harness_status_claude(&bundle, None);
+        assert!(!status.exists, "missing dir must report exists=false");
+        assert!(
+            status.path.contains("projects"),
+            "path must include the projects subdir (got {:?})",
+            status.path
+        );
+    }
+
+    #[test]
+    fn harness_status_for_present_claude_dir_reports_existence() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(claude_dir.join("projects")).unwrap();
+        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let bundle = HarnessBundle {
+            claude: Some(toolpath_claude::ClaudeConvo::with_resolver(resolver)),
+            ..Default::default()
+        };
+        let status = harness_status_claude(&bundle, None);
+        assert!(status.exists);
+    }
+
+    #[test]
+    fn harness_status_for_empty_bundle_is_unresolved() {
+        let bundle = HarnessBundle::default();
+        // Every harness slot is None, so each status hits the unresolved branch.
+        for status in [
+            harness_status_claude(&bundle, None),
+            harness_status_gemini(&bundle, None),
+            harness_status_codex(&bundle, None),
+            harness_status_opencode(&bundle, None),
+            harness_status_pi(&bundle, None),
+        ] {
+            assert_eq!(status, HarnessStatus::unresolved());
+            assert!(!status.exists);
+        }
     }
 }
