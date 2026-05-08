@@ -690,7 +690,7 @@ fn share_explicit_args_uploads_via_anon() {
         use std::io::Read;
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"abc-123","url":"https://example.test/anon/abc-123"}"#;
+        let body = r#"{"id":"abc-123","path":"/anon/x/y/abc-123","share_url":"https://example.test/anon/abc-123"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -767,7 +767,7 @@ fn share_anon_fixture() -> (
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"abc","url":"https://example.test/anon/abc"}"#;
+        let body = r#"{"id":"abc","path":"/anon/x/y/abc","share_url":"https://example.test/anon/abc"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -817,7 +817,7 @@ fn one_shot_anon_server() -> (u16, std::thread::JoinHandle<()>) {
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"abc","url":"https://example.test/anon/abc"}"#;
+        let body = r#"{"id":"abc","path":"/anon/x/y/abc","share_url":"https://example.test/anon/abc"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
