@@ -14,6 +14,8 @@ mod cmd_project;
 mod cmd_query;
 mod cmd_render;
 #[cfg(not(target_os = "emscripten"))]
+mod cmd_resume;
+#[cfg(not(target_os = "emscripten"))]
 mod cmd_share;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_show;
@@ -122,6 +124,13 @@ enum Commands {
         #[command(flatten)]
         args: cmd_share::ShareArgs,
     },
+    /// Resume an agent session into the chosen harness, projecting the
+    /// document and exec'ing the harness's resume command.
+    #[cfg(not(target_os = "emscripten"))]
+    Resume {
+        #[command(flatten)]
+        args: cmd_resume::ResumeArgs,
+    },
 
     // ── Deprecated aliases ────────────────────────────────────────────
     #[command(hide = true, about = "[deprecated] Use `path import`")]
@@ -168,6 +177,8 @@ pub fn run() -> Result<()> {
         Commands::Auth { op } => cmd_auth::run(op),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Share { args } => cmd_share::run(args),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::Resume { args } => cmd_resume::run(args),
 
         Commands::Derive { source } => cmd_derive::run(source, cli.pretty),
         Commands::Incept { args } => cmd_incept::run(args),
