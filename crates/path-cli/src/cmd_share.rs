@@ -1085,6 +1085,48 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn paths_match_canonicalizes_through_symlink() {
+        // `paths_match` is the function that produces `SessionRow.matches_cwd`
+        // (collect_* all delegate to it). Without canonicalization, a user who
+        // navigated to a project via a symlink would see their cwd-row sink
+        // in the picker because the symlink path string ≠ the project path
+        // string. Verify both arguments are canonicalized.
+        //
+        // Note: we test `paths_match` directly rather than going through
+        // `gather_sessions` because Claude's project-dir slug encoding is
+        // lossy (sanitize_project_path: '/', '_', '.' → '-'; unsanitize: only
+        // '-' → '/'). On macOS, tempdir paths contain '.' and end up under
+        // /private/var/..., so the unsanitized slug never round-trips back to
+        // the real on-disk path. This direct test covers the canonicalization
+        // bug regardless of platform-specific tempdir layouts.
+        let temp = TempDir::new().unwrap();
+        let real_project = temp.path().join("real-project");
+        std::fs::create_dir_all(&real_project).unwrap();
+        let symlink_path = temp.path().join("symlink-to-project");
+        std::os::unix::fs::symlink(&real_project, &symlink_path).unwrap();
+
+        // Sanity-check the setup: the symlink and its target are different
+        // string-paths but resolve to the same canonical path.
+        assert_ne!(real_project, symlink_path);
+        assert_eq!(
+            std::fs::canonicalize(&real_project).unwrap(),
+            std::fs::canonicalize(&symlink_path).unwrap(),
+        );
+
+        // The actual property under test.
+        assert!(
+            paths_match(&real_project, &symlink_path),
+            "paths_match must canonicalize both sides so symlink == target"
+        );
+        // And symmetric.
+        assert!(
+            paths_match(&symlink_path, &real_project),
+            "paths_match must be symmetric across the symlink"
+        );
+    }
+
+    #[test]
     fn parse_picker_row_roundtrips_keyed() {
         let row = SessionRow {
             harness: Harness::Claude,
