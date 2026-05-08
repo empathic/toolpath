@@ -323,6 +323,97 @@ pub(crate) fn project_into_harness(
     }
 }
 
+/// What `exec_harness` saw (for tests).
+#[derive(Debug, Clone, Default)]
+pub struct CapturedExec {
+    pub binary: String,
+    pub args: Vec<String>,
+    pub cwd: std::path::PathBuf,
+}
+
+/// Pluggable exec backend. Production uses `RealExec` (`execvp` on
+/// Unix, spawn-and-wait on Windows). Tests use `RecordingExec`.
+pub trait ExecStrategy {
+    fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()>;
+}
+
+/// Production implementation. On Unix this never returns on success
+/// (the current process is replaced); on Windows it spawns the child,
+/// waits, and propagates the exit code.
+pub struct RealExec;
+
+impl ExecStrategy for RealExec {
+    fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()> {
+        let mut cmd = std::process::Command::new(binary);
+        cmd.args(args);
+        cmd.current_dir(cwd);
+
+        eprintln!(
+            "Resuming: {} {} (cwd: {})",
+            binary,
+            args.join(" "),
+            cwd.display()
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // exec only returns if it fails.
+            let err = cmd.exec();
+            anyhow::bail!(
+                "couldn't exec `{}`: {}. Recipe: {} {} (run from {})",
+                binary,
+                err,
+                binary,
+                args.join(" "),
+                cwd.display()
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            let status = cmd.spawn()
+                .with_context(|| format!("spawn {}", binary))?
+                .wait()
+                .with_context(|| format!("wait for {}", binary))?;
+            std::process::exit(status.code().unwrap_or(1));
+        }
+    }
+}
+
+/// Recording strategy for tests. `captured()` returns the most recent
+/// invocation.
+#[derive(Default)]
+pub struct RecordingExec {
+    inner: std::sync::Mutex<CapturedExec>,
+}
+
+impl RecordingExec {
+    pub fn captured(&self) -> CapturedExec {
+        self.inner.lock().unwrap().clone()
+    }
+}
+
+impl ExecStrategy for RecordingExec {
+    fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()> {
+        let mut g = self.inner.lock().unwrap();
+        *g = CapturedExec {
+            binary: binary.to_string(),
+            args: args.to_vec(),
+            cwd: cwd.to_path_buf(),
+        };
+        Ok(())
+    }
+}
+
+pub(crate) fn exec_harness(
+    binary: &str,
+    args: &[String],
+    cwd: &std::path::Path,
+    strategy: &dyn ExecStrategy,
+) -> Result<()> {
+    strategy.exec(binary, args, cwd)
+}
+
 fn looks_like_pathbase_shorthand(s: &str) -> bool {
     // Three non-empty slash-separated segments, none containing whitespace
     // or starting with a dot/slash (which would indicate a relative or
@@ -657,5 +748,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn exec_strategy_recording_captures_invocation() {
+        let recorder = RecordingExec::default();
+        let strategy: &dyn ExecStrategy = &recorder;
+        exec_harness("claude", &["-r".into(), "abc123".into()], std::path::Path::new("/tmp/x"), strategy)
+            .unwrap();
+
+        let captured = recorder.captured();
+        assert_eq!(captured.binary, "claude");
+        assert_eq!(captured.args, vec!["-r".to_string(), "abc123".to_string()]);
+        assert_eq!(captured.cwd, std::path::PathBuf::from("/tmp/x"));
     }
 }
