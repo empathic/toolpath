@@ -622,7 +622,7 @@ pub(crate) fn clear_session(path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn sample() -> StoredSession {
@@ -735,13 +735,13 @@ mod tests {
 
     /// A one-shot HTTP/1.1 responder. Binds to 127.0.0.1 on a free port,
     /// reads one request (headers + body), writes a canned response, closes.
-    struct MockServer {
+    pub(crate) struct MockServer {
         port: u16,
         thread: Option<std::thread::JoinHandle<Vec<u8>>>,
     }
 
     impl MockServer {
-        fn start(status_line: &'static str, body: &'static str) -> Self {
+        pub(crate) fn start(status_line: &'static str, body: &'static str) -> Self {
             use std::io::{BufRead, BufReader, Write};
             use std::net::TcpListener;
 
@@ -794,7 +794,7 @@ mod tests {
             }
         }
 
-        fn base(&self) -> String {
+        pub(crate) fn base(&self) -> String {
             format!("http://127.0.0.1:{}", self.port)
         }
 

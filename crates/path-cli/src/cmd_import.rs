@@ -1362,6 +1362,29 @@ fn project_short(p: &str) -> String {
     out.join("/")
 }
 
+/// Fetch a Pathbase ref (`https://host/owner/repo/slug` URL or bare
+/// `owner/repo/slug` triple) and parse it as a toolpath document. Used
+/// by `path import pathbase` and by `path resume <url>`.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Result<DerivedDoc> {
+    use crate::cmd_pathbase::{credentials_path, load_session, paths_download, resolve_url};
+
+    let (base, ref_) = parse_pathbase_ref(target, url_flag)?;
+    let stored = load_session(&credentials_path()?)?;
+    let base_url = base
+        .or_else(|| stored.as_ref().map(|s| s.url.clone()))
+        .unwrap_or_else(|| resolve_url(None));
+
+    let token = stored.as_ref().map(|s| s.token.as_str());
+
+    let PathRef { owner, repo, slug } = ref_;
+    let body = paths_download(&base_url, token, &owner, &repo, &slug)?;
+    let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{slug}"));
+    let doc = Graph::from_json(&body)
+        .map_err(|e| anyhow::anyhow!("server returned a non-toolpath document: {e}"))?;
+    Ok(DerivedDoc { cache_id, doc })
+}
+
 fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<DerivedDoc>> {
     #[cfg(target_os = "emscripten")]
     {
@@ -1371,22 +1394,7 @@ fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<Deriv
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        use crate::cmd_pathbase::{credentials_path, load_session, paths_download, resolve_url};
-
-        let (base, ref_) = parse_pathbase_ref(&target, url_flag.as_deref())?;
-        let stored = load_session(&credentials_path()?)?;
-        let base_url = base
-            .or_else(|| stored.as_ref().map(|s| s.url.clone()))
-            .unwrap_or_else(|| resolve_url(None));
-
-        let token = stored.as_ref().map(|s| s.token.as_str());
-
-        let PathRef { owner, repo, slug } = ref_;
-        let body = paths_download(&base_url, token, &owner, &repo, &slug)?;
-        let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{slug}"));
-        let doc = Graph::from_json(&body)
-            .map_err(|e| anyhow::anyhow!("server returned a non-toolpath document: {e}"))?;
-        Ok(vec![DerivedDoc { cache_id, doc }])
+        Ok(vec![pathbase_fetch_to_doc(&target, url_flag.as_deref())?])
     }
 }
 
@@ -1630,5 +1638,19 @@ mod tests {
         for d in &out {
             assert!(d.cache_id.starts_with("claude-"));
         }
+    }
+
+    #[test]
+    #[cfg(not(target_os = "emscripten"))]
+    fn pathbase_fetch_to_doc_url_input() {
+        use crate::cmd_pathbase::tests::MockServer;
+        let body = r#"{"graph":{"id":"g1"},"paths":[{"path":{"id":"p1","head":"s1"},"steps":[{"step":{"id":"s1","actor":"agent:claude-code","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#;
+        let server = MockServer::start("HTTP/1.1 200 OK", body);
+        let url = format!("{}/alex/pathstash/my-path", server.base());
+
+        let derived = pathbase_fetch_to_doc(&url, None).unwrap();
+
+        assert_eq!(derived.cache_id, "pathbase-alex-pathstash-my-path");
+        assert!(derived.doc.into_single_path().is_some());
     }
 }
