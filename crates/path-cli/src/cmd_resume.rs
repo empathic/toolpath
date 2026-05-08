@@ -293,6 +293,36 @@ fn interactive_pick(
     anyhow::bail!("picker returned an unrecognized row: {selected}")
 }
 
+/// Static map from harness to resume-argv shape. Lives here because
+/// it's a per-harness CLI convention, not a projection concern.
+pub(crate) fn argv_for(harness: crate::cmd_share::Harness, session_id: &str) -> Vec<String> {
+    use crate::cmd_share::Harness;
+    match harness {
+        Harness::Claude   => vec!["-r".into(), session_id.into()],
+        Harness::Gemini   => vec!["--resume".into(), session_id.into()],
+        Harness::Codex    => vec!["resume".into(), session_id.into()],
+        Harness::Opencode => vec!["--session".into(), session_id.into()],
+        Harness::Pi       => vec!["--session".into(), session_id.into()],
+    }
+}
+
+/// Project a Path into the chosen harness's on-disk layout under `cwd`,
+/// returning the projected session id.
+pub(crate) fn project_into_harness(
+    path: &TPath,
+    harness: crate::cmd_share::Harness,
+    cwd: &std::path::Path,
+) -> Result<String> {
+    use crate::cmd_share::Harness;
+    match harness {
+        Harness::Claude   => crate::cmd_export::project_claude(path, cwd),
+        Harness::Gemini   => crate::cmd_export::project_gemini(path, cwd),
+        Harness::Codex    => crate::cmd_export::project_codex(path, cwd),
+        Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
+        Harness::Pi       => crate::cmd_export::project_pi(path, cwd),
+    }
+}
+
 fn looks_like_pathbase_shorthand(s: &str) -> bool {
     // Three non-empty slash-separated segments, none containing whitespace
     // or starting with a dot/slash (which would indicate a relative or
@@ -539,5 +569,93 @@ mod tests {
             "actual: {}",
             err
         );
+    }
+
+    #[test]
+    fn argv_for_returns_harness_specific_shape() {
+        assert_eq!(argv_for(Harness::Claude, "abc"),   vec!["-r".to_string(), "abc".to_string()]);
+        assert_eq!(argv_for(Harness::Gemini, "abc"),   vec!["--resume".to_string(), "abc".to_string()]);
+        assert_eq!(argv_for(Harness::Codex, "abc"),    vec!["resume".to_string(), "abc".to_string()]);
+        assert_eq!(argv_for(Harness::Opencode, "abc"), vec!["--session".to_string(), "abc".to_string()]);
+        assert_eq!(argv_for(Harness::Pi, "abc"),       vec!["--session".to_string(), "abc".to_string()]);
+    }
+
+    #[test]
+    fn project_into_harness_claude_round_trip() {
+        let _home = scoped_home_for_resume();
+        let cwd = tempfile::tempdir().unwrap();
+        let path = make_convo_path_for_resume("claude-code://resume-test-session");
+
+        let session_id = project_into_harness(&path, Harness::Claude, cwd.path()).unwrap();
+        assert!(!session_id.is_empty());
+    }
+
+    /// Build a minimal `toolpath::v1::Path` with a single `conversation.append`
+    /// step using the given `artifact_key` (e.g. `"claude-code://my-session"`).
+    /// Required for projectors that extract the session id from the artifact key.
+    fn make_convo_path_for_resume(artifact_key: &str) -> toolpath::v1::Path {
+        use std::collections::HashMap;
+        let mut extra = HashMap::new();
+        extra.insert("role".to_string(), serde_json::json!("user"));
+        extra.insert("text".to_string(), serde_json::json!("hello"));
+        let step = toolpath::v1::Step {
+            step: toolpath::v1::StepIdentity {
+                id: "s1".to_string(),
+                parents: vec![],
+                actor: "human:test".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+            },
+            change: {
+                let mut m = HashMap::new();
+                m.insert(
+                    artifact_key.to_string(),
+                    toolpath::v1::ArtifactChange {
+                        raw: None,
+                        structural: Some(toolpath::v1::StructuralChange {
+                            change_type: "conversation.append".to_string(),
+                            extra,
+                        }),
+                    },
+                );
+                m
+            },
+            meta: None,
+        };
+        toolpath::v1::Path {
+            path: toolpath::v1::PathIdentity {
+                id: "test-path".to_string(),
+                base: None,
+                head: "s1".to_string(),
+                graph_ref: None,
+            },
+            steps: vec![step],
+            meta: None,
+        }
+    }
+
+    fn scoped_home_for_resume() -> ScopedHomeForResume {
+        ScopedHomeForResume::new()
+    }
+
+    struct ScopedHomeForResume { _td: tempfile::TempDir, prev: Option<std::ffi::OsString> }
+
+    impl ScopedHomeForResume {
+        fn new() -> Self {
+            let td = tempfile::tempdir().unwrap();
+            let prev = std::env::var_os("HOME");
+            unsafe { std::env::set_var("HOME", td.path()); }
+            Self { _td: td, prev }
+        }
+    }
+
+    impl Drop for ScopedHomeForResume {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
     }
 }
