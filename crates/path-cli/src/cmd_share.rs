@@ -76,7 +76,6 @@ pub(crate) enum Harness {
     Pi,
 }
 
-#[allow(dead_code)] // wired up by gather_sessions in a follow-up task
 impl Harness {
     pub(crate) fn name(&self) -> &'static str {
         match self {
@@ -89,6 +88,7 @@ impl Harness {
     }
 
     /// Padded so all five symbols line up in the fzf column.
+    #[allow(dead_code)] // wired up by the picker in a follow-up task
     pub(crate) fn symbol(&self) -> &'static str {
         match self {
             Harness::Claude => "claude  ",
@@ -116,6 +116,7 @@ impl Harness {
         }
     }
 
+    #[allow(dead_code)] // wired up by the picker in a follow-up task
     pub(crate) fn parse(s: &str) -> Option<Self> {
         match s {
             "claude" => Some(Harness::Claude),
@@ -503,8 +504,74 @@ fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
 }
 
 pub fn run(args: ShareArgs) -> Result<()> {
-    let _ = args;
-    anyhow::bail!("`path share` is not yet implemented")
+    let harness = args.harness.map(Harness::from_arg);
+
+    if let (Some(h), Some(session)) = (harness, &args.session) {
+        return share_explicit(h, session.as_str(), &args);
+    }
+
+    if args.session.is_some() && harness.is_none() {
+        anyhow::bail!("--session requires --harness");
+    }
+
+    // Picker path lands in the next task.
+    anyhow::bail!("interactive `path share` is not yet implemented")
+}
+
+fn share_explicit(harness: Harness, session: &str, args: &ShareArgs) -> Result<()> {
+    let project = match (harness.project_keyed(), args.project.as_ref()) {
+        (true, Some(p)) => Some(p.to_string_lossy().into_owned()),
+        (true, None) => anyhow::bail!(
+            "--project required when --harness is {} and --session is set",
+            harness.name()
+        ),
+        (false, _) => None,
+    };
+
+    let derived = derive_one(harness, project.as_deref(), session)?;
+    let summary = format!("{} session {}", harness.name(), derived.cache_id);
+
+    if !args.no_cache {
+        let path = crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, args.force)?;
+        eprintln!(
+            "Imported {} session → {} ({})",
+            harness.name(),
+            derived.cache_id,
+            path.display()
+        );
+    }
+
+    let body = derived.doc.to_json()?;
+    let upload = crate::cmd_export::PathbaseUploadArgs {
+        url: args.url.clone(),
+        anon: args.anon,
+        repo: args.repo.clone(),
+        slug: args.slug.clone(),
+        public: args.public,
+    };
+    crate::cmd_export::run_pathbase_inner(upload, &body, &summary)
+}
+
+fn derive_one(
+    harness: Harness,
+    project: Option<&str>,
+    session: &str,
+) -> Result<crate::cmd_import::DerivedDoc> {
+    match harness {
+        Harness::Claude => {
+            crate::cmd_import::derive_claude_pair(project.expect("project_keyed"), session)
+        }
+        Harness::Gemini => crate::cmd_import::derive_gemini_pair(
+            project.expect("project_keyed"),
+            session,
+            false,
+        ),
+        Harness::Pi => {
+            crate::cmd_import::derive_pi_pair(project.expect("project_keyed"), session, None)
+        }
+        Harness::Codex => crate::cmd_import::derive_codex_one(session),
+        Harness::Opencode => crate::cmd_import::derive_opencode_one(session, false),
+    }
 }
 
 #[cfg(test)]

@@ -450,7 +450,6 @@ fn derive_claude_with_manager(
 /// Derive a single Claude conversation given an explicit project + session.
 /// Used by `cmd_share` after its picker has resolved the pair; mirrors the
 /// `(Some(p), Some(s), _)` arm in [`derive_claude_with_manager`].
-#[allow(dead_code)] // wired up by cmd_share in a follow-up task
 pub(crate) fn derive_claude_pair(project: &str, session: &str) -> Result<DerivedDoc> {
     let manager = toolpath_claude::ClaudeConvo::new();
     let cfg = toolpath_claude::derive::DeriveConfig {
@@ -659,7 +658,6 @@ fn derive_gemini_with_manager(
 }
 
 /// Derive a single Gemini conversation given an explicit project + session.
-#[allow(dead_code)] // wired up by cmd_share in a follow-up task
 pub(crate) fn derive_gemini_pair(
     project: &str,
     session: &str,
@@ -836,7 +834,6 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
 }
 
 /// Derive a single Codex session given an explicit session id.
-#[allow(dead_code)] // wired up by cmd_share in a follow-up task
 pub(crate) fn derive_codex_one(session: &str) -> Result<DerivedDoc> {
     let manager = toolpath_codex::CodexConvo::new();
     let config = toolpath_codex::derive::DeriveConfig { project_path: None };
@@ -981,7 +978,6 @@ fn derive_opencode(
 
 /// Derive a single opencode session given an explicit session id.
 #[cfg(not(target_os = "emscripten"))]
-#[allow(dead_code)] // wired up by cmd_share in a follow-up task
 pub(crate) fn derive_opencode_one(
     session: &str,
     no_snapshot_diffs: bool,
@@ -1156,7 +1152,6 @@ fn derive_pi_with_manager(
 }
 
 /// Derive a single Pi session given an explicit project + session.
-#[allow(dead_code)] // wired up by cmd_share in a follow-up task
 pub(crate) fn derive_pi_pair(
     project: &str,
     session: &str,

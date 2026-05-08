@@ -675,3 +675,201 @@ fn share_help_lists_unified_picker_flags() {
         .stdout(predicate::str::contains("--project"))
         .stdout(predicate::str::contains("--anon"));
 }
+
+#[test]
+fn share_explicit_args_uploads_via_anon() {
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    // Stand up a one-shot mock that returns a valid AnonUploadResponse.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        // Drain the request just enough to keep the OS happy.
+        use std::io::Read;
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let body = r#"{"id":"abc-123","url":"https://example.test/anon/abc-123"}"#;
+        let resp = format!(
+            "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+    });
+
+    // Build a claude fixture so the explicit-args path has something to derive.
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let claude_dir = temp.path().join(".claude");
+    // toolpath-claude maps '/', '_', and '.' to '-' when sanitizing project
+    // paths into directory slugs — mirror that here so the fixture lands
+    // where the resolver looks for it.
+    let project_slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let project_dir = claude_dir.join("projects").join(&project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("session-abc.jsonl"),
+        format!(
+            r#"{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--anon", "--no-cache", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("https://example.test/anon/abc-123"))
+        .stderr(predicate::str::contains("Uploaded"));
+
+    server.join().unwrap();
+}
+
+/// Helper for the cache tests. Spawns a one-shot mock anon-upload server
+/// on a free port and returns (port, server-thread-handle, fixture-temp,
+/// project-path, $HOME-path).
+fn share_anon_fixture() -> (u16, std::thread::JoinHandle<()>, tempfile::TempDir, PathBuf, PathBuf)
+{
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let body = r#"{"id":"abc","url":"https://example.test/anon/abc"}"#;
+        let resp = format!(
+            "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+    });
+
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let claude_dir = temp.path().join(".claude");
+    // toolpath-claude maps '/', '_', and '.' to '-' when sanitizing project
+    // paths into directory slugs — mirror that here so the fixture lands
+    // where the resolver looks for it.
+    let project_slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let project_dir = claude_dir.join("projects").join(&project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("session-abc.jsonl"),
+        format!(
+            r#"{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+
+    let home = temp.path().to_path_buf();
+    (port, server, temp, project, home)
+}
+
+#[test]
+fn share_writes_cache_by_default() {
+    let (port, server, _temp, project, home) = share_anon_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+
+    cmd()
+        .env("HOME", &home)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--anon", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .assert()
+        .success();
+
+    let docs = cfg.path().join("documents");
+    let entries: Vec<_> = std::fs::read_dir(&docs)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one cache entry, got {entries:?}"
+    );
+    let name = entries[0].file_name().to_string_lossy().into_owned();
+    assert!(
+        name.starts_with("claude-"),
+        "expected claude-* cache id, got {name}"
+    );
+
+    server.join().unwrap();
+}
+
+#[test]
+fn share_no_cache_skips_write() {
+    let (port, server, _temp, project, home) = share_anon_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+
+    cmd()
+        .env("HOME", &home)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--anon", "--no-cache", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .assert()
+        .success();
+
+    let docs = cfg.path().join("documents");
+    if docs.exists() {
+        let entries: Vec<_> = std::fs::read_dir(&docs)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "expected no cache entries with --no-cache, got {entries:?}"
+        );
+    }
+
+    server.join().unwrap();
+}
