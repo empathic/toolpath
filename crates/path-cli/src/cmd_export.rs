@@ -239,6 +239,112 @@ pub(crate) struct PathbaseUploadArgs {
     pub(crate) public: bool,
 }
 
+// ── pub(crate) project_<harness> wrappers ────────────────────────────
+//
+// These compose the private build + write helpers below and return the
+// projected session id. They are called by `path resume`; the existing
+// `run_<harness>` functions are untouched.
+
+/// Project `path` into a Claude session under `project_dir` and return
+/// the resulting session id.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_claude(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    let conv = build_claude_conversation(path)?;
+    let jsonl = serialize_jsonl(&conv)?;
+    write_into_claude_project(&conv, &jsonl, project_dir)?;
+    Ok(conv.session_id)
+}
+
+/// Project `path` into a Gemini session under `project_dir` and return
+/// the resulting session UUID.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_gemini(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    use toolpath_convo::ConversationProjector;
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+    let project_path = project_dir.to_string_lossy().to_string();
+
+    let view = toolpath_convo::extract_conversation(path);
+    let project_hash = toolpath_gemini::paths::project_hash(&project_path);
+    let projector = toolpath_gemini::project::GeminiProjector::new()
+        .with_project_hash(project_hash)
+        .with_project_path(project_path.clone());
+    let conv = projector
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
+    if conv.session_uuid.is_empty() {
+        anyhow::bail!("Projected conversation has no session UUID");
+    }
+    write_into_gemini_project(&conv, &project_path)?;
+    Ok(conv.session_uuid)
+}
+
+/// Project `path` into a Codex session and return the resulting session id.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_codex(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    use toolpath_convo::ConversationProjector;
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+    let cwd_str = project_dir.to_string_lossy().to_string();
+
+    let view = toolpath_convo::extract_conversation(path);
+    let projector = toolpath_codex::project::CodexProjector::new().with_cwd(cwd_str);
+    let session = projector
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
+    if session.id.is_empty() {
+        anyhow::bail!("Projected session has no id");
+    }
+    write_into_codex_project(&session)?;
+    Ok(session.id)
+}
+
+/// Project `path` into an opencode session under `project_dir` and return
+/// the resulting session id.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_opencode(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    let session = build_opencode_session(path, Some(project_dir))?;
+    let id = session.id.clone();
+    write_into_opencode_db(&session, project_dir)?;
+    Ok(id)
+}
+
+/// Project `path` into a Pi session under `project_dir` and return the
+/// resulting session id.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_pi(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    use toolpath_convo::ConversationProjector;
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+    let cwd_str = project_dir.to_string_lossy().to_string();
+
+    let view = toolpath_convo::extract_conversation(path);
+    let projector = toolpath_pi::project::PiProjector::new().with_cwd(cwd_str.clone());
+    let session = projector
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
+    if session.header.id.is_empty() {
+        anyhow::bail!("Projected session has no id");
+    }
+    write_into_pi_project(&session, &cwd_str)?;
+    Ok(session.header.id)
+}
+
 fn run_claude(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
@@ -2512,5 +2618,259 @@ mod tests {
 
         let err = run_opencode(input_path.to_string_lossy().to_string(), None, None).unwrap_err();
         assert!(err.to_string().contains("single-path"));
+    }
+
+    // ── project_<harness> wrapper tests ──────────────────────────────
+
+    /// Build a minimal `toolpath::v1::Path` with a single `conversation.append`
+    /// step using the given `artifact_key` (e.g. `"claude-code://my-session"`).
+    /// The projectors read `view.id` from the first `<provider>://<id>` artifact
+    /// key they see, so this gives them a non-empty session id to work with.
+    fn make_convo_path(artifact_key: &str) -> toolpath::v1::Path {
+        let mut extra = HashMap::new();
+        extra.insert("role".to_string(), serde_json::json!("user"));
+        extra.insert("text".to_string(), serde_json::json!("hello"));
+        let step = toolpath::v1::Step {
+            step: toolpath::v1::StepIdentity {
+                id: "s1".to_string(),
+                parents: vec![],
+                actor: "human:test".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+            },
+            change: {
+                let mut m = HashMap::new();
+                m.insert(
+                    artifact_key.to_string(),
+                    toolpath::v1::ArtifactChange {
+                        raw: None,
+                        structural: Some(toolpath::v1::StructuralChange {
+                            change_type: "conversation.append".to_string(),
+                            extra,
+                        }),
+                    },
+                );
+                m
+            },
+            meta: None,
+        };
+        toolpath::v1::Path {
+            path: toolpath::v1::PathIdentity {
+                id: "test-path".to_string(),
+                base: None,
+                head: "s1".to_string(),
+                graph_ref: None,
+            },
+            steps: vec![step],
+            meta: None,
+        }
+    }
+
+    #[test]
+    fn project_claude_returns_session_id_and_writes_jsonl() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        // Use a deterministic session id embedded in the artifact key.
+        let session_id = "claude-wrapper-test-session";
+        let path = make_convo_path(&format!("claude-code://{}", session_id));
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &fake_home); }
+        let result = project_claude(&path, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let returned_id = result.expect("project_claude should succeed");
+        assert_eq!(returned_id, session_id);
+
+        let claude_projects = fake_home.join(".claude/projects");
+        assert!(
+            claude_projects.exists(),
+            "claude projects dir missing under HOME"
+        );
+    }
+
+    #[test]
+    fn project_gemini_returns_session_id_and_writes_chat_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let session_uuid = "11111111-2222-3333-4444-aaaaaaaaaaaa";
+        let path = make_convo_path(&format!("gemini-cli://{}", session_uuid));
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &fake_home); }
+        let result = project_gemini(&path, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let returned_id = result.expect("project_gemini should succeed");
+        assert_eq!(returned_id, session_uuid);
+
+        let gemini_tmp = fake_home.join(".gemini/tmp");
+        assert!(gemini_tmp.exists(), "gemini tmp dir missing under HOME");
+    }
+
+    #[test]
+    fn project_codex_returns_session_id_and_writes_rollout() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let session_uuid = "019dabc6-cccc-dddd-eeee-ffffffffffff";
+        let path = make_convo_path(&format!("codex://{}", session_uuid));
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &fake_home); }
+        let result = project_codex(&path, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let returned_id = result.expect("project_codex should succeed");
+        assert_eq!(returned_id, session_uuid);
+
+        let codex_sessions = fake_home.join(".codex/sessions");
+        assert!(codex_sessions.exists(), "codex sessions dir missing");
+    }
+
+    #[test]
+    fn project_opencode_returns_session_id_and_inserts_row() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        // Bootstrap the opencode DB (no public schema helper exists; inline
+        // the same DDL used in the existing opencode_writes_into_db_with_project test).
+        let data_dir = fake_home.join(".local/share/opencode");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let db_path = data_dir.join("opencode.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE project (
+                  id text PRIMARY KEY, worktree text NOT NULL, vcs text, name text,
+                  icon_url text, icon_color text,
+                  time_created integer NOT NULL, time_updated integer NOT NULL,
+                  time_initialized integer, sandboxes text NOT NULL, commands text
+                );
+                CREATE TABLE session (
+                  id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
+                  slug text NOT NULL, directory text NOT NULL, title text NOT NULL,
+                  version text NOT NULL, share_url text,
+                  summary_additions integer, summary_deletions integer,
+                  summary_files integer, summary_diffs text, revert text, permission text,
+                  time_created integer NOT NULL, time_updated integer NOT NULL,
+                  time_compacting integer, time_archived integer, workspace_id text
+                );
+                CREATE TABLE message (
+                  id text PRIMARY KEY, session_id text NOT NULL,
+                  time_created integer NOT NULL, time_updated integer NOT NULL,
+                  data text NOT NULL
+                );
+                CREATE TABLE part (
+                  id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
+                  time_created integer NOT NULL, time_updated integer NOT NULL,
+                  data text NOT NULL
+                );
+                "#,
+            )
+            .unwrap();
+        }
+
+        // opencode session ids are derived from view.id via mint_session_id,
+        // which adds the `ses_` prefix if not already present.
+        let path = make_convo_path("opencode://ses_wrapper-test");
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+        let result = project_opencode(&path, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let returned_id = result.expect("project_opencode should succeed");
+        assert!(!returned_id.is_empty());
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session WHERE id = ?1",
+                [&returned_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "expected one session row with id {returned_id}");
+    }
+
+    #[test]
+    fn project_pi_returns_session_id_and_writes_jsonl() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let session_id = "pi-wrapper-test-session";
+        let path = make_convo_path(&format!("pi://{}", session_id));
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &fake_home); }
+        let result = project_pi(&path, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let returned_id = result.expect("project_pi should succeed");
+        assert_eq!(returned_id, session_id);
+
+        let pi_sessions = fake_home.join(".pi/agent/sessions");
+        assert!(pi_sessions.exists(), "pi sessions dir missing");
     }
 }
