@@ -2681,7 +2681,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prior_home = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", &fake_home); }
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
         let result = project_claude(&path, &cwd);
         unsafe {
             match prior_home {
@@ -2715,7 +2717,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prior_home = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", &fake_home); }
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
         let result = project_gemini(&path, &cwd);
         unsafe {
             match prior_home {
@@ -2746,7 +2750,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prior_home = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", &fake_home); }
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
         let result = project_codex(&path, &cwd);
         unsafe {
             match prior_home {
@@ -2817,6 +2823,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prior_home = std::env::var_os("HOME");
+        let prior_xdg = std::env::var_os("XDG_DATA_HOME");
         unsafe {
             std::env::set_var("HOME", &fake_home);
             std::env::remove_var("XDG_DATA_HOME");
@@ -2827,10 +2834,14 @@ mod tests {
                 Some(v) => std::env::set_var("HOME", v),
                 None => std::env::remove_var("HOME"),
             }
+            match prior_xdg {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
         }
 
         let returned_id = result.expect("project_opencode should succeed");
-        assert!(!returned_id.is_empty());
+        assert_eq!(returned_id, "ses_wrapper-test");
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         let count: i64 = conn
@@ -2858,7 +2869,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prior_home = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", &fake_home); }
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
         let result = project_pi(&path, &cwd);
         unsafe {
             match prior_home {
