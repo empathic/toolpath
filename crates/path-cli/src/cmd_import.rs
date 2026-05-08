@@ -450,7 +450,7 @@ fn derive_claude_with_manager(
 /// Derive a single Claude conversation given an explicit project + session.
 /// Used by `cmd_share` after its picker has resolved the pair; mirrors the
 /// `(Some(p), Some(s), _)` arm in [`derive_claude_with_manager`].
-pub(crate) fn derive_claude_pair(project: &str, session: &str) -> Result<DerivedDoc> {
+pub(crate) fn derive_claude_session(project: &str, session: &str) -> Result<DerivedDoc> {
     let manager = toolpath_claude::ClaudeConvo::new();
     let cfg = toolpath_claude::derive::DeriveConfig {
         project_path: Some(project.to_string()),
@@ -666,7 +666,7 @@ fn derive_gemini_with_manager(
 }
 
 /// Derive a single Gemini conversation given an explicit project + session.
-pub(crate) fn derive_gemini_pair(
+pub(crate) fn derive_gemini_session(
     project: &str,
     session: &str,
     include_thinking: bool,
@@ -850,7 +850,7 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
 }
 
 /// Derive a single Codex session given an explicit session id.
-pub(crate) fn derive_codex_one(session: &str) -> Result<DerivedDoc> {
+pub(crate) fn derive_codex_session(session: &str) -> Result<DerivedDoc> {
     let manager = toolpath_codex::CodexConvo::new();
     let config = toolpath_codex::derive::DeriveConfig { project_path: None };
     let s = manager
@@ -998,7 +998,7 @@ fn derive_opencode(
 
 /// Derive a single opencode session given an explicit session id.
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn derive_opencode_one(session: &str, no_snapshot_diffs: bool) -> Result<DerivedDoc> {
+pub(crate) fn derive_opencode_session(session: &str, no_snapshot_diffs: bool) -> Result<DerivedDoc> {
     let manager = toolpath_opencode::OpencodeConvo::new();
     let config = toolpath_opencode::derive::DeriveConfig {
         no_snapshot_diffs,
@@ -1173,7 +1173,7 @@ fn derive_pi_with_manager(
 }
 
 /// Derive a single Pi session given an explicit project + session.
-pub(crate) fn derive_pi_pair(
+pub(crate) fn derive_pi_session(
     project: &str,
     session: &str,
     base: Option<PathBuf>,

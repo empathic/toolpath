@@ -789,7 +789,7 @@ fn share_explicit(
         (false, _) => None,
     };
 
-    let derived = derive_one(harness, project.as_deref(), session)?;
+    let derived = derive_session(harness, project.as_deref(), session)?;
     let summary = format!("{} session {}", harness.name(), derived.cache_id);
 
     if !args.no_cache {
@@ -893,23 +893,23 @@ fn project_short(p: &str) -> String {
     out.join("/")
 }
 
-fn derive_one(
+fn derive_session(
     harness: Harness,
     project: Option<&str>,
     session: &str,
 ) -> Result<crate::cmd_import::DerivedDoc> {
     match harness {
         Harness::Claude => {
-            crate::cmd_import::derive_claude_pair(project.expect("project_keyed"), session)
+            crate::cmd_import::derive_claude_session(project.expect("project_keyed"), session)
         }
         Harness::Gemini => {
-            crate::cmd_import::derive_gemini_pair(project.expect("project_keyed"), session, false)
+            crate::cmd_import::derive_gemini_session(project.expect("project_keyed"), session, false)
         }
         Harness::Pi => {
-            crate::cmd_import::derive_pi_pair(project.expect("project_keyed"), session, None)
+            crate::cmd_import::derive_pi_session(project.expect("project_keyed"), session, None)
         }
-        Harness::Codex => crate::cmd_import::derive_codex_one(session),
-        Harness::Opencode => crate::cmd_import::derive_opencode_one(session, false),
+        Harness::Codex => crate::cmd_import::derive_codex_session(session),
+        Harness::Opencode => crate::cmd_import::derive_opencode_session(session, false),
     }
 }
 
