@@ -902,9 +902,11 @@ fn derive_session(
         Harness::Claude => {
             crate::cmd_import::derive_claude_session(project.expect("project_keyed"), session)
         }
-        Harness::Gemini => {
-            crate::cmd_import::derive_gemini_session(project.expect("project_keyed"), session, false)
-        }
+        Harness::Gemini => crate::cmd_import::derive_gemini_session(
+            project.expect("project_keyed"),
+            session,
+            false,
+        ),
         Harness::Pi => {
             crate::cmd_import::derive_pi_session(project.expect("project_keyed"), session, None)
         }

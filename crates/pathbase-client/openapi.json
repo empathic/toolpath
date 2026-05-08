@@ -2,11 +2,11 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Pathbase API",
-    "description": "",
+    "description": "HTTP API for Pathbase — repositories, agent trace paths, computation graphs, and anonymous share links.\n\n**Stability.** v1 endpoints are stable in shape; additive changes (new fields, new endpoints, broader query params) ship without a version bump. Breaking changes get a new prefix (`/api/v2/...`) and a deprecation window.\n\n**Spec format.** OpenAPI 3.1, served live at `/api/v1/openapi.json`. The `x-pathbase-version` response header on every call carries the running build's `<semver>+<git-sha>` so consumers can pin or correlate.\n\n**Auth.** Most endpoints require a Pathbase session cookie or a `pat_…` bearer token (see the `bearerAuth` scheme). Unauthenticated endpoints — the `Anon` and `Signups` namespaces, public profile reads — are clearly tagged. Per-operation `security` annotations reflect the actual gate enforced by the handler.",
     "license": {
       "name": ""
     },
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "paths": {
     "/api/v1/anon/paths": {
@@ -14,6 +14,7 @@
         "tags": [
           "Anon"
         ],
+        "summary": "Upload a single-path Graph document anonymously. Stored under the\nshared `anon` user; the response carries a UUID-based `share_url`\nthe uploader can hand out. Per-IP rate-limited and capped by\n`body_limits.anon_upload_bytes`.",
         "operationId": "create_anon_path",
         "requestBody": {
           "content": {
@@ -48,11 +49,244 @@
         }
       }
     },
+    "/api/v1/anon/paths/{id}": {
+      "get": {
+        "tags": [
+          "Anon"
+        ],
+        "summary": "Read an anon-uploaded trace by its UUID. No auth, no rate limit.",
+        "description": "The handler explicitly overrides the global `Cache-Control` and\n`Vary` defaults: anon responses don't depend on the `Authorization`\nheader (the endpoint ignores it), so the auth-keyed cache defaults\nwould needlessly fragment any CDN/proxy cache.",
+        "operationId": "get_anon_path",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Anon path UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reconstructed toolpath document",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "No anon path with that ID"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/cli/redeem": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Second half of the CLI browser-login flow. Redeems a one-time code\nfor a long-lived `pat_…` bearer token bound to a `cli` session. No\nauth required — the code is the credential.",
+        "operationId": "cli_redeem",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemBody"
+              },
+              "example": {
+                "code": "BCDF23GH"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bearer token + user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid code format"
+          },
+          "401": {
+            "description": "Code expired or unknown"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/cli/request-grant": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "First half of the CLI browser-login flow. The signed-in browser\nasks for a short, human-readable code that the user types into a\nCLI (`pathbase login`); the CLI then redeems it for a long-lived\nbearer token via `/auth/cli/redeem`.",
+        "operationId": "cli_request_grant",
+        "responses": {
+          "200": {
+            "description": "Short-lived grant code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliGrantResponse"
+                },
+                "example": {
+                  "code": "BCDF23GH",
+                  "expires_in": 600
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/dev": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Local-development sign-in shortcut — creates / signs in as `dev`.\nDisabled (400) when GitHub OAuth is configured, so it can never\nfire in production.",
+        "operationId": "dev_login",
+        "parameters": [
+          {
+            "name": "redirect",
+            "in": "query",
+            "description": "Same-origin relative path to land on after sign-in.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect after signing in as the local `dev` user"
+          },
+          "400": {
+            "description": "Disabled — GitHub OAuth is configured"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/github": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Start the GitHub OAuth handshake — issue a 302 to GitHub's\n`authorize` URL with `state` carrying the validated `redirect`.\nFalls back to `/api/v1/auth/dev` when GitHub OAuth is unconfigured.",
+        "operationId": "github_redirect",
+        "parameters": [
+          {
+            "name": "redirect",
+            "in": "query",
+            "description": "Same-origin relative path to land on after sign-in. Bad values are silently dropped (open-redirect defense).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to GitHub authorize URL (or to `/api/v1/auth/dev` when GitHub OAuth is unconfigured)"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/github/callback": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "GitHub OAuth callback — exchange the `code` for a token, look up or\ncreate the matching Pathbase user, and redirect to the validated\n`state` target (or `/`).",
+        "operationId": "github_callback",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "description": "GitHub-issued authorization code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Echoed redirect target from `/api/v1/auth/github`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect after creating or linking the Pathbase account"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Sign in with email + password. Sets `pb_session` cookie. Returns\nthe user; for the bearer token instead, use the CLI grant flow.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginBody"
+              },
+              "example": {
+                "email": "alice@example.com",
+                "password": "correct-horse-battery-staple"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials"
+          }
+        }
+      }
+    },
     "/api/v1/auth/logout": {
       "post": {
         "tags": [
           "Auth"
         ],
+        "summary": "Invalidate the caller's session (cookie or bearer-token) and clear\nthe `pb_session` cookie. Idempotent — succeeds even with no session.",
         "operationId": "logout",
         "responses": {
           "204": {
@@ -61,11 +295,123 @@
         }
       }
     },
+    "/api/v1/auth/register": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Create a new account with username + email + password and sign the\ncaller in. Sets `pb_session` cookie and creates the default\n`pathstash` repo for quick uploads.",
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterBody"
+              },
+              "example": {
+                "email": "alice@example.com",
+                "password": "correct-horse-battery-staple",
+                "username": "alice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Account created and signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid username, email, or password"
+          },
+          "409": {
+            "description": "Username or email already taken"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/sessions": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "List the caller's active sessions (web + CLI). The session that\nissued the request is flagged `is_current`.",
+        "operationId": "list_sessions",
+        "responses": {
+          "200": {
+            "description": "Sessions for the authenticated user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Revoke a specific session by ID. 404 (not 401/403) for sessions\nowned by other users — keeps the existence of those sessions\ninvisible to the caller.",
+        "operationId": "revoke_session",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session ID to revoke",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session revoked"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "404": {
+            "description": "Session not found or not owned by the caller"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [
           "Health"
         ],
+        "summary": "Liveness + readiness probe — confirms the database is reachable.\nReturns 503 (still as JSON) when the round-trip fails so an\norchestrator can distinguish \"process up, dependency down\" from\n\"process down.\"",
         "operationId": "health",
         "responses": {
           "200": {
@@ -96,19 +442,24 @@
         "tags": [
           "Repos"
         ],
+        "summary": "Create a new repository owned by the caller. Names are unique per\nowner; collisions return 409.",
         "operationId": "create_repo",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CreateRepoBody"
+              },
+              "example": {
+                "description": "Agent runs from the rebuild week",
+                "name": "my-traces"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Created repository",
             "content": {
               "application/json": {
@@ -120,8 +471,16 @@
           },
           "401": {
             "description": "Not authenticated"
+          },
+          "409": {
+            "description": "A repo with this name already exists for the caller"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/repos/{owner}/{repo}": {
@@ -129,6 +488,7 @@
         "tags": [
           "Repos"
         ],
+        "summary": "Fetch a repository by `owner/name`. Public read; the contained\npaths/graphs enforce their own visibility on read.",
         "operationId": "get_repo",
         "parameters": [
           {
@@ -170,6 +530,7 @@
         "tags": [
           "Repos"
         ],
+        "summary": "Delete a repository, cascading to all paths and graphs it contains.\nOwner-only.",
         "operationId": "delete_repo",
         "parameters": [
           {
@@ -201,12 +562,18 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Repos"
         ],
+        "summary": "Update a repo's mutable fields. Only the owner may call this;\nnon-owners get 401.",
         "operationId": "update_repo",
         "parameters": [
           {
@@ -233,6 +600,9 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/UpdateRepoBody"
+              },
+              "example": {
+                "description": "Updated tagline"
               }
             }
           },
@@ -255,7 +625,12 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/repos/{owner}/{repo}/graphs": {
@@ -263,6 +638,7 @@
         "tags": [
           "Graphs"
         ],
+        "summary": "List graphs in a repo. Public read.",
         "operationId": "list_graphs",
         "parameters": [
           {
@@ -317,6 +693,7 @@
         "tags": [
           "Graphs"
         ],
+        "summary": "Upload a multi-path Graph document. Inline paths (`PathOrRef::Path`)\nare persisted as new TracePaths in the same repo, deduped by their\ntoolpath ID. Refs to existing paths are kept as-is. Caller must own\nthe repo.",
         "operationId": "create_graph",
         "parameters": [
           {
@@ -365,7 +742,12 @@
           "401": {
             "description": "Not authorized"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/repos/{owner}/{repo}/graphs/{slug}": {
@@ -373,6 +755,7 @@
         "tags": [
           "Graphs"
         ],
+        "summary": "Fetch a graph with its full reconstructed multi-path document.\nPublic read; constituent path visibility is enforced when those\npaths are accessed individually.",
         "operationId": "get_graph",
         "parameters": [
           {
@@ -396,7 +779,7 @@
           {
             "name": "slug",
             "in": "path",
-            "description": "Graph slug",
+            "description": "Graph slug, or the graph's UUID for unguessable share-by-link access",
             "required": true,
             "schema": {
               "type": "string"
@@ -423,6 +806,7 @@
         "tags": [
           "Graphs"
         ],
+        "summary": "Delete a graph. Owner only. Detaches but does not delete the\nconstituent TracePaths — those remain reachable as standalone paths.",
         "operationId": "delete_graph",
         "parameters": [
           {
@@ -463,7 +847,12 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/repos/{owner}/{repo}/paths": {
@@ -471,6 +860,7 @@
         "tags": [
           "Paths"
         ],
+        "summary": "List paths in a repo. Visibility-filtered: callers see all paths if\nthey own the repo, public paths only otherwise.",
         "operationId": "list_paths",
         "parameters": [
           {
@@ -525,6 +915,7 @@
         "tags": [
           "Paths"
         ],
+        "summary": "Upload a single-path graph as a new path under `{owner}/{repo}`.\nMulti-path graphs go to `POST .../graphs`. Caller must own the repo.",
         "operationId": "create_path",
         "parameters": [
           {
@@ -573,7 +964,12 @@
           "401": {
             "description": "Not authorized"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/repos/{owner}/{repo}/paths/{slug}": {
@@ -581,6 +977,7 @@
         "tags": [
           "Paths"
         ],
+        "summary": "Fetch a path with its full reconstructed document. Visibility-gated:\nprivate paths return 404 unless the caller owns the repo or\naddressed the path by its UUID (the unguessable share-by-link form).\nConditional via `If-None-Match`.",
         "operationId": "get_path",
         "parameters": [
           {
@@ -604,7 +1001,7 @@
           {
             "name": "slug",
             "in": "path",
-            "description": "Path slug",
+            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
             "required": true,
             "schema": {
               "type": "string"
@@ -631,6 +1028,7 @@
         "tags": [
           "Paths"
         ],
+        "summary": "Delete a path. Owner only. Cascades to its step rows.",
         "operationId": "delete_path",
         "parameters": [
           {
@@ -654,7 +1052,7 @@
           {
             "name": "slug",
             "in": "path",
-            "description": "Path slug",
+            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
             "required": true,
             "schema": {
               "type": "string"
@@ -671,12 +1069,18 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Paths"
         ],
+        "summary": "Patch a path's mutable fields — currently just `is_public`. Owner\nonly. Use this to flip a private upload public for sharing.",
         "operationId": "update_path",
         "parameters": [
           {
@@ -700,7 +1104,7 @@
           {
             "name": "slug",
             "in": "path",
-            "description": "Path slug",
+            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
             "required": true,
             "schema": {
               "type": "string"
@@ -712,6 +1116,9 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/UpdatePathBody"
+              },
+              "example": {
+                "is_public": true
               }
             }
           },
@@ -734,7 +1141,12 @@
           "404": {
             "description": "Not found"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/repos/{owner}/{repo}/paths/{slug}/chat": {
@@ -742,6 +1154,7 @@
         "tags": [
           "Paths"
         ],
+        "summary": "Render the path's HEAD-ancestor chain as a chat-projection — a\ndensely-indexed, pre-classified, optionally pre-rendered transcript.\nVisibility-gated like `GET .../paths/{slug}`.",
         "operationId": "get_path_chat",
         "parameters": [
           {
@@ -765,7 +1178,7 @@
           {
             "name": "slug",
             "in": "path",
-            "description": "Path slug",
+            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
             "required": true,
             "schema": {
               "type": "string"
@@ -803,6 +1216,7 @@
         "tags": [
           "Paths"
         ],
+        "summary": "Stream the path's reconstructed Graph document as raw JSON — the\ninverse of `POST .../paths`. Visibility-gated; private paths return\n404 unless owner-authenticated or addressed by UUID.",
         "operationId": "download_path",
         "parameters": [
           {
@@ -826,7 +1240,7 @@
           {
             "name": "slug",
             "in": "path",
-            "description": "Path slug",
+            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
             "required": true,
             "schema": {
               "type": "string"
@@ -851,6 +1265,7 @@
         "tags": [
           "Signups"
         ],
+        "summary": "Capture an email + source pair from a marketing form. Idempotent\nper (email, source); per-IP rate-limited; the response intentionally\ncarries no detail so a caller can't enumerate which addresses are\nalready on a list.",
         "operationId": "create_signup",
         "requestBody": {
           "content": {
@@ -887,6 +1302,7 @@
         "tags": [
           "Users"
         ],
+        "summary": "Return the authenticated caller's full profile, including their\nemail — fields no other endpoint exposes.",
         "operationId": "get_me",
         "responses": {
           "200": {
@@ -902,18 +1318,28 @@
           "401": {
             "description": "Not authenticated"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "patch": {
         "tags": [
           "Users"
         ],
+        "summary": "Patch the caller's mutable profile fields. Unspecified fields are\nleft untouched; pass `null` to clear an optional field.",
         "operationId": "update_me",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/UpdateProfileBody"
+              },
+              "example": {
+                "bio": "Curious about agents.",
+                "display_name": "Alice"
               }
             }
           },
@@ -933,7 +1359,12 @@
           "401": {
             "description": "Not authenticated"
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/users/{username}": {
@@ -941,6 +1372,7 @@
         "tags": [
           "Users"
         ],
+        "summary": "Return another user's public profile. Email is never included for\nusers other than the caller; use `/users/me` for the caller's own\nfull profile.",
         "operationId": "get_user",
         "parameters": [
           {
@@ -975,6 +1407,7 @@
         "tags": [
           "Users"
         ],
+        "summary": "List a user's repositories. Public read; visibility filtering on\nthe contained paths/graphs happens at their respective endpoints,\nnot here.",
         "operationId": "list_repos",
         "parameters": [
           {
@@ -1022,6 +1455,7 @@
     "schemas": {
       "ActorView": {
         "type": "object",
+        "description": "Resolved actor identity for a turn. Lookup happens once on the\nserver against the document's `meta.actors` block; turns reference\nthe actor by `u32` index into the projection's `actors` array.",
         "required": [
           "id",
           "kind",
@@ -1078,18 +1512,37 @@
           }
         }
       },
+      "AppendStepsResponse": {
+        "type": "object",
+        "required": [
+          "inserted",
+          "path"
+        ],
+        "properties": {
+          "inserted": {
+            "type": "integer",
+            "description": "Number of steps newly inserted (existing `step_id`s are skipped).",
+            "minimum": 0
+          },
+          "path": {
+            "$ref": "#/components/schemas/TracePath"
+          }
+        }
+      },
       "ChatCursor": {
         "type": "object",
+        "description": "Pagination cursor for fetching older turns. Reserved for future\n`?before=<step_id>` requests; currently every projection returns the\nfull chain in one shot.",
         "properties": {
           "before": {
             "type": "string",
-            "description": "Canonical step id one step older than `turns[0]`. `None` when the\nchain reaches a root step in this projection.",
+            "description": "Canonical step ID one step older than `turns[0]`. `None` when the\nchain reaches a root step in this projection.",
             "nullable": true
           }
         }
       },
       "ChatProjection": {
         "type": "object",
+        "description": "Top-level chat-projection response. Densely-indexed (`u32` IDs into\n`turns` / `actors`) so JSON parsing is cheap and the wire shape\navoids duplicating actor strings on every turn.",
         "required": [
           "path_id",
           "actors",
@@ -1122,7 +1575,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Canonical step ids parallel to `turns`, for deep-links and\n`/step/{id}` fetches."
+            "description": "Canonical step IDs parallel to `turns`, for deep-links and\n`/step/{id}` fetches."
           },
           "title": {
             "type": "string",
@@ -1138,6 +1591,7 @@
       },
       "ChatTurn": {
         "type": "object",
+        "description": "One linearized turn along the HEAD-ancestor chain. Already\nclassified, optionally pre-rendered to HTML, with tool invocations\ninlined — the renderer drops in `text_html` and renders no further.",
         "required": [
           "actor_id",
           "is_head",
@@ -1226,12 +1680,31 @@
       },
       "ChatTurnKind": {
         "type": "string",
+        "description": "Pre-classified turn kind. Server-side classification follows the\nprecedence rules in `packages/frontend/src/classify.ts`; the client\nrenders verbatim without re-deriving.",
         "enum": [
           "user",
           "assistant",
           "tool",
           "system"
         ]
+      },
+      "CliGrantResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "expires_in"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Display code the browser shows; the user types it into the CLI."
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until the grant expires (10 minutes)."
+          }
+        }
       },
       "CreateRepoBody": {
         "type": "object",
@@ -1276,6 +1749,7 @@
       },
       "Graph": {
         "type": "object",
+        "description": "A computation graph — a named ordered collection of paths within a\nrepo. Stored as header metadata plus `(graph_id, path_id, position)`\njunction rows; the full `document` is reconstructed on read.",
         "required": [
           "id",
           "repo_id",
@@ -1338,8 +1812,72 @@
           }
         }
       },
+      "LoginBody": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "RedeemBody": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "RedeemResponse": {
+        "type": "object",
+        "required": [
+          "token",
+          "user"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Long-lived bearer token (`pat_…`). Send as\n`Authorization: Bearer <token>` from CLI calls."
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        }
+      },
+      "RegisterBody": {
+        "type": "object",
+        "required": [
+          "username",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "description": "Minimum 8 characters. Stored as an Argon2id hash."
+          },
+          "username": {
+            "type": "string",
+            "description": "Lowercase ASCII alphanumerics, hyphens, and underscores. Must\nnot collide with the reserved `me` / `anon` namespaces."
+          }
+        }
+      },
       "Repo": {
         "type": "object",
+        "description": "A repository — a named bucket of paths and graphs owned by a single\nuser. The `(owner_id, name)` pair is unique; `name` is also the\nURL-segment (\"alice/my-traces\").",
         "required": [
           "id",
           "owner_id",
@@ -1381,8 +1919,42 @@
           }
         }
       },
+      "SessionSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "created_at",
+          "expires_at",
+          "is_current"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_current": {
+            "type": "boolean",
+            "description": "Marks the session that issued the request; clients should warn\nbefore letting the user revoke it (logs the current device out)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`web` (cookie) or `cli` (bearer token)."
+          },
+          "user_agent": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
       "ToolDiff": {
         "type": "object",
+        "description": "Pre-split diff payload — picked from the first non-empty\n`change[k].raw` on a structural step. Lines are pre-split so the\nrenderer doesn't repeat the work.",
         "required": [
           "path",
           "lines"
@@ -1401,6 +1973,7 @@
       },
       "ToolInvocation": {
         "type": "object",
+        "description": "A `tool.invoke` step spliced inline next to its parent assistant\nturn. Saves the client a second pass over the path's step graph.",
         "required": [
           "step_id",
           "actor_id",
@@ -1424,7 +1997,7 @@
           },
           "step_id": {
             "type": "string",
-            "description": "Canonical step id of the tool.invoke step."
+            "description": "Canonical step ID of the tool.invoke step."
           },
           "text": {
             "type": "string",
@@ -1453,6 +2026,7 @@
       },
       "TracePath": {
         "type": "object",
+        "description": "A single agent trace path within a repo. Stored in three pieces:\nheader metadata (here), step rows (in `path_steps`), and the\nreconstructed full `document` (re-assembled on read for handlers\nthat need it).",
         "required": [
           "id",
           "repo_id",
@@ -1584,6 +2158,7 @@
       },
       "User": {
         "type": "object",
+        "description": "A registered Pathbase account. `email` is optional because GitHub\nOAuth users can have a private email; CLI / API consumers see the\ncaller's own email via `/users/me` but never another user's.",
         "required": [
           "id",
           "username",
@@ -1623,6 +2198,13 @@
             "type": "string"
           }
         }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Pathbase personal access token (`pat_…`) obtained via the CLI grant flow (`POST /auth/cli/request-grant` then `POST /auth/cli/redeem`). Send as `Authorization: Bearer <token>`."
       }
     }
   },

@@ -60,6 +60,28 @@ jq '
       | (if $ref_obj.description then .description = $ref_obj.description else . end)
     else . end;
 
-  walk(downconvert_type_array | downconvert_nullable_ref)
+  # Progenitor 0.14 only handles JSON request/response bodies. Drop
+  # operations that use non-JSON content types (e.g. application/x-ndjson
+  # for streaming endpoints) so the build doesnt panic on
+  # `UnexpectedFormat("unexpected content type: ...")`. The CLI doesnt
+  # use these surfaces; if it ever needs them, switch to a hand-rolled
+  # call (see api_redeem for the pattern).
+  def has_unsupported_content(op):
+    ((op.requestBody.content // {}) | keys | any(. != "application/json"))
+    or ((op.responses // {}) | to_entries | any(
+      ((.value.content // {}) | keys | any(. != "application/json"))
+    ));
+
+  def strip_unsupported_operations:
+    .paths |= with_entries(
+      .value |= with_entries(
+        select(
+          (.key | IN("get", "put", "post", "delete", "patch", "options", "head", "trace") | not)
+          or (has_unsupported_content(.value) | not)
+        )
+      )
+    ) | .paths |= with_entries(select((.value | length) > 0));
+
+  walk(downconvert_type_array | downconvert_nullable_ref) | strip_unsupported_operations
 ' "${_tmp}" > "${_dest}"
 echo "refresh: wrote ${_dest} ($(wc -l < "${_dest}") lines, OpenAPI 3.0 form)"

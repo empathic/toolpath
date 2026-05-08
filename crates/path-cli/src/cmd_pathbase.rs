@@ -1,9 +1,13 @@
 //! Shared Pathbase client helpers.
 //!
-//! Hosts the HTTP client and session-storage logic used by `cmd_auth`,
-//! `cmd_import`, and `cmd_export`. Config-dir resolution lives in the
-//! sibling `config` module so `cmd_cache` (which doesn't depend on
-//! reqwest and must build on emscripten) can reuse it.
+//! Wraps the typed `pathbase-client` (generated from
+//! `crates/pathbase-client/openapi.json` — refresh via
+//! `scripts/refresh-pathbase-openapi.sh`) plus session-storage logic
+//! used by `cmd_auth`, `cmd_import`, `cmd_export`, and `cmd_share`.
+//! Every Pathbase HTTP call now goes through the typed client; no
+//! hand-rolled reqwest left in this module. Config-dir resolution lives
+//! in the sibling `config` module so `cmd_cache` (which doesn't depend
+//! on reqwest and must build on emscripten) can reuse it.
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -99,48 +103,46 @@ pub(crate) fn prompt_line(prompt: &str) -> Result<String> {
 
 // ── HTTP layer ──────────────────────────────────────────────────────────
 
-pub(crate) fn http_client() -> Result<reqwest::blocking::Client> {
-    reqwest::blocking::Client::builder()
-        .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("failed to build HTTP client")
-}
-
-#[derive(Deserialize)]
-pub(crate) struct RedeemResponse {
-    pub token: String,
-    pub user: User,
-}
-
 pub(crate) fn api_redeem(base_url: &str, code: &str) -> Result<(String, User)> {
-    let client = http_client()?;
-    let resp = client
-        .post(format!("{base_url}/api/v1/auth/cli/redeem"))
-        .json(&serde_json::json!({ "code": code }))
-        .send()
-        .with_context(|| format!("connect to {base_url}"))?;
-
-    let status = resp.status();
-    let body = resp.text().unwrap_or_default();
-
-    if !status.is_success() {
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            bail!("code is invalid, already used, or expired — generate a new one");
+    let body = pathbase_client::types::RedeemBody {
+        code: code.to_string(),
+    };
+    let client = pathbase_client(base_url, None)?;
+    match block_on(client.cli_redeem(&body)) {
+        Ok(resp) => {
+            let inner = resp.into_inner();
+            let u = inner.user;
+            Ok((
+                inner.token,
+                User {
+                    id: u.id.to_string(),
+                    username: u.username,
+                    email: u.email,
+                    display_name: u.display_name,
+                    avatar_url: u.avatar_url,
+                },
+            ))
         }
-        if status == reqwest::StatusCode::BAD_REQUEST {
-            let msg = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
-                .unwrap_or_else(|| body.clone());
-            bail!("{msg}");
+        Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
+            401 => bail!("code is invalid, already used, or expired — generate a new one"),
+            400 => bail!("invalid code format"),
+            code => bail!("redeem failed (HTTP {code})"),
+        },
+        Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
+            let status = resp.status();
+            let body = block_on(resp.text()).unwrap_or_default();
+            let msg = error_message(&body).unwrap_or_else(|| short_body(&body));
+            if msg.is_empty() {
+                bail!("redeem failed ({status})")
+            } else {
+                bail!("redeem failed ({status}): {msg}")
+            }
         }
-        bail!("redeem failed ({status}): {body}");
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("connect to {base_url}: {}", reqwest_hint(&e))
+        }
+        Err(e) => Err(anyhow!("redeem failed: {}", full_chain(&e))),
     }
-
-    let parsed: RedeemResponse =
-        serde_json::from_str(&body).with_context(|| format!("parsing redeem response: {body}"))?;
-    Ok((parsed.token, parsed.user))
 }
 
 pub(crate) fn api_logout(base_url: &str, token: &str) -> Result<()> {
@@ -387,10 +389,16 @@ pub(crate) fn anon_paths_post(base_url: &str, document_json: &str) -> Result<Ano
 }
 
 /// `POST /api/v1/repos/{owner}/{repo}/paths` — listable upload to a
-/// repo the authenticated user owns. `is_public=false` writes a
-/// pathstash-style secret/unlisted path; the URL is still publicly
-/// addressable (UUIDs are public for both secret and public paths) but
-/// won't appear in any user's listing.
+/// repo the authenticated user owns. Multi-path graphs go to the
+/// sibling `/graphs` endpoint, but `path share` only ever uploads
+/// single-path graphs.
+///
+/// Per the spec, `is_public` defaults to **true** on the server side.
+/// We always pass `Some(is_public)` explicitly so the share command's
+/// default (`--public` unset → `is_public=false`) reliably writes a
+/// secret/unlisted path; the path stays addressable via its UUID
+/// (`/<owner>/<repo>/paths/<id>`) as the unguessable share-by-link
+/// form, but won't appear in any user's listing.
 pub(crate) fn paths_post(
     base_url: &str,
     token: &str,
@@ -516,16 +524,18 @@ pub(crate) fn repos_post(base_url: &str, token: &str, name: &str) -> Result<()> 
 }
 
 /// `GET /api/v1/repos/{owner}/{repo}/paths/{slug}/download` — fetch the
-/// raw toolpath JSON for a path. Public paths and unlisted-but-shared
-/// paths both download without authentication; only fully private paths
-/// (gated by an ACL beyond `is_public=false`) require auth.
+/// reconstructed Graph document for a path.
+///
+/// Per the spec: private paths return 404 unless the caller is
+/// owner-authenticated *or* addresses the path by its UUID
+/// (the unguessable share-by-link form). The 404 message therefore
+/// hints at both possibilities — "not found, or you're not the owner."
 ///
 /// Returns a serialized JSON string. The generated client decodes into
 /// `serde_json::Map`, which we re-serialize on the way out — keys may
 /// be reordered relative to the server's bytes, but the consumer parses
 /// to `Graph` and re-serializes anyway, so byte-fidelity isn't a real
-/// requirement. The downstream `write_cached` writes pretty-printed
-/// JSON regardless.
+/// requirement.
 pub(crate) fn paths_download(
     base_url: &str,
     token: Option<&str>,
@@ -540,12 +550,11 @@ pub(crate) fn paths_download(
             serde_json::to_string(&map).context("re-serializing downloaded path")
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status() {
-            reqwest::StatusCode::UNAUTHORIZED => bail!(
-                "this path is private and requires authentication — run `path auth login --url {base_url}` and retry"
+            reqwest::StatusCode::NOT_FOUND => bail!(
+                "{owner}/{repo}/{slug} not found on {base_url} (or it's a private path \
+                 and you're not the owner — try the path's UUID instead, or \
+                 `path auth login --url {base_url}`)"
             ),
-            reqwest::StatusCode::NOT_FOUND => {
-                bail!("path {owner}/{repo}/{slug} not found on {base_url}")
-            }
             status => bail!("download of {owner}/{repo}/{slug} failed ({status})"),
         },
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {

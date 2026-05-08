@@ -767,7 +767,8 @@ fn share_anon_fixture() -> (
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"abc","path":"/anon/x/y/abc","share_url":"https://example.test/anon/abc"}"#;
+        let body =
+            r#"{"id":"abc","path":"/anon/x/y/abc","share_url":"https://example.test/anon/abc"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -817,7 +818,8 @@ fn one_shot_anon_server() -> (u16, std::thread::JoinHandle<()>) {
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"abc","path":"/anon/x/y/abc","share_url":"https://example.test/anon/abc"}"#;
+        let body =
+            r#"{"id":"abc","path":"/anon/x/y/abc","share_url":"https://example.test/anon/abc"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -860,7 +862,14 @@ fn share_rewrites_cache_when_session_has_grown() {
     cmd()
         .env("HOME", home)
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["share", "--harness", "claude", "--session", "session-grow", "--project"])
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-grow",
+            "--project",
+        ])
         .arg(&project)
         .args(["--anon", "--url"])
         .arg(format!("http://127.0.0.1:{port1}"))
@@ -873,11 +882,21 @@ fn share_rewrites_cache_when_session_has_grown() {
         .unwrap()
         .filter_map(|e| e.ok())
         .collect();
-    assert_eq!(cache_files.len(), 1, "expected one cache entry after first share");
+    assert_eq!(
+        cache_files.len(),
+        1,
+        "expected one cache entry after first share"
+    );
     let cache_path = cache_files[0].path();
     let cache_v1 = std::fs::read_to_string(&cache_path).unwrap();
-    assert!(cache_v1.contains("reply-1"), "v1 cache must contain reply-1");
-    assert!(!cache_v1.contains("reply-2"), "v1 cache must not contain reply-2 yet");
+    assert!(
+        cache_v1.contains("reply-1"),
+        "v1 cache must contain reply-1"
+    );
+    assert!(
+        !cache_v1.contains("reply-2"),
+        "v1 cache must not contain reply-2 yet"
+    );
 
     // Conversation continues: append two more turns to the session JSONL.
     let mut grown = initial.clone();
@@ -894,7 +913,14 @@ fn share_rewrites_cache_when_session_has_grown() {
     cmd()
         .env("HOME", home)
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["share", "--harness", "claude", "--session", "session-grow", "--project"])
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-grow",
+            "--project",
+        ])
         .arg(&project)
         .args(["--anon", "--url"])
         .arg(format!("http://127.0.0.1:{port2}"))

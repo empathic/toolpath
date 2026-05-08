@@ -998,7 +998,10 @@ fn derive_opencode(
 
 /// Derive a single opencode session given an explicit session id.
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn derive_opencode_session(session: &str, no_snapshot_diffs: bool) -> Result<DerivedDoc> {
+pub(crate) fn derive_opencode_session(
+    session: &str,
+    no_snapshot_diffs: bool,
+) -> Result<DerivedDoc> {
     let manager = toolpath_opencode::OpencodeConvo::new();
     let config = toolpath_opencode::derive::DeriveConfig {
         no_snapshot_diffs,
