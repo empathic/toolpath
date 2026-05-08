@@ -177,6 +177,127 @@ pub(crate) fn resolve_input(
     Ok((graph, harness))
 }
 
+/// Probe `$PATH` (or `path_override`, for tests) for a given binary name.
+/// Cross-platform: on Windows, also tries `<name>.exe`.
+pub(crate) fn binary_on_path(name: &str, path_override: Option<&std::path::Path>) -> bool {
+    let dirs: Vec<std::path::PathBuf> = match path_override {
+        Some(p) => vec![p.to_path_buf()],
+        None => std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default(),
+    };
+    for d in dirs {
+        let candidate = d.join(name);
+        if candidate.is_file() {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            let exe = d.join(format!("{name}.exe"));
+            if exe.is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+const ALL_HARNESSES: &[crate::cmd_share::Harness] = &[
+    crate::cmd_share::Harness::Claude,
+    crate::cmd_share::Harness::Gemini,
+    crate::cmd_share::Harness::Codex,
+    crate::cmd_share::Harness::Opencode,
+    crate::cmd_share::Harness::Pi,
+];
+
+/// Decide which harness to resume in.
+///
+/// - If `arg` is `Some`, validate the named harness is on PATH and return it.
+/// - Otherwise, enumerate installed harnesses and either return the only one,
+///   or launch the fzf picker. `source` is used to label the source row in the
+///   picker UI and to short-circuit when exactly one harness is installed.
+///
+/// `path_override` is `None` in production; tests pass `Some(dir)` to fake `$PATH`.
+pub(crate) fn pick_harness(
+    arg: Option<HarnessArg>,
+    source: Option<crate::cmd_share::Harness>,
+    path_override: Option<&std::path::Path>,
+) -> Result<crate::cmd_share::Harness> {
+    use crate::cmd_share::Harness;
+
+    if let Some(a) = arg {
+        let h = Harness::from_arg(a);
+        if !binary_on_path(h.name(), path_override) {
+            anyhow::bail!(
+                "harness `{}` isn't on PATH; install it or pick another with `--harness`",
+                h.name()
+            );
+        }
+        return Ok(h);
+    }
+
+    let installed: Vec<Harness> = ALL_HARNESSES
+        .iter()
+        .copied()
+        .filter(|h| binary_on_path(h.name(), path_override))
+        .collect();
+
+    if installed.is_empty() {
+        anyhow::bail!(
+            "no installed harnesses found on PATH; install one of: claude, gemini, codex, opencode, pi"
+        );
+    }
+
+    if installed.len() == 1 {
+        return Ok(installed[0]);
+    }
+
+    interactive_pick(&installed, source)
+}
+
+fn interactive_pick(
+    installed: &[crate::cmd_share::Harness],
+    source: Option<crate::cmd_share::Harness>,
+) -> Result<crate::cmd_share::Harness> {
+    if !crate::fzf::available() {
+        anyhow::bail!(
+            "interactive picker requires `fzf` on PATH and a TTY; pass `--harness <X>` or rerun in a terminal"
+        );
+    }
+    let mut lines: Vec<String> = Vec::with_capacity(installed.len());
+    for h in installed {
+        let suffix = if Some(*h) == source { "  (source)" } else { "" };
+        lines.push(format!("{}{}", h.symbol(), suffix));
+    }
+
+    let header = match source {
+        Some(s) => format!("pick a harness to resume in (source: {})", s.name()),
+        None => "pick a harness to resume in".to_string(),
+    };
+
+    let opts = crate::fzf::PickOptions {
+        with_nth: "1..",
+        header: Some(&header),
+        ..Default::default()
+    };
+    let selected = match crate::fzf::pick(&lines, &opts)
+        .map_err(|e| anyhow::anyhow!("fzf failed: {}", e))?
+    {
+        crate::fzf::PickResult::Selected(rows) => rows.into_iter().next().unwrap_or_default(),
+        crate::fzf::PickResult::Cancelled => std::process::exit(130),
+        crate::fzf::PickResult::NoMatch => {
+            anyhow::bail!("fzf returned no match — picker UI was empty?");
+        }
+    };
+
+    for h in installed {
+        if selected.starts_with(h.symbol()) {
+            return Ok(*h);
+        }
+    }
+    anyhow::bail!("picker returned an unrecognized row: {selected}")
+}
+
 fn looks_like_pathbase_shorthand(s: &str) -> bool {
     // Three non-empty slash-separated segments, none containing whitespace
     // or starting with a dot/slash (which would indicate a relative or
@@ -378,5 +499,50 @@ mod tests {
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();
         assert!(s.contains("couldn't resolve"), "actual: {s}");
+    }
+
+    fn fake_path_with(binaries: &[&str]) -> tempfile::TempDir {
+        let td = tempfile::tempdir().unwrap();
+        for b in binaries {
+            let p = td.path().join(b);
+            std::fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perm = std::fs::metadata(&p).unwrap().permissions();
+                perm.set_mode(0o755);
+                std::fs::set_permissions(&p, perm).unwrap();
+            }
+        }
+        td
+    }
+
+    #[test]
+    fn binary_on_path_finds_present_binary() {
+        let td = fake_path_with(&["claude"]);
+        assert!(binary_on_path("claude", Some(td.path())));
+        assert!(!binary_on_path("gemini", Some(td.path())));
+    }
+
+    #[test]
+    fn pick_harness_explicit_arg_validates_path() {
+        let td = fake_path_with(&["claude"]);
+        let result = pick_harness(Some(HarnessArg::Claude), None, Some(td.path()));
+        assert_eq!(result.unwrap(), Harness::Claude);
+
+        let err = pick_harness(Some(HarnessArg::Gemini), None, Some(td.path())).unwrap_err();
+        assert!(err.to_string().contains("`gemini` isn't on PATH"));
+    }
+
+    #[test]
+    fn pick_harness_zero_installed_errors() {
+        let td = fake_path_with(&[]);
+        let err = pick_harness(None, Some(Harness::Claude), Some(td.path())).unwrap_err();
+        assert!(
+            err.to_string().contains("no installed harnesses")
+                || err.to_string().contains("no harnesses on PATH"),
+            "actual: {}",
+            err
+        );
     }
 }
