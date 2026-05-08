@@ -219,11 +219,7 @@ pub(crate) enum AuthMode {
 /// `host_of(base_url) != host_of(stored.url)` triggers an advisory warning
 /// before the credentials probe so the user sees the mismatch even if
 /// `api_me` happens to succeed.
-pub(crate) fn preflight_auth(
-    base_url: &str,
-    anon: bool,
-    needs_auth: bool,
-) -> Result<AuthMode> {
+pub(crate) fn preflight_auth(base_url: &str, anon: bool, needs_auth: bool) -> Result<AuthMode> {
     if anon {
         return Ok(AuthMode::Anon);
     }
@@ -342,33 +338,70 @@ fn parse_document(json: &str) -> Result<serde_json::Map<String, serde_json::Valu
 /// URL is intentionally public); the trade-off is that they aren't
 /// listable from any user account. For listable uploads use
 /// [`paths_post`] against an authenticated session.
+///
+/// **Why this doesn't go through `pathbase-client`.** Same reasoning as
+/// [`paths_download`]: deployments in the wild have drifted from the
+/// OpenAPI spec the generated client was built against — pathbase-dev
+/// returns `{"id", "share_url", "path"}` while the spec says
+/// `{"id", "url"}`. progenitor's strict response decode then rejects a
+/// successful upload with "Invalid Response Payload: missing field
+/// `url`." Using raw blocking reqwest plus a tolerant parser that
+/// accepts any of `share_url` / `url` / `path` keeps the CLI working
+/// across spec versions until the spec catches up.
 pub(crate) fn anon_paths_post(base_url: &str, document_json: &str) -> Result<AnonUploadResponse> {
-    let body = pathbase_client::types::AnonUploadBody {
-        document: parse_document(document_json)?,
-    };
-    let client = pathbase_client(base_url, None)?;
-    match block_on(client.create_anon_path(&body)) {
-        Ok(resp) => {
-            let inner = resp.into_inner();
-            Ok(AnonUploadResponse {
-                id: inner.id,
-                url: inner.url,
-            })
-        }
-        Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
-            413 => bail!(
-                "anon upload exceeds the 5 MB cap — log in (`path auth login`) for a listable upload without that limit"
-            ),
-            429 => bail!("anon upload rate-limited; retry shortly or log in"),
-            code => bail!("anon upload failed (HTTP {code})"),
-        },
-        Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
-            bail!(
-                "anon upload returned unexpected status: HTTP {}",
-                resp.status()
+    let body = serde_json::json!({
+        "document": parse_document(document_json)?,
+    });
+    let client = http_client()?;
+    let resp = client
+        .post(format!("{base_url}/api/v1/anon/paths"))
+        .json(&body)
+        .send()
+        .with_context(|| format!("connect to {base_url}"))?;
+
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+
+    if status.is_success() {
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            anyhow!(
+                "anon upload returned non-JSON ({status}): {} ({e})",
+                short_body(&text)
             )
-        }
-        Err(e) => Err(anyhow!("anon upload failed: {e}")),
+        })?;
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .map(String::from)
+            .ok_or_else(|| {
+                anyhow!(
+                    "anon upload response missing `id`: {}",
+                    short_body(&text)
+                )
+            })?;
+        // Server-shape compat: production currently returns `url`, but
+        // pathbase-dev returns `share_url` + `path`. Accept any.
+        let url = v
+            .get("share_url")
+            .or_else(|| v.get("url"))
+            .or_else(|| v.get("path"))
+            .and_then(|x| x.as_str())
+            .map(String::from)
+            .ok_or_else(|| {
+                anyhow!(
+                    "anon upload response missing `share_url` / `url` / `path`: {}",
+                    short_body(&text)
+                )
+            })?;
+        return Ok(AnonUploadResponse { id, url });
+    }
+
+    match status.as_u16() {
+        413 => bail!(
+            "anon upload exceeds the 5 MB cap — log in (`path auth login`) for a listable upload without that limit"
+        ),
+        429 => bail!("anon upload rate-limited; retry shortly or log in"),
+        code => bail!("anon upload failed (HTTP {code}): {}", short_body(&text)),
     }
 }
 
@@ -790,13 +823,15 @@ mod tests {
     fn paths_post_401_surfaces_relogin_message() {
         let server = MockServer::start("HTTP/1.1 401 Unauthorized", r#"{"error":"bad"}"#);
         let base = server.base();
-        let err =
-            paths_post(&base, "tok", "alex", "pathstash", "s", "{}", false).unwrap_err();
+        let err = paths_post(&base, "tok", "alex", "pathstash", "s", "{}", false).unwrap_err();
         let msg = err.to_string();
         // Should name the URL the credentials are being rejected by, point at
         // `path auth login --url`, and offer `--anon` as the bypass.
         assert!(msg.contains(&base), "expected base URL in error: {msg}");
-        assert!(msg.contains("path auth login --url"), "expected re-auth hint: {msg}");
+        assert!(
+            msg.contains("path auth login --url"),
+            "expected re-auth hint: {msg}"
+        );
         assert!(msg.contains("--anon"), "expected --anon hint: {msg}");
     }
 
@@ -836,6 +871,45 @@ mod tests {
         let err = anon_paths_post(&server.base(), "{}").unwrap_err();
         assert!(err.to_string().contains("5 MB"), "{err}");
         assert!(err.to_string().contains("path auth login"), "{err}");
+    }
+
+    /// Server-shape compat: pathbase-dev returns `share_url` + `path`
+    /// (no `url` key) for anon uploads. Production / older deployments
+    /// may still return `url`. Accept all three so the CLI works against
+    /// both surfaces. Regression: a strict response decode here used to
+    /// fail successful anon uploads with "missing field `url`".
+    #[test]
+    fn anon_paths_post_accepts_share_url_field() {
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            r#"{"id":"xyz","share_url":"https://pathbase-dev.example/anon/xyz","path":"/anon/pathstash/paths/xyz"}"#,
+        );
+        let resp = anon_paths_post(&server.base(), r#"{"Step":{}}"#).unwrap();
+        assert_eq!(resp.id, "xyz");
+        assert_eq!(resp.url, "https://pathbase-dev.example/anon/xyz");
+    }
+
+    #[test]
+    fn anon_paths_post_accepts_path_only_when_url_fields_missing() {
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            r#"{"id":"abc","path":"/anon/pathstash/paths/abc"}"#,
+        );
+        let resp = anon_paths_post(&server.base(), r#"{"Step":{}}"#).unwrap();
+        assert_eq!(resp.id, "abc");
+        assert_eq!(resp.url, "/anon/pathstash/paths/abc");
+    }
+
+    #[test]
+    fn anon_paths_post_includes_body_in_5xx_error() {
+        let server = MockServer::start(
+            "HTTP/1.1 503 Service Unavailable",
+            r#"{"error":"db down"}"#,
+        );
+        let err = anon_paths_post(&server.base(), r#"{"Step":{}}"#).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("503"), "expected status code: {msg}");
+        assert!(msg.contains("db down"), "expected body in error: {msg}");
     }
 
     #[test]
@@ -916,7 +990,10 @@ mod tests {
     /// Stored credentials AND host matches AND api_me succeeds → Authed.
     #[test]
     fn preflight_authed_when_credentials_validate() {
-        let server = MockServer::start("HTTP/1.1 200 OK", Box::leak(me_response_body("alice").into_boxed_str()));
+        let server = MockServer::start(
+            "HTTP/1.1 200 OK",
+            Box::leak(me_response_body("alice").into_boxed_str()),
+        );
         let cfg = tempfile::tempdir().unwrap();
         let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), &server.base());
