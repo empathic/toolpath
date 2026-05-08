@@ -40,7 +40,7 @@
             "description": "Invalid document / unsupported variant / empty path"
           },
           "413": {
-            "description": "Request body exceeds 5 MB"
+            "description": "Request body exceeds the configured anon upload byte limit"
           },
           "429": {
             "description": "Rate limit exceeded"
@@ -57,29 +57,6 @@
         "responses": {
           "204": {
             "description": "Logged out"
-          }
-        }
-      }
-    },
-    "/api/v1/auth/me": {
-      "get": {
-        "tags": [
-          "Auth"
-        ],
-        "operationId": "me",
-        "responses": {
-          "200": {
-            "description": "Current authenticated user",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/User"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not authenticated"
           }
         }
       }
@@ -305,6 +282,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return. Default and cap are server-configurable;\nout-of-range values are clamped silently.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -502,6 +489,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return. Default and cap are server-configurable;\nout-of-range values are clamped silently.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
             }
           }
         ],
@@ -740,6 +737,67 @@
         }
       }
     },
+    "/api/v1/repos/{owner}/{repo}/paths/{slug}/chat": {
+      "get": {
+        "tags": [
+          "Paths"
+        ],
+        "operationId": "get_path_chat",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Owner username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Path slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_html",
+            "in": "query",
+            "description": "Render `text` and `thinking` fields to sanitized HTML server-side.\nDefaults to true; set false for lighter payloads when the client\nrenders markdown lazily.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chat-shaped projection of the path's HEAD-ancestor chain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatProjection"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/api/v1/repos/{owner}/{repo}/paths/{slug}/download": {
       "get": {
         "tags": [
@@ -788,15 +846,51 @@
         }
       }
     },
-    "/api/v1/settings/profile": {
+    "/api/v1/signups": {
+      "post": {
+        "tags": [
+          "Signups"
+        ],
+        "operationId": "create_signup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSignupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Signup recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSignupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email or source"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me": {
       "get": {
         "tags": [
-          "Settings"
+          "Users"
         ],
-        "operationId": "get_profile",
+        "operationId": "get_me",
         "responses": {
           "200": {
-            "description": "Current user profile",
+            "description": "Current authenticated user",
             "content": {
               "application/json": {
                 "schema": {
@@ -812,9 +906,9 @@
       },
       "patch": {
         "tags": [
-          "Settings"
+          "Users"
         ],
-        "operationId": "update_profile",
+        "operationId": "update_me",
         "requestBody": {
           "content": {
             "application/json": {
@@ -827,7 +921,7 @@
         },
         "responses": {
           "200": {
-            "description": "Updated profile",
+            "description": "Profile updated",
             "content": {
               "application/json": {
                 "schema": {
@@ -891,6 +985,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return. Default and cap are server-configurable;\nout-of-range values are clamped silently.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -916,6 +1020,32 @@
   },
   "components": {
     "schemas": {
+      "ActorView": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "display"
+        ],
+        "properties": {
+          "display": {
+            "type": "string",
+            "description": "Display name resolved against `meta.actors` if present, else the\nsuffix after `:`."
+          },
+          "id": {
+            "type": "string",
+            "description": "Canonical actor string (e.g. `\"claude:opus-4-7\"`)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Prefix before `:` — `\"claude\"`, `\"human\"`, etc."
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
       "AnonUploadBody": {
         "type": "object",
         "required": [
@@ -930,17 +1060,178 @@
       "AnonUploadResponse": {
         "type": "object",
         "required": [
-          "url",
-          "id"
+          "path",
+          "id",
+          "share_url"
         ],
         "properties": {
           "id": {
             "type": "string"
           },
-          "url": {
-            "type": "string"
+          "path": {
+            "type": "string",
+            "description": "Site-relative path to the uploaded trace's frontend page, e.g.\n`/anon/pathstash/paths/<uuid>`. Suitable for in-app navigation."
+          },
+          "share_url": {
+            "type": "string",
+            "description": "Absolute URL for sharing externally."
           }
         }
+      },
+      "ChatCursor": {
+        "type": "object",
+        "properties": {
+          "before": {
+            "type": "string",
+            "description": "Canonical step id one step older than `turns[0]`. `None` when the\nchain reaches a root step in this projection.",
+            "nullable": true
+          }
+        }
+      },
+      "ChatProjection": {
+        "type": "object",
+        "required": [
+          "path_id",
+          "actors",
+          "turns",
+          "step_ids",
+          "cursor"
+        ],
+        "properties": {
+          "actors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActorView"
+            }
+          },
+          "cursor": {
+            "$ref": "#/components/schemas/ChatCursor"
+          },
+          "head": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index into `turns` — the latest turn along the HEAD chain. `None`\nwhen the document has no head.",
+            "minimum": 0,
+            "nullable": true
+          },
+          "path_id": {
+            "type": "string"
+          },
+          "step_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Canonical step ids parallel to `turns`, for deep-links and\n`/step/{id}` fetches."
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatTurn"
+            }
+          }
+        }
+      },
+      "ChatTurn": {
+        "type": "object",
+        "required": [
+          "actor_id",
+          "is_head",
+          "kind",
+          "text_html",
+          "thinking_html",
+          "tool_uses",
+          "invocations"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index into `actors`.",
+            "minimum": 0
+          },
+          "intent": {
+            "type": "string",
+            "nullable": true
+          },
+          "invocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolInvocation"
+            },
+            "description": "`tool.invoke` siblings of an assistant step, spliced inline."
+          },
+          "is_head": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChatTurnKind"
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "parent_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index into `turns` — `i - 1` along the HEAD chain, `None` at the root.",
+            "minimum": 0,
+            "nullable": true
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "text_html": {
+            "type": "string",
+            "description": "Sanitized HTML for `text`. Empty when `include_html` is false or\n`text` is empty."
+          },
+          "thinking": {
+            "type": "string",
+            "nullable": true
+          },
+          "thinking_html": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "nullable": true
+          },
+          "tool_diff": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ToolDiff"
+              }
+            ],
+            "description": "For `kind = \"tool\"` only: the first non-empty `change[k].raw`,\npre-split into lines."
+          },
+          "tool_name": {
+            "type": "string",
+            "description": "For `kind = \"tool\"` only: the tool name (`extra.name`).",
+            "nullable": true
+          },
+          "tool_uses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tool names from `extra.tool_uses` (string list)."
+          }
+        }
+      },
+      "ChatTurnKind": {
+        "type": "string",
+        "enum": [
+          "user",
+          "assistant",
+          "tool",
+          "system"
+        ]
       },
       "CreateRepoBody": {
         "type": "object",
@@ -949,13 +1240,37 @@
         ],
         "properties": {
           "description": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CreateSignupBody": {
+        "type": "object",
+        "required": [
+          "email",
+          "source"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateSignupResponse": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
           }
         }
       },
@@ -966,7 +1281,6 @@
           "repo_id",
           "slug",
           "toolpath_id",
-          "document",
           "created_at",
           "updated_at"
         ],
@@ -976,7 +1290,14 @@
             "format": "date-time"
           },
           "document": {
-            "type": "object"
+            "type": "object",
+            "description": "Reconstructed full Graph document with inline paths. Only populated\nby handlers that explicitly fetch the constituent paths and steps.",
+            "nullable": true
+          },
+          "header": {
+            "type": "object",
+            "description": "Stored graph metadata: `{graph: GraphIdentity, meta?: GraphMeta}` —\nthe toolpath `Graph` minus its `paths`. None when never set.",
+            "nullable": true
           },
           "id": {
             "type": "string",
@@ -990,10 +1311,8 @@
             "type": "string"
           },
           "title": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "toolpath_id": {
             "type": "string"
@@ -1011,10 +1330,8 @@
         ],
         "properties": {
           "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "type": "string"
@@ -1037,10 +1354,8 @@
             "format": "date-time"
           },
           "description": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "id": {
             "type": "string",
@@ -1057,14 +1372,82 @@
             "format": "uuid"
           },
           "readme": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "ToolDiff": {
+        "type": "object",
+        "required": [
+          "path",
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "ToolInvocation": {
+        "type": "object",
+        "required": [
+          "step_id",
+          "actor_id",
+          "text_html"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "input": {
+            "type": "string",
+            "description": "Tool input args from the structural payload (`extra.input`),\nJSON-stringified when not already a string.",
+            "nullable": true
+          },
+          "result": {
+            "type": "string",
+            "description": "Tool output from the structural payload (`extra.result`),\nJSON-stringified when not already a string.",
+            "nullable": true
+          },
+          "step_id": {
+            "type": "string",
+            "description": "Canonical step id of the tool.invoke step."
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "text_html": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "nullable": true
+          },
+          "tool_diff": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ToolDiff"
+              }
+            ]
+          },
+          "tool_name": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -1075,7 +1458,6 @@
           "repo_id",
           "slug",
           "toolpath_id",
-          "document",
           "step_count",
           "is_public",
           "created_at",
@@ -1087,7 +1469,14 @@
             "format": "date-time"
           },
           "document": {
-            "type": "object"
+            "type": "object",
+            "description": "Reconstructed full Graph document. Only populated by handlers that\nexplicitly fetch the steps (e.g. single-path GET, download, chat).\nListing endpoints leave this None to avoid N+1 step fetches.",
+            "nullable": true
+          },
+          "header": {
+            "type": "object",
+            "description": "Stored path metadata: `{path: PathIdentity, meta?: PathMeta}` — the\ntoolpath `Path` minus its `steps`. None when never set.",
+            "nullable": true
           },
           "id": {
             "type": "string",
@@ -1108,10 +1497,8 @@
             "format": "int32"
           },
           "title": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "toolpath_id": {
             "type": "string"
@@ -1126,10 +1513,8 @@
         "type": "object",
         "properties": {
           "is_public": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean",
+            "nullable": true
           }
         }
       },
@@ -1137,16 +1522,12 @@
         "type": "object",
         "properties": {
           "bio": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "display_name": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -1154,22 +1535,16 @@
         "type": "object",
         "properties": {
           "description": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "name": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "readme": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -1217,32 +1592,24 @@
         ],
         "properties": {
           "avatar_url": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "bio": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "created_at": {
             "type": "string",
             "format": "date-time"
           },
           "display_name": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "email": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "id": {
             "type": "string",
@@ -1285,12 +1652,12 @@
       "description": "Computation graphs"
     },
     {
-      "name": "Settings",
-      "description": "User settings"
-    },
-    {
       "name": "Anon",
       "description": "Anonymous uploads"
+    },
+    {
+      "name": "Signups",
+      "description": "Marketing-page email capture"
     }
   ]
 }
