@@ -873,3 +873,31 @@ fn share_no_cache_skips_write() {
 
     server.join().unwrap();
 }
+
+#[test]
+fn share_filters_by_project_with_no_matches_errors() {
+    let cfg = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let nonexistent = home.path().join("never");
+
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["share", "--project"])
+        .arg(&nonexistent)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No agent sessions found in project"));
+}
+
+#[test]
+fn share_no_harness_non_tty_prints_recipe() {
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["share"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path import"))
+        .stderr(predicate::str::contains("path export pathbase"));
+}

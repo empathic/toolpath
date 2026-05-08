@@ -88,7 +88,6 @@ impl Harness {
     }
 
     /// Padded so all five symbols line up in the fzf column.
-    #[allow(dead_code)] // wired up by the picker in a follow-up task
     pub(crate) fn symbol(&self) -> &'static str {
         match self {
             Harness::Claude => "claude  ",
@@ -116,7 +115,6 @@ impl Harness {
         }
     }
 
-    #[allow(dead_code)] // wired up by the picker in a follow-up task
     pub(crate) fn parse(s: &str) -> Option<Self> {
         match s {
             "claude" => Some(Harness::Claude),
@@ -130,7 +128,6 @@ impl Harness {
 }
 
 /// One row in the unified session picker.
-#[allow(dead_code)] // wired up by gather_sessions in a follow-up task
 #[derive(Debug, Clone)]
 pub(crate) struct SessionRow {
     pub(crate) harness: Harness,
@@ -148,7 +145,6 @@ pub(crate) struct SessionRow {
 /// Bundle of provider managers used during aggregation. Production code
 /// builds this from real `$HOME` via `from_environment`; tests construct
 /// it directly with provider-specific resolvers.
-#[allow(dead_code)] // wired up by gather_sessions in a follow-up task
 #[derive(Default)]
 pub(crate) struct HarnessBundle {
     pub(crate) claude: Option<toolpath_claude::ClaudeConvo>,
@@ -162,7 +158,6 @@ impl HarnessBundle {
     /// Build the production bundle. Each provider is included
     /// unconditionally (its `new()` doesn't fail on a missing home dir);
     /// `gather_sessions` skips the ones whose listing returns empty/NotFound.
-    #[allow(dead_code)] // wired up by gather_sessions in a follow-up task
     pub(crate) fn from_environment() -> Self {
         Self {
             claude: Some(toolpath_claude::ClaudeConvo::new()),
@@ -181,7 +176,6 @@ impl HarnessBundle {
 /// Filters: `harness_filter` keeps only rows from one harness; `project_filter`
 /// keeps only rows whose project (for keyed) or cwd (for session-keyed)
 /// canonicalizes to that path.
-#[allow(dead_code)] // call sites land in Tasks 7-8
 pub(crate) fn gather_sessions(
     bundle: &HarnessBundle,
     cwd: &std::path::Path,
@@ -509,13 +503,124 @@ pub fn run(args: ShareArgs) -> Result<()> {
     if let (Some(h), Some(session)) = (harness, &args.session) {
         return share_explicit(h, session.as_str(), &args);
     }
-
     if args.session.is_some() && harness.is_none() {
         anyhow::bail!("--session requires --harness");
     }
 
-    // Picker path lands in the next task.
-    anyhow::bail!("interactive `path share` is not yet implemented")
+    let cwd = std::env::current_dir()?;
+    let bundle = HarnessBundle::from_environment();
+    let project_filter = args.project.as_deref();
+    let rows = gather_sessions(&bundle, &cwd, harness, project_filter);
+
+    if rows.is_empty() {
+        return bail_no_sessions(&bundle, project_filter);
+    }
+
+    if !crate::fzf::available() {
+        eprintln!(
+            "Interactive `path share` needs `fzf` on PATH and a TTY.\n\
+             \n\
+             Manual recipe:\n  \
+             path import <harness>      # writes a cache entry, prints its id\n  \
+             path export pathbase --input <id>"
+        );
+        anyhow::bail!("fzf unavailable; run `path import <harness>` then `path export pathbase`");
+    }
+
+    let lines: Vec<String> = rows.iter().map(format_picker_row).collect();
+    let host = pathbase_host_for_picker(&args);
+    let header = format!("share an agent session (Enter = upload to {host})");
+    let opts = crate::fzf::PickOptions {
+        with_nth: "4..",
+        prompt: "share> ",
+        preview: Some("path show {1} --project {2} --session {3}"),
+        header: Some(&header),
+        tiebreak: "index",
+        multi: false,
+    };
+    let selected = crate::fzf::pick(&lines, &opts)?;
+    let line = match selected.into_iter().next() {
+        Some(l) => l,
+        None => return Ok(()), // user cancelled
+    };
+    let (h, key, session) = parse_picker_row(&line)
+        .ok_or_else(|| anyhow::anyhow!("internal: failed to parse picker row"))?;
+
+    let mut explicit = ShareArgs {
+        url: args.url.clone(),
+        anon: args.anon,
+        repo: args.repo.clone(),
+        slug: args.slug.clone(),
+        public: args.public,
+        harness: Some(harness_to_arg(h)),
+        session: Some(session.clone()),
+        project: if h.project_keyed() {
+            Some(PathBuf::from(&key))
+        } else {
+            None
+        },
+        force: args.force,
+        no_cache: args.no_cache,
+    };
+    eprintln!(
+        "Picked {} session {}",
+        h.name(),
+        explicit.session.as_deref().unwrap_or("?")
+    );
+    let session_id = explicit.session.take().unwrap();
+    share_explicit(h, &session_id, &explicit)
+}
+
+fn harness_to_arg(h: Harness) -> HarnessArg {
+    match h {
+        Harness::Claude => HarnessArg::Claude,
+        Harness::Gemini => HarnessArg::Gemini,
+        Harness::Codex => HarnessArg::Codex,
+        Harness::Opencode => HarnessArg::Opencode,
+        Harness::Pi => HarnessArg::Pi,
+    }
+}
+
+fn pathbase_host_for_picker(args: &ShareArgs) -> String {
+    use crate::cmd_pathbase::resolve_url;
+    if let Some(u) = &args.url {
+        return resolve_url(Some(u.clone()));
+    }
+    // Best-effort: if there's a stored session, surface its URL; otherwise fall back to default.
+    let path = match crate::cmd_pathbase::credentials_path() {
+        Ok(p) => p,
+        Err(_) => return resolve_url(None),
+    };
+    match crate::cmd_pathbase::load_session(&path) {
+        Ok(Some(s)) => s.url,
+        _ => resolve_url(None),
+    }
+}
+
+fn bail_no_sessions(bundle: &HarnessBundle, project_filter: Option<&std::path::Path>) -> Result<()> {
+    if let Some(p) = project_filter {
+        anyhow::bail!(
+            "No agent sessions found in project {}. Run without --project to see sessions across all projects.",
+            p.display()
+        );
+    }
+
+    let mut summary = String::from("No agent sessions found.\n");
+    summary.push_str(&probe_summary_line("claude", bundle.claude.is_some()));
+    summary.push_str(&probe_summary_line("gemini", bundle.gemini.is_some()));
+    summary.push_str(&probe_summary_line("codex", bundle.codex.is_some()));
+    summary.push_str(&probe_summary_line("opencode", bundle.opencode.is_some()));
+    summary.push_str(&probe_summary_line("pi", bundle.pi.is_some()));
+    eprint!("{summary}");
+    anyhow::bail!("no shareable sessions");
+}
+
+fn probe_summary_line(name: &str, present: bool) -> String {
+    if present {
+        format!("  {name}: 0 sessions\n")
+    } else {
+        format!("  {name}: not configured\n")
+    }
 }
 
 fn share_explicit(harness: Harness, session: &str, args: &ShareArgs) -> Result<()> {
@@ -550,6 +655,74 @@ fn share_explicit(harness: Harness, session: &str, args: &ShareArgs) -> Result<(
         public: args.public,
     };
     crate::cmd_export::run_pathbase_inner(upload, &body, &summary)
+}
+
+/// Build the TSV line fed to fzf. Cols 1–3 are hidden (harness/key/session,
+/// used as parser keys); cols 4..8 are visible to the user.
+fn format_picker_row(row: &SessionRow) -> String {
+    let key = row
+        .project
+        .clone()
+        .or_else(|| row.cwd.clone())
+        .unwrap_or_default();
+    let when = row
+        .last_activity
+        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "          —     ".to_string());
+    let scope = if row.matches_cwd { "·" } else { " " };
+    let project_short = project_short(&key);
+    let title = fzf_title(&row.title);
+    format!(
+        "{}\t{}\t{}\t{}\t{}\t{} msgs\t{}\t{}\t{}",
+        row.harness.name(),
+        tab_safe(&key),
+        tab_safe(&row.session_id),
+        row.harness.symbol(),
+        when,
+        row.message_count,
+        scope,
+        tab_safe(&project_short),
+        title,
+    )
+}
+
+/// Inverse of [`format_picker_row`] — pulls (harness, key, session) back
+/// out of the line fzf returned. Returns `None` if the line is malformed.
+fn parse_picker_row(line: &str) -> Option<(Harness, String, String)> {
+    let mut parts = line.split('\t');
+    let h = Harness::parse(parts.next()?)?;
+    let key = parts.next()?.to_string();
+    let session = parts.next()?.to_string();
+    if session.is_empty() {
+        return None;
+    }
+    Some((h, key, session))
+}
+
+fn tab_safe(s: &str) -> String {
+    s.replace(['\t', '\n', '\r'], " ")
+}
+
+fn fzf_title(s: &str) -> String {
+    const MAX: usize = 120;
+    let safe = tab_safe(s);
+    if safe.chars().count() > MAX {
+        let head: String = safe.chars().take(MAX - 1).collect();
+        format!("{head}…")
+    } else {
+        safe
+    }
+}
+
+fn project_short(p: &str) -> String {
+    let trimmed = p.trim_end_matches('/');
+    let parts: Vec<&str> = trimmed.rsplit('/').take(2).collect();
+    if parts.is_empty() {
+        return p.to_string();
+    }
+    let mut out: Vec<&str> = parts.into_iter().collect();
+    out.reverse();
+    out.join("/")
 }
 
 fn derive_one(
@@ -777,5 +950,43 @@ mod tests {
         assert_eq!(rows[0].session_id, "in-cwd-session");
         assert!(rows[0].matches_cwd);
         assert!(!rows[1].matches_cwd);
+    }
+
+    #[test]
+    fn parse_picker_row_roundtrips_keyed() {
+        let row = SessionRow {
+            harness: Harness::Claude,
+            project: Some("/tmp/proj".to_string()),
+            cwd: None,
+            session_id: "sess-abc".to_string(),
+            title: "Hello\tworld".to_string(),
+            last_activity: None,
+            message_count: 3,
+            matches_cwd: true,
+        };
+        let line = format_picker_row(&row);
+        let (harness, key, session) = parse_picker_row(&line).unwrap();
+        assert_eq!(harness, Harness::Claude);
+        assert_eq!(key, "/tmp/proj");
+        assert_eq!(session, "sess-abc");
+    }
+
+    #[test]
+    fn parse_picker_row_roundtrips_session_keyed() {
+        let row = SessionRow {
+            harness: Harness::Codex,
+            project: None,
+            cwd: Some("/work/proj".to_string()),
+            session_id: "0190abcd".to_string(),
+            title: "(no prompt)".to_string(),
+            last_activity: None,
+            message_count: 0,
+            matches_cwd: false,
+        };
+        let line = format_picker_row(&row);
+        let (harness, key, session) = parse_picker_row(&line).unwrap();
+        assert_eq!(harness, Harness::Codex);
+        assert_eq!(key, "/work/proj"); // codex has no project; cwd carried as the keyed slot
+        assert_eq!(session, "0190abcd");
     }
 }
