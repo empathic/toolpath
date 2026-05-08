@@ -500,11 +500,28 @@ fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
 pub fn run(args: ShareArgs) -> Result<()> {
     let harness = args.harness.map(Harness::from_arg);
 
-    if let (Some(h), Some(session)) = (harness, &args.session) {
-        return share_explicit(h, session.as_str(), &args);
-    }
     if args.session.is_some() && harness.is_none() {
         anyhow::bail!("--session requires --harness");
+    }
+
+    // Build upload args + base URL once and reuse for both the explicit
+    // path and the picker path. `needs_auth` decides whether preflight
+    // can fall back to anon on credential failure.
+    let upload_args = crate::cmd_export::PathbaseUploadArgs {
+        url: args.url.clone(),
+        anon: args.anon,
+        repo: args.repo.clone(),
+        slug: args.slug.clone(),
+        public: args.public,
+    };
+    let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
+    let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.slug.is_some();
+
+    if let (Some(h), Some(session)) = (harness, &args.session) {
+        // Explicit-args: validate creds before derive so a credential
+        // failure doesn't waste the derive/cache work.
+        let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
+        return share_explicit(h, session.as_str(), &args, auth, base_url);
     }
 
     let cwd = std::env::current_dir()?;
@@ -527,9 +544,14 @@ pub fn run(args: ShareArgs) -> Result<()> {
         anyhow::bail!("fzf unavailable; run `path import <harness>` then `path export pathbase`");
     }
 
+    // We have rows AND fzf available — now validate credentials before
+    // making the user pick a session. If preflight returns Anon (either
+    // explicit --anon, no creds + no auth flags, or auth probe failed
+    // and fell back), the picker still fires with that knowledge baked in.
+    let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
+
     let lines: Vec<String> = rows.iter().map(format_picker_row).collect();
-    let host = pathbase_host_for_picker(&args);
-    let header = format!("share an agent session (Enter = upload to {host})");
+    let header = format!("share an agent session (Enter = upload to {base_url})");
     let opts = crate::fzf::PickOptions {
         with_nth: "4..",
         prompt: "share> ",
@@ -579,7 +601,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
     // is opaque and doesn't help the user verify they picked the right
     // thing. `{:?}` adds the surrounding quotes per the spec.
     eprintln!("Picked {} session {:?}", h.name(), title);
-    share_explicit(h, &session, &explicit)
+    share_explicit(h, &session, &explicit, auth, base_url)
 }
 
 fn harness_to_arg(h: Harness) -> HarnessArg {
@@ -589,22 +611,6 @@ fn harness_to_arg(h: Harness) -> HarnessArg {
         Harness::Codex => HarnessArg::Codex,
         Harness::Opencode => HarnessArg::Opencode,
         Harness::Pi => HarnessArg::Pi,
-    }
-}
-
-fn pathbase_host_for_picker(args: &ShareArgs) -> String {
-    use crate::cmd_pathbase::resolve_url;
-    if let Some(u) = &args.url {
-        return resolve_url(Some(u.clone()));
-    }
-    // Best-effort: if there's a stored session, surface its URL; otherwise fall back to default.
-    let path = match crate::cmd_pathbase::credentials_path() {
-        Ok(p) => p,
-        Err(_) => return resolve_url(None),
-    };
-    match crate::cmd_pathbase::load_session(&path) {
-        Ok(Some(s)) => s.url,
-        _ => resolve_url(None),
     }
 }
 
@@ -772,7 +778,13 @@ fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> Stri
     path.display().to_string()
 }
 
-fn share_explicit(harness: Harness, session: &str, args: &ShareArgs) -> Result<()> {
+fn share_explicit(
+    harness: Harness,
+    session: &str,
+    args: &ShareArgs,
+    auth: crate::cmd_pathbase::AuthMode,
+    base_url: String,
+) -> Result<()> {
     let project = match (harness.project_keyed(), args.project.as_ref()) {
         (true, Some(p)) => Some(p.to_string_lossy().into_owned()),
         (true, None) => anyhow::bail!(
@@ -803,7 +815,7 @@ fn share_explicit(harness: Harness, session: &str, args: &ShareArgs) -> Result<(
         slug: args.slug.clone(),
         public: args.public,
     };
-    crate::cmd_export::run_pathbase_inner(upload, &body, &summary)
+    crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary)
 }
 
 /// Build the TSV line fed to fzf. Cols 1–3 are hidden (harness/key/session,

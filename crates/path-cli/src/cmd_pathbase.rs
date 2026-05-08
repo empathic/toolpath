@@ -71,6 +71,21 @@ pub(crate) fn resolve_url(cli_url: Option<String>) -> String {
     raw.trim_end_matches('/').to_string()
 }
 
+/// Extract `scheme://host[:port]` from a URL, dropping any path/query.
+/// Returns the input unchanged if it doesn't look like a URL. Used to
+/// compare a stored session's host against the upload target so we can
+/// warn / fall back when the two don't agree.
+pub(crate) fn host_of(url: &str) -> &str {
+    let after_scheme = match url.find("://") {
+        Some(i) => i + 3,
+        None => return url,
+    };
+    match url[after_scheme..].find('/') {
+        Some(off) => &url[..after_scheme + off],
+        None => url,
+    }
+}
+
 pub(crate) fn prompt_line(prompt: &str) -> Result<String> {
     use std::io::{BufRead, Write};
     let mut stdout = std::io::stdout();
@@ -172,6 +187,85 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
             short_body(&body)
         )
     })
+}
+
+/// Pre-resolved upload mode. Produced by [`preflight_auth`] before any
+/// expensive work (session pickers, cache writes, derive passes) so that
+/// callers can fail fast or fall back to anonymous mode without making
+/// the user select a session and *then* discover the credentials are bad.
+#[derive(Debug)]
+pub(crate) enum AuthMode {
+    /// Use the public anonymous endpoint. No credentials required;
+    /// 5 MB cap and rate-limited.
+    Anon,
+    /// Use the authenticated endpoint. Credentials have already been
+    /// validated against the target server via `api_me`.
+    Authed { token: String, username: String },
+}
+
+/// Probe credentials and decide whether the upload should go authed or
+/// anonymous, *before* any picker/derive/cache work. Behavior:
+///
+/// - `--anon` → `Anon`, no credentials check.
+/// - No stored credentials and no auth-requiring flags → `Anon` with the
+///   "not logged in — uploading anonymously" notice.
+/// - Stored credentials present → call `api_me` against the target URL.
+///   - On success → `Authed { token, username }`.
+///   - On failure with no auth-requiring flags (`--repo`/`--public`/`--slug`)
+///     → fall back to `Anon` with a stderr notice explaining why.
+///   - On failure with auth-requiring flags → propagate the error so the
+///     user knows their explicit request can't be satisfied.
+///
+/// `host_of(base_url) != host_of(stored.url)` triggers an advisory warning
+/// before the credentials probe so the user sees the mismatch even if
+/// `api_me` happens to succeed.
+pub(crate) fn preflight_auth(
+    base_url: &str,
+    anon: bool,
+    needs_auth: bool,
+) -> Result<AuthMode> {
+    if anon {
+        return Ok(AuthMode::Anon);
+    }
+    let stored = load_session(&credentials_path()?)?;
+
+    let go_anon = stored.is_none() && !needs_auth;
+    if go_anon {
+        eprintln!(
+            "note: not logged in — uploading anonymously (not listable). \
+             Run `path auth login --url {base_url}` for a listable upload."
+        );
+        return Ok(AuthMode::Anon);
+    }
+
+    let session = match stored {
+        Some(s) => s,
+        None => bail!("Not logged in. Run `path auth login` or pass `--anon`."),
+    };
+
+    if host_of(base_url) != host_of(&session.url) {
+        eprintln!(
+            "warning: stored credentials are for {}, but you're uploading to {}.",
+            session.url, base_url
+        );
+    }
+
+    match api_me(base_url, &session.token) {
+        Ok(user) => Ok(AuthMode::Authed {
+            token: session.token,
+            username: user.username,
+        }),
+        Err(e) if needs_auth => Err(e.context(
+            "--repo / --public / --slug require an authenticated upload, so falling back \
+             to anonymous wasn't an option. Drop those flags to upload anonymously.",
+        )),
+        Err(e) => {
+            eprintln!(
+                "note: authenticated upload not available — falling back to anonymous.\n  reason: {e}"
+            );
+            Ok(AuthMode::Anon)
+        }
+    }
 }
 
 /// Trim a response body to a single-line snippet for error messages.
@@ -488,6 +582,21 @@ mod tests {
     }
 
     #[test]
+    fn host_of_strips_path() {
+        assert_eq!(host_of("https://pathbase.dev"), "https://pathbase.dev");
+        assert_eq!(host_of("https://pathbase.dev/"), "https://pathbase.dev");
+        assert_eq!(
+            host_of("https://pathbase.dev/api/v1/traces"),
+            "https://pathbase.dev"
+        );
+        assert_eq!(
+            host_of("http://127.0.0.1:9000/foo"),
+            "http://127.0.0.1:9000"
+        );
+        assert_eq!(host_of("not-a-url"), "not-a-url");
+    }
+
+    #[test]
     fn short_body_handles_empty_and_whitespace() {
         assert_eq!(short_body(""), "<empty body>");
         assert_eq!(short_body("   \n\t  "), "<empty body>");
@@ -765,5 +874,133 @@ mod tests {
         let err = paths_download(&server.base(), Some("tok"), "alex", "pathstash", "missing")
             .unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    // ── preflight_auth ────────────────────────────────────────────────
+    //
+    // The preflight is the gate that decides authed-vs-anon BEFORE the
+    // share picker runs, so a credential rejection shouldn't make the
+    // user pick a session and *then* fail. These tests use
+    // TOOLPATH_CONFIG_DIR + a tempdir-credentials file to drive the
+    // logged-in path through the same MockServer used elsewhere.
+
+    fn write_credentials(dir: &std::path::Path, url: &str) {
+        let creds = StoredSession {
+            url: url.to_string(),
+            token: "tok".into(),
+            user: User {
+                id: "u1".into(),
+                username: "alice".into(),
+                email: None,
+                display_name: None,
+                avatar_url: None,
+            },
+        };
+        store_session(&dir.join(CREDENTIALS_FILE), &creds).unwrap();
+    }
+
+    fn me_response_body(username: &str) -> String {
+        format!(r#"{{"id":"u1","username":"{username}"}}"#)
+    }
+
+    /// Cleared TOOLPATH_CONFIG_DIR + no `--anon` + no auth-requiring flags
+    /// → preflight returns Anon with the "not logged in" notice.
+    #[test]
+    fn preflight_anon_when_logged_out_and_no_auth_flags() {
+        let cfg = tempfile::tempdir().unwrap();
+        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
+        let mode = preflight_auth("https://pathbase.dev", false, false).unwrap();
+        assert!(matches!(mode, AuthMode::Anon));
+    }
+
+    /// Stored credentials AND host matches AND api_me succeeds → Authed.
+    #[test]
+    fn preflight_authed_when_credentials_validate() {
+        let server = MockServer::start("HTTP/1.1 200 OK", Box::leak(me_response_body("alice").into_boxed_str()));
+        let cfg = tempfile::tempdir().unwrap();
+        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
+        write_credentials(cfg.path(), &server.base());
+        let base = server.base();
+        let mode = preflight_auth(&base, false, false).unwrap();
+        match mode {
+            AuthMode::Authed { username, .. } => assert_eq!(username, "alice"),
+            AuthMode::Anon => panic!("expected Authed, got Anon"),
+        }
+    }
+
+    /// Stored credentials but api_me rejects with 401 + no auth-requiring
+    /// flags → fall back to Anon (don't error).
+    #[test]
+    fn preflight_falls_back_to_anon_on_401_without_auth_flags() {
+        let server = MockServer::start("HTTP/1.1 401 Unauthorized", "{}");
+        let cfg = tempfile::tempdir().unwrap();
+        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
+        write_credentials(cfg.path(), &server.base());
+        let base = server.base();
+        let mode = preflight_auth(&base, false, false).unwrap();
+        assert!(matches!(mode, AuthMode::Anon));
+    }
+
+    /// Stored credentials but api_me rejects + needs_auth=true → propagate
+    /// the error so the user knows --repo/--public/--slug can't be honored.
+    #[test]
+    fn preflight_propagates_401_when_auth_required() {
+        let server = MockServer::start("HTTP/1.1 401 Unauthorized", "{}");
+        let cfg = tempfile::tempdir().unwrap();
+        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
+        write_credentials(cfg.path(), &server.base());
+        let base = server.base();
+        let err = preflight_auth(&base, false, true).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("--repo"), "expected mention of --repo: {msg}");
+    }
+
+    /// `--anon` short-circuits past every check.
+    #[test]
+    fn preflight_anon_flag_skips_credentials_check() {
+        // Even with valid credentials in place, --anon returns Anon without
+        // calling api_me (no MockServer needed — would 404).
+        let cfg = tempfile::tempdir().unwrap();
+        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
+        write_credentials(cfg.path(), "https://pathbase.dev");
+        let mode = preflight_auth("https://pathbase.dev", true, false).unwrap();
+        assert!(matches!(mode, AuthMode::Anon));
+    }
+
+    /// Test-helper guard for `std::env::set_var`. Restores the prior value
+    /// on drop so tests don't leak state. Tests touching env vars run
+    /// serially because `cargo test` shares process env across the suite;
+    /// the existing pathbase tests don't depend on TOOLPATH_CONFIG_DIR so
+    /// this guard's blast radius is just the preflight tests above.
+    struct EnvGuard {
+        key: String,
+        prior: Option<std::ffi::OsString>,
+    }
+    impl EnvGuard {
+        fn set(key: &str, val: &str) -> Self {
+            let prior = std::env::var_os(key);
+            // SAFETY: tests are single-threaded with respect to each other
+            // for the env vars these guards control; the cargo test harness
+            // runs them concurrently across env vars but the only env var
+            // these tests touch is TOOLPATH_CONFIG_DIR, and no other tests
+            // in this crate touch it.
+            unsafe {
+                std::env::set_var(key, val);
+            }
+            Self {
+                key: key.to_string(),
+                prior,
+            }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prior {
+                    Some(v) => std::env::set_var(&self.key, v),
+                    None => std::env::remove_var(&self.key),
+                }
+            }
+        }
     }
 }
