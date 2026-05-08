@@ -84,6 +84,11 @@ cargo run -p path-cli -- import pi --project /path/to/project
 cargo run -p path-cli -- import pathbase <pathbase-url-or-owner/repo/slug>
 cargo run -p path-cli -- import claude --project . --no-cache | path render md --input -
 
+# Share an agent session to Pathbase (interactive picker, single-shot)
+cargo run -p path-cli -- share
+cargo run -p path-cli -- share --harness claude --session <session-id> --project /path/to/project
+cargo run -p path-cli -- share --url https://my-pathbase.example
+
 # Export toolpath documents into external formats. <ref> is a cache id or a file path.
 cargo run -p path-cli -- export claude --input <ref> --project /tmp/sandbox
 cargo run -p path-cli -- export claude --input <ref> --output conv.jsonl
@@ -218,3 +223,4 @@ Build the site after changes: `cd site && pnpm run build` (should produce 7 page
 - Format references for the agent on-disk formats we derive from live at `docs/agents/formats/`. The Claude Code format (`~/.claude/projects/…` JSONL) gets the deepest treatment — twelve focused docs at `docs/agents/formats/claude-code/` covering envelope, entry types, tools, session chains, compaction, writing-compatible JSONL, a linear walkthrough, and a version-keyed changelog. Sibling single-file references: `codex.md`, `gemini.md`, `opencode.md`. Keep them in sync with their derive crates when fields or behaviors change.
 - Interactive session selection: `path import <provider>` (claude / gemini / pi / codex / opencode) auto-launches `fzf` when stdin and stderr are TTYs, `fzf` is on `$PATH`, and no `--session` was given. Multi-select (TAB) produces a `Graph` document; single-select produces a `Path`. The picker uses `path show <provider> --…` as its `--preview` command. When fzf isn't available, it falls back to most-recent (with `--project`) or prints the manual recipe (without). `path list <provider> --format tsv` is the documented machine-readable surface — column 1 is the project (for claude/gemini/pi) or session id (for codex/opencode), and the trailing column carries `first_user_message` so consumers can fuzzy-match by topic.
 - Conversation metadata title field: `toolpath-claude::ConversationMetadata`, `toolpath-gemini::ConversationMetadata`, and `toolpath-pi::SessionMeta` all expose `first_user_message: Option<String>` — the first non-empty user-prompt text. Populated cheaply during the metadata pass (single-pass for Claude/Gemini; one extra short read for Pi). Used by the picker UI but useful for any "list sessions by topic" surface.
+- `path share` is the one-shot equivalent of `path import <harness> | path export pathbase`. It probes installed agent harnesses (claude/gemini/codex/opencode/pi), aggregates their sessions into a single fzf picker, and ranks rows whose project (claude/gemini/pi) or recorded cwd (codex/opencode) canonicalizes to the current directory at the top. `--harness` narrows the picker to one provider; `--harness X --session Y` (and `--project P` for keyed providers) skips the picker entirely. Pathbase flags (`--url`, `--anon`, `--repo`, `--slug`, `--public`) match `path export pathbase`. By default the derived doc is written to the cache like `import` does; pass `--no-cache` to skip.
