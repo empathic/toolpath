@@ -6,7 +6,6 @@
 
 #![cfg(not(target_os = "emscripten"))]
 
-#[allow(unused_imports)]
 use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
@@ -118,6 +117,75 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
         );
     }
     Ok(path)
+}
+
+/// Resolve the user-supplied `<input>` argument into a parsed `Graph`
+/// plus the source harness inferred from its single inline path (if
+/// any). See spec § "Input resolution" for the order.
+pub(crate) fn resolve_input(
+    args: &ResumeArgs,
+) -> Result<(Graph, Option<crate::cmd_share::Harness>)> {
+    let raw = args.input.as_str();
+
+    enum Shape<'a> {
+        PathbaseUrl(&'a str),
+        PathbaseShorthand(&'a str),
+        FilePath(&'a str),
+        CacheId(&'a str),
+    }
+
+    let shape = if raw.starts_with("http://") || raw.starts_with("https://") {
+        Shape::PathbaseUrl(raw)
+    } else if looks_like_pathbase_shorthand(raw) {
+        Shape::PathbaseShorthand(raw)
+    } else if std::path::Path::new(raw).is_file() {
+        Shape::FilePath(raw)
+    } else {
+        Shape::CacheId(raw)
+    };
+
+    let graph: Graph = match shape {
+        Shape::PathbaseUrl(u) | Shape::PathbaseShorthand(u) => {
+            let derived = crate::cmd_import::pathbase_fetch_to_doc(u, args.url.as_deref())?;
+            if !args.no_cache {
+                crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, args.force)?;
+                eprintln!("Resolved {} → {}", raw, derived.cache_id);
+            }
+            derived.doc
+        }
+        Shape::FilePath(p) => {
+            let json = std::fs::read_to_string(p).with_context(|| format!("read {}", p))?;
+            Graph::from_json(&json)
+                .map_err(|e| anyhow::anyhow!("not a valid toolpath document: {}", e))?
+        }
+        Shape::CacheId(id) => {
+            let file = crate::cmd_cache::cache_ref(id).map_err(|e| {
+                anyhow::anyhow!(
+                    "couldn't resolve `{}` as a URL, file path, or cache id: {}",
+                    raw,
+                    e
+                )
+            })?;
+            let json = std::fs::read_to_string(&file)
+                .with_context(|| format!("read {}", file.display()))?;
+            Graph::from_json(&json)
+                .map_err(|e| anyhow::anyhow!("not a valid toolpath document: {}", e))?
+        }
+    };
+
+    let harness = graph.single_path().and_then(infer_source_harness);
+    Ok((graph, harness))
+}
+
+fn looks_like_pathbase_shorthand(s: &str) -> bool {
+    // Three non-empty slash-separated segments, none containing whitespace
+    // or starting with a dot/slash (which would indicate a relative or
+    // absolute path).
+    if s.starts_with('.') || s.starts_with('/') {
+        return false;
+    }
+    let segs: Vec<&str> = s.split('/').collect();
+    segs.len() == 3 && segs.iter().all(|s| !s.is_empty() && !s.contains(char::is_whitespace))
 }
 
 #[cfg(test)]
@@ -247,5 +315,68 @@ mod tests {
         })];
         let err = ensure_path_with_agent(&g).unwrap_err();
         assert!(err.to_string().contains("inline `Path`"), "actual: {}", err);
+    }
+
+    #[test]
+    fn resolve_input_file_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("doc.json");
+        let graph = toolpath::v1::Graph::from_path(make_path_with_actor("agent:claude-code"));
+        std::fs::write(&p, graph.to_json().unwrap()).unwrap();
+
+        let args = ResumeArgs {
+            input: p.to_string_lossy().to_string(),
+            cwd: None,
+            harness: None,
+            no_cache: false,
+            force: false,
+            url: None,
+        };
+        let (g, harness) = resolve_input(&args).unwrap();
+        let _path = ensure_path_with_agent(&g).unwrap();
+        assert_eq!(harness, Some(Harness::Claude));
+    }
+
+    #[test]
+    fn resolve_input_url_dispatches_to_pathbase_fetch() {
+        use crate::cmd_pathbase::tests::MockServer;
+        let body = {
+            let mut path = make_path_with_actor("agent:codex");
+            path.meta = Some(toolpath::v1::PathMeta {
+                source: Some("codex".to_string()),
+                ..Default::default()
+            });
+            toolpath::v1::Graph::from_path(path).to_json().unwrap()
+        };
+        // MockServer::start requires &'static str — leak the body to satisfy this.
+        let body_static: &'static str = Box::leak(body.into_boxed_str());
+        let server = MockServer::start("HTTP/1.1 200 OK", body_static);
+
+        let args = ResumeArgs {
+            input: format!("{}/alex/pathstash/p", server.base()),
+            cwd: None,
+            harness: None,
+            no_cache: true, // skip cache write in tests
+            force: false,
+            url: None,
+        };
+        let (g, harness) = resolve_input(&args).unwrap();
+        let _ = ensure_path_with_agent(&g).unwrap();
+        assert_eq!(harness, Some(Harness::Codex));
+    }
+
+    #[test]
+    fn resolve_input_unresolvable_errors_clearly() {
+        let args = ResumeArgs {
+            input: "definitely/not/a/real/cache/id".to_string(),
+            cwd: None,
+            harness: None,
+            no_cache: false,
+            force: false,
+            url: None,
+        };
+        let err = resolve_input(&args).unwrap_err();
+        let s = err.to_string();
+        assert!(s.contains("couldn't resolve"), "actual: {s}");
     }
 }
