@@ -103,8 +103,9 @@ pub async fn run_resume(args: ResumeArgs) -> Result<()> {
                  .unwrap_or_else(|| std::env::current_dir())?;
 
     let target = pick_harness(args.harness, source_harness)?;
-    let recipe = project_into_harness(&doc, target, &cwd)?;
-    exec_harness(recipe, &cwd)
+    let session_id = project_into_harness(&doc, target, &cwd)?;
+    let argv = argv_for(target, &session_id);
+    exec_harness(target.binary_name(), &argv, &cwd)
 }
 ```
 
@@ -120,9 +121,10 @@ Small dispatcher that delegates, in order:
   pathbase branch keeps using it. Honors `--no-cache`, `--force`, `--url`.
 - File path / cache id → `cmd_cache::cache_ref` then read+parse.
 
-Returns `(Document, Option<Harness>)`. The source harness is read
-from `path.meta.source` — set by `toolpath-convo::derive_path` to the
-provider's `provider_id`:
+Returns `(Graph, Option<Harness>)` — there is no `Document` enum in
+the codebase; `Graph::from_json` is the universal parse entry. The
+source harness is read from the single inline path's `meta.source` —
+set by `toolpath-convo::derive_path` to the provider's `provider_id`:
 
 | `meta.source` | Harness |
 | --- | --- |
@@ -140,16 +142,22 @@ pre-selection.
 
 ### `ensure_path_with_agent`
 
-Pure validation; rejects:
+Pure validation operating on a `Graph`. Rejects:
 
-- `Document::Step` → "resume needs a `Path` document; `<input>` is a
-  `Step`".
-- `Document::Graph` with N > 0 paths → "resume needs a single `Path`;
-  `<input>` is a `Graph` with N paths. Pick one with `path query …`
-  or split first."
-- `Path` whose steps contain zero `agent:*` actors → "no agent
-  session in `<input>` — `path resume` only works on harness-derived
-  paths".
+- Empty graph → "resume needs a `Path`; expected one path, got an
+  empty graph".
+- Graph with more than one inline path → "resume needs a single
+  `Path`; `<input>` is a graph with N paths. Pick one with
+  `path query …` or split first."
+- Single-path graph whose steps contain zero `agent:*` actors → "no
+  agent session in `<input>` — `path resume` only works on
+  harness-derived paths".
+- Single-path graph whose only entry is a `$ref` (not an inline
+  path) → "resume needs an inline `Path`; got a $ref. Resolve it
+  first."
+
+A bare `Step` JSON document never reaches this function — it would
+fail `Graph::from_json` parse. No dedicated rejection branch needed.
 
 ### `pick_harness`
 
@@ -170,29 +178,50 @@ Codex / Opencode / Pi), including its `binary_name()` helper. Logic:
 Non-TTY environment with no `--harness`: error with the recipe (no
 silent default — picking is consequential).
 
-### `project_into_harness` and `ResumeRecipe`
+### `project_into_harness`
 
-Today the per-harness projection helpers in `cmd_export.rs`
-(`run_claude` / `run_gemini` / `run_codex` / `run_opencode` /
-`run_pi`) `eprintln!("Resume with: …")` and return `()`. We extract a
-return type:
+Each `run_<harness>` in `cmd_export.rs` is already split into two
+private helpers:
+
+- `build_<harness>_<x>(...)` — projects a `Path` into the harness's
+  in-memory session struct (which carries a stable `session_id` field).
+- `write_into_<harness>_project(...)` — writes that struct to disk.
+
+We add five thin `pub(crate)` wrappers in `cmd_export.rs`:
 
 ```rust
-pub struct ResumeRecipe {
-    pub binary: &'static str,    // "claude" | "gemini" | "codex" | "opencode" | "pi"
-    pub args: Vec<String>,       // ["-r", "<session-id>"] etc.
-    pub session_id: String,
-    pub cwd_for_recipe: PathBuf, // dir the harness must be invoked from
+pub(crate) fn project_claude(path: &Path, project_dir: &Path) -> Result<String>;
+pub(crate) fn project_gemini(path: &Path, project_dir: &Path) -> Result<String>;
+pub(crate) fn project_codex(path: &Path, project_dir: &Path) -> Result<String>;
+pub(crate) fn project_opencode(path: &Path, project_dir: &Path) -> Result<String>;
+pub(crate) fn project_pi(path: &Path, project_dir: &Path) -> Result<String>;
+```
+
+Each composes its build + write pair, returning the projected
+session id. cmd_resume's `project_into_harness` is a five-arm match
+that dispatches to the right wrapper.
+
+No public type, no refactor of the existing private writers, and no
+change to `path export <harness>`'s user-visible behavior.
+
+### `argv_for`
+
+```rust
+fn argv_for(harness: Harness, session_id: &str) -> Vec<String> {
+    match harness {
+        Harness::Claude   => vec!["-r".into(), session_id.into()],
+        Harness::Gemini   => vec!["--resume".into(), session_id.into()],
+        Harness::Codex    => vec!["resume".into(), session_id.into()],
+        Harness::Opencode => vec!["--session".into(), session_id.into()],
+        Harness::Pi       => vec!["--session".into(), session_id.into()],
+    }
 }
 ```
 
-The existing CLI-level `path export <harness>` commands keep their
-stderr output by formatting this struct; behavior is unchanged. The
-new code path in `cmd_resume` consumes the struct directly and feeds
-it to `exec_harness`.
-
-This is a five-site mechanical refactor inside `cmd_export.rs` plus a
-new public type. No behavior change for `path export`.
+A static map from harness to resume-argv shape. Lives in
+`cmd_resume.rs` because it's a per-harness CLI convention, not a
+projection concern. `Harness::binary_name()` already exists in
+`cmd_share.rs` and supplies the program name.
 
 ### `exec_harness`
 
@@ -201,8 +230,8 @@ Unix:
 ```rust
 use std::os::unix::process::CommandExt;
 
-let err = std::process::Command::new(recipe.binary)
-    .args(&recipe.args)
+let err = std::process::Command::new(binary)
+    .args(args)
     .current_dir(cwd)
     .exec();          // returns std::io::Error on failure only
 ```
@@ -244,9 +273,10 @@ errors → propagate. Picker cancel → 130. Validation errors → 1.
 | URL fetch returns 401/403 | "auth failed for `<url>`; run `path auth login` or pass `--anon`" (mirrors `import pathbase`). |
 | Cache hit on URL fetch, no `--force` | "cache entry `<id>` already exists; pass `--force` to overwrite". |
 | Input doesn't resolve as URL / shorthand / file / cache id | "couldn't resolve `<input>` as a URL, file path, or cache id". |
-| Doc parses but is a `Step` | "resume needs a `Path` document; `<input>` is a `Step`". |
-| Doc is a `Graph` | "resume needs a single `Path`; `<input>` is a `Graph` with N paths. Pick one with `path query …` or split first." |
-| Path has no `agent:*` actors | "no agent session in `<input>` — `path resume` only works on harness-derived paths". |
+| Empty graph | "resume needs a `Path`; expected one path, got an empty graph". |
+| Multi-path graph | "resume needs a single `Path`; `<input>` is a graph with N paths. Pick one with `path query …` or split first." |
+| Single-path graph with no `agent:*` actors | "no agent session in `<input>` — `path resume` only works on harness-derived paths". |
+| Single-path graph entry is a `$ref` | "resume needs an inline `Path`; got a $ref. Resolve it first." |
 | `--harness X` given, X not on PATH | "harness `<x>` isn't on PATH; install it or pick another with `--harness`". |
 | Zero harnesses on PATH (interactive mode) | "no installed harnesses found; install one of: claude, gemini, codex, opencode, pi". |
 | No `--harness` and stderr/stdin not a TTY | "interactive picker requires a TTY; pass `--harness <X>` or rerun in a terminal". |
@@ -280,38 +310,38 @@ Notes that drive design but not behavior:
    returns it; `--harness` set + not on PATH → error; zero installed
    → error. PATH membership is faked via an injectable lookup helper.
 
-### `ResumeRecipe` round-trip in `cmd_export.rs` tests
+### `project_<harness>` round-trip in `cmd_export.rs` tests
 
 One test per harness (claude / gemini / codex / opencode / pi):
-project a fixture path, assert the returned `ResumeRecipe` matches
-`("claude", ["-r", "<id>"])` etc. These also cover the existing CLI
-surface, since `path export <harness>` now formats the same struct on
-stderr.
+project a fixture path, assert the returned `session_id` is
+non-empty and the on-disk side-effects landed (the `.jsonl` exists,
+the SQLite row was inserted, etc.).
 
 ### Integration tests in `crates/path-cli/tests/resume.rs`
 
 Exec is the one untestable line. `cmd_resume` accepts an injectable
 "exec strategy" (a small trait object or boxed closure) — the binary
 calls the real `execvp` strategy; tests substitute a strategy that
-records the recipe and returns success. No public `--dry-run` flag.
+records `(binary, args, cwd)` and returns success. No public
+`--dry-run` flag.
 
 Cases:
 
 1. File-path input + `--harness claude` + `-C <tmp>` → projects under
-   `<tmp>/.claude/projects/<sanitized>/<id>.jsonl`; recorded recipe is
-   `("claude", ["-r", <id>])`.
+   `<tmp>/.claude/projects/<sanitized>/<id>.jsonl`; recorded
+   `(binary, args)` is `("claude", ["-r", <id>])`.
 2. Same shape, one per harness (gemini / codex / opencode / pi).
-3. Cache-id input → loads from a tmp cache, projects, records recipe.
+3. Cache-id input → loads from a tmp cache, projects, records
+   `(binary, args, cwd)`.
 4. URL input → reuses the in-repo `MockServer` test helper from
    `cmd_pathbase.rs`'s test module (extract into a `pub(crate)` test
    util if needed), fetches, caches, projects.
-5. `Step` input → returns the error verbatim.
-6. `Graph` input → returns the error verbatim.
-7. Agent-less `Path` (git-derived fixture) → returns the error.
-8. `--harness` not on PATH → error.
-9. Zero installed harnesses → error.
-10. Picker cancel → exit 130 (reuses the existing fzf-cancel test
-    pattern from `cmd_share`).
+5. Multi-path graph → returns the error verbatim.
+6. Agent-less `Path` (git-derived fixture) → returns the error.
+7. `--harness` not on PATH → error.
+8. Zero installed harnesses → error.
+9. Picker cancel → exit 130 (reuses the existing fzf-cancel test
+   pattern from `cmd_share`).
 
 ### Out of scope for tests
 
@@ -329,17 +359,17 @@ Cases:
   inputs, resolution order, harness picker, and exec semantics. Same
   density as the doc comment at the top of `cmd_share.rs` and
   `cmd_export.rs`.
-- `cmd_export.rs` — adjust module rustdoc to mention that the `Resume
-  with: …` lines now come from a shared `ResumeRecipe`.
+- `cmd_export.rs` — no rustdoc change required; the new
+  `project_<harness>` wrappers carry their own doc comments.
 - Site (`site/`) — no new page; `path resume` gets one bullet wherever
   the CLI surface is enumerated.
 
 ## Versioning
 
-- `path-cli` minor bump (additive command + new `pub` type
-  `ResumeRecipe`). Update `crates/path-cli/Cargo.toml`,
-  `[workspace.dependencies]` in root `Cargo.toml`,
-  `site/_data/crates.json`, and add a `CHANGELOG.md` entry.
+- `path-cli` minor bump (additive command). Update
+  `crates/path-cli/Cargo.toml`, `[workspace.dependencies]` in root
+  `Cargo.toml`, `site/_data/crates.json`, and add a `CHANGELOG.md`
+  entry.
 - `toolpath-cli` shim follows along (no version bump needed).
 - No bumps for the `toolpath-*` provider crates.
 

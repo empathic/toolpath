@@ -4,9 +4,9 @@
 
 **Goal:** Add `path resume <input>` — fetches/loads a Toolpath document, picks a coding-agent harness (interactive picker by default, `--harness X` to skip), projects the session into the harness's on-disk layout in a chosen cwd, then execs the harness's resume command.
 
-**Architecture:** New `cmd_resume.rs` module mirroring `cmd_share.rs`. Reuses the per-harness projection helpers in `cmd_export.rs` after a small refactor that has each project-mode writer return a `ResumeRecipe { binary, args, session_id, cwd_for_recipe }`. The CLI surface for `path export <harness> --project P` is unchanged; the new code path consumes the recipe directly and feeds it to an injectable `ExecStrategy` (the binary plugs in `execvp`; tests plug in a recorder).
+**Architecture:** New `cmd_resume.rs` module mirroring `cmd_share.rs`. cmd_export.rs gains five small `pub(crate)` wrappers (`project_<harness>`) that compose the existing private build+write helpers and return the projected session id. cmd_resume composes these with an `argv_for(harness, session_id)` helper, an injectable `ExecStrategy`, and a small interactive picker. No new public types in the path-cli library.
 
-**Tech Stack:** Rust 2024, clap, anyhow, `toolpath_*` workspace crates, existing `crate::fzf` helper, `cmd_share::Harness` enum, `pathbase-client`. New types are `pub` only where the desktop app might consume them later.
+**Tech Stack:** Rust 2024, clap, anyhow, `toolpath_*` workspace crates, existing `crate::fzf` helper, `cmd_share::Harness` enum, `pathbase-client`.
 
 **Spec reference:** `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`.
 
@@ -14,7 +14,7 @@
 
 ## Type and API quick reference
 
-The plan's code samples lean on these existing types and functions. Cross-check against the source before writing tests — the names below are what's actually in the repo as of branch `akesling/resume`.
+The plan's code samples lean on these existing types and functions. Cross-check against the source before writing tests.
 
 ```rust
 // crates/toolpath/src/types.rs
@@ -49,7 +49,7 @@ graph.into_single_path();           // Option<Path>
 graph.single_path();                // Option<&Path>
 ```
 
-**There is no `Document` enum.** `Graph::from_json` is the universal entry point — every cache file, every Pathbase response, every Toolpath JSON parses as a `Graph`. Single-path-graphs are the closest thing to a "Path document"; `into_single_path` unwraps them. The plan validates everything as a `Graph` (see Task 8).
+**There is no `Document` enum.** `Graph::from_json` is the universal entry point — every cache file, every Pathbase response, every Toolpath JSON parses as a `Graph`. Single-path-graphs are the closest thing to a "Path document"; `into_single_path` unwraps them. The plan validates everything as a `Graph` (see Task 4).
 
 **`path.meta.source` access pattern** (because `meta: Option<PathMeta>`):
 
@@ -99,19 +99,33 @@ fn make_path_with_actor(actor: &str) -> toolpath::v1::Path {
 }
 ```
 
-Whenever a task below refers to `path_with_actor(...)` or `make_minimal_<harness>_path()`, the body is the snippet above with `actor` substituted. Each task lists the actor explicitly.
+Whenever a task below refers to `make_path_with_actor(...)`, the body is the snippet above with `actor` substituted. Each task lists the actor explicitly.
+
+**Existing `cmd_export.rs` private helpers** (these stay private; the new wrappers compose them):
+
+| Harness | Build helper | Write helper |
+| --- | --- | --- |
+| Claude   | `build_claude_conversation(path) -> Conversation` (with `session_id`)              | `write_into_claude_project(conv, jsonl, project_dir) -> PathBuf` (returns the JSONL path) |
+| Gemini   | `build_gemini_conversation(input, project_path) -> Conversation` (with `session_uuid`) | `write_into_gemini_project(conv, project_path) -> ()` |
+| Codex    | `build_codex_session(input, cwd) -> Session` (with `id`)                          | `write_into_codex_project(session) -> ()` |
+| Opencode | `build_opencode_session(path, project_dir) -> Session` (with `id`)                 | `write_into_opencode_db(session, project_dir) -> ()` |
+| Pi       | `build_pi_session(input, cwd) -> PiSession` (with `header.id`)                     | `write_into_pi_project(session, cwd) -> ()` |
+
+Verify these signatures by reading `cmd_export.rs` before writing the wrappers — adapt as needed if a name differs from this table.
 
 ---
 
 ## File Structure
 
 **New:**
-- `crates/path-cli/src/cmd_resume.rs` — module: `ResumeArgs`, `ResumeRecipe` re-export, orchestration, `resolve_input`, `infer_source_harness`, `ensure_path_with_agent`, `pick_harness`, `exec_harness`, picker.
+- `crates/path-cli/src/cmd_resume.rs` — new module: `ResumeArgs`, orchestration, `resolve_input`, `infer_source_harness`, `ensure_path_with_agent`, `pick_harness`, `argv_for`, `ExecStrategy`, `RealExec`, `RecordingExec`.
 - `crates/path-cli/tests/resume.rs` — integration tests with injectable exec strategy.
+- `crates/path-cli/tests/support/mod.rs` (or `tests/support.rs`) — shared test helpers.
 
 **Modified:**
-- `crates/path-cli/src/cmd_export.rs` — add `pub struct ResumeRecipe`; change `write_into_claude_project`, `write_into_gemini_project`, `write_into_codex_project`, `write_into_opencode_db`, `write_into_pi_project` to return `Result<ResumeRecipe>`; have each `run_<harness>`'s project-mode arm format the recipe to stderr (preserving current output).
+- `crates/path-cli/src/cmd_export.rs` — add five `pub(crate) fn project_<harness>(path: &Path, project_dir: &Path) -> Result<String>` wrappers. No other change.
 - `crates/path-cli/src/cmd_import.rs` — extract a `pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Result<DerivedDoc>` from the inner block of `derive_pathbase`. `derive_pathbase` becomes a one-line wrapper.
+- `crates/path-cli/src/cmd_pathbase.rs` — promote the test-module `MockServer` and required helpers to `pub(crate)` so cross-test-module use works.
 - `crates/path-cli/src/lib.rs` — add `Commands::Resume { args: cmd_resume::ResumeArgs }`; wire dispatch.
 - `crates/path-cli/Cargo.toml` — minor version bump (`0.8.0` → `0.9.0`).
 - `Cargo.toml` (root) — `[workspace.dependencies]` `path-cli` version bump.
@@ -122,320 +136,66 @@ Whenever a task below refers to `path_with_actor(...)` or `make_minimal_<harness
 
 ---
 
-## Task 1: Introduce `ResumeRecipe` and refactor Claude project-mode writer
+## Task 1: `project_<harness>` `pub(crate)` wrappers in `cmd_export.rs`
 
 **Files:**
-- Modify: `crates/path-cli/src/cmd_export.rs:230` (add type near `PathbaseUploadArgs`)
-- Modify: `crates/path-cli/src/cmd_export.rs:255-268` (run_claude project arm) and `crates/path-cli/src/cmd_export.rs:321-342` (write_into_claude_project)
-- Test: `crates/path-cli/src/cmd_export.rs` (inline `#[cfg(test)] mod tests`)
+- Modify: `crates/path-cli/src/cmd_export.rs`
 
-- [ ] **Step 1: Write the failing test**
+These wrappers compose the existing build + write private helpers and return the projected session id as a `String`. No behavior change to `path export <harness>`. The five wrappers are sibling-shaped; we add and test them all in one task to keep the refactor batched.
 
-Append to the existing tests module in `cmd_export.rs` (find it near the bottom of the file under `#[cfg(test)] mod tests {`):
+- [ ] **Step 1: Read the existing private helpers**
 
-```rust
-#[test]
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_claude_project_returns_recipe() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = make_path_with_actor("agent:claude-code");   // see "Type and API quick reference"
+Read `crates/path-cli/src/cmd_export.rs`, focusing on:
+- `build_claude_conversation`, `serialize_jsonl`, `write_into_claude_project`
+- `build_gemini_conversation`, `write_into_gemini_project`
+- `build_codex_session`, `write_into_codex_project`
+- `build_opencode_session`, `write_into_opencode_db`
+- `build_pi_session`, `write_into_pi_project`
 
-    let conv = build_claude_conversation(&path).unwrap();
-    let jsonl = serialize_jsonl(&conv).unwrap();
-    let recipe = write_into_claude_project(&conv, &jsonl, tmp.path()).unwrap();
+Confirm the signatures match the "Existing `cmd_export.rs` private helpers" table above. Note any deviations (most likely: `build_<gemini|codex|pi>_*` take `input: &str` cache id, not `path: &Path`; rework if so).
 
-    assert_eq!(recipe.binary, "claude");
-    assert_eq!(recipe.args, vec!["-r".to_string(), conv.session_id.clone()]);
-    assert_eq!(recipe.session_id, conv.session_id);
-    assert_eq!(recipe.cwd_for_recipe, std::fs::canonicalize(tmp.path()).unwrap());
-}
-```
+- [ ] **Step 2: Write failing tests for all five wrappers**
 
-If `make_path_with_actor` and `make_step` aren't already in scope, add them to the test module — they're used throughout the plan's tests. Crib the bodies from the "Type and API quick reference" section above (or copy `cmd_merge.rs::tests::{make_step, make_path}` directly).
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-cargo test -p path-cli --lib write_into_claude_project_returns_recipe
-```
-
-Expected: FAIL — `write_into_claude_project` currently returns `Result<PathBuf>`, not `Result<ResumeRecipe>`.
-
-- [ ] **Step 3: Add the `ResumeRecipe` type**
-
-Insert near `PathbaseUploadArgs` (around `cmd_export.rs:230`):
-
-```rust
-/// What `path resume` needs to launch a harness's interactive resume
-/// after a successful project-mode export. Returned by every
-/// `write_into_<harness>_project` helper.
-#[cfg(not(target_os = "emscripten"))]
-#[derive(Debug, Clone)]
-pub struct ResumeRecipe {
-    /// Binary name as it appears on PATH (e.g. `"claude"`, `"codex"`).
-    pub binary: &'static str,
-    /// Argv after the binary name (e.g. `["-r", "<session-id>"]`).
-    pub args: Vec<String>,
-    /// Session id the recipe targets. Convenience accessor — also
-    /// embedded in `args` when relevant.
-    pub session_id: String,
-    /// Directory the harness must be invoked from. Already canonicalized.
-    pub cwd_for_recipe: std::path::PathBuf,
-}
-```
-
-- [ ] **Step 4: Refactor `write_into_claude_project` to return the recipe**
-
-Replace the existing function body:
+Append to the existing tests module in `cmd_export.rs` (find it near the bottom of the file under `#[cfg(test)] mod tests {`). First add the shared fixture helpers if they're not already there:
 
 ```rust
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_claude_project(
-    conv: &toolpath_claude::Conversation,
-    jsonl: &str,
-    project_dir: &std::path::Path,
-) -> Result<ResumeRecipe> {
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let project_path = project_dir.to_string_lossy();
-
-    let resolver = toolpath_claude::PathResolver::new();
-    let claude_project_dir = resolver
-        .project_dir(&project_path)
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Claude project dir: {}", e))?;
-
-    std::fs::create_dir_all(&claude_project_dir)
-        .with_context(|| format!("create {}", claude_project_dir.display()))?;
-
-    let session_id = conv.session_id.clone();
-    let out_path = claude_project_dir.join(format!("{}.jsonl", session_id));
-    std::fs::write(&out_path, jsonl).with_context(|| format!("write {}", out_path.display()))?;
-
-    Ok(ResumeRecipe {
-        binary: "claude",
-        args: vec!["-r".to_string(), session_id.clone()],
-        session_id,
-        cwd_for_recipe: project_dir,
-    })
+fn make_step_with_actor(id: &str, actor: &str) -> toolpath::v1::Step {
+    toolpath::v1::Step::new(id, actor, "2026-01-01T00:00:00Z")
+        .with_raw_change("src/main.rs", "@@ -1 +1 @@\n-old\n+new")
 }
-```
 
-- [ ] **Step 5: Update `run_claude`'s project arm to print from the recipe**
-
-In `run_claude` (around line 255), the `(Some(project_dir), None)` branch becomes:
-
-```rust
-(Some(project_dir), None) => {
-    let recipe = write_into_claude_project(&conversation, &jsonl, &project_dir)?;
-    let session_id = &recipe.session_id;
-    eprintln!(
-        "Exported session {} ({} entries) → {}",
-        session_id,
-        conversation.preamble.len() + conversation.entries.len(),
-        recipe.cwd_for_recipe.display()
-    );
-    eprintln!();
-    eprintln!("Resume with:");
-    eprintln!(
-        "  cd {} && {} {}",
-        recipe.cwd_for_recipe.display(),
-        recipe.binary,
-        recipe.args.join(" ")
-    );
-}
-```
-
-(Note: the existing message says `"Exported session ... → <out_path>"` showing the JSONL filename. Switch to `recipe.cwd_for_recipe` so the recipe-print is self-contained — the file path is implied by the harness's resolver and isn't useful to the user.)
-
-- [ ] **Step 6: Run test to verify it passes**
-
-```bash
-cargo test -p path-cli --lib write_into_claude_project_returns_recipe
-```
-
-Expected: PASS.
-
-- [ ] **Step 7: Run the full export tests to confirm no regressions**
-
-```bash
-cargo test -p path-cli --lib cmd_export
-```
-
-Expected: all pass.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add crates/path-cli/src/cmd_export.rs
-git commit -m "refactor(path-cli): return ResumeRecipe from claude project-mode export"
-```
-
----
-
-## Task 2: Refactor Gemini project-mode writer to return `ResumeRecipe`
-
-**Files:**
-- Modify: `crates/path-cli/src/cmd_export.rs:407-441` (write_into_gemini_project) and the caller `run_gemini` (~line 368)
-- Test: `crates/path-cli/src/cmd_export.rs` (inline tests module)
-
-- [ ] **Step 1: Write the failing test**
-
-```rust
-#[test]
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_gemini_project_returns_recipe() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project_path = tmp.path().to_string_lossy().to_string();
-
-    let path = make_path_with_actor("agent:gemini-cli");
-    let view = toolpath_convo::extract_conversation(&path);
-    let project_hash = toolpath_gemini::paths::project_hash(&project_path);
-    let projector = toolpath_gemini::project::GeminiProjector::new()
-        .with_project_hash(project_hash)
-        .with_project_path(project_path.clone());
-    let conv = projector.project(&view).unwrap();
-
-    let recipe = write_into_gemini_project(&conv, &project_path).unwrap();
-
-    assert_eq!(recipe.binary, "gemini");
-    assert_eq!(recipe.args, vec!["--resume".to_string(), conv.session_uuid.clone()]);
-    assert_eq!(recipe.session_id, conv.session_uuid);
-    assert_eq!(recipe.cwd_for_recipe, std::path::PathBuf::from(&project_path));
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-cargo test -p path-cli --lib write_into_gemini_project_returns_recipe
-```
-
-Expected: FAIL — current return type is `Result<()>`.
-
-- [ ] **Step 3: Refactor `write_into_gemini_project`**
-
-Replace the body (lines 407-441):
-
-```rust
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_gemini_project(
-    conversation: &toolpath_gemini::types::Conversation,
-    project_path: &str,
-) -> Result<ResumeRecipe> {
-    let resolver = toolpath_gemini::PathResolver::new();
-    let chats_dir = resolver
-        .chats_dir(project_path)
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Gemini chats dir: {}", e))?;
-    std::fs::create_dir_all(&chats_dir)
-        .with_context(|| format!("create {}", chats_dir.display()))?;
-
-    if let Some(slot_dir) = chats_dir.parent() {
-        let marker = slot_dir.join(".project_root");
-        if !marker.exists() {
-            let _ = std::fs::write(&marker, format!("{}\n", project_path));
-        }
+fn make_path_with_actor(actor: &str) -> toolpath::v1::Path {
+    use toolpath::v1::{Path, PathIdentity};
+    let step = make_step_with_actor("s1", actor);
+    Path {
+        path: PathIdentity {
+            id: "p1".to_string(),
+            base: None,
+            head: "s1".to_string(),
+            graph_ref: None,
+        },
+        steps: vec![step],
+        meta: None,
     }
-
-    let main_stem = gemini_main_stem(conversation);
-    let main_path = chats_dir.join(format!("{}.json", main_stem));
-    let written = write_main_and_subs(conversation, &main_path)?;
-
-    print_summary(conversation, &written, &chats_dir);
-
-    Ok(ResumeRecipe {
-        binary: "gemini",
-        args: vec!["--resume".to_string(), conversation.session_uuid.clone()],
-        session_id: conversation.session_uuid.clone(),
-        cwd_for_recipe: std::path::PathBuf::from(project_path),
-    })
 }
-```
 
-- [ ] **Step 4: Update `run_gemini` project arm to print from the recipe**
-
-In `run_gemini`'s match (around line 368), the `(Some(_), None)` branch becomes:
-
-```rust
-(Some(_), None) => {
-    let recipe = write_into_gemini_project(&conversation, &project_path)?;
-    eprintln!();
-    eprintln!("Resume with:");
-    eprintln!(
-        "  cd {} && {} {}",
-        recipe.cwd_for_recipe.display(),
-        recipe.binary,
-        recipe.args.join(" ")
-    );
-}
-```
-
-- [ ] **Step 5: Run test to verify it passes**
-
-```bash
-cargo test -p path-cli --lib write_into_gemini_project_returns_recipe
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Run gemini export tests**
-
-```bash
-cargo test -p path-cli --lib gemini
-```
-
-Expected: pass (in particular `gemini_writes_resume_ready_layout`).
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add crates/path-cli/src/cmd_export.rs
-git commit -m "refactor(path-cli): return ResumeRecipe from gemini project-mode export"
-```
-
----
-
-## Task 3: Refactor Codex project-mode writer to return `ResumeRecipe`
-
-**Files:**
-- Modify: `crates/path-cli/src/cmd_export.rs:765-815` (write_into_codex_project) and run_codex caller (~line 732)
-- Test: `crates/path-cli/src/cmd_export.rs` (inline tests module)
-
-- [ ] **Step 1: Write the failing test**
-
-```rust
-#[test]
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_codex_project_returns_recipe() {
-    let _home = scoped_home(tempfile::tempdir().unwrap());   // see Step 2
-    let path = make_path_with_actor("agent:codex");
-    let session = build_codex_session_for_test(&path, "/tmp/x");
-    let recipe = write_into_codex_project(&session).unwrap();
-
-    assert_eq!(recipe.binary, "codex");
-    assert_eq!(recipe.args, vec!["resume".to_string(), session.id.clone()]);
-    assert_eq!(recipe.session_id, session.id);
-    // codex resume reads state_5.sqlite, so cwd doesn't matter for invocation;
-    // the recipe records cwd as the recorded session cwd for completeness.
-    assert_eq!(recipe.cwd_for_recipe, std::path::PathBuf::from("/tmp/x"));
-}
-```
-
-- [ ] **Step 2: Add the `scoped_home` and codex fixture helpers**
-
-In the tests module, add (or extend if equivalents exist):
-
-```rust
+/// Pin `$HOME` to a tempdir for tests that resolve harness paths.
 #[cfg(not(target_os = "emscripten"))]
 struct ScopedHome { _td: tempfile::TempDir, prev: Option<std::ffi::OsString> }
 
 #[cfg(not(target_os = "emscripten"))]
-fn scoped_home(td: tempfile::TempDir) -> ScopedHome {
-    let prev = std::env::var_os("HOME");
-    // Safety: tests are single-threaded under `cargo test --test-threads=1`
-    // for this crate (see existing `cmd_pathbase` test pattern). If the
-    // crate ever flips to multi-threaded, replace with `serial_test`.
-    unsafe { std::env::set_var("HOME", td.path()); }
-    ScopedHome { _td: td, prev }
+impl ScopedHome {
+    fn new() -> Self {
+        let td = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("HOME");
+        // Safety: cmd_export tests already share state via the global cache
+        // dir; treat them as serial. If the crate ever flips to multi-threaded
+        // tests, replace with `serial_test`.
+        unsafe { std::env::set_var("HOME", td.path()); }
+        Self { _td: td, prev }
+    }
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -449,404 +209,241 @@ impl Drop for ScopedHome {
         }
     }
 }
-
-#[cfg(not(target_os = "emscripten"))]
-fn build_codex_session_for_test(path: &toolpath::v1::Path, cwd: &str) -> toolpath_codex::Session {
-    use toolpath_convo::ConversationProjector;
-    let view = toolpath_convo::extract_conversation(path);
-    let projector = toolpath_codex::project::CodexProjector::new().with_cwd(cwd.to_string());
-    projector.project(&view).unwrap()
-}
 ```
 
-(Verify whether the existing tests already define a `scoped_home`-like helper — if so, reuse it instead of duplicating.)
-
-- [ ] **Step 3: Run test to verify it fails**
-
-```bash
-cargo test -p path-cli --lib write_into_codex_project_returns_recipe
-```
-
-Expected: FAIL — current return type is `Result<()>`.
-
-- [ ] **Step 4: Refactor `write_into_codex_project`**
-
-Find the existing body (line 765 onwards). Replace the trailing `eprintln!()` block + `Ok(())` with the recipe-returning shape:
-
-```rust
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_codex_project(session: &toolpath_codex::Session) -> Result<ResumeRecipe> {
-    let session_ts = codex_session_timestamp(session)?;
-    let resolver = toolpath_codex::PathResolver::new();
-    let sessions_root = resolver
-        .sessions_root()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Codex sessions dir: {}", e))?;
-
-    let date_dir = sessions_root
-        .join(session_ts.format("%Y").to_string())
-        .join(session_ts.format("%m").to_string())
-        .join(session_ts.format("%d").to_string());
-    std::fs::create_dir_all(&date_dir).with_context(|| format!("create {}", date_dir.display()))?;
-
-    let stem = codex_rollout_stem(session, &session_ts);
-    let out_path = date_dir.join(format!("{}.jsonl", stem));
-    let bytes = serialize_codex_jsonl(session)?;
-    std::fs::write(&out_path, &bytes).with_context(|| format!("write {}", out_path.display()))?;
-
-    let codex_dir = resolver
-        .codex_dir()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve ~/.codex dir: {}", e))?;
-    let registration = register_codex_thread(&codex_dir, session, &out_path, &session_ts);
-
-    eprintln!(
-        "Exported Codex session {} ({} lines) → {}",
-        session.id,
-        session.lines.len(),
-        out_path.display()
-    );
-    match registration {
-        Ok(true) => eprintln!("  registered in {}/state_5.sqlite", codex_dir.display()),
-        Ok(false) => eprintln!(
-            "  warning: state_5.sqlite not found at {} — `codex resume` won't see this session",
-            codex_dir.display()
-        ),
-        Err(e) => eprintln!(
-            "  warning: failed to register thread in state_5.sqlite: {} — `codex resume` may not see this session",
-            e
-        ),
-    }
-
-    let recorded_cwd = session
-        .meta()
-        .map(|m| m.cwd.clone())
-        .unwrap_or_else(|| std::path::PathBuf::from("/"));
-
-    Ok(ResumeRecipe {
-        binary: "codex",
-        args: vec!["resume".to_string(), session.id.clone()],
-        session_id: session.id.clone(),
-        cwd_for_recipe: recorded_cwd,
-    })
-}
-```
-
-- [ ] **Step 5: Update `run_codex` project arm**
-
-In `run_codex` (around line 732), the `(Some(_), None)` branch becomes:
-
-```rust
-(Some(_), None) => {
-    let recipe = write_into_codex_project(&session)?;
-    eprintln!();
-    eprintln!("Loadable via:");
-    eprintln!("  path import codex --session {}", recipe.session_id);
-    eprintln!();
-    eprintln!("Open conversation with:");
-    eprintln!("  {} {}", recipe.binary, recipe.args.join(" "));
-}
-```
-
-- [ ] **Step 6: Run test to verify it passes**
-
-```bash
-cargo test -p path-cli --lib write_into_codex_project_returns_recipe
-```
-
-Expected: PASS.
-
-- [ ] **Step 7: Run codex export tests**
-
-```bash
-cargo test -p path-cli --lib codex
-```
-
-Expected: pass.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add crates/path-cli/src/cmd_export.rs
-git commit -m "refactor(path-cli): return ResumeRecipe from codex project-mode export"
-```
-
----
-
-## Task 4: Refactor opencode project-mode writer to return `ResumeRecipe`
-
-**Files:**
-- Modify: `crates/path-cli/src/cmd_export.rs:1024-1076` (write_into_opencode_db) and run_opencode caller (~line 985)
-- Test: inline tests module
-
-- [ ] **Step 1: Write the failing test**
+Then add five tests:
 
 ```rust
 #[test]
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_opencode_db_returns_recipe() {
-    let _home = scoped_home(tempfile::tempdir().unwrap());
-    // Pre-create an empty opencode.db so the writer doesn't bail.
-    let db_dir = dirs::data_local_dir().unwrap().join("opencode");
-    std::fs::create_dir_all(&db_dir).unwrap();
-    let db_path = db_dir.join("opencode.db");
+fn project_claude_returns_session_id_and_writes_jsonl() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let path = make_path_with_actor("agent:claude-code");
+
+    let session_id = project_claude(&path, cwd.path()).unwrap();
+    assert!(!session_id.is_empty(), "session id should be non-empty");
+
+    // The projected JSONL must land somewhere under HOME/.claude/projects/.
+    let projects = std::path::PathBuf::from(std::env::var_os("HOME").unwrap())
+        .join(".claude/projects");
+    assert!(projects.exists(), "claude projects dir missing under HOME");
+}
+
+#[test]
+#[cfg(not(target_os = "emscripten"))]
+fn project_gemini_returns_session_id_and_writes_chat_file() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let path = make_path_with_actor("agent:gemini-cli");
+
+    let session_id = project_gemini(&path, cwd.path()).unwrap();
+    assert!(!session_id.is_empty());
+
+    let tmp_root = std::path::PathBuf::from(std::env::var_os("HOME").unwrap())
+        .join(".gemini/tmp");
+    assert!(tmp_root.exists(), "gemini tmp dir missing");
+}
+
+#[test]
+#[cfg(not(target_os = "emscripten"))]
+fn project_codex_returns_session_id_and_writes_rollout() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let path = make_path_with_actor("agent:codex");
+
+    let session_id = project_codex(&path, cwd.path()).unwrap();
+    assert!(!session_id.is_empty());
+
+    let sessions = std::path::PathBuf::from(std::env::var_os("HOME").unwrap())
+        .join(".codex/sessions");
+    assert!(sessions.exists(), "codex sessions dir missing");
+}
+
+#[test]
+#[cfg(not(target_os = "emscripten"))]
+fn project_opencode_returns_session_id_and_inserts_row() {
+    // Pre-create an opencode db with the canonical schema so the writer
+    // doesn't bail. Locate the schema bootstrap helper used by existing
+    // opencode tests in `crates/toolpath-opencode/src/` and call it.
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let resolver = toolpath_opencode::PathResolver::new();
+    let db_path = resolver.db_path().unwrap();
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        // Minimal schema — copy from `toolpath_opencode::schema::CREATE_SQL`
-        // or whatever the production schema bootstrap is. (See
-        // existing opencode tests for the helper, if any.)
+        // Substitute the actual bootstrap helper name if different.
         toolpath_opencode::schema::apply_full_schema(&conn).unwrap();
     }
 
     let path = make_path_with_actor("agent:opencode");
-    let session = build_opencode_session(&path, Some(std::path::Path::new("/tmp/x"))).unwrap();
-    let project_dir = tempfile::tempdir().unwrap();
-    let recipe = write_into_opencode_db(&session, project_dir.path()).unwrap();
+    let session_id = project_opencode(&path, cwd.path()).unwrap();
+    assert!(!session_id.is_empty());
 
-    assert_eq!(recipe.binary, "opencode");
-    assert_eq!(recipe.args, vec!["--session".to_string(), session.id.clone()]);
-    assert_eq!(recipe.session_id, session.id);
-    assert_eq!(
-        recipe.cwd_for_recipe,
-        std::fs::canonicalize(project_dir.path()).unwrap()
-    );
+    // Verify the session row exists.
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM session WHERE id = ?1", [&session_id], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
 }
-```
 
-If `toolpath_opencode::schema::apply_full_schema` doesn't exist, locate the canonical bootstrap helper that existing opencode tests use (search `crates/toolpath-opencode/src/`) and substitute the right name.
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-cargo test -p path-cli --lib write_into_opencode_db_returns_recipe
-```
-
-Expected: FAIL — return type mismatch.
-
-- [ ] **Step 3: Refactor `write_into_opencode_db`**
-
-Replace the function body, swapping the two `eprintln!` "Loadable via:" / "Open conversation with:" blocks for a returned `ResumeRecipe`:
-
-```rust
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_opencode_db(
-    session: &toolpath_opencode::Session,
-    project_dir: &std::path::Path,
-) -> Result<ResumeRecipe> {
-    use toolpath_opencode::PathResolver;
-
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-
-    let resolver = PathResolver::new();
-    let db_path = resolver
-        .db_path()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve opencode db path: {}", e))?;
-    if !db_path.exists() {
-        anyhow::bail!(
-            "opencode database not found at {} — has opencode been run on this machine?",
-            db_path.display()
-        );
-    }
-
-    let mut conn = rusqlite::Connection::open(&db_path)
-        .with_context(|| format!("open {}", db_path.display()))?;
-    let tx = conn.transaction()?;
-
-    ensure_opencode_project(&tx, &session.project_id, &project_dir, session.time_created)?;
-    insert_opencode_session(&tx, session)?;
-    let mut message_count = 0_usize;
-    let mut part_count = 0_usize;
-    for message in &session.messages {
-        insert_opencode_message(&tx, message)?;
-        message_count += 1;
-        for part in &message.parts {
-            insert_opencode_part(&tx, part)?;
-            part_count += 1;
-        }
-    }
-    tx.commit()?;
-
-    eprintln!(
-        "Exported opencode session {} ({} messages, {} parts) → {}",
-        session.id,
-        message_count,
-        part_count,
-        db_path.display()
-    );
-
-    Ok(ResumeRecipe {
-        binary: "opencode",
-        args: vec!["--session".to_string(), session.id.clone()],
-        session_id: session.id.clone(),
-        cwd_for_recipe: project_dir,
-    })
-}
-```
-
-**Verify the actual opencode resume invocation.** Read `crates/toolpath-opencode/README.md` or the opencode CLI's own help — if the canonical resume command is something other than `opencode --session <id>`, replace `args` with the right shape. (Today's `eprintln!` says `opencode --session <id>`, so that's the assumption baked in.)
-
-- [ ] **Step 4: Update `run_opencode` project arm**
-
-In `run_opencode` (around line 985), the `(Some(project_dir), None)` branch becomes:
-
-```rust
-(Some(project_dir), None) => {
-    let session = build_opencode_session(&path, Some(&project_dir))?;
-    let recipe = write_into_opencode_db(&session, &project_dir)?;
-    eprintln!();
-    eprintln!("Loadable via:");
-    eprintln!("  path import opencode --session {}", recipe.session_id);
-    eprintln!();
-    eprintln!("Open conversation with:");
-    eprintln!("  {} {}", recipe.binary, recipe.args.join(" "));
-}
-```
-
-- [ ] **Step 5: Run test to verify it passes**
-
-```bash
-cargo test -p path-cli --lib write_into_opencode_db_returns_recipe
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Run opencode export tests**
-
-```bash
-cargo test -p path-cli --lib opencode
-```
-
-Expected: pass.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add crates/path-cli/src/cmd_export.rs
-git commit -m "refactor(path-cli): return ResumeRecipe from opencode project-mode export"
-```
-
----
-
-## Task 5: Refactor Pi project-mode writer to return `ResumeRecipe`
-
-**Files:**
-- Modify: `crates/path-cli/src/cmd_export.rs:622-650` (write_into_pi_project) and run_pi caller (search for `run_pi` in the file)
-- Test: inline tests module
-
-- [ ] **Step 1: Write the failing test**
-
-```rust
 #[test]
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_pi_project_returns_recipe() {
-    let _home = scoped_home(tempfile::tempdir().unwrap());
+fn project_pi_returns_session_id_and_writes_jsonl() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
     let path = make_path_with_actor("agent:pi");
-    let session = build_pi_session_for_test(&path, "/tmp/x");
-    let recipe = write_into_pi_project(&session, "/tmp/x").unwrap();
 
-    assert_eq!(recipe.binary, "pi");
-    assert_eq!(recipe.args, vec!["--session".to_string(), session.header.id.clone()]);
-    assert_eq!(recipe.session_id, session.header.id);
-    assert_eq!(recipe.cwd_for_recipe, std::path::PathBuf::from("/tmp/x"));
+    let session_id = project_pi(&path, cwd.path()).unwrap();
+    assert!(!session_id.is_empty());
+
+    let sessions = std::path::PathBuf::from(std::env::var_os("HOME").unwrap())
+        .join(".pi/agent/sessions");
+    assert!(sessions.exists(), "pi sessions dir missing");
+}
+```
+
+If `toolpath_opencode::schema::apply_full_schema` doesn't exist, locate the canonical schema-apply helper used by existing opencode tests (search `crates/toolpath-opencode/src/`) and use that name.
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+```bash
+cargo test -p path-cli --lib project_claude project_gemini project_codex project_opencode project_pi
+```
+
+Expected: FAIL — none of the wrappers exist yet.
+
+- [ ] **Step 4: Implement the five wrappers**
+
+Add near the top of `cmd_export.rs`, after the existing `pub(crate) struct PathbaseUploadArgs` (around line 230). Each wrapper composes the existing private build + write helpers and returns the projected session id.
+
+```rust
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_claude(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    let conv = build_claude_conversation(path)?;
+    let jsonl = serialize_jsonl(&conv)?;
+    write_into_claude_project(&conv, &jsonl, project_dir)?;
+    Ok(conv.session_id)
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn build_pi_session_for_test(path: &toolpath::v1::Path, cwd: &str) -> toolpath_pi::PiSession {
+pub(crate) fn project_gemini(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
     use toolpath_convo::ConversationProjector;
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+    let project_path = project_dir.to_string_lossy().to_string();
+
     let view = toolpath_convo::extract_conversation(path);
-    let projector = toolpath_pi::project::PiProjector::new().with_cwd(cwd.to_string());
-    projector.project(&view).unwrap()
+    let project_hash = toolpath_gemini::paths::project_hash(&project_path);
+    let projector = toolpath_gemini::project::GeminiProjector::new()
+        .with_project_hash(project_hash)
+        .with_project_path(project_path.clone());
+    let conv = projector
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
+    if conv.session_uuid.is_empty() {
+        anyhow::bail!("Projected conversation has no session UUID");
+    }
+    write_into_gemini_project(&conv, &project_path)?;
+    Ok(conv.session_uuid)
 }
-```
 
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-cargo test -p path-cli --lib write_into_pi_project_returns_recipe
-```
-
-Expected: FAIL.
-
-- [ ] **Step 3: Refactor `write_into_pi_project`**
-
-```rust
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_pi_project(session: &toolpath_pi::PiSession, cwd: &str) -> Result<ResumeRecipe> {
-    let resolver = toolpath_pi::PathResolver::new();
-    let project_dir = resolver.project_dir(cwd);
-    std::fs::create_dir_all(&project_dir)
-        .with_context(|| format!("create {}", project_dir.display()))?;
+pub(crate) fn project_codex(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    use toolpath_convo::ConversationProjector;
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+    let cwd_str = project_dir.to_string_lossy().to_string();
 
-    let stem = pi_session_stem(session);
-    let out_path = project_dir.join(format!("{}.jsonl", stem));
-    let bytes = serialize_pi_jsonl(session)?;
-    std::fs::write(&out_path, &bytes).with_context(|| format!("write {}", out_path.display()))?;
+    let view = toolpath_convo::extract_conversation(path);
+    let projector = toolpath_codex::project::CodexProjector::new().with_cwd(cwd_str);
+    let session = projector
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
+    if session.id.is_empty() {
+        anyhow::bail!("Projected session has no id");
+    }
+    write_into_codex_project(&session)?;
+    Ok(session.id)
+}
 
-    let entry_count = session.entries.len().saturating_sub(1);
-    eprintln!(
-        "Exported Pi session {} ({} entries) → {}",
-        session.header.id,
-        entry_count,
-        out_path.display()
-    );
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_opencode(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    let session = build_opencode_session(path, Some(project_dir))?;
+    let id = session.id.clone();
+    write_into_opencode_db(&session, project_dir)?;
+    Ok(id)
+}
 
-    Ok(ResumeRecipe {
-        binary: "pi",
-        args: vec!["--session".to_string(), session.header.id.clone()],
-        session_id: session.header.id.clone(),
-        cwd_for_recipe: std::path::PathBuf::from(cwd),
-    })
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_pi(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    use toolpath_convo::ConversationProjector;
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+    let cwd_str = project_dir.to_string_lossy().to_string();
+
+    let view = toolpath_convo::extract_conversation(path);
+    let projector = toolpath_pi::project::PiProjector::new().with_cwd(cwd_str.clone());
+    let session = projector
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
+    if session.header.id.is_empty() {
+        anyhow::bail!("Projected session has no id");
+    }
+    write_into_pi_project(&session, &cwd_str)?;
+    Ok(session.header.id)
 }
 ```
 
-- [ ] **Step 4: Update `run_pi` project arm**
+(`project_claude` doesn't canonicalize because `write_into_claude_project` already does. `project_opencode` doesn't either, because `build_opencode_session` already passes the dir to the projector. The other three canonicalize here because their write helpers don't.)
 
-Find the `(Some(_), None)` branch in `run_pi`, replace with:
-
-```rust
-(Some(_), None) => {
-    let recipe = write_into_pi_project(&session, &cwd_str)?;
-    eprintln!();
-    eprintln!("Loadable via:");
-    eprintln!(
-        "  path import pi --session {} --project {}",
-        recipe.session_id,
-        recipe.cwd_for_recipe.display()
-    );
-    eprintln!();
-    eprintln!("Open conversation with:");
-    eprintln!("  {} {}", recipe.binary, recipe.args.join(" "));
-}
-```
-
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 5: Run the new tests**
 
 ```bash
-cargo test -p path-cli --lib write_into_pi_project_returns_recipe
+cargo test -p path-cli --lib project_claude project_gemini project_codex project_opencode project_pi
 ```
 
 Expected: PASS.
 
-- [ ] **Step 6: Run pi export tests**
+- [ ] **Step 6: Run the full export tests to confirm no regressions**
 
 ```bash
-cargo test -p path-cli --lib pi
+cargo test -p path-cli --lib cmd_export
 ```
 
-Expected: pass (in particular `pi_writes_resume_ready_layout`).
+Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add crates/path-cli/src/cmd_export.rs
-git commit -m "refactor(path-cli): return ResumeRecipe from pi project-mode export"
+git commit -m "feat(path-cli): pub(crate) project_<harness> wrappers in cmd_export"
 ```
 
 ---
 
-## Task 6: Extract `pathbase_fetch_to_doc` from `cmd_import.rs`
+## Task 2: Extract `pathbase_fetch_to_doc` from `cmd_import.rs`
 
 **Files:**
 - Modify: `crates/path-cli/src/cmd_import.rs:1362-1388` (derive_pathbase)
+- Modify: `crates/path-cli/src/cmd_pathbase.rs` — promote `MockServer` test helpers to `pub(crate)` so a sibling test module can use them.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -857,7 +454,7 @@ In `cmd_import.rs`'s tests module (or in a new `#[cfg(test)] mod pathbase_fetch_
 #[cfg(not(target_os = "emscripten"))]
 fn pathbase_fetch_to_doc_url_input() {
     use crate::cmd_pathbase::tests::MockServer;
-    let body = r#"{"Path":{"id":"p1","actor":"agent:claude-code","steps":[]}}"#;
+    let body = r#"{"graph":{"id":"g1"},"paths":[{"path":{"id":"p1","head":"s1"},"steps":[{"step":{"id":"s1","actor":"agent:claude-code","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#;
     let server = MockServer::start("HTTP/1.1 200 OK", body);
     let url = format!("{}/alex/pathstash/my-path", server.base());
 
@@ -868,7 +465,7 @@ fn pathbase_fetch_to_doc_url_input() {
 }
 ```
 
-If `cmd_pathbase::tests::MockServer` is not yet `pub(crate)`, this test will fail to compile — Step 3 below adds the visibility.
+(Adjust the JSON body shape to whatever `Graph::from_json` actually accepts — read existing pathbase tests in `cmd_pathbase.rs` and `cmd_import.rs` for the canonical body string.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -876,27 +473,25 @@ If `cmd_pathbase::tests::MockServer` is not yet `pub(crate)`, this test will fai
 cargo test -p path-cli --lib pathbase_fetch_to_doc_url_input
 ```
 
-Expected: FAIL — `pathbase_fetch_to_doc` doesn't exist; possibly also `MockServer` isn't pub(crate).
+Expected: FAIL — `pathbase_fetch_to_doc` doesn't exist; possibly also `MockServer` isn't reachable from sibling test modules.
 
 - [ ] **Step 3: Make `MockServer` reachable from sibling tests**
 
-In `crates/path-cli/src/cmd_pathbase.rs`, change the existing test module declaration so the helper is reachable from sibling test modules:
+In `crates/path-cli/src/cmd_pathbase.rs`, change the existing test module declaration so its helper is reachable from sibling test modules:
 
 ```rust
 #[cfg(test)]
 pub(crate) mod tests {
-    // (existing contents unchanged; the only change is `pub(crate)` and
-    // promoting `MockServer` + its `impl` block to `pub(crate)`.)
-    pub(crate) struct MockServer { /* ... */ }
+    // (existing contents unchanged; the only changes are `pub(crate)` on the
+    // module itself and on `MockServer` + the methods the new caller needs.)
+    pub(crate) struct MockServer { /* leave existing fields */ }
     impl MockServer {
-        pub(crate) fn start(/* ... */) -> Self { /* ... */ }
-        pub(crate) fn base(&self) -> String { /* ... */ }
-        // ...
+        pub(crate) fn start(/* same signature */) -> Self { /* leave body */ }
+        pub(crate) fn base(&self) -> String { /* leave body */ }
+        // …promote only what the new test consumes.
     }
 }
 ```
-
-Promote only the items the new test needs. Existing tests inside the module continue to work unchanged.
 
 - [ ] **Step 4: Extract the function**
 
@@ -965,13 +560,13 @@ git commit -m "refactor(path-cli): extract pathbase_fetch_to_doc helper"
 
 ---
 
-## Task 7: Scaffold `cmd_resume.rs` — types, args, lib.rs wiring
+## Task 3: Scaffold `cmd_resume.rs` — types, args, lib.rs wiring
 
 **Files:**
 - Create: `crates/path-cli/src/cmd_resume.rs`
 - Modify: `crates/path-cli/src/lib.rs:45-180` (Commands enum + dispatch)
 
-- [ ] **Step 1: Write a stub failing test**
+- [ ] **Step 1: Create the module with stub run + test**
 
 Create `crates/path-cli/src/cmd_resume.rs`:
 
@@ -984,7 +579,7 @@ Create `crates/path-cli/src/cmd_resume.rs`:
 
 #![cfg(not(target_os = "emscripten"))]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
@@ -1098,7 +693,7 @@ git commit -m "feat(path-cli): scaffold path resume command (stub)"
 
 ---
 
-## Task 8: Implement `infer_source_harness` and `ensure_path_with_agent`
+## Task 4: Implement `infer_source_harness` and `ensure_path_with_agent`
 
 **Files:**
 - Modify: `crates/path-cli/src/cmd_resume.rs`
@@ -1110,16 +705,30 @@ Append to `cmd_resume.rs`'s tests module. There is no `Document` enum in this co
 ```rust
 use crate::cmd_share::Harness;
 use toolpath::v1::{Graph, PathMeta, PathOrRef};
-// `make_path_with_actor` and `make_step` come from the type-reference snippet
-// at the top of this plan.
 
-fn graph_of(path: toolpath::v1::Path) -> Graph {
-    Graph::from_path(path)
+fn make_step_with_actor(id: &str, actor: &str) -> toolpath::v1::Step {
+    toolpath::v1::Step::new(id, actor, "2026-01-01T00:00:00Z")
+        .with_raw_change("src/main.rs", "@@ -1 +1 @@\n-old\n+new")
+}
+
+fn make_path_with_actor(actor: &str) -> toolpath::v1::Path {
+    use toolpath::v1::{Path, PathIdentity};
+    let step = make_step_with_actor("s1", actor);
+    Path {
+        path: PathIdentity {
+            id: "p1".to_string(),
+            base: None,
+            head: "s1".to_string(),
+            graph_ref: None,
+        },
+        steps: vec![step],
+        meta: None,
+    }
 }
 
 #[test]
 fn infer_source_harness_meta_source_wins() {
-    let mut path = make_path_with_actor("agent:codex");   // actor sniff would say codex…
+    let mut path = make_path_with_actor("agent:codex");
     path.meta = Some(PathMeta {
         source: Some("claude-code".to_string()),
         ..Default::default()
@@ -1163,14 +772,13 @@ fn infer_source_harness_returns_none_when_no_signal() {
 
 #[test]
 fn ensure_path_with_agent_accepts_single_path_with_agent_actor() {
-    let g = graph_of(make_path_with_actor("agent:claude-code"));
+    let g = Graph::from_path(make_path_with_actor("agent:claude-code"));
     assert!(ensure_path_with_agent(&g).is_ok());
 }
 
 #[test]
 fn ensure_path_with_agent_rejects_empty_graph() {
-    let g = Graph::from_path(make_path_with_actor("agent:claude-code")); // start with one
-    let mut g = g;
+    let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
     g.paths.clear();
     let err = ensure_path_with_agent(&g).unwrap_err();
     assert!(err.to_string().contains("expected"));
@@ -1179,7 +787,6 @@ fn ensure_path_with_agent_rejects_empty_graph() {
 
 #[test]
 fn ensure_path_with_agent_rejects_multi_path_graph() {
-    use toolpath::v1::PathOrRef;
     let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
     g.paths.push(PathOrRef::Path(Box::new(make_path_with_actor("agent:claude-code"))));
     let err = ensure_path_with_agent(&g).unwrap_err();
@@ -1190,14 +797,14 @@ fn ensure_path_with_agent_rejects_multi_path_graph() {
 
 #[test]
 fn ensure_path_with_agent_rejects_agentless_path() {
-    let g = graph_of(make_path_with_actor("human:alex"));
+    let g = Graph::from_path(make_path_with_actor("human:alex"));
     let err = ensure_path_with_agent(&g).unwrap_err();
     assert!(err.to_string().contains("no agent session"));
 }
 
 #[test]
 fn ensure_path_with_agent_rejects_path_ref_only_graph() {
-    use toolpath::v1::{PathOrRef, PathRef};
+    use toolpath::v1::PathRef;
     let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
     g.paths = vec![PathOrRef::Ref(PathRef { ref_url: "$ref://something".into() })];
     let err = ensure_path_with_agent(&g).unwrap_err();
@@ -1281,13 +888,11 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
         .iter()
         .any(|s| s.step.actor.starts_with("agent:"));
     if !has_agent {
-                anyhow::bail!(
-                    "no agent session in input — `path resume` only works on harness-derived paths"
-                );
-            }
-            Ok(path)
-        }
+        anyhow::bail!(
+            "no agent session in input — `path resume` only works on harness-derived paths"
+        );
     }
+    Ok(path)
 }
 ```
 
@@ -1308,7 +913,7 @@ git commit -m "feat(path-cli): infer_source_harness and ensure_path_with_agent"
 
 ---
 
-## Task 9: Implement `resolve_input`
+## Task 5: Implement `resolve_input`
 
 **Files:**
 - Modify: `crates/path-cli/src/cmd_resume.rs`
@@ -1438,24 +1043,16 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
 
 fn looks_like_pathbase_shorthand(s: &str) -> bool {
     // Three non-empty slash-separated segments, none containing whitespace
-    // or a leading dot (which would indicate a relative file path).
+    // or a leading dot/slash (which would indicate a relative/absolute path).
     if s.starts_with('.') || s.starts_with('/') { return false; }
     let segs: Vec<&str> = s.split('/').collect();
     segs.len() == 3 && segs.iter().all(|s| !s.is_empty() && !s.contains(char::is_whitespace))
 }
 ```
 
-`Graph::single_path` returns `Option<&Path>` — see the type reference. `infer_source_harness` takes `&Path`, so `.and_then(infer_source_harness)` is the right composition.
+`Graph::single_path` returns `Option<&Path>`. `infer_source_harness` takes `&Path`, so `.and_then(infer_source_harness)` is the right composition.
 
-- [ ] **Step 4: Add `Context` import and any missing imports**
-
-Make sure the top of `cmd_resume.rs` has:
-
-```rust
-use anyhow::{Context, Result};
-```
-
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
 cargo test -p path-cli --lib resolve_input
@@ -1463,7 +1060,7 @@ cargo test -p path-cli --lib resolve_input
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add crates/path-cli/src/cmd_resume.rs
@@ -1472,7 +1069,7 @@ git commit -m "feat(path-cli): resolve_input dispatcher for path resume"
 
 ---
 
-## Task 10: Implement `pick_harness` non-interactive paths and PATH probe
+## Task 6: Implement `pick_harness` non-interactive paths and PATH probe
 
 **Files:**
 - Modify: `crates/path-cli/src/cmd_resume.rs`
@@ -1526,8 +1123,6 @@ fn pick_harness_explicit_arg_validates_path() {
 #[test]
 fn pick_harness_zero_installed_errors() {
     let td = fake_path_with(&[]);
-    // Force non-interactive so we hit the "zero installed" branch
-    // deterministically — the picker step is exercised in integration tests.
     let err = pick_harness(
         None,
         Some(Harness::Claude),
@@ -1541,12 +1136,10 @@ fn pick_harness_zero_installed_errors() {
 }
 ```
 
-(The third test depends on `pick_harness` short-circuiting to the "zero installed" error before consulting `crate::fzf::available()`. The `path_override: Option<&std::path::Path>` parameter exists exclusively for tests.)
-
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cargo test -p path-cli --lib pick_harness
+cargo test -p path-cli --lib pick_harness binary_on_path
 ```
 
 Expected: FAIL.
@@ -1581,7 +1174,6 @@ pub(crate) fn binary_on_path(name: &str, path_override: Option<&std::path::Path>
     false
 }
 
-/// All five harnesses, in the canonical picker order.
 const ALL_HARNESSES: &[Harness] = &[
     Harness::Claude,
     Harness::Gemini,
@@ -1631,14 +1223,9 @@ fn interactive_pick(installed: &[Harness], source: Option<Harness>) -> Result<Ha
             "interactive picker requires `fzf` on PATH and a TTY; pass `--harness <X>` or rerun in a terminal"
         );
     }
-    // Format rows: "<symbol>   <annotation>"
     let mut lines: Vec<String> = Vec::with_capacity(installed.len());
     for h in installed {
-        let mut tags: Vec<&str> = Vec::new();
-        if Some(*h) == source {
-            tags.push("source");
-        }
-        let suffix = if tags.is_empty() { String::new() } else { format!("  ({})", tags.join(", ")) };
+        let suffix = if Some(*h) == source { "  (source)" } else { "" };
         lines.push(format!("{}{}", h.symbol(), suffix));
     }
 
@@ -1658,7 +1245,6 @@ fn interactive_pick(installed: &[Harness], source: Option<Harness>) -> Result<Ha
         }
     };
 
-    // Match by leading symbol (which uniquely identifies each harness).
     for h in installed {
         if pick.starts_with(h.symbol()) {
             return Ok(*h);
@@ -1673,8 +1259,7 @@ fn interactive_pick(installed: &[Harness], source: Option<Harness>) -> Result<Ha
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cargo test -p path-cli --lib pick_harness
-cargo test -p path-cli --lib binary_on_path
+cargo test -p path-cli --lib pick_harness binary_on_path
 ```
 
 Expected: PASS.
@@ -1688,7 +1273,7 @@ git commit -m "feat(path-cli): harness picker + PATH probe for path resume"
 
 ---
 
-## Task 11: Implement `project_into_harness` dispatcher
+## Task 7: Implement `project_into_harness` dispatcher and `argv_for`
 
 **Files:**
 - Modify: `crates/path-cli/src/cmd_resume.rs`
@@ -1697,172 +1282,110 @@ git commit -m "feat(path-cli): harness picker + PATH probe for path resume"
 
 ```rust
 #[test]
+fn argv_for_returns_harness_specific_shape() {
+    assert_eq!(argv_for(Harness::Claude, "abc"),   vec!["-r".to_string(), "abc".to_string()]);
+    assert_eq!(argv_for(Harness::Gemini, "abc"),   vec!["--resume".to_string(), "abc".to_string()]);
+    assert_eq!(argv_for(Harness::Codex, "abc"),    vec!["resume".to_string(), "abc".to_string()]);
+    assert_eq!(argv_for(Harness::Opencode, "abc"), vec!["--session".to_string(), "abc".to_string()]);
+    assert_eq!(argv_for(Harness::Pi, "abc"),       vec!["--session".to_string(), "abc".to_string()]);
+}
+
+#[test]
 fn project_into_harness_claude_round_trip() {
-    let td = tempfile::tempdir().unwrap();
-    let _home = scoped_home_for_resume(tempfile::tempdir().unwrap());
-
+    let _home = scoped_home_for_resume();
+    let cwd = tempfile::tempdir().unwrap();
     let path = make_path_with_actor("agent:claude-code");
-    let recipe = project_into_harness(&path, Harness::Claude, td.path()).unwrap();
 
-    assert_eq!(recipe.binary, "claude");
-    assert_eq!(recipe.args.len(), 2);
-    assert_eq!(recipe.args[0], "-r");
-    assert_eq!(
-        recipe.cwd_for_recipe,
-        std::fs::canonicalize(td.path()).unwrap()
-    );
+    let session_id = project_into_harness(&path, Harness::Claude, cwd.path()).unwrap();
+    assert!(!session_id.is_empty());
+}
+
+fn scoped_home_for_resume() -> ScopedHomeForResume {
+    ScopedHomeForResume::new()
+}
+
+struct ScopedHomeForResume { _td: tempfile::TempDir, prev: Option<std::ffi::OsString> }
+
+impl ScopedHomeForResume {
+    fn new() -> Self {
+        let td = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", td.path()); }
+        Self { _td: td, prev }
+    }
+}
+
+impl Drop for ScopedHomeForResume {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.prev {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
 }
 ```
 
-Add a `scoped_home_for_resume` mirroring the export-side `scoped_home`, or reuse it via `pub(crate)`.
-
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cargo test -p path-cli --lib project_into_harness_claude_round_trip
+cargo test -p path-cli --lib argv_for project_into_harness_claude_round_trip
 ```
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `project_into_harness`**
+- [ ] **Step 3: Implement `argv_for` and `project_into_harness`**
 
 Append to `cmd_resume.rs`:
 
 ```rust
-use crate::cmd_export::ResumeRecipe;
+/// Static map from harness to resume-argv shape.
+pub(crate) fn argv_for(harness: Harness, session_id: &str) -> Vec<String> {
+    match harness {
+        Harness::Claude   => vec!["-r".into(), session_id.into()],
+        Harness::Gemini   => vec!["--resume".into(), session_id.into()],
+        Harness::Codex    => vec!["resume".into(), session_id.into()],
+        Harness::Opencode => vec!["--session".into(), session_id.into()],
+        Harness::Pi       => vec!["--session".into(), session_id.into()],
+    }
+}
 
-/// Run the appropriate `cmd_export` project-mode helper and return its
-/// recipe. The `cwd` is the directory the projection layout is keyed
-/// on AND the directory the harness will be exec'd from.
+/// Project a Path into the chosen harness's on-disk layout under `cwd`,
+/// returning the projected session id.
 pub(crate) fn project_into_harness(
     path: &TPath,
     harness: Harness,
     cwd: &std::path::Path,
-) -> Result<ResumeRecipe> {
+) -> Result<String> {
     match harness {
-        Harness::Claude => crate::cmd_export::project_claude(path, cwd),
-        Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
-        Harness::Codex => crate::cmd_export::project_codex(path, cwd),
+        Harness::Claude   => crate::cmd_export::project_claude(path, cwd),
+        Harness::Gemini   => crate::cmd_export::project_gemini(path, cwd),
+        Harness::Codex    => crate::cmd_export::project_codex(path, cwd),
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
-        Harness::Pi => crate::cmd_export::project_pi(path, cwd),
+        Harness::Pi       => crate::cmd_export::project_pi(path, cwd),
     }
 }
 ```
 
-- [ ] **Step 4: Add the five `pub(crate) fn project_<harness>` thin wrappers in `cmd_export.rs`**
-
-Each wrapper calls the existing build/write pair without going through `run_<harness>` (so the CLI's `--input` / `--output` machinery is bypassed but the on-disk side-effects are identical):
-
-```rust
-// Add near the top of cmd_export.rs, after the existing helpers.
-
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_claude(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<ResumeRecipe> {
-    let conv = build_claude_conversation(path)?;
-    let jsonl = serialize_jsonl(&conv)?;
-    write_into_claude_project(&conv, &jsonl, project_dir)
-}
-
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_gemini(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<ResumeRecipe> {
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let project_path = project_dir.to_string_lossy().to_string();
-    // Reuse existing build-from-path path (build_gemini_conversation takes
-    // an `input: &str` cache id today — refactor to take the path directly).
-    let view = toolpath_convo::extract_conversation(path);
-    let project_hash = toolpath_gemini::paths::project_hash(&project_path);
-    let projector = toolpath_gemini::project::GeminiProjector::new()
-        .with_project_hash(project_hash)
-        .with_project_path(project_path.clone());
-    use toolpath_convo::ConversationProjector;
-    let conv = projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
-    if conv.session_uuid.is_empty() {
-        anyhow::bail!("Projected conversation has no session UUID");
-    }
-    write_into_gemini_project(&conv, &project_path)
-}
-
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_codex(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<ResumeRecipe> {
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let cwd_str = project_dir.to_string_lossy().to_string();
-    use toolpath_convo::ConversationProjector;
-    let view = toolpath_convo::extract_conversation(path);
-    let projector = toolpath_codex::project::CodexProjector::new().with_cwd(cwd_str);
-    let session = projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
-    if session.id.is_empty() {
-        anyhow::bail!("Projected session has no id");
-    }
-    write_into_codex_project(&session)
-}
-
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_opencode(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<ResumeRecipe> {
-    let session = build_opencode_session(path, Some(project_dir))?;
-    write_into_opencode_db(&session, project_dir)
-}
-
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_pi(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<ResumeRecipe> {
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let cwd_str = project_dir.to_string_lossy().to_string();
-    let session = {
-        use toolpath_convo::ConversationProjector;
-        let view = toolpath_convo::extract_conversation(path);
-        let projector = toolpath_pi::project::PiProjector::new().with_cwd(cwd_str.clone());
-        projector
-            .project(&view)
-            .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?
-    };
-    if session.header.id.is_empty() {
-        anyhow::bail!("Projected session has no id");
-    }
-    write_into_pi_project(&session, &cwd_str)
-}
-```
-
-(Each wrapper duplicates a small amount of the corresponding `run_<harness>` body. If the duplication bothers a reviewer, a follow-up can collapse the existing `run_<harness>` into a thin wrapper around `project_<harness>` plus output-mode handling. Out of scope for this plan.)
-
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cargo test -p path-cli --lib project_into_harness_claude_round_trip
+cargo test -p path-cli --lib argv_for project_into_harness_claude_round_trip
 ```
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/path-cli/src/cmd_export.rs crates/path-cli/src/cmd_resume.rs
-git commit -m "feat(path-cli): project_into_harness dispatcher with per-harness wrappers"
+git add crates/path-cli/src/cmd_resume.rs
+git commit -m "feat(path-cli): argv_for + project_into_harness dispatcher"
 ```
 
 ---
 
-## Task 12: Implement `exec_harness` with injectable strategy
+## Task 8: Implement `exec_harness` with injectable strategy
 
 **Files:**
 - Modify: `crates/path-cli/src/cmd_resume.rs`
@@ -1871,16 +1394,11 @@ git commit -m "feat(path-cli): project_into_harness dispatcher with per-harness 
 
 ```rust
 #[test]
-fn exec_strategy_recording_captures_recipe() {
-    let recipe = ResumeRecipe {
-        binary: "claude",
-        args: vec!["-r".to_string(), "abc123".to_string()],
-        session_id: "abc123".to_string(),
-        cwd_for_recipe: std::path::PathBuf::from("/tmp/x"),
-    };
+fn exec_strategy_recording_captures_invocation() {
     let recorder = RecordingExec::default();
     let strategy: &dyn ExecStrategy = &recorder;
-    exec_harness(&recipe, std::path::Path::new("/tmp/x"), strategy).unwrap();
+    exec_harness("claude", &["-r".into(), "abc123".into()], std::path::Path::new("/tmp/x"), strategy)
+        .unwrap();
 
     let captured = recorder.captured();
     assert_eq!(captured.binary, "claude");
@@ -1892,7 +1410,7 @@ fn exec_strategy_recording_captures_recipe() {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p path-cli --lib exec_strategy_recording_captures_recipe
+cargo test -p path-cli --lib exec_strategy_recording_captures_invocation
 ```
 
 Expected: FAIL.
@@ -1904,33 +1422,33 @@ Append to `cmd_resume.rs`:
 ```rust
 /// What `exec_harness` saw (for tests).
 #[derive(Debug, Clone, Default)]
-pub(crate) struct CapturedExec {
-    pub(crate) binary: String,
-    pub(crate) args: Vec<String>,
-    pub(crate) cwd: std::path::PathBuf,
+pub struct CapturedExec {
+    pub binary: String,
+    pub args: Vec<String>,
+    pub cwd: std::path::PathBuf,
 }
 
 /// Pluggable exec backend. Production uses `RealExec` (`execvp` on
 /// Unix, spawn-and-wait on Windows). Tests use `RecordingExec`.
-pub(crate) trait ExecStrategy {
-    fn exec(&self, recipe: &ResumeRecipe, cwd: &std::path::Path) -> Result<()>;
+pub trait ExecStrategy {
+    fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()>;
 }
 
 /// Production implementation. On Unix this never returns on success
 /// (the current process is replaced); on Windows it spawns the child,
 /// waits, and propagates the exit code.
-pub(crate) struct RealExec;
+pub struct RealExec;
 
 impl ExecStrategy for RealExec {
-    fn exec(&self, recipe: &ResumeRecipe, cwd: &std::path::Path) -> Result<()> {
-        let mut cmd = std::process::Command::new(recipe.binary);
-        cmd.args(&recipe.args);
+    fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()> {
+        let mut cmd = std::process::Command::new(binary);
+        cmd.args(args);
         cmd.current_dir(cwd);
 
         eprintln!(
             "Resuming: {} {} (cwd: {})",
-            recipe.binary,
-            recipe.args.join(" "),
+            binary,
+            args.join(" "),
             cwd.display()
         );
 
@@ -1941,19 +1459,19 @@ impl ExecStrategy for RealExec {
             let err = cmd.exec();
             anyhow::bail!(
                 "couldn't exec `{}`: {}. Recipe: {} {} (run from {})",
-                recipe.binary,
+                binary,
                 err,
-                recipe.binary,
-                recipe.args.join(" "),
+                binary,
+                args.join(" "),
                 cwd.display()
             );
         }
         #[cfg(not(unix))]
         {
             let status = cmd.spawn()
-                .with_context(|| format!("spawn {}", recipe.binary))?
+                .with_context(|| format!("spawn {}", binary))?
                 .wait()
-                .with_context(|| format!("wait for {}", recipe.binary))?;
+                .with_context(|| format!("wait for {}", binary))?;
             std::process::exit(status.code().unwrap_or(1));
         }
     }
@@ -1962,22 +1480,22 @@ impl ExecStrategy for RealExec {
 /// Recording strategy for tests. `captured()` returns the most recent
 /// invocation.
 #[derive(Default)]
-pub(crate) struct RecordingExec {
+pub struct RecordingExec {
     inner: std::sync::Mutex<CapturedExec>,
 }
 
 impl RecordingExec {
-    pub(crate) fn captured(&self) -> CapturedExec {
+    pub fn captured(&self) -> CapturedExec {
         self.inner.lock().unwrap().clone()
     }
 }
 
 impl ExecStrategy for RecordingExec {
-    fn exec(&self, recipe: &ResumeRecipe, cwd: &std::path::Path) -> Result<()> {
+    fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()> {
         let mut g = self.inner.lock().unwrap();
         *g = CapturedExec {
-            binary: recipe.binary.to_string(),
-            args: recipe.args.clone(),
+            binary: binary.to_string(),
+            args: args.to_vec(),
             cwd: cwd.to_path_buf(),
         };
         Ok(())
@@ -1985,18 +1503,19 @@ impl ExecStrategy for RecordingExec {
 }
 
 pub(crate) fn exec_harness(
-    recipe: &ResumeRecipe,
+    binary: &str,
+    args: &[String],
     cwd: &std::path::Path,
     strategy: &dyn ExecStrategy,
 ) -> Result<()> {
-    strategy.exec(recipe, cwd)
+    strategy.exec(binary, args, cwd)
 }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p path-cli --lib exec_strategy_recording_captures_recipe
+cargo test -p path-cli --lib exec_strategy_recording_captures_invocation
 ```
 
 Expected: PASS.
@@ -2005,12 +1524,12 @@ Expected: PASS.
 
 ```bash
 git add crates/path-cli/src/cmd_resume.rs
-git commit -m "feat(path-cli): ExecStrategy with RealExec/RecordingExec for path resume"
+git commit -m "feat(path-cli): ExecStrategy with RealExec/RecordingExec"
 ```
 
 ---
 
-## Task 13: Wire `run_resume` orchestration
+## Task 9: Wire `run_resume` orchestration
 
 **Files:**
 - Modify: `crates/path-cli/src/cmd_resume.rs`
@@ -2034,9 +1553,9 @@ pub fn run(args: ResumeArgs) -> Result<()> {
 
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
-pub(crate) fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
-    let (doc, source_harness) = resolve_input(&args)?;
-    let path = ensure_path_with_agent(&doc)?;
+pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
+    let (graph, source_harness) = resolve_input(&args)?;
+    let path = ensure_path_with_agent(&graph)?;
 
     let cwd = match args.cwd.as_ref() {
         Some(p) => std::fs::canonicalize(p)
@@ -2050,26 +1569,27 @@ pub(crate) fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Re
         if Some(target) == source_harness { " (source)" } else { "" }
     );
 
-    let recipe = project_into_harness(path, target, &cwd)?;
-    exec_harness(&recipe, &cwd, exec)
+    let session_id = project_into_harness(path, target, &cwd)?;
+    let argv = argv_for(target, &session_id);
+    exec_harness(target.name(), &argv, &cwd, exec)
 }
 ```
 
-- [ ] **Step 2: Update the existing stub test**
+- [ ] **Step 2: Replace the stub test**
 
 Replace:
 
 ```rust
 #[test]
-fn run_returns_not_implemented_until_wired() { ... }
+fn run_returns_not_implemented_until_wired() { … }
 ```
 
 with:
 
 ```rust
 #[test]
-fn run_with_strategy_records_recipe_for_file_input_with_explicit_harness() {
-    let _home = scoped_home_for_resume(tempfile::tempdir().unwrap());
+fn run_with_strategy_records_invocation_for_file_input_with_explicit_harness() {
+    let _home = scoped_home_for_resume();
     let cwd = tempfile::tempdir().unwrap();
     let doc_file = cwd.path().join("doc.json");
 
@@ -2084,16 +1604,7 @@ fn run_with_strategy_records_recipe_for_file_input_with_explicit_harness() {
         std::iter::once(bin_dir.path().to_path_buf())
             .chain(std::env::split_paths(&prev.clone().unwrap_or_default())),
     ).unwrap();
-    // Safety: see scoped_home note. Treat tests as single-threaded.
     unsafe { std::env::set_var("PATH", new_path); }
-    let _restore = scopeguard::guard(prev, |p| {
-        unsafe {
-            match p {
-                Some(v) => std::env::set_var("PATH", v),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    });
 
     let args = ResumeArgs {
         input: doc_file.to_string_lossy().to_string(),
@@ -2105,6 +1616,14 @@ fn run_with_strategy_records_recipe_for_file_input_with_explicit_harness() {
     let recorder = RecordingExec::default();
     run_with_strategy(args, &recorder).unwrap();
 
+    // Restore PATH.
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+    }
+
     let cap = recorder.captured();
     assert_eq!(cap.binary, "claude");
     assert_eq!(cap.args[0], "-r");
@@ -2112,12 +1631,10 @@ fn run_with_strategy_records_recipe_for_file_input_with_explicit_harness() {
 }
 ```
 
-If `scopeguard` isn't already a dev-dep, either add it (`scopeguard = "1"` under `[dev-dependencies]`) or write an equivalent local `Drop`-based guard struct. Check `Cargo.toml` first.
-
 - [ ] **Step 3: Run the orchestration test**
 
 ```bash
-cargo test -p path-cli --lib run_with_strategy_records_recipe_for_file_input_with_explicit_harness
+cargo test -p path-cli --lib run_with_strategy_records_invocation_for_file_input_with_explicit_harness
 ```
 
 Expected: PASS.
@@ -2128,97 +1645,26 @@ Expected: PASS.
 cargo test -p path-cli --lib cmd_resume
 ```
 
-Expected: PASS for the full set.
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/path-cli/src/cmd_resume.rs crates/path-cli/Cargo.toml
+git add crates/path-cli/src/cmd_resume.rs
 git commit -m "feat(path-cli): wire path resume orchestration end-to-end"
 ```
 
 ---
 
-## Task 14: Integration tests
+## Task 10: Integration tests
 
 **Files:**
 - Create: `crates/path-cli/tests/resume.rs`
+- Create: `crates/path-cli/tests/support/mod.rs`
 
-- [ ] **Step 1: Write the integration test file**
+- [ ] **Step 1: Add the `support` module**
 
-Create `crates/path-cli/tests/resume.rs` with the cases enumerated in the spec. Each test invokes `path_cli::cmd_resume::run_with_strategy` with a `RecordingExec` and asserts on captured recipe + on-disk side-effects.
-
-Each test in the file is one case from the list below. Subsequent steps in this task fill in the per-harness bodies and the rejection cases.
-
-```rust
-#![cfg(not(target_os = "emscripten"))]
-
-use path_cli::cmd_resume::{run_with_strategy, RecordingExec, ResumeArgs};
-use path_cli::cmd_share::HarnessArg;
-
-mod support;
-use support::*;
-
-#[test]
-fn file_input_explicit_claude_projects_and_records_exec() {
-    let _home = ScopedHome::new();
-    let cwd = tempfile::tempdir().unwrap();
-    let doc_file = write_minimal_path_file(cwd.path(), "agent:claude-code");
-
-    let _path_guard = ScopedPath::with_binary("claude");
-
-    let recorder = RecordingExec::default();
-    run_with_strategy(args(doc_file, cwd.path(), HarnessArg::Claude), &recorder).unwrap();
-
-    let cap = recorder.captured();
-    assert_eq!(cap.binary, "claude");
-    assert_eq!(cap.args[0], "-r");
-
-    // Side-effect: the projected JSONL exists under HOME.
-    let projects = home_dir().join(".claude/projects");
-    assert!(projects.exists(), "claude projects dir missing");
-    assert!(walk_dir_finds_jsonl(&projects), "no JSONL written");
-}
-
-#[test]
-fn file_input_explicit_gemini_projects_and_records_exec() { /* ... */ }
-
-#[test]
-fn file_input_explicit_codex_projects_and_records_exec() { /* ... */ }
-
-#[test]
-fn file_input_explicit_opencode_projects_and_records_exec() { /* ... */ }
-
-#[test]
-fn file_input_explicit_pi_projects_and_records_exec() { /* ... */ }
-
-#[test]
-fn cache_id_input_loads_and_projects() { /* writes a cache entry first, runs resume */ }
-
-#[test]
-fn url_input_fetches_via_mock_pathbase_and_projects() {
-    use path_cli::cmd_pathbase::tests::MockServer;
-    /* ... */
-}
-
-#[test]
-fn multi_path_graph_returns_clear_error() { /* see Step 6 */ }
-
-#[test]
-fn agentless_path_returns_clear_error() { /* see Step 6 */ }
-
-#[test]
-fn explicit_harness_not_on_path_errors() { /* see Step 7 */ }
-
-#[test]
-fn zero_installed_errors() { /* see Step 7 */ }
-```
-
-(There is no `step_input` rejection test: this codebase has no `Document::Step` shape — `Graph::from_json` rejects non-graph JSON during parse, well before `ensure_path_with_agent` runs. The `multi_path_graph` and `agentless_path` cases cover the rejection logic that lives in `cmd_resume`.)
-
-- [ ] **Step 2: Add the `support` module**
-
-Create `crates/path-cli/tests/support/mod.rs` (or `crates/path-cli/tests/support.rs`) with shared helpers:
+Create `crates/path-cli/tests/support/mod.rs`:
 
 ```rust
 use std::ffi::OsString;
@@ -2233,7 +1679,6 @@ impl ScopedHome {
         let prev_config = std::env::var_os("TOOLPATH_CONFIG_DIR");
         unsafe {
             std::env::set_var("HOME", td.path());
-            // Some helpers honor TOOLPATH_CONFIG_DIR; keep it pinned to HOME/.toolpath.
             std::env::set_var("TOOLPATH_CONFIG_DIR", td.path().join(".toolpath"));
         }
         Self { _td: td, prev, prev_config }
@@ -2325,7 +1770,7 @@ pub fn write_minimal_path_file(dir: &Path, actor: &str) -> PathBuf {
     p
 }
 
-pub fn args(input: PathBuf, cwd: &Path, harness: HarnessArg) -> path_cli::cmd_resume::ResumeArgs {
+pub fn args(input: PathBuf, cwd: &Path, harness: path_cli::cmd_share::HarnessArg) -> path_cli::cmd_resume::ResumeArgs {
     path_cli::cmd_resume::ResumeArgs {
         input: input.to_string_lossy().to_string(),
         cwd: Some(cwd.to_path_buf()),
@@ -2349,44 +1794,121 @@ pub fn walk_dir_finds_jsonl(root: &Path) -> bool {
 }
 ```
 
-- [ ] **Step 3: Implement the per-harness positive cases**
+- [ ] **Step 2: Add the integration test file with all per-harness positive cases**
 
-Each follows the Claude pattern. Adjust `actor`, `HarnessArg`, expected binary, expected first arg (`-r` for claude, `--resume` for gemini, `resume` for codex, `--session` for opencode/pi). Skip on-disk JSONL assertion for opencode (which writes SQLite rows, not JSONL).
-
-- [ ] **Step 4: Implement the cache-id input case**
+Create `crates/path-cli/tests/resume.rs`:
 
 ```rust
+#![cfg(not(target_os = "emscripten"))]
+
+use path_cli::cmd_resume::{run_with_strategy, RecordingExec, ResumeArgs};
+use path_cli::cmd_share::HarnessArg;
+
+mod support;
+use support::*;
+
 #[test]
-fn cache_id_input_loads_and_projects() {
+fn file_input_explicit_claude_projects_and_records_exec() {
     let _home = ScopedHome::new();
     let cwd = tempfile::tempdir().unwrap();
+    let doc_file = write_minimal_path_file(cwd.path(), "agent:claude-code");
     let _path_guard = ScopedPath::with_binary("claude");
 
-    // Build the same minimal claude path as `write_minimal_path_file` does,
-    // but keep it in memory and stash it under a known cache id.
-    let cache_id = "claude-test-fixture";
-    let doc_file = write_minimal_path_file(cwd.path(), "agent:claude-code");
-    let json = std::fs::read_to_string(&doc_file).unwrap();
-    let graph = toolpath::v1::Graph::from_json(&json).unwrap();
-    path_cli::cmd_cache::write_cached(cache_id, &graph, false).unwrap();
-
-    let resume_args = path_cli::cmd_resume::ResumeArgs {
-        input: cache_id.to_string(),
-        cwd: Some(cwd.path().to_path_buf()),
-        harness: Some(HarnessArg::Claude),
-        no_cache: false, force: false, url: None,
-    };
     let recorder = RecordingExec::default();
-    run_with_strategy(resume_args, &recorder).unwrap();
-    assert_eq!(recorder.captured().binary, "claude");
+    run_with_strategy(args(doc_file, cwd.path(), HarnessArg::Claude), &recorder).unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "claude");
+    assert_eq!(cap.args[0], "-r");
+
+    let projects = home_dir().join(".claude/projects");
+    assert!(projects.exists(), "claude projects dir missing");
+    assert!(walk_dir_finds_jsonl(&projects), "no JSONL written");
+}
+
+#[test]
+fn file_input_explicit_gemini_projects_and_records_exec() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let doc_file = write_minimal_path_file(cwd.path(), "agent:gemini-cli");
+    let _path_guard = ScopedPath::with_binary("gemini");
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(args(doc_file, cwd.path(), HarnessArg::Gemini), &recorder).unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "gemini");
+    assert_eq!(cap.args[0], "--resume");
+
+    let tmp_root = home_dir().join(".gemini/tmp");
+    assert!(tmp_root.exists(), "gemini tmp dir missing");
+}
+
+#[test]
+fn file_input_explicit_codex_projects_and_records_exec() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let doc_file = write_minimal_path_file(cwd.path(), "agent:codex");
+    let _path_guard = ScopedPath::with_binary("codex");
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(args(doc_file, cwd.path(), HarnessArg::Codex), &recorder).unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "codex");
+    assert_eq!(cap.args[0], "resume");
+
+    let sessions = home_dir().join(".codex/sessions");
+    assert!(sessions.exists(), "codex sessions dir missing");
+}
+
+#[test]
+fn file_input_explicit_opencode_projects_and_records_exec() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let doc_file = write_minimal_path_file(cwd.path(), "agent:opencode");
+    let _path_guard = ScopedPath::with_binary("opencode");
+
+    // Pre-create the opencode db with the canonical schema.
+    let resolver = toolpath_opencode::PathResolver::new();
+    let db_path = resolver.db_path().unwrap();
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        // Substitute actual bootstrap helper if different.
+        toolpath_opencode::schema::apply_full_schema(&conn).unwrap();
+    }
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(args(doc_file, cwd.path(), HarnessArg::Opencode), &recorder).unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "opencode");
+    assert_eq!(cap.args[0], "--session");
+}
+
+#[test]
+fn file_input_explicit_pi_projects_and_records_exec() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let doc_file = write_minimal_path_file(cwd.path(), "agent:pi");
+    let _path_guard = ScopedPath::with_binary("pi");
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(args(doc_file, cwd.path(), HarnessArg::Pi), &recorder).unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "pi");
+    assert_eq!(cap.args[0], "--session");
+
+    let sessions = home_dir().join(".pi/agent/sessions");
+    assert!(sessions.exists(), "pi sessions dir missing");
 }
 ```
 
-- [ ] **Step 5: Implement the URL-input case via `MockServer`**
+- [ ] **Step 3: Add the rejection cases**
 
-Use `path_cli::cmd_pathbase::tests::MockServer` (made `pub(crate)` in Task 6 — promote to `pub` here if cross-crate-test-binary access requires it, or move the helper to a `pub` test-utilities module).
-
-- [ ] **Step 6: Implement the rejection cases**
+Append to `tests/resume.rs`:
 
 ```rust
 #[test]
@@ -2400,22 +1922,12 @@ fn multi_path_graph_returns_clear_error() {
         let json = std::fs::read_to_string(write_minimal_path_file(cwd.path(), "agent:claude-code")).unwrap();
         toolpath::v1::Graph::from_json(&json).unwrap().into_single_path().unwrap()
     };
-    let p2 = {
-        // Reuse the same builder; rename the path id to avoid collision.
-        let mut p = p1.clone();
-        p.path.id = "p2".into();
-        p
-    };
-    let graph = toolpath::v1::Graph {
-        graph: toolpath::v1::GraphIdentity { id: "g1".into() },
-        paths: vec![
-            toolpath::v1::PathOrRef::Path(Box::new(p1)),
-            toolpath::v1::PathOrRef::Path(Box::new(p2)),
-        ],
-        meta: None,
-    };
+    let mut p2 = p1.clone();
+    p2.path.id = "p2".into();
+    let mut g = toolpath::v1::Graph::from_path(p1);
+    g.paths.push(toolpath::v1::PathOrRef::Path(Box::new(p2)));
     let doc_file = cwd.path().join("multi.json");
-    std::fs::write(&doc_file, graph.to_json().unwrap()).unwrap();
+    std::fs::write(&doc_file, g.to_json().unwrap()).unwrap();
 
     let recorder = RecordingExec::default();
     let err = run_with_strategy(args(doc_file, cwd.path(), HarnessArg::Claude), &recorder)
@@ -2437,28 +1949,56 @@ fn agentless_path_returns_clear_error() {
         .unwrap_err();
     assert!(err.to_string().contains("no agent session"));
 }
-```
 
-(Substitute the actual `Graph` and `GraphIdentity` field names if they differ from the snippet — read `crates/toolpath/src/types.rs` first; the existing `cmd_merge.rs::tests` builds graphs literally and is the canonical example.)
-
-- [ ] **Step 7: Implement the harness-not-on-PATH and zero-installed cases**
-
-```rust
 #[test]
 fn explicit_harness_not_on_path_errors() {
     let _home = ScopedHome::new();
     let _path_guard = ScopedPath::empty();
     let cwd = tempfile::tempdir().unwrap();
-    let doc = write_minimal_path_file(cwd.path(), "agent:claude-code");
+    let doc_file = write_minimal_path_file(cwd.path(), "agent:claude-code");
 
     let recorder = RecordingExec::default();
-    let err = run_with_strategy(args(doc, cwd.path(), HarnessArg::Claude), &recorder)
+    let err = run_with_strategy(args(doc_file, cwd.path(), HarnessArg::Claude), &recorder)
         .unwrap_err();
     assert!(err.to_string().contains("isn't on PATH"));
 }
 ```
 
-- [ ] **Step 8: Run all integration tests**
+- [ ] **Step 4: Add cache-id and URL input tests**
+
+```rust
+#[test]
+fn cache_id_input_loads_and_projects() {
+    let _home = ScopedHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let _path_guard = ScopedPath::with_binary("claude");
+
+    // Stash a graph in the cache under a known id.
+    let cache_id = "claude-test-fixture";
+    let doc_file = write_minimal_path_file(cwd.path(), "agent:claude-code");
+    let json = std::fs::read_to_string(&doc_file).unwrap();
+    let graph = toolpath::v1::Graph::from_json(&json).unwrap();
+    path_cli::cmd_cache::write_cached(cache_id, &graph, false).unwrap();
+
+    let resume_args = path_cli::cmd_resume::ResumeArgs {
+        input: cache_id.to_string(),
+        cwd: Some(cwd.path().to_path_buf()),
+        harness: Some(HarnessArg::Claude),
+        no_cache: false, force: false, url: None,
+    };
+    let recorder = RecordingExec::default();
+    run_with_strategy(resume_args, &recorder).unwrap();
+    assert_eq!(recorder.captured().binary, "claude");
+}
+
+// URL input case — uses the in-repo MockServer test helper. If the
+// MockServer module isn't reachable from cross-test binaries, skip
+// or re-implement a minimal mock here.
+```
+
+(The URL input test depends on `path_cli::cmd_pathbase::tests::MockServer` being reachable. If `pub(crate)` doesn't bridge across the integration-test binary boundary, either move `MockServer` to a tiny `pub` test-utilities module or write a minimal inline mock for this single test. Decide at implementation time.)
+
+- [ ] **Step 5: Run all integration tests**
 
 ```bash
 cargo test -p path-cli --test resume
@@ -2466,7 +2006,7 @@ cargo test -p path-cli --test resume
 
 Expected: PASS.
 
-- [ ] **Step 9: Run the full `path-cli` test suite**
+- [ ] **Step 6: Run the full `path-cli` test suite**
 
 ```bash
 cargo test -p path-cli
@@ -2474,7 +2014,7 @@ cargo test -p path-cli
 
 Expected: pass.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add crates/path-cli/tests/
@@ -2483,13 +2023,12 @@ git commit -m "test(path-cli): integration tests for path resume"
 
 ---
 
-## Task 15: Documentation
+## Task 11: Documentation
 
 **Files:**
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 - Modify: `crates/path-cli/src/cmd_resume.rs` (rustdoc)
-- Modify: `crates/path-cli/src/cmd_export.rs` (rustdoc)
 - Create or modify: `CHANGELOG.md`
 
 - [ ] **Step 1: Add `path resume` to the `CLAUDE.md` CLI usage block**
@@ -2554,22 +2093,9 @@ Replace the placeholder module comment with a real one:
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`.
 ```
 
-- [ ] **Step 5: Adjust the `cmd_export.rs` module rustdoc**
+- [ ] **Step 5: Add a `CHANGELOG.md` entry**
 
-In the existing `//! ` block at the top of `cmd_export.rs`, append a paragraph:
-
-```rust
-//!
-//! Each `--project` mode now returns a `ResumeRecipe { binary, args,
-//! session_id, cwd_for_recipe }`. The CLI surface formats the recipe
-//! into the same `Resume with: …` / `Open conversation with: …` lines
-//! it always has; `path resume` consumes the recipe directly to exec
-//! the harness.
-```
-
-- [ ] **Step 6: Add a `CHANGELOG.md` entry**
-
-Add a new section at the top (above the most recent entry):
+Add a new section at the top (above the most recent entry; create the file with `# Changelog` header if it doesn't exist):
 
 ```markdown
 ## path-cli 0.9.0 — 2026-05-08
@@ -2579,19 +2105,12 @@ Add a new section at the top (above the most recent entry):
   file path, or cache id), pick a coding-agent harness, project the
   session into its on-disk layout under a chosen cwd, and exec the
   harness's resume command.
-- `cmd_export::ResumeRecipe` — public type returned by every
-  project-mode export helper; describes how to invoke the harness for
-  resume. Consumed by `path resume`.
-
-### Changed
-- `path export <harness> --project <dir>` writers internally return a
-  `ResumeRecipe`. The CLI's stderr "Resume with: …" lines are now
-  formatted from the recipe; user-visible output is unchanged.
+- `cmd_export::project_<harness>` `pub(crate)` wrappers that compose
+  the existing build + write helpers and return the projected session
+  id. Consumed by `path resume`.
 ```
 
-(If `CHANGELOG.md` doesn't exist yet, create it with a simple header `# Changelog` followed by the section above.)
-
-- [ ] **Step 7: Build the docs to confirm they compile**
+- [ ] **Step 6: Build the docs to confirm they compile**
 
 ```bash
 cargo doc -p path-cli --no-deps
@@ -2599,16 +2118,16 @@ cargo doc -p path-cli --no-deps
 
 Expected: clean build.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add CLAUDE.md README.md CHANGELOG.md crates/path-cli/src/cmd_resume.rs crates/path-cli/src/cmd_export.rs
+git add CLAUDE.md README.md CHANGELOG.md crates/path-cli/src/cmd_resume.rs
 git commit -m "docs: document path resume command"
 ```
 
 ---
 
-## Task 16: Version bumps
+## Task 12: Version bumps
 
 **Files:**
 - Modify: `crates/path-cli/Cargo.toml`
@@ -2625,13 +2144,7 @@ version = "0.9.0"   # was 0.8.0
 
 - [ ] **Step 2: Bump the workspace dep entry**
 
-In the root `Cargo.toml`, find the `[workspace.dependencies]` `path-cli` entry and bump to match:
-
-```toml
-path-cli = { path = "crates/path-cli", version = "0.9.0" }
-```
-
-(Adjust to match the existing entry's exact shape — `path` may or may not be present.)
+In the root `Cargo.toml`, find the `[workspace.dependencies]` `path-cli` entry and bump to match. (Adjust to match the existing entry's exact shape — `path` may or may not be present.)
 
 - [ ] **Step 3: Bump the site data**
 
@@ -2678,7 +2191,7 @@ git commit -m "chore: bump path-cli to 0.9.0 for path resume"
 
 ---
 
-## Task 17: Smoke test from the CLI
+## Task 13: Smoke test from the CLI
 
 **Files:** none modified — manual verification only.
 
@@ -2698,30 +2211,22 @@ Expected: usage line + flags listed exactly as documented in `cmd_resume.rs`.
 
 - [ ] **Step 3: Confirm rejection paths work end-to-end**
 
-Pick a cache entry that's not from a harness — e.g. a `git-*` entry from a previous `path import git`. If none exist, derive one:
-
-```bash
-./target/release/path import git --repo . --branch main
-./target/release/path cache ls
-```
-
-Then attempt to resume:
+Pick or derive a cache entry that's not from a harness (e.g. a `git-*` entry from `path import git`). Then attempt to resume:
 
 ```bash
 ./target/release/path resume <git-cache-id> --harness claude
 ```
 
-Expected: error message `no agent session in input — `path resume` only works on harness-derived paths`.
+Expected: error message `no agent session in input — \`path resume\` only works on harness-derived paths`.
 
 - [ ] **Step 4: (Optional) Confirm a real resume works against an actual session**
 
 Only if you have a real claude/codex/gemini/opencode/pi session locally and one of those binaries on PATH:
 
 ```bash
-./target/release/path import claude --project . --no-cache | ./target/release/path resume - --harness claude
+./target/release/path import claude --project $PWD
+./target/release/path resume <cache-id-from-prev-step> --harness claude
 ```
-
-(Or use a cached entry. The `-` stdin form requires an extra implementation step — skip if not implemented.)
 
 Expected: control transfers to the harness with the prior conversation visible.
 
@@ -2731,21 +2236,22 @@ Manual step only.
 
 ---
 
-## Self-review checklist (run before handing the plan off)
+## Self-review checklist
 
 1. Every task ends with a `git commit` — verified.
-2. Every code step shows the actual code, not "implement X" — verified.
-3. Every test step shows the actual test, the run command, and the expected outcome — verified.
-4. File paths are absolute or workspace-relative — verified (all `crates/path-cli/...`).
-5. Type names are consistent across tasks (`ResumeRecipe`, `ResumeArgs`, `ExecStrategy`, `RecordingExec`, `RealExec`, `Harness`, `HarnessArg`) — verified.
-6. Spec coverage:
-   - § Surface — Tasks 7, 13.
-   - § Input resolution — Task 9.
-   - § Launch — Tasks 12, 13.
-   - § Internal architecture (`resolve_input`, `ensure_path_with_agent`, `pick_harness`, `project_into_harness`, `exec_harness`) — Tasks 8–13.
-   - § `ResumeRecipe` and `cmd_export` refactor — Tasks 1–5, 11.
-   - § Error handling — Tasks 8, 9, 10, 14.
-   - § Testing — Tasks 1–14, 17.
-   - § Documentation — Task 15.
-   - § Versioning — Task 16.
-7. No "TBD", "TODO", or "implement later" — verified.
+2. Every code step shows actual code, not "implement X" — verified.
+3. Every test step shows actual test, run command, and expected outcome — verified.
+4. File paths are absolute or workspace-relative — verified.
+5. Type names are consistent across tasks (`ResumeArgs`, `ExecStrategy`, `RecordingExec`, `RealExec`, `Harness`, `HarnessArg`, `CapturedExec`) — verified.
+6. No `ResumeRecipe` references — verified (collapsed into `(session_id, argv_for, exec_harness)`).
+7. Spec coverage:
+   - § Surface — Tasks 3, 9.
+   - § Input resolution — Task 5.
+   - § Launch — Tasks 8, 9.
+   - § Internal architecture (`resolve_input`, `ensure_path_with_agent`, `pick_harness`, `project_into_harness`, `argv_for`, `exec_harness`) — Tasks 4–9.
+   - § `project_<harness>` wrappers — Task 1.
+   - § Error handling — Tasks 4, 5, 6, 10.
+   - § Testing — Tasks 1–10, 13.
+   - § Documentation — Task 11.
+   - § Versioning — Task 12.
+8. No "TBD", "TODO", or "implement later" — verified.
