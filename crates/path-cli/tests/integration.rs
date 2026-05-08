@@ -892,8 +892,33 @@ fn share_filters_by_project_with_no_matches_errors() {
 
 #[test]
 fn share_no_harness_non_tty_prints_recipe() {
+    // Build a minimal claude fixture in a tempdir, point HOME at it, so
+    // gather_sessions returns a non-empty Vec. Without this, an environment
+    // with no agent harnesses configured (e.g. CI) would hit bail_no_sessions
+    // before the fzf-unavailable recipe path. We want the recipe path here.
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let claude_dir = temp.path().join(".claude");
+    let project_slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let project_dir = claude_dir.join("projects").join(&project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("session-recipe.jsonl"),
+        format!(
+            r#"{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+
     let cfg = tempfile::tempdir().unwrap();
     cmd()
+        .env("HOME", temp.path())
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
         .args(["share"])
         .assert()
