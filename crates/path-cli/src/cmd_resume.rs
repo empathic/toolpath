@@ -44,8 +44,32 @@ pub struct ResumeArgs {
     pub url: Option<String>,
 }
 
-pub fn run(_args: ResumeArgs) -> Result<()> {
-    anyhow::bail!("path resume: not yet implemented")
+pub fn run(args: ResumeArgs) -> Result<()> {
+    run_with_strategy(args, &RealExec)
+}
+
+/// Internal entry point that the integration tests call with a
+/// `RecordingExec` strategy. Production callers use [`run`].
+pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
+    let (graph, source_harness) = resolve_input(&args)?;
+    let path = ensure_path_with_agent(&graph)?;
+
+    let cwd = match args.cwd.as_ref() {
+        Some(p) => std::fs::canonicalize(p)
+            .with_context(|| format!("resolve cwd path {}", p.display()))?,
+        None => std::env::current_dir()?,
+    };
+
+    let target = pick_harness(args.harness, source_harness, None)?;
+    eprintln!(
+        "Picked harness: {}{}",
+        target.name(),
+        if Some(target) == source_harness { " (source)" } else { "" }
+    );
+
+    let session_id = project_into_harness(path, target, &cwd)?;
+    let argv = argv_for(target, &session_id);
+    exec_harness(target.name(), &argv, &cwd, exec)
 }
 
 use toolpath::v1::{Graph, Path as TPath, PathOrRef};
@@ -430,17 +454,86 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_returns_not_implemented_until_wired() {
-        let args = ResumeArgs {
-            input: "irrelevant".to_string(),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+    fn run_with_strategy_records_invocation_for_file_input_with_explicit_harness() {
+        let _home = scoped_home_for_resume();
+        let cwd = tempfile::tempdir().unwrap();
+        let doc_file = cwd.path().join("doc.json");
+
+        // Build a path with an agent:claude-code actor step that also carries
+        // a conversation.append artifact so project_claude can consume it.
+        let path = {
+            use std::collections::HashMap;
+            let mut extra = HashMap::new();
+            extra.insert("role".to_string(), serde_json::json!("user"));
+            extra.insert("text".to_string(), serde_json::json!("hello"));
+            let step = toolpath::v1::Step {
+                step: toolpath::v1::StepIdentity {
+                    id: "s1".to_string(),
+                    parents: vec![],
+                    actor: "agent:claude-code".to_string(),
+                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                },
+                change: {
+                    let mut m = HashMap::new();
+                    m.insert(
+                        "claude-code://resume-test-session".to_string(),
+                        toolpath::v1::ArtifactChange {
+                            raw: None,
+                            structural: Some(toolpath::v1::StructuralChange {
+                                change_type: "conversation.append".to_string(),
+                                extra,
+                            }),
+                        },
+                    );
+                    m
+                },
+                meta: None,
+            };
+            toolpath::v1::Path {
+                path: toolpath::v1::PathIdentity {
+                    id: "test-path".to_string(),
+                    base: None,
+                    head: "s1".to_string(),
+                    graph_ref: None,
+                },
+                steps: vec![step],
+                meta: None,
+            }
         };
-        let err = run(args).unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"));
+        let graph = toolpath::v1::Graph::from_path(path);
+        std::fs::write(&doc_file, graph.to_json().unwrap()).unwrap();
+
+        // Make `claude` discoverable by salting PATH for this process.
+        let bin_dir = fake_path_with(&["claude"]);
+        let prev = std::env::var_os("PATH");
+        let new_path = std::env::join_paths(
+            std::iter::once(bin_dir.path().to_path_buf())
+                .chain(std::env::split_paths(&prev.clone().unwrap_or_default())),
+        ).unwrap();
+        unsafe { std::env::set_var("PATH", new_path); }
+
+        let args = ResumeArgs {
+            input: doc_file.to_string_lossy().to_string(),
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(HarnessArg::Claude),
+            no_cache: false, force: false, url: None,
+        };
+
+        let recorder = RecordingExec::default();
+        run_with_strategy(args, &recorder).unwrap();
+
+        // Restore PATH.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("PATH", v),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        let cap = recorder.captured();
+        assert_eq!(cap.binary, "claude");
+        assert_eq!(cap.args[0], "-r");
+        assert_eq!(cap.cwd, std::fs::canonicalize(cwd.path()).unwrap());
     }
 
     use crate::cmd_share::Harness;
