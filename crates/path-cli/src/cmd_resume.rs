@@ -620,6 +620,7 @@ mod tests {
 
     #[test]
     fn resolve_input_url_dispatches_to_pathbase_fetch() {
+        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use crate::cmd_pathbase::tests::MockServer;
         let body = {
             let mut path = make_path_with_actor("agent:codex");
@@ -648,6 +649,7 @@ mod tests {
 
     #[test]
     fn resolve_input_unresolvable_errors_clearly() {
+        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let args = ResumeArgs {
             input: "definitely/not/a/real/cache/id".to_string(),
             cwd: None,

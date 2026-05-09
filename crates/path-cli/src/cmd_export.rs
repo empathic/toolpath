@@ -2577,6 +2577,8 @@ mod tests {
         let _g = crate::config::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let prev_xdg = std::env::var_os("XDG_DATA_HOME");
         unsafe {
             std::env::set_var("HOME", &fake_home);
             std::env::remove_var("XDG_DATA_HOME");
@@ -2587,7 +2589,14 @@ mod tests {
             None,
         );
         unsafe {
-            std::env::remove_var("HOME");
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
         }
         result.expect("export opencode --project");
 
