@@ -916,10 +916,10 @@ mod tests {
             .unwrap();
         let msg = &convo.main.messages[0];
         assert!(
-            msg.extra.get("claude").is_none(),
+            !msg.extra.contains_key("claude"),
             "claude namespace should not leak onto Gemini messages"
         );
-        assert!(msg.extra.get("codex").is_none());
+        assert!(!msg.extra.contains_key("codex"));
     }
 
     #[test]
