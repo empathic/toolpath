@@ -108,6 +108,11 @@ path export pathbase --input claude-<session-id>
 # (full URL or bare `<owner>/<repo>/<slug>` triple)
 path import pathbase https://pathbase.dev/alex/pathstash/path-pr-42
 
+# Resume a Toolpath document into your coding agent of choice (interactive
+# harness picker; project the session and exec the harness's resume command)
+path resume https://pathbase.dev/alex/pathstash/path-pr-42
+path resume claude-<session-id> --harness claude -C /path/to/project
+
 # Query for dead ends (abandoned approaches)
 path query dead-ends --input doc.json
 

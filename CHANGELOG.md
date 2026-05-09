@@ -2,6 +2,35 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## `path resume` — one-shot resume into a coding agent — 2026-05-09
+
+`path-cli` 0.9.0. New subcommand `path resume <input>` that fetches a
+Toolpath document (Pathbase URL, `owner/repo/slug` shorthand, local
+file, or cache id), validates it as a single agent-bearing `Path`,
+launches an `fzf` picker over installed coding-agent harnesses
+(`--harness X` skips the picker), projects the session into that
+harness's on-disk layout under `-C, --cwd P` (default: shell cwd),
+and `execvp`'s the harness's resume command (`claude -r <id>`,
+`gemini --resume <id>`, `codex resume <id>`, `opencode --session <id>`,
+`pi --session <id>`). On Windows the harness is spawned and waited on
+with the exit code propagated.
+
+Source-harness inference reads `path.meta.source` (`claude-code` /
+`gemini-cli` / `codex` / `opencode` / `pi`) with actor-string
+fallback; the picker pre-selects the source when it's installed.
+
+Implementation introduces five `pub(crate)` `project_<harness>`
+helpers in `cmd_export.rs` that compose the existing build + write
+pairs and return the projected session id. `cmd_resume.rs` adds an
+`ExecStrategy` trait (`RealExec` for production, `RecordingExec` for
+tests) so the integration tests can exercise the full
+resolve→pick→project pipeline without launching a real harness.
+
+Also fixed an unrelated env-var race in
+`cmd_export::tests::opencode_writes_into_db_with_project` that
+cleared `$HOME` on cleanup without restoring; this had been quietly
+flaking the parallel test suite.
+
 ## Conversation-stack realignment onto `toolpath` 0.4 + path-cli schema vendoring
 
 Republish of every `toolpath-convo`-consuming crate so they pin the

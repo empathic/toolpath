@@ -1,8 +1,42 @@
-//! `path resume` — fetch / load a Toolpath document and exec a coding
-//! agent's resume command after projecting the session into the
-//! harness's on-disk layout.
+//! `path resume <input>` — fetch / load a Toolpath document, pick an
+//! installed coding-agent harness, project the session into that
+//! harness's on-disk layout, and exec the harness's resume command.
 //!
-//! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`.
+//! ## Inputs
+//!
+//! `<input>` is resolved in this order:
+//! 1. `https://` / `http://` URL → fetched via `pathbase-client`,
+//!    cached unless `--no-cache`.
+//! 2. `owner/repo/slug` shorthand → same Pathbase fetch flow.
+//! 3. Existing file path → read directly.
+//! 4. Otherwise treated as a cache id under `~/.toolpath/documents/`.
+//!
+//! ## Harness selection
+//!
+//! With `--harness X`, `X` is validated against `$PATH` and used.
+//! Without `--harness`, an `fzf` picker shows installed harnesses
+//! with the source harness pre-selected. Source comes from
+//! `path.meta.source` (`claude-code`, `gemini-cli`, `codex`,
+//! `opencode`, `pi`) with actor-string fallback.
+//!
+//! ## Project directory
+//!
+//! `-C / --cwd P` overrides the shell cwd. The harness is exec'd
+//! with cwd set to P and the on-disk projection is keyed on P.
+//!
+//! ## Launch
+//!
+//! On Unix the harness binary is `execvp`'d, replacing the current
+//! process. On Windows it's spawned and waited on with the exit
+//! code propagated. If `exec` itself fails (e.g. the binary disappears
+//! between PATH check and exec), the recipe is printed to stderr.
+//!
+//! Exec is mockable via [`ExecStrategy`]: production uses [`RealExec`],
+//! integration tests use [`RecordingExec`] to capture
+//! `(binary, args, cwd)` without launching anything.
+//!
+//! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
+//! for the full design.
 
 #![cfg(not(target_os = "emscripten"))]
 
