@@ -455,62 +455,21 @@ mod tests {
 
     #[test]
     fn run_with_strategy_records_invocation_for_file_input_with_explicit_harness() {
+        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _home = scoped_home_for_resume();
+        let _path_guard = ScopedPathForResume::with_binaries(&["claude"]);
         let cwd = tempfile::tempdir().unwrap();
         let doc_file = cwd.path().join("doc.json");
 
-        // Build a path with an agent:claude-code actor step that also carries
-        // a conversation.append artifact so project_claude can consume it.
-        let path = {
-            use std::collections::HashMap;
-            let mut extra = HashMap::new();
-            extra.insert("role".to_string(), serde_json::json!("user"));
-            extra.insert("text".to_string(), serde_json::json!("hello"));
-            let step = toolpath::v1::Step {
-                step: toolpath::v1::StepIdentity {
-                    id: "s1".to_string(),
-                    parents: vec![],
-                    actor: "agent:claude-code".to_string(),
-                    timestamp: "2026-01-01T00:00:00Z".to_string(),
-                },
-                change: {
-                    let mut m = HashMap::new();
-                    m.insert(
-                        "claude-code://resume-test-session".to_string(),
-                        toolpath::v1::ArtifactChange {
-                            raw: None,
-                            structural: Some(toolpath::v1::StructuralChange {
-                                change_type: "conversation.append".to_string(),
-                                extra,
-                            }),
-                        },
-                    );
-                    m
-                },
-                meta: None,
-            };
-            toolpath::v1::Path {
-                path: toolpath::v1::PathIdentity {
-                    id: "test-path".to_string(),
-                    base: None,
-                    head: "s1".to_string(),
-                    graph_ref: None,
-                },
-                steps: vec![step],
-                meta: None,
-            }
-        };
+        // Build a minimal path with a conversation.append step that
+        // project_claude can consume, reusing the existing helper.
+        let mut path = make_convo_path_for_resume("claude-code://resume-test-session");
+        // Overwrite the actor to agent:claude-code so run_with_strategy can
+        // pass the ensure_path_with_agent check.
+        path.steps[0].step.actor = "agent:claude-code".to_string();
+
         let graph = toolpath::v1::Graph::from_path(path);
         std::fs::write(&doc_file, graph.to_json().unwrap()).unwrap();
-
-        // Make `claude` discoverable by salting PATH for this process.
-        let bin_dir = fake_path_with(&["claude"]);
-        let prev = std::env::var_os("PATH");
-        let new_path = std::env::join_paths(
-            std::iter::once(bin_dir.path().to_path_buf())
-                .chain(std::env::split_paths(&prev.clone().unwrap_or_default())),
-        ).unwrap();
-        unsafe { std::env::set_var("PATH", new_path); }
 
         let args = ResumeArgs {
             input: doc_file.to_string_lossy().to_string(),
@@ -521,14 +480,6 @@ mod tests {
 
         let recorder = RecordingExec::default();
         run_with_strategy(args, &recorder).unwrap();
-
-        // Restore PATH.
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("PATH", v),
-                None => std::env::remove_var("PATH"),
-            }
-        }
 
         let cap = recorder.captured();
         assert_eq!(cap.binary, "claude");
@@ -766,6 +717,7 @@ mod tests {
 
     #[test]
     fn project_into_harness_claude_round_trip() {
+        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _home = scoped_home_for_resume();
         let cwd = tempfile::tempdir().unwrap();
         let path = make_convo_path_for_resume("claude-code://resume-test-session");
@@ -819,6 +771,38 @@ mod tests {
 
     fn scoped_home_for_resume() -> ScopedHomeForResume {
         ScopedHomeForResume::new()
+    }
+
+    struct ScopedPathForResume {
+        _bin_dir: tempfile::TempDir,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl ScopedPathForResume {
+        /// Prepends a tempdir containing the named binaries to `PATH` for
+        /// the guard's lifetime.
+        fn with_binaries(binaries: &[&str]) -> Self {
+            let bin_dir = fake_path_with(binaries);
+            let prev = std::env::var_os("PATH");
+            let new_path = std::env::join_paths(
+                std::iter::once(bin_dir.path().to_path_buf())
+                    .chain(std::env::split_paths(&prev.clone().unwrap_or_default())),
+            )
+            .unwrap();
+            unsafe { std::env::set_var("PATH", new_path); }
+            Self { _bin_dir: bin_dir, prev }
+        }
+    }
+
+    impl Drop for ScopedPathForResume {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("PATH", v),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
     }
 
     struct ScopedHomeForResume { _td: tempfile::TempDir, prev: Option<std::ffi::OsString> }
