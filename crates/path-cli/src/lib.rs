@@ -14,7 +14,7 @@ mod cmd_project;
 mod cmd_query;
 mod cmd_render;
 #[cfg(not(target_os = "emscripten"))]
-mod cmd_resume;
+pub mod cmd_resume;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_share;
 #[cfg(not(target_os = "emscripten"))]

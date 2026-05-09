@@ -10,7 +10,10 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
-use crate::cmd_share::HarnessArg;
+/// Re-exported so external callers (integration tests, future consumers)
+/// can construct [`ResumeArgs`] without depending on the `cmd_share`
+/// module directly.
+pub use crate::cmd_share::HarnessArg;
 
 #[derive(Args, Debug)]
 pub struct ResumeArgs {
