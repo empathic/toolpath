@@ -67,11 +67,15 @@ pub struct ResumeArgs {
     #[arg(long, value_enum)]
     pub harness: Option<HarnessArg>,
 
-    /// Skip writing the cache when fetching from Pathbase.
+    /// Skip the cache entirely when fetching from Pathbase: don't read
+    /// an existing entry, don't write the fetched body. Useful for
+    /// ephemeral environments where you don't want the cache to grow.
     #[arg(long)]
     pub no_cache: bool,
 
-    /// Overwrite an existing cache entry when fetching from Pathbase.
+    /// Force a re-fetch from Pathbase even if a cache entry exists,
+    /// overwriting it with the new bytes. Default behavior is to use
+    /// the cached doc on hit and never round-trip.
     #[arg(long)]
     pub force: bool,
 
@@ -207,12 +211,33 @@ pub(crate) fn resolve_input(
 
     let graph: Graph = match shape {
         Shape::PathbaseUrl(u) | Shape::PathbaseShorthand(u) => {
-            let derived = crate::cmd_import::pathbase_fetch_to_doc(u, args.url.as_deref())?;
-            if !args.no_cache {
-                crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, args.force)?;
-                eprintln!("Resolved {} → {}", raw, derived.cache_id);
+            // Probe the local cache before going to the network. The cache
+            // id is purely a function of (owner, repo, slug), so we can
+            // compute it without fetching. `--force` skips the probe and
+            // re-fetches; `--no-cache` skips both the probe AND the post-
+            // fetch write (still useful for ephemeral environments).
+            let cache_id = crate::cmd_import::pathbase_cache_id_of(u, args.url.as_deref())?;
+            if !args.force
+                && !args.no_cache
+                && let Ok(cache_path) = crate::cmd_cache::cache_path(&cache_id)
+                && cache_path.exists()
+            {
+                let json = std::fs::read_to_string(&cache_path)
+                    .with_context(|| format!("read {}", cache_path.display()))?;
+                eprintln!("Resolved {} → {} (cached)", raw, cache_id);
+                Graph::from_json(&json)
+                    .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e))?
+            } else {
+                let derived = crate::cmd_import::pathbase_fetch_to_doc(u, args.url.as_deref())?;
+                if !args.no_cache {
+                    // force=true here: we either short-circuited above
+                    // (cache miss) or the user explicitly passed --force,
+                    // and either way we want the new bytes to land.
+                    crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+                    eprintln!("Resolved {} → {}", raw, derived.cache_id);
+                }
+                derived.doc
             }
-            derived.doc
         }
         Shape::FilePath(p) => {
             let json = std::fs::read_to_string(p).with_context(|| format!("read {}", p))?;
@@ -680,6 +705,69 @@ mod tests {
             url: None,
         };
         let (g, harness) = resolve_input(&args).unwrap();
+        let _ = ensure_path_with_agent(&g).unwrap();
+        assert_eq!(harness, Some(Harness::Codex));
+    }
+
+    #[test]
+    fn resolve_input_url_uses_cache_on_hit_without_refetching() {
+        // Regression for the second-invocation cache-hit error: re-running
+        // `path resume <url>` should silently reuse the cached doc instead
+        // of erroring. We seed the cache with a known-good doc, point the
+        // input at a 500-erroring mock server (so any network round-trip
+        // would surface as an error), and confirm resolve_input still
+        // returns the cached graph.
+        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Pin TOOLPATH_CONFIG_DIR to a tempdir so we don't pollute the
+        // user's real cache.
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let prev_cfg = std::env::var_os("TOOLPATH_CONFIG_DIR");
+        unsafe {
+            std::env::set_var("TOOLPATH_CONFIG_DIR", cfg_dir.path());
+        }
+
+        // Seed the cache with a codex-source graph.
+        let cache_id = "pathbase-alex-pathstash-cached-fixture";
+        let documents = cfg_dir.path().join("documents");
+        std::fs::create_dir_all(&documents).unwrap();
+        let cached_graph = {
+            let mut path = make_path_with_actor("agent:codex");
+            path.meta = Some(toolpath::v1::PathMeta {
+                source: Some("codex".to_string()),
+                ..Default::default()
+            });
+            toolpath::v1::Graph::from_path(path)
+        };
+        std::fs::write(
+            documents.join(format!("{cache_id}.json")),
+            cached_graph.to_json().unwrap(),
+        )
+        .unwrap();
+
+        // Mock server that 500s any request — proves we never call out.
+        use crate::cmd_pathbase::tests::MockServer;
+        let server = MockServer::start("HTTP/1.1 500 Internal Server Error", "boom");
+
+        let args = ResumeArgs {
+            input: format!("{}/alex/pathstash/cached-fixture", server.base()),
+            cwd: None,
+            harness: None,
+            no_cache: false,
+            force: false,
+            url: None,
+        };
+        let result = resolve_input(&args);
+
+        // Restore env before asserting so a panic doesn't poison sibling tests.
+        unsafe {
+            match prev_cfg {
+                Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
+                None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
+            }
+        }
+
+        let (g, harness) = result.expect("resolve_input should reuse cache without refetching");
         let _ = ensure_path_with_agent(&g).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }

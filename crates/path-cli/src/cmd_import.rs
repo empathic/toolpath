@@ -1363,6 +1363,16 @@ fn project_short(p: &str) -> String {
 }
 
 /// Fetch a Pathbase ref (`https://host/owner/repo/slug` URL or bare
+/// Compute the local cache id a Pathbase ref would land at, without
+/// hitting the network. Lets `path resume` probe the cache before
+/// deciding whether to fetch.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn pathbase_cache_id_of(target: &str, url_flag: Option<&str>) -> Result<String> {
+    let (_base, ref_) = parse_pathbase_ref(target, url_flag)?;
+    let PathRef { owner, repo, slug } = ref_;
+    Ok(make_id("pathbase", &format!("{owner}-{repo}-{slug}")))
+}
+
 /// `owner/repo/slug` triple) and parse it as a toolpath document. Used
 /// by `path import pathbase` and by `path resume <url>`.
 #[cfg(not(target_os = "emscripten"))]
