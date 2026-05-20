@@ -2,6 +2,29 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Plumbing/porcelain split — `path p …` — 2026-05-20
+
+`path-cli` 0.10.0. **Breaking** (pre-1.0). The lower-level operations
+that compose into the day-to-day flows are now grouped under a single
+`path p …` subcommand (`p` for "plumbing"), keeping the top-level
+`--help` focused on the porcelain (`show`, `share`, `resume`, `query`,
+`auth`, `haiku`).
+
+- New canonical surface under `path p`: `list`, `import`, `export`,
+  `cache`, `render`, `merge`, `validate`, `derive`, `project`, `track`.
+- **Hard removal at the top level.** `path import`, `path export`,
+  `path cache`, `path list`, `path render`, `path merge`,
+  `path validate`, `path derive`, `path project`, and `path track` no
+  longer exist as top-level subcommands — they only resolve under
+  `path p`. There is no deprecation shim. Scripts will fail with
+  `error: unrecognized subcommand`; update call sites to the
+  `path p X` form.
+- The older `path incept` alias is gone entirely; use
+  `path p export claude --project <dir>` instead.
+- Internal: `cmd_p.rs` owns the `PCommand` enum and dispatches to the
+  existing per-command handlers. No behavioral changes to the handlers
+  themselves.
+
 ## Actor validation fixes — derived paths conform to the base schema — unreleased
 
 `derive_path` produced actor strings the base JSON Schema rejected: event steps

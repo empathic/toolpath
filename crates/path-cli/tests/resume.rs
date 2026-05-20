@@ -8,7 +8,7 @@
 
 #![cfg(not(target_os = "emscripten"))]
 
-use path_cli::cmd_resume::{run_with_strategy, HarnessArg, RecordingExec, ResumeArgs};
+use path_cli::cmd_resume::{HarnessArg, RecordingExec, ResumeArgs, run_with_strategy};
 
 mod support;
 use support::*;
@@ -26,7 +26,11 @@ fn file_input_explicit_claude_projects_and_records_exec() {
     let doc_file = write_path_to_temp(cwd.path(), path);
 
     let recorder = RecordingExec::default();
-    run_with_strategy(args_explicit(doc_file, cwd.path(), HarnessArg::Claude), &recorder).unwrap();
+    run_with_strategy(
+        args_explicit(doc_file, cwd.path(), HarnessArg::Claude),
+        &recorder,
+    )
+    .unwrap();
 
     let cap = recorder.captured();
     assert_eq!(cap.binary, "claude");
@@ -56,7 +60,11 @@ fn file_input_explicit_gemini_projects_and_records_exec() {
     let doc_file = write_path_to_temp(cwd.path(), path);
 
     let recorder = RecordingExec::default();
-    run_with_strategy(args_explicit(doc_file, cwd.path(), HarnessArg::Gemini), &recorder).unwrap();
+    run_with_strategy(
+        args_explicit(doc_file, cwd.path(), HarnessArg::Gemini),
+        &recorder,
+    )
+    .unwrap();
 
     let cap = recorder.captured();
     assert_eq!(cap.binary, "gemini");
@@ -80,7 +88,11 @@ fn file_input_explicit_codex_projects_and_records_exec() {
     let doc_file = write_path_to_temp(cwd.path(), path);
 
     let recorder = RecordingExec::default();
-    run_with_strategy(args_explicit(doc_file, cwd.path(), HarnessArg::Codex), &recorder).unwrap();
+    run_with_strategy(
+        args_explicit(doc_file, cwd.path(), HarnessArg::Codex),
+        &recorder,
+    )
+    .unwrap();
 
     let cap = recorder.captured();
     assert_eq!(cap.binary, "codex");
@@ -172,7 +184,11 @@ fn file_input_explicit_pi_projects_and_records_exec() {
     let doc_file = write_path_to_temp(cwd.path(), path);
 
     let recorder = RecordingExec::default();
-    run_with_strategy(args_explicit(doc_file, cwd.path(), HarnessArg::Pi), &recorder).unwrap();
+    run_with_strategy(
+        args_explicit(doc_file, cwd.path(), HarnessArg::Pi),
+        &recorder,
+    )
+    .unwrap();
 
     let cap = recorder.captured();
     assert_eq!(cap.binary, "pi");
@@ -204,7 +220,11 @@ fn cache_id_input_loads_and_projects() {
         "agent:claude-code",
         "claude-code://resume-cache-int",
     ));
-    std::fs::write(documents.join(format!("{cache_id}.json")), graph.to_json().unwrap()).unwrap();
+    std::fs::write(
+        documents.join(format!("{cache_id}.json")),
+        graph.to_json().unwrap(),
+    )
+    .unwrap();
 
     let resume_args = ResumeArgs {
         input: cache_id.to_string(),

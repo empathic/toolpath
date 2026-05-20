@@ -202,14 +202,15 @@ No parents (it's the first step). No meta. One file, one perspective. Every docu
 # Install
 cargo install path-cli
 
-# Derive provenance from this repo's git history
-path derive git --repo . --branch main --pretty
+# Import provenance from this repo's git history (top-level surface is
+# the porcelain; plumbing lives under `path p …`)
+path p import git --repo . --branch main --no-cache --pretty
 
 # Visualize it
-path derive git --repo . --branch main | path render dot | dot -Tpng -o graph.png
+path p import git --repo . --branch main --no-cache | path p render dot | dot -Tpng -o graph.png
 
-# Derive from Claude conversation logs
-path derive claude --project /path/to/project --pretty
+# Import from Claude conversation logs
+path p import claude --project /path/to/project --no-cache --pretty
 
 # Query for dead ends
 path query dead-ends --input doc.json

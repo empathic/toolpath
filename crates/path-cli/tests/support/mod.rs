@@ -42,7 +42,11 @@ impl ScopedHome {
             std::env::set_var("HOME", td.path());
             std::env::set_var("TOOLPATH_CONFIG_DIR", td.path().join(".toolpath"));
         }
-        Self { _td: td, prev_home, prev_config }
+        Self {
+            _td: td,
+            prev_home,
+            prev_config,
+        }
     }
 
     pub fn home_dir(&self) -> PathBuf {

@@ -1,16 +1,15 @@
-//! Deprecation shim for `path derive`.
+//! `path p derive` — the stdout-JSON sibling of `import`.
 //!
-//! `path derive` was renamed to `path import`. This shim preserves the
-//! old surface (including stdout JSON output) for one release, printing a
-//! deprecation warning on stderr and delegating into `cmd_import`.
+//! Same sources as `import`, but always streams the resulting document
+//! to stdout (i.e. `--no-cache` is implied). Useful for shell
+//! composition where caching to `~/.toolpath/documents/` would be pure
+//! overhead.
 
 use anyhow::Result;
 
 pub use crate::cmd_import::ImportSource as DeriveSource;
 
 pub fn run(source: DeriveSource, pretty: bool) -> Result<()> {
-    eprintln!("warning: `path derive` is deprecated; use `path import` instead");
-    // Preserve the old stdout-JSON behavior via --no-cache.
     let args = crate::cmd_import::ImportArgs {
         source,
         force: false,

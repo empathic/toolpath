@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live-server smoke test for `path import/export pathbase`. Always runs
+# Live-server smoke test for `path p import/export pathbase`. Always runs
 # the same two scenarios in the same order; never branches on environment
 # state. Fails up-front if its preconditions aren't met.
 #
@@ -84,7 +84,7 @@ assert_imports_with_steps() {
     local _label="$1" _trace_url="$2" _expected_steps="$3"
     local _tmp; _tmp="$(mktemp -d -t "pb-live-${_label}-import.XXXXXX")"
     _tmp_dirs+=("${_tmp}")
-    local _stderr; _stderr="$(TOOLPATH_CONFIG_DIR="${_tmp}" "${_path_bin}" import pathbase "${_trace_url}" --force 2>&1 1>/dev/null)"
+    local _stderr; _stderr="$(TOOLPATH_CONFIG_DIR="${_tmp}" "${_path_bin}" p import pathbase "${_trace_url}" --force 2>&1 1>/dev/null)"
     if ! grep -qE "^Imported graph .* \\(1 path, ${_expected_steps} steps\\)" <<<"${_stderr}"; then
         echo "FAIL[${_label}]: import did not report ${_expected_steps} steps" >&2
         echo "${_stderr}" >&2
@@ -102,7 +102,7 @@ _anon_cfg="$(mktemp -d -t pb-live-anon.XXXXXX)"
 _tmp_dirs+=("${_anon_cfg}")
 
 _anon_url=$(TOOLPATH_CONFIG_DIR="${_anon_cfg}" PATHBASE_URL="${_url}" \
-    "${_path_bin}" export pathbase --input "${_example}")
+    "${_path_bin}" p export pathbase --input "${_example}")
 
 case "${_anon_url}" in
     "${_url}"/anon/*) echo "  upload OK: ${_anon_url}" ;;
@@ -116,7 +116,7 @@ assert_imports_with_steps "anon" "${_anon_url}" "${_expected_steps}"
 echo
 echo "=== 2. authed pathstash round-trip ==="
 
-_authed_url=$(PATHBASE_URL="${_url}" "${_path_bin}" export pathbase --input "${_example}")
+_authed_url=$(PATHBASE_URL="${_url}" "${_path_bin}" p export pathbase --input "${_example}")
 
 case "${_authed_url}" in
     "${_url}"/anon/*)

@@ -47,7 +47,7 @@ version uses different flags):
 | Codex | `codex exec "<prompt>"` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
 | Gemini | `gemini -p "<prompt>"` | `~/.gemini/tmp/<slot>/chats/session-*.json` |
 | Pi | `pi -p "<prompt>"` (varies; manual fallback documented below) | `~/.pi/agent/sessions/--<encoded-cwd>--/*.jsonl` |
-| Opencode | `opencode run "<prompt>"` then `path export opencode` | rows in `opencode.db`, exported to JSON |
+| Opencode | `opencode run "<prompt>"` then `path p export opencode` | rows in `opencode.db`, exported to JSON |
 
 ### Manual
 

@@ -71,42 +71,42 @@ See each crate's README for library-level documentation.
 cargo build --workspace
 
 # Import a Toolpath document from this repo's git history (cached under ~/.toolpath/documents/)
-path import git --repo . --branch main
+path p import git --repo . --branch main
 
 # Visualize it
-path import git --repo . --branch main --no-cache | path render dot | dot -Tpng -o graph.png
+path p import git --repo . --branch main --no-cache | path p render dot | dot -Tpng -o graph.png
 
 # Render as Markdown for an LLM
-path import git --repo . --branch main --no-cache | path render md
+path p import git --repo . --branch main --no-cache | path p render md
 
 # Import from a GitHub pull request
-path import github https://github.com/owner/repo/pull/42
+path p import github https://github.com/owner/repo/pull/42
 
 # Import from Claude conversation logs
-path import claude --project /path/to/project
+path p import claude --project /path/to/project
 
 # Import from Gemini CLI conversation logs
-path import gemini --project /path/to/project
+path p import gemini --project /path/to/project
 
 # Import from Codex CLI rollout files (most recent session by default)
-path import codex
+path p import codex
 
 # Import from opencode session database (most recent session by default)
-path import opencode
+path p import opencode
 
 # List what's in the cache
-path cache ls
+path p cache ls
 
 # Export a cached document back into a Claude Code session
-path export claude --input claude-<session-id> --project /path/to/resume
+path p export claude --input claude-<session-id> --project /path/to/resume
 
 # Push a cached document to Pathbase
 path auth login
-path export pathbase --input claude-<session-id>
+path p export pathbase --input claude-<session-id>
 
 # Pull a path from Pathbase back into the local cache
 # (full URL or bare `<owner>/<repo>/<slug>` triple)
-path import pathbase https://pathbase.dev/alex/pathstash/path-pr-42
+path p import pathbase https://pathbase.dev/alex/pathstash/path-pr-42
 
 # Resume a Toolpath document into your coding agent of choice (interactive
 # harness picker; project the session and exec the harness's resume command)
@@ -123,81 +123,89 @@ path query filter --input doc.json --actor "agent:"
 path query ancestors --input doc.json --step-id step-003
 
 # Merge multiple documents into a graph
-path merge doc1.json doc2.json --title "Release v2" --pretty
+path p merge doc1.json doc2.json --title "Release v2" --pretty
 
 # Validate a document
-path validate --input examples/step-01-minimal.json
+path p validate --input examples/step-01-minimal.json
 ```
 
 ## CLI reference
 
 ```
 path
-  list
-    git       [--repo PATH] [--remote NAME] [--format pretty|json|tsv]
-    github    --repo OWNER/REPO [--format ...]
-    claude    [--project PATH] [--format ...]
-    gemini    [--project PATH] [--format ...]
-    codex     [--format ...]
-    opencode  [--project ID] [--format ...]
-    pi        [--project PATH] [--base DIR] [--format ...]
-  import                                            # writes to ~/.toolpath/documents/ by default
-    git       --repo PATH --branch NAME[:START] [--base COMMIT] [--remote NAME] [--title TEXT]
-    github    --repo OWNER/REPO --pr NUMBER [--no-ci] [--no-comments]
-    claude    [--project PATH] [--session ID] [--all]
-    gemini    [--project PATH] [--session UUID] [--all] [--include-thinking]
-    codex     [--session UUID|STEM] [--all]
-    opencode  [--session ID] [--all] [--project ID] [--no-snapshot-diffs]
-    pi        [--project PATH] [--session ID] [--all] [--base DIR]
-    pathbase  TRACE-ID-OR-URL [--url URL]
-                                                    # global: [--force] [--no-cache]
-  export
-    claude    --input REF [--project DIR | --output FILE]
-    pathbase  --input REF [--url URL]
-  cache
-    ls | rm CACHE-ID
+  haiku
   show          # markdown summary for a single session (used as fzf preview)
     claude    --project PATH --session ID
     gemini    --project PATH --session UUID
     codex     --session ID
     opencode  --session ID
     pi        --project PATH --session ID [--base DIR]
+  share       # one-shot interactive picker + Pathbase upload
+  resume      # project a doc into a coding agent and exec --resume
   query
     ancestors --input FILE --step-id ID
     dead-ends --input FILE
     filter    --input FILE [--actor PREFIX] [--artifact PATH] [--after TIME] [--before TIME]
-  render
-    dot       [--input FILE] [--output FILE] [--show-files] [--show-timestamps]
-    md        [--input FILE] [--output FILE] [--detail summary|full] [--front-matter]
-  merge       FILE... [--title TEXT]
-  track
-    init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
-    step      --session FILE --seq N [--actor ACTOR] [--intent TEXT]
-    visit     --session FILE --seq N
-    note      --session FILE --intent TEXT
-    export    --session FILE
-    close     --session FILE
-    list
-  validate    --input FILE
   auth        login | status | whoami | logout [--url URL]
-  haiku
+  p           # plumbing: lower-level building blocks
+    list
+      git       [--repo PATH] [--remote NAME] [--format pretty|json|tsv]
+      github    --repo OWNER/REPO [--format ...]
+      claude    [--project PATH] [--format ...]
+      gemini    [--project PATH] [--format ...]
+      codex     [--format ...]
+      opencode  [--project ID] [--format ...]
+      pi        [--project PATH] [--base DIR] [--format ...]
+    import                                            # writes to ~/.toolpath/documents/ by default
+      git       --repo PATH --branch NAME[:START] [--base COMMIT] [--remote NAME] [--title TEXT]
+      github    --repo OWNER/REPO --pr NUMBER [--no-ci] [--no-comments]
+      claude    [--project PATH] [--session ID] [--all]
+      gemini    [--project PATH] [--session UUID] [--all] [--include-thinking]
+      codex     [--session UUID|STEM] [--all]
+      opencode  [--session ID] [--all] [--project ID] [--no-snapshot-diffs]
+      pi        [--project PATH] [--session ID] [--all] [--base DIR]
+      pathbase  TRACE-ID-OR-URL [--url URL]
+                                                      # global: [--force] [--no-cache]
+    export
+      claude    --input REF [--project DIR | --output FILE]
+      pathbase  --input REF [--url URL]
+    cache
+      ls | rm CACHE-ID
+    render
+      dot       [--input FILE] [--output FILE] [--show-files] [--show-timestamps]
+      md        [--input FILE] [--output FILE] [--detail summary|full] [--front-matter]
+    merge       FILE... [--title TEXT]
+    validate    --input FILE
+    derive      # stdout-JSON sibling of import (same sources, --no-cache implied)
+    project     # narrower file-shaped sibling of export
+    track
+      init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
+      step      --session FILE --seq N [--actor ACTOR] [--intent TEXT]
+      visit     --session FILE --seq N
+      note      --session FILE --intent TEXT
+      export    --session FILE
+      close     --session FILE
+      list
 ```
 
 Global: `--pretty` for formatted JSON output.
 
-`path derive`, `path incept`, and `path project` are still accepted as
-deprecated aliases for `path import` / `path export claude` / `path export`
-and print a deprecation warning to stderr.
+**Breaking** (pre-1.0). The previous top-level commands `path import`,
+`path export`, `path cache`, `path list`, `path render`, `path merge`,
+`path validate`, `path derive`, `path project`, and `path track` were
+**removed** in `path-cli` 0.10.0 — they now live exclusively under
+`path p`. The older `path incept` alias was deleted entirely; use
+`path p export claude --project <dir>` instead.
 
 ## Interactive selection (fzf)
 
-When `path import <provider>` is run with no `--session` and `fzf` is on
+When `path p import <provider>` is run with no `--session` and `fzf` is on
 `$PATH` (with stdin and stderr as TTYs), the CLI launches `fzf` so you can
 pick a session by topic. TAB selects multiple — the result is a `Graph`.
 
 The picker leans on two machine-readable surfaces you can also use yourself:
 
-- `path list <provider> --format tsv` — one session per line, tab-delimited.
+- `path p list <provider> --format tsv` — one session per line, tab-delimited.
   For project-keyed providers (claude, gemini, pi) the columns are
   `<project>\t<session>\t<iso8601 last_activity>\t<count>\t<first_user_message>`.
   For single-keyed providers (codex, opencode):
@@ -209,21 +217,21 @@ The picker leans on two machine-readable surfaces you can also use yourself:
 Manual recipe (project-keyed; substitute `claude` for `gemini` or `pi`):
 
 ```bash
-path list claude --format tsv \
+path p list claude --format tsv \
   | fzf --delimiter=$'\t' --with-nth=5,3 \
         --preview 'path show claude --project {1} --session {2}' \
   | awk -F'\t' '{print $1; print $2}' \
-  | xargs -L2 sh -c 'path import claude --project "$1" --session "$2"' --
+  | xargs -L2 sh -c 'path p import claude --project "$1" --session "$2"' --
 ```
 
 Single-keyed (codex/opencode):
 
 ```bash
-path list codex --format tsv \
+path p list codex --format tsv \
   | fzf --delimiter=$'\t' --with-nth=5,2 \
         --preview 'path show codex --session {1}' \
   | cut -f1 \
-  | xargs -I{} path import codex --session {}
+  | xargs -I{} path p import codex --session {}
 ```
 
 ## Using the libraries

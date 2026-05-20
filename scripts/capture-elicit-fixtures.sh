@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2012
+# (uses `ls -1` to enumerate harness session/project directories whose
+# names are UUIDs / project slugs — `find` would be more verbose without
+# adding safety here.)
 #
 # Drive each available harness through docs/agents/feature-elicit.prompt.txt
 # in a fresh scratch directory and copy the resulting session file into

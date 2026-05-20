@@ -66,14 +66,14 @@ to GitLab MRs, Gerrit, Phabricator, etc.
 ## CLI
 
 ```bash
-# Derive a Toolpath document from a GitHub PR
-path derive github --repo owner/repo --pr 42 --pretty
+# Import a Toolpath document from a GitHub PR
+path p import github --repo owner/repo --pr 42 --pretty
 
 # Without CI checks or comments
-path derive github --repo owner/repo --pr 42 --no-ci --no-comments
+path p import github --repo owner/repo --pr 42 --no-ci --no-comments
 
 # List pull requests
-path list github --repo owner/repo --json
+path p list github --repo owner/repo --json
 ```
 
 ## Part of Toolpath

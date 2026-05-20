@@ -20,76 +20,83 @@ Or run from source:
 cargo run -p path-cli -- <command>
 ```
 
+The CLI splits into porcelain (top-level: `haiku`, `show`, `share`,
+`resume`, `query`, `auth`) and plumbing (`path p …`: `p list`,
+`p import`, `p export`, `p cache`, `p render`, `p merge`, `p validate`,
+`p derive`, `p project`, `p track`).
+
 ## Typical workflows
 
 **Capture the provenance of a PR:**
 
 ```bash
-path derive git --repo . --branch feature --pretty > pr-provenance.json
+path p import git --repo . --branch feature --no-cache --pretty > pr-provenance.json
 ```
 
 **Visualize how a branch evolved, including dead ends:**
 
 ```bash
-path derive git --repo . --branch main:HEAD~20 | path render dot | dot -Tpng -o history.png
+path p import git --repo . --branch main:HEAD~20 --no-cache | path p render dot | dot -Tpng -o history.png
 ```
 
 **Review what an AI agent changed:**
 
 ```bash
-path derive claude --project . --pretty | path query filter --actor "agent:" --pretty
+path p import claude --project . --no-cache --pretty | path query filter --actor "agent:" --pretty
 ```
 
 **Record provenance for a live editing session:**
 
 ```bash
-cat src/main.rs | path track init --file src/main.rs --actor "human:alex"
+cat src/main.rs | path p track init --file src/main.rs --actor "human:alex"
 # ... edit the file ...
-cat src/main.rs | path track step --session /tmp/session.json --seq 1 --parent-seq 0
-path track annotate --session /tmp/session.json --intent "Refactored auth"
-path track close --session /tmp/session.json --pretty > session-provenance.json
+cat src/main.rs | path p track step --session /tmp/session.json --seq 1 --parent-seq 0
+path p track annotate --session /tmp/session.json --intent "Refactored auth"
+path p track close --session /tmp/session.json --pretty > session-provenance.json
 ```
 
 **Merge multiple sources into a release graph:**
 
 ```bash
-path merge git-provenance.json claude-provenance.json --title "v2.0 Release" --pretty
+path p merge git-provenance.json claude-provenance.json --title "v2.0 Release" --pretty
 ```
 
 ## Commands
 
-### list
+### p list
 
-Discover available sources before deriving.
+Discover available sources before importing.
 
 ```bash
 # List git branches with metadata
-path list git --repo .
+path p list git --repo .
 
 # List Claude projects
-path list claude
+path p list claude
 
 # List sessions within a project
-path list claude --project /path/to/project
+path p list claude --project /path/to/project
 
 # Machine-readable output
-path list git --repo . --json
+path p list git --repo . --json
 ```
 
-### derive
+### p import
 
-Generate Toolpath documents from source systems.
+Generate Toolpath documents from source systems and write them to the
+local cache (`~/.toolpath/documents/`). Use `--no-cache` to stream the
+JSON to stdout for shell composition instead.
 
 ```bash
 # From git history (single branch -> Path, multiple -> Graph)
-path derive git --repo . --branch main --pretty
-path derive git --repo . --branch main --branch feature --title "Release v2"
-path derive git --repo . --branch main:HEAD~20 --pretty
+path p import git --repo . --branch main --pretty
+path p import git --repo . --branch main --branch feature --title "Release v2"
+path p import git --repo . --branch main:HEAD~20 --pretty
 
 # From Claude conversation logs
-path derive claude --project /path/to/project --pretty
-path derive claude --project /path/to/project --session abc123
-path derive claude --project /path/to/project --all
+path p import claude --project /path/to/project --pretty
+path p import claude --project /path/to/project --session abc123
+path p import claude --project /path/to/project --all
 ```
 
 ### query
@@ -109,68 +116,68 @@ path query filter --input doc.json --artifact "src/main.rs"
 path query filter --input doc.json --after "2026-01-29T00:00:00Z" --before "2026-01-30T00:00:00Z"
 ```
 
-### render
+### p render
 
 Render documents to other formats.
 
 ```bash
 # Graphviz DOT output
-path render dot --input doc.json --output graph.dot
-path render dot --input doc.json --show-files --show-timestamps
+path p render dot --input doc.json --output graph.dot
+path p render dot --input doc.json --show-files --show-timestamps
 
 # Pipe through Graphviz
-path derive git --repo . --branch main | path render dot | dot -Tpng -o graph.png
+path p import git --repo . --branch main --no-cache | path p render dot | dot -Tpng -o graph.png
 ```
 
-### merge
+### p merge
 
 Combine multiple documents into a single Graph.
 
 ```bash
-path merge doc1.json doc2.json --title "Release v2" --pretty
-path merge *.json --pretty
+path p merge doc1.json doc2.json --title "Release v2" --pretty
+path p merge *.json --pretty
 ```
 
-### track
+### p track
 
 Incrementally build a Path document step by step, useful for editor integrations and live sessions.
 
 ```bash
 # Start a session (pipe initial content via stdin)
-echo "hello" | path track init --file src/main.rs --actor "human:alex" --title "Editing session"
+echo "hello" | path p track init --file src/main.rs --actor "human:alex" --title "Editing session"
 
 # Record a step (pipe current content via stdin)
-echo "world" | path track step --session /tmp/session.json --seq 1 --parent-seq 0
+echo "world" | path p track step --session /tmp/session.json --seq 1 --parent-seq 0
 
 # Record a step with VCS source metadata
-echo "world" | path track step --session /tmp/session.json --seq 2 --parent-seq 1 \
+echo "world" | path p track step --session /tmp/session.json --seq 2 --parent-seq 1 \
   --source '{"type":"git","revision":"abc123"}'
 
 # Add a note to the current step
-path track note --session /tmp/session.json --intent "Refactored for clarity"
+path p track note --session /tmp/session.json --intent "Refactored for clarity"
 
 # Annotate any step with metadata (intent, source, refs)
-path track annotate --session /tmp/session.json --step step-001 \
+path p track annotate --session /tmp/session.json --step step-001 \
   --intent "Extract helper" \
   --source '{"type":"git","revision":"abc123"}' \
   --ref '{"rel":"issue","href":"https://github.com/org/repo/issues/42"}'
 
 # Export the session as a Toolpath Path document
-path track export --session /tmp/session.json --pretty
+path p track export --session /tmp/session.json --pretty
 
 # Export and clean up
-path track close --session /tmp/session.json --pretty
+path p track close --session /tmp/session.json --pretty
 
 # List active sessions
-path track list
+path p track list
 ```
 
-### validate
+### p validate
 
 Check that a JSON file is a valid Toolpath document.
 
 ```bash
-path validate --input examples/step-01-minimal.json
+path p validate --input examples/step-01-minimal.json
 # Valid: Step (id: step-001)
 ```
 

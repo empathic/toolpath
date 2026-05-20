@@ -1,5 +1,3 @@
-#![allow(deprecated)]
-
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::path::PathBuf;
@@ -65,7 +63,7 @@ fn git_fixture() -> (tempfile::TempDir, String) {
 #[test]
 fn validate_valid_step() {
     cmd()
-        .arg("validate")
+        .args(["p", "validate"])
         .arg("--input")
         .arg(examples_dir().join("step-01-minimal.json"))
         .assert()
@@ -80,7 +78,7 @@ fn validate_invalid_json() {
     std::fs::write(&tmp_file, "{ not valid json }").unwrap();
 
     cmd()
-        .arg("validate")
+        .args(["p", "validate"])
         .arg("--input")
         .arg(&tmp_file)
         .assert()
@@ -96,7 +94,7 @@ fn derive_git_produces_path() {
     let (dir, branch) = git_fixture();
 
     cmd()
-        .arg("derive")
+        .args(["p", "derive"])
         .arg("git")
         .arg("--repo")
         .arg(dir.path())
@@ -115,7 +113,7 @@ fn derive_git_has_correct_actor() {
     let (dir, branch) = git_fixture();
 
     let output = cmd()
-        .arg("derive")
+        .args(["p", "derive"])
         .arg("git")
         .arg("--repo")
         .arg(dir.path())
@@ -145,7 +143,7 @@ fn derive_git_has_change_with_diff() {
     let (dir, branch) = git_fixture();
 
     let output = cmd()
-        .arg("derive")
+        .args(["p", "derive"])
         .arg("git")
         .arg("--repo")
         .arg(dir.path())
@@ -177,7 +175,7 @@ fn derive_git_has_intent_from_commit_message() {
     let (dir, branch) = git_fixture();
 
     let output = cmd()
-        .arg("derive")
+        .args(["p", "derive"])
         .arg("git")
         .arg("--repo")
         .arg(dir.path())
@@ -200,7 +198,7 @@ fn derive_git_has_base_uri() {
     let (dir, branch) = git_fixture();
 
     let output = cmd()
-        .arg("derive")
+        .args(["p", "derive"])
         .arg("git")
         .arg("--repo")
         .arg(dir.path())
@@ -236,7 +234,7 @@ fn derive_git_validate_roundtrip() {
     let tmp_file = std::env::temp_dir().join("toolpath-integration-roundtrip.json");
 
     let derive_output = cmd()
-        .arg("derive")
+        .args(["p", "derive"])
         .arg("git")
         .arg("--repo")
         .arg(dir.path())
@@ -248,7 +246,7 @@ fn derive_git_validate_roundtrip() {
     std::fs::write(&tmp_file, &derive_output.stdout).unwrap();
 
     cmd()
-        .arg("validate")
+        .args(["p", "validate"])
         .arg("--input")
         .arg(&tmp_file)
         .assert()
@@ -265,7 +263,7 @@ fn render_dot_from_stdin() {
     let input = std::fs::read_to_string(examples_dir().join("path-01-pr.path.json")).unwrap();
 
     cmd()
-        .arg("render")
+        .args(["p", "render"])
         .arg("dot")
         .write_stdin(input)
         .assert()
@@ -307,7 +305,7 @@ fn query_ancestors() {
 #[test]
 fn merge_produces_graph() {
     cmd()
-        .arg("merge")
+        .args(["p", "merge"])
         .arg(examples_dir().join("path-01-pr.path.json"))
         .arg(examples_dir().join("path-02-local-session.path.json"))
         .assert()
@@ -321,7 +319,7 @@ fn merge_produces_graph() {
 #[test]
 fn validate_accepts_path_jsonl() {
     cmd()
-        .arg("validate")
+        .args(["p", "validate"])
         .arg("--input")
         .arg(examples_dir().join("path-02-local-session.path.jsonl"))
         .assert()
@@ -341,7 +339,7 @@ fn validate_rejects_truncated_jsonl() {
     f.flush().unwrap();
 
     cmd()
-        .arg("validate")
+        .args(["p", "validate"])
         .arg("--input")
         .arg(f.path())
         .assert()
@@ -352,7 +350,7 @@ fn validate_rejects_truncated_jsonl() {
 #[test]
 fn render_md_accepts_path_jsonl() {
     cmd()
-        .arg("render")
+        .args(["p", "render"])
         .arg("md")
         .arg("--input")
         .arg(examples_dir().join("path-03-signed-pr.path.jsonl"))
@@ -375,7 +373,7 @@ fn query_dead_ends_accepts_path_jsonl() {
 #[test]
 fn merge_accepts_path_jsonl() {
     cmd()
-        .arg("merge")
+        .args(["p", "merge"])
         .arg(examples_dir().join("path-01-pr.path.jsonl"))
         .arg(examples_dir().join("path-02-local-session.path.jsonl"))
         .assert()
@@ -419,7 +417,7 @@ fn auth_login_against_unreachable_url_errors() {
 #[test]
 fn import_help_lists_sources_including_pathbase() {
     cmd()
-        .arg("import")
+        .args(["p", "import"])
         .arg("--help")
         .assert()
         .success()
@@ -432,7 +430,7 @@ fn import_help_lists_sources_including_pathbase() {
 #[test]
 fn export_help_lists_claude_and_pathbase() {
     cmd()
-        .arg("export")
+        .args(["p", "export"])
         .arg("--help")
         .assert()
         .success()
@@ -445,7 +443,7 @@ fn import_git_no_cache_emits_stdout_json() {
     let (dir, branch) = git_fixture();
 
     cmd()
-        .arg("import")
+        .args(["p", "import"])
         .arg("git")
         .arg("--no-cache")
         .arg("--repo")
@@ -466,7 +464,7 @@ fn import_git_writes_cache_and_prints_path() {
 
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .arg("import")
+        .args(["p", "import"])
         .arg("git")
         .arg("--repo")
         .arg(dir.path())
@@ -485,7 +483,7 @@ fn import_git_errors_on_existing_cache_without_force() {
 
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["import", "git", "--branch"])
+        .args(["p", "import", "git", "--branch"])
         .arg(&branch)
         .arg("--repo")
         .arg(dir.path())
@@ -494,7 +492,7 @@ fn import_git_errors_on_existing_cache_without_force() {
 
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["import", "git", "--branch"])
+        .args(["p", "import", "git", "--branch"])
         .arg(&branch)
         .arg("--repo")
         .arg(dir.path())
@@ -504,7 +502,7 @@ fn import_git_errors_on_existing_cache_without_force() {
 
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["import", "git", "--force", "--branch"])
+        .args(["p", "import", "git", "--force", "--branch"])
         .arg(&branch)
         .arg("--repo")
         .arg(dir.path())
@@ -517,7 +515,7 @@ fn cache_ls_on_empty_directory_prints_hint() {
     let cfg = tempfile::tempdir().unwrap();
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["cache", "ls"])
+        .args(["p", "cache", "ls"])
         .assert()
         .success()
         .stderr(predicate::str::contains("No cached"));
@@ -530,7 +528,7 @@ fn cache_ls_after_import_lists_entry() {
 
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["import", "git", "--branch"])
+        .args(["p", "import", "git", "--branch"])
         .arg(&branch)
         .arg("--repo")
         .arg(dir.path())
@@ -539,7 +537,7 @@ fn cache_ls_after_import_lists_entry() {
 
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["cache", "ls"])
+        .args(["p", "cache", "ls"])
         .assert()
         .success()
         .stdout(predicate::str::contains("git-"));
@@ -554,6 +552,7 @@ fn export_pathbase_repo_flag_requires_login() {
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
         .args([
+            "p",
             "export",
             "pathbase",
             "--repo",
@@ -576,7 +575,7 @@ fn import_pathbase_rejects_legacy_trace_id() {
     let cfg = tempfile::tempdir().unwrap();
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["import", "pathbase", "trc_nonexistent"])
+        .args(["p", "import", "pathbase", "trc_nonexistent"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("<owner>/<repo>/<slug>"));
@@ -588,7 +587,7 @@ fn import_git_no_cache_honors_global_pretty() {
 
     let output = cmd()
         .arg("--pretty")
-        .arg("import")
+        .args(["p", "import"])
         .arg("git")
         .arg("--no-cache")
         .arg("--repo")
@@ -614,7 +613,7 @@ fn import_git_two_repos_on_same_branch_have_distinct_cache_ids() {
 
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["import", "git", "--branch"])
+        .args(["p", "import", "git", "--branch"])
         .arg(&branch)
         .arg("--repo")
         .arg(dir_a.path())
@@ -625,7 +624,7 @@ fn import_git_two_repos_on_same_branch_have_distinct_cache_ids() {
     // trigger the "cache entry already exists" collision.
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["import", "git", "--branch"])
+        .args(["p", "import", "git", "--branch"])
         .arg(&branch)
         .arg("--repo")
         .arg(dir_b.path())
@@ -634,7 +633,7 @@ fn import_git_two_repos_on_same_branch_have_distinct_cache_ids() {
 
     let ls = cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
-        .args(["cache", "ls"])
+        .args(["p", "cache", "ls"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(ls.stdout).unwrap();
@@ -645,23 +644,24 @@ fn import_git_two_repos_on_same_branch_have_distinct_cache_ids() {
     );
 }
 
-// ── Deprecation aliases ─────────────────────────────────────────────
+// ── `path p derive` regression guard ────────────────────────────────
 
 #[test]
-fn derive_alias_still_works_with_warning() {
+fn p_derive_is_first_class_and_warns_no_one() {
+    // `path p derive` is the canonical home of the stdout-JSON derive
+    // surface — it must produce the document on stdout AND keep stderr
+    // clean. Regression guard: if we ever start printing a deprecation
+    // notice through this path, this test breaks loudly.
     let (dir, branch) = git_fixture();
     cmd()
-        .arg("derive")
-        .arg("git")
-        .arg("--repo")
+        .args(["p", "derive", "git", "--repo"])
         .arg(dir.path())
         .arg("--branch")
         .arg(&branch)
         .assert()
         .success()
         .stdout(predicate::str::contains("\"graph\":"))
-        .stdout(predicate::str::contains("\"paths\":"))
-        .stderr(predicate::str::contains("deprecated"));
+        .stderr(predicate::str::is_empty());
 }
 
 #[test]

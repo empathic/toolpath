@@ -33,7 +33,7 @@ assert!(md.contains("g1"));
 Pipe into an LLM for contextual assistance:
 
 ```bash
-path derive git --repo . --branch main | path render md | pbcopy
+path p import git --repo . --branch main --no-cache | path p render md | pbcopy
 # Paste into Claude/ChatGPT: "here's what I've tried, help me with the next step"
 ```
 

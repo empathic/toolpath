@@ -52,7 +52,7 @@ sessions are linear.
 |---|---|---|
 | `type` | `"session"` | Required discriminant. |
 | `version` | int | Format version. Currently 3. |
-| `id` | string | Session id. Used by `path import pi --session <id>`. |
+| `id` | string | Session id. Used by `path p import pi --session <id>`. |
 | `timestamp` | ISO-8601 | Session start. |
 | `cwd` | string | Project working directory. Pi's project encoder operates on this. |
 | `parentSession` | string | Optional. Path to a parent JSONL file when this session was forked. |
@@ -180,7 +180,7 @@ emitted by `toolpath-pi::provider::native_name` are lowercase
 
 ## Session resolution
 
-`path import pi --session <id>` resolves `<id>` against:
+`path p import pi --session <id>` resolves `<id>` against:
 
 1. The header `id` field of every JSONL file in the project's
    sessions directory (line-1 peek).

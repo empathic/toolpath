@@ -58,8 +58,8 @@ let path = derive_path(&convo, &DeriveConfig::default());
 ## CLI
 
 ```bash
-path list   opencode [--json]
-path derive opencode --session <id> [--pretty]
+path p list   opencode [--json]
+path p import opencode --session <id> [--pretty]
 ```
 
 ## What's *not* read

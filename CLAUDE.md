@@ -72,17 +72,24 @@ Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
 
 The binary is called `path` (package: `path-cli`; the older `toolpath-cli` package is a deprecated shim that still installs the same binary for users running `cargo install toolpath-cli`):
 
+The top-level surface is the porcelain (`haiku`, `show`, `share`,
+`resume`, `query`, `auth`). Lower-level building blocks live under
+`path p …` (plumbing): `p list`, `p import`, `p export`, `p cache`,
+`p render`, `p merge`, `p validate`, `p derive`, `p project`,
+`p track`.
+
 ```bash
-# Import from external formats into the local toolpath cache (~/.toolpath/documents/)
-cargo run -p path-cli -- import git --repo . --branch main
-cargo run -p path-cli -- import github https://github.com/owner/repo/pull/42
-cargo run -p path-cli -- import claude --project /path/to/project
-cargo run -p path-cli -- import gemini --project /path/to/project
-cargo run -p path-cli -- import codex --session <uuid>
-cargo run -p path-cli -- import opencode --session ses_<id>
-cargo run -p path-cli -- import pi --project /path/to/project
-cargo run -p path-cli -- import pathbase <pathbase-url-or-owner/repo/slug>
-cargo run -p path-cli -- import claude --project . --no-cache | path render md --input -
+# Plumbing: import from external formats into the local toolpath cache
+# (~/.toolpath/documents/)
+cargo run -p path-cli -- p import git --repo . --branch main
+cargo run -p path-cli -- p import github https://github.com/owner/repo/pull/42
+cargo run -p path-cli -- p import claude --project /path/to/project
+cargo run -p path-cli -- p import gemini --project /path/to/project
+cargo run -p path-cli -- p import codex --session <uuid>
+cargo run -p path-cli -- p import opencode --session ses_<id>
+cargo run -p path-cli -- p import pi --project /path/to/project
+cargo run -p path-cli -- p import pathbase <pathbase-url-or-owner/repo/slug>
+cargo run -p path-cli -- p import claude --project . --no-cache | path p render md --input -
 
 # Share an agent session to Pathbase (interactive picker, single-shot)
 cargo run -p path-cli -- share
@@ -93,38 +100,44 @@ cargo run -p path-cli -- share --url https://my-pathbase.example
 cargo run -p path-cli -- resume <pathbase-url-or-shorthand-or-file-or-cache-id>
 cargo run -p path-cli -- resume <input> --harness claude -C /path/to/project
 
-# Export toolpath documents into external formats. <ref> is a cache id or a file path.
-cargo run -p path-cli -- export claude --input <ref> --project /tmp/sandbox
-cargo run -p path-cli -- export claude --input <ref> --output conv.jsonl
-cargo run -p path-cli -- export pathbase --input <ref>
+# Plumbing: export toolpath documents into external formats. <ref> is a
+# cache id or a file path.
+cargo run -p path-cli -- p export claude --input <ref> --project /tmp/sandbox
+cargo run -p path-cli -- p export claude --input <ref> --output conv.jsonl
+cargo run -p path-cli -- p export pathbase --input <ref>
 
-# Manage the cache
-cargo run -p path-cli -- cache ls
-cargo run -p path-cli -- cache rm <cache-id>
+# Plumbing: manage the cache
+cargo run -p path-cli -- p cache ls
+cargo run -p path-cli -- p cache rm <cache-id>
 
 # Inspect / analyze
-cargo run -p path-cli -- render dot --input doc.json
-cargo run -p path-cli -- render md --input doc.json --detail full
+cargo run -p path-cli -- p render dot --input doc.json
+cargo run -p path-cli -- p render md --input doc.json --detail full
 cargo run -p path-cli -- query dead-ends --input doc.json
 cargo run -p path-cli -- query ancestors --input doc.json --step-id step-003
 cargo run -p path-cli -- query filter --input doc.json --actor "agent:"
-cargo run -p path-cli -- merge doc1.json doc2.json --title "Combined"
-cargo run -p path-cli -- list git --repo .
-cargo run -p path-cli -- list github --repo owner/repo
-cargo run -p path-cli -- list opencode
-cargo run -p path-cli -- list pi
-cargo run -p path-cli -- list pi --project /path/to/project
-cargo run -p path-cli -- list claude --format tsv  # one session per line, fzf-friendly
+cargo run -p path-cli -- p merge doc1.json doc2.json --title "Combined"
+cargo run -p path-cli -- p list git --repo .
+cargo run -p path-cli -- p list github --repo owner/repo
+cargo run -p path-cli -- p list opencode
+cargo run -p path-cli -- p list pi
+cargo run -p path-cli -- p list pi --project /path/to/project
+cargo run -p path-cli -- p list claude --format tsv  # one session per line, fzf-friendly
 cargo run -p path-cli -- show claude --project /path/to/project --session <session-id>  # markdown summary; used by fzf preview
-cargo run -p path-cli -- track init --file src/main.rs --actor "human:alex"
-cargo run -p path-cli -- validate --input doc.json
+cargo run -p path-cli -- p track init --file src/main.rs --actor "human:alex"
+cargo run -p path-cli -- p validate --input doc.json
 cargo run -p path-cli -- auth login
 cargo run -p path-cli -- auth status
 cargo run -p path-cli -- auth whoami
 cargo run -p path-cli -- auth logout
 ```
 
-`path derive`, `path incept`, and `path project` are deprecated aliases for `path import` / `path export claude` and print a deprecation warning to stderr. They will be removed in the release after next.
+**Breaking** (pre-1.0). The previous top-level commands `path import`,
+`path export`, `path cache`, `path list`, `path render`, `path merge`,
+`path validate`, `path derive`, `path incept`, and `path project` were
+**removed** in 0.10.0 — there is no top-level alias and no deprecation
+shim. They now live exclusively under `path p` (and `incept` is gone
+entirely; use `path p export claude --project …`).
 
 The **cache** at `~/.toolpath/documents/<cache-id>.json` is the single landing zone for every `import` (and for `import pathbase` downloads). Cache id is `<source>-<inner-id>` — e.g. `claude-abc123`, `git-main`, `pathbase-alex-pathstash-path-pr-42` (Pathbase paths key on `<owner>-<repo>-<slug>`, anon paths on `anon-pathstash-<uuid>`). Files are `0600`, parent directory `0700`. `$TOOLPATH_CONFIG_DIR` overrides the root. Default behavior: error on cache hit; pass `--force` to overwrite. `--no-cache` sends the JSON to stdout for shell composition.
 
@@ -168,7 +181,7 @@ Tests live alongside the code (`#[cfg(test)] mod tests`), plus `path-cli` has in
 - `path-cli`: 260 unit + 63 integration tests (import/export/cache, track sessions, merge, validate, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, fzf-friendly TSV output, `path resume` orchestration with injectable `ExecStrategy`). For an end-to-end check against a real Pathbase deployment, run `scripts/test-pathbase-live.sh <url>` — it does an anon round-trip in a sandboxed config dir and, if you're logged into that URL, an authed pathstash round-trip too.
 - `toolpath-cli`: 0 tests (it's a one-line `path_cli::run()` shim crate that exists only so `cargo install toolpath-cli` keeps installing the `path` binary)
 
-Validate example documents: `for f in examples/*.json; do cargo run -p path-cli -- validate --input "$f"; done`
+Validate example documents: `for f in examples/*.json; do cargo run -p path-cli -- p validate --input "$f"; done`
 
 ## Feature flags
 
@@ -225,7 +238,7 @@ Build the site after changes: `cd site && pnpm run build` (should produce 7 page
 - Codex provider: `toolpath-codex` reads Codex CLI rollout files from `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Sessions are date-bucketed (not project-keyed). File-change fidelity is excellent — Codex's `patch_apply_end` events carry either the unified diff (for updates) or the full file content (for adds), so the derived `Path` gets a real `raw` perspective on every file artifact. See `docs/agents/formats/codex.md` for the full format reference.
 - opencode provider: `toolpath-opencode` reads a SQLite database at `~/.local/share/opencode/opencode.db` (opened read-only). Each session's messages and 12 typed part variants (text, reasoning, tool, step-start/-finish, snapshot, patch, file, agent, subtask, retry, compaction) land as one step per message with tool invocations attached. File diffs come from a sibling bare git repo at `snapshot/<project-id>/[<sha1(worktree)>]/` via `git2` tree↔tree diffs — opencode respects the user's `.gitignore`, so changes under gitignored paths fall back to tool-input-derived structural changes with no `raw` perspective. Project id is the SHA of the repo's first root commit. See `docs/agents/formats/opencode.md` for the full format reference.
 - Format references for the agent on-disk formats we derive from live at `docs/agents/formats/`. The Claude Code format (`~/.claude/projects/…` JSONL) gets the deepest treatment — twelve focused docs at `docs/agents/formats/claude-code/` covering envelope, entry types, tools, session chains, compaction, writing-compatible JSONL, a linear walkthrough, and a version-keyed changelog. Sibling single-file references: `codex.md`, `gemini.md`, `opencode.md`. Keep them in sync with their derive crates when fields or behaviors change.
-- Interactive session selection: `path import <provider>` (claude / gemini / pi / codex / opencode) auto-launches `fzf` when stdin and stderr are TTYs, `fzf` is on `$PATH`, and no `--session` was given. Multi-select (TAB) produces a `Graph` document; single-select produces a `Path`. The picker uses `path show <provider> --…` as its `--preview` command. When fzf isn't available, it falls back to most-recent (with `--project`) or prints the manual recipe (without). `path list <provider> --format tsv` is the documented machine-readable surface — column 1 is the project (for claude/gemini/pi) or session id (for codex/opencode), and the trailing column carries `first_user_message` so consumers can fuzzy-match by topic.
+- Interactive session selection: `path p import <provider>` (claude / gemini / pi / codex / opencode) auto-launches `fzf` when stdin and stderr are TTYs, `fzf` is on `$PATH`, and no `--session` was given. Multi-select (TAB) produces a `Graph` document; single-select produces a `Path`. The picker uses `path show <provider> --…` as its `--preview` command. When fzf isn't available, it falls back to most-recent (with `--project`) or prints the manual recipe (without). `path p list <provider> --format tsv` is the documented machine-readable surface — column 1 is the project (for claude/gemini/pi) or session id (for codex/opencode), and the trailing column carries `first_user_message` so consumers can fuzzy-match by topic.
 - Conversation metadata title field: `toolpath-claude::ConversationMetadata`, `toolpath-gemini::ConversationMetadata`, and `toolpath-pi::SessionMeta` all expose `first_user_message: Option<String>` — the first non-empty user-prompt text. Populated cheaply during the metadata pass (single-pass for Claude/Gemini; one extra short read for Pi). Used by the picker UI but useful for any "list sessions by topic" surface.
-- `path share` is the one-shot equivalent of `path import <harness> | path export pathbase`. It probes installed agent harnesses (claude/gemini/codex/opencode/pi), aggregates their sessions into a single fzf picker, and ranks rows whose project (claude/gemini/pi) or recorded cwd (codex/opencode) canonicalizes to the current directory at the top. `--harness` narrows the picker to one provider; `--harness X --session Y` (and `--project P` for keyed providers) skips the picker entirely. Pathbase flags (`--url`, `--anon`, `--repo`, `--slug`, `--public`) match `path export pathbase`. By default the derived doc is written to the cache like `import` does; pass `--no-cache` to skip.
+- `path share` is the one-shot equivalent of `path p import <harness> | path p export pathbase`. It probes installed agent harnesses (claude/gemini/codex/opencode/pi), aggregates their sessions into a single fzf picker, and ranks rows whose project (claude/gemini/pi) or recorded cwd (codex/opencode) canonicalizes to the current directory at the top. `--harness` narrows the picker to one provider; `--harness X --session Y` (and `--project P` for keyed providers) skips the picker entirely. Pathbase flags (`--url`, `--anon`, `--repo`, `--slug`, `--public`) match `path export pathbase`. By default the derived doc is written to the cache like `import` does; pass `--no-cache` to skip.
 - `path resume <input>` is the inverse of `path share`. It accepts a Pathbase URL, an `owner/repo/slug` shorthand, a local toolpath JSON file, or a cache id; resolves it (caching URL fetches under `~/.toolpath/documents/` unless `--no-cache`); validates that the document is a single agent-bearing `Path`; then opens an `fzf` harness picker (skipped with `--harness X`). The picker pre-selects the source harness inferred from `path.meta.source` (`claude-code`/`gemini-cli`/`codex`/`opencode`/`pi`) when it's installed. After picking, `path resume` projects the session into the harness's on-disk layout under the chosen working directory (default: shell cwd; override with `-C, --cwd P`) and `execvp`'s the harness's resume command (`claude -r <id>` / `gemini --resume <id>` / `codex resume <id>` / `opencode --session <id>` / `pi --session <id>`). On Windows it spawns and waits, propagating the exit code. The exec is mockable via `cmd_resume::ExecStrategy` — production uses `RealExec`; integration tests use `RecordingExec` to capture the recipe without launching a real harness.

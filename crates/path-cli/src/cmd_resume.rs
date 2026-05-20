@@ -96,8 +96,9 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
     let path = ensure_path_with_agent(&graph)?;
 
     let cwd = match args.cwd.as_ref() {
-        Some(p) => std::fs::canonicalize(p)
-            .with_context(|| format!("resolve cwd path {}", p.display()))?,
+        Some(p) => {
+            std::fs::canonicalize(p).with_context(|| format!("resolve cwd path {}", p.display()))?
+        }
         None => std::env::current_dir()?,
     };
 
@@ -105,7 +106,11 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
     eprintln!(
         "Picked harness: {}{}",
         target.name(),
-        if Some(target) == source_harness { " (source)" } else { "" }
+        if Some(target) == source_harness {
+            " (source)"
+        } else {
+            ""
+        }
     );
 
     let session_id = project_into_harness(path, target, &cwd)?;
@@ -361,15 +366,14 @@ fn interactive_pick(
         header: Some(&header),
         ..Default::default()
     };
-    let selected = match crate::fzf::pick(&lines, &opts)
-        .map_err(|e| anyhow::anyhow!("fzf failed: {}", e))?
-    {
-        crate::fzf::PickResult::Selected(rows) => rows.into_iter().next().unwrap_or_default(),
-        crate::fzf::PickResult::Cancelled => std::process::exit(130),
-        crate::fzf::PickResult::NoMatch => {
-            anyhow::bail!("fzf returned no match — picker UI was empty?");
-        }
-    };
+    let selected =
+        match crate::fzf::pick(&lines, &opts).map_err(|e| anyhow::anyhow!("fzf failed: {}", e))? {
+            crate::fzf::PickResult::Selected(rows) => rows.into_iter().next().unwrap_or_default(),
+            crate::fzf::PickResult::Cancelled => std::process::exit(130),
+            crate::fzf::PickResult::NoMatch => {
+                anyhow::bail!("fzf returned no match — picker UI was empty?");
+            }
+        };
 
     for h in installed {
         if selected.starts_with(h.symbol()) {
@@ -384,11 +388,11 @@ fn interactive_pick(
 pub(crate) fn argv_for(harness: crate::cmd_share::Harness, session_id: &str) -> Vec<String> {
     use crate::cmd_share::Harness;
     match harness {
-        Harness::Claude   => vec!["-r".into(), session_id.into()],
-        Harness::Gemini   => vec!["--resume".into(), session_id.into()],
-        Harness::Codex    => vec!["resume".into(), session_id.into()],
+        Harness::Claude => vec!["-r".into(), session_id.into()],
+        Harness::Gemini => vec!["--resume".into(), session_id.into()],
+        Harness::Codex => vec!["resume".into(), session_id.into()],
         Harness::Opencode => vec!["--session".into(), session_id.into()],
-        Harness::Pi       => vec!["--session".into(), session_id.into()],
+        Harness::Pi => vec!["--session".into(), session_id.into()],
     }
 }
 
@@ -401,11 +405,11 @@ pub(crate) fn project_into_harness(
 ) -> Result<String> {
     use crate::cmd_share::Harness;
     match harness {
-        Harness::Claude   => crate::cmd_export::project_claude(path, cwd),
-        Harness::Gemini   => crate::cmd_export::project_gemini(path, cwd),
-        Harness::Codex    => crate::cmd_export::project_codex(path, cwd),
+        Harness::Claude => crate::cmd_export::project_claude(path, cwd),
+        Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
+        Harness::Codex => crate::cmd_export::project_codex(path, cwd),
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
-        Harness::Pi       => crate::cmd_export::project_pi(path, cwd),
+        Harness::Pi => crate::cmd_export::project_pi(path, cwd),
     }
 }
 
@@ -457,7 +461,8 @@ impl ExecStrategy for RealExec {
         }
         #[cfg(not(unix))]
         {
-            let status = cmd.spawn()
+            let status = cmd
+                .spawn()
                 .with_context(|| format!("spawn {}", binary))?
                 .wait()
                 .with_context(|| format!("wait for {}", binary))?;
@@ -508,7 +513,10 @@ fn looks_like_pathbase_shorthand(s: &str) -> bool {
         return false;
     }
     let segs: Vec<&str> = s.split('/').collect();
-    segs.len() == 3 && segs.iter().all(|s| !s.is_empty() && !s.contains(char::is_whitespace))
+    segs.len() == 3
+        && segs
+            .iter()
+            .all(|s| !s.is_empty() && !s.contains(char::is_whitespace))
 }
 
 #[cfg(test)]
@@ -517,7 +525,9 @@ mod tests {
 
     #[test]
     fn run_with_strategy_records_invocation_for_file_input_with_explicit_harness() {
-        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _home = scoped_home_for_resume();
         let _path_guard = ScopedPathForResume::with_binaries(&["claude"]);
         let cwd = tempfile::tempdir().unwrap();
@@ -537,7 +547,9 @@ mod tests {
             input: doc_file.to_string_lossy().to_string(),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(HarnessArg::Claude),
-            no_cache: false, force: false, url: None,
+            no_cache: false,
+            force: false,
+            url: None,
         };
 
         let recorder = RecordingExec::default();
@@ -634,8 +646,9 @@ mod tests {
     #[test]
     fn ensure_path_with_agent_rejects_multi_path_graph() {
         let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
-        g.paths
-            .push(PathOrRef::Path(Box::new(make_path_with_actor("agent:claude-code"))));
+        g.paths.push(PathOrRef::Path(Box::new(make_path_with_actor(
+            "agent:claude-code",
+        ))));
         let err = ensure_path_with_agent(&g).unwrap_err();
         let s = err.to_string();
         assert!(s.contains("single `Path`"), "actual: {s}");
@@ -682,7 +695,9 @@ mod tests {
 
     #[test]
     fn resolve_input_url_dispatches_to_pathbase_fetch() {
-        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use crate::cmd_pathbase::tests::MockServer;
         let body = {
             let mut path = make_path_with_actor("agent:codex");
@@ -717,7 +732,9 @@ mod tests {
         // input at a 500-erroring mock server (so any network round-trip
         // would surface as an error), and confirm resolve_input still
         // returns the cached graph.
-        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         // Pin TOOLPATH_CONFIG_DIR to a tempdir so we don't pollute the
         // user's real cache.
@@ -774,7 +791,9 @@ mod tests {
 
     #[test]
     fn resolve_input_unresolvable_errors_clearly() {
-        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let args = ResumeArgs {
             input: "definitely/not/a/real/cache/id".to_string(),
             cwd: None,
@@ -835,16 +854,33 @@ mod tests {
 
     #[test]
     fn argv_for_returns_harness_specific_shape() {
-        assert_eq!(argv_for(Harness::Claude, "abc"),   vec!["-r".to_string(), "abc".to_string()]);
-        assert_eq!(argv_for(Harness::Gemini, "abc"),   vec!["--resume".to_string(), "abc".to_string()]);
-        assert_eq!(argv_for(Harness::Codex, "abc"),    vec!["resume".to_string(), "abc".to_string()]);
-        assert_eq!(argv_for(Harness::Opencode, "abc"), vec!["--session".to_string(), "abc".to_string()]);
-        assert_eq!(argv_for(Harness::Pi, "abc"),       vec!["--session".to_string(), "abc".to_string()]);
+        assert_eq!(
+            argv_for(Harness::Claude, "abc"),
+            vec!["-r".to_string(), "abc".to_string()]
+        );
+        assert_eq!(
+            argv_for(Harness::Gemini, "abc"),
+            vec!["--resume".to_string(), "abc".to_string()]
+        );
+        assert_eq!(
+            argv_for(Harness::Codex, "abc"),
+            vec!["resume".to_string(), "abc".to_string()]
+        );
+        assert_eq!(
+            argv_for(Harness::Opencode, "abc"),
+            vec!["--session".to_string(), "abc".to_string()]
+        );
+        assert_eq!(
+            argv_for(Harness::Pi, "abc"),
+            vec!["--session".to_string(), "abc".to_string()]
+        );
     }
 
     #[test]
     fn project_into_harness_claude_round_trip() {
-        let _env = crate::config::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _home = scoped_home_for_resume();
         let cwd = tempfile::tempdir().unwrap();
         let path = make_convo_path_for_resume("claude-code://resume-test-session");
@@ -916,8 +952,13 @@ mod tests {
                     .chain(std::env::split_paths(&prev.clone().unwrap_or_default())),
             )
             .unwrap();
-            unsafe { std::env::set_var("PATH", new_path); }
-            Self { _bin_dir: bin_dir, prev }
+            unsafe {
+                std::env::set_var("PATH", new_path);
+            }
+            Self {
+                _bin_dir: bin_dir,
+                prev,
+            }
         }
     }
 
@@ -932,13 +973,18 @@ mod tests {
         }
     }
 
-    struct ScopedHomeForResume { _td: tempfile::TempDir, prev: Option<std::ffi::OsString> }
+    struct ScopedHomeForResume {
+        _td: tempfile::TempDir,
+        prev: Option<std::ffi::OsString>,
+    }
 
     impl ScopedHomeForResume {
         fn new() -> Self {
             let td = tempfile::tempdir().unwrap();
             let prev = std::env::var_os("HOME");
-            unsafe { std::env::set_var("HOME", td.path()); }
+            unsafe {
+                std::env::set_var("HOME", td.path());
+            }
             Self { _td: td, prev }
         }
     }
@@ -958,8 +1004,13 @@ mod tests {
     fn exec_strategy_recording_captures_invocation() {
         let recorder = RecordingExec::default();
         let strategy: &dyn ExecStrategy = &recorder;
-        exec_harness("claude", &["-r".into(), "abc123".into()], std::path::Path::new("/tmp/x"), strategy)
-            .unwrap();
+        exec_harness(
+            "claude",
+            &["-r".into(), "abc123".into()],
+            std::path::Path::new("/tmp/x"),
+            strategy,
+        )
+        .unwrap();
 
         let captured = recorder.captured();
         assert_eq!(captured.binary, "claude");

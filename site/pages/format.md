@@ -95,8 +95,8 @@ A `.path.jsonl` stream encodes exactly one inline Path and seals to a single-pat
 ## Where to next
 
 - **[Full specification](/rfc/)** — the normative details: signatures, perspectives, the `meta` object, ID uniqueness, JSONL streaming.
-- **[JSON Schema](https://github.com/empathic/toolpath/blob/main/schema/toolpath.schema.json)** — authoritative shape; what `path validate` checks against.
+- **[JSON Schema](https://github.com/empathic/toolpath/blob/main/schema/toolpath.schema.json)** — authoritative shape; what `path p validate` checks against.
 - **[Examples](https://github.com/empathic/toolpath/tree/main/examples)** — the fixtures used throughout these docs and tested in CI.
-- **[CLI](/cli/)** — `path import`, `path render`, `path query`, `path validate`.
+- **[CLI](/cli/)** — `path share`, `path resume`, `path query`, and the `path p …` plumbing (`p import`, `p render`, `p validate`, …).
 - **[Visualizer](/visualizer/)** — paste a document, see the DAG.
 - **[Design notes](/faq/)** — why the format is shaped the way it is.

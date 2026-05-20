@@ -79,7 +79,7 @@ gate_doc() {
 gate_examples() {
     local _failed=0
     for _f in "${_root}"/examples/*.json; do
-        if ! RUSTFLAGS="-D warnings" cargo run --quiet -p path-cli -- validate --input "${_f}" 2>&1; then
+        if ! RUSTFLAGS="-D warnings" cargo run --quiet -p path-cli -- p validate --input "${_f}" 2>&1; then
             _failed=1
         fi
     done

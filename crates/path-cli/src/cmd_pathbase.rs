@@ -444,7 +444,10 @@ pub(crate) fn paths_post(
         Err(pathbase_client::Error::CommunicationError(e)) => {
             bail!("upload to {owner}/{repo} failed: {}", reqwest_hint(&e))
         }
-        Err(e) => Err(anyhow!("upload to {owner}/{repo} failed: {}", full_chain(&e))),
+        Err(e) => Err(anyhow!(
+            "upload to {owner}/{repo} failed: {}",
+            full_chain(&e)
+        )),
     }
 }
 

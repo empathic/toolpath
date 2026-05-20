@@ -92,7 +92,7 @@ split is principled, not decorative — and it is the one place where
 Toolpath's type system diverges from its siblings.
 
 **Why mono for chrome.** Toolpath lives at the CLI. Its primary outputs
-are JSONL, JSON Schema, `git log`, and `path render` ASCII trees. Its
+are JSONL, JSON Schema, `git log`, and `path p render` ASCII trees. Its
 primary inputs are conversation logs and diff hunks — already monospace
 at rest. Nav, buttons, headings, table headers, code blocks, and
 figure labels stay mono so the site never changes voice from the tool
@@ -375,12 +375,12 @@ Bad:   Error: An issue was encountered while attempting to write the cache.
 Always include one example invocation. No marketing.
 
 ```
-Good:  Import a Claude conversation into the local toolpath cache.
-       Usage: path import claude --project <DIR> [--session <ID>]
-       Example: path import claude --project $PWD
+Good:  Share an agent session to Pathbase via an interactive picker.
+       Usage: path share [--harness NAME] [--session ID] [--url URL]
+       Example: path share --harness claude
 
-Bad:   The import claude command provides a powerful way to bring
-       your conversational context into the toolpath ecosystem.
+Bad:   The share command provides a powerful way to bring your
+       conversational context into the Pathbase ecosystem.
 ```
 
 **README rhythm.** One-sentence thesis, install, smallest useful

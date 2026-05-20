@@ -1,8 +1,10 @@
-//! Deprecation shim for `path project`.
+//! `path p project` — narrower, file-shaped sibling of `export`.
 //!
-//! `path project claude --input X [--output Y]` became `path export claude
-//! --input X [--output Y]`. This shim preserves the old surface for one
-//! release.
+//! `project claude --input X [--output Y]` writes a toolpath document
+//! as a Claude JSONL session, either to a file (`--output`) or to
+//! stdout. It's the older, simpler surface; `export claude` is its
+//! superset and also accepts `--project <dir>` to overwrite an
+//! on-disk session layout.
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -23,7 +25,6 @@ pub enum ProjectTarget {
 }
 
 pub fn run(target: ProjectTarget) -> Result<()> {
-    eprintln!("warning: `path project` is deprecated; use `path export` instead");
     match target {
         ProjectTarget::Claude { input, output } => {
             crate::cmd_export::run(crate::cmd_export::ExportTarget::Claude {

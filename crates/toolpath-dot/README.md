@@ -28,7 +28,7 @@ assert!(dot.contains("digraph"));
 Pipe through Graphviz to produce images:
 
 ```bash
-path derive git --repo . --branch main | path render dot | dot -Tpng -o graph.png
+path p import git --repo . --branch main --no-cache | path p render dot | dot -Tpng -o graph.png
 ```
 
 ## Render options

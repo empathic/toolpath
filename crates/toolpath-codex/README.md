@@ -50,8 +50,8 @@ let path = derive_path(&convo, &DeriveConfig::default());
 ## CLI
 
 ```bash
-path list   codex [--json]
-path derive codex --session <uuid|filename-stem> [--pretty]
+path p list   codex [--json]
+path p import codex --session <uuid|filename-stem> [--pretty]
 ```
 
 ## What's *not* read

@@ -244,10 +244,11 @@ fn test_cli_project_command() {
 
     fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
 
-    // 3. Run `path project claude --input <file> --output <file>`.
+    // 3. Run `path p export claude --input <file> --output <file>`.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_path"))
         .args([
-            "project",
+            "p",
+            "export",
             "claude",
             "--input",
             input_path.to_str().unwrap(),
@@ -259,7 +260,7 @@ fn test_cli_project_command() {
 
     assert!(
         output.status.success(),
-        "path project claude failed: {}",
+        "path p export claude failed: {}",
         String::from_utf8_lossy(&output.stderr),
     );
 

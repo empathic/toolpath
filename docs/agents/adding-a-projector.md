@@ -1,4 +1,4 @@
-# Adding `path export <harness>` for a new harness
+# Adding `path p export <harness>` for a new harness
 
 How to add projection (toolpath document → harness-native session) for
 a harness that already has forward derivation. Distilled from the
@@ -117,7 +117,7 @@ Three things the projector MUST do:
 
 If the harness's CLI accepts session identifiers in multiple forms
 (file stem AND inner session ID, for instance), the harness's library
-reader should too — otherwise `path export <harness>` followed by
+reader should too — otherwise `path p export <harness>` followed by
 `<harness>cli --resume <uuid>` works but the equivalent library round-
 trip doesn't. See `toolpath-gemini::PathResolver::resolve_main_file`
 for the stem-then-scan-and-match pattern.
@@ -193,7 +193,7 @@ error status), thoughts, tokens, sub-agents. The Gemini test file is
 the template.
 
 **CLI integration test** in `cmd_export.rs::tests` — proves the
-`path export <harness>` command writes a resume-ready file that the
+`path p export <harness>` command writes a resume-ready file that the
 harness's library reader can open by the same identifier the CLI's
 resume command would use. Isolate `$HOME` to a temp dir.
 
@@ -212,16 +212,16 @@ non-trivial conversation from another harness (Claude is convenient
 since the source is rich) and pipe it through:
 
 ```bash
-# Derive a real session into a Path doc
-path import claude --session <session-uuid> --project /path/to/project
+# Import a real session into a Path doc
+path p import claude --session <session-uuid> --project /path/to/project
 
 # Or, if not using cache:
-cargo run -q -p toolpath-cli -- derive claude \
-  --project /path/to/project --session <session-uuid> --pretty \
+cargo run -q -p path-cli -- p import claude \
+  --project /path/to/project --session <session-uuid> --no-cache --pretty \
   > /tmp/source.path.json
 
 # Project into the new harness
-path export <harness> --input /tmp/source.path.json --project $(pwd)
+path p export <harness> --input /tmp/source.path.json --project $(pwd)
 ```
 
 The summary line should report the full message count, not zero or
