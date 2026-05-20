@@ -42,10 +42,7 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
 }
 
 /// Derive Toolpath Paths from multiple conversations in a project.
-pub fn derive_project(
-    conversations: &[Conversation],
-    config: &DeriveConfig,
-) -> Vec<Path> {
+pub fn derive_project(conversations: &[Conversation], config: &DeriveConfig) -> Vec<Path> {
     conversations
         .iter()
         .map(|c| derive_path(c, config))

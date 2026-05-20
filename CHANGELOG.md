@@ -11,16 +11,15 @@ that compose into the day-to-day flows are now grouped under a single
 `auth`, `haiku`).
 
 - New canonical surface under `path p`: `list`, `import`, `export`,
-  `cache`, `render`, `merge`, `validate`, `derive`, `project`, `track`.
+  `cache`, `render`, `merge`, `validate`, `derive`, `project`,
+  `incept`, `track`.
 - **Hard removal at the top level.** `path import`, `path export`,
   `path cache`, `path list`, `path render`, `path merge`,
-  `path validate`, `path derive`, `path project`, and `path track` no
-  longer exist as top-level subcommands — they only resolve under
-  `path p`. There is no deprecation shim. Scripts will fail with
-  `error: unrecognized subcommand`; update call sites to the
+  `path validate`, `path derive`, `path project`, `path incept`, and
+  `path track` no longer exist as top-level subcommands — they only
+  resolve under `path p`. There is no deprecation shim. Scripts will
+  fail with `error: unrecognized subcommand`; update call sites to the
   `path p X` form.
-- The older `path incept` alias is gone entirely; use
-  `path p export claude --project <dir>` instead.
 - Internal: `cmd_p.rs` owns the `PCommand` enum and dispatches to the
   existing per-command handlers. No behavioral changes to the handlers
   themselves.

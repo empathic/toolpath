@@ -771,7 +771,11 @@ mod tests {
             .iter_errors(&graph)
             .map(|e| format!("at {}: {e}", e.instance_path()))
             .collect();
-        assert!(errors.is_empty(), "base-schema violations:\n{}", errors.join("\n"));
+        assert!(
+            errors.is_empty(),
+            "base-schema violations:\n{}",
+            errors.join("\n")
+        );
     }
 
     fn fw_tool(name: &str, id: &str, input: serde_json::Value) -> ToolInvocation {

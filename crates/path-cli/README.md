@@ -20,10 +20,10 @@ Or run from source:
 cargo run -p path-cli -- <command>
 ```
 
-The CLI splits into porcelain (top-level: `haiku`, `show`, `share`,
-`resume`, `query`, `auth`) and plumbing (`path p …`: `p list`,
+The CLI splits into porcelain (top-level: `show`, `share`, `resume`,
+`query`, `auth`, `haiku`) and plumbing (`path p …`: `p list`,
 `p import`, `p export`, `p cache`, `p render`, `p merge`, `p validate`,
-`p derive`, `p project`, `p track`).
+`p derive`, `p project`, `p incept`, `p track`).
 
 ## Typical workflows
 

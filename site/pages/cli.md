@@ -50,6 +50,7 @@ path
     validate    --input FILE
     derive      # stdout-JSON sibling of import (same sources, --no-cache implied)
     project     # narrower file-shaped sibling of export
+    incept      # file/stdin-shaped sibling of `export claude --project`
     track
       init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
                 [--actor-def JSON] [--source TEXT] [--session-dir PATH]
@@ -87,6 +88,7 @@ Plumbing (`path p …`):
 - **p validate** — Check that a document is structurally valid
 - **p derive** — Stream a Toolpath document to stdout (the stdout-only sibling of `import`)
 - **p project** — Write a Toolpath document into a harness's session format as a file
+- **p incept** — Project a Toolpath document into a Claude session layout under `--project` (file/stdin-shaped sibling of `export claude`)
 - **p track** — Build a Path incrementally as you work (editor integrations, live sessions)
 
 <svg class="topo topo-wide" viewBox="0 0 900 70" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

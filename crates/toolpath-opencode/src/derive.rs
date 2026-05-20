@@ -152,9 +152,19 @@ mod tests {
             Some("proj_sha")
         );
         // 2 messages → 2 turns (both have content/tool calls).
-        assert_eq!(p.steps.iter().filter(|s| {
-            s.change.values().any(|c| c.structural.as_ref().is_some_and(|sc| sc.change_type == "conversation.append"))
-        }).count(), 2);
+        assert_eq!(
+            p.steps
+                .iter()
+                .filter(|s| {
+                    s.change.values().any(|c| {
+                        c.structural
+                            .as_ref()
+                            .is_some_and(|sc| sc.change_type == "conversation.append")
+                    })
+                })
+                .count(),
+            2
+        );
     }
 
     #[test]

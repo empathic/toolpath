@@ -178,6 +178,7 @@ path
     validate    --input FILE
     derive      # stdout-JSON sibling of import (same sources, --no-cache implied)
     project     # narrower file-shaped sibling of export
+    incept      # file/stdin-shaped sibling of `export claude --project`
     track
       init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
       step      --session FILE --seq N [--actor ACTOR] [--intent TEXT]
@@ -192,10 +193,9 @@ Global: `--pretty` for formatted JSON output.
 
 **Breaking** (pre-1.0). The previous top-level commands `path import`,
 `path export`, `path cache`, `path list`, `path render`, `path merge`,
-`path validate`, `path derive`, `path project`, and `path track` were
-**removed** in `path-cli` 0.10.0 — they now live exclusively under
-`path p`. The older `path incept` alias was deleted entirely; use
-`path p export claude --project <dir>` instead.
+`path validate`, `path derive`, `path project`, `path incept`, and
+`path track` were **removed** in `path-cli` 0.10.0 — they all now live
+exclusively under `path p`.
 
 ## Interactive selection (fzf)
 

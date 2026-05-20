@@ -72,11 +72,11 @@ Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
 
 The binary is called `path` (package: `path-cli`; the older `toolpath-cli` package is a deprecated shim that still installs the same binary for users running `cargo install toolpath-cli`):
 
-The top-level surface is the porcelain (`haiku`, `show`, `share`,
-`resume`, `query`, `auth`). Lower-level building blocks live under
+The top-level surface is the porcelain (`show`, `share`, `resume`,
+`query`, `auth`, `haiku`). Lower-level building blocks live under
 `path p …` (plumbing): `p list`, `p import`, `p export`, `p cache`,
 `p render`, `p merge`, `p validate`, `p derive`, `p project`,
-`p track`.
+`p incept`, `p track`.
 
 ```bash
 # Plumbing: import from external formats into the local toolpath cache
@@ -134,10 +134,10 @@ cargo run -p path-cli -- auth logout
 
 **Breaking** (pre-1.0). The previous top-level commands `path import`,
 `path export`, `path cache`, `path list`, `path render`, `path merge`,
-`path validate`, `path derive`, `path incept`, and `path project` were
-**removed** in 0.10.0 — there is no top-level alias and no deprecation
-shim. They now live exclusively under `path p` (and `incept` is gone
-entirely; use `path p export claude --project …`).
+`path validate`, `path derive`, `path incept`, `path project`, and
+`path track` were **removed** in 0.10.0 — there is no top-level alias
+and no deprecation shim. They all now live exclusively under
+`path p …`.
 
 The **cache** at `~/.toolpath/documents/<cache-id>.json` is the single landing zone for every `import` (and for `import pathbase` downloads). Cache id is `<source>-<inner-id>` — e.g. `claude-abc123`, `git-main`, `pathbase-alex-pathstash-path-pr-42` (Pathbase paths key on `<owner>-<repo>-<slug>`, anon paths on `anon-pathstash-<uuid>`). Files are `0600`, parent directory `0700`. `$TOOLPATH_CONFIG_DIR` overrides the root. Default behavior: error on cache hit; pass `--force` to overwrite. `--no-cache` sends the JSON to stdout for shell composition.
 

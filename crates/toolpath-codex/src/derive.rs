@@ -121,8 +121,14 @@ mod tests {
             .get("producer")
             .and_then(|v| v.as_object())
             .expect("meta.extra.producer object");
-        assert_eq!(producer.get("name").and_then(|v| v.as_str()), Some("codex-tui"));
-        assert_eq!(producer.get("version").and_then(|v| v.as_str()), Some("0.118.0"));
+        assert_eq!(
+            producer.get("name").and_then(|v| v.as_str()),
+            Some("codex-tui")
+        );
+        assert_eq!(
+            producer.get("version").and_then(|v| v.as_str()),
+            Some("0.118.0")
+        );
         // Nothing else codex-specific is smuggled through meta.extra.
         assert!(!meta_extra.contains_key("codex"));
     }

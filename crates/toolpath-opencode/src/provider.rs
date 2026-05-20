@@ -481,9 +481,11 @@ impl<'a> Builder<'a> {
         let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Snapshot diff (when repo + pair available).
-        if let (Some(repo), Some(first), Some(last)) =
-            (self.snapshot_repo.as_ref(), snapshots.first(), snapshots.last())
-        {
+        if let (Some(repo), Some(first), Some(last)) = (
+            self.snapshot_repo.as_ref(),
+            snapshots.first(),
+            snapshots.last(),
+        ) {
             let before = self
                 .prev_snapshot_after
                 .clone()

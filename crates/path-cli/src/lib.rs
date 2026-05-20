@@ -5,6 +5,7 @@ mod cmd_derive;
 mod cmd_export;
 mod cmd_haiku;
 mod cmd_import;
+mod cmd_incept;
 mod cmd_list;
 mod cmd_merge;
 mod cmd_p;
@@ -76,7 +77,7 @@ enum Commands {
     },
     /// Plumbing: lower-level operations on documents and sources
     /// (import, export, cache, list, render, merge, validate, derive,
-    /// project, track)
+    /// project, incept, track)
     P {
         #[command(subcommand)]
         command: cmd_p::PCommand,

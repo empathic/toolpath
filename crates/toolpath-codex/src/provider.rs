@@ -451,13 +451,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn attach_tool_call(
-        &mut self,
-        timestamp: &str,
-        call_id: String,
-        name: String,
-        input: Value,
-    ) {
+    fn attach_tool_call(&mut self, timestamp: &str, call_id: String, name: String, input: Value) {
         let category = tool_category(&name);
         let invocation = ToolInvocation {
             id: call_id.clone(),

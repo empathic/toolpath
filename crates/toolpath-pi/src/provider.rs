@@ -229,9 +229,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         match entry {
             Entry::Session(_) => continue,
 
-            Entry::ModelChange { .. }
-            | Entry::ThinkingLevelChange { .. }
-            | Entry::Label { .. } => {
+            Entry::ModelChange { .. } | Entry::ThinkingLevelChange { .. } | Entry::Label { .. } => {
                 // Discarded — these influence rendering only and don't map onto
                 // a cross-harness IR field.
             }
