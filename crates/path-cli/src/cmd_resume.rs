@@ -712,7 +712,10 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 200 OK", body_static);
 
         let args = ResumeArgs {
-            input: format!("{}/alex/pathstash/p", server.base()),
+            input: format!(
+                "{}/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
+                server.base()
+            ),
             cwd: None,
             harness: None,
             no_cache: true, // skip cache write in tests
@@ -744,8 +747,11 @@ mod tests {
             std::env::set_var("TOOLPATH_CONFIG_DIR", cfg_dir.path());
         }
 
-        // Seed the cache with a codex-source graph.
-        let cache_id = "pathbase-alex-pathstash-cached-fixture";
+        // Seed the cache with a codex-source graph. Cache id keys on the
+        // graph UUID since Pathbase 1.1+ addresses graphs by UUID.
+        const FIXTURE_UUID: &str = "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
+        let cache_id = format!("pathbase-alex-pathstash-{FIXTURE_UUID}");
+        let cache_id = cache_id.as_str();
         let documents = cfg_dir.path().join("documents");
         std::fs::create_dir_all(&documents).unwrap();
         let cached_graph = {
@@ -767,7 +773,10 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 500 Internal Server Error", "boom");
 
         let args = ResumeArgs {
-            input: format!("{}/alex/pathstash/cached-fixture", server.base()),
+            input: format!(
+                "{}/u/alex/repos/pathstash/graphs/{FIXTURE_UUID}",
+                server.base()
+            ),
             cwd: None,
             harness: None,
             no_cache: false,

@@ -2,102 +2,36 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Pathbase API",
-    "description": "HTTP API for Pathbase — repositories, agent trace paths, computation graphs, and anonymous share links.\n\n**Stability.** v1 endpoints are stable in shape; additive changes (new fields, new endpoints, broader query params) ship without a version bump. Breaking changes get a new prefix (`/api/v2/...`) and a deprecation window.\n\n**Spec format.** OpenAPI 3.1, served live at `/api/v1/openapi.json`. The `x-pathbase-version` response header on every call carries the running build's `<semver>+<git-sha>` so consumers can pin or correlate.\n\n**Auth.** Most endpoints require a Pathbase session cookie or a `pat_…` bearer token (see the `bearerAuth` scheme). Unauthenticated endpoints — the `Anon` and `Signups` namespaces, public profile reads — are clearly tagged. Per-operation `security` annotations reflect the actual gate enforced by the handler.",
+    "description": "HTTP API for Pathbase — repositories, agent trace paths, computation graphs, and anonymous share links.\n\n**Stability.** v1 endpoints are stable in shape; additive changes (new fields, new endpoints, broader query params) ship without a version bump. Breaking changes get a new prefix (`/api/v2/...`) and a deprecation window.\n\n**Spec format.** OpenAPI 3.1, served live at `/api/v1/openapi.json`.\n\n**Versioning header.** Every response carries an `X-Pathbase-Version` header with the running build's identifier (`<crate-version>+<git-sha>`). The spec does not enumerate it per operation; consumers may read it from any response to pin or correlate.\n\n**Auth.** Most endpoints require a `pat_…` bearer token (see `bearerAuth`). Obtain one through the CLI grant flow (`POST /api/v1/auth/cli/request-grant` then `POST /api/v1/auth/cli/redeem`). Unauthenticated endpoints — the `Anon` namespace, public profile reads — are clearly tagged. Per-operation `security` annotations reflect the actual gate.",
     "license": {
       "name": ""
     },
     "version": "1.1.0"
   },
+  "servers": [
+    {
+      "url": "https://pathbase.dev",
+      "description": "Production"
+    }
+  ],
   "paths": {
-    "/api/v1/anon/paths": {
-      "post": {
-        "tags": [
-          "Anon"
-        ],
-        "summary": "Upload a single-path Graph document anonymously. Stored under the\nshared `anon` user; the response carries a UUID-based `share_url`\nthe uploader can hand out. Per-IP rate-limited and capped by\n`body_limits.anon_upload_bytes`.",
-        "operationId": "create_anon_path",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AnonUploadBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "New anon path created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AnonUploadResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid document / unsupported variant / empty path"
-          },
-          "413": {
-            "description": "Request body exceeds the configured anon upload byte limit"
-          },
-          "429": {
-            "description": "Rate limit exceeded"
-          }
-        }
-      }
-    },
-    "/api/v1/anon/paths/{id}": {
-      "get": {
-        "tags": [
-          "Anon"
-        ],
-        "summary": "Read an anon-uploaded trace by its UUID. No auth, no rate limit.",
-        "description": "The handler explicitly overrides the global `Cache-Control` and\n`Vary` defaults: anon responses don't depend on the `Authorization`\nheader (the endpoint ignores it), so the auth-keyed cache defaults\nwould needlessly fragment any CDN/proxy cache.",
-        "operationId": "get_anon_path",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Anon path UUID",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Reconstructed toolpath document",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "404": {
-            "description": "No anon path with that ID"
-          }
-        }
-      }
-    },
     "/api/v1/auth/cli/redeem": {
       "post": {
         "tags": [
-          "Auth"
+          "Auth: CLI"
         ],
-        "summary": "Second half of the CLI browser-login flow. Redeems a one-time code\nfor a long-lived `pat_…` bearer token bound to a `cli` session. No\nauth required — the code is the credential.",
+        "summary": "Redeem a CLI pairing grant for a long-lived bearer token.",
+        "description": "Second leg of the CLI pairing flow (see\n`/api/v1/auth/cli/request-grant` for the full sequence). The CLI\nposts the code the user typed; the server normalizes case and\nwhitespace, consumes the grant, and — on a still-valid grant —\nreturns the bearer token plus user. Single-use; subsequent\nredemptions of the same code return 401.\n\nNo authentication is required to call this endpoint; the grant code\nIS the authentication. A code that is unknown, expired, or already\nredeemed all collapse to `401 Unauthorized` so the response cannot\nbe used to probe for valid codes — the three failure modes are\ndeliberately indistinguishable.",
         "operationId": "cli_redeem",
         "requestBody": {
+          "description": "The grant code the user pasted into the CLI. Case and surrounding whitespace are normalized server-side.",
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/RedeemBody"
               },
               "example": {
-                "code": "BCDF23GH"
+                "code": "AB12CD34"
               }
             }
           },
@@ -105,7 +39,7 @@
         },
         "responses": {
           "200": {
-            "description": "Bearer token + user",
+            "description": "Grant redeemed. Store `token` securely and send it as `Authorization: Bearer <token>` on subsequent API calls; it is shown only once.",
             "content": {
               "application/json": {
                 "schema": {
@@ -115,10 +49,24 @@
             }
           },
           "400": {
-            "description": "Invalid code format"
+            "description": "Code is the wrong length after normalization (must be exactly 8 alphanumeric characters).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Code expired or unknown"
+            "description": "Code is unknown, expired, or has already been redeemed. The three failure modes are deliberately indistinguishable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -126,27 +74,31 @@
     "/api/v1/auth/cli/request-grant": {
       "post": {
         "tags": [
-          "Auth"
+          "Auth: CLI"
         ],
-        "summary": "First half of the CLI browser-login flow. The signed-in browser\nasks for a short, human-readable code that the user types into a\nCLI (`pathbase login`); the CLI then redeems it for a long-lived\nbearer token via `/auth/cli/redeem`.",
+        "summary": "Mint a short-lived grant code for pairing the pathbase CLI to this\nbrowser session.",
+        "description": "**Pairing flow.**\n1. Browser (already authenticated) calls this endpoint and displays\n   the returned `code` to the user.\n2. User pastes the code into a CLI prompt (`pathbase login`).\n3. CLI POSTs the code to `/api/v1/auth/cli/redeem`.\n4. Server consumes the grant and returns `{ token, user }` to the\n   CLI.\n5. CLI stores `token` and sends it as `Authorization: Bearer\n   <token>` on every subsequent API call.\n\nThe grant is single-use and expires after a short window. Multiple\ngrants may be active concurrently; redeeming one has no effect on\nexisting tokens.",
         "operationId": "cli_request_grant",
         "responses": {
           "200": {
-            "description": "Short-lived grant code",
+            "description": "Grant issued. Display `code` to the user so they can paste it into the CLI before `expires_in` seconds elapse.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CliGrantResponse"
-                },
-                "example": {
-                  "code": "BCDF23GH",
-                  "expires_in": 600
                 }
               }
             }
           },
           "401": {
-            "description": "Not authenticated"
+            "description": "Caller is not authenticated. Grants can only be minted by an already-logged-in browser session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -156,197 +108,17 @@
         ]
       }
     },
-    "/api/v1/auth/dev": {
-      "get": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "Local-development sign-in shortcut — creates / signs in as `dev`.\nDisabled (400) when GitHub OAuth is configured, so it can never\nfire in production.",
-        "operationId": "dev_login",
-        "parameters": [
-          {
-            "name": "redirect",
-            "in": "query",
-            "description": "Same-origin relative path to land on after sign-in.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "302": {
-            "description": "Redirect after signing in as the local `dev` user"
-          },
-          "400": {
-            "description": "Disabled — GitHub OAuth is configured"
-          }
-        }
-      }
-    },
-    "/api/v1/auth/github": {
-      "get": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "Start the GitHub OAuth handshake — issue a 302 to GitHub's\n`authorize` URL with `state` carrying the validated `redirect`.\nFalls back to `/api/v1/auth/dev` when GitHub OAuth is unconfigured.",
-        "operationId": "github_redirect",
-        "parameters": [
-          {
-            "name": "redirect",
-            "in": "query",
-            "description": "Same-origin relative path to land on after sign-in. Bad values are silently dropped (open-redirect defense).",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "302": {
-            "description": "Redirect to GitHub authorize URL (or to `/api/v1/auth/dev` when GitHub OAuth is unconfigured)"
-          }
-        }
-      }
-    },
-    "/api/v1/auth/github/callback": {
-      "get": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "GitHub OAuth callback — exchange the `code` for a token, look up or\ncreate the matching Pathbase user, and redirect to the validated\n`state` target (or `/`).",
-        "operationId": "github_callback",
-        "parameters": [
-          {
-            "name": "code",
-            "in": "query",
-            "description": "GitHub-issued authorization code",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "state",
-            "in": "query",
-            "description": "Echoed redirect target from `/api/v1/auth/github`",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "302": {
-            "description": "Redirect after creating or linking the Pathbase account"
-          }
-        }
-      }
-    },
-    "/api/v1/auth/login": {
-      "post": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "Sign in with email + password. Sets `pb_session` cookie. Returns\nthe user; for the bearer token instead, use the CLI grant flow.",
-        "operationId": "login",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LoginBody"
-              },
-              "example": {
-                "email": "alice@example.com",
-                "password": "correct-horse-battery-staple"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Signed in",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/User"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Invalid credentials"
-          }
-        }
-      }
-    },
-    "/api/v1/auth/logout": {
-      "post": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "Invalidate the caller's session (cookie or bearer-token) and clear\nthe `pb_session` cookie. Idempotent — succeeds even with no session.",
-        "operationId": "logout",
-        "responses": {
-          "204": {
-            "description": "Logged out"
-          }
-        }
-      }
-    },
-    "/api/v1/auth/register": {
-      "post": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "Create a new account with username + email + password and sign the\ncaller in. Sets `pb_session` cookie and creates the default\n`pathstash` repo for quick uploads.",
-        "operationId": "register",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RegisterBody"
-              },
-              "example": {
-                "email": "alice@example.com",
-                "password": "correct-horse-battery-staple",
-                "username": "alice"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Account created and signed in",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/User"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid username, email, or password"
-          },
-          "409": {
-            "description": "Username or email already taken"
-          }
-        }
-      }
-    },
     "/api/v1/auth/sessions": {
       "get": {
         "tags": [
-          "Auth"
+          "Auth: Sessions"
         ],
-        "summary": "List the caller's active sessions (web + CLI). The session that\nissued the request is flagged `is_current`.",
+        "summary": "List the authenticated user's active sessions.",
+        "description": "Returns one entry per session owned by the caller — both browser\nlogins and CLI tokens. Includes an `is_current` flag so the UI can\nmark which entry is the caller's own session.\n\nUsed by the settings UI to render \"active devices/CLIs\" with a\nper-entry revoke button (which calls\n`DELETE /api/v1/auth/sessions/{id}`).",
         "operationId": "list_sessions",
         "responses": {
           "200": {
-            "description": "Sessions for the authenticated user",
+            "description": "All active sessions for the current user, including the one that issued this request (marked with `is_current: true`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -359,7 +131,14 @@
             }
           },
           "401": {
-            "description": "Not authenticated"
+            "description": "Not authenticated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -372,15 +151,16 @@
     "/api/v1/auth/sessions/{id}": {
       "delete": {
         "tags": [
-          "Auth"
+          "Auth: Sessions"
         ],
-        "summary": "Revoke a specific session by ID. 404 (not 401/403) for sessions\nowned by other users — keeps the existence of those sessions\ninvisible to the caller.",
+        "summary": "Revoke one of the caller's sessions.",
+        "description": "Ends the session identified by `{id}`, immediately invalidating\nits token. The caller can revoke any of their own sessions,\nincluding the one that issued this request — doing so will end\nthe current login. Sessions belonging to other users are reported\nas `404 Not Found` (no leakage of \"exists but isn't yours\").",
         "operationId": "revoke_session",
         "parameters": [
           {
             "name": "id",
             "in": "path",
-            "description": "Session ID to revoke",
+            "description": "ID of the session to revoke. Obtain from `GET /api/v1/auth/sessions`. Revoking your current session ends the request's own login.",
             "required": true,
             "schema": {
               "type": "string",
@@ -390,13 +170,27 @@
         ],
         "responses": {
           "204": {
-            "description": "Session revoked"
+            "description": "Session revoked. The associated token is no longer accepted."
           },
           "401": {
-            "description": "Not authenticated"
+            "description": "Not authenticated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Session not found or not owned by the caller"
+            "description": "No session with this ID exists, or it belongs to another user. The two cases are deliberately conflated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -406,316 +200,15 @@
         ]
       }
     },
-    "/api/v1/health": {
-      "get": {
-        "tags": [
-          "Health"
-        ],
-        "summary": "Liveness + readiness probe — confirms the database is reachable.\nReturns 503 (still as JSON) when the round-trip fails so an\norchestrator can distinguish \"process up, dependency down\" from\n\"process down.\"",
-        "operationId": "health",
-        "responses": {
-          "200": {
-            "description": "Service is healthy",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Service is degraded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/repos": {
+    "/api/v1/u/anon/repos/pathstash/graphs": {
       "post": {
         "tags": [
-          "Repos"
+          "Anon"
         ],
-        "summary": "Create a new repository owned by the caller. Names are unique per\nowner; collisions return 409.",
-        "operationId": "create_repo",
+        "summary": "Upload a graph anonymously as the `anon` user. No authentication\nrequired; the resulting graph is always `Unlisted` and reachable\nonly via the returned share URL.",
+        "operationId": "create_anon_graph",
         "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateRepoBody"
-              },
-              "example": {
-                "description": "Agent runs from the rebuild week",
-                "name": "my-traces"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Created repository",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Repo"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not authenticated"
-          },
-          "409": {
-            "description": "A repo with this name already exists for the caller"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
-    "/api/v1/repos/{owner}/{repo}": {
-      "get": {
-        "tags": [
-          "Repos"
-        ],
-        "summary": "Fetch a repository by `owner/name`. Public read; the contained\npaths/graphs enforce their own visibility on read.",
-        "operationId": "get_repo",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Repository details",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Repo"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Repos"
-        ],
-        "summary": "Delete a repository, cascading to all paths and graphs it contains.\nOwner-only.",
-        "operationId": "delete_repo",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Deleted"
-          },
-          "401": {
-            "description": "Not authorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      },
-      "patch": {
-        "tags": [
-          "Repos"
-        ],
-        "summary": "Update a repo's mutable fields. Only the owner may call this;\nnon-owners get 401.",
-        "operationId": "update_repo",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateRepoBody"
-              },
-              "example": {
-                "description": "Updated tagline"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Updated repository",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Repo"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not authorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
-    "/api/v1/repos/{owner}/{repo}/graphs": {
-      "get": {
-        "tags": [
-          "Graphs"
-        ],
-        "summary": "List graphs in a repo. Public read.",
-        "operationId": "list_graphs",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "description": "Max items to return. Default and cap are server-configurable;\nout-of-range values are clamped silently.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of graphs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Graph"
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Graphs"
-        ],
-        "summary": "Upload a multi-path Graph document. Inline paths (`PathOrRef::Path`)\nare persisted as new TracePaths in the same repo, deduped by their\ntoolpath ID. Refs to existing paths are kept as-is. Caller must own\nthe repo.",
-        "operationId": "create_graph",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
+          "description": "Toolpath Graph document. The body's `visibility` field is ignored; anon uploads are always `Unlisted`.",
           "content": {
             "application/json": {
               "schema": {
@@ -727,586 +220,59 @@
         },
         "responses": {
           "201": {
-            "description": "Created graph",
+            "description": "Graph stored; the `url` in the response is the share link.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Graph"
+                  "$ref": "#/components/schemas/GraphDocumentResponse"
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid document"
-          },
-          "401": {
-            "description": "Not authorized"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
-    "/api/v1/repos/{owner}/{repo}/graphs/{slug}": {
-      "get": {
-        "tags": [
-          "Graphs"
-        ],
-        "summary": "Fetch a graph with its full reconstructed multi-path document.\nPublic read; constituent path visibility is enforced when those\npaths are accessed individually.",
-        "operationId": "get_graph",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "slug",
-            "in": "path",
-            "description": "Graph slug, or the graph's UUID for unguessable share-by-link access",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Graph details",
+            "description": "Document failed to parse as a toolpath Graph.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Graph"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
           },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Graphs"
-        ],
-        "summary": "Delete a graph. Owner only. Detaches but does not delete the\nconstituent TracePaths — those remain reachable as standalone paths.",
-        "operationId": "delete_graph",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "slug",
-            "in": "path",
-            "description": "Graph slug",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Deleted"
-          },
-          "401": {
-            "description": "Not authorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
-    "/api/v1/repos/{owner}/{repo}/paths": {
-      "get": {
-        "tags": [
-          "Paths"
-        ],
-        "summary": "List paths in a repo. Visibility-filtered: callers see all paths if\nthey own the repo, public paths only otherwise.",
-        "operationId": "list_paths",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "description": "Max items to return. Default and cap are server-configurable;\nout-of-range values are clamped silently.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of paths",
+          "413": {
+            "description": "Request body too large.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TracePath"
-                  }
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             }
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Paths"
-        ],
-        "summary": "Upload a single-path graph as a new path under `{owner}/{repo}`.\nMulti-path graphs go to `POST .../graphs`. Caller must own the repo.",
-        "operationId": "create_path",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UploadPathBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Created path",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TracePath"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid document"
-          },
-          "401": {
-            "description": "Not authorized"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
-    "/api/v1/repos/{owner}/{repo}/paths/{slug}": {
-      "get": {
-        "tags": [
-          "Paths"
-        ],
-        "summary": "Fetch a path with its full reconstructed document. Visibility-gated:\nprivate paths return 404 unless the caller owns the repo or\naddressed the path by its UUID (the unguessable share-by-link form).\nConditional via `If-None-Match`.",
-        "operationId": "get_path",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "slug",
-            "in": "path",
-            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Path details",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TracePath"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Paths"
-        ],
-        "summary": "Delete a path. Owner only. Cascades to its step rows.",
-        "operationId": "delete_path",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "slug",
-            "in": "path",
-            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Deleted"
-          },
-          "401": {
-            "description": "Not authorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      },
-      "patch": {
-        "tags": [
-          "Paths"
-        ],
-        "summary": "Patch a path's mutable fields — currently just `is_public`. Owner\nonly. Use this to flip a private upload public for sharing.",
-        "operationId": "update_path",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "slug",
-            "in": "path",
-            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdatePathBody"
-              },
-              "example": {
-                "is_public": true
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Updated path",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TracePath"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not authorized"
-          },
-          "404": {
-            "description": "Not found"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
-    "/api/v1/repos/{owner}/{repo}/paths/{slug}/chat": {
-      "get": {
-        "tags": [
-          "Paths"
-        ],
-        "summary": "Render the path's HEAD-ancestor chain as a chat-projection — a\ndensely-indexed, pre-classified, optionally pre-rendered transcript.\nVisibility-gated like `GET .../paths/{slug}`.",
-        "operationId": "get_path_chat",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "slug",
-            "in": "path",
-            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "include_html",
-            "in": "query",
-            "description": "Render `text` and `thinking` fields to sanitized HTML server-side.\nDefaults to true; set false for lighter payloads when the client\nrenders markdown lazily.",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Chat-shaped projection of the path's HEAD-ancestor chain",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatProjection"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/api/v1/repos/{owner}/{repo}/paths/{slug}/download": {
-      "get": {
-        "tags": [
-          "Paths"
-        ],
-        "summary": "Stream the path's reconstructed Graph document as raw JSON — the\ninverse of `POST .../paths`. Visibility-gated; private paths return\n404 unless owner-authenticated or addressed by UUID.",
-        "operationId": "download_path",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "path",
-            "description": "Owner username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "repo",
-            "in": "path",
-            "description": "Repository name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "slug",
-            "in": "path",
-            "description": "Path slug, or the path's UUID for unguessable share-by-link access",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Toolpath JSON file download",
-            "content": {
-              "application/json": {}
-            }
-          },
-          "404": {
-            "description": "Not found"
-          }
-        }
-      }
-    },
-    "/api/v1/signups": {
-      "post": {
-        "tags": [
-          "Signups"
-        ],
-        "summary": "Capture an email + source pair from a marketing form. Idempotent\nper (email, source); per-IP rate-limited; the response intentionally\ncarries no detail so a caller can't enumerate which addresses are\nalready on a list.",
-        "operationId": "create_signup",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateSignupBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Signup recorded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreateSignupResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid email or source"
           },
           "429": {
-            "description": "Rate limit exceeded"
+            "description": "Rate limit exceeded; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         }
       }
     },
-    "/api/v1/users/me": {
+    "/api/v1/u/me": {
       "get": {
         "tags": [
           "Users"
         ],
-        "summary": "Return the authenticated caller's full profile, including their\nemail — fields no other endpoint exposes.",
+        "summary": "Return the authenticated user's full profile.",
+        "description": "Canonical \"who am I?\" endpoint. Returns the user matching the\ncaller's bearer token. The returned shape matches the public\n`GET /api/v1/u/{username}` response with one difference: `email`\nis included here because the caller is reading their own profile.",
         "operationId": "get_me",
         "responses": {
           "200": {
-            "description": "Current authenticated user",
+            "description": "The authenticated user, including the private `email` field.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1316,7 +282,14 @@
             }
           },
           "401": {
-            "description": "Not authenticated"
+            "description": "Not authenticated. Send `Authorization: Bearer <token>`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1325,21 +298,23 @@
           }
         ]
       },
-      "patch": {
+      "put": {
         "tags": [
           "Users"
         ],
-        "summary": "Patch the caller's mutable profile fields. Unspecified fields are\nleft untouched; pass `null` to clear an optional field.",
+        "summary": "Replace the authenticated user's editable profile fields.",
+        "description": "PUT semantics: the body is the new state. Fields not present\n(or `null`) are cleared. Username, email, and avatar are not\neditable here. Returns the updated user.",
         "operationId": "update_me",
         "requestBody": {
+          "description": "Complete new state of the editable profile fields. Missing or `null` clears the field — send the current value to preserve it.",
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/UpdateProfileBody"
               },
               "example": {
-                "bio": "Curious about agents.",
-                "display_name": "Alice"
+                "bio": "Wonderland correspondent.",
+                "display_name": "Alice Liddell"
               }
             }
           },
@@ -1347,7 +322,7 @@
         },
         "responses": {
           "200": {
-            "description": "Profile updated",
+            "description": "Profile updated; returns the post-update user.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1357,7 +332,14 @@
             }
           },
           "401": {
-            "description": "Not authenticated"
+            "description": "Not authenticated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1367,53 +349,18 @@
         ]
       }
     },
-    "/api/v1/users/{username}": {
+    "/api/v1/u/{owner}/repos": {
       "get": {
         "tags": [
-          "Users"
+          "Repos"
         ],
-        "summary": "Return another user's public profile. Email is never included for\nusers other than the caller; use `/users/me` for the caller's own\nfull profile.",
-        "operationId": "get_user",
-        "parameters": [
-          {
-            "name": "username",
-            "in": "path",
-            "description": "Username",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "User profile",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/User"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "User not found"
-          }
-        }
-      }
-    },
-    "/api/v1/users/{username}/repos": {
-      "get": {
-        "tags": [
-          "Users"
-        ],
-        "summary": "List a user's repositories. Public read; visibility filtering on\nthe contained paths/graphs happens at their respective endpoints,\nnot here.",
+        "summary": "List repositories owned by `{owner}`. The DB layer applies the\nvisibility filter in SQL using the resolved `Viewer`: owners get\nall three states (Public + Unlisted + Private); non-owners get\n`Public` only. There is no caller-side branching, and no helper\nthat returns \"everything\" without a viewer.",
         "operationId": "list_repos",
         "parameters": [
           {
-            "name": "username",
+            "name": "owner",
             "in": "path",
-            "description": "Username",
+            "description": "Owner username",
             "required": true,
             "schema": {
               "type": "string"
@@ -1422,7 +369,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Max items to return. Default and cap are server-configurable;\nout-of-range values are clamped silently.",
+            "description": "Optional. Server-bounded; out-of-range values are clamped silently.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -1432,7 +379,7 @@
         ],
         "responses": {
           "200": {
-            "description": "User's repositories",
+            "description": "Owner's repositories. Owners see all repos; other viewers see only public repos.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1445,7 +392,1226 @@
             }
           },
           "404": {
-            "description": "User not found"
+            "description": "Owner not found"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ]
+      },
+      "post": {
+        "tags": [
+          "Repos"
+        ],
+        "summary": "Create a new repository owned by the authenticated user.",
+        "description": "The new repo's owner is taken from the session — there is no way\nto create a repo on behalf of someone else through this endpoint.\n(Owner usernames in URLs are read-only metadata; ownership is set\nonce at creation.) The repo defaults to public visibility.\n\nReturns the created `Repo` with its server-assigned UUID and\ntimestamps.",
+        "operationId": "create_repo",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Owner username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Name and optional description for the new repo. Owner is implicit (the authenticated user).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRepoBody"
+              },
+              "example": {
+                "description": "Captured runs of my coding agent.",
+                "name": "agent-traces"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Repository created. Body is the new `Repo`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Repo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authorized to create under this owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An owner already has a repo with this `name`. Names are unique per owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}": {
+      "get": {
+        "tags": [
+          "Repos"
+        ],
+        "summary": "Fetch a repository by `(owner, name)`.",
+        "description": "Public read; no authentication required. Returns the `Repo`\nincluding description, README, visibility flag, and timestamps. To\nlist a repo's paths or graphs, follow up with the corresponding\n`/paths` and `/graphs` collection endpoints.\n\n**Reserved owners.** `me` and `anon` are reserved namespaces; this\nendpoint returns 404 for either. Use `/api/v1/anon/...` for\nanonymous content and `/api/v1/u/me` (and `/api/v1/u/{owner}/repos`) for\nthe calling user's own resources.\n\n**Visibility.** `can_read` is enforced: `Public` returns to anyone,\n`Unlisted` (system-managed; URL-addressable) returns to anyone,\n`Private` returns only to the owner — others get `404`. Repos are\naddressed by guessable name, so there's no share-by-link at this\nlevel for `Private` repos. (Per-graph/per-path share-by-link inside\n`Public` repos is unaffected — those still gate on their own\nvisibility.)",
+        "operationId": "get_repo",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Owner username. The reserved values `me` and `anon` always 404.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name (unique per owner).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Repo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner unknown, repo unknown for that owner, repo is secret and the viewer is not the owner, or owner is a reserved namespace (`me`, `anon`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ]
+      },
+      "put": {
+        "tags": [
+          "Repos"
+        ],
+        "summary": "Replace a repository's editable fields (name, description, README).",
+        "description": "Owner-only: the authenticated user must match `{owner}`. Reserved\nowners (`me`, `anon`) always return 404.\n\nPUT semantics: the body is the new state. To preserve any field,\nsend its current value; missing or `null` clears the nullable\nfields. Visibility is changed through the separate `/visibility`\nsub-resource. Renaming changes the canonical URL of the repo (and\nevery nested resource), so callers should expect old links to 404\nafterward.",
+        "operationId": "update_repo",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Owner username; must match the authenticated user. `me`/`anon` always 404.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name (current — pre-rename).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Complete new state of the editable repo fields. `name` is required; missing/`null` clears `description` and `readme`. Send back the current values to preserve them.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRepoBody"
+              },
+              "example": {
+                "description": "Captured runs of my coding agent (now with vendor labels).",
+                "name": "agent-traces",
+                "readme": "# agent-traces\n\nUploaded via `pathbase push`."
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Repository updated; returns the post-update `Repo`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Repo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated, or the caller is not the owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner unknown, repo unknown, or owner is a reserved namespace (`me`, `anon`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Renaming to a name already used by another of this owner's repos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Repos"
+        ],
+        "summary": "Delete a repository and all its contents.",
+        "description": "Owner-only. Removes the repo and all paths and graphs in it.\nIrreversible. Reserved owners (`me`, `anon`) always return 404.",
+        "operationId": "delete_repo",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Owner username; must match the authenticated user. `me`/`anon` always 404.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Repository (and all paths and graphs in it) deleted."
+          },
+          "401": {
+            "description": "Not authenticated, or the caller is not the owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner unknown, repo unknown, or owner is a reserved namespace (`me`, `anon`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "List graphs in a repository.",
+        "description": "Returns up to `?limit=` graphs under `{owner}/{repo}`, ordered by\ncreation time. The DB layer applies the visibility filter in SQL\nusing the resolved `Viewer`: the owner sees all three states\n(`Public` + `Unlisted` + `Private`) so the UI can render the\n`unlisted` pill and offer a show/hide toggle; everyone else sees\nonly `Public`. Non-public graphs remain reachable by direct UUID\nshare-link regardless of listing visibility.",
+        "operationId": "list_graphs",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Username of the repository's owner.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name within the owner's namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Optional. Server-bounded; out-of-range values are clamped silently.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of graphs in the repository, capped by `?limit=`. Each entry carries the graph row plus `path_count` and the `url` clients should link to. Owners see all graphs; other viewers see only public graphs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GraphSummaryResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner unknown, repo unknown for that owner, or owner is a reserved namespace (`me`, `anon`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ]
+      },
+      "post": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Create a graph from a multi-path toolpath document.",
+        "description": "Inline path entries (`PathOrRef::Path`) are admitted into the same\nworkspace as the graph (deduped by toolpath ID; an existing match\nis linked rather than re-created). Refs to existing paths\n(`PathOrRef::Ref`) are kept as ID references and not re-stored.\n\nCaller must own `{owner}/{repo}`. The `document` field must parse\nas a `toolpath::v1::Graph`.",
+        "operationId": "create_graph",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Username of the repository's owner. Must match the authenticated caller.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name within the owner's namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Multi-path toolpath Graph document, optional display name, and visibility (`public`/`unlisted`/`private`, default `unlisted`). Inline paths are admitted into the workspace; refs are kept as ID references.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadGraphBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The newly created graph with its server-assigned UUID, the reconstructed multi-path `document`, and the canonical `url`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphDocumentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Document failed to parse as a toolpath Graph.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid bearer token, or the authenticated user does not own the target repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Fetch a single graph with its full reconstructed multi-path\ndocument. `Public` and `Unlisted` graphs are readable by anyone\n(possession of the UUID is the share token for `Unlisted`);\n`Private` graphs require the caller to authenticate as the owner.\nNon-owner reads of a `Private` graph return `404` — same response as\n\"doesn't exist\" so the gate doesn't leak existence.",
+        "description": "Responses carry an `ETag`; conditional requests using\n`If-None-Match` return `304 Not Modified` when the representation\nis unchanged.",
+        "operationId": "get_graph",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Username of the repository's owner.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name within the owner's namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Graph UUID. For `Unlisted` graphs the UUID is the share token; `Private` graphs additionally require owner authentication.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The graph row, its `path_count`, the reconstructed multi-path `document`, and the canonical `url`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphDocumentResponse"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the current ETag."
+          },
+          "404": {
+            "description": "Owner, repository, or graph not found — or graph is `Private` and the caller isn't the owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Delete a graph. Owner only — knowing the UUID is enough to *read*\n(it's the share token) but not enough to mutate.",
+        "operationId": "delete_graph",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Owner username — must match the authenticated caller.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Graph UUID.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Graph deleted; constituent paths remain in the workspace."
+          },
+          "401": {
+            "description": "Not authorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/download": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Stream the graph's reconstructed Graph document as raw JSON — the\ninverse of `POST .../graphs`. `Public` and `Unlisted` graphs\ndownload for anyone with the UUID; `Private` graphs require owner\nauthentication and 404 for everyone else (mirrors \"doesn't exist\").",
+        "operationId": "download_graph",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Toolpath Graph JSON file download. Send the returned `ETag` back as `If-None-Match` on a subsequent request to receive 304 when unchanged.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`attachment; filename=\"…\"`. Filename derives from the graph's display `name` when set, otherwise the graph UUID."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong ETag for conditional GETs. Echo as `If-None-Match` on subsequent requests."
+              }
+            },
+            "content": {
+              "application/json": {}
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the current ETag."
+          },
+          "404": {
+            "description": "Owner, repository, or graph not found — or graph is `Private` and the caller isn't the owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/paths": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "List the paths that belong to a graph, in graph-defined order.\nIf the parent graph is readable to the caller (`Public`/`Unlisted`,\nor `Private` for the owner), all of its constituent paths are\nreturned; the parent's UUID is the share token. A `Private` graph\n404s for non-owners — same as the per-graph GET.",
+        "operationId": "list_graph_paths",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Optional. Server-bounded; out-of-range values are clamped silently.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of constituent paths in graph-defined order. Each entry carries the path row, `step_count`, and the `url` clients should link to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TracePathSummaryResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/paths/{path_id}": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Fetch a constituent path with its full reconstructed document.\nConditional via `If-None-Match`.",
+        "operationId": "get_graph_path",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Path row plus `step_count`, the reconstructed Graph `document`, and the canonical `url`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TracePathDocumentResponse"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the current ETag."
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Delete a constituent path. Owner only. Cascades to its step rows\nAND removes the junction row from this graph.",
+        "operationId": "delete_graph_path",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Patch a constituent path's mutable fields — currently just\n`visibility`. Owner only.",
+        "operationId": "update_graph_path",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGraphPathBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Path updated; returns the path row plus its canonical `url`. Re-fetch the path's full document via the GET endpoint when needed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TracePathResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/paths/{path_id}/chat": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Render the path's HEAD-ancestor chain as a chat-projection — a\ndensely-indexed, pre-classified, optionally pre-rendered\ntranscript.",
+        "operationId": "get_graph_path_chat",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "include_html",
+            "in": "query",
+            "description": "Render `text` and `thinking` fields to sanitized HTML\nserver-side. Defaults to true; set false for lighter payloads\nwhen the client renders markdown lazily.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatProjection"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/visibility": {
+      "patch": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Toggle a graph's public/secret visibility. Owner only.",
+        "operationId": "update_graph_visibility",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGraphVisibilityBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Visibility updated; returns the graph row plus its canonical `url`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/visibility": {
+      "patch": {
+        "tags": [
+          "Repos"
+        ],
+        "summary": "Flip a repo's visibility between `public` and `private`. The\n`unlisted` state is system-only — owner cannot set it, and any\nrepo currently `unlisted` (e.g., the seeded `pathstash`) is locked.",
+        "operationId": "update_repo_visibility",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Owner username; must match the authenticated user. `me`/`anon` always 404.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "New visibility. Repos accept `public` or `private` only — `unlisted` is system-only.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepoVisibilityBody"
+              },
+              "example": {
+                "visibility": "public"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Visibility updated; returns the post-update `Repo`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Repo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body contained `unlisted`, which is not accepted on repos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated, or the caller is not the owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Repo's current visibility is `Unlisted` (system-pinned); user cannot modify.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner unknown, repo unknown, or owner is reserved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{username}": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Look up a user's public profile by username.",
+        "description": "No authentication required. Returns the same `User` shape as\n`/u/me` with one guarantee: `email` is always `null` here — that\nfield is only ever populated for the caller's own profile via\n`GET /api/v1/u/me`.\n\n**Reserved namespaces.** The literal usernames `me` and `anon` are\nreserved and always return 404 from this endpoint. Use\n`GET /api/v1/u/me` for the calling user and `/api/v1/u/anon/...`\nfor anonymous content.",
+        "operationId": "get_user",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "description": "Public username. Lowercase ASCII alphanumerics with `-`/`_`. The reserved values `me` and `anon` always 404 here — use `/api/v1/u/me` and `/api/v1/anon/...` respectively.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public user profile. `email` is always null here; use `/api/v1/u/me` to read your own email.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No user with that username, or the username is a reserved namespace (`me`, `anon`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1480,35 +1646,33 @@
           }
         }
       },
-      "AnonUploadBody": {
-        "type": "object",
-        "required": [
-          "document"
-        ],
-        "properties": {
-          "document": {
-            "type": "object"
-          }
-        }
+      "ApiErrorCode": {
+        "type": "string",
+        "description": "Closed set of error codes the API can emit. Renders as a snake_case\nstring on the wire (`not_found`, `unauthorized`, …) and is declared\nas an OpenAPI enum so generated clients can switch on it\nexhaustively. Add a variant here, never a free-form string in\n[`ApiErrorResponse::code`].",
+        "enum": [
+          "not_found",
+          "unauthorized",
+          "bad_request",
+          "conflict",
+          "visibility_locked",
+          "internal_error"
+        ]
       },
-      "AnonUploadResponse": {
+      "ApiErrorResponse": {
         "type": "object",
+        "description": "Standard error response envelope for all 4xx/5xx responses.\n\nEvery non-2xx response from the API has this shape. The `code`\nis a short, stable token from a closed enum suitable for\nprogrammatic dispatch; the `error` is a human-readable message\nsuitable for log/UI display.",
         "required": [
-          "path",
-          "id",
-          "share_url"
+          "code",
+          "error"
         ],
         "properties": {
-          "id": {
-            "type": "string"
+          "code": {
+            "$ref": "#/components/schemas/ApiErrorCode",
+            "description": "Stable token identifying the error class. Clients should\nbranch on this rather than parsing `error`."
           },
-          "path": {
+          "error": {
             "type": "string",
-            "description": "Site-relative path to the uploaded trace's frontend page, e.g.\n`/anon/pathstash/paths/<uuid>`. Suitable for in-app navigation."
-          },
-          "share_url": {
-            "type": "string",
-            "description": "Absolute URL for sharing externally."
+            "description": "Human-readable error message. Suitable for log/UI display; do\nnot parse for branching."
           }
         }
       },
@@ -1525,7 +1689,8 @@
             "minimum": 0
           },
           "path": {
-            "$ref": "#/components/schemas/TracePath"
+            "$ref": "#/components/schemas/TracePathDocumentResponse",
+            "description": "The path's full HATEOAS-decorated document after the append."
           }
         }
       },
@@ -1690,6 +1855,7 @@
       },
       "CliGrantResponse": {
         "type": "object",
+        "description": "Response body for `POST /api/v1/auth/cli/request-grant`.\n\nCarries the human-typeable grant `code` that the user pastes into\nthe pathbase CLI, plus its lifetime. Display the code prominently\nin the UI; do not store it in the URL or log files.",
         "required": [
           "code",
           "expires_in"
@@ -1697,64 +1863,50 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "Display code the browser shows; the user types it into the CLI."
+            "description": "Short, visually unambiguous alphanumeric code. Single-use;\nconsumed by the next call to `/api/v1/auth/cli/redeem`.\nComparison is case-insensitive on redeem."
           },
           "expires_in": {
             "type": "integer",
             "format": "int64",
-            "description": "Seconds until the grant expires (10 minutes)."
+            "description": "Lifetime of the grant in seconds, set by the server."
           }
         }
       },
       "CreateRepoBody": {
         "type": "object",
+        "description": "Request body for `POST /api/v1/u/{owner}/repos`.\n\nCreates a repository owned by the authenticated user. The (owner,\nname) pair must be unique; collisions return 409.",
         "required": [
           "name"
         ],
         "properties": {
           "description": {
             "type": "string",
+            "description": "Optional short description shown next to the repo name in\nlistings. Free-form; no length cap.",
             "nullable": true
           },
           "name": {
-            "type": "string"
-          }
-        }
-      },
-      "CreateSignupBody": {
-        "type": "object",
-        "required": [
-          "email",
-          "source"
-        ],
-        "properties": {
-          "email": {
-            "type": "string"
+            "type": "string",
+            "description": "Repository name. Must be unique among the authenticated user's\nexisting repos. Used as the URL slug at\n`/api/v1/u/{owner}/repos/{repo}`."
           },
-          "source": {
-            "type": "string"
-          }
-        }
-      },
-      "CreateSignupResponse": {
-        "type": "object",
-        "required": [
-          "ok"
-        ],
-        "properties": {
-          "ok": {
-            "type": "boolean"
+          "visibility": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RepoVisibilityInput"
+              }
+            ],
+            "description": "Initial visibility. Defaults to `public` if omitted. The\n`unlisted` state is not accepted on repos — it's reserved for\nthe system-managed pathstash repo and seeded directly in the DB."
           }
         }
       },
       "Graph": {
         "type": "object",
-        "description": "A computation graph — a named ordered collection of paths within a\nrepo. Stored as header metadata plus `(graph_id, path_id, position)`\njunction rows; the full `document` is reconstructed on read.",
+        "description": "A computation graph — a named ordered collection of paths within\na repo. Pure storage shape — the columns on `graphs`. Derived\nproperties (path count, reconstructed document) live on the response\nwrappers that need them (`GraphSummary`, `GraphDocument`).",
         "required": [
           "id",
           "repo_id",
-          "slug",
           "toolpath_id",
+          "visibility",
           "created_at",
           "updated_at"
         ],
@@ -1763,26 +1915,23 @@
             "type": "string",
             "format": "date-time"
           },
-          "document": {
-            "type": "object",
-            "description": "Reconstructed full Graph document with inline paths. Only populated\nby handlers that explicitly fetch the constituent paths and steps.",
-            "nullable": true
-          },
           "header": {
             "type": "object",
-            "description": "Stored graph metadata: `{graph: GraphIdentity, meta?: GraphMeta}` —\nthe toolpath `Graph` minus its `paths`. None when never set.",
+            "description": "Graph metadata: `{graph: GraphIdentity, meta?: GraphMeta}` —\nthe toolpath `Graph` shape minus its `paths`. Absent when not set.",
             "nullable": true
           },
           "id": {
             "type": "string",
             "format": "uuid"
           },
+          "name": {
+            "type": "string",
+            "description": "Optional human-readable label for display. Free-form; no URL\nimplications — graphs are addressed by `id` (UUID) at the wire\nboundary. Defaults from the uploader (filename or caller-\nprovided) and can be edited.",
+            "nullable": true
+          },
           "repo_id": {
             "type": "string",
             "format": "uuid"
-          },
-          "slug": {
-            "type": "string"
           },
           "title": {
             "type": "string",
@@ -1794,52 +1943,102 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility",
+            "description": "Visibility — `Public` is listed and world-readable; `Unlisted`\nis link-share (UUID grants read); `Private` is owner-only."
           }
         }
       },
-      "HealthResponse": {
-        "type": "object",
-        "required": [
-          "status"
-        ],
-        "properties": {
-          "reason": {
-            "type": "string",
-            "nullable": true
+      "GraphDocumentResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Graph"
           },
-          "status": {
-            "type": "string"
+          {
+            "type": "object",
+            "required": [
+              "path_count",
+              "document",
+              "url"
+            ],
+            "properties": {
+              "document": {
+                "type": "object",
+                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }`."
+              },
+              "path_count": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "url": {
+                "type": "string"
+              }
+            }
           }
-        }
+        ],
+        "description": "Wraps a `Graph` with its path count, reconstructed multi-path\ndocument, and the URL. Used by endpoints that promise the full\ndocument on the wire."
       },
-      "LoginBody": {
-        "type": "object",
-        "required": [
-          "email",
-          "password"
-        ],
-        "properties": {
-          "email": {
-            "type": "string"
+      "GraphResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Graph"
           },
-          "password": {
-            "type": "string"
+          {
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            }
           }
-        }
+        ],
+        "description": "`Graph` plus the absolute URL clients should link to."
+      },
+      "GraphSummaryResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Graph"
+          },
+          {
+            "type": "object",
+            "required": [
+              "path_count",
+              "url"
+            ],
+            "properties": {
+              "path_count": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Number of constituent paths in this graph."
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Wraps a `Graph` with its path count plus the URL. Used by listing\nendpoints."
       },
       "RedeemBody": {
         "type": "object",
+        "description": "Request body for `POST /api/v1/auth/cli/redeem`.\n\nCarries the grant code that the user pasted from the browser into\nthe CLI. Whitespace and case-folding are tolerated server-side.",
         "required": [
           "code"
         ],
         "properties": {
           "code": {
-            "type": "string"
+            "type": "string",
+            "description": "The grant code displayed by the browser. Whitespace, dashes,\nand case differences are normalized away (server uppercases and\nstrips non-alphanumerics) before lookup; submit it however the\nuser typed it."
           }
         }
       },
       "RedeemResponse": {
         "type": "object",
+        "description": "Response body for `POST /api/v1/auth/cli/redeem`.\n\nReturns the new bearer token plus the authenticated user. The token\nis shown to the API ONCE; pathbase cannot recover the plaintext if\nit is lost.",
         "required": [
           "token",
           "user"
@@ -1847,42 +2046,22 @@
         "properties": {
           "token": {
             "type": "string",
-            "description": "Long-lived bearer token (`pat_…`). Send as\n`Authorization: Bearer <token>` from CLI calls."
+            "description": "Opaque session bearer token, prefixed `pat_…`. Send as\n`Authorization: Bearer <token>` on subsequent API calls. Treat\nas a secret; only its hash is retained server-side, so it\ncannot be re-shown if lost — the user must re-pair the CLI."
           },
           "user": {
-            "$ref": "#/components/schemas/User"
-          }
-        }
-      },
-      "RegisterBody": {
-        "type": "object",
-        "required": [
-          "username",
-          "email",
-          "password"
-        ],
-        "properties": {
-          "email": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string",
-            "description": "Minimum 8 characters. Stored as an Argon2id hash."
-          },
-          "username": {
-            "type": "string",
-            "description": "Lowercase ASCII alphanumerics, hyphens, and underscores. Must\nnot collide with the reserved `me` / `anon` namespaces."
+            "$ref": "#/components/schemas/User",
+            "description": "The user the CLI is now authenticated as."
           }
         }
       },
       "Repo": {
         "type": "object",
-        "description": "A repository — a named bucket of paths and graphs owned by a single\nuser. The `(owner_id, name)` pair is unique; `name` is also the\nURL-segment (\"alice/my-traces\").",
+        "description": "A repository — a named workspace of paths and graphs owned by a\nsingle user. `name` is unique per owner and serves as the URL\nsegment in `/{owner}/{name}` and nested resources.",
         "required": [
           "id",
           "owner_id",
           "name",
-          "is_public",
+          "visibility",
           "created_at",
           "updated_at"
         ],
@@ -1898,9 +2077,6 @@
           "id": {
             "type": "string",
             "format": "uuid"
-          },
-          "is_public": {
-            "type": "boolean"
           },
           "name": {
             "type": "string"
@@ -1916,11 +2092,36 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility",
+            "description": "Repository visibility. See `Visibility` for the state semantics.\nRepos are user-controllable as `Public`/`Private`; `Unlisted`\nis system-set (e.g., the seeded `pathstash` repo)."
           }
         }
       },
+      "RepoVisibilityBody": {
+        "type": "object",
+        "description": "Body for `PATCH /api/v1/u/{owner}/repos/{repo}/visibility`.",
+        "required": [
+          "visibility"
+        ],
+        "properties": {
+          "visibility": {
+            "$ref": "#/components/schemas/RepoVisibilityInput"
+          }
+        }
+      },
+      "RepoVisibilityInput": {
+        "type": "string",
+        "description": "Write-side narrowing of [`pathbase_core::Visibility`] for repo\nbodies. The repo *read* shape (`Repo.visibility`) still uses the\nfull three-state enum — a `GET` on the seeded `pathstash` repo\nreturns `\"unlisted\"` like always. This type only constrains what\nthe API will *accept* from a client: `Unlisted` is system-pinned,\nusers can't enter or leave it through the API, so it doesn't\nappear in `POST /repos` or `PATCH .../visibility` bodies.\nGenerated clients see only `public | private` on inputs and the\n`Unlisted` write is unreachable by construction. Graph and path\nbodies use the full `Visibility` enum; all three values are legal\nthere.",
+        "enum": [
+          "public",
+          "private"
+        ]
+      },
       "SessionSummary": {
         "type": "object",
+        "description": "One entry of the session list returned by `GET /api/v1/auth/sessions`.\n\nA session is the durable side of an authentication: one entry\nexists for every browser login (`kind = \"web\"`) and every redeemed\nCLI grant (`kind = \"cli\"`). Sessions can be inspected and revoked\nfrom the user's settings UI.",
         "required": [
           "id",
           "kind",
@@ -1930,24 +2131,28 @@
         ],
         "properties": {
           "created_at": {
-            "type": "string"
+            "type": "string",
+            "description": "RFC 3339 timestamp of session creation."
           },
           "expires_at": {
-            "type": "string"
+            "type": "string",
+            "description": "RFC 3339 timestamp at which the session token stops being\naccepted."
           },
           "id": {
-            "type": "string"
+            "type": "string",
+            "description": "Stable session ID. Use this with\n`DELETE /api/v1/auth/sessions/{id}` to revoke."
           },
           "is_current": {
             "type": "boolean",
-            "description": "Marks the session that issued the request; clients should warn\nbefore letting the user revoke it (logs the current device out)."
+            "description": "`true` if this entry corresponds to the session that issued\nthe current request — useful for the UI to mark the \"this\ndevice\" entry and warn before revoking it."
           },
           "kind": {
             "type": "string",
-            "description": "`web` (cookie) or `cli` (bearer token)."
+            "description": "`\"web\"` for browser logins (password, GitHub OAuth, dev login),\n`\"cli\"` for CLI tokens minted via `/api/v1/auth/cli/redeem`."
           },
           "user_agent": {
             "type": "string",
+            "description": "`User-Agent` header captured at session creation. Useful for\n\"is that you on Firefox?\" recognition. May be absent for\nclients that omit the header.",
             "nullable": true
           }
         }
@@ -2024,16 +2229,38 @@
           }
         }
       },
+      "ToolpathDocument": {
+        "type": "object",
+        "description": "A toolpath v1 Graph document. See <https://github.com/empathic/toolpath>\nfor the full schema; the wire format is JSON with top-level fields\n`graph`, `paths`, and optional `meta`.\n\nThis is a marker schema used to generate an OpenAPI reference. The\ncanonical Rust type is `toolpath::v1::Graph` from an external crate\nthat does not derive `utoipa::ToSchema`, so we describe the shape\nwith `serde_json::Value`-typed fields here. Generated clients will\nsee a permissive object shape; they should defer real validation\nto the toolpath crate.",
+        "required": [
+          "graph",
+          "paths"
+        ],
+        "properties": {
+          "graph": {
+            "type": "object",
+            "description": "Graph identity and head pointer."
+          },
+          "meta": {
+            "type": "object",
+            "description": "Optional document metadata (title, description). Free-form\nobject; clients should defer real validation to the toolpath\ncrate.",
+            "nullable": true
+          },
+          "paths": {
+            "type": "array",
+            "items": {},
+            "description": "One or more `PathOrRef` entries."
+          }
+        }
+      },
       "TracePath": {
         "type": "object",
-        "description": "A single agent trace path within a repo. Stored in three pieces:\nheader metadata (here), step rows (in `path_steps`), and the\nreconstructed full `document` (re-assembled on read for handlers\nthat need it).",
+        "description": "A single agent trace path within a repo. Pure storage shape — the\ncolumns on `paths`. Derived properties (step count, reconstructed\ndocument) live on the response wrappers that need them\n(`TracePathSummary`, `TracePathDocument`).",
         "required": [
           "id",
           "repo_id",
-          "slug",
           "toolpath_id",
-          "step_count",
-          "is_public",
+          "visibility",
           "created_at",
           "updated_at"
         ],
@@ -2042,33 +2269,23 @@
             "type": "string",
             "format": "date-time"
           },
-          "document": {
-            "type": "object",
-            "description": "Reconstructed full Graph document. Only populated by handlers that\nexplicitly fetch the steps (e.g. single-path GET, download, chat).\nListing endpoints leave this None to avoid N+1 step fetches.",
-            "nullable": true
-          },
           "header": {
             "type": "object",
-            "description": "Stored path metadata: `{path: PathIdentity, meta?: PathMeta}` — the\ntoolpath `Path` minus its `steps`. None when never set.",
+            "description": "Path metadata: `{path: PathIdentity, meta?: PathMeta}` — the\ntoolpath `Path` shape minus its `steps`. Absent when not set.",
             "nullable": true
           },
           "id": {
             "type": "string",
             "format": "uuid"
           },
-          "is_public": {
-            "type": "boolean"
+          "name": {
+            "type": "string",
+            "description": "Optional human-readable label for display. Free-form; no URL\nimplications — paths are addressed by `id` (UUID) at the wire\nboundary. Defaults from the uploader (filename or caller-\nprovided) and can be edited.",
+            "nullable": true
           },
           "repo_id": {
             "type": "string",
             "format": "uuid"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "step_count": {
-            "type": "integer",
-            "format": "int32"
           },
           "title": {
             "type": "string",
@@ -2080,85 +2297,182 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility",
+            "description": "Visibility — `Public` is listed and world-readable; `Unlisted`\nis link-share (UUID grants read); `Private` is owner-only."
           }
         }
       },
-      "UpdatePathBody": {
+      "TracePathDocumentResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TracePath"
+          },
+          {
+            "type": "object",
+            "required": [
+              "step_count",
+              "document",
+              "url"
+            ],
+            "properties": {
+              "document": {
+                "type": "object",
+                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}] }`."
+              },
+              "step_count": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Wraps a `TracePath` with its step count, reconstructed Graph\ndocument, and the URL. Used by endpoints that promise the full\ndocument (single-path GET, append-steps response)."
+      },
+      "TracePathResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TracePath"
+          },
+          {
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "Absolute URL for this path's web page. UUID-addressed: works\nregardless of visibility (knowing the UUID is the share\ntoken for secret resources)."
+              }
+            }
+          }
+        ],
+        "description": "`TracePath` plus the absolute URL clients should link to."
+      },
+      "TracePathSummaryResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TracePath"
+          },
+          {
+            "type": "object",
+            "required": [
+              "step_count",
+              "url"
+            ],
+            "properties": {
+              "step_count": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Number of steps in this path."
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Wraps a `TracePath` with its step count plus the URL. Used by\nlisting endpoints and any single-row reads that surface the count."
+      },
+      "UpdateGraphPathBody": {
         "type": "object",
         "properties": {
-          "is_public": {
-            "type": "boolean",
-            "nullable": true
+          "visibility": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Visibility"
+              }
+            ]
+          }
+        }
+      },
+      "UpdateGraphVisibilityBody": {
+        "type": "object",
+        "description": "Body for `PATCH /api/v1/u/{owner}/repos/{repo}/graphs/{id}/visibility`.",
+        "required": [
+          "visibility"
+        ],
+        "properties": {
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility",
+            "description": "New graph visibility. `public` lists in feeds and is anonymously\nreadable; `unlisted` hides from listings but stays reachable via\nthe UUID share link; `private` restricts read to the owner."
           }
         }
       },
       "UpdateProfileBody": {
         "type": "object",
+        "description": "Body for `PUT /api/v1/u/me`.\n\nCarries the complete replacement state of the editable profile\nfields. PUT semantics: the body IS the new value — fields not\npresent (or set to `null`) are cleared. To preserve an existing\nvalue, send it back. Read the current values from `GET /u/me`.\n\nUsername, email, and avatar are NOT editable here — username is\nimmutable, email is bound to the auth provider, and avatar comes\nfrom the OAuth provider's profile.",
         "properties": {
           "bio": {
             "type": "string",
+            "description": "Free-form short biography rendered on the user's public\nprofile. Missing or `null` clears the field. No length cap is\nenforced at the API layer; expect Markdown but no rendering\nguarantees.",
             "nullable": true
           },
           "display_name": {
             "type": "string",
+            "description": "Human-readable display name shown next to the username on\nprofile pages and trace headers. Missing or `null` clears the\nfield (the UI then falls back to the bare username).",
             "nullable": true
           }
         }
       },
       "UpdateRepoBody": {
         "type": "object",
+        "description": "Request body for `PUT /api/v1/u/{owner}/repos/{repo}`.\n\nCarries the complete replacement state of the editable repo\nfields. PUT semantics: every field is written. To preserve an\nexisting value, send it back; missing or `null` for the nullable\nfields clears them. Read the current state from `GET /repos/{repo}`\nfirst if the form doesn't already have it.\n\nVisibility is NOT editable here — it lives at the sub-resource\n`/repos/{repo}/visibility` for two reasons: (1) it's a single\nwell-defined op clients flip independently of content edits, and\n(2) `Unlisted` is system-only and that gate is cleaner to enforce\non its own endpoint.",
+        "required": [
+          "name"
+        ],
         "properties": {
           "description": {
             "type": "string",
+            "description": "New description. Missing or `null` clears the field.",
             "nullable": true
           },
           "name": {
             "type": "string",
-            "nullable": true
+            "description": "New repository name. Required (the column is non-nullable —\nthere is no \"no name\" state). Renames must be unique among\nthis owner's repos (409 on collision). Renaming changes the\nURL of the repo and every nested resource — clients holding\nold URLs will 404 afterward."
           },
           "readme": {
             "type": "string",
+            "description": "New README body (free-form text/Markdown). Missing or `null`\nclears the field. No length cap is enforced at the API layer.",
             "nullable": true
           }
         }
       },
       "UploadGraphBody": {
         "type": "object",
+        "description": "Request body for `POST /api/v1/u/{owner}/repos/{repo}/graphs`.\n\nThe `document` field carries a multi-path toolpath Graph; inline\npath entries are admitted into the workspace and deduped by their\ntoolpath ID, refs are kept as ID references.",
         "required": [
-          "slug",
           "document"
         ],
         "properties": {
           "document": {
-            "type": "object"
+            "$ref": "#/components/schemas/ToolpathDocument",
+            "description": "The toolpath v1 Graph document with one or more `PathOrRef`\nentries. Inline paths are admitted into the same workspace as\nthe graph; refs are kept as ID references to existing paths."
           },
-          "slug": {
-            "type": "string"
-          }
-        }
-      },
-      "UploadPathBody": {
-        "type": "object",
-        "required": [
-          "slug",
-          "document"
-        ],
-        "properties": {
-          "document": {
-            "type": "object"
+          "name": {
+            "type": "string",
+            "description": "Optional human-readable display label. Free-form; no URL or\nuniqueness implications — the server addresses the created\ngraph by its UUID `id` in the response. Defaults to whatever\nthe uploader (web/CLI) chose to send, typically the filename.",
+            "nullable": true
           },
-          "is_public": {
-            "type": "boolean",
-            "description": "Defaults to true. Set false for secret/unlisted paths (e.g. pathstash)."
-          },
-          "slug": {
-            "type": "string"
+          "visibility": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Visibility"
+              }
+            ],
+            "description": "Graph visibility. Omitted defaults to `unlisted` —\nreachable only via the graph's UUID share link or to the\nauthenticated owner. Flip later via `PATCH\n/graphs/{id}/visibility`."
           }
         }
       },
       "User": {
         "type": "object",
-        "description": "A registered Pathbase account. `email` is optional because GitHub\nOAuth users can have a private email; CLI / API consumers see the\ncaller's own email via `/users/me` but never another user's.",
+        "description": "A registered Pathbase account. `email` is optional because GitHub\nOAuth users can have a private email; CLI / API consumers see the\ncaller's own email via `/u/me` but never another user's.",
         "required": [
           "id",
           "username",
@@ -2184,6 +2498,7 @@
           },
           "email": {
             "type": "string",
+            "description": "Caller's own email. Populated only by `GET /api/v1/u/me` (the\nauthenticated self-read). The public profile endpoint\n`GET /api/v1/u/{username}` always returns `null` here; emails\nare never exposed across users.",
             "nullable": true
           },
           "id": {
@@ -2198,6 +2513,15 @@
             "type": "string"
           }
         }
+      },
+      "Visibility": {
+        "type": "string",
+        "description": "The visibility state of a `Repo`, `TracePath`, or `Graph`. Used uniformly\nacross the three entities at the storage and wire layers.\n\n- `Public`: appears in public and owner listings, readable by anyone.\n- `Unlisted`: hidden from default listings (even from the owner), but\n  readable by anyone in possession of the resource's URL/ID. The\n  resource ID is the access gate — for paths/graphs that's the UUID;\n  for repos it's a system-pinned state used by `pathstash` only.\n- `Private`: hidden from public listings, listed only to the owner,\n  readable only by the owner.",
+        "enum": [
+          "public",
+          "unlisted",
+          "private"
+        ]
       }
     },
     "securitySchemes": {
@@ -2210,36 +2534,28 @@
   },
   "tags": [
     {
-      "name": "Health",
-      "description": "Liveness/readiness"
+      "name": "Auth: CLI",
+      "description": "CLI pairing — request a short-lived grant code and redeem it for a `pat_…` bearer token."
     },
     {
-      "name": "Auth",
-      "description": "Authentication"
+      "name": "Auth: Sessions",
+      "description": "Inspect and revoke the caller's active sessions (browser logins and CLI tokens)."
     },
     {
       "name": "Users",
-      "description": "User profiles"
+      "description": "User profiles and ownership listings."
     },
     {
       "name": "Repos",
-      "description": "Repositories"
-    },
-    {
-      "name": "Paths",
-      "description": "Trace paths"
+      "description": "Repositories: create, list, update, delete."
     },
     {
       "name": "Graphs",
-      "description": "Computation graphs"
+      "description": "Computation graphs and their constituent trace paths."
     },
     {
       "name": "Anon",
-      "description": "Anonymous uploads"
-    },
-    {
-      "name": "Signups",
-      "description": "Marketing-page email capture"
+      "description": "Unauthenticated share-by-link uploads under the `anon` user. Always `Unlisted`."
     }
   ]
 }

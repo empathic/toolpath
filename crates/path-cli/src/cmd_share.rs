@@ -34,11 +34,13 @@ pub struct ShareArgs {
     #[arg(long, value_parser = crate::cmd_export::parse_repo_spec)]
     pub repo: Option<RepoSpec>,
 
-    /// Override the auto-derived slug (defaults to the toolpath document id)
-    #[arg(long)]
-    pub slug: Option<String>,
+    /// Human-readable display label for the uploaded graph
+    /// (defaults to the toolpath document id). Free-form; not used
+    /// in the URL — graphs are addressed by UUID server-side.
+    #[arg(long, alias = "slug")]
+    pub name: Option<String>,
 
-    /// Make the uploaded path publicly listable (default: secret/unlisted)
+    /// Mark the uploaded graph public (default: unlisted, addressable only by UUID)
     #[arg(long)]
     pub public: bool,
 
@@ -507,11 +509,11 @@ pub fn run(args: ShareArgs) -> Result<()> {
         url: args.url.clone(),
         anon: args.anon,
         repo: args.repo.clone(),
-        slug: args.slug.clone(),
+        name: args.name.clone(),
         public: args.public,
     };
     let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
-    let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.slug.is_some();
+    let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some();
 
     if let (Some(h), Some(session)) = (harness, &args.session) {
         // Explicit-args: validate creds before derive so a credential
@@ -581,7 +583,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
         url: args.url.clone(),
         anon: args.anon,
         repo: args.repo.clone(),
-        slug: args.slug.clone(),
+        name: args.name.clone(),
         public: args.public,
         harness: Some(harness_to_arg(h)),
         session: None, // unused by share_explicit
@@ -814,7 +816,7 @@ fn share_explicit(
         url: args.url.clone(),
         anon: args.anon,
         repo: args.repo.clone(),
-        slug: args.slug.clone(),
+        name: args.name.clone(),
         public: args.public,
     };
     crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary)

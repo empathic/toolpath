@@ -116,12 +116,12 @@ pub enum ExportTarget {
     /// Upload a toolpath document to Pathbase.
     ///
     /// Default behavior depends on whether you're logged in:
-    /// - Logged in (default): writes a secret/unlisted path under your
+    /// - Logged in (default): writes an unlisted graph under your
     ///   `pathstash` repo. Listable from your account; not publicly visible.
     /// - Not logged in: falls through to the public anonymous endpoint.
-    ///   Anon paths are not listable and capped at 5 MB.
+    ///   Anon graphs are not listable.
     ///
-    /// Use `--repo`/`--slug`/`--public` to override the pathstash default
+    /// Use `--repo`/`--name`/`--public` to override the pathstash default
     /// when authenticated. Use `--anon` to force the anonymous endpoint
     /// even when credentials are present.
     Pathbase {
@@ -141,11 +141,13 @@ pub enum ExportTarget {
         #[arg(long, value_parser = parse_repo_spec)]
         repo: Option<RepoSpec>,
 
-        /// Override the auto-derived slug (defaults to the toolpath document id)
-        #[arg(long)]
-        slug: Option<String>,
+        /// Human-readable display label for the uploaded graph
+        /// (defaults to the toolpath document id). Free-form; not used
+        /// in the URL — graphs are addressed by UUID server-side.
+        #[arg(long, alias = "slug")]
+        name: Option<String>,
 
-        /// Make the uploaded path publicly listable (default: secret/unlisted)
+        /// Mark the uploaded graph public (default: unlisted, addressable only by UUID)
         #[arg(long)]
         public: bool,
     },
@@ -203,14 +205,14 @@ pub fn run(target: ExportTarget) -> Result<()> {
             url,
             anon,
             repo,
-            slug,
+            name,
             public,
         } => run_pathbase(PathbaseExportArgs {
             input,
             url,
             anon,
             repo,
-            slug,
+            name,
             public,
         }),
     }
@@ -222,7 +224,7 @@ struct PathbaseExportArgs {
     url: Option<String>,
     anon: bool,
     repo: Option<RepoSpec>,
-    slug: Option<String>,
+    name: Option<String>,
     public: bool,
 }
 
@@ -235,7 +237,7 @@ pub(crate) struct PathbaseUploadArgs {
     pub(crate) url: Option<String>,
     pub(crate) anon: bool,
     pub(crate) repo: Option<RepoSpec>,
-    pub(crate) slug: Option<String>,
+    pub(crate) name: Option<String>,
     pub(crate) public: bool,
 }
 
@@ -1336,11 +1338,11 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
             url: args.url,
             anon: args.anon,
             repo: args.repo,
-            slug: args.slug,
+            name: args.name,
             public: args.public,
         };
         let base_url = resolve_upload_base_url(&upload);
-        let needs_auth = upload.repo.is_some() || upload.public || upload.slug.is_some();
+        let needs_auth = upload.repo.is_some() || upload.public || upload.name.is_some();
         let auth = preflight_auth(&base_url, upload.anon, needs_auth)?;
         let summary_source = file.display().to_string();
         run_pathbase_inner(auth, base_url, upload, &body, &summary_source)
@@ -1373,7 +1375,8 @@ pub(crate) fn run_pathbase_inner(
     body: &str,
     summary_source: &str,
 ) -> Result<()> {
-    use crate::cmd_pathbase::{AuthMode, anon_paths_post, paths_post, repos_post};
+    use crate::cmd_pathbase::{AuthMode, anon_graphs_post, graphs_post, repos_post};
+    use pathbase_client::types::Visibility;
 
     // Validate locally so we give a clean error rather than relying on
     // the server to reject malformed payloads.
@@ -1382,7 +1385,7 @@ pub(crate) fn run_pathbase_inner(
 
     let (token, username) = match auth {
         AuthMode::Anon => {
-            let resp = anon_paths_post(&base_url, body)?;
+            let resp = anon_graphs_post(&base_url, body)?;
             let printable = if resp.url.starts_with("http://") || resp.url.starts_with("https://") {
                 resp.url.clone()
             } else if resp.url.starts_with('/') {
@@ -1394,7 +1397,7 @@ pub(crate) fn run_pathbase_inner(
             // share URL is the primary product, so it's the last line
             // the user (or a script piping the output) sees.
             eprintln!(
-                "Uploaded {} → anon path {} ({} bytes)",
+                "Uploaded {} → anon graph {} ({} bytes)",
                 summary_source,
                 resp.id,
                 body.len()
@@ -1410,91 +1413,61 @@ pub(crate) fn run_pathbase_inner(
         None => {
             // Pathstash default: own the repo "pathstash" under the username
             // we resolved during preflight. Create it on demand.
-            repos_post(&base_url, &token, "pathstash")?;
+            repos_post(&base_url, &token, &username, "pathstash")?;
             (username, "pathstash".to_string())
         }
     };
 
-    let slug = args.slug.unwrap_or_else(|| derive_slug(&doc));
-    let created = paths_post(&base_url, &token, &owner, &repo, &slug, body, args.public)?;
-
-    // The visibility we surface is what the server actually applied,
-    // not what we requested. If a server-side policy ever clamps
-    // `is_public` (rate limits, account flags, future feature flags),
-    // we render the URL form the path can actually be reached at.
-    if created.is_public != args.public {
-        eprintln!(
-            "note: requested is_public={} but server applied is_public={}",
-            args.public, created.is_public
-        );
-    }
-    let visibility = if created.is_public {
-        "public"
-    } else {
-        "secret"
-    };
-    let url = pathbase_share_url(
+    let name = args.name.or_else(|| Some(derive_name(&doc)));
+    let created = graphs_post(
         &base_url,
+        &token,
         &owner,
         &repo,
-        &created.slug,
-        &created.id,
-        created.is_public,
-    );
+        name.as_deref(),
+        body,
+        args.public,
+    )?;
+
+    // The visibility we surface is what the server actually applied,
+    // not what we requested. If server-side policy ever clamps the
+    // request, we render the form the graph can actually be reached at.
+    let requested = if args.public {
+        Visibility::Public
+    } else {
+        Visibility::Unlisted
+    };
+    if created.visibility != requested {
+        eprintln!(
+            "note: requested visibility={requested} but server applied visibility={}",
+            created.visibility
+        );
+    }
     // Summary first on stderr, URL last on stdout — same ordering as
     // the anon path so the share URL is consistently the final line.
     eprintln!(
-        "Uploaded {} → {}/{}/{} ({} path, {} bytes)",
+        "Uploaded {} → {}/{}/graphs/{} ({}, {} bytes)",
         summary_source,
         owner,
         repo,
-        created.slug,
-        visibility,
+        created.id,
+        created.visibility,
         body.len()
     );
-    println!("{url}");
+    println!("{}", created.url);
     Ok(())
 }
 
-/// Pick the canonical share URL for a path uploaded via `export pathbase`.
+/// Default display label for a graph uploaded via `export pathbase`.
 ///
-/// - **Secret** (`is_public = false`): `<base>/<owner>/<repo>/paths/<id>`.
-///   The UUID is the share token. The slug URL would be an owner-facing
-///   stub — non-owners hitting it get a dead end, and the secret listing
-///   doesn't surface it.
-/// - **Public** (`is_public = true`): `<base>/<owner>/<repo>/<slug>`. The
-///   listable canonical address; appears in the user's repo listing.
-///
-/// This is the entire URL-grammar policy of `export pathbase`, isolated
-/// here so it's directly testable without standing up a mock server.
+/// Sanitize the inner id (Path id / Graph id) into `[a-z0-9_-]`-only
+/// form, lower-cased — close to a URL slug, even though the server
+/// addresses graphs by UUID and never reads this back from the wire.
+/// Fallback (id sanitizes to empty — non-ascii, all punctuation, …):
+/// hash the canonical JSON and use a short hex prefix so re-uploads
+/// of the same content produce the same display label.
 #[cfg(not(target_os = "emscripten"))]
-fn pathbase_share_url(
-    base_url: &str,
-    owner: &str,
-    repo: &str,
-    slug: &str,
-    id: &str,
-    is_public: bool,
-) -> String {
-    if is_public {
-        format!("{base_url}/{owner}/{repo}/{slug}")
-    } else {
-        format!("{base_url}/{owner}/{repo}/paths/{id}")
-    }
-}
-
-/// Pick a URL-safe slug from the document.
-///
-/// Primary path: sanitize the inner id (Path id / Step id / Graph id) into
-/// `[a-z0-9_-]`-only form, lower-cased. Most toolpath documents have ids
-/// like `path-claude-abc123`, which sanitize to themselves.
-///
-/// Fallback (id sanitizes to empty — non-ascii, all punctuation, etc.):
-/// hash the canonical JSON of the document and use a short hex prefix.
-/// Two uploads of the same content produce the same slug, so re-uploads
-/// stay deterministic instead of drifting on `chrono::Utc::now()`.
-#[cfg(not(target_os = "emscripten"))]
-fn derive_slug(doc: &toolpath::v1::Graph) -> String {
+fn derive_name(doc: &toolpath::v1::Graph) -> String {
     let raw = match doc.single_path() {
         Some(p) => p.path.id.as_str(),
         None => doc.graph.id.as_str(),
@@ -2361,7 +2334,7 @@ mod tests {
                 owner: "alex".to_string(),
                 name: "pathstash".to_string(),
             }),
-            slug: None,
+            name: None,
             public: false,
         })
         .unwrap_err();
@@ -2389,13 +2362,13 @@ mod tests {
     }
 
     #[test]
-    fn derive_slug_uses_path_id() {
+    fn derive_name_uses_path_id() {
         let doc = make_path_doc();
-        assert_eq!(derive_slug(&doc), "test-path");
+        assert_eq!(derive_name(&doc), "test-path");
     }
 
     #[test]
-    fn derive_slug_sanitizes_non_url_safe_chars() {
+    fn derive_name_sanitizes_non_url_safe_chars() {
         use toolpath::v1::{Graph, Path, PathIdentity};
         let doc = Graph::from_path(Path {
             path: PathIdentity {
@@ -2407,13 +2380,13 @@ mod tests {
             steps: vec![],
             meta: None,
         });
-        assert_eq!(derive_slug(&doc), "claude-path-42");
+        assert_eq!(derive_name(&doc), "claude-path-42");
     }
 
     #[test]
-    fn derive_slug_falls_back_to_content_hash_when_id_empties_out() {
+    fn derive_name_falls_back_to_content_hash_when_id_empties_out() {
         // An id consisting entirely of non-url-safe characters sanitizes to
-        // empty; we fall back to a deterministic content-hash slug.
+        // empty; we fall back to a deterministic content-hash label.
         use toolpath::v1::{Graph, Path, PathIdentity};
         let doc = Graph::from_path(Path {
             path: PathIdentity {
@@ -2425,11 +2398,10 @@ mod tests {
             steps: vec![],
             meta: None,
         });
-        let s1 = derive_slug(&doc);
-        let s2 = derive_slug(&doc);
-        assert_eq!(s1, s2, "fallback slug must be deterministic across calls");
+        let s1 = derive_name(&doc);
+        let s2 = derive_name(&doc);
+        assert_eq!(s1, s2, "fallback name must be deterministic across calls");
         assert!(s1.starts_with("path-"), "got {s1}");
-        // 12-char hex prefix after the `path-` stem.
         assert_eq!(s1.len(), "path-".len() + 12, "got {s1}");
         assert!(
             s1.chars().skip(5).all(|c| c.is_ascii_hexdigit()),
@@ -2438,47 +2410,7 @@ mod tests {
     }
 
     #[test]
-    fn share_url_is_uuid_for_secret_uploads() {
-        // Secret paths share by UUID — the slug URL would be a dead stub.
-        let url = pathbase_share_url(
-            "https://pathbase.example",
-            "alex",
-            "pathstash",
-            "ignored-slug",
-            "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
-            false,
-        );
-        assert_eq!(
-            url,
-            "https://pathbase.example/alex/pathstash/paths/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537"
-        );
-    }
-
-    #[test]
-    fn share_url_is_slug_for_public_uploads() {
-        // Public paths share by slug — the listable canonical address.
-        let url = pathbase_share_url(
-            "https://pathbase.example",
-            "alex",
-            "pathstash",
-            "my-slug",
-            "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
-            true,
-        );
-        assert_eq!(url, "https://pathbase.example/alex/pathstash/my-slug");
-    }
-
-    #[test]
-    fn share_url_strips_trailing_slash_assumption() {
-        // Sanity: the function does not double-slash if base_url has none.
-        // (resolve_url already trims trailing slashes upstream — this
-        // documents that pathbase_share_url is just doing concatenation.)
-        let url = pathbase_share_url("https://x.test", "u", "r", "s", "id", true);
-        assert_eq!(url, "https://x.test/u/r/s");
-    }
-
-    #[test]
-    fn derive_slug_fallback_differs_across_documents() {
+    fn derive_name_fallback_differs_across_documents() {
         use toolpath::v1::{Graph, Path, PathIdentity};
         let mk = |head: &str| {
             Graph::from_path(Path {
@@ -2492,7 +2424,7 @@ mod tests {
                 meta: None,
             })
         };
-        assert_ne!(derive_slug(&mk("a")), derive_slug(&mk("b")));
+        assert_ne!(derive_name(&mk("a")), derive_name(&mk("b")));
     }
     #[test]
     fn opencode_output_to_file_writes_session_json() {

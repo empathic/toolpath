@@ -39,31 +39,27 @@ pub(crate) struct User {
     pub avatar_url: Option<String>,
 }
 
-/// Response from `POST /api/v1/anon/paths` (matches the OpenAPI
-/// `AnonUploadResponse` shape).
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct AnonUploadResponse {
+/// Response from `POST /api/v1/u/anon/repos/pathstash/graphs`.
+/// `id` is the graph UUID; `url` is the server-rendered share URL.
+#[derive(Debug, Clone)]
+pub(crate) struct AnonGraphResponse {
     pub id: String,
     pub url: String,
 }
 
-/// Subset of the `TracePath` response from `POST /api/v1/repos/{owner}/{repo}/paths`
-/// that the CLI actually uses. The spec carries more fields (timestamps,
-/// step_count, repo_id, …); we only deserialize what we need.
+/// Response from `POST /api/v1/u/{owner}/repos/{repo}/graphs`.
 ///
-/// `id` is the public share-token UUID. For secret paths the canonical
-/// share URL is `<base>/<owner>/<repo>/paths/<id>` — the slug URL is the
-/// owner-facing stub and isn't a reliable share link.
-///
-/// `is_public` is echoed from the server response (not the request) so
-/// the caller can react to server-side overrides (rate limits, policy,
-/// future feature flags) instead of trusting that what we asked for is
-/// what landed.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct CreatedPath {
+/// `id` is the graph's UUID (the share token for `Unlisted` and `Public`
+/// graphs). `url` is the server-rendered canonical URL clients should
+/// link to. `visibility` is what the server actually applied — may
+/// diverge from what the caller requested if server-side policy clamped
+/// it, so callers should render based on this value rather than the
+/// request.
+#[derive(Debug, Clone)]
+pub(crate) struct CreatedGraph {
     pub id: String,
-    pub slug: String,
-    pub is_public: bool,
+    pub url: String,
+    pub visibility: pathbase_client::types::Visibility,
 }
 
 // ── URL + prompt helpers ────────────────────────────────────────────────
@@ -145,9 +141,45 @@ pub(crate) fn api_redeem(base_url: &str, code: &str) -> Result<(String, User)> {
     }
 }
 
+/// Revoke the current bearer-token session on the server, then return.
+///
+/// Pathbase 1.1 dropped the dedicated `/logout` endpoint in favor of a
+/// uniform sessions surface. There's no "revoke whoever made this
+/// request" endpoint; the CLI has to list its own sessions, find the
+/// one flagged `is_current`, and `DELETE` it by id.
+///
+/// Returns `Ok(())` even when the current session can't be located in
+/// the response — callers always proceed to clear local credentials, so
+/// failure here just means the token will rot server-side until expiry.
 pub(crate) fn api_logout(base_url: &str, token: &str) -> Result<()> {
     let client = pathbase_client(base_url, Some(token))?;
-    match block_on(client.logout()) {
+    let sessions = match block_on(client.list_sessions()) {
+        Ok(resp) => resp.into_inner(),
+        Err(pathbase_client::Error::ErrorResponse(resp)) => {
+            bail!("server returned {}", resp.status())
+        }
+        Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
+            bail!("server returned {}", resp.status())
+        }
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("connect to {base_url}: {}", reqwest_hint(&e))
+        }
+        Err(e) => bail!("connect to {base_url}: {}", full_chain(&e)),
+    };
+    let current = sessions
+        .iter()
+        .find(|s| s.is_current)
+        .map(|s| s.id.as_str());
+    let Some(id_str) = current else {
+        // No session marked current — server accepted the token but
+        // can't tell us which session it belongs to. Nothing to revoke
+        // server-side; local credentials still get cleared by the caller.
+        return Ok(());
+    };
+    let id: uuid::Uuid = id_str
+        .parse()
+        .with_context(|| format!("server returned a non-UUID session id: {id_str}"))?;
+    match block_on(client.revoke_session(&id)) {
         Ok(_) => Ok(()),
         Err(pathbase_client::Error::ErrorResponse(resp)) => {
             bail!("server returned {}", resp.status())
@@ -338,35 +370,50 @@ fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_clien
     Ok(pathbase_client::Client::new_with_client(base_url, client))
 }
 
-/// Decode a toolpath JSON string into the `Map` shape the generated
-/// upload bodies expect. All three Document variants (`Step`, `Path`,
-/// `Graph`) are externally-tagged objects, so the top-level is always a
-/// JSON object — the parse can't fail on a well-formed toolpath doc.
-fn parse_document(json: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
+/// Decode a toolpath JSON string into the typed `ToolpathDocument` the
+/// generated upload bodies expect. A toolpath `Graph` document is a
+/// `{graph, paths, meta?}` object — the parse can't fail on a
+/// well-formed Graph.
+fn parse_document(json: &str) -> Result<pathbase_client::types::ToolpathDocument> {
     serde_json::from_str(json).context("parse toolpath document")
 }
 
-/// `POST /api/v1/anon/paths` — public, rate-limited, 5 MB cap. No auth.
-/// Anon paths are URL-addressable share tokens (the UUID in the returned
-/// URL is intentionally public); the trade-off is that they aren't
-/// listable from any user account. For listable uploads use
-/// [`paths_post`] against an authenticated session.
-pub(crate) fn anon_paths_post(base_url: &str, document_json: &str) -> Result<AnonUploadResponse> {
-    let body = pathbase_client::types::AnonUploadBody {
+/// Map the CLI's boolean `--public` flag to the wire-level visibility
+/// the upload body expects. Public when `true`; `Unlisted` when `false`
+/// — the historical "secret" semantic where the graph is addressed only
+/// by its UUID share-link.
+fn visibility_from_public_flag(public: bool) -> pathbase_client::types::Visibility {
+    use pathbase_client::types::Visibility;
+    if public {
+        Visibility::Public
+    } else {
+        Visibility::Unlisted
+    }
+}
+
+/// `POST /api/v1/u/anon/repos/pathstash/graphs` — public, rate-limited.
+/// No auth. Anon graphs are always `Unlisted` (URL-addressable but
+/// unlistable); the trade-off is that they aren't listable from any
+/// user account. For listable uploads use [`graphs_post`] against an
+/// authenticated session.
+pub(crate) fn anon_graphs_post(base_url: &str, document_json: &str) -> Result<AnonGraphResponse> {
+    let body = pathbase_client::types::UploadGraphBody {
         document: parse_document(document_json)?,
+        name: None,
+        visibility: None,
     };
     let client = pathbase_client(base_url, None)?;
-    match block_on(client.create_anon_path(&body)) {
+    match block_on(client.create_anon_graph(&body)) {
         Ok(resp) => {
             let inner = resp.into_inner();
-            Ok(AnonUploadResponse {
-                id: inner.id,
-                url: inner.share_url,
+            Ok(AnonGraphResponse {
+                id: inner.id.to_string(),
+                url: inner.url,
             })
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
             413 => bail!(
-                "anon upload exceeds the 5 MB cap — log in (`path auth login`) for a listable upload without that limit"
+                "anon upload exceeds the size cap — log in (`path auth login`) for a listable upload without that limit"
             ),
             429 => bail!("anon upload rate-limited; retry shortly or log in"),
             code => bail!("anon upload failed (HTTP {code})"),
@@ -388,39 +435,40 @@ pub(crate) fn anon_paths_post(base_url: &str, document_json: &str) -> Result<Ano
     }
 }
 
-/// `POST /api/v1/repos/{owner}/{repo}/paths` — listable upload to a
-/// repo the authenticated user owns. Multi-path graphs go to the
-/// sibling `/graphs` endpoint, but `path share` only ever uploads
-/// single-path graphs.
+/// `POST /api/v1/u/{owner}/repos/{repo}/graphs` — listable upload to
+/// a repo the authenticated user owns.
 ///
-/// Per the spec, `is_public` defaults to **true** on the server side.
-/// We always pass `Some(is_public)` explicitly so the share command's
-/// default (`--public` unset → `is_public=false`) reliably writes a
-/// secret/unlisted path; the path stays addressable via its UUID
-/// (`/<owner>/<repo>/paths/<id>`) as the unguessable share-by-link
-/// form, but won't appear in any user's listing.
-pub(crate) fn paths_post(
+/// `name` is a free-form display label; it is **not** addressable —
+/// the server addresses graphs by UUID. Pass `None` to let the server
+/// default it.
+///
+/// `public=false` writes a secret/unlisted graph; the graph stays
+/// addressable via its UUID share-link but doesn't appear in any
+/// listing. `public=true` writes a `Public` graph that appears in
+/// owner and public listings. The wire spec also exposes `Private`
+/// (owner-only); the CLI flag is boolean so we don't surface it here.
+pub(crate) fn graphs_post(
     base_url: &str,
     token: &str,
     owner: &str,
     repo: &str,
-    slug: &str,
+    name: Option<&str>,
     document_json: &str,
-    is_public: bool,
-) -> Result<CreatedPath> {
-    let body = pathbase_client::types::UploadPathBody {
+    public: bool,
+) -> Result<CreatedGraph> {
+    let body = pathbase_client::types::UploadGraphBody {
         document: parse_document(document_json)?,
-        is_public: Some(is_public),
-        slug: slug.to_string(),
+        name: name.map(|s| s.to_string()),
+        visibility: Some(visibility_from_public_flag(public)),
     };
     let client = pathbase_client(base_url, Some(token))?;
-    match block_on(client.create_path(owner, repo, &body)) {
+    match block_on(client.create_graph(owner, repo, &body)) {
         Ok(resp) => {
             let inner = resp.into_inner();
-            Ok(CreatedPath {
+            Ok(CreatedGraph {
                 id: inner.id.to_string(),
-                slug: inner.slug,
-                is_public: inner.is_public,
+                url: inner.url,
+                visibility: inner.visibility,
             })
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
@@ -492,16 +540,24 @@ fn reqwest_hint(err: &reqwest::Error) -> String {
     full_chain(err)
 }
 
-/// `POST /api/v1/repos` — create a repo owned by the authenticated user.
+/// `POST /api/v1/u/{owner}/repos` — create a repo owned by the
+/// authenticated user. Owner must match the caller's username.
+/// Visibility defaults to `Public` per server spec; we don't override
+/// it here because the only documented caller (`run_pathbase_inner`)
+/// uses this to ensure the user's `pathstash` exists, and `pathstash`
+/// is system-pinned to `Unlisted` by direct DB seeding regardless of
+/// what this endpoint asks for.
+///
 /// Treats 409 (already exists) as success so callers can use this
-/// idempotently to ensure pathstash exists before uploading to it.
-pub(crate) fn repos_post(base_url: &str, token: &str, name: &str) -> Result<()> {
+/// idempotently to ensure a repo exists before uploading to it.
+pub(crate) fn repos_post(base_url: &str, token: &str, owner: &str, name: &str) -> Result<()> {
     let body = pathbase_client::types::CreateRepoBody {
         name: name.to_string(),
         description: None,
+        visibility: None,
     };
     let client = pathbase_client(base_url, Some(token))?;
-    match block_on(client.create_repo(&body)) {
+    match block_on(client.create_repo(owner, &body)) {
         Ok(_) => Ok(()),
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
             401 => bail!(
@@ -513,9 +569,6 @@ pub(crate) fn repos_post(base_url: &str, token: &str, name: &str) -> Result<()> 
             code => bail!("creating repo {name} failed (HTTP {code})"),
         },
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => match resp.status().as_u16() {
-            // The OpenAPI spec only documents 200 and 401 for create_repo,
-            // so a 409 lands in UnexpectedResponse rather than ErrorResponse.
-            // Treat it as success — repo already exists.
             409 => Ok(()),
             code => bail!("creating repo {name} returned unexpected status: HTTP {code}"),
         },
@@ -526,52 +579,55 @@ pub(crate) fn repos_post(base_url: &str, token: &str, name: &str) -> Result<()> 
     }
 }
 
-/// `GET /api/v1/repos/{owner}/{repo}/paths/{slug}/download` — fetch the
-/// reconstructed Graph document for a path.
+/// `GET /api/v1/u/{owner}/repos/{repo}/graphs/{id}/download` — fetch
+/// the reconstructed Graph document by UUID.
 ///
-/// Per the spec: private paths return 404 unless the caller is
-/// owner-authenticated *or* addresses the path by its UUID
-/// (the unguessable share-by-link form). The 404 message therefore
-/// hints at both possibilities — "not found, or you're not the owner."
+/// `id` must be a graph UUID (parsed before the wire call). Pathbase 1.1
+/// addresses graphs by UUID only; the old slug-style references aren't
+/// resolvable here. `Private` graphs 404 unless the caller is
+/// owner-authenticated; `Public` and `Unlisted` graphs are readable by
+/// anyone with the UUID.
 ///
 /// Returns a serialized JSON string. The generated client decodes into
 /// `serde_json::Map`, which we re-serialize on the way out — keys may
 /// be reordered relative to the server's bytes, but the consumer parses
 /// to `Graph` and re-serializes anyway, so byte-fidelity isn't a real
 /// requirement.
-pub(crate) fn paths_download(
+pub(crate) fn graphs_download(
     base_url: &str,
     token: Option<&str>,
     owner: &str,
     repo: &str,
-    slug: &str,
+    id: &str,
 ) -> Result<String> {
+    let uuid: uuid::Uuid = id
+        .parse()
+        .with_context(|| format!("not a valid graph UUID: {id}"))?;
     let client = pathbase_client(base_url, token)?;
-    match block_on(client.download_path(owner, repo, slug)) {
+    match block_on(client.download_graph(owner, repo, &uuid)) {
         Ok(resp) => {
             let map = resp.into_inner();
-            serde_json::to_string(&map).context("re-serializing downloaded path")
+            serde_json::to_string(&map).context("re-serializing downloaded graph")
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status() {
             reqwest::StatusCode::NOT_FOUND => bail!(
-                "{owner}/{repo}/{slug} not found on {base_url} (or it's a private path \
-                 and you're not the owner — try the path's UUID instead, or \
-                 `path auth login --url {base_url}`)"
+                "{owner}/{repo}/{id} not found on {base_url} (or it's a private graph \
+                 and you're not the owner — run `path auth login --url {base_url}`)"
             ),
-            status => bail!("download of {owner}/{repo}/{slug} failed ({status})"),
+            status => bail!("download of {owner}/{repo}/{id} failed ({status})"),
         },
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
             let status = resp.status();
             let body = block_on(resp.text()).unwrap_or_default();
             let msg = error_message(&body).unwrap_or_else(|| short_body(&body));
-            bail!("download of {owner}/{repo}/{slug} failed ({status}): {msg}")
+            bail!("download of {owner}/{repo}/{id} failed ({status}): {msg}")
         }
         Err(pathbase_client::Error::CommunicationError(e)) => bail!(
-            "download of {owner}/{repo}/{slug} failed: {}",
+            "download of {owner}/{repo}/{id} failed: {}",
             reqwest_hint(&e)
         ),
         Err(e) => Err(anyhow!(
-            "download of {owner}/{repo}/{slug} failed: {}",
+            "download of {owner}/{repo}/{id} failed: {}",
             full_chain(&e)
         )),
     }
@@ -806,61 +862,87 @@ pub(crate) mod tests {
         }
     }
 
-    /// A complete `TracePath` JSON body for mock-server responses. Progenitor
+    const TEST_UUID: &str = "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
+    const TEST_REPO_UUID: &str = "00000000-0000-0000-0000-000000000002";
+
+    /// A `GraphDocumentResponse` body for mock-server responses. Progenitor
     /// strictly validates response shapes against the OpenAPI schema, so the
     /// mock has to return every required field even though the CLI only reads
-    /// `slug`. Centralized here so tests don't drift when the schema changes.
-    fn trace_path_json() -> &'static str {
-        r#"{
-            "id": "00000000-0000-0000-0000-000000000001",
-            "repo_id": "00000000-0000-0000-0000-000000000002",
-            "slug": "my-path",
-            "toolpath_id": "tp-1",
-            "document": {"Step": {}},
-            "step_count": 0,
-            "is_public": false,
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z"
-        }"#
+    /// a few. A bare-minimum toolpath document parses cleanly as
+    /// `ToolpathDocument` (`{graph, paths}`).
+    fn graph_document_json() -> String {
+        format!(
+            r#"{{
+                "id": "{TEST_UUID}",
+                "repo_id": "{TEST_REPO_UUID}",
+                "toolpath_id": "tp-1",
+                "document": {{"graph": {{"id":"g"}}, "paths": []}},
+                "path_count": 0,
+                "url": "https://pathbase.dev/u/alex/repos/pathstash/graphs/{TEST_UUID}",
+                "visibility": "unlisted",
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z"
+            }}"#
+        )
     }
 
     #[test]
-    fn paths_post_wraps_document_with_slug_and_is_public() {
-        let server = MockServer::start("HTTP/1.1 201 Created", trace_path_json());
-        let created = paths_post(
+    fn graphs_post_wraps_document_with_name_and_visibility() {
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            Box::leak(graph_document_json().into_boxed_str()),
+        );
+        let created = graphs_post(
             &server.base(),
             "tok",
             "alex",
             "pathstash",
-            "my-path",
-            r#"{"Step":{}}"#,
+            Some("my-graph"),
+            r#"{"graph":{"id":"g"},"paths":[]}"#,
             false,
         )
         .unwrap();
-        assert_eq!(created.slug, "my-path");
+        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(
+            created.visibility,
+            pathbase_client::types::Visibility::Unlisted
+        );
 
         let req = String::from_utf8(server.request()).unwrap();
         assert!(
-            req.starts_with("POST /api/v1/repos/alex/pathstash/paths "),
+            req.starts_with("POST /api/v1/u/alex/repos/pathstash/graphs "),
             "got: {req}"
         );
         assert!(
             req.to_lowercase().contains("authorization: bearer tok"),
             "got: {req}"
         );
-        assert!(req.contains(r#""slug":"my-path""#), "got: {req}");
-        assert!(req.contains(r#""is_public":false"#), "got: {req}");
-        assert!(req.contains(r#""document":{"Step":{}}"#), "got: {req}");
+        assert!(req.contains(r#""name":"my-graph""#), "got: {req}");
+        assert!(req.contains(r#""visibility":"unlisted""#), "got: {req}");
+        assert!(
+            req.contains(r#""document":{"graph":{"id":"g"},"paths":[]}"#),
+            "got: {req}"
+        );
     }
 
     #[test]
-    fn paths_post_401_surfaces_relogin_message() {
-        let server = MockServer::start("HTTP/1.1 401 Unauthorized", r#"{"error":"bad"}"#);
+    fn graphs_post_401_surfaces_relogin_message() {
+        let server = MockServer::start(
+            "HTTP/1.1 401 Unauthorized",
+            r#"{"code":"unauthorized","error":"bad"}"#,
+        );
         let base = server.base();
-        let err = paths_post(&base, "tok", "alex", "pathstash", "s", "{}", false).unwrap_err();
+        let err = graphs_post(
+            &base,
+            "tok",
+            "alex",
+            "pathstash",
+            None,
+            r#"{"graph":{"id":"g"},"paths":[]}"#,
+            false,
+        )
+        .unwrap_err();
         let msg = err.to_string();
-        // Should name the URL the credentials are being rejected by, point at
-        // `path auth login --url`, and offer `--anon` as the bypass.
         assert!(msg.contains(&base), "expected base URL in error: {msg}");
         assert!(
             msg.contains("path auth login --url"),
@@ -870,49 +952,77 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn paths_post_5xx_includes_server_message() {
+    fn graphs_post_5xx_includes_server_message() {
         let server = MockServer::start(
             "HTTP/1.1 500 Internal Server Error",
             r#"{"error":"database is on fire"}"#,
         );
-        let err =
-            paths_post(&server.base(), "tok", "alex", "pathstash", "s", "{}", false).unwrap_err();
+        let err = graphs_post(
+            &server.base(),
+            "tok",
+            "alex",
+            "pathstash",
+            None,
+            r#"{"graph":{"id":"g"},"paths":[]}"#,
+            false,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("database is on fire"), "{err}");
     }
 
-    /// Anon upload returns `{id, path, share_url}` per the OpenAPI spec.
-    /// We expose `share_url` to callers as the canonical share link.
+    /// Anon upload returns a `GraphDocumentResponse` whose `url` field
+    /// is the canonical share link. We expose that field to callers.
     #[test]
-    fn anon_paths_post_wraps_document_and_omits_auth() {
+    fn anon_graphs_post_wraps_document_and_omits_auth() {
         let server = MockServer::start(
             "HTTP/1.1 201 Created",
-            r#"{"id":"abc","path":"/anon/pathstash/paths/abc","share_url":"https://pathbase.dev/anon/pathstash/paths/abc"}"#,
+            Box::leak(graph_document_json().into_boxed_str()),
         );
-        let resp = anon_paths_post(&server.base(), r#"{"Step":{}}"#).unwrap();
-        assert_eq!(resp.id, "abc");
-        assert_eq!(resp.url, "https://pathbase.dev/anon/pathstash/paths/abc");
+        let resp = anon_graphs_post(
+            &server.base(),
+            r#"{"graph":{"id":"g"},"paths":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(resp.id, TEST_UUID);
+        assert!(resp.url.ends_with(TEST_UUID));
 
         let req = String::from_utf8(server.request()).unwrap();
-        assert!(req.starts_with("POST /api/v1/anon/paths "), "got: {req}");
+        assert!(
+            req.starts_with("POST /api/v1/u/anon/repos/pathstash/graphs "),
+            "got: {req}"
+        );
         assert!(
             !req.to_lowercase().contains("authorization:"),
             "anon must not send auth header: {req}"
         );
-        assert!(req.contains(r#""document":{"Step":{}}"#), "got: {req}");
+        assert!(
+            req.contains(r#""document":{"graph":{"id":"g"},"paths":[]}"#),
+            "got: {req}"
+        );
     }
 
     #[test]
-    fn anon_paths_post_413_advises_login() {
-        let server = MockServer::start("HTTP/1.1 413 Payload Too Large", "");
-        let err = anon_paths_post(&server.base(), "{}").unwrap_err();
-        assert!(err.to_string().contains("5 MB"), "{err}");
+    fn anon_graphs_post_413_advises_login() {
+        let server = MockServer::start(
+            "HTTP/1.1 413 Payload Too Large",
+            r#"{"code":"bad_request","error":"body too large"}"#,
+        );
+        let err = anon_graphs_post(
+            &server.base(),
+            r#"{"graph":{"id":"g"},"paths":[]}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("size cap"), "{err}");
         assert!(err.to_string().contains("path auth login"), "{err}");
     }
 
     #[test]
     fn repos_post_treats_409_as_success() {
-        let server = MockServer::start("HTTP/1.1 409 Conflict", r#"{"error":"already exists"}"#);
-        repos_post(&server.base(), "tok", "pathstash").unwrap();
+        let server = MockServer::start(
+            "HTTP/1.1 409 Conflict",
+            r#"{"code":"conflict","error":"already exists"}"#,
+        );
+        repos_post(&server.base(), "tok", "alex", "pathstash").unwrap();
     }
 
     /// Download decodes through `serde_json::Map` and re-serializes, so
@@ -921,11 +1031,17 @@ pub(crate) mod tests {
     /// `Graph` and writes pretty-printed JSON anyway, so the only
     /// invariant we care about is "the JSON parses to the same value".
     #[test]
-    fn paths_download_returns_body_as_json() {
-        let body = r#"{"Step":{"step":{"id":"s1","actor":"human:x","timestamp":"2024-01-01T00:00:00Z"},"change":{}}}"#;
+    fn graphs_download_returns_body_as_json() {
+        let body = r#"{"graph":{"id":"g"},"paths":[{"path":{"id":"p1","head":"s1"},"steps":[]}]}"#;
         let server = MockServer::start("HTTP/1.1 200 OK", body);
-        let got =
-            paths_download(&server.base(), Some("tok"), "alex", "pathstash", "my-path").unwrap();
+        let got = graphs_download(
+            &server.base(),
+            Some("tok"),
+            "alex",
+            "pathstash",
+            TEST_UUID,
+        )
+        .unwrap();
         let got_v: serde_json::Value = serde_json::from_str(&got).unwrap();
         let want_v: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(
@@ -934,10 +1050,9 @@ pub(crate) mod tests {
         );
 
         let req = String::from_utf8(server.request()).unwrap();
-        assert!(
-            req.starts_with("GET /api/v1/repos/alex/pathstash/paths/my-path/download "),
-            "got: {req}"
-        );
+        let expected_path =
+            format!("GET /api/v1/u/alex/repos/pathstash/graphs/{TEST_UUID}/download ");
+        assert!(req.starts_with(&expected_path), "got: {req}");
         assert!(
             req.to_lowercase().contains("authorization: bearer tok"),
             "got: {req}"
@@ -945,11 +1060,30 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn paths_download_404_says_not_found() {
-        let server = MockServer::start("HTTP/1.1 404 Not Found", "");
-        let err = paths_download(&server.base(), Some("tok"), "alex", "pathstash", "missing")
-            .unwrap_err();
+    fn graphs_download_404_says_not_found() {
+        let server = MockServer::start(
+            "HTTP/1.1 404 Not Found",
+            r#"{"code":"not_found","error":"graph not found"}"#,
+        );
+        let err =
+            graphs_download(&server.base(), Some("tok"), "alex", "pathstash", TEST_UUID)
+                .unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn graphs_download_rejects_non_uuid_id() {
+        // Don't even make the network call when the id obviously can't
+        // be a graph id under the 1.1+ wire scheme.
+        let err = graphs_download(
+            "http://127.0.0.1:1",
+            Some("tok"),
+            "alex",
+            "pathstash",
+            "my-old-slug",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not a valid graph UUID"), "{err}");
     }
 
     // ── preflight_auth ────────────────────────────────────────────────

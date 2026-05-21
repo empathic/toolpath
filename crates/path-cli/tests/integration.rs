@@ -570,7 +570,7 @@ fn export_pathbase_repo_flag_requires_login() {
 #[test]
 fn import_pathbase_rejects_legacy_trace_id() {
     // The old `/traces/<id>` shape is gone; passing a bare token that
-    // isn't a `<owner>/<repo>/<slug>` triple should fail at parse time
+    // isn't an `<owner>/<repo>/<uuid>` triple should fail at parse time
     // with a clear message rather than blowing up downstream.
     let cfg = tempfile::tempdir().unwrap();
     cmd()
@@ -578,7 +578,7 @@ fn import_pathbase_rejects_legacy_trace_id() {
         .args(["p", "import", "pathbase", "trc_nonexistent"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("<owner>/<repo>/<slug>"));
+        .stderr(predicate::str::contains("<owner>/<repo>/<uuid>"));
 }
 
 #[test]
@@ -690,7 +690,7 @@ fn share_explicit_args_uploads_via_anon() {
         use std::io::Read;
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"abc-123","path":"/anon/x/y/abc-123","share_url":"https://example.test/anon/abc-123"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc-123","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -767,8 +767,7 @@ fn share_anon_fixture() -> (
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body =
-            r#"{"id":"abc","path":"/anon/x/y/abc","share_url":"https://example.test/anon/abc"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -818,8 +817,7 @@ fn one_shot_anon_server() -> (u16, std::thread::JoinHandle<()>) {
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body =
-            r#"{"id":"abc","path":"/anon/x/y/abc","share_url":"https://example.test/anon/abc"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),

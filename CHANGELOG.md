@@ -61,6 +61,41 @@ Touches `toolpath`, `toolpath-convo`, `toolpath-claude`, `toolpath-gemini`,
 `toolpath-codex`, `toolpath-opencode`, `toolpath-pi`, and `path-cli`; versions
 to be bumped at release.
 
+## Pathbase 1.1 wire-model refresh — graphs-by-UUID — 2026-05-21
+
+`pathbase-client` 0.2.0 and `path-cli` 0.11.0. **Breaking** (pre-1.0).
+The Pathbase HTTP API was restructured around graphs-by-UUID; the
+client was regenerated from the live `pathbase-dev` OpenAPI spec and
+the CLI was updated to match.
+
+- **`pathbase-client` 0.2.0.** Regenerated from
+  `https://pathbase-dev.fly.dev/api/v1/openapi.json`. All endpoints
+  now live under `/api/v1/u/{owner}/repos/{repo}/...` (was
+  `/api/v1/repos/...`). Graphs are the only addressable upload shape
+  — the path-specific endpoints are gone. New tri-state `Visibility`
+  enum (`public` / `unlisted` / `private`) replaces the old
+  `is_public: bool`. New `ApiErrorResponse` is `{code, error}` with a
+  typed `ApiErrorCode` enum. Anon uploads go to
+  `/api/v1/u/anon/repos/pathstash/graphs`. The hand-rolled `/logout`
+  endpoint is gone; revoke now goes through
+  `GET /auth/sessions` + `DELETE /auth/sessions/{id}`. Newly exposed:
+  `update_me`, `update_repo`, `update_graph_visibility`,
+  `update_repo_visibility`, `list_graph_paths`, `get_graph_path`,
+  `update_graph_path`, `delete_graph_path`, `get_graph_path_chat`.
+- **`path-cli` 0.11.0.** `path share` / `path export pathbase`:
+  `--slug` is renamed to `--name` (kept as a hidden alias). The flag
+  is a display label only; graphs are addressed by UUID server-side,
+  so the slug never appears in the share URL. `--public` still maps
+  to public-vs-unlisted (the historical "secret" semantic). The
+  printed share URL now comes from the server response rather than
+  being reconstructed locally. `path import pathbase` / `path resume`
+  accept `https://host/u/<owner>/repos/<repo>/graphs/<uuid>` URLs
+  (plus the short `https://host/<owner>/<repo>/graphs/<uuid>` and
+  legacy `paths` delimiter for back-compat); the trailing identifier
+  must parse as a UUID — old slug-style refs no longer resolve.
+  `path auth logout` revokes the current session via the sessions
+  endpoint before clearing local credentials.
+
 ## Plumbing/porcelain split — `path p …` — 2026-05-20
 
 `path-cli` 0.10.0. **Breaking** (pre-1.0). The lower-level operations

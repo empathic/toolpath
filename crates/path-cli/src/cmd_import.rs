@@ -1362,22 +1362,22 @@ fn project_short(p: &str) -> String {
     out.join("/")
 }
 
-/// Fetch a Pathbase ref (`https://host/owner/repo/slug` URL or bare
 /// Compute the local cache id a Pathbase ref would land at, without
 /// hitting the network. Lets `path resume` probe the cache before
 /// deciding whether to fetch.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn pathbase_cache_id_of(target: &str, url_flag: Option<&str>) -> Result<String> {
     let (_base, ref_) = parse_pathbase_ref(target, url_flag)?;
-    let PathRef { owner, repo, slug } = ref_;
-    Ok(make_id("pathbase", &format!("{owner}-{repo}-{slug}")))
+    let PathRef { owner, repo, id } = ref_;
+    Ok(make_id("pathbase", &format!("{owner}-{repo}-{id}")))
 }
 
-/// `owner/repo/slug` triple) and parse it as a toolpath document. Used
-/// by `path import pathbase` and by `path resume <url>`.
+/// Fetch a Pathbase ref (`https://host/u/owner/repos/repo/graphs/<uuid>`
+/// URL or bare `owner/repo/<uuid>` triple) and parse it as a toolpath
+/// document. Used by `path import pathbase` and `path resume <url>`.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Result<DerivedDoc> {
-    use crate::cmd_pathbase::{credentials_path, load_session, paths_download, resolve_url};
+    use crate::cmd_pathbase::{credentials_path, graphs_download, load_session, resolve_url};
 
     let (base, ref_) = parse_pathbase_ref(target, url_flag)?;
     let stored = load_session(&credentials_path()?)?;
@@ -1387,9 +1387,9 @@ pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Res
 
     let token = stored.as_ref().map(|s| s.token.as_str());
 
-    let PathRef { owner, repo, slug } = ref_;
-    let body = paths_download(&base_url, token, &owner, &repo, &slug)?;
-    let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{slug}"));
+    let PathRef { owner, repo, id } = ref_;
+    let body = graphs_download(&base_url, token, &owner, &repo, &id)?;
+    let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{id}"));
     let doc = Graph::from_json(&body)
         .map_err(|e| anyhow::anyhow!("server returned a non-toolpath document: {e}"))?;
     Ok(DerivedDoc { cache_id, doc })
@@ -1408,24 +1408,26 @@ fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<Deriv
     }
 }
 
-/// What the user pointed at on the import side. The Pathbase API
-/// addresses paths as `<owner>/<repo>/<slug>` triples; that's the only
-/// shape we accept today. (Anon paths surface a UUID-as-slug under the
-/// `anon` user, so they fold cleanly into the same struct.)
+/// What the user pointed at on the import side. Pathbase 1.1+
+/// addresses graphs by UUID, so `id` is always a parseable UUID string;
+/// `parse_pathbase_ref` rejects non-UUID trailing segments.
 #[cfg(not(target_os = "emscripten"))]
 #[derive(Debug, PartialEq)]
 struct PathRef {
     owner: String,
     repo: String,
-    slug: String,
+    id: String,
 }
 
 /// Parse a positional ref for `path import pathbase`. Returns `(override_base, ref)`.
 ///
-/// Accepted shapes:
-/// - Full URL: `https://host/<owner>/<repo>/<slug>` — host overrides the
-///   server URL.
-/// - `owner/repo/slug` — bare triple, used with `--url` or the stored session.
+/// Accepted shapes (trailing identifier must be a UUID):
+/// - Full URL: `https://host/u/<owner>/repos/<repo>/graphs/<uuid>` —
+///   host overrides the server URL. Also accepts the older
+///   `https://host/<owner>/<repo>/{paths|graphs}/<uuid>` shape and the
+///   short `https://host/<owner>/<repo>/<uuid>` form.
+/// - `<owner>/<repo>/<uuid>` — bare triple, used with `--url` or the
+///   stored session.
 #[cfg(not(target_os = "emscripten"))]
 fn parse_pathbase_ref(target: &str, url_flag: Option<&str>) -> Result<(Option<String>, PathRef)> {
     use crate::cmd_pathbase::resolve_url;
@@ -1450,49 +1452,55 @@ fn parse_pathbase_ref(target: &str, url_flag: Option<&str>) -> Result<(Option<St
         let path = path.split(['?', '#']).next().unwrap_or("");
         let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let triple = extract_triple(&segs).ok_or_else(|| {
-            anyhow::anyhow!("expected URL ending in /<owner>/<repo>/<slug>, got {target}")
+            anyhow::anyhow!(
+                "expected URL ending in /<owner>/<repo>/graphs/<uuid> (got {target})"
+            )
         })?;
         Ok((Some(format!("{scheme}{host}")), triple))
     } else {
         let base = url_flag.map(|u| resolve_url(Some(u.to_string())));
         let segs: Vec<&str> = target.split('/').filter(|s| !s.is_empty()).collect();
         let triple = extract_triple(&segs)
-            .ok_or_else(|| anyhow::anyhow!("expected `<owner>/<repo>/<slug>`, got `{target}`"))?;
+            .ok_or_else(|| anyhow::anyhow!("expected `<owner>/<repo>/<uuid>`, got `{target}`"))?;
         Ok((base, triple))
     }
 }
 
-/// Pull (owner, repo, slug) from a slash-split URL path. Two real shapes
-/// in the wild:
+/// Pull (owner, repo, uuid) from a slash-split URL path. Accepts all of:
 ///
-/// - `/<owner>/<repo>/<slug>` — short authed URL (3 segs).
-/// - `/<owner>/<repo>/paths/<slug>` — what the anon endpoint returns
-///   (owner=anon), and likely the canonical SvelteKit route for repo-scoped
-///   paths too (4 segs with literal `paths` second-to-last).
+/// - `/u/<owner>/repos/<repo>/graphs/<uuid>` — current canonical form.
+/// - `/<owner>/<repo>/{paths|graphs}/<uuid>` — short SvelteKit route.
+/// - `/<owner>/<repo>/<uuid>` — bare triple.
 ///
-/// Heuristic: if the second-to-last segment is the literal `paths`, treat
-/// it as a route delimiter and look back two more segments for owner/repo.
-/// Otherwise take the last three segments.
+/// The trailing segment must parse as a UUID (the only addressing
+/// scheme Pathbase 1.1+ accepts for graphs).
 #[cfg(not(target_os = "emscripten"))]
 fn extract_triple(segs: &[&str]) -> Option<PathRef> {
     let n = segs.len();
     if n < 3 {
         return None;
     }
+    let id = segs[n - 1];
+    if uuid::Uuid::parse_str(id).is_err() {
+        return None;
+    }
 
-    let (owner, repo, slug) = if n >= 4 && segs[n - 2] == "paths" {
-        (segs[n - 4], segs[n - 3], segs[n - 1])
+    // Look back through the canonical layouts in order of specificity.
+    let (owner, repo) = if n >= 6 && segs[n - 6] == "u" && segs[n - 4] == "repos" && segs[n - 2] == "graphs" {
+        (segs[n - 5], segs[n - 3])
+    } else if n >= 4 && (segs[n - 2] == "paths" || segs[n - 2] == "graphs") {
+        (segs[n - 4], segs[n - 3])
     } else {
-        (segs[n - 3], segs[n - 2], segs[n - 1])
+        (segs[n - 3], segs[n - 2])
     };
 
-    if owner.is_empty() || repo.is_empty() || slug.is_empty() {
+    if owner.is_empty() || repo.is_empty() {
         return None;
     }
     Some(PathRef {
         owner: owner.to_string(),
         repo: repo.to_string(),
-        slug: slug.to_string(),
+        id: id.to_string(),
     })
 }
 
@@ -1500,71 +1508,101 @@ fn extract_triple(segs: &[&str]) -> Option<PathRef> {
 mod tests {
     use super::*;
 
+    const UUID: &str = "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
+
     #[test]
-    fn parse_pathbase_ref_full_url_owner_repo_slug() {
-        let (base, ref_) =
-            parse_pathbase_ref("https://pathbase.dev/alex/pathstash/my-path", None).unwrap();
+    fn parse_pathbase_ref_full_url_canonical_form() {
+        let url = format!("https://pathbase.dev/u/alex/repos/pathstash/graphs/{UUID}");
+        let (base, ref_) = parse_pathbase_ref(&url, None).unwrap();
         assert_eq!(base.as_deref(), Some("https://pathbase.dev"));
         assert_eq!(
             ref_,
             PathRef {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
-                slug: "my-path".into(),
+                id: UUID.into(),
             }
         );
     }
 
     #[test]
     fn parse_pathbase_ref_bare_triple_with_url_flag() {
+        let target = format!("alex/pathstash/{UUID}");
         let (base, ref_) =
-            parse_pathbase_ref("alex/pathstash/my-path", Some("https://other.example/")).unwrap();
+            parse_pathbase_ref(&target, Some("https://other.example/")).unwrap();
         assert_eq!(base.as_deref(), Some("https://other.example"));
         assert_eq!(
             ref_,
             PathRef {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
-                slug: "my-path".into(),
+                id: UUID.into(),
             }
         );
     }
 
     #[test]
     fn parse_pathbase_ref_bare_triple_no_flag() {
-        let (base, ref_) = parse_pathbase_ref("alex/pathstash/my-path", None).unwrap();
+        let target = format!("alex/pathstash/{UUID}");
+        let (base, ref_) = parse_pathbase_ref(&target, None).unwrap();
         assert_eq!(base, None);
         assert_eq!(
             ref_,
             PathRef {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
-                slug: "my-path".into(),
+                id: UUID.into(),
             }
         );
     }
 
     #[test]
     fn parse_pathbase_ref_url_with_trailing_slash() {
-        let (base, ref_) =
-            parse_pathbase_ref("https://pathbase.dev/alex/pathstash/my-path/", None).unwrap();
+        let url = format!("https://pathbase.dev/alex/pathstash/{UUID}/");
+        let (base, ref_) = parse_pathbase_ref(&url, None).unwrap();
         assert_eq!(base.as_deref(), Some("https://pathbase.dev"));
-        assert_eq!(ref_.slug, "my-path");
+        assert_eq!(ref_.id, UUID);
     }
 
     #[test]
-    fn parse_pathbase_ref_anon_url_with_paths_delimiter() {
-        // The anon endpoint returns URLs like `/anon/pathstash/paths/<uuid>`.
-        // Parser must recognize the literal `paths` as a route delimiter.
-        let (_, ref_) =
-            parse_pathbase_ref("https://pathbase.dev/anon/pathstash/paths/abc-123", None).unwrap();
+    fn parse_pathbase_ref_short_route_with_graphs_delimiter() {
+        let url = format!("https://pathbase.dev/alex/pathstash/graphs/{UUID}");
+        let (_, ref_) = parse_pathbase_ref(&url, None).unwrap();
+        assert_eq!(
+            ref_,
+            PathRef {
+                owner: "alex".into(),
+                repo: "pathstash".into(),
+                id: UUID.into(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pathbase_ref_legacy_paths_delimiter_still_parses() {
+        // Pre-1.1 share URLs used `/<owner>/<repo>/paths/<id>`. Keep
+        // parsing them for back-compat — `id` still has to be a UUID
+        // because that's the only addressing scheme the new server
+        // understands; legacy slug-style refs no longer resolve.
+        let url = format!("https://pathbase.dev/anon/pathstash/paths/{UUID}");
+        let (_, ref_) = parse_pathbase_ref(&url, None).unwrap();
         assert_eq!(
             ref_,
             PathRef {
                 owner: "anon".into(),
                 repo: "pathstash".into(),
-                slug: "abc-123".into(),
+                id: UUID.into(),
             }
+        );
+    }
+
+    #[test]
+    fn parse_pathbase_ref_rejects_non_uuid_trailing_segment() {
+        // Pathbase 1.1+ addresses graphs by UUID; a slug-style ref
+        // can no longer be resolved, so fail at the parse step.
+        assert!(parse_pathbase_ref("alex/pathstash/my-path", None).is_err());
+        assert!(
+            parse_pathbase_ref("https://pathbase.dev/alex/pathstash/my-path", None).is_err()
         );
     }
 
@@ -1656,11 +1694,14 @@ mod tests {
         use crate::cmd_pathbase::tests::MockServer;
         let body = r#"{"graph":{"id":"g1"},"paths":[{"path":{"id":"p1","head":"s1"},"steps":[{"step":{"id":"s1","actor":"agent:claude-code","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#;
         let server = MockServer::start("HTTP/1.1 200 OK", body);
-        let url = format!("{}/alex/pathstash/my-path", server.base());
+        let url = format!("{}/u/alex/repos/pathstash/graphs/{UUID}", server.base());
 
         let derived = pathbase_fetch_to_doc(&url, None).unwrap();
 
-        assert_eq!(derived.cache_id, "pathbase-alex-pathstash-my-path");
+        assert_eq!(
+            derived.cache_id,
+            format!("pathbase-alex-pathstash-{UUID}")
+        );
         assert!(derived.doc.into_single_path().is_some());
     }
 }
