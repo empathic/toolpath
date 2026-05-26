@@ -156,6 +156,55 @@ pub(crate) fn project_short(p: &str) -> String {
     out.join("/")
 }
 
+/// Right-align an item count with its unit (`" 875 msgs"`, `"  12 lines"`,
+/// `"   4 entries"`). Providers count different things, so the unit is
+/// caller-supplied — kept as a single helper rather than one per unit
+/// to keep the per-provider call sites grep-able.
+pub(crate) fn count(n: usize, unit: &str) -> String {
+    format!("{n:>4} {unit}")
+}
+
+/// One visible picker column packed into a single fixed-width string,
+/// so columns line up consistently across pickers. Terminal tab stops
+/// produce ugly variable gaps; explicit space padding here avoids that.
+///
+/// Layout: `[{leading} ]{when:16}  {count}  [{project:28}]  {title}`.
+///
+/// - `leading` is an optional prefix (used by `path share` to inject a
+///   cwd-match marker and a harness symbol; `None` for single-provider
+///   `path p import <provider>` pickers where neither applies).
+/// - `when` renders as `YYYY-MM-DD HH:MM` or a 16-char placeholder when
+///   the provider doesn't have a timestamp on hand.
+/// - `count` is supplied pre-formatted via [`count`] so the picker
+///   doesn't need to know that codex counts lines and pi counts entries.
+/// - `project` is optional — omitted in per-project views where the
+///   project label would be redundant on every row.
+/// - `title` is run through [`clean_for_picker_display`] to strip
+///   Claude's slash-command and local-command-caveat envelopes.
+pub(crate) fn render_row(
+    leading: Option<&str>,
+    when: Option<chrono::DateTime<chrono::Utc>>,
+    count: &str,
+    project: Option<&str>,
+    title: &str,
+) -> String {
+    const PROJECT_WIDTH: usize = 28;
+    const TITLE_MAX: usize = 96;
+    let leading_segment = match leading {
+        Some(s) => format!("{s} "),
+        None => String::new(),
+    };
+    let when_str = when
+        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "       —        ".to_string());
+    let project_segment = match project {
+        Some(p) => format!("{}  ", pad_or_truncate(&tab_safe(p), PROJECT_WIDTH)),
+        None => String::new(),
+    };
+    let title_str = clip_chars(&clean_for_picker_display(title), TITLE_MAX);
+    format!("{leading_segment}{when_str}  {count}  {project_segment}{title_str}")
+}
+
 /// Clean up a user prompt for display in a picker row.
 ///
 /// Claude wraps the first user message of a session with XML envelopes

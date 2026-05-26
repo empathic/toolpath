@@ -345,8 +345,8 @@ fn interactive_pick(
     installed: &[crate::cmd_share::Harness],
     source: Option<crate::cmd_share::Harness>,
 ) -> Result<crate::cmd_share::Harness> {
-    if !crate::fzf::available() {
-        let hint = if crate::fzf::embedded_picker_available() {
+    if !crate::fuzzy::available() {
+        let hint = if crate::fuzzy::embedded_picker_available() {
             "rerun in a terminal"
         } else {
             "install `fzf` (or build with the default `embedded-picker` feature) and rerun in a terminal"
@@ -366,16 +366,16 @@ fn interactive_pick(
         None => "pick a harness to resume in".to_string(),
     };
 
-    let opts = crate::fzf::PickOptions {
+    let opts = crate::fuzzy::PickOptions {
         with_nth: "1..",
         header: Some(&header),
         ..Default::default()
     };
     let selected =
-        match crate::fzf::pick(&lines, &opts).map_err(|e| anyhow::anyhow!("fzf failed: {}", e))? {
-            crate::fzf::PickResult::Selected(rows) => rows.into_iter().next().unwrap_or_default(),
-            crate::fzf::PickResult::Cancelled => std::process::exit(130),
-            crate::fzf::PickResult::NoMatch => {
+        match crate::fuzzy::pick(&lines, &opts).map_err(|e| anyhow::anyhow!("fzf failed: {}", e))? {
+            crate::fuzzy::PickResult::Selected(rows) => rows.into_iter().next().unwrap_or_default(),
+            crate::fuzzy::PickResult::Cancelled => std::process::exit(130),
+            crate::fuzzy::PickResult::NoMatch => {
                 anyhow::bail!("fzf returned no match — picker UI was empty?");
             }
         };

@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use std::io::Cursor;
 
-use crate::fzf::{PickOptions, PickResult};
+use crate::fuzzy::{PickOptions, PickResult};
 
 use regex::Regex;
 use skim::Skim;
@@ -44,7 +44,7 @@ pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
     if let Some(preview) = opts.preview {
         // `setter(strip_option, into)` on the builder unwraps `Option<T>`
         // and converts via `Into`, so we just pass the bare value.
-        builder.preview(crate::fzf::substitute_exe_placeholder(preview));
+        builder.preview(crate::fuzzy::substitute_exe_placeholder(preview));
         builder.preview_window(opts.preview_window);
     }
     if let Some(header) = opts.header {

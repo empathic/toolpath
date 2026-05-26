@@ -24,7 +24,7 @@ mod cmd_track;
 mod cmd_validate;
 mod config;
 #[cfg(not(target_os = "emscripten"))]
-mod fzf;
+mod fuzzy;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
 mod io;
@@ -51,8 +51,8 @@ struct Cli {
     /// picker. `fzf`/`skim` force one backend and error if it isn't
     /// available.
     #[cfg(not(target_os = "emscripten"))]
-    #[arg(long, global = true, value_enum, default_value_t = fzf::Picker::Auto)]
-    picker: fzf::Picker,
+    #[arg(long, global = true, value_enum, default_value_t = fuzzy::Picker::Auto)]
+    picker: fuzzy::Picker,
 }
 
 #[derive(Subcommand, Debug)]
@@ -107,7 +107,7 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     #[cfg(not(target_os = "emscripten"))]
-    fzf::set_picker_override(cli.picker);
+    fuzzy::set_picker_override(cli.picker);
 
     match cli.command {
         Commands::Haiku => {

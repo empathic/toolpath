@@ -6,7 +6,7 @@
 //! composition with `render | query | validate`.
 
 #[cfg(not(target_os = "emscripten"))]
-use crate::fzf;
+use crate::fuzzy;
 #[cfg(not(target_os = "emscripten"))]
 use anyhow::Context;
 use anyhow::Result;
@@ -424,7 +424,7 @@ fn derive_claude_with_manager(
                 match pick_claude_global(manager)? {
                     Some(picks) => picks,
                     None => {
-                        fzf::print_recipe("claude", true);
+                        fuzzy::print_recipe("claude", true);
                         anyhow::bail!("--project required when not running interactively");
                     }
                 }
@@ -485,7 +485,7 @@ fn pick_claude_in_project(
     manager: &toolpath_claude::ClaudeConvo,
     project: &str,
 ) -> Result<Option<Vec<(String, String)>>> {
-    if !fzf::available() {
+    if !fuzzy::available() {
         return Ok(None);
     }
     let metas = manager
@@ -503,16 +503,16 @@ fn pick_claude_in_project(
                 "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_id),
-                picker_display(
+                render_row(None, 
                     m.last_activity,
-                    &msg_count(m.message_count),
+                    &count(m.message_count, "msgs"),
                     None,
                     m.first_user_message.as_deref().unwrap_or("(no prompt)"),
                 ),
             )
         })
         .collect();
-    let opts = fzf::PickOptions {
+    let opts = fuzzy::PickOptions {
         with_nth: "3",
         prompt: "claude session> ",
         preview: Some("{exe} show --ansi claude --project {1} --session {2}"),
@@ -521,9 +521,9 @@ fn pick_claude_in_project(
         tiebreak: "index",
         multi: true,
     };
-    let selected = match fzf::pick(&lines, &opts)? {
-        fzf::PickResult::Selected(v) => v,
-        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
     };
     Ok(Some(parse_project_session(&selected)))
 }
@@ -532,7 +532,7 @@ fn pick_claude_in_project(
 fn pick_claude_global(
     manager: &toolpath_claude::ClaudeConvo,
 ) -> Result<Option<Vec<(String, String)>>> {
-    if !fzf::available() {
+    if !fuzzy::available() {
         return Ok(None);
     }
     let projects = manager
@@ -555,16 +555,16 @@ fn pick_claude_global(
                 "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_id),
-                picker_display(
+                render_row(None, 
                     m.last_activity,
-                    &msg_count(m.message_count),
+                    &count(m.message_count, "msgs"),
                     Some(&project_short(&m.project_path)),
                     m.first_user_message.as_deref().unwrap_or("(no prompt)"),
                 ),
             )
         })
         .collect();
-    let opts = fzf::PickOptions {
+    let opts = fuzzy::PickOptions {
         with_nth: "3",
         prompt: "claude session> ",
         preview: Some("{exe} show --ansi claude --project {1} --session {2}"),
@@ -573,9 +573,9 @@ fn pick_claude_global(
         tiebreak: "index",
         multi: true,
     };
-    let selected = match fzf::pick(&lines, &opts)? {
-        fzf::PickResult::Selected(v) => v,
-        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
     };
     Ok(Some(parse_project_session(&selected)))
 }
@@ -645,7 +645,7 @@ fn derive_gemini_with_manager(
                 match pick_gemini_global(manager)? {
                     Some(picks) => picks,
                     None => {
-                        fzf::print_recipe("gemini", true);
+                        fuzzy::print_recipe("gemini", true);
                         anyhow::bail!("--project required when not running interactively");
                     }
                 }
@@ -708,7 +708,7 @@ fn pick_gemini_in_project(
     manager: &toolpath_gemini::GeminiConvo,
     project: &str,
 ) -> Result<Option<Vec<(String, String)>>> {
-    if !fzf::available() {
+    if !fuzzy::available() {
         return Ok(None);
     }
     let metas = manager
@@ -724,16 +724,16 @@ fn pick_gemini_in_project(
                 "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_uuid),
-                picker_display(
+                render_row(None, 
                     m.last_activity,
-                    &msg_count(m.message_count),
+                    &count(m.message_count, "msgs"),
                     None,
                     m.first_user_message.as_deref().unwrap_or("(no prompt)"),
                 ),
             )
         })
         .collect();
-    let opts = fzf::PickOptions {
+    let opts = fuzzy::PickOptions {
         with_nth: "3",
         prompt: "gemini session> ",
         preview: Some("{exe} show --ansi gemini --project {1} --session {2}"),
@@ -742,9 +742,9 @@ fn pick_gemini_in_project(
         tiebreak: "index",
         multi: true,
     };
-    let selected = match fzf::pick(&lines, &opts)? {
-        fzf::PickResult::Selected(v) => v,
-        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
     };
     Ok(Some(parse_project_session(&selected)))
 }
@@ -753,7 +753,7 @@ fn pick_gemini_in_project(
 fn pick_gemini_global(
     manager: &toolpath_gemini::GeminiConvo,
 ) -> Result<Option<Vec<(String, String)>>> {
-    if !fzf::available() {
+    if !fuzzy::available() {
         return Ok(None);
     }
     let projects = manager
@@ -776,16 +776,16 @@ fn pick_gemini_global(
                 "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_uuid),
-                picker_display(
+                render_row(None, 
                     m.last_activity,
-                    &msg_count(m.message_count),
+                    &count(m.message_count, "msgs"),
                     Some(&project_short(&m.project_path)),
                     m.first_user_message.as_deref().unwrap_or("(no prompt)"),
                 ),
             )
         })
         .collect();
-    let opts = fzf::PickOptions {
+    let opts = fuzzy::PickOptions {
         with_nth: "3",
         prompt: "gemini session> ",
         preview: Some("{exe} show --ansi gemini --project {1} --session {2}"),
@@ -794,9 +794,9 @@ fn pick_gemini_global(
         tiebreak: "index",
         multi: true,
     };
-    let selected = match fzf::pick(&lines, &opts)? {
-        fzf::PickResult::Selected(v) => v,
-        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
     };
     Ok(Some(parse_project_session(&selected)))
 }
@@ -887,7 +887,7 @@ fn wrap_paths_codex(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
 
 #[cfg(not(target_os = "emscripten"))]
 fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>>> {
-    if !fzf::available() {
+    if !fuzzy::available() {
         return Ok(None);
     }
     let metas = manager
@@ -906,16 +906,16 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
             format!(
                 "{}\t{}",
                 tab_safe(&m.id),
-                picker_display(
+                render_row(None, 
                     m.last_activity,
-                    &line_count(m.line_count),
+                    &count(m.line_count, "lines"),
                     cwd_short.as_deref(),
                     m.first_user_message.as_deref().unwrap_or("(no prompt)"),
                 ),
             )
         })
         .collect();
-    let opts = fzf::PickOptions {
+    let opts = fuzzy::PickOptions {
         with_nth: "2",
         prompt: "codex session> ",
         preview: Some("{exe} show --ansi codex --session {1}"),
@@ -924,9 +924,9 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
         tiebreak: "index",
         multi: true,
     };
-    let selected = match fzf::pick(&lines, &opts)? {
-        fzf::PickResult::Selected(v) => v,
-        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
     };
     Ok(Some(parse_single_id(&selected)))
 }
@@ -1046,7 +1046,7 @@ fn pick_opencode(
     manager: &toolpath_opencode::OpencodeConvo,
     project: Option<&str>,
 ) -> Result<Option<Vec<String>>> {
-    if !fzf::available() {
+    if !fuzzy::available() {
         return Ok(None);
     }
     let metas = manager
@@ -1068,16 +1068,16 @@ fn pick_opencode(
             format!(
                 "{}\t{}",
                 tab_safe(&m.id),
-                picker_display(
+                render_row(None, 
                     m.last_activity,
-                    &msg_count(m.message_count),
+                    &count(m.message_count, "msgs"),
                     Some(&dir_short),
                     title,
                 ),
             )
         })
         .collect();
-    let opts = fzf::PickOptions {
+    let opts = fuzzy::PickOptions {
         with_nth: "2",
         prompt: "opencode session> ",
         preview: Some("{exe} show --ansi opencode --session {1}"),
@@ -1086,9 +1086,9 @@ fn pick_opencode(
         tiebreak: "index",
         multi: true,
     };
-    let selected = match fzf::pick(&lines, &opts)? {
-        fzf::PickResult::Selected(v) => v,
-        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
     };
     Ok(Some(parse_single_id(&selected)))
 }
@@ -1163,7 +1163,7 @@ fn derive_pi_with_manager(
                 match pick_pi_global(manager)? {
                     Some(picks) => picks,
                     None => {
-                        fzf::print_recipe("pi", true);
+                        fuzzy::print_recipe("pi", true);
                         anyhow::bail!("--project required when not running interactively");
                     }
                 }
@@ -1213,7 +1213,7 @@ fn pick_pi_in_project(
     manager: &toolpath_pi::PiConvo,
     project: &str,
 ) -> Result<Option<Vec<(String, String)>>> {
-    if !fzf::available() {
+    if !fuzzy::available() {
         return Ok(None);
     }
     let metas = manager
@@ -1229,16 +1229,16 @@ fn pick_pi_in_project(
                 "{}\t{}\t{}",
                 tab_safe(project),
                 tab_safe(&m.id),
-                picker_display(
+                render_row(None, 
                     parse_rfc3339(&m.timestamp),
-                    &entry_count(m.entry_count),
+                    &count(m.entry_count, "entries"),
                     None,
                     m.first_user_message.as_deref().unwrap_or("(no prompt)"),
                 ),
             )
         })
         .collect();
-    let opts = fzf::PickOptions {
+    let opts = fuzzy::PickOptions {
         with_nth: "3",
         prompt: "pi session> ",
         preview: Some("{exe} show --ansi pi --project {1} --session {2}"),
@@ -1247,16 +1247,16 @@ fn pick_pi_in_project(
         tiebreak: "index",
         multi: true,
     };
-    let selected = match fzf::pick(&lines, &opts)? {
-        fzf::PickResult::Selected(v) => v,
-        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
     };
     Ok(Some(parse_project_session(&selected)))
 }
 
 #[cfg(not(target_os = "emscripten"))]
 fn pick_pi_global(manager: &toolpath_pi::PiConvo) -> Result<Option<Vec<(String, String)>>> {
-    if !fzf::available() {
+    if !fuzzy::available() {
         return Ok(None);
     }
     let projects = manager
@@ -1281,16 +1281,16 @@ fn pick_pi_global(manager: &toolpath_pi::PiConvo) -> Result<Option<Vec<(String, 
                 "{}\t{}\t{}",
                 tab_safe(project),
                 tab_safe(&m.id),
-                picker_display(
+                render_row(None, 
                     parse_rfc3339(&m.timestamp),
-                    &entry_count(m.entry_count),
+                    &count(m.entry_count, "entries"),
                     Some(&project_short(project)),
                     m.first_user_message.as_deref().unwrap_or("(no prompt)"),
                 ),
             )
         })
         .collect();
-    let opts = fzf::PickOptions {
+    let opts = fuzzy::PickOptions {
         with_nth: "3",
         prompt: "pi session> ",
         preview: Some("{exe} show --ansi pi --project {1} --session {2}"),
@@ -1299,9 +1299,9 @@ fn pick_pi_global(manager: &toolpath_pi::PiConvo) -> Result<Option<Vec<(String, 
         tiebreak: "index",
         multi: true,
     };
-    let selected = match fzf::pick(&lines, &opts)? {
-        fzf::PickResult::Selected(v) => v,
-        fzf::PickResult::NoMatch | fzf::PickResult::Cancelled => Vec::new(),
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
     };
     Ok(Some(parse_project_session(&selected)))
 }
@@ -1334,66 +1334,13 @@ fn parse_single_id(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-use crate::fzf::{clip_chars, pad_or_truncate, project_short, tab_safe};
-
-/// One visible picker column packed into a single fixed-width string,
-/// so columns line up consistently across pickers (terminal tab stops
-/// produce ugly variable gaps).
-///
-/// Layout: `{when:16}  {count}  [{project:28}]  {title}`. The project
-/// segment is omitted when not relevant (e.g. the per-project view
-/// already has the project pinned). Slash-command and local-command-
-/// caveat envelopes are stripped from `title` via
-/// `fzf::clean_for_picker_display`.
-///
-/// `count` is supplied pre-formatted (e.g. `" 875 msgs"` or
-/// `" 12 lines"`) so providers with different units share the same
-/// renderer. Use [`msg_count`] / [`line_count`] for the conventional
-/// formatting.
-#[cfg(not(target_os = "emscripten"))]
-fn picker_display(
-    when: Option<chrono::DateTime<chrono::Utc>>,
-    count: &str,
-    project: Option<&str>,
-    title: &str,
-) -> String {
-    const PROJECT_WIDTH: usize = 28;
-    const TITLE_MAX: usize = 96;
-    let when_str = when
-        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| "       —        ".to_string());
-    let project_segment = match project {
-        Some(p) => format!("{}  ", pad_or_truncate(&tab_safe(p), PROJECT_WIDTH)),
-        None => String::new(),
-    };
-    let title_str = clip_chars(&crate::fzf::clean_for_picker_display(title), TITLE_MAX);
-    format!("{when_str}  {count}  {project_segment}{title_str}")
-}
-
-/// `" 875 msgs"` — right-aligned to keep the count column predictable.
-#[cfg(not(target_os = "emscripten"))]
-fn msg_count(n: usize) -> String {
-    format!("{n:>4} msgs")
-}
-
-/// `" 12 lines"` — codex sessions count newlines, not messages.
-#[cfg(not(target_os = "emscripten"))]
-fn line_count(n: usize) -> String {
-    format!("{n:>4} lines")
-}
-
-/// `" 12 entries"` — pi sessions count tree entries (which include
-/// sub-agent steps), not flat messages.
-#[cfg(not(target_os = "emscripten"))]
-fn entry_count(n: usize) -> String {
-    format!("{n:>4} entries")
-}
+use crate::fuzzy::{count, project_short, render_row, tab_safe};
 
 /// Parse an RFC 3339 timestamp string into `DateTime<Utc>` for picker
 /// row rendering. Returns `None` when the string isn't parseable so
-/// `picker_display` renders its placeholder column rather than blowing
-/// up the row. Used by the Pi provider, whose session metadata stores
-/// timestamps as raw strings.
+/// `fuzzy::render_row` falls back to its placeholder column rather
+/// than blowing up the row. Used by the Pi provider, whose session
+/// metadata stores timestamps as raw strings.
 #[cfg(not(target_os = "emscripten"))]
 fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(s)
