@@ -197,11 +197,30 @@ Global: `--pretty` for formatted JSON output.
 `path track` were **removed** in `path-cli` 0.10.0 — they all now live
 exclusively under `path p`.
 
-## Interactive selection (fzf)
+## Interactive selection
 
-When `path p import <provider>` is run with no `--session` and `fzf` is on
-`$PATH` (with stdin and stderr as TTYs), the CLI launches `fzf` so you can
-pick a session by topic. TAB selects multiple — the result is a `Graph`.
+When `path p import <provider>` is run with no `--session` and stdin/stderr
+are TTYs, the CLI launches a fuzzy picker so you can pick a session by
+topic. TAB selects multiple — the result is a `Graph`. `path share` and
+`path resume` use the same picker.
+
+Two backends, selected at runtime:
+
+- **External `fzf`** is preferred when it's on `$PATH` (so your fzf
+  config and keybindings keep working).
+- **Embedded `skim`** (Rust fzf-clone) is shipped in the default build
+  and used when `fzf` isn't installed. Same `{1}`/`{2}` preview
+  placeholders, same column-selection grammar — visually similar UX.
+  Build with `--no-default-features` to drop it for a ~2 MB smaller
+  binary; without either backend the CLI prints a manual recipe.
+
+Use the global `--picker auto|fzf|skim` flag to force a backend
+(default `auto`):
+
+```bash
+path --picker skim share              # use embedded skim even with fzf on PATH
+path --picker fzf p import claude     # error out if fzf isn't installed
+```
 
 The picker leans on two machine-readable surfaces you can also use yourself:
 

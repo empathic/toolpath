@@ -346,8 +346,13 @@ fn interactive_pick(
     source: Option<crate::cmd_share::Harness>,
 ) -> Result<crate::cmd_share::Harness> {
     if !crate::fzf::available() {
+        let hint = if crate::fzf::embedded_picker_available() {
+            "rerun in a terminal"
+        } else {
+            "install `fzf` (or build with the default `embedded-picker` feature) and rerun in a terminal"
+        };
         anyhow::bail!(
-            "interactive picker requires `fzf` on PATH and a TTY; pass `--harness <X>` or rerun in a terminal"
+            "interactive picker requires a TTY; pass `--harness <X>` or {hint}"
         );
     }
     let mut lines: Vec<String> = Vec::with_capacity(installed.len());

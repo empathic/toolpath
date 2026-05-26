@@ -514,7 +514,7 @@ fn pick_claude_in_project(
     let opts = fzf::PickOptions {
         with_nth: "3..",
         prompt: "claude session> ",
-        preview: Some("path show --ansi claude --project {1} --session {2}"),
+        preview: Some("{exe} show --ansi claude --project {1} --session {2}"),
         header: Some("pick a Claude session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
@@ -564,7 +564,7 @@ fn pick_claude_global(
     let opts = fzf::PickOptions {
         with_nth: "3..",
         prompt: "claude session> ",
-        preview: Some("path show --ansi claude --project {1} --session {2}"),
+        preview: Some("{exe} show --ansi claude --project {1} --session {2}"),
         header: Some("pick a Claude session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
@@ -730,7 +730,7 @@ fn pick_gemini_in_project(
     let opts = fzf::PickOptions {
         with_nth: "3..",
         prompt: "gemini session> ",
-        preview: Some("path show --ansi gemini --project {1} --session {2}"),
+        preview: Some("{exe} show --ansi gemini --project {1} --session {2}"),
         header: Some("pick a Gemini session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
@@ -780,7 +780,7 @@ fn pick_gemini_global(
     let opts = fzf::PickOptions {
         with_nth: "3..",
         prompt: "gemini session> ",
-        preview: Some("path show --ansi gemini --project {1} --session {2}"),
+        preview: Some("{exe} show --ansi gemini --project {1} --session {2}"),
         header: Some("pick a Gemini session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
@@ -909,7 +909,7 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
     let opts = fzf::PickOptions {
         with_nth: "2..",
         prompt: "codex session> ",
-        preview: Some("path show --ansi codex --session {1}"),
+        preview: Some("{exe} show --ansi codex --session {1}"),
         header: Some("pick a Codex session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
@@ -1068,7 +1068,7 @@ fn pick_opencode(
     let opts = fzf::PickOptions {
         with_nth: "2..",
         prompt: "opencode session> ",
-        preview: Some("path show --ansi opencode --session {1}"),
+        preview: Some("{exe} show --ansi opencode --session {1}"),
         header: Some("pick an opencode session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
@@ -1226,7 +1226,7 @@ fn pick_pi_in_project(
     let opts = fzf::PickOptions {
         with_nth: "3..",
         prompt: "pi session> ",
-        preview: Some("path show --ansi pi --project {1} --session {2}"),
+        preview: Some("{exe} show --ansi pi --project {1} --session {2}"),
         header: Some("pick a Pi session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
@@ -1276,7 +1276,7 @@ fn pick_pi_global(manager: &toolpath_pi::PiConvo) -> Result<Option<Vec<(String, 
     let opts = fzf::PickOptions {
         with_nth: "3..",
         prompt: "pi session> ",
-        preview: Some("path show --ansi pi --project {1} --session {2}"),
+        preview: Some("{exe} show --ansi pi --project {1} --session {2}"),
         header: Some("pick a Pi session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
@@ -1324,12 +1324,16 @@ fn tab_safe(s: &str) -> String {
 
 /// Display-friendly title cell for an fzf row: tab-safe, single-line, capped
 /// in length so a long pasted prompt doesn't push later columns off screen.
-/// fzf still fuzzy-matches on the truncated form — full prompt text lives in
-/// the preview pane via `path show`.
+/// Strips Claude's slash-command and local-command XML envelopes via
+/// `fzf::clean_for_picker_display` so the visible text is the actual
+/// user intent rather than the raw markup. fzf still fuzzy-matches on
+/// the truncated form — full prompt text lives in the preview pane via
+/// `path show`.
 #[cfg(not(target_os = "emscripten"))]
 fn fzf_title(s: &str) -> String {
     const MAX: usize = 120;
-    let safe = tab_safe(s);
+    let cleaned = crate::fzf::clean_for_picker_display(s);
+    let safe = tab_safe(&cleaned);
     if safe.chars().count() > MAX {
         let head: String = safe.chars().take(MAX - 1).collect();
         format!("{head}…")

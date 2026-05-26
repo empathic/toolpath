@@ -1,29 +1,99 @@
-//! Helpers for interactive session selection via `fzf`.
+//! Interactive session selection backed by a fuzzy picker.
 //!
 //! The protocol:
-//! - `path list <provider> --format tsv` emits one session per line, tab-delimited.
-//!   For single-keyed providers (codex, opencode) col 1 is the session id.
-//!   For project-keyed providers (claude, gemini, pi) col 1 is the project path
-//!   and col 2 is the session id. Subsequent columns are display-only.
-//! - `path show <provider>` emits a markdown summary for one session, suitable
-//!   for fzf's `--preview`.
-//! - `path derive <provider>` with no session arg auto-launches fzf when stdin
-//!   and stderr are TTYs and `fzf` is on `PATH`. Multi-select produces a `Graph`.
+//! - `path p list <provider> --format tsv` emits one session per line,
+//!   tab-delimited. For single-keyed providers (codex, opencode) col 1
+//!   is the session id. For project-keyed providers (claude, gemini,
+//!   pi) col 1 is the project path and col 2 is the session id.
+//!   Subsequent columns are display-only.
+//! - `path show <provider>` emits a markdown summary for one session,
+//!   suitable as the picker's `--preview` command.
+//! - `path p import <provider>` (and `path share` / `path resume`) with
+//!   no `--session` auto-launches the picker when stdin and stderr are
+//!   TTYs. Multi-select produces a `Graph`.
 //!
-//! When fzf is unavailable, callers fall through to the documented manual recipe.
+//! Two backends, selected at runtime:
+//!
+//! - **External `fzf`** (preferred when on `PATH`). Users keep their
+//!   own fzf config and keybindings.
+//! - **Embedded skim** (Rust fzf-clone, compiled in unless the
+//!   `embedded-picker` feature is disabled). Same `{1}`/`{2}` preview
+//!   placeholder grammar and the same `--with-nth`/`--tiebreak`
+//!   notation, so existing call sites work unchanged.
+//!
+//! When neither backend can run (no TTY, or no external fzf with the
+//! embedded picker disabled at build time), callers fall through to the
+//! documented manual recipe printed by [`print_recipe`].
 #![cfg(not(target_os = "emscripten"))]
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use std::io::{IsTerminal, Write};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
-/// Returns true when stdin and stderr are both attached to a TTY *and* `fzf`
-/// is on `PATH`. `derive` only auto-launches when this is true.
+/// Backend override for the interactive fuzzy picker, set once at CLI
+/// startup via the global `--picker` flag and read by [`pick`].
+///
+/// `Auto` (the default) preserves the historical behavior: external
+/// `fzf` if on `PATH`, embedded skim otherwise. `Fzf` and `Skim` are
+/// strict — they error out rather than silently using the other backend.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum Picker {
+    /// Pick whichever backend is available; prefer external `fzf`.
+    #[default]
+    Auto,
+    /// Force the external `fzf` binary. Errors if it isn't on `PATH`.
+    Fzf,
+    /// Force the embedded skim picker. Errors if path-cli was built
+    /// with `--no-default-features`.
+    Skim,
+}
+
+static PICKER_OVERRIDE: OnceLock<Picker> = OnceLock::new();
+
+/// Set the global picker preference. Called once at CLI startup from
+/// the `--picker` flag handler. Subsequent calls are no-ops — the first
+/// value wins, so library callers can't accidentally override the
+/// user's explicit choice mid-run.
+pub fn set_picker_override(picker: Picker) {
+    let _ = PICKER_OVERRIDE.set(picker);
+}
+
+fn current_picker() -> Picker {
+    PICKER_OVERRIDE.get().copied().unwrap_or_default()
+}
+
+/// Returns true when an interactive picker can actually run: stdin and
+/// stderr are TTYs *and* at least one backend is available (external
+/// `fzf` on `PATH`, or the embedded skim picker compiled in). Callers
+/// use this as a guard before invoking [`pick`]; on `false` they print
+/// the manual recipe via [`print_recipe`].
 pub fn available() -> bool {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return false;
     }
+    embedded_picker_available() || external_fzf_available()
+}
+
+/// True when the external `fzf` binary is on `PATH`. Used by [`pick`]
+/// to decide between the external picker and the embedded skim
+/// fallback, and to tailor the manual-recipe message.
+pub fn external_fzf_available() -> bool {
     which("fzf").is_some()
+}
+
+/// True when the embedded skim picker was compiled in. Always `true`
+/// in the default build; `false` under `--no-default-features`.
+#[cfg(feature = "embedded-picker")]
+pub const fn embedded_picker_available() -> bool {
+    true
+}
+
+#[cfg(not(feature = "embedded-picker"))]
+pub const fn embedded_picker_available() -> bool {
+    false
 }
 
 fn which(cmd: &str) -> Option<std::path::PathBuf> {
@@ -37,25 +107,208 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-/// Outcome of an fzf invocation.
+/// Clean up a user prompt for display in a picker row.
 ///
-/// Distinguishes a deliberate user cancel (Esc / Ctrl-C, fzf exit 130) from
-/// the no-match case (fzf exit 1). Callers that want to surface a non-zero
-/// exit on cancel can match on `Cancelled`; callers that just want the picked
-/// lines treat both `NoMatch` and `Cancelled` as "empty selection".
+/// Claude wraps the first user message of a session with XML envelopes
+/// when the user invoked a slash command or a local `!cmd`. In their
+/// raw form they're unreadable noise — a row like
+/// `<command-message>biko</command-message> <command-name>/biko</command-name> <command-args>From origin/main…</command-args>`
+/// pushes the actual intent off the end of the picker line. This helper
+/// strips the envelope down to its human-readable kernel:
+///
+/// - Slash command envelopes render as `/<name> <args>`.
+/// - `<local-command-caveat>…</local-command-caveat>` is dropped; if a
+///   `<bash-input>…</bash-input>` follows, it renders as `! <cmd>`.
+/// - Any other XML-like wrappers are stripped, keeping inner content.
+///
+/// The original prompt is preserved in the session file and shown in
+/// full via the `path show` preview pane — this only affects the
+/// truncated row text used for picker scanning.
+pub(crate) fn clean_for_picker_display(s: &str) -> String {
+    if let Some(out) = strip_slash_command_envelope(s) {
+        return out;
+    }
+    if let Some(out) = strip_local_command_caveat(s) {
+        return out;
+    }
+    strip_xml_tags(s)
+}
+
+/// Recognize `<command-message>X</command-message> <command-name>/X</command-name> <command-args>Y</command-args>`
+/// and re-emit it as `/X Y`. Returns None if the envelope isn't present
+/// so the caller can fall through to the next strategy.
+fn strip_slash_command_envelope(s: &str) -> Option<String> {
+    let name = extract_tag_content(s, "command-name")?;
+    let args = extract_tag_content(s, "command-args").unwrap_or_default();
+    // `name` already includes the leading `/` per Claude's format.
+    let name = name.trim();
+    let args = args.trim();
+    if args.is_empty() {
+        Some(name.to_string())
+    } else {
+        Some(format!("{name} {args}"))
+    }
+}
+
+/// Recognize `<local-command-caveat>…</local-command-caveat>` blocks.
+/// If a `<bash-input>cmd</bash-input>` follows, re-emit as `! cmd`; if
+/// not, fall back to stripping the caveat block and returning what's
+/// left. Returns None when no caveat is present.
+fn strip_local_command_caveat(s: &str) -> Option<String> {
+    if !s.contains("<local-command-caveat>") {
+        return None;
+    }
+    if let Some(cmd) = extract_tag_content(s, "bash-input") {
+        return Some(format!("! {}", cmd.trim()));
+    }
+    // No bash-input — strip the caveat block and return whatever's left.
+    let stripped = remove_block(s, "<local-command-caveat>", "</local-command-caveat>");
+    Some(strip_xml_tags(&stripped))
+}
+
+/// Extract the inner text of the first `<tag>…</tag>` in `s`.
+fn extract_tag_content(s: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = s.find(&open)? + open.len();
+    let end = s[start..].find(&close)?;
+    Some(s[start..start + end].to_string())
+}
+
+/// Remove the substring from the first `start` marker through the next
+/// `end` marker, inclusive. No-op when either marker isn't found.
+fn remove_block(s: &str, start: &str, end: &str) -> String {
+    let Some(open_idx) = s.find(start) else {
+        return s.to_string();
+    };
+    let after_open = open_idx + start.len();
+    let Some(close_off) = s[after_open..].find(end) else {
+        return s.to_string();
+    };
+    let close_idx = after_open + close_off + end.len();
+    format!("{}{}", &s[..open_idx], &s[close_idx..])
+}
+
+/// Strip all `<tag>` and `</tag>` markers, keeping the inner text.
+/// Best-effort fallback for envelopes we don't have a structured
+/// renderer for. Collapses consecutive whitespace afterward so the
+/// resulting row doesn't have weird gaps.
+fn strip_xml_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    // Collapse runs of whitespace.
+    let mut collapsed = String::with_capacity(out.len());
+    let mut prev_space = false;
+    for ch in out.chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                collapsed.push(' ');
+            }
+            prev_space = true;
+        } else {
+            collapsed.push(ch);
+            prev_space = false;
+        }
+    }
+    collapsed.trim().to_string()
+}
+
+/// Substitute the `{exe}` placeholder in a preview command with the
+/// shell-quoted absolute path of the currently-running binary.
+///
+/// Why this exists: previews used to hard-code `path show …`, which
+/// resolves whatever `path` is first on `$PATH`. Users with an older
+/// `path` from `cargo install path-cli` would see preview errors
+/// (mismatched flags) instead of the rendered session. Substituting
+/// the running binary makes the preview self-consistent — same code
+/// runs in the picker, the preview, and the eventual import.
+pub(crate) fn substitute_exe_placeholder(preview: &str) -> String {
+    let exe = match std::env::current_exe() {
+        Ok(p) => shell_quote(&p.to_string_lossy()),
+        // Fallback to bare `path` if we can't locate ourselves — preserves
+        // the previous behavior rather than blowing up the preview.
+        Err(_) => "path".to_string(),
+    };
+    preview.replace("{exe}", &exe)
+}
+
+/// Single-quote a path for embedding in a `/bin/sh -c` command line.
+/// Any embedded single-quote becomes `'\''` so the path survives intact.
+fn shell_quote(s: &str) -> String {
+    let escaped = s.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+/// Outcome of a picker invocation.
+///
+/// Distinguishes a deliberate user cancel (Esc / Ctrl-C, fzf exit 130)
+/// from the no-match case (fzf exit 1). Callers that want to surface a
+/// non-zero exit on cancel can match on `Cancelled`; callers that just
+/// want the picked lines treat both `NoMatch` and `Cancelled` as "empty
+/// selection".
 pub enum PickResult {
-    /// fzf exited 0 with at least one selected line.
+    /// Picker exited cleanly with at least one selected line.
     Selected(Vec<String>),
-    /// fzf exited 1: input was non-empty but nothing matched the query.
+    /// Picker exited cleanly with nothing matched / nothing selected.
     NoMatch,
-    /// fzf exited 130: the user pressed Esc / Ctrl-C / Ctrl-D.
+    /// User pressed Esc / Ctrl-C / Ctrl-D.
     Cancelled,
 }
 
-/// Run fzf with the supplied lines on stdin. Returns a `PickResult` so the
-/// caller can distinguish a successful selection from no-match vs. an
-/// explicit user cancel (which some callers map to a non-zero exit).
+/// Run the fuzzy picker with the supplied lines and options. Honors
+/// the global `--picker` override; defaults to `Auto`, which prefers
+/// the external `fzf` binary when it's on `PATH` (so users keep their
+/// own fzf config / keybindings) and falls back to the embedded skim
+/// picker otherwise. Errors out only when the requested backend isn't
+/// available — callers should check [`available`] first.
 pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
+    match current_picker() {
+        Picker::Fzf => {
+            if !external_fzf_available() {
+                anyhow::bail!(
+                    "`--picker fzf` requested but `fzf` isn't on PATH; install it or pass `--picker auto`/`skim`"
+                );
+            }
+            pick_external(lines, opts)
+        }
+        Picker::Skim => pick_embedded(lines, opts),
+        Picker::Auto => {
+            if external_fzf_available() {
+                pick_external(lines, opts)
+            } else {
+                pick_embedded(lines, opts)
+            }
+        }
+    }
+}
+
+/// Invoke the embedded skim picker. Compiled-out under
+/// `--no-default-features`, in which case calling this returns a clear
+/// error rather than the cryptic "no backend" surface.
+#[cfg(feature = "embedded-picker")]
+fn pick_embedded(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
+    crate::skim_picker::pick(lines, opts)
+}
+
+#[cfg(not(feature = "embedded-picker"))]
+fn pick_embedded(_lines: &[String], _opts: &PickOptions<'_>) -> Result<PickResult> {
+    anyhow::bail!(
+        "embedded skim picker isn't compiled in (built with `--no-default-features`); install `fzf` and pass `--picker fzf` or rebuild with the default `embedded-picker` feature"
+    )
+}
+
+/// Run the external `fzf` binary directly. Same surface as [`pick`] —
+/// kept as a dedicated path so call sites that *must* hit external fzf
+/// (e.g. integration tests pinning behavior) can opt in.
+pub fn pick_external(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
     let mut args: Vec<String> = vec![
         "--delimiter=\t".into(),
         format!("--with-nth={}", opts.with_nth),
@@ -68,7 +321,7 @@ pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
     }
 
     if let Some(preview) = opts.preview {
-        args.push(format!("--preview={}", preview));
+        args.push(format!("--preview={}", substitute_exe_placeholder(preview)));
         args.push(format!("--preview-window={}", opts.preview_window));
         args.push("--preview-wrap-sign=".into());
     }
@@ -112,7 +365,8 @@ pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
     }
 }
 
-/// Options for an fzf invocation.
+/// Options for a picker invocation. Field names mirror fzf's flags;
+/// the embedded skim backend maps them onto its equivalents.
 pub struct PickOptions<'a> {
     /// Visible columns in fzf's notation, e.g. `2..` to hide col 1.
     pub with_nth: &'a str,
@@ -145,30 +399,76 @@ impl Default for PickOptions<'_> {
     }
 }
 
-/// Print a manual recipe for users without fzf or piping non-interactively.
-/// `provider` is the subcommand name; `project_keyed` toggles the column layout.
+/// Print a manual recipe for users who can't get an interactive picker.
+/// Reached when stdin/stderr aren't TTYs, or — under
+/// `--no-default-features` — when external `fzf` is also missing.
+/// `provider` is the subcommand name; `project_keyed` toggles the
+/// column layout.
 pub fn print_recipe(provider: &str, project_keyed: bool) {
+    let leader = if !external_fzf_available() && !embedded_picker_available() {
+        "Interactive selection needs `fzf` on PATH (or a build with the \
+         `embedded-picker` feature) and a TTY."
+    } else {
+        "Interactive selection needs a TTY."
+    };
+
     if project_keyed {
         eprintln!(
-            "Interactive selection needs `fzf` on PATH and a TTY.\n\
+            "{leader}\n\
              \n\
              Manual recipe:\n  \
-             path list {provider} --format tsv \\\n    \
+             path p list {provider} --format tsv \\\n    \
              | fzf --delimiter=$'\\t' --with-nth=3.. \\\n          \
              --preview 'path show {provider} --project {{1}} --session {{2}}' \\\n    \
              | awk -F'\\t' '{{print $1 \"\\n\" $2}}' \\\n    \
-             | xargs -L2 sh -c 'path derive {provider} --project \"$1\" --session \"$2\"' --\n"
+             | xargs -L2 sh -c 'path p import {provider} --project \"$1\" --session \"$2\"' --\n"
         );
     } else {
         eprintln!(
-            "Interactive selection needs `fzf` on PATH and a TTY.\n\
+            "{leader}\n\
              \n\
              Manual recipe:\n  \
-             path list {provider} --format tsv \\\n    \
+             path p list {provider} --format tsv \\\n    \
              | fzf --delimiter=$'\\t' --with-nth=2.. \\\n          \
              --preview 'path show {provider} --session {{1}}' \\\n    \
              | cut -f1 \\\n    \
-             | xargs -I{{}} path derive {provider} --session {{}}\n"
+             | xargs -I{{}} path p import {provider} --session {{}}\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_quote_wraps_in_single_quotes() {
+        assert_eq!(shell_quote("/usr/local/bin/path"), "'/usr/local/bin/path'");
+    }
+
+    #[test]
+    fn shell_quote_escapes_embedded_single_quote() {
+        // A path containing a single quote becomes `'…'\''…'` so the
+        // shell reassembles the literal correctly.
+        assert_eq!(shell_quote("/o'reilly/bin"), "'/o'\\''reilly/bin'");
+    }
+
+    #[test]
+    fn substitute_exe_replaces_placeholder() {
+        // We don't pin the substituted value (it's `current_exe()` at
+        // runtime), but we can confirm the placeholder is consumed and
+        // the surrounding template survives.
+        let out = substitute_exe_placeholder("{exe} show --ansi claude --session {1}");
+        assert!(!out.contains("{exe}"), "placeholder not substituted: {out}");
+        assert!(out.contains(" show --ansi claude --session {1}"));
+    }
+
+    #[test]
+    fn substitute_exe_leaves_other_placeholders_alone() {
+        // `{1}`, `{2}` etc. are the picker's column placeholders —
+        // they must survive the substitution untouched.
+        let out = substitute_exe_placeholder("{exe} show --session {1} --project {2}");
+        assert!(out.contains("{1}"));
+        assert!(out.contains("{2}"));
     }
 }

@@ -551,9 +551,9 @@ pub fn run(args: ShareArgs) -> Result<()> {
     let lines: Vec<String> = rows.iter().map(format_picker_row).collect();
     let header = format!("share an agent session (Enter = upload to {base_url})");
     let opts = crate::fzf::PickOptions {
-        with_nth: "4..",
+        with_nth: "4",
         prompt: "share> ",
-        preview: Some("path show --ansi {1} --project {2} --session {3}"),
+        preview: Some("{exe} show --ansi {1} --project {2} --session {3}"),
         // Stacked layout: preview above the list, list below. Fits narrow
         // terminals better than the default side-by-side and gives the
         // session preview the full terminal width to render `path show`.
@@ -822,39 +822,66 @@ fn share_explicit(
     crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary)
 }
 
-/// Build the TSV line fed to fzf. Cols 1–3 are hidden (harness/key/session,
-/// used as parser keys); cols 4..8 are visible to the user.
+/// Build the TSV line fed to fzf / skim. Three hidden parser-only
+/// columns lead the row (harness key, project/cwd, session id); a
+/// fourth column carries the pre-formatted display string; a fifth
+/// carries the raw title so `parse_picker_row` can recover it without
+/// reparsing the formatted display.
+///
+/// Visible columns are packed into the single display string with
+/// explicit space padding rather than left to terminal tab stops to
+/// render — tab-separated cells line up unpredictably across pickers
+/// (fzf and skim both honor terminal tab stops, which produces wide
+/// variable gaps).
 fn format_picker_row(row: &SessionRow) -> String {
     let key = row
         .project
         .clone()
         .or_else(|| row.cwd.clone())
         .unwrap_or_default();
-    let when = row
-        .last_activity
-        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| "          —     ".to_string());
-    let scope = if row.matches_cwd { "·" } else { " " };
-    let project_short = project_short(&key);
-    let title = fzf_title(&row.title);
+    let display = format_picker_display(row, &key);
+    let title = crate::fzf::clean_for_picker_display(&row.title);
     format!(
-        "{}\t{}\t{}\t{}\t{}\t{} msgs\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}",
         row.harness.name(),
         tab_safe(&key),
         tab_safe(&row.session_id),
-        row.harness.symbol(),
-        when,
-        row.message_count,
-        scope,
-        tab_safe(&project_short),
-        title,
+        display,
+        tab_safe(&title),
     )
 }
 
-/// Inverse of [`format_picker_row`] — pulls (harness, key, session, title)
-/// back out of the line fzf returned. Returns `None` if the line is
-/// malformed. The title is column 9 of the TSV; it lives in the visible
-/// portion so it round-trips through fzf unchanged.
+/// Render the visible portion of a picker row as a single fixed-width
+/// string. Columns left-to-right:
+///
+/// 1. `·` or space — cwd-match marker.
+/// 2. Harness symbol, padded to the width of the widest installed
+///    name (`opencode` = 8).
+/// 3. `YYYY-MM-DD HH:MM` timestamp (16 chars), or a placeholder.
+/// 4. Right-aligned message count + ` msgs`.
+/// 5. Repo-shaped project label, padded to a fixed width with `…`
+///    truncation.
+/// 6. Cleaned-up title, ellipsis-truncated past `TITLE_MAX`.
+fn format_picker_display(row: &SessionRow, key: &str) -> String {
+    const PROJECT_WIDTH: usize = 28;
+    const TITLE_MAX: usize = 96;
+
+    let scope = if row.matches_cwd { "·" } else { " " };
+    let symbol = row.harness.symbol(); // already padded to 8 chars
+    let when = row
+        .last_activity
+        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "       —        ".to_string());
+    let msgs = format!("{:>4} msgs", row.message_count);
+    let project = pad_or_truncate(&tab_safe(&project_short(key)), PROJECT_WIDTH);
+    let title = clip_chars(&crate::fzf::clean_for_picker_display(&row.title), TITLE_MAX);
+
+    format!("{scope} {symbol} {when}  {msgs}  {project}  {title}")
+}
+
+/// Inverse of [`format_picker_row`] — pulls (harness, key, session,
+/// title) back out of the line the picker returned. Returns `None` if
+/// the line is malformed.
 fn parse_picker_row(line: &str) -> Option<(Harness, String, String, String)> {
     let mut parts = line.split('\t');
     let h = Harness::parse(parts.next()?)?;
@@ -863,9 +890,9 @@ fn parse_picker_row(line: &str) -> Option<(Harness, String, String, String)> {
     if session.is_empty() {
         return None;
     }
-    // Skip cols 4..8 (symbol, when, msgs, scope, project_short) to reach
-    // the title at col 9.
-    let title = parts.nth(5).unwrap_or("").to_string();
+    // Skip the pre-formatted display column (col 4) to reach the raw
+    // title at col 5.
+    let title = parts.nth(1).unwrap_or("").to_string();
     Some((h, key, session, title))
 }
 
@@ -873,15 +900,31 @@ fn tab_safe(s: &str) -> String {
     s.replace(['\t', '\n', '\r'], " ")
 }
 
-fn fzf_title(s: &str) -> String {
-    const MAX: usize = 120;
-    let safe = tab_safe(s);
-    if safe.chars().count() > MAX {
-        let head: String = safe.chars().take(MAX - 1).collect();
-        format!("{head}…")
+/// Pad `s` with trailing spaces to `width` chars, or truncate it with
+/// a trailing `…` if it's longer. Width is measured in characters,
+/// not bytes, so the column alignment is predictable on multibyte
+/// titles. ASCII fast-path covers the common case.
+fn pad_or_truncate(s: &str, width: usize) -> String {
+    let count = s.chars().count();
+    if count == width {
+        s.to_string()
+    } else if count < width {
+        format!("{s}{}", " ".repeat(width - count))
     } else {
-        safe
+        let head: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{head}…")
     }
+}
+
+/// Truncate to `width` characters with a trailing `…` if needed.
+/// (No padding — used for the trailing title column where the picker
+/// will horizontally scroll if the row is wider than the terminal.)
+fn clip_chars(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(width.saturating_sub(1)).collect();
+    format!("{head}…")
 }
 
 fn project_short(p: &str) -> String {

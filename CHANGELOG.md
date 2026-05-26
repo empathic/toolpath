@@ -2,6 +2,29 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Embedded fuzzy picker — fzf is now optional — unreleased
+
+`path-cli` 0.12.0. The CLI no longer requires the external `fzf` binary
+for its interactive flows (`path share`, `path resume`, `path p import
+<provider>`). When `fzf` is on `PATH` we still prefer it — so users'
+fzf config and keybindings keep working — but absence is no longer a
+reason to bail out of an interactive flow.
+
+- New `skim`-backed embedded picker in `crates/path-cli/src/skim_picker.rs`,
+  routed through the existing `fzf::pick` API so all call sites work
+  unchanged. Same `{1}`/`{2}` preview placeholders and `--with-nth`
+  column grammar; existing `path show ...` preview commands work.
+- Gated by the `embedded-picker` Cargo feature, on by default. Build
+  with `--no-default-features` to drop skim and shave ~2 MB off the
+  release binary; the CLI falls back to the manual-recipe printout
+  when neither backend is available.
+- New global `--picker auto|fzf|skim` flag forces a backend (default
+  `auto`). `--picker skim` overrides external fzf even when it's on
+  PATH; `--picker fzf` errors out when fzf isn't installed.
+- `fzf::available()` is now TTY-only — `fzf::external_fzf_available()`
+  and `fzf::embedded_picker_available()` split out the two halves so
+  callers (and `print_recipe`) can describe what's actually missing.
+
 ## Readable conversation previews — kind-aware rendering + ANSI — unreleased
 
 `toolpath-md` renders an `agent-coding-session` path as a flat conversation
