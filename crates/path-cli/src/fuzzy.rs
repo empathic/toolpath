@@ -569,4 +569,121 @@ mod tests {
         assert!(out.contains("{1}"));
         assert!(out.contains("{2}"));
     }
+
+    use chrono::TimeZone;
+
+    fn jan_first() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 1, 29, 10, 5, 0).unwrap()
+    }
+
+    /// Bare row — no leading prefix, no project, real timestamp.
+    /// Pin the exact output so a regression in spacing or column order
+    /// shows up as a diff on this test.
+    #[test]
+    fn render_row_bare_matches_expected_format() {
+        let out = render_row(None, Some(jan_first()), "  17 msgs", None, "hello world");
+        // {when:16}␣␣{count}␣␣{title}
+        assert_eq!(out, "2026-01-29 10:05    17 msgs  hello world");
+    }
+
+    /// `path share` injects a scope marker + harness symbol as the
+    /// `leading` prefix; assert it's separated from the timestamp by
+    /// exactly one space so the layout is grep-able.
+    #[test]
+    fn render_row_with_leading_prefix_separates_with_one_space() {
+        let out = render_row(
+            Some("· claude  "),
+            Some(jan_first()),
+            "  17 msgs",
+            None,
+            "hi",
+        );
+        assert!(out.starts_with("· claude   2026-01-29 10:05"), "{out}");
+    }
+
+    /// Optional project segment pads to PROJECT_WIDTH (28 chars) so
+    /// the title column starts at the same offset on every row.
+    #[test]
+    fn render_row_pads_project_to_fixed_width() {
+        let short = render_row(None, Some(jan_first()), "  17 msgs", Some("a/b"), "t");
+        let long = render_row(
+            None,
+            Some(jan_first()),
+            "  17 msgs",
+            Some("a-much-longer-name"),
+            "t",
+        );
+        let title_offset = |s: &str| s.find("t").and_then(|_| s.rfind("  t")).unwrap();
+        assert_eq!(
+            title_offset(&short),
+            title_offset(&long),
+            "title misaligned across rows:\n short={short:?}\n long={long:?}"
+        );
+    }
+
+    /// Project longer than PROJECT_WIDTH is truncated with a `…`
+    /// sentinel; padding never makes a row wider than the budget.
+    #[test]
+    fn render_row_truncates_oversized_project_with_ellipsis() {
+        let long = "x".repeat(40);
+        let out = render_row(None, Some(jan_first()), "  17 msgs", Some(&long), "t");
+        // The project segment renders 28 chars wide then `  ` separator.
+        // Find the literal "  t" that follows it.
+        let project_segment = out
+            .strip_prefix("2026-01-29 10:05    17 msgs  ")
+            .unwrap()
+            .strip_suffix("  t")
+            .unwrap();
+        assert_eq!(project_segment.chars().count(), 28);
+        assert!(project_segment.ends_with('…'), "got: {project_segment:?}");
+    }
+
+    /// Missing timestamp renders a 16-char placeholder so subsequent
+    /// columns still align with timestamped rows. Compare via *char*
+    /// position — the placeholder uses an em dash which is 3 bytes but
+    /// 1 char, so byte offsets would diverge despite visual alignment.
+    #[test]
+    fn render_row_missing_when_renders_placeholder_at_fixed_width() {
+        let with = render_row(None, Some(jan_first()), "  17 msgs", None, "t");
+        let without = render_row(None, None, "  17 msgs", None, "t");
+        let char_offset = |s: &str| {
+            s.chars()
+                .collect::<Vec<_>>()
+                .windows(7)
+                .position(|w| w.iter().collect::<String>() == "17 msgs")
+        };
+        assert_eq!(char_offset(&with), char_offset(&without));
+    }
+
+    /// Long titles get clipped with a `…` sentinel; the surrounding
+    /// columns are untouched.
+    #[test]
+    fn render_row_clips_long_title_with_ellipsis() {
+        let title = "x".repeat(200);
+        let out = render_row(None, Some(jan_first()), "  17 msgs", None, &title);
+        let title_part = out.strip_prefix("2026-01-29 10:05    17 msgs  ").unwrap();
+        // TITLE_MAX = 96; ellipsis takes one slot.
+        assert_eq!(title_part.chars().count(), 96);
+        assert!(title_part.ends_with('…'), "got: {title_part:?}");
+    }
+
+    /// Slash-command envelopes are stripped from the title via
+    /// `clean_for_picker_display` before truncation. Belt-and-suspenders
+    /// regression guard for the row noise the picker rows used to show.
+    #[test]
+    fn render_row_strips_slash_command_envelope_from_title() {
+        let raw = "<command-message>biko</command-message> <command-name>/biko</command-name> <command-args>do the thing</command-args>";
+        let out = render_row(None, Some(jan_first()), "  17 msgs", None, raw);
+        assert!(out.ends_with("/biko do the thing"), "got: {out}");
+        assert!(!out.contains("<command-"));
+    }
+
+    /// `count` right-aligns the number to 4 chars so the unit column
+    /// stays in the same place across rows with different magnitudes.
+    #[test]
+    fn count_right_aligns_number_to_four_chars() {
+        assert_eq!(count(7, "msgs"), "   7 msgs");
+        assert_eq!(count(1572, "msgs"), "1572 msgs");
+        assert_eq!(count(12, "entries"), "  12 entries");
+    }
 }
