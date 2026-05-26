@@ -497,22 +497,23 @@ fn pick_claude_in_project(
     let lines: Vec<String> = metas
         .iter()
         .map(|m| {
-            // Cols 1+2 are hidden ID columns the parser uses; cols 3+ are
-            // visible to fzf for display + fuzzy-match. Lead the visible
-            // section with the title so the user is searching what the
-            // conversation was *about*, not on UUIDs.
+            // Cols 1+2 are hidden ID columns the parser keys on; col 3
+            // is the visible display string.
             format!(
-                "{}\t{}\t{}\t{}\t{} msgs",
+                "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_id),
-                fzf_title(m.first_user_message.as_deref().unwrap_or("(no prompt)")),
-                short_timestamp(m.last_activity),
-                m.message_count,
+                picker_display(
+                    m.last_activity,
+                    &msg_count(m.message_count),
+                    None,
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
             )
         })
         .collect();
     let opts = fzf::PickOptions {
-        with_nth: "3..",
+        with_nth: "3",
         prompt: "claude session> ",
         preview: Some("{exe} show --ansi claude --project {1} --session {2}"),
         header: Some("pick a Claude session (TAB = multi-select, Enter = confirm)"),
@@ -551,18 +552,20 @@ fn pick_claude_global(
         .iter()
         .map(|m| {
             format!(
-                "{}\t{}\t{}\t{}\t{} msgs\t{}",
+                "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_id),
-                fzf_title(m.first_user_message.as_deref().unwrap_or("(no prompt)")),
-                short_timestamp(m.last_activity),
-                m.message_count,
-                tab_safe(&project_short(&m.project_path)),
+                picker_display(
+                    m.last_activity,
+                    &msg_count(m.message_count),
+                    Some(&project_short(&m.project_path)),
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
             )
         })
         .collect();
     let opts = fzf::PickOptions {
-        with_nth: "3..",
+        with_nth: "3",
         prompt: "claude session> ",
         preview: Some("{exe} show --ansi claude --project {1} --session {2}"),
         header: Some("pick a Claude session (TAB = multi-select, Enter = confirm)"),
@@ -718,17 +721,20 @@ fn pick_gemini_in_project(
         .iter()
         .map(|m| {
             format!(
-                "{}\t{}\t{}\t{}\t{} msgs",
+                "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_uuid),
-                fzf_title(m.first_user_message.as_deref().unwrap_or("(no prompt)")),
-                short_timestamp(m.last_activity),
-                m.message_count,
+                picker_display(
+                    m.last_activity,
+                    &msg_count(m.message_count),
+                    None,
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
             )
         })
         .collect();
     let opts = fzf::PickOptions {
-        with_nth: "3..",
+        with_nth: "3",
         prompt: "gemini session> ",
         preview: Some("{exe} show --ansi gemini --project {1} --session {2}"),
         header: Some("pick a Gemini session (TAB = multi-select, Enter = confirm)"),
@@ -767,18 +773,20 @@ fn pick_gemini_global(
         .iter()
         .map(|m| {
             format!(
-                "{}\t{}\t{}\t{}\t{} msgs\t{}",
+                "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_uuid),
-                fzf_title(m.first_user_message.as_deref().unwrap_or("(no prompt)")),
-                short_timestamp(m.last_activity),
-                m.message_count,
-                tab_safe(&project_short(&m.project_path)),
+                picker_display(
+                    m.last_activity,
+                    &msg_count(m.message_count),
+                    Some(&project_short(&m.project_path)),
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
             )
         })
         .collect();
     let opts = fzf::PickOptions {
-        with_nth: "3..",
+        with_nth: "3",
         prompt: "gemini session> ",
         preview: Some("{exe} show --ansi gemini --project {1} --session {2}"),
         header: Some("pick a Gemini session (TAB = multi-select, Enter = confirm)"),
@@ -891,23 +899,24 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
     let lines: Vec<String> = metas
         .iter()
         .map(|m| {
+            let cwd_short = m
+                .cwd
+                .as_ref()
+                .map(|p| project_short(&p.to_string_lossy()));
             format!(
-                "{}\t{}\t{}\t{} lines\t{}",
+                "{}\t{}",
                 tab_safe(&m.id),
-                fzf_title(m.first_user_message.as_deref().unwrap_or("(no prompt)")),
-                short_timestamp(m.last_activity),
-                m.line_count,
-                tab_safe(
-                    &m.cwd
-                        .as_ref()
-                        .map(|p| project_short(&p.to_string_lossy()))
-                        .unwrap_or_default(),
+                picker_display(
+                    m.last_activity,
+                    &line_count(m.line_count),
+                    cwd_short.as_deref(),
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
                 ),
             )
         })
         .collect();
     let opts = fzf::PickOptions {
-        with_nth: "2..",
+        with_nth: "2",
         prompt: "codex session> ",
         preview: Some("{exe} show --ansi codex --session {1}"),
         header: Some("pick a Codex session (TAB = multi-select, Enter = confirm)"),
@@ -1050,23 +1059,26 @@ fn pick_opencode(
     let lines: Vec<String> = metas
         .iter()
         .map(|m| {
+            let dir_short = project_short(&m.directory.to_string_lossy());
+            let title = m
+                .first_user_message
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(m.title.as_str());
             format!(
-                "{}\t{}\t{}\t{} msgs\t{}",
+                "{}\t{}",
                 tab_safe(&m.id),
-                fzf_title(
-                    m.first_user_message
-                        .as_deref()
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or(m.title.as_str()),
+                picker_display(
+                    m.last_activity,
+                    &msg_count(m.message_count),
+                    Some(&dir_short),
+                    title,
                 ),
-                short_timestamp(m.last_activity),
-                m.message_count,
-                tab_safe(&project_short(&m.directory.to_string_lossy())),
             )
         })
         .collect();
     let opts = fzf::PickOptions {
-        with_nth: "2..",
+        with_nth: "2",
         prompt: "opencode session> ",
         preview: Some("{exe} show --ansi opencode --session {1}"),
         header: Some("pick an opencode session (TAB = multi-select, Enter = confirm)"),
@@ -1214,17 +1226,20 @@ fn pick_pi_in_project(
         .iter()
         .map(|m| {
             format!(
-                "{}\t{}\t{}\t{}\t{} entries",
+                "{}\t{}\t{}",
                 tab_safe(project),
                 tab_safe(&m.id),
-                fzf_title(m.first_user_message.as_deref().unwrap_or("(no prompt)")),
-                tab_safe(&m.timestamp),
-                m.entry_count,
+                picker_display(
+                    parse_rfc3339(&m.timestamp),
+                    &entry_count(m.entry_count),
+                    None,
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
             )
         })
         .collect();
     let opts = fzf::PickOptions {
-        with_nth: "3..",
+        with_nth: "3",
         prompt: "pi session> ",
         preview: Some("{exe} show --ansi pi --project {1} --session {2}"),
         header: Some("pick a Pi session (TAB = multi-select, Enter = confirm)"),
@@ -1263,18 +1278,20 @@ fn pick_pi_global(manager: &toolpath_pi::PiConvo) -> Result<Option<Vec<(String, 
         .iter()
         .map(|(project, m)| {
             format!(
-                "{}\t{}\t{}\t{}\t{} entries\t{}",
+                "{}\t{}\t{}",
                 tab_safe(project),
                 tab_safe(&m.id),
-                fzf_title(m.first_user_message.as_deref().unwrap_or("(no prompt)")),
-                tab_safe(&m.timestamp),
-                m.entry_count,
-                tab_safe(&project_short(project)),
+                picker_display(
+                    parse_rfc3339(&m.timestamp),
+                    &entry_count(m.entry_count),
+                    Some(&project_short(project)),
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
             )
         })
         .collect();
     let opts = fzf::PickOptions {
-        with_nth: "3..",
+        with_nth: "3",
         prompt: "pi session> ",
         preview: Some("{exe} show --ansi pi --project {1} --session {2}"),
         header: Some("pick a Pi session (TAB = multi-select, Enter = confirm)"),
@@ -1317,53 +1334,71 @@ fn parse_single_id(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Replace tabs/newlines so a TSV row stays one line with stable columns.
-fn tab_safe(s: &str) -> String {
-    s.replace(['\t', '\n', '\r'], " ")
+use crate::fzf::{clip_chars, pad_or_truncate, project_short, tab_safe};
+
+/// One visible picker column packed into a single fixed-width string,
+/// so columns line up consistently across pickers (terminal tab stops
+/// produce ugly variable gaps).
+///
+/// Layout: `{when:16}  {count}  [{project:28}]  {title}`. The project
+/// segment is omitted when not relevant (e.g. the per-project view
+/// already has the project pinned). Slash-command and local-command-
+/// caveat envelopes are stripped from `title` via
+/// `fzf::clean_for_picker_display`.
+///
+/// `count` is supplied pre-formatted (e.g. `" 875 msgs"` or
+/// `" 12 lines"`) so providers with different units share the same
+/// renderer. Use [`msg_count`] / [`line_count`] for the conventional
+/// formatting.
+#[cfg(not(target_os = "emscripten"))]
+fn picker_display(
+    when: Option<chrono::DateTime<chrono::Utc>>,
+    count: &str,
+    project: Option<&str>,
+    title: &str,
+) -> String {
+    const PROJECT_WIDTH: usize = 28;
+    const TITLE_MAX: usize = 96;
+    let when_str = when
+        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "       —        ".to_string());
+    let project_segment = match project {
+        Some(p) => format!("{}  ", pad_or_truncate(&tab_safe(p), PROJECT_WIDTH)),
+        None => String::new(),
+    };
+    let title_str = clip_chars(&crate::fzf::clean_for_picker_display(title), TITLE_MAX);
+    format!("{when_str}  {count}  {project_segment}{title_str}")
 }
 
-/// Display-friendly title cell for an fzf row: tab-safe, single-line, capped
-/// in length so a long pasted prompt doesn't push later columns off screen.
-/// Strips Claude's slash-command and local-command XML envelopes via
-/// `fzf::clean_for_picker_display` so the visible text is the actual
-/// user intent rather than the raw markup. fzf still fuzzy-matches on
-/// the truncated form — full prompt text lives in the preview pane via
-/// `path show`.
+/// `" 875 msgs"` — right-aligned to keep the count column predictable.
 #[cfg(not(target_os = "emscripten"))]
-fn fzf_title(s: &str) -> String {
-    const MAX: usize = 120;
-    let cleaned = crate::fzf::clean_for_picker_display(s);
-    let safe = tab_safe(&cleaned);
-    if safe.chars().count() > MAX {
-        let head: String = safe.chars().take(MAX - 1).collect();
-        format!("{head}…")
-    } else {
-        safe
-    }
+fn msg_count(n: usize) -> String {
+    format!("{n:>4} msgs")
 }
 
-/// Compact timestamp for fzf rows — `YYYY-MM-DD HH:MM` is enough resolution
-/// to disambiguate sessions in a picker without eating a full RFC 3339 line.
+/// `" 12 lines"` — codex sessions count newlines, not messages.
 #[cfg(not(target_os = "emscripten"))]
-fn short_timestamp(t: Option<chrono::DateTime<chrono::Utc>>) -> String {
-    match t {
-        Some(t) => t.format("%Y-%m-%d %H:%M").to_string(),
-        None => "          —     ".to_string(), // pad so the column stays aligned
-    }
+fn line_count(n: usize) -> String {
+    format!("{n:>4} lines")
 }
 
-/// Last two path segments — enough to disambiguate `…/repo/.claude/worktrees/foo`
-/// from `…/other-repo/main` without showing the full absolute path.
+/// `" 12 entries"` — pi sessions count tree entries (which include
+/// sub-agent steps), not flat messages.
 #[cfg(not(target_os = "emscripten"))]
-fn project_short(p: &str) -> String {
-    let trimmed = p.trim_end_matches('/');
-    let parts: Vec<&str> = trimmed.rsplit('/').take(2).collect();
-    if parts.is_empty() {
-        return p.to_string();
-    }
-    let mut out: Vec<&str> = parts.into_iter().collect();
-    out.reverse();
-    out.join("/")
+fn entry_count(n: usize) -> String {
+    format!("{n:>4} entries")
+}
+
+/// Parse an RFC 3339 timestamp string into `DateTime<Utc>` for picker
+/// row rendering. Returns `None` when the string isn't parseable so
+/// `picker_display` renders its placeholder column rather than blowing
+/// up the row. Used by the Pi provider, whose session metadata stores
+/// timestamps as raw strings.
+#[cfg(not(target_os = "emscripten"))]
+fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
 }
 
 /// Compute the local cache id a Pathbase ref would land at, without

@@ -896,47 +896,7 @@ fn parse_picker_row(line: &str) -> Option<(Harness, String, String, String)> {
     Some((h, key, session, title))
 }
 
-fn tab_safe(s: &str) -> String {
-    s.replace(['\t', '\n', '\r'], " ")
-}
-
-/// Pad `s` with trailing spaces to `width` chars, or truncate it with
-/// a trailing `…` if it's longer. Width is measured in characters,
-/// not bytes, so the column alignment is predictable on multibyte
-/// titles. ASCII fast-path covers the common case.
-fn pad_or_truncate(s: &str, width: usize) -> String {
-    let count = s.chars().count();
-    if count == width {
-        s.to_string()
-    } else if count < width {
-        format!("{s}{}", " ".repeat(width - count))
-    } else {
-        let head: String = s.chars().take(width.saturating_sub(1)).collect();
-        format!("{head}…")
-    }
-}
-
-/// Truncate to `width` characters with a trailing `…` if needed.
-/// (No padding — used for the trailing title column where the picker
-/// will horizontally scroll if the row is wider than the terminal.)
-fn clip_chars(s: &str, width: usize) -> String {
-    if s.chars().count() <= width {
-        return s.to_string();
-    }
-    let head: String = s.chars().take(width.saturating_sub(1)).collect();
-    format!("{head}…")
-}
-
-fn project_short(p: &str) -> String {
-    let trimmed = p.trim_end_matches('/');
-    let parts: Vec<&str> = trimmed.rsplit('/').take(2).collect();
-    if parts.is_empty() {
-        return p.to_string();
-    }
-    let mut out: Vec<&str> = parts.into_iter().collect();
-    out.reverse();
-    out.join("/")
-}
+use crate::fzf::{clip_chars, pad_or_truncate, project_short, tab_safe};
 
 fn derive_session(
     harness: Harness,

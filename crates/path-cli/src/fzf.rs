@@ -107,6 +107,55 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
     None
 }
 
+/// Replace tabs / newlines / carriage returns with a single space so a
+/// value safely fits inside one TSV cell without breaking the row
+/// structure or pushing content onto a new line.
+pub(crate) fn tab_safe(s: &str) -> String {
+    s.replace(['\t', '\n', '\r'], " ")
+}
+
+/// Pad `s` with trailing spaces to `width` *characters* (not bytes) so
+/// the next column lines up predictably even with multibyte titles.
+/// If `s` is longer than `width`, truncate and replace the last visible
+/// character with `…` so the boundary is obvious.
+pub(crate) fn pad_or_truncate(s: &str, width: usize) -> String {
+    let count = s.chars().count();
+    if count == width {
+        s.to_string()
+    } else if count < width {
+        format!("{s}{}", " ".repeat(width - count))
+    } else {
+        let head: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{head}…")
+    }
+}
+
+/// Truncate `s` to `width` characters with a trailing `…` if needed.
+/// No padding — used for the trailing column of a picker row where
+/// the picker is free to horizontally scroll if the line overflows.
+pub(crate) fn clip_chars(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(width.saturating_sub(1)).collect();
+    format!("{head}…")
+}
+
+/// Last two path segments of `p`, slash-joined. Just enough to
+/// disambiguate `…/repo/.claude/worktrees/foo` from
+/// `…/other-repo/main` in a picker without spending screen real
+/// estate on the full absolute path.
+pub(crate) fn project_short(p: &str) -> String {
+    let trimmed = p.trim_end_matches('/');
+    let parts: Vec<&str> = trimmed.rsplit('/').take(2).collect();
+    if parts.is_empty() {
+        return p.to_string();
+    }
+    let mut out: Vec<&str> = parts.into_iter().collect();
+    out.reverse();
+    out.join("/")
+}
+
 /// Clean up a user prompt for display in a picker row.
 ///
 /// Claude wraps the first user message of a session with XML envelopes
