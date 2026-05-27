@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## Embedded fuzzy picker — fzf is now optional — unreleased
+## Embedded fuzzy picker — fzf is now optional — 2026-05-27
 
 `path-cli` 0.12.0. The CLI no longer requires the external `fzf` binary
 for its interactive flows (`path share`, `path resume`, `path p import
@@ -25,9 +25,9 @@ reason to bail out of an interactive flow.
   and `fzf::embedded_picker_available()` split out the two halves so
   callers (and `print_recipe`) can describe what's actually missing.
 
-## Readable conversation previews — kind-aware rendering + ANSI — unreleased
+## Readable conversation previews — kind-aware rendering + ANSI — 2026-05-27
 
-`toolpath-md` renders an `agent-coding-session` path as a flat conversation
+`toolpath-md` 0.5.0 and `path-cli` 0.12.0. Renders an `agent-coding-session` path as a flat conversation
 transcript instead of the generic step/DAG timeline. The active (head-ancestry)
 turns render in causal order, speaker-labeled (`**User:**` / `**Assistant:**`),
 with the per-step UUID headers, timestamps, parent links, dead-end markers, and
@@ -48,10 +48,13 @@ boundaries and reflow on resize (requires fzf ≥ 0.59). `path show` without the
 flag still emits plain Markdown.
 
 Also fixes `truncate_str` slicing on a byte index that could fall inside a
-multibyte character (it now truncates by character). Touches `toolpath-md` and
-`path-cli`; versions to be bumped at release.
+multibyte character (it now truncates by character).
 
-## `meta.kind` — new path-kind field; hosted kind spec registry — unreleased
+## `meta.kind` — new path-kind field; hosted kind spec registry — 2026-05-27
+
+`toolpath` 0.5.0, `toolpath-convo` 0.9.0, `toolpath-claude` 0.10.0,
+`toolpath-gemini` 0.4.0, `toolpath-codex` 0.4.0, `toolpath-opencode` 0.3.0,
+`toolpath-pi` 0.4.0, and `path-cli` 0.12.0.
 
 New optional `meta.kind` field on `Path` (`toolpath::v1::PathMeta::kind`,
 plus the `toolpath::v1::PATH_KIND_AGENT_CODING_SESSION` constant). `kind` is a
@@ -80,9 +83,9 @@ and, for each path carrying a recognized `meta.kind`, the matching kind schema
 is applied on top of the base schema. An unrecognized `kind` validates against
 the base schema only.
 
-Touches `toolpath`, `toolpath-convo`, `toolpath-claude`, `toolpath-gemini`,
-`toolpath-codex`, `toolpath-opencode`, `toolpath-pi`, and `path-cli`; versions
-to be bumped at release.
+Cascading minor bumps with no source changes of their own — only the
+dependency on the new `toolpath 0.5` major: `toolpath-git` 0.4.0,
+`toolpath-github` 0.4.0, `toolpath-dot` 0.3.0.
 
 ## Pathbase 1.1 wire-model refresh — graphs-by-UUID — 2026-05-21
 

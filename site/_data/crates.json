@@ -1,7 +1,7 @@
 [
   {
     "name": "toolpath",
-    "version": "0.4.1",
+    "version": "0.5.0",
     "description": "Core types, builders, and query API",
     "docs": "https://docs.rs/toolpath",
     "crate": "https://crates.io/crates/toolpath",
@@ -9,7 +9,7 @@
   },
   {
     "name": "toolpath-convo",
-    "version": "0.8.0",
+    "version": "0.9.0",
     "description": "Provider-agnostic conversation types, traits, and Toolpath-Path derivation",
     "docs": "https://docs.rs/toolpath-convo",
     "crate": "https://crates.io/crates/toolpath-convo",
@@ -17,7 +17,7 @@
   },
   {
     "name": "toolpath-git",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Derive from git repository history",
     "docs": "https://docs.rs/toolpath-git",
     "crate": "https://crates.io/crates/toolpath-git",
@@ -25,7 +25,7 @@
   },
   {
     "name": "toolpath-github",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Derive from GitHub pull requests",
     "docs": "https://docs.rs/toolpath-github",
     "crate": "https://crates.io/crates/toolpath-github",
@@ -33,7 +33,7 @@
   },
   {
     "name": "toolpath-claude",
-    "version": "0.9.0",
+    "version": "0.10.0",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",
@@ -41,7 +41,7 @@
   },
   {
     "name": "toolpath-gemini",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Derive from Gemini CLI conversation logs",
     "docs": "https://docs.rs/toolpath-gemini",
     "crate": "https://crates.io/crates/toolpath-gemini",
@@ -49,7 +49,7 @@
   },
   {
     "name": "toolpath-codex",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Derive from Codex CLI rollout files",
     "docs": "https://docs.rs/toolpath-codex",
     "crate": "https://crates.io/crates/toolpath-codex",
@@ -57,7 +57,7 @@
   },
   {
     "name": "toolpath-opencode",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Derive from opencode SQLite databases",
     "docs": "https://docs.rs/toolpath-opencode",
     "crate": "https://crates.io/crates/toolpath-opencode",
@@ -65,7 +65,7 @@
   },
   {
     "name": "toolpath-pi",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Derive Toolpath provenance documents from Pi (pi.dev) agent session logs",
     "docs": "https://docs.rs/toolpath-pi",
     "crate": "https://crates.io/crates/toolpath-pi",
@@ -73,7 +73,7 @@
   },
   {
     "name": "toolpath-dot",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Graphviz DOT visualization",
     "docs": "https://docs.rs/toolpath-dot",
     "crate": "https://crates.io/crates/toolpath-dot",
@@ -81,7 +81,7 @@
   },
   {
     "name": "toolpath-md",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "description": "Markdown rendering for LLM consumption",
     "docs": "https://docs.rs/toolpath-md",
     "crate": "https://crates.io/crates/toolpath-md",
