@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Pathbase API",
-    "description": "HTTP API for Pathbase — repositories, agent trace paths, computation graphs, and anonymous share links.\n\n**Stability.** v1 endpoints are stable in shape; additive changes (new fields, new endpoints, broader query params) ship without a version bump. Breaking changes get a new prefix (`/api/v2/...`) and a deprecation window.\n\n**Spec format.** OpenAPI 3.1, served live at `/api/v1/openapi.json`.\n\n**Versioning header.** Every response carries an `X-Pathbase-Version` header with the running build's identifier (`<crate-version>+<git-sha>`). The spec does not enumerate it per operation; consumers may read it from any response to pin or correlate.\n\n**Auth.** Most endpoints require a `pat_…` bearer token (see `bearerAuth`). Obtain one through the CLI grant flow (`POST /api/v1/auth/cli/request-grant` then `POST /api/v1/auth/cli/redeem`). Unauthenticated endpoints — the `Anon` namespace, public profile reads — are clearly tagged. Per-operation `security` annotations reflect the actual gate.",
+    "description": "HTTP API for Pathbase — repositories, agent trace paths, computation graphs, and anonymous share links.\n\n**Stability.** v1 endpoints are stable in shape; additive changes (new fields, new endpoints, broader query params) ship without a version bump. Breaking changes get a new prefix (`/api/v2/...`) and a deprecation window.\n\n**Spec format.** OpenAPI 3.1, served live at `/api/v1/openapi.json`.\n\n**Versioning header.** Every response carries an `X-Pathbase-Version` header with the running build's identifier (`<semver>+<git-sha>`). The spec does not enumerate it per operation; consumers may read it from any response to pin or correlate.\n\n**Auth.** Most endpoints require a `pat_…` bearer token (see `bearerAuth`). Obtain one through the CLI grant flow (`POST /api/v1/auth/cli/request-grant` then `POST /api/v1/auth/cli/redeem`). Unauthenticated endpoints — the `Anon` namespace, public profile reads — are clearly tagged. Per-operation `security` annotations reflect the actual gate.",
     "license": {
       "name": ""
     },
@@ -303,7 +303,7 @@
           "Users"
         ],
         "summary": "Replace the authenticated user's editable profile fields.",
-        "description": "PUT semantics: the body is the new state. Fields not present\n(or `null`) are cleared. Username, email, and avatar are not\neditable here. Returns the updated user.",
+        "description": "PUT semantics: the body is the new state. Fields not present\n(or `null`) are cleared. Username and email are not editable\nhere. Returns the updated user.",
         "operationId": "update_me",
         "requestBody": {
           "description": "Complete new state of the editable profile fields. Missing or `null` clears the field — send the current value to preserve it.",
@@ -480,13 +480,13 @@
           "Repos"
         ],
         "summary": "Fetch a repository by `(owner, name)`.",
-        "description": "Public read; no authentication required. Returns the `Repo`\nincluding description, README, visibility flag, and timestamps. To\nlist a repo's paths or graphs, follow up with the corresponding\n`/paths` and `/graphs` collection endpoints.\n\n**Reserved owners.** `me` and `anon` are reserved namespaces; this\nendpoint returns 404 for either. Use `/api/v1/anon/...` for\nanonymous content and `/api/v1/u/me` (and `/api/v1/u/{owner}/repos`) for\nthe calling user's own resources.\n\n**Visibility.** `can_read` is enforced: `Public` returns to anyone,\n`Unlisted` (system-managed; URL-addressable) returns to anyone,\n`Private` returns only to the owner — others get `404`. Repos are\naddressed by guessable name, so there's no share-by-link at this\nlevel for `Private` repos. (Per-graph/per-path share-by-link inside\n`Public` repos is unaffected — those still gate on their own\nvisibility.)",
+        "description": "Public read; no authentication required. Returns the `Repo`\nincluding description, README, visibility flag, and timestamps. To\nlist a repo's paths or graphs, follow up with the corresponding\n`/paths` and `/graphs` collection endpoints.\n\n**Owner aliases.** The literal `me` resolves to the authenticated\nviewer (401 if unauthenticated) — `/u/me/repos/{repo}` is the\nsame as `/u/{your-username}/repos/{repo}` without needing your\nown username. `anon` is the seeded system namespace; its\n`pathstash` repo is reachable here like any other `Unlisted`\nrepo.\n\n**Visibility.** `can_read` is enforced: `Public` returns to anyone,\n`Unlisted` (system-managed; URL-addressable) returns to anyone,\n`Private` returns only to the owner — others get `404`. Repos are\naddressed by guessable name, so there's no share-by-link at this\nlevel for `Private` repos. (Per-graph/per-path share-by-link inside\n`Public` repos is unaffected — those still gate on their own\nvisibility.)",
         "operationId": "get_repo",
         "parameters": [
           {
             "name": "owner",
             "in": "path",
-            "description": "Owner username. The reserved values `me` and `anon` always 404.",
+            "description": "Owner username. The literal `me` resolves to the authenticated viewer (401 if unauthenticated).",
             "required": true,
             "schema": {
               "type": "string"
@@ -514,7 +514,7 @@
             }
           },
           "404": {
-            "description": "Owner unknown, repo unknown for that owner, repo is secret and the viewer is not the owner, or owner is a reserved namespace (`me`, `anon`).",
+            "description": "Owner unknown, repo unknown, repo is secret and the viewer is not the owner, or `anon` (no profile).",
             "content": {
               "application/json": {
                 "schema": {
@@ -536,13 +536,13 @@
           "Repos"
         ],
         "summary": "Replace a repository's editable fields (name, description, README).",
-        "description": "Owner-only: the authenticated user must match `{owner}`. Reserved\nowners (`me`, `anon`) always return 404.\n\nPUT semantics: the body is the new state. To preserve any field,\nsend its current value; missing or `null` clears the nullable\nfields. Visibility is changed through the separate `/visibility`\nsub-resource. Renaming changes the canonical URL of the repo (and\nevery nested resource), so callers should expect old links to 404\nafterward.",
+        "description": "Owner-only: the authenticated user must match `{owner}`. The\nliteral `me` resolves to the authenticated viewer's own\nnamespace.\n\nPUT semantics: the body is the new state. To preserve any field,\nsend its current value; missing or `null` clears the nullable\nfields. Visibility is changed through the separate `/visibility`\nsub-resource. Renaming changes the canonical URL of the repo (and\nevery nested resource), so callers should expect old links to 404\nafterward.",
         "operationId": "update_repo",
         "parameters": [
           {
             "name": "owner",
             "in": "path",
-            "description": "Owner username; must match the authenticated user. `me`/`anon` always 404.",
+            "description": "Owner username; must match the authenticated user. The literal `me` resolves to the authenticated viewer.",
             "required": true,
             "schema": {
               "type": "string"
@@ -596,7 +596,7 @@
             }
           },
           "404": {
-            "description": "Owner unknown, repo unknown, or owner is a reserved namespace (`me`, `anon`).",
+            "description": "Owner unknown, repo unknown, or `\u0007non` (no profile).",
             "content": {
               "application/json": {
                 "schema": {
@@ -627,13 +627,13 @@
           "Repos"
         ],
         "summary": "Delete a repository and all its contents.",
-        "description": "Owner-only. Removes the repo and all paths and graphs in it.\nIrreversible. Reserved owners (`me`, `anon`) always return 404.",
+        "description": "Owner-only. Removes the repo and all paths and graphs in it.\nIrreversible. The literal `me` resolves to the authenticated\nviewer's own namespace.",
         "operationId": "delete_repo",
         "parameters": [
           {
             "name": "owner",
             "in": "path",
-            "description": "Owner username; must match the authenticated user. `me`/`anon` always 404.",
+            "description": "Owner username; must match the authenticated user. The literal `me` resolves to the authenticated viewer.",
             "required": true,
             "schema": {
               "type": "string"
@@ -664,7 +664,7 @@
             }
           },
           "404": {
-            "description": "Owner unknown, repo unknown, or owner is a reserved namespace (`me`, `anon`).",
+            "description": "Owner unknown, repo unknown, or `\u0007non` (no profile).",
             "content": {
               "application/json": {
                 "schema": {
@@ -734,7 +734,7 @@
             }
           },
           "404": {
-            "description": "Owner unknown, repo unknown for that owner, or owner is a reserved namespace (`me`, `anon`).",
+            "description": "Owner unknown, repo unknown for that owner, or `\u0007non` (no profile).",
             "content": {
               "application/json": {
                 "schema": {
@@ -756,7 +756,7 @@
           "Graphs"
         ],
         "summary": "Create a graph from a multi-path toolpath document.",
-        "description": "Inline path entries (`PathOrRef::Path`) are admitted into the same\nworkspace as the graph (deduped by toolpath ID; an existing match\nis linked rather than re-created). Refs to existing paths\n(`PathOrRef::Ref`) are kept as ID references and not re-stored.\n\nCaller must own `{owner}/{repo}`. The `document` field must parse\nas a `toolpath::v1::Graph`.",
+        "description": "Inline path entries (full path objects) are admitted into the same\nworkspace as the graph (deduped by toolpath ID; an existing match\nis linked rather than re-created). Refs to existing paths\n(`{ \"$ref\": \"...\" }` entries) are kept as ID references and not\nre-stored.\n\nCaller must own `{owner}/{repo}`. The `document` field must parse\nas a toolpath v1 `Graph`.",
         "operationId": "create_graph",
         "parameters": [
           {
@@ -1484,7 +1484,7 @@
           {
             "name": "owner",
             "in": "path",
-            "description": "Owner username; must match the authenticated user. `me`/`anon` always 404.",
+            "description": "Owner username; must match the authenticated user. The literal `me` resolves to the authenticated viewer.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1585,7 +1585,7 @@
           {
             "name": "username",
             "in": "path",
-            "description": "Public username. Lowercase ASCII alphanumerics with `-`/`_`. The reserved values `me` and `anon` always 404 here — use `/api/v1/u/me` and `/api/v1/anon/...` respectively.",
+            "description": "Public username. Lowercase ASCII alphanumerics with `-`/`_`. The literal `me` resolves to the authenticated viewer (401 if unauthenticated). `anon` is the seeded system namespace; its profile is not browseable.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1604,7 +1604,7 @@
             }
           },
           "404": {
-            "description": "No user with that username, or the username is a reserved namespace (`me`, `anon`).",
+            "description": "No user with that username, or the username is the `anon` system namespace (which has no profile).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1648,7 +1648,7 @@
       },
       "ApiErrorCode": {
         "type": "string",
-        "description": "Closed set of error codes the API can emit. Renders as a snake_case\nstring on the wire (`not_found`, `unauthorized`, …) and is declared\nas an OpenAPI enum so generated clients can switch on it\nexhaustively. Add a variant here, never a free-form string in\n[`ApiErrorResponse::code`].",
+        "description": "Closed set of error codes the API can emit. Renders as a snake_case\nstring on the wire (`not_found`, `unauthorized`, …) and is declared\nas an OpenAPI enum so generated clients can switch on it\nexhaustively. Add a variant here, never a free-form string in\nthe `code` field of `ApiErrorResponse`.",
         "enum": [
           "not_found",
           "unauthorized",
@@ -1897,7 +1897,8 @@
             ],
             "description": "Initial visibility. Defaults to `public` if omitted. The\n`unlisted` state is not accepted on repos — it's reserved for\nthe system-managed pathstash repo and seeded directly in the DB."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "Graph": {
         "type": "object",
@@ -2034,7 +2035,8 @@
             "type": "string",
             "description": "The grant code displayed by the browser. Whitespace, dashes,\nand case differences are normalized away (server uppercases and\nstrips non-alphanumerics) before lookup; submit it however the\nuser typed it."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "RedeemResponse": {
         "type": "object",
@@ -2109,11 +2111,12 @@
           "visibility": {
             "$ref": "#/components/schemas/RepoVisibilityInput"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "RepoVisibilityInput": {
         "type": "string",
-        "description": "Write-side narrowing of [`pathbase_core::Visibility`] for repo\nbodies. The repo *read* shape (`Repo.visibility`) still uses the\nfull three-state enum — a `GET` on the seeded `pathstash` repo\nreturns `\"unlisted\"` like always. This type only constrains what\nthe API will *accept* from a client: `Unlisted` is system-pinned,\nusers can't enter or leave it through the API, so it doesn't\nappear in `POST /repos` or `PATCH .../visibility` bodies.\nGenerated clients see only `public | private` on inputs and the\n`Unlisted` write is unreachable by construction. Graph and path\nbodies use the full `Visibility` enum; all three values are legal\nthere.",
+        "description": "Write-side narrowing of `Visibility` for repo\nbodies. The repo *read* shape (`Repo.visibility`) still uses the\nfull three-state enum — a `GET` on the seeded `pathstash` repo\nreturns `\"unlisted\"` like always. This type only constrains what\nthe API will *accept* from a client: `Unlisted` is system-pinned,\nusers can't enter or leave it through the API, so it doesn't\nappear in `POST /repos` or `PATCH .../visibility` bodies.\nGenerated clients see only `public | private` on inputs and the\n`Unlisted` write is unreachable by construction. Graph and path\nbodies use the full `Visibility` enum; all three values are legal\nthere.",
         "enum": [
           "public",
           "private"
@@ -2231,7 +2234,7 @@
       },
       "ToolpathDocument": {
         "type": "object",
-        "description": "A toolpath v1 Graph document. See <https://github.com/empathic/toolpath>\nfor the full schema; the wire format is JSON with top-level fields\n`graph`, `paths`, and optional `meta`.\n\nThis is a marker schema used to generate an OpenAPI reference. The\ncanonical Rust type is `toolpath::v1::Graph` from an external crate\nthat does not derive `utoipa::ToSchema`, so we describe the shape\nwith `serde_json::Value`-typed fields here. Generated clients will\nsee a permissive object shape; they should defer real validation\nto the toolpath crate.",
+        "description": "A toolpath v1 Graph document. See <https://github.com/empathic/toolpath>\nfor the full schema; the wire format is JSON with top-level fields\n`graph`, `paths`, and optional `meta`.\n\nThis schema is a permissive object placeholder — generated clients\nsee free-form JSON for `graph`, each entry of `paths`, and `meta`,\nand should defer real validation to the toolpath project.",
         "required": [
           "graph",
           "paths"
@@ -2243,13 +2246,13 @@
           },
           "meta": {
             "type": "object",
-            "description": "Optional document metadata (title, description). Free-form\nobject; clients should defer real validation to the toolpath\ncrate.",
+            "description": "Optional document metadata (title, description). Free-form\nobject; clients should defer real validation to the toolpath\nproject.",
             "nullable": true
           },
           "paths": {
             "type": "array",
             "items": {},
-            "description": "One or more `PathOrRef` entries."
+            "description": "One or more entries — each is either a full inline path object\nor a `{ \"$ref\": \"...\" }` reference to an external path."
           }
         }
       },
@@ -2389,7 +2392,8 @@
               }
             ]
           }
-        }
+        },
+        "additionalProperties": false
       },
       "UpdateGraphVisibilityBody": {
         "type": "object",
@@ -2402,11 +2406,12 @@
             "$ref": "#/components/schemas/Visibility",
             "description": "New graph visibility. `public` lists in feeds and is anonymously\nreadable; `unlisted` hides from listings but stays reachable via\nthe UUID share link; `private` restricts read to the owner."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "UpdateProfileBody": {
         "type": "object",
-        "description": "Body for `PUT /api/v1/u/me`.\n\nCarries the complete replacement state of the editable profile\nfields. PUT semantics: the body IS the new value — fields not\npresent (or set to `null`) are cleared. To preserve an existing\nvalue, send it back. Read the current values from `GET /u/me`.\n\nUsername, email, and avatar are NOT editable here — username is\nimmutable, email is bound to the auth provider, and avatar comes\nfrom the OAuth provider's profile.",
+        "description": "Body for `PUT /api/v1/u/me`.\n\nCarries the complete replacement state of the editable profile\nfields. PUT semantics: the body IS the new value — fields not\npresent (or set to `null`) are cleared. To preserve an existing\nvalue, send it back. Read the current values from `GET /u/me`.\n\nUsername and email are NOT editable here — username is immutable\nand email is bound to the auth provider.",
         "properties": {
           "bio": {
             "type": "string",
@@ -2418,7 +2423,8 @@
             "description": "Human-readable display name shown next to the username on\nprofile pages and trace headers. Missing or `null` clears the\nfield (the UI then falls back to the bare username).",
             "nullable": true
           }
-        }
+        },
+        "additionalProperties": false
       },
       "UpdateRepoBody": {
         "type": "object",
@@ -2441,7 +2447,8 @@
             "description": "New README body (free-form text/Markdown). Missing or `null`\nclears the field. No length cap is enforced at the API layer.",
             "nullable": true
           }
-        }
+        },
+        "additionalProperties": false
       },
       "UploadGraphBody": {
         "type": "object",
@@ -2468,7 +2475,8 @@
             ],
             "description": "Graph visibility. Omitted defaults to `unlisted` —\nreachable only via the graph's UUID share link or to the\nauthenticated owner. Flip later via `PATCH\n/graphs/{id}/visibility`."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "User": {
         "type": "object",
@@ -2480,10 +2488,6 @@
           "updated_at"
         ],
         "properties": {
-          "avatar_url": {
-            "type": "string",
-            "nullable": true
-          },
           "bio": {
             "type": "string",
             "nullable": true

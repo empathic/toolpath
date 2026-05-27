@@ -35,8 +35,6 @@ pub(crate) struct User {
     pub email: Option<String>,
     #[serde(default)]
     pub display_name: Option<String>,
-    #[serde(default)]
-    pub avatar_url: Option<String>,
 }
 
 /// Response from `POST /api/v1/u/anon/repos/pathstash/graphs`.
@@ -115,7 +113,6 @@ pub(crate) fn api_redeem(base_url: &str, code: &str) -> Result<(String, User)> {
                     username: u.username,
                     email: u.email,
                     display_name: u.display_name,
-                    avatar_url: u.avatar_url,
                 },
             ))
         }
@@ -209,7 +206,6 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
                 username: u.username,
                 email: u.email,
                 display_name: u.display_name,
-                avatar_url: u.avatar_url,
             })
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => {
@@ -693,7 +689,6 @@ pub(crate) mod tests {
                 username: "alice".into(),
                 email: Some("alice@example.com".into()),
                 display_name: None,
-                avatar_url: None,
             },
         }
     }
@@ -978,11 +973,7 @@ pub(crate) mod tests {
             "HTTP/1.1 201 Created",
             Box::leak(graph_document_json().into_boxed_str()),
         );
-        let resp = anon_graphs_post(
-            &server.base(),
-            r#"{"graph":{"id":"g"},"paths":[]}"#,
-        )
-        .unwrap();
+        let resp = anon_graphs_post(&server.base(), r#"{"graph":{"id":"g"},"paths":[]}"#).unwrap();
         assert_eq!(resp.id, TEST_UUID);
         assert!(resp.url.ends_with(TEST_UUID));
 
@@ -1007,11 +998,8 @@ pub(crate) mod tests {
             "HTTP/1.1 413 Payload Too Large",
             r#"{"code":"bad_request","error":"body too large"}"#,
         );
-        let err = anon_graphs_post(
-            &server.base(),
-            r#"{"graph":{"id":"g"},"paths":[]}"#,
-        )
-        .unwrap_err();
+        let err =
+            anon_graphs_post(&server.base(), r#"{"graph":{"id":"g"},"paths":[]}"#).unwrap_err();
         assert!(err.to_string().contains("size cap"), "{err}");
         assert!(err.to_string().contains("path auth login"), "{err}");
     }
@@ -1034,14 +1022,8 @@ pub(crate) mod tests {
     fn graphs_download_returns_body_as_json() {
         let body = r#"{"graph":{"id":"g"},"paths":[{"path":{"id":"p1","head":"s1"},"steps":[]}]}"#;
         let server = MockServer::start("HTTP/1.1 200 OK", body);
-        let got = graphs_download(
-            &server.base(),
-            Some("tok"),
-            "alex",
-            "pathstash",
-            TEST_UUID,
-        )
-        .unwrap();
+        let got =
+            graphs_download(&server.base(), Some("tok"), "alex", "pathstash", TEST_UUID).unwrap();
         let got_v: serde_json::Value = serde_json::from_str(&got).unwrap();
         let want_v: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(
@@ -1065,9 +1047,8 @@ pub(crate) mod tests {
             "HTTP/1.1 404 Not Found",
             r#"{"code":"not_found","error":"graph not found"}"#,
         );
-        let err =
-            graphs_download(&server.base(), Some("tok"), "alex", "pathstash", TEST_UUID)
-                .unwrap_err();
+        let err = graphs_download(&server.base(), Some("tok"), "alex", "pathstash", TEST_UUID)
+            .unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
 
@@ -1103,7 +1084,6 @@ pub(crate) mod tests {
                 username: "alice".into(),
                 email: None,
                 display_name: None,
-                avatar_url: None,
             },
         };
         store_session(&dir.join(CREDENTIALS_FILE), &creds).unwrap();
