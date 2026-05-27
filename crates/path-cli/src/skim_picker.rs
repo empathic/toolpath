@@ -14,9 +14,7 @@ use crate::fuzzy::{PickOptions, PickResult};
 
 use regex::Regex;
 use skim::Skim;
-use skim::prelude::{
-    RankCriteria, SkimItemReader, SkimItemReaderOption, SkimOptionsBuilder,
-};
+use skim::prelude::{RankCriteria, SkimItemReader, SkimItemReaderOption, SkimOptionsBuilder};
 
 /// Run the embedded fuzzy picker. Same semantics as `fzf::pick`: returns
 /// `Selected` for accepted picks, `Cancelled` for Esc/Ctrl-C, `NoMatch`
@@ -61,8 +59,7 @@ pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
     // earlier version of this code displayed every column including
     // the hidden lookup keys.
     let input = lines.join("\n");
-    let reader =
-        SkimItemReader::new(SkimItemReaderOption::from_options(&options));
+    let reader = SkimItemReader::new(SkimItemReaderOption::from_options(&options));
     let items = reader.of_bufread(Cursor::new(input));
 
     // Skim returns eyre::Result rather than anyhow, so the chain isn't

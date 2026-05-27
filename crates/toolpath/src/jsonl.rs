@@ -1249,7 +1249,9 @@ mod tests {
             }),
         };
         let jsonl = p.to_jsonl_string().unwrap();
-        assert!(jsonl.contains(r#""kind":"https://toolpath.dev/kinds/agent-coding-session/v1.0.0""#));
+        assert!(
+            jsonl.contains(r#""kind":"https://toolpath.dev/kinds/agent-coding-session/v1.0.0""#)
+        );
         let back = Path::from_jsonl_str(&jsonl).unwrap();
         assert_eq!(canonical_json(&p), canonical_json(&back));
     }
@@ -1262,7 +1264,10 @@ mod tests {
         };
         let mut meta = PathMeta::default();
         apply_meta_patch(&mut meta, patch);
-        assert_eq!(meta.kind.as_deref(), Some("https://toolpath.dev/kinds/agent-coding-session/v1.0.0"));
+        assert_eq!(
+            meta.kind.as_deref(),
+            Some("https://toolpath.dev/kinds/agent-coding-session/v1.0.0")
+        );
     }
 
     #[test]

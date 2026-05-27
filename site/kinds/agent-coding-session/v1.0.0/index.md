@@ -33,14 +33,14 @@ Its `structural` object always carries:
 
 It may also carry any of the following, present only when the turn has them:
 
-| Field | Type | Meaning |
-| ----- | ---- | ------- |
-| `thinking` | string | the model's reasoning text |
-| `tool_uses` | array | tools the agent invoked (shape below) |
-| `token_usage` | object | per-turn token counts (shape below) |
-| `stop_reason` | string | why the model stopped (`end_turn`, `tool_use`, …) |
-| `delegations` | array | sub-agent work spawned from this turn (shape below) |
-| `environment` | object | working environment at this turn (shape below) |
+| Field         | Type   | Meaning                                             |
+| ------------- | ------ | --------------------------------------------------- |
+| `thinking`    | string | the model's reasoning text                          |
+| `tool_uses`   | array  | tools the agent invoked (shape below)               |
+| `token_usage` | object | per-turn token counts (shape below)                 |
+| `stop_reason` | string | why the model stopped (`end_turn`, `tool_use`, …)   |
+| `delegations` | array  | sub-agent work spawned from this turn (shape below) |
+| `environment` | object | working environment at this turn (shape below)      |
 
 The model identifier is not on the change. It lives in `step.actor` (`agent:<model>`) and `meta.actors`. There is no provider-specific blob: every field the derivation captures is one of those listed above.
 
@@ -48,24 +48,24 @@ The model identifier is not on the change. It lives in `step.actor` (`agent:<mod
 
 Each element is an object:
 
-| Field | Type | Notes |
-| ----- | ---- | ----- |
-| `id` | string | provider-assigned invocation id |
-| `name` | string | provider tool name (`Read`, `Bash`, `edit`, …) |
-| `input` | any | tool arguments; shape is producer-specific |
+| Field      | Type           | Notes                                                                                                                              |
+| ---------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `id`       | string         | provider-assigned invocation id                                                                                                    |
+| `name`     | string         | provider tool name (`Read`, `Bash`, `edit`, …)                                                                                     |
+| `input`    | any            | tool arguments; shape is producer-specific                                                                                         |
 | `category` | string \| null | Toolpath's classification: `file_read`, `file_write`, `file_search`, `shell`, `network`, `delegation`, or `null` when unrecognized |
-| `result` | object | `{ "content": string, "is_error": boolean }`, when the result landed in the same turn |
+| `result`   | object         | `{ "content": string, "is_error": boolean }`, when the result landed in the same turn                                              |
 
 `id`, `name`, `input`, and `category` are always present (`category` may be `null`); `result` is optional.
 
 ### `token_usage`
 
-| Field | Type | Notes |
-| ----- | ---- | ----- |
-| `input_tokens` | integer \| null | always present |
-| `output_tokens` | integer \| null | always present |
-| `cache_read_tokens` | integer | only when the source records it |
-| `cache_write_tokens` | integer | only when the source records it |
+| Field                | Type            | Notes                           |
+| -------------------- | --------------- | ------------------------------- |
+| `input_tokens`       | integer \| null | always present                  |
+| `output_tokens`      | integer \| null | always present                  |
+| `cache_read_tokens`  | integer         | only when the source records it |
+| `cache_write_tokens` | integer         | only when the source records it |
 
 ### `environment`
 
@@ -79,13 +79,13 @@ Each element is `{ "agent_id": string, "prompt": string, "turns"?: array, "resul
 
 When a turn writes files, its step carries sibling `change` entries keyed by file path, each with `structural.type` of `"file.write"`. The unified diff, when available, is on the change's `raw`, not inside `structural`. The `structural` object holds, all optional:
 
-| Field | Meaning |
-| ----- | ------- |
-| `tool_id` | the `tool_uses[].id` that produced the mutation, when attributable |
-| `tool` | that tool's `name` |
-| `operation` | `"add"`, `"update"`, `"delete"`, or a producer-specific tag |
-| `before` / `after` | file contents before / after, when known |
-| `rename_to` | the new path, for a rename |
+| Field              | Meaning                                                            |
+| ------------------ | ------------------------------------------------------------------ |
+| `tool_id`          | the `tool_uses[].id` that produced the mutation, when attributable |
+| `tool`             | that tool's `name`                                                 |
+| `operation`        | `"add"`, `"update"`, `"delete"`, or a producer-specific tag        |
+| `before` / `after` | file contents before / after, when known                           |
+| `rename_to`        | the new path, for a rename                                         |
 
 ## Non-turn entries
 
@@ -95,24 +95,24 @@ Entries that aren't turns (attachments, preamble lines, snapshots, hook results)
 
 `step.actor` follows the `type:name` convention, assigned by role:
 
-| Actor | Turn |
-| ----- | ---- |
-| `human:user` | a user message |
-| `agent:<model>` | a model reply, named by the recorded model, or `agent:unknown` when none was recorded |
+| Actor             | Turn                                                                                           |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| `human:user`      | a user message                                                                                 |
+| `agent:<model>`   | a model reply, named by the recorded model, or `agent:unknown` when none was recorded          |
 | `tool:<provider>` | a system turn (session init, system prompt), any other producer role, or a non-turn event step |
 
 `meta.actors` defines each actor the steps reference; `agent:` entries carry `provider` and `model`. A turn's original role is always in its `role` field, so collapsing system and other roles onto `tool:<provider>` loses nothing. Walk steps in `head`-ancestry order for the linear transcript.
 
 ## Path metadata
 
-| Field | Meaning |
-| ----- | ------- |
-| `meta.kind` | this URI |
-| `meta.source` | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, or `pi` |
-| `meta.title` | session title |
-| `meta.actors` | the actor definitions the steps reference |
-| `meta.files_changed` | file paths touched across the session |
-| `meta.vcs_remote` | repository URL, when known |
-| `meta.producer` | `{ "name": string, "version"?: string }`, the software that produced the session |
+| Field                | Meaning                                                                          |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `meta.kind`          | this URI                                                                         |
+| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, or `pi` |
+| `meta.title`         | session title                                                                    |
+| `meta.actors`        | the actor definitions the steps reference                                        |
+| `meta.files_changed` | file paths touched across the session                                            |
+| `meta.vcs_remote`    | repository URL, when known                                                       |
+| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session |
 
 `files_changed`, `vcs_remote`, and `producer` sit directly under `meta` (they ride `PathMeta`'s flattened `extra`), not under a nested `meta.extra`.

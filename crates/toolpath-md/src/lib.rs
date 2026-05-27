@@ -614,7 +614,11 @@ fn write_compact_transcript(out: &mut String, turns: &[&Step]) {
             continue;
         };
         let extra = &s.extra;
-        let text = extra.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let text = extra
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         let tools = extra.get("tool_uses").and_then(|v| v.as_array());
 
         if text.is_empty() {
@@ -2627,8 +2631,10 @@ mod tests {
         let key = "claude-code://sess-1";
 
         let mut user = Step::new("u1", "human:user", "2026-01-01T00:00:00Z");
-        user.change
-            .insert(key.into(), conv_append("user", &[("text", serde_json::json!("add a greeting"))]));
+        user.change.insert(
+            key.into(),
+            conv_append("user", &[("text", serde_json::json!("add a greeting"))]),
+        );
 
         let mut asst = Step::new("a1", "agent:gpt-5.5", "2026-01-01T00:00:01Z");
         asst.step.parents = vec!["u1".into()];
@@ -2733,9 +2739,7 @@ mod tests {
             "reasoning missing:\n{md}"
         );
         assert!(
-            md.contains("**Tools:**")
-                && md.contains("`write_file`")
-                && md.contains("\u{2192} ok"),
+            md.contains("**Tools:**") && md.contains("`write_file`") && md.contains("\u{2192} ok"),
             "tool call missing:\n{md}"
         );
         assert!(
@@ -2754,7 +2758,10 @@ mod tests {
         assert!(!md.contains("**Timestamp:**"), "timestamp leaked:\n{md}");
         assert!(!md.contains("[dead end]"), "dead-end marker leaked:\n{md}");
         assert!(!md.contains("_attachment_"), "event noise leaked:\n{md}");
-        assert!(!md.contains("## Timeline"), "timeline heading leaked:\n{md}");
+        assert!(
+            !md.contains("## Timeline"),
+            "timeline heading leaked:\n{md}"
+        );
     }
 
     #[test]
@@ -2768,8 +2775,14 @@ mod tests {
             md.contains("*tools: write_file (1)*"),
             "tool breakdown:\n{md}"
         );
-        assert!(!md.contains("```diff"), "summary should not emit diffs:\n{md}");
-        assert!(!md.contains("**Reasoning:**"), "summary omits reasoning:\n{md}");
+        assert!(
+            !md.contains("```diff"),
+            "summary should not emit diffs:\n{md}"
+        );
+        assert!(
+            !md.contains("**Reasoning:**"),
+            "summary omits reasoning:\n{md}"
+        );
     }
 
     #[test]
@@ -2777,8 +2790,10 @@ mod tests {
         // user → assistant (no text, 2× Read + 1× Bash) → assistant ("ok", 1× Read)
         let key = "claude-code://sess-1";
         let mut user = Step::new("u1", "human:user", "2026-01-01T00:00:00Z");
-        user.change
-            .insert(key.into(), conv_append("user", &[("text", serde_json::json!("go"))]));
+        user.change.insert(
+            key.into(),
+            conv_append("user", &[("text", serde_json::json!("go"))]),
+        );
 
         let mut work = Step::new("a1", "agent:gpt-5.5", "2026-01-01T00:00:01Z");
         work.step.parents = vec!["u1".into()];
@@ -2786,11 +2801,14 @@ mod tests {
             key.into(),
             conv_append(
                 "assistant",
-                &[("tool_uses", serde_json::json!([
-                    {"id": "1", "name": "Read", "input": {}, "category": "file_read"},
-                    {"id": "2", "name": "Read", "input": {}, "category": "file_read"},
-                    {"id": "3", "name": "Bash", "input": {}, "category": "shell"}
-                ]))],
+                &[(
+                    "tool_uses",
+                    serde_json::json!([
+                        {"id": "1", "name": "Read", "input": {}, "category": "file_read"},
+                        {"id": "2", "name": "Read", "input": {}, "category": "file_read"},
+                        {"id": "3", "name": "Bash", "input": {}, "category": "shell"}
+                    ]),
+                )],
             ),
         );
 
@@ -2824,11 +2842,18 @@ mod tests {
         let md = render_path(&path, &RenderOptions::default()); // Summary
         // Text-less work turn produces no speaker line; only the two real
         // messages get one.
-        assert_eq!(md.matches("**Assistant:**").count(), 1, "empty turn rendered:\n{md}");
+        assert_eq!(
+            md.matches("**Assistant:**").count(),
+            1,
+            "empty turn rendered:\n{md}"
+        );
         assert!(md.contains("**User:** go"));
         assert!(md.contains("**Assistant:** ok"));
         // The work turn's tools collapse into a per-name breakdown before "ok".
-        assert!(md.contains("*tools: Read (2), Bash (1)*"), "breakdown:\n{md}");
+        assert!(
+            md.contains("*tools: Read (2), Bash (1)*"),
+            "breakdown:\n{md}"
+        );
     }
 
     #[test]
@@ -2840,7 +2865,10 @@ mod tests {
         dead.step.parents = vec!["u1".into()];
         dead.change.insert(
             "claude-code://sess-1".into(),
-            conv_append("assistant", &[("text", serde_json::json!("abandoned attempt"))]),
+            conv_append(
+                "assistant",
+                &[("text", serde_json::json!("abandoned attempt"))],
+            ),
         );
         path.steps.push(dead);
 
@@ -2851,8 +2879,14 @@ mod tests {
                 front_matter: false,
             },
         );
-        assert!(!md.contains("abandoned attempt"), "dead-end content shown:\n{md}");
-        assert!(md.contains("1 abandoned turn omitted"), "omission note:\n{md}");
+        assert!(
+            !md.contains("abandoned attempt"),
+            "dead-end content shown:\n{md}"
+        );
+        assert!(
+            md.contains("1 abandoned turn omitted"),
+            "omission note:\n{md}"
+        );
     }
 
     #[test]
@@ -2868,7 +2902,10 @@ mod tests {
                 front_matter: false,
             },
         );
-        assert!(!md.contains("**Reasoning:**"), "kind treatment leaked:\n{md}");
+        assert!(
+            !md.contains("**Reasoning:**"),
+            "kind treatment leaked:\n{md}"
+        );
         assert!(
             md.contains("Structural: `conversation.append`"),
             "expected the generic structural dump:\n{md}"

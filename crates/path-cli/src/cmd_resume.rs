@@ -351,9 +351,7 @@ fn interactive_pick(
         } else {
             "install `fzf` (or build with the default `embedded-picker` feature) and rerun in a terminal"
         };
-        anyhow::bail!(
-            "interactive picker requires a TTY; pass `--harness <X>` or {hint}"
-        );
+        anyhow::bail!("interactive picker requires a TTY; pass `--harness <X>` or {hint}");
     }
     let mut lines: Vec<String> = Vec::with_capacity(installed.len());
     for h in installed {
@@ -371,14 +369,15 @@ fn interactive_pick(
         header: Some(&header),
         ..Default::default()
     };
-    let selected =
-        match crate::fuzzy::pick(&lines, &opts).map_err(|e| anyhow::anyhow!("fzf failed: {}", e))? {
-            crate::fuzzy::PickResult::Selected(rows) => rows.into_iter().next().unwrap_or_default(),
-            crate::fuzzy::PickResult::Cancelled => std::process::exit(130),
-            crate::fuzzy::PickResult::NoMatch => {
-                anyhow::bail!("fzf returned no match — picker UI was empty?");
-            }
-        };
+    let selected = match crate::fuzzy::pick(&lines, &opts)
+        .map_err(|e| anyhow::anyhow!("fzf failed: {}", e))?
+    {
+        crate::fuzzy::PickResult::Selected(rows) => rows.into_iter().next().unwrap_or_default(),
+        crate::fuzzy::PickResult::Cancelled => std::process::exit(130),
+        crate::fuzzy::PickResult::NoMatch => {
+            anyhow::bail!("fzf returned no match — picker UI was empty?");
+        }
+    };
 
     for h in installed {
         if selected.starts_with(h.symbol()) {

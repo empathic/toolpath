@@ -9,8 +9,8 @@
 use std::collections::HashMap;
 
 use toolpath::v1::{
-    ActorDefinition, ArtifactChange, Base, PATH_KIND_AGENT_CODING_SESSION, Path, PathIdentity, PathMeta,
-    Step, StepIdentity, StructuralChange,
+    ActorDefinition, ArtifactChange, Base, PATH_KIND_AGENT_CODING_SESSION, Path, PathIdentity,
+    PathMeta, Step, StepIdentity, StructuralChange,
 };
 
 use crate::{ConversationView, Role, ToolCategory, ToolInvocation, Turn};
@@ -698,7 +698,9 @@ mod tests {
         );
         // ...and survives a JSON round-trip.
         let json = serde_json::to_string(&path).unwrap();
-        assert!(json.contains(r#""kind":"https://toolpath.dev/kinds/agent-coding-session/v1.0.0""#));
+        assert!(
+            json.contains(r#""kind":"https://toolpath.dev/kinds/agent-coding-session/v1.0.0""#)
+        );
     }
 
     #[test]
@@ -881,7 +883,11 @@ mod tests {
             .iter_errors(&value)
             .map(|e| format!("at {}: {e}", e.instance_path()))
             .collect();
-        assert!(errors.is_empty(), "kind-schema violations:\n{}", errors.join("\n"));
+        assert!(
+            errors.is_empty(),
+            "kind-schema violations:\n{}",
+            errors.join("\n")
+        );
     }
 
     fn fw_tool(name: &str, id: &str, input: serde_json::Value) -> ToolInvocation {

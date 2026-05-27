@@ -48,8 +48,9 @@ fn kind_validators() -> &'static HashMap<&'static str, Validator> {
             .map(|(uri, source)| {
                 let schema: serde_json::Value = serde_json::from_str(source)
                     .unwrap_or_else(|e| panic!("bundled kind schema {uri} is not valid JSON: {e}"));
-                let v = jsonschema::validator_for(&schema)
-                    .unwrap_or_else(|e| panic!("bundled kind schema {uri} is not a valid JSON Schema: {e}"));
+                let v = jsonschema::validator_for(&schema).unwrap_or_else(|e| {
+                    panic!("bundled kind schema {uri} is not a valid JSON Schema: {e}")
+                });
                 (*uri, v)
             })
             .collect()
@@ -262,8 +263,14 @@ mod tests {
         }));
         let err = validate(&doc).expect_err("missing `text` violates the kind");
         let msg = err.to_string();
-        assert!(msg.contains("text"), "error should name the missing field: {msg}");
-        assert!(msg.contains(ACS_KIND), "error should attribute the kind: {msg}");
+        assert!(
+            msg.contains("text"),
+            "error should name the missing field: {msg}"
+        );
+        assert!(
+            msg.contains(ACS_KIND),
+            "error should attribute the kind: {msg}"
+        );
     }
 
     #[test]

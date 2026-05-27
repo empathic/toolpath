@@ -25,10 +25,10 @@ mod cmd_validate;
 mod config;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
-#[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
-mod skim_picker;
 mod io;
 mod schema;
+#[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
+mod skim_picker;
 mod term;
 
 use anyhow::Result;

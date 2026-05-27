@@ -824,9 +824,14 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&meta).unwrap();
-        assert!(json.contains(r#""kind":"https://toolpath.dev/kinds/agent-coding-session/v1.0.0""#));
+        assert!(
+            json.contains(r#""kind":"https://toolpath.dev/kinds/agent-coding-session/v1.0.0""#)
+        );
         let parsed: PathMeta = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.kind.as_deref(), Some("https://toolpath.dev/kinds/agent-coding-session/v1.0.0"));
+        assert_eq!(
+            parsed.kind.as_deref(),
+            Some("https://toolpath.dev/kinds/agent-coding-session/v1.0.0")
+        );
     }
 
     #[test]

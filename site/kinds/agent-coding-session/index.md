@@ -12,4 +12,4 @@ Documents reference a specific version URI. They do not depend on this landing p
 
 ## Versions
 
-- [**v1.0.0**](/kinds/agent-coding-session/v1.0.0/): `https://toolpath.dev/kinds/agent-coding-session/v1.0.0` *(current)*
+- [**v1.0.0**](/kinds/agent-coding-session/v1.0.0/): `https://toolpath.dev/kinds/agent-coding-session/v1.0.0` _(current)_

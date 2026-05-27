@@ -503,7 +503,8 @@ fn pick_claude_in_project(
                 "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_id),
-                render_row(None, 
+                render_row(
+                    None,
                     m.last_activity,
                     &count(m.message_count, "msgs"),
                     None,
@@ -555,7 +556,8 @@ fn pick_claude_global(
                 "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_id),
-                render_row(None, 
+                render_row(
+                    None,
                     m.last_activity,
                     &count(m.message_count, "msgs"),
                     Some(&project_short(&m.project_path)),
@@ -724,7 +726,8 @@ fn pick_gemini_in_project(
                 "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_uuid),
-                render_row(None, 
+                render_row(
+                    None,
                     m.last_activity,
                     &count(m.message_count, "msgs"),
                     None,
@@ -776,7 +779,8 @@ fn pick_gemini_global(
                 "{}\t{}\t{}",
                 tab_safe(&m.project_path),
                 tab_safe(&m.session_uuid),
-                render_row(None, 
+                render_row(
+                    None,
                     m.last_activity,
                     &count(m.message_count, "msgs"),
                     Some(&project_short(&m.project_path)),
@@ -899,14 +903,12 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
     let lines: Vec<String> = metas
         .iter()
         .map(|m| {
-            let cwd_short = m
-                .cwd
-                .as_ref()
-                .map(|p| project_short(&p.to_string_lossy()));
+            let cwd_short = m.cwd.as_ref().map(|p| project_short(&p.to_string_lossy()));
             format!(
                 "{}\t{}",
                 tab_safe(&m.id),
-                render_row(None, 
+                render_row(
+                    None,
                     m.last_activity,
                     &count(m.line_count, "lines"),
                     cwd_short.as_deref(),
@@ -1068,7 +1070,8 @@ fn pick_opencode(
             format!(
                 "{}\t{}",
                 tab_safe(&m.id),
-                render_row(None, 
+                render_row(
+                    None,
                     m.last_activity,
                     &count(m.message_count, "msgs"),
                     Some(&dir_short),
@@ -1229,7 +1232,8 @@ fn pick_pi_in_project(
                 "{}\t{}\t{}",
                 tab_safe(project),
                 tab_safe(&m.id),
-                render_row(None, 
+                render_row(
+                    None,
                     parse_rfc3339(&m.timestamp),
                     &count(m.entry_count, "entries"),
                     None,
@@ -1281,7 +1285,8 @@ fn pick_pi_global(manager: &toolpath_pi::PiConvo) -> Result<Option<Vec<(String, 
                 "{}\t{}\t{}",
                 tab_safe(project),
                 tab_safe(&m.id),
-                render_row(None, 
+                render_row(
+                    None,
                     parse_rfc3339(&m.timestamp),
                     &count(m.entry_count, "entries"),
                     Some(&project_short(project)),
@@ -1438,9 +1443,7 @@ fn parse_pathbase_ref(target: &str, url_flag: Option<&str>) -> Result<(Option<St
         let path = path.split(['?', '#']).next().unwrap_or("");
         let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let triple = extract_triple(&segs).ok_or_else(|| {
-            anyhow::anyhow!(
-                "expected URL ending in /<owner>/<repo>/graphs/<uuid> (got {target})"
-            )
+            anyhow::anyhow!("expected URL ending in /<owner>/<repo>/graphs/<uuid> (got {target})")
         })?;
         Ok((Some(format!("{scheme}{host}")), triple))
     } else {
@@ -1472,13 +1475,14 @@ fn extract_triple(segs: &[&str]) -> Option<PathRef> {
     }
 
     // Look back through the canonical layouts in order of specificity.
-    let (owner, repo) = if n >= 6 && segs[n - 6] == "u" && segs[n - 4] == "repos" && segs[n - 2] == "graphs" {
-        (segs[n - 5], segs[n - 3])
-    } else if n >= 4 && (segs[n - 2] == "paths" || segs[n - 2] == "graphs") {
-        (segs[n - 4], segs[n - 3])
-    } else {
-        (segs[n - 3], segs[n - 2])
-    };
+    let (owner, repo) =
+        if n >= 6 && segs[n - 6] == "u" && segs[n - 4] == "repos" && segs[n - 2] == "graphs" {
+            (segs[n - 5], segs[n - 3])
+        } else if n >= 4 && (segs[n - 2] == "paths" || segs[n - 2] == "graphs") {
+            (segs[n - 4], segs[n - 3])
+        } else {
+            (segs[n - 3], segs[n - 2])
+        };
 
     if owner.is_empty() || repo.is_empty() {
         return None;
@@ -1514,8 +1518,7 @@ mod tests {
     #[test]
     fn parse_pathbase_ref_bare_triple_with_url_flag() {
         let target = format!("alex/pathstash/{UUID}");
-        let (base, ref_) =
-            parse_pathbase_ref(&target, Some("https://other.example/")).unwrap();
+        let (base, ref_) = parse_pathbase_ref(&target, Some("https://other.example/")).unwrap();
         assert_eq!(base.as_deref(), Some("https://other.example"));
         assert_eq!(
             ref_,
@@ -1587,9 +1590,7 @@ mod tests {
         // Pathbase 1.1+ addresses graphs by UUID; a slug-style ref
         // can no longer be resolved, so fail at the parse step.
         assert!(parse_pathbase_ref("alex/pathstash/my-path", None).is_err());
-        assert!(
-            parse_pathbase_ref("https://pathbase.dev/alex/pathstash/my-path", None).is_err()
-        );
+        assert!(parse_pathbase_ref("https://pathbase.dev/alex/pathstash/my-path", None).is_err());
     }
 
     #[test]
@@ -1684,10 +1685,7 @@ mod tests {
 
         let derived = pathbase_fetch_to_doc(&url, None).unwrap();
 
-        assert_eq!(
-            derived.cache_id,
-            format!("pathbase-alex-pathstash-{UUID}")
-        );
+        assert_eq!(derived.cache_id, format!("pathbase-alex-pathstash-{UUID}"));
         assert!(derived.doc.into_single_path().is_some());
     }
 }
