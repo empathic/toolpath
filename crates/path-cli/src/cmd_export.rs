@@ -16,10 +16,13 @@
 //!   the `opencode` CLI; or to a JSON file / stdout.
 //! - `export pathbase` uploads the document to a Pathbase server.
 
-use anyhow::{Context, Result};
+#[cfg(not(target_os = "emscripten"))]
+use anyhow::Context;
+use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
+#[cfg(not(target_os = "emscripten"))]
 use crate::cmd_cache::cache_ref;
 
 #[derive(Subcommand, Debug)]

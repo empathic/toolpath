@@ -1339,6 +1339,7 @@ fn parse_single_id(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(not(target_os = "emscripten"))]
 use crate::fuzzy::{count, project_short, render_row, tab_safe};
 
 /// Parse an RFC 3339 timestamp string into `DateTime<Utc>` for picker
