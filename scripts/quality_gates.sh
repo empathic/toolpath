@@ -88,7 +88,12 @@ gate_examples() {
 
 # shellcheck disable=SC2329
 gate_site() {
-    cd "${_root}/site" && pnpm run build 2>&1
+    # `pnpm install --frozen-lockfile` is a no-op when node_modules is in sync
+    # with pnpm-lock.yaml, so the cost is only paid once per fresh checkout
+    # (notably, every new worktree). Without it the build fails with
+    # `sh: eleventy: command not found` and a stale "did you mean to install?"
+    # warning that doesn't say which directory.
+    cd "${_root}/site" && pnpm install --frozen-lockfile 2>&1 && pnpm run build 2>&1
 }
 
 # ── Runner ────────────────────────────────────────────────────────────────────
