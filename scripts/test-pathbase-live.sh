@@ -13,10 +13,10 @@
 #     Run `path auth login --url <pathbase-url>` first if not.
 #
 # Scenarios (always run, in order):
-#   1. anonymous   POST /api/v1/anon/paths           (no creds)
-#                  GET  /api/v1/repos/anon/.../download
-#   2. authed      POST /api/v1/repos/<you>/pathstash/paths   (creds)
-#                  GET  /api/v1/repos/<you>/pathstash/paths/<slug>/download
+#   1. anonymous   POST /api/v1/u/anon/repos/pathstash/graphs        (no creds)
+#                  GET  /api/v1/u/anon/repos/pathstash/graphs/<uuid> (download)
+#   2. authed      POST /api/v1/u/<you>/repos/pathstash/graphs       (creds)
+#                  GET  /api/v1/u/<you>/repos/pathstash/graphs/<uuid> (download)
 #
 # Each scenario asserts the upload returns the expected URL shape and the
 # downloaded document re-imports as a Path with the same step count as
@@ -105,8 +105,8 @@ _anon_url=$(TOOLPATH_CONFIG_DIR="${_anon_cfg}" PATHBASE_URL="${_url}" \
     "${_path_bin}" p export pathbase --input "${_example}")
 
 case "${_anon_url}" in
-    "${_url}"/anon/*) echo "  upload OK: ${_anon_url}" ;;
-    *) echo "FAIL[anon]: expected ${_url}/anon/... URL, got: ${_anon_url}" >&2; exit 1 ;;
+    "${_url}"/u/anon/*/graphs/*) echo "  upload OK: ${_anon_url}" ;;
+    *) echo "FAIL[anon]: expected ${_url}/u/anon/<repo>/graphs/<uuid>, got: ${_anon_url}" >&2; exit 1 ;;
 esac
 
 assert_imports_with_steps "anon" "${_anon_url}" "${_expected_steps}"
@@ -119,11 +119,11 @@ echo "=== 2. authed pathstash round-trip ==="
 _authed_url=$(PATHBASE_URL="${_url}" "${_path_bin}" p export pathbase --input "${_example}")
 
 case "${_authed_url}" in
-    "${_url}"/anon/*)
+    "${_url}"/u/anon/*)
         echo "FAIL[authed]: authed upload landed on anon endpoint: ${_authed_url}" >&2
         exit 1 ;;
-    "${_url}"/*/pathstash/*) echo "  upload OK: ${_authed_url}" ;;
-    *) echo "FAIL[authed]: expected ${_url}/<user>/pathstash/<slug>, got: ${_authed_url}" >&2; exit 1 ;;
+    "${_url}"/u/*/*/graphs/*) echo "  upload OK: ${_authed_url}" ;;
+    *) echo "FAIL[authed]: expected ${_url}/u/<user>/<repo>/graphs/<uuid>, got: ${_authed_url}" >&2; exit 1 ;;
 esac
 
 assert_imports_with_steps "authed" "${_authed_url}" "${_expected_steps}"
