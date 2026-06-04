@@ -699,7 +699,7 @@ mod tests {
         // ...and survives a JSON round-trip.
         let json = serde_json::to_string(&path).unwrap();
         assert!(
-            json.contains(r#""kind":"https://toolpath.dev/kinds/agent-coding-session/v1.0.0""#)
+            json.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.0.0""#)
         );
     }
 

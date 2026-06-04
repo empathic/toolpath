@@ -32,7 +32,7 @@ step-1 -- step-2 --+
 
 ```bash
 # Prebuilt binary (macOS arm64, Linux x86_64/arm64)
-curl -fsSL https://raw.githubusercontent.com/empathic/toolpath/main/scripts/install.sh | bash
+curl -fsSL https://toolpath.net/install.sh | bash
 
 # from source
 cargo install path-cli

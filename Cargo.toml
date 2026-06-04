@@ -22,18 +22,18 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
-toolpath = { version = "0.5.0", path = "crates/toolpath" }
-toolpath-convo = { version = "0.9.0", path = "crates/toolpath-convo" }
-toolpath-git = { version = "0.4.0", path = "crates/toolpath-git" }
-toolpath-claude = { version = "0.10.0", path = "crates/toolpath-claude", default-features = false }
-toolpath-gemini = { version = "0.4.0", path = "crates/toolpath-gemini", default-features = false }
-toolpath-codex = { version = "0.4.0", path = "crates/toolpath-codex" }
-toolpath-opencode = { version = "0.3.0", path = "crates/toolpath-opencode" }
-toolpath-github = { version = "0.4.0", path = "crates/toolpath-github" }
-toolpath-dot = { version = "0.3.0", path = "crates/toolpath-dot" }
-toolpath-md = { version = "0.5.0", path = "crates/toolpath-md" }
-toolpath-pi = { version = "0.4.0", path = "crates/toolpath-pi" }
-path-cli = { version = "0.12.0", path = "crates/path-cli" }
+toolpath = { version = "0.6.0", path = "crates/toolpath" }
+toolpath-convo = { version = "0.10.0", path = "crates/toolpath-convo" }
+toolpath-git = { version = "0.5.0", path = "crates/toolpath-git" }
+toolpath-claude = { version = "0.11.0", path = "crates/toolpath-claude", default-features = false }
+toolpath-gemini = { version = "0.5.0", path = "crates/toolpath-gemini", default-features = false }
+toolpath-codex = { version = "0.5.0", path = "crates/toolpath-codex" }
+toolpath-opencode = { version = "0.4.0", path = "crates/toolpath-opencode" }
+toolpath-github = { version = "0.5.0", path = "crates/toolpath-github" }
+toolpath-dot = { version = "0.4.0", path = "crates/toolpath-dot" }
+toolpath-md = { version = "0.6.0", path = "crates/toolpath-md" }
+toolpath-pi = { version = "0.5.0", path = "crates/toolpath-pi" }
+path-cli = { version = "0.13.0", path = "crates/path-cli" }
 pathbase-client = { version = "0.2.0", path = "crates/pathbase-client" }
 
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }

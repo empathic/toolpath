@@ -8,7 +8,7 @@ permalink: /kinds/agent-coding-session/v1.0.0/
 
 <dl class="kind-meta">
   <dt>URI</dt>
-  <dd><code>https://toolpath.dev/kinds/agent-coding-session/v1.0.0</code></dd>
+  <dd><code>https://toolpath.net/kinds/agent-coding-session/v1.0.0</code></dd>
   <dt>Schema</dt>
   <dd><a href="./schema.json"><code>schema.json</code></a></dd>
 </dl>

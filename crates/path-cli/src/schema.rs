@@ -22,10 +22,10 @@ use jsonschema::Validator;
 const SCHEMA_SOURCE: &str = toolpath::SCHEMA_JSON;
 
 /// `meta.kind` URI → bundled kind-schema source. Bundled (rather than
-/// fetched from `toolpath.dev` at validation time) so validation is
+/// fetched from `toolpath.net` at validation time) so validation is
 /// offline and deterministic.
 const KIND_SCHEMAS: &[(&str, &str)] = &[(
-    "https://toolpath.dev/kinds/agent-coding-session/v1.0.0",
+    "https://toolpath.net/kinds/agent-coding-session/v1.0.0",
     include_str!("../kinds/agent-coding-session/v1.0.0/schema.json"),
 )];
 
@@ -223,7 +223,7 @@ mod tests {
         validate(&doc).expect("base is optional on path identity");
     }
 
-    const ACS_KIND: &str = "https://toolpath.dev/kinds/agent-coding-session/v1.0.0";
+    const ACS_KIND: &str = "https://toolpath.net/kinds/agent-coding-session/v1.0.0";
 
     fn acs_graph(append: serde_json::Value) -> serde_json::Value {
         json!({
@@ -281,7 +281,7 @@ mod tests {
             "type": "conversation.append",
             "role": "user"
         }));
-        doc["paths"][0]["meta"]["kind"] = json!("https://toolpath.dev/kinds/made-up/v9.9.9");
+        doc["paths"][0]["meta"]["kind"] = json!("https://toolpath.net/kinds/made-up/v9.9.9");
         validate(&doc).expect("an unknown kind imposes no extra constraints");
     }
 

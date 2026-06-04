@@ -2,6 +2,33 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Domain rename: toolpath.dev → toolpath.net + hosted install.sh — 2026-06-04
+
+The canonical domain for the site, kind URIs, and schema `$id`s moves from
+`toolpath.dev` to `toolpath.net`. This is a breaking change: any saved
+`Path` whose `meta.kind` points at the old URI is now treated as a generic
+path by `path validate` (base-schema-only; no kind-level constraints
+applied). Producers (the shared `toolpath_convo::derive_path` and every
+provider crate built on it) now emit the new URI.
+
+- New constant value: `toolpath::v1::PATH_KIND_AGENT_CODING_SESSION =
+  "https://toolpath.net/kinds/agent-coding-session/v1.0.0"`.
+- The base JSON Schema's `$id` is now
+  `https://toolpath.net/schema/toolpath.schema.json`; the kind schema's
+  `$id` and `const` constraint move to `toolpath.net` as well.
+- `scripts/install.sh` is now served from the site at
+  `https://toolpath.net/install.sh` (eleventy passthrough). The
+  documented one-liner is
+  `curl -fsSL https://toolpath.net/install.sh | bash`.
+
+Crates bumped (every crate that depends on `toolpath`, directly or
+transitively): `toolpath` 0.6.0, `toolpath-convo` 0.10.0, `toolpath-git`
+0.5.0, `toolpath-github` 0.5.0, `toolpath-claude` 0.11.0,
+`toolpath-gemini` 0.5.0, `toolpath-codex` 0.5.0, `toolpath-opencode`
+0.4.0, `toolpath-dot` 0.4.0, `toolpath-md` 0.6.0, `toolpath-pi` 0.5.0,
+`path-cli` 0.13.0, `toolpath-cli` 0.13.0. `pathbase-client` is
+unaffected.
+
 ## Embedded fuzzy picker — fzf is now optional — 2026-05-27
 
 `path-cli` 0.12.0. The CLI no longer requires the external `fzf` binary
@@ -63,7 +90,7 @@ contract describing the additional shape a path follows on top of the base
 format. Absent or unrecognized `kind` ⇒ generic path; existing documents
 parse and validate unchanged.
 
-The first defined kind is `https://toolpath.dev/kinds/agent-coding-session/v1.0.0`,
+The first defined kind is `https://toolpath.net/kinds/agent-coding-session/v1.0.0`,
 which marks a path as an AI coding conversation (each step is a
 `conversation.append` change carrying that turn's `role`, `text`, and so
 on; `meta.source` names the producing harness). Every conversation → `Path`
@@ -73,8 +100,8 @@ conversation provider crate's own. The JSONL form carries `kind` through
 
 Kind specs are sourced under `site/kinds/<name>/<version>/` (Markdown spec
 plus an additive JSON Schema fragment) and published under
-`https://toolpath.dev/kinds/`. A registry index lives at
-`https://toolpath.dev/kinds/`. The Toolpath RFC ("Document Kind") and the
+`https://toolpath.net/kinds/`. A registry index lives at
+`https://toolpath.net/kinds/`. The Toolpath RFC ("Document Kind") and the
 JSON Schema (`$defs/pathMeta`) reference the registry rather than carrying
 kind-specific contracts inline.
 

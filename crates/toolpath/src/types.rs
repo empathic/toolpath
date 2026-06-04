@@ -141,9 +141,9 @@ pub struct Base {
 }
 
 /// [`PathMeta::kind`] URI for a path derived from an AI coding conversation.
-/// Spec at <https://toolpath.dev/kinds/agent-coding-session/v1.0.0>.
+/// Spec at <https://toolpath.net/kinds/agent-coding-session/v1.0.0>.
 pub const PATH_KIND_AGENT_CODING_SESSION: &str =
-    "https://toolpath.dev/kinds/agent-coding-session/v1.0.0";
+    "https://toolpath.net/kinds/agent-coding-session/v1.0.0";
 
 /// Path metadata
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -825,12 +825,12 @@ mod tests {
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(
-            json.contains(r#""kind":"https://toolpath.dev/kinds/agent-coding-session/v1.0.0""#)
+            json.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.0.0""#)
         );
         let parsed: PathMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(
             parsed.kind.as_deref(),
-            Some("https://toolpath.dev/kinds/agent-coding-session/v1.0.0")
+            Some("https://toolpath.net/kinds/agent-coding-session/v1.0.0")
         );
     }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install path — Toolpath CLI for artifact transformation provenance
-# Usage: curl -fsSL https://raw.githubusercontent.com/empathic/toolpath/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://toolpath.net/install.sh | bash
 #
 # Environment variables:
 #   TOOLPATH_INSTALL_DIR  Override install directory (default: ~/.local/bin)

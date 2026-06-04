@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://toolpath.dev/kinds/agent-coding-session/v1.0.0/schema.json",
+  "$id": "https://toolpath.net/kinds/agent-coding-session/v1.0.0/schema.json",
   "title": "Toolpath kind: agent-coding-session v1.0.0",
-  "description": "Additive constraints on a Toolpath `Path` whose `meta.kind` is the agent-coding-session v1.0.0 URI. Apply alongside the base Toolpath schema; the path is valid when both pass. These constraints are by structural `type`, not by artifact key — a `change` entry is checked only when its `structural.type` matches one this kind defines (`conversation.append`, `file.write`, `conversation.event`). Everything is additive: unmentioned properties are allowed, so producer-specific extras never invalidate a path. The human-readable contract is at https://toolpath.dev/kinds/agent-coding-session/v1.0.0/.",
+  "description": "Additive constraints on a Toolpath `Path` whose `meta.kind` is the agent-coding-session v1.0.0 URI. Apply alongside the base Toolpath schema; the path is valid when both pass. These constraints are by structural `type`, not by artifact key — a `change` entry is checked only when its `structural.type` matches one this kind defines (`conversation.append`, `file.write`, `conversation.event`). Everything is additive: unmentioned properties are allowed, so producer-specific extras never invalidate a path. The human-readable contract is at https://toolpath.net/kinds/agent-coding-session/v1.0.0/.",
   "type": "object",
 
   "$defs": {
@@ -190,7 +190,7 @@
       "description": "Path metadata. `kind` pins this spec; `source` names the producing harness; `producer`/`files_changed`/`vcs_remote` are flattened session-level fields (PathMeta carries `extra` via serde flatten, so they sit directly under `meta`, not under `meta.extra`).",
       "properties": {
         "kind": {
-          "const": "https://toolpath.dev/kinds/agent-coding-session/v1.0.0"
+          "const": "https://toolpath.net/kinds/agent-coding-session/v1.0.0"
         },
         "source": { "type": "string" },
         "files_changed": {

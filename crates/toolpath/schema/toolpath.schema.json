@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://toolpath.dev/schema/toolpath.schema.json",
+  "$id": "https://toolpath.net/schema/toolpath.schema.json",
   "title": "Toolpath",
   "description": "A tool-agnostic format for tracking artifact transformation provenance",
 
@@ -339,8 +339,8 @@
         "kind": {
           "type": "string",
           "format": "uri",
-          "description": "URI naming a kind specification this path conforms to. Defined kinds are listed at https://toolpath.dev/kinds/. Kind URIs are immutable; revisions ship at a new version URI. Consumers should treat an absent or unrecognized URI as a generic path.",
-          "examples": ["https://toolpath.dev/kinds/agent-coding-session/v1.0.0"]
+          "description": "URI naming a kind specification this path conforms to. Defined kinds are listed at https://toolpath.net/kinds/. Kind URIs are immutable; revisions ship at a new version URI. Consumers should treat an absent or unrecognized URI as a generic path.",
+          "examples": ["https://toolpath.net/kinds/agent-coding-session/v1.0.0"]
         },
         "source": {
           "type": "string",

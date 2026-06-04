@@ -39,6 +39,9 @@ export default function (eleventyConfig) {
   // either form.
   eleventyConfig.addPassthroughCopy("kinds/**/*.json", { expand: true });
 
+  // install.sh — served at /install.sh so `curl https://toolpath.net/install.sh | bash` works.
+  eleventyConfig.addPassthroughCopy({ "../scripts/install.sh": "install.sh" });
+
   // Self-hosted fonts (latin subset only) — pulled from @fontsource packages
   // at install time, copied to /fonts/ at build time. Filenames are stable
   // so <link rel="preload"> and @font-face URLs match.
