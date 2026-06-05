@@ -41,7 +41,11 @@ use std::sync::OnceLock;
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum Picker {
-    /// Pick whichever backend is available; prefer external `fzf`.
+    /// Pick whichever backend is available; prefer the embedded skim
+    /// picker and fall back to external `fzf` when skim isn't compiled
+    /// in. When external `fzf` is also on `PATH`, a one-time hint is
+    /// printed to stderr advising `--picker fzf` for users who want
+    /// their fzf config / keybindings.
     #[default]
     Auto,
     /// Force the external `fzf` binary. Errors if it isn't on `PATH`.
@@ -379,12 +383,34 @@ pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
         }
         Picker::Skim => pick_embedded(lines, opts),
         Picker::Auto => {
-            if external_fzf_available() {
-                pick_external(lines, opts)
-            } else {
+            // Skim is the default: it's compiled in, behaves
+            // consistently across versions, and we control its option
+            // surface. Fall back to external fzf only when skim is
+            // unavailable (e.g. `--no-default-features` builds).
+            if embedded_picker_available() {
+                if external_fzf_available() {
+                    hint_external_fzf_available();
+                }
                 pick_embedded(lines, opts)
+            } else {
+                pick_external(lines, opts)
             }
         }
+    }
+}
+
+/// Print a one-time hint (per process) on stderr letting the user know
+/// they can opt into their installed `fzf` via `--picker fzf`. Only
+/// fires when stderr is a TTY so we don't pollute non-interactive logs.
+fn hint_external_fzf_available() {
+    static SHOWN: OnceLock<()> = OnceLock::new();
+    if !std::io::stderr().is_terminal() {
+        return;
+    }
+    if SHOWN.set(()).is_ok() {
+        eprintln!(
+            "hint: pass `--picker fzf` to use your installed fzf (and its config + keybindings) instead of the built-in picker."
+        );
     }
 }
 
@@ -403,6 +429,51 @@ fn pick_embedded(_lines: &[String], _opts: &PickOptions<'_>) -> Result<PickResul
     )
 }
 
+/// Probed `(major, minor)` from `fzf --version`. Cached after the first
+/// call so we don't shell out per-pick. `None` when fzf isn't on PATH or
+/// its output doesn't parse — callers treat that as "conservative
+/// defaults" (assume the oldest behavior).
+fn fzf_version() -> Option<(u32, u32)> {
+    static CACHED: OnceLock<Option<(u32, u32)>> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        let output = Command::new("fzf").arg("--version").output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        parse_fzf_version(&String::from_utf8_lossy(&output.stdout))
+    })
+}
+
+/// Extract `(major, minor)` from an `fzf --version` line. The output
+/// looks like `0.65.0 (a1b2c3d)` or `0.46.0` or `0.72.0 (Homebrew)`.
+fn parse_fzf_version(s: &str) -> Option<(u32, u32)> {
+    let head = s.split_whitespace().next()?;
+    let mut parts = head.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+/// `wrap-word` as a `--preview-window` modifier landed in fzf 0.55
+/// (June 2024). On older fzf the unknown modifier aborts the picker
+/// before it reads stdin, so substitute plain `wrap` instead — it's
+/// been supported for years and the only visible difference is wrapping
+/// at character boundaries rather than word boundaries.
+fn adjust_preview_window(window: &str, version: Option<(u32, u32)>) -> String {
+    let supports_wrap_word = version.map(|v| v >= (0, 55)).unwrap_or(false);
+    if supports_wrap_word {
+        window.to_string()
+    } else {
+        window.replace("wrap-word", "wrap")
+    }
+}
+
+/// `--preview-wrap-sign` landed in fzf 0.50. Older fzf rejects it; the
+/// default sign (`↳`) is fine, so just omit the flag.
+fn supports_preview_wrap_sign(version: Option<(u32, u32)>) -> bool {
+    version.map(|v| v >= (0, 50)).unwrap_or(false)
+}
+
 /// Run the external `fzf` binary directly. Same surface as [`pick`] —
 /// kept as a dedicated path so call sites that *must* hit external fzf
 /// (e.g. integration tests pinning behavior) can opt in.
@@ -418,10 +489,16 @@ pub fn pick_external(lines: &[String], opts: &PickOptions<'_>) -> Result<PickRes
         args.push("--multi".into());
     }
 
+    let version = fzf_version();
     if let Some(preview) = opts.preview {
         args.push(format!("--preview={}", substitute_exe_placeholder(preview)));
-        args.push(format!("--preview-window={}", opts.preview_window));
-        args.push("--preview-wrap-sign=".into());
+        args.push(format!(
+            "--preview-window={}",
+            adjust_preview_window(opts.preview_window, version)
+        ));
+        if supports_preview_wrap_sign(version) {
+            args.push("--preview-wrap-sign=".into());
+        }
     }
 
     if let Some(header) = opts.header {
@@ -442,8 +519,20 @@ pub fn pick_external(lines: &[String], opts: &PickOptions<'_>) -> Result<PickRes
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Failed to open fzf stdin"))?;
         for line in lines {
-            stdin.write_all(line.as_bytes())?;
-            stdin.write_all(b"\n")?;
+            // If fzf exited early (e.g. an unrecognized arg on an old
+            // version), writing yields BrokenPipe. Stop feeding lines so
+            // the user sees fzf's real stderr message instead of our
+            // noisy pipe error — `wait_with_output` below surfaces the
+            // exit status.
+            if let Err(err) = stdin
+                .write_all(line.as_bytes())
+                .and_then(|_| stdin.write_all(b"\n"))
+            {
+                if err.kind() == std::io::ErrorKind::BrokenPipe {
+                    break;
+                }
+                return Err(err.into());
+            }
         }
     }
 
@@ -676,6 +765,66 @@ mod tests {
         let out = render_row(None, Some(jan_first()), "  17 msgs", None, raw);
         assert!(out.ends_with("/biko do the thing"), "got: {out}");
         assert!(!out.contains("<command-"));
+    }
+
+    #[test]
+    fn parse_fzf_version_handles_common_shapes() {
+        assert_eq!(parse_fzf_version("0.46.0\n"), Some((0, 46)));
+        assert_eq!(parse_fzf_version("0.65.0 (a1b2c3d)\n"), Some((0, 65)));
+        assert_eq!(parse_fzf_version("0.72.0 (Homebrew)\n"), Some((0, 72)));
+        assert_eq!(parse_fzf_version("1.0.0\n"), Some((1, 0)));
+    }
+
+    #[test]
+    fn parse_fzf_version_rejects_unparseable_input() {
+        assert_eq!(parse_fzf_version(""), None);
+        assert_eq!(parse_fzf_version("not a version"), None);
+        assert_eq!(parse_fzf_version("0"), None);
+    }
+
+    #[test]
+    fn adjust_preview_window_downgrades_wrap_word_on_old_fzf() {
+        // The user's bug: fzf 0.46 rejects `wrap-word`. Downgrade to plain `wrap`.
+        assert_eq!(
+            adjust_preview_window("up:60%:wrap-word", Some((0, 46))),
+            "up:60%:wrap"
+        );
+        assert_eq!(
+            adjust_preview_window("right:60%:wrap-word", Some((0, 54))),
+            "right:60%:wrap"
+        );
+    }
+
+    #[test]
+    fn adjust_preview_window_preserves_wrap_word_on_new_fzf() {
+        assert_eq!(
+            adjust_preview_window("up:60%:wrap-word", Some((0, 55))),
+            "up:60%:wrap-word"
+        );
+        assert_eq!(
+            adjust_preview_window("up:60%:wrap-word", Some((1, 0))),
+            "up:60%:wrap-word"
+        );
+    }
+
+    #[test]
+    fn adjust_preview_window_unknown_version_assumes_old() {
+        // If we couldn't probe fzf, lean conservative — `wrap` works on
+        // every fzf we care about; `wrap-word` doesn't.
+        assert_eq!(
+            adjust_preview_window("up:60%:wrap-word", None),
+            "up:60%:wrap"
+        );
+    }
+
+    #[test]
+    fn supports_preview_wrap_sign_follows_version_floor() {
+        assert!(!supports_preview_wrap_sign(Some((0, 49))));
+        assert!(supports_preview_wrap_sign(Some((0, 50))));
+        assert!(supports_preview_wrap_sign(Some((0, 72))));
+        assert!(supports_preview_wrap_sign(Some((1, 0))));
+        // Unknown version → omit the flag, default sign is fine.
+        assert!(!supports_preview_wrap_sign(None));
     }
 
     /// `count` right-aligns the number to 4 chars so the unit column

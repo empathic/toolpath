@@ -46,9 +46,10 @@ struct Cli {
     pretty: bool,
 
     /// Backend for the interactive fuzzy picker used by `share`,
-    /// `resume`, and `p import <provider>`. `auto` (default) picks
-    /// external `fzf` when on PATH and falls back to the embedded skim
-    /// picker. `fzf`/`skim` force one backend and error if it isn't
+    /// `resume`, and `p import <provider>`. `auto` (default) uses the
+    /// embedded skim picker and falls back to external `fzf` only when
+    /// skim isn't compiled in; a hint is printed if `fzf` is also on
+    /// PATH. `fzf`/`skim` force one backend and error if it isn't
     /// available.
     #[cfg(not(target_os = "emscripten"))]
     #[arg(long, global = true, value_enum, default_value_t = fuzzy::Picker::Auto)]
