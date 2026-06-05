@@ -35,7 +35,17 @@ impl ConvoIO {
         session_id: &str,
     ) -> Result<ConversationMetadata> {
         let path = self.resolver.conversation_file(project_path, session_id)?;
-        ConversationReader::read_conversation_metadata(&path)
+        let mut meta = ConversationReader::read_conversation_metadata(&path)?;
+        // The reader mines `cwd` from the first JSONL entry and stores it
+        // as `project_path`. That works when the session was recorded on
+        // this machine, but diverges from the on-disk directory key when
+        // the file was imported from another machine (e.g. `path resume`
+        // of a Pathbase upload). Stamp the caller's project_path — the
+        // actual on-disk key — so consumers can round-trip it back into
+        // `read_conversation(project_path, session_id)` without ending up
+        // looking under a directory that doesn't exist locally.
+        meta.project_path = project_path.to_string();
+        Ok(meta)
     }
 
     pub fn list_conversations(&self, project_path: &str) -> Result<Vec<String>> {
@@ -142,6 +152,39 @@ mod tests {
             .read_conversation_metadata("/test/project", "session-1")
             .unwrap();
         assert_eq!(meta.message_count, 2);
+    }
+
+    /// Regression: when a session JSONL has a `cwd` field that differs
+    /// from the on-disk project directory it lives in (e.g. it was
+    /// imported from another machine), the metadata's `project_path`
+    /// must reflect the on-disk directory key the caller passed in, not
+    /// the foreign cwd recorded in the file. Otherwise downstream
+    /// `read_conversation(meta.project_path, meta.session_id)` looks
+    /// under a directory that doesn't exist locally and errors out with
+    /// `Conversation not found`.
+    #[test]
+    fn read_conversation_metadata_stamps_caller_project_path_over_jsonl_cwd() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        // On-disk dir key encodes /Users/alex/Devel/empathic/toolpath.
+        let on_disk = "/Users/alex/Devel/empathic/toolpath";
+        let dir = claude_dir.join("projects/-Users-alex-Devel-empathic-toolpath");
+        fs::create_dir_all(&dir).unwrap();
+        // JSONL records a foreign cwd (the original author's machine).
+        let foreign_cwd = "/Users/ben/empathic/oss/toolpath";
+        let entry = format!(
+            r#"{{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","cwd":"{foreign_cwd}","message":{{"role":"user","content":"hi"}}}}"#,
+        );
+        fs::write(dir.join("imported-session.jsonl"), format!("{entry}\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let io = ConvoIO::with_resolver(resolver);
+        let meta = io
+            .read_conversation_metadata(on_disk, "imported-session")
+            .unwrap();
+
+        assert_eq!(meta.project_path, on_disk);
+        assert_ne!(meta.project_path, foreign_cwd);
     }
 
     #[test]
