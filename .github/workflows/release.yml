@@ -43,9 +43,14 @@ jobs:
       - name: Build
         run: |
           # musl can't use system libssl (glibc-linked), so it vendors openssl.
+          # mac has no system libssl at all; the runner has Homebrew's openssl
+          # at /opt/homebrew/opt/openssl@3, but linking against it bakes that
+          # absolute path into the binary and end users without Homebrew get
+          # dyld errors — so we vendor there too.
           # aarch64-gnu now builds natively on an arm runner — system libssl works.
           extra=()
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ] \
+            || [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
             extra=(--features vendored-openssl)
           fi
           cargo build --release --target ${{ matrix.target }} -p path-cli --bin path "${extra[@]}"
