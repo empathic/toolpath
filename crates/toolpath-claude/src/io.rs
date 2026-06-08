@@ -35,17 +35,25 @@ impl ConvoIO {
         session_id: &str,
     ) -> Result<ConversationMetadata> {
         let path = self.resolver.conversation_file(project_path, session_id)?;
-        let mut meta = ConversationReader::read_conversation_metadata(&path)?;
-        // The reader mines `cwd` from the first JSONL entry and stores it
-        // as `project_path`. That works when the session was recorded on
-        // this machine, but diverges from the on-disk directory key when
-        // the file was imported from another machine (e.g. `path resume`
-        // of a Pathbase upload). Stamp the caller's project_path — the
-        // actual on-disk key — so consumers can round-trip it back into
-        // `read_conversation(project_path, session_id)` without ending up
-        // looking under a directory that doesn't exist locally.
-        meta.project_path = project_path.to_string();
-        Ok(meta)
+        let observed = ConversationReader::read_conversation_metadata(&path)?;
+        // The io layer is the only place that knows the project path —
+        // it's the directory key we walked into to locate `path`. Attach
+        // it here so every `ConversationMetadata` carries a path that
+        // round-trips back into `read_conversation(project_path,
+        // session_id)`. Sessions imported from another machine (e.g.
+        // projected by `path resume` from a Pathbase upload) can have
+        // an internal `cwd` that doesn't match the local directory;
+        // that's a JSONL detail the reader never returns, so it can't
+        // contaminate routing.
+        Ok(ConversationMetadata {
+            session_id: observed.session_id,
+            project_path: project_path.to_string(),
+            file_path: observed.file_path,
+            message_count: observed.message_count,
+            started_at: observed.started_at,
+            last_activity: observed.last_activity,
+            first_user_message: observed.first_user_message,
+        })
     }
 
     pub fn list_conversations(&self, project_path: &str) -> Result<Vec<String>> {

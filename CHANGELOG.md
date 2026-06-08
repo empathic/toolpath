@@ -2,6 +2,42 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.12.0: split observed-from-file metadata from caller-attached project path — 2026-06-08
+
+`ConversationReader::read_conversation_metadata` no longer returns a
+`ConversationMetadata`. It returns a new `ObservedMetadata` type that
+carries only fields a single-file scan can know — session id, file
+path, message count, started/last timestamps, first user prompt. The
+`project_path` field has been removed from the reader's output: the
+on-disk project directory is the caller's knowledge (it's the
+directory the caller walked into to find the file), not anything the
+reader can observe by scanning JSONL contents.
+
+The io layer (`ConvoIO::read_conversation_metadata`) is now the only
+place that constructs `ConversationMetadata`, attaching the
+caller-supplied `project_path` to the `ObservedMetadata` it gets from
+the reader. The chained variant in `ClaudeConvo::read_conversation_metadata`
+follows the same shape — `project_path` is passed through, not
+accumulated from each segment.
+
+Why: when a session was imported from another machine (e.g. projected
+into `~/.claude/projects/` by `path resume` of a Pathbase upload), the
+JSONL records the *original author's* cwd, which doesn't match the
+local on-disk directory. The previous reader synthesized
+`project_path` from that internal `cwd`, and downstream code that
+round-tripped it back into `read_conversation(project_path, session_id)`
+would look under a directory that doesn't exist locally and crash with
+`Conversation not found`. The new factoring makes the bug
+structurally impossible: the reader has no authority over
+`project_path`, so it can't supply a value that diverges from the
+directory the caller actually used.
+
+Migration: callers of `ConversationReader::read_conversation_metadata`
+need to bind the result as `ObservedMetadata` and (if they need a full
+`ConversationMetadata`) construct one themselves with the project path
+they used to locate the file. Most consumers go through
+`ConvoIO::read_conversation_metadata` and need no changes.
+
 ## Domain rename: toolpath.dev → toolpath.net + hosted install.sh — 2026-06-04
 
 The canonical domain for the site, kind URIs, and schema `$id`s moves from

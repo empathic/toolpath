@@ -56,9 +56,16 @@ impl ConversationReader {
         Ok(conversation)
     }
 
+    /// Scan a single JSONL session file and return what the reader can
+    /// observe from it alone (timestamps, message count, first user
+    /// prompt). The on-disk project path is deliberately **not**
+    /// returned — the reader doesn't know which directory the caller
+    /// opened the file from. The io layer attaches that downstream
+    /// when assembling the full
+    /// [`ConversationMetadata`](crate::types::ConversationMetadata).
     pub fn read_conversation_metadata<P: AsRef<Path>>(
         path: P,
-    ) -> Result<crate::types::ConversationMetadata> {
+    ) -> Result<crate::types::ObservedMetadata> {
         let path = path.as_ref();
         if !path.exists() {
             return Err(ConvoError::ConversationNotFound(path.display().to_string()));
@@ -76,7 +83,6 @@ impl ConversationReader {
         let mut message_count = 0;
         let mut started_at = None;
         let mut last_activity = None;
-        let mut project_path = String::new();
         let mut first_user_message: Option<String> = None;
 
         for line in reader.lines() {
@@ -91,12 +97,6 @@ impl ConversationReader {
                 if !entry.uuid.is_empty() {
                     if entry.message.is_some() {
                         message_count += 1;
-                    }
-
-                    if project_path.is_empty()
-                        && let Some(cwd) = entry.cwd
-                    {
-                        project_path = cwd;
                     }
 
                     // First user prompt with actual text (skip tool-result-only
@@ -127,9 +127,8 @@ impl ConversationReader {
             }
         }
 
-        Ok(crate::types::ConversationMetadata {
+        Ok(crate::types::ObservedMetadata {
             session_id,
-            project_path,
             file_path: path.to_path_buf(),
             message_count,
             started_at,
@@ -316,11 +315,16 @@ mod tests {
         ).unwrap();
         temp.flush().unwrap();
 
-        let meta = ConversationReader::read_conversation_metadata(temp.path()).unwrap();
-        assert_eq!(meta.message_count, 2);
-        assert_eq!(meta.project_path, "/my/project");
-        assert!(meta.started_at.is_some());
-        assert!(meta.last_activity.is_some());
+        let observed = ConversationReader::read_conversation_metadata(temp.path()).unwrap();
+        assert_eq!(observed.message_count, 2);
+        assert!(observed.started_at.is_some());
+        assert!(observed.last_activity.is_some());
+        // The reader does not return a project path. The on-disk
+        // project directory is the caller's knowledge, not anything
+        // the reader can observe by scanning a single file — even
+        // when the JSONL records a `cwd`, the reader treats it as
+        // opaque content and lets the io layer attach the real
+        // directory it walked into.
     }
 
     #[test]
