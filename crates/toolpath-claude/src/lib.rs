@@ -25,8 +25,8 @@ pub use query::{ConversationQuery, HistoryQuery};
 pub use reader::ConversationReader;
 pub use types::{
     CacheCreation, ContentPart, Conversation, ConversationEntry, ConversationMetadata,
-    HistoryEntry, Message, MessageContent, MessageRole, ObservedMetadata, ToolResultContent,
-    ToolResultRef, ToolUseRef, Usage,
+    HistoryEntry, Message, MessageContent, MessageRole, ToolResultContent, ToolResultRef,
+    ToolUseRef, Usage,
 };
 #[cfg(feature = "watcher")]
 pub use watcher::ConversationWatcher;
@@ -208,9 +208,6 @@ impl ClaudeConvo {
 
         Ok(ConversationMetadata {
             session_id: head.clone(),
-            // Caller-supplied; every segment lives under the same
-            // project directory by construction (chains are within a
-            // single project), so there's nothing to accumulate.
             project_path: project_path.to_string(),
             file_path,
             message_count: total_messages,

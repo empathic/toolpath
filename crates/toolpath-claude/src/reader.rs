@@ -56,16 +56,9 @@ impl ConversationReader {
         Ok(conversation)
     }
 
-    /// Scan a single JSONL session file and return what the reader can
-    /// observe from it alone (timestamps, message count, first user
-    /// prompt). The on-disk project path is deliberately **not**
-    /// returned — the reader doesn't know which directory the caller
-    /// opened the file from. The io layer attaches that downstream
-    /// when assembling the full
-    /// [`ConversationMetadata`](crate::types::ConversationMetadata).
     pub fn read_conversation_metadata<P: AsRef<Path>>(
         path: P,
-    ) -> Result<crate::types::ObservedMetadata> {
+    ) -> Result<crate::types::ConversationMetadata> {
         let path = path.as_ref();
         if !path.exists() {
             return Err(ConvoError::ConversationNotFound(path.display().to_string()));
@@ -76,6 +69,17 @@ impl ConversationReader {
             .and_then(|s| s.to_str())
             .ok_or_else(|| ConvoError::InvalidFormat(path.to_path_buf()))?
             .to_string();
+
+        // The parent directory's name is the project's on-disk key.
+        // This is the only correct source: JSONL `cwd` reflects where
+        // the session was originally recorded, which can differ from
+        // the local directory for sessions projected in from elsewhere.
+        let project_path = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(crate::paths::unsanitize_project_path)
+            .unwrap_or_default();
 
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -91,44 +95,43 @@ impl ConversationReader {
                 continue;
             }
 
-            // Try to parse as ConversationEntry, skip if it fails (likely a metadata entry)
-            if let Ok(entry) = serde_json::from_str::<ConversationEntry>(&line) {
-                // Only process entries with valid UUIDs
-                if !entry.uuid.is_empty() {
-                    if entry.message.is_some() {
-                        message_count += 1;
-                    }
+            if let Ok(entry) = serde_json::from_str::<ConversationEntry>(&line)
+                && !entry.uuid.is_empty()
+            {
+                if entry.message.is_some() {
+                    message_count += 1;
+                }
 
-                    // First user prompt with actual text (skip tool-result-only
-                    // user entries, which `Message::text()` collapses to "").
-                    if first_user_message.is_none()
-                        && entry.entry_type == "user"
-                        && let Some(msg) = &entry.message
-                    {
-                        let text = msg.text();
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            first_user_message = Some(trimmed.to_string());
-                        }
+                // Skip tool-result-only user entries — `Message::text()`
+                // collapses them to "".
+                if first_user_message.is_none()
+                    && entry.entry_type == "user"
+                    && let Some(msg) = &entry.message
+                {
+                    let text = msg.text();
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        first_user_message = Some(trimmed.to_string());
                     }
+                }
 
-                    if !entry.timestamp.is_empty()
-                        && let Ok(timestamp) =
-                            entry.timestamp.parse::<chrono::DateTime<chrono::Utc>>()
-                    {
-                        if started_at.is_none() || Some(timestamp) < started_at {
-                            started_at = Some(timestamp);
-                        }
-                        if last_activity.is_none() || Some(timestamp) > last_activity {
-                            last_activity = Some(timestamp);
-                        }
+                if !entry.timestamp.is_empty()
+                    && let Ok(timestamp) =
+                        entry.timestamp.parse::<chrono::DateTime<chrono::Utc>>()
+                {
+                    if started_at.is_none() || Some(timestamp) < started_at {
+                        started_at = Some(timestamp);
+                    }
+                    if last_activity.is_none() || Some(timestamp) > last_activity {
+                        last_activity = Some(timestamp);
                     }
                 }
             }
         }
 
-        Ok(crate::types::ObservedMetadata {
+        Ok(crate::types::ConversationMetadata {
             session_id,
+            project_path,
             file_path: path.to_path_buf(),
             message_count,
             started_at,
@@ -255,8 +258,9 @@ impl ConversationReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     #[test]
     fn test_read_conversation() {
@@ -304,27 +308,29 @@ mod tests {
 
     #[test]
     fn test_read_conversation_metadata() {
-        let mut temp = NamedTempFile::new().unwrap();
-        writeln!(
-            temp,
-            r#"{{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","cwd":"/my/project","message":{{"role":"user","content":"Hello"}}}}"#
-        ).unwrap();
-        writeln!(
-            temp,
-            r#"{{"type":"assistant","uuid":"u2","timestamp":"2024-01-01T00:01:00Z","message":{{"role":"assistant","content":"Hi"}}}}"#
-        ).unwrap();
-        temp.flush().unwrap();
+        // Layout matches `~/.claude/projects/<encoded>/<session>.jsonl`.
+        // The JSONL records a `cwd` that disagrees with the parent
+        // directory — the reader must ignore the JSONL value and derive
+        // `project_path` from the actual parent directory.
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("-Users-alex-Devel-myproject");
+        fs::create_dir_all(&project_dir).unwrap();
+        let file_path = project_dir.join("session-1.jsonl");
+        fs::write(
+            &file_path,
+            "\
+{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2024-01-01T00:00:00Z\",\"cwd\":\"/Users/ben/elsewhere\",\"message\":{\"role\":\"user\",\"content\":\"Hello\"}}
+{\"type\":\"assistant\",\"uuid\":\"u2\",\"timestamp\":\"2024-01-01T00:01:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"Hi\"}}
+",
+        )
+        .unwrap();
 
-        let observed = ConversationReader::read_conversation_metadata(temp.path()).unwrap();
-        assert_eq!(observed.message_count, 2);
-        assert!(observed.started_at.is_some());
-        assert!(observed.last_activity.is_some());
-        // The reader does not return a project path. The on-disk
-        // project directory is the caller's knowledge, not anything
-        // the reader can observe by scanning a single file — even
-        // when the JSONL records a `cwd`, the reader treats it as
-        // opaque content and lets the io layer attach the real
-        // directory it walked into.
+        let meta = ConversationReader::read_conversation_metadata(&file_path).unwrap();
+        assert_eq!(meta.message_count, 2);
+        assert_eq!(meta.session_id, "session-1");
+        assert_eq!(meta.project_path, "/Users/alex/Devel/myproject");
+        assert!(meta.started_at.is_some());
+        assert!(meta.last_activity.is_some());
     }
 
     #[test]

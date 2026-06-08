@@ -35,25 +35,7 @@ impl ConvoIO {
         session_id: &str,
     ) -> Result<ConversationMetadata> {
         let path = self.resolver.conversation_file(project_path, session_id)?;
-        let observed = ConversationReader::read_conversation_metadata(&path)?;
-        // The io layer is the only place that knows the project path —
-        // it's the directory key we walked into to locate `path`. Attach
-        // it here so every `ConversationMetadata` carries a path that
-        // round-trips back into `read_conversation(project_path,
-        // session_id)`. Sessions imported from another machine (e.g.
-        // projected by `path resume` from a Pathbase upload) can have
-        // an internal `cwd` that doesn't match the local directory;
-        // that's a JSONL detail the reader never returns, so it can't
-        // contaminate routing.
-        Ok(ConversationMetadata {
-            session_id: observed.session_id,
-            project_path: project_path.to_string(),
-            file_path: observed.file_path,
-            message_count: observed.message_count,
-            started_at: observed.started_at,
-            last_activity: observed.last_activity,
-            first_user_message: observed.first_user_message,
-        })
+        ConversationReader::read_conversation_metadata(&path)
     }
 
     pub fn list_conversations(&self, project_path: &str) -> Result<Vec<String>> {
@@ -162,23 +144,18 @@ mod tests {
         assert_eq!(meta.message_count, 2);
     }
 
-    /// Regression: when a session JSONL has a `cwd` field that differs
-    /// from the on-disk project directory it lives in (e.g. it was
-    /// imported from another machine), the metadata's `project_path`
-    /// must reflect the on-disk directory key the caller passed in, not
-    /// the foreign cwd recorded in the file. Otherwise downstream
-    /// `read_conversation(meta.project_path, meta.session_id)` looks
-    /// under a directory that doesn't exist locally and errors out with
-    /// `Conversation not found`.
+    /// A session JSONL whose internal `cwd` disagrees with its on-disk
+    /// directory (e.g. projected in from another machine) must still
+    /// report the on-disk directory as `project_path`, so that
+    /// `read_conversation(meta.project_path, meta.session_id)`
+    /// round-trips to the same file.
     #[test]
-    fn read_conversation_metadata_stamps_caller_project_path_over_jsonl_cwd() {
+    fn metadata_project_path_follows_on_disk_dir_not_jsonl_cwd() {
         let temp = TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
-        // On-disk dir key encodes /Users/alex/Devel/empathic/toolpath.
         let on_disk = "/Users/alex/Devel/empathic/toolpath";
         let dir = claude_dir.join("projects/-Users-alex-Devel-empathic-toolpath");
         fs::create_dir_all(&dir).unwrap();
-        // JSONL records a foreign cwd (the original author's machine).
         let foreign_cwd = "/Users/ben/empathic/oss/toolpath";
         let entry = format!(
             r#"{{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","cwd":"{foreign_cwd}","message":{{"role":"user","content":"hi"}}}}"#,

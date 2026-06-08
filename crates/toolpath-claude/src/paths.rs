@@ -114,7 +114,7 @@ fn sanitize_project_path(path: &str) -> String {
     path.replace(['/', '_', '.'], "-")
 }
 
-fn unsanitize_project_path(sanitized: &str) -> String {
+pub(crate) fn unsanitize_project_path(sanitized: &str) -> String {
     sanitized.replace('-', "/")
 }
 

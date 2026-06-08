@@ -526,45 +526,16 @@ impl Conversation {
     }
 }
 
-/// Metadata `ConversationReader` can derive from a single JSONL file with
-/// no caller context. Carries only what a single-file scan can know;
-/// notably **not** the project path, because the project path is the
-/// on-disk directory key the caller walked into to find the file — the
-/// reader doesn't know which directory it was opened from.
-///
-/// [`Io::read_conversation_metadata`](crate::io::ConvoIO::read_conversation_metadata)
-/// is the layer that turns this into a full [`ConversationMetadata`] by
-/// attaching the project path it used for the lookup.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObservedMetadata {
-    pub session_id: String,
-    pub file_path: std::path::PathBuf,
-    pub message_count: usize,
-    pub started_at: Option<DateTime<Utc>>,
-    pub last_activity: Option<DateTime<Utc>>,
-    /// The first non-empty user-prompt text in the conversation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_user_message: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMetadata {
     pub session_id: String,
-    /// On-disk directory key the conversation file lives under. Always
-    /// supplied by the caller-aware io layer — never derived from JSONL
-    /// contents (a session imported from another machine can have an
-    /// internal `cwd` that doesn't match the local directory, and that
-    /// internal value would route lookups at a directory that doesn't
-    /// exist locally).
+    /// Parent directory of `file_path`, unsanitized.
     pub project_path: String,
     pub file_path: std::path::PathBuf,
     pub message_count: usize,
     pub started_at: Option<DateTime<Utc>>,
     pub last_activity: Option<DateTime<Utc>>,
-    /// The first non-empty user-prompt text in the conversation. Useful as a
-    /// human-readable title — populated cheaply during the metadata pass and
-    /// surfaced by `path list claude --format tsv` so that picking sessions
-    /// by topic (rather than by UUID/timestamp) is practical.
+    /// First non-empty user-prompt text. Used as a human-readable title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_user_message: Option<String>,
 }
