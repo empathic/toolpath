@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## toolpath-claude 0.11.1: derive `project_path` from the file's parent directory — 2026-06-08
+## toolpath-claude 0.11.1 + path-cli 0.13.1 + toolpath-cli 0.13.1: derive `project_path` from the file's parent directory — 2026-06-09
 
 `ConversationReader::read_conversation_metadata` used to set
 `ConversationMetadata.project_path` from the JSONL's first `cwd`
@@ -21,7 +21,9 @@ purpose. The chained variant in
 `ClaudeConvo::read_conversation_metadata` drops its now-dead
 `project_path` accumulator.
 
-Public API unchanged.
+Public API unchanged. `path-cli` and the `toolpath-cli` shim bump to
+0.13.1 so a release ships the fix to users on `cargo install path-cli`
+/ `cargo install toolpath-cli`.
 
 ## Domain rename: toolpath.dev → toolpath.net + hosted install.sh — 2026-06-04
 
