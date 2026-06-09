@@ -642,16 +642,84 @@
   }
   .hero-install {
     font-family: var(--font);
-    font-size: 0.85rem;
+    font-size: 1rem;
     background: var(--bg-surface);
     border-left: 3px solid var(--accent);
-    padding: 0.6rem 1rem;
+    padding: 0.9rem 1.15rem;
     display: inline-block;
     color: var(--text);
+  }
+  .hero-install .install-option + .install-option {
+    margin-top: 0.7rem;
+  }
+  .hero-install .install-label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+  }
+  .hero-install .install-label .cli-name {
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .hero-install .install-cmd-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .hero-install .install-cmd {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font);
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    /* Hanging indent: first line flush, the \-continuation (and any
+       soft-wrap on narrow screens) aligns past the prompt. */
+    padding-left: 1.5em;
+    text-indent: -1.5em;
   }
   .hero-install .prompt {
     color: var(--text-secondary);
     user-select: none;
+  }
+  .copy-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.85rem;
+    height: 1.85rem;
+    padding: 0;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    cursor: pointer;
+    transition:
+      color 0.15s,
+      border-color 0.15s,
+      background 0.15s;
+  }
+  .copy-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .copy-btn .check-icon {
+    display: none;
+  }
+  .copy-btn.copied {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .copy-btn.copied .copy-icon {
+    display: none;
+  }
+  .copy-btn.copied .check-icon {
+    display: block;
   }
   .try-it-btn {
     font-family: var(--font);
@@ -677,6 +745,10 @@
   .try-it-btn:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+  .hero-install .try-it-btn {
+    margin-left: 0;
+    margin-top: 0.85rem;
   }
   .hero + .divider {
     margin-bottom: var(--space-lg);

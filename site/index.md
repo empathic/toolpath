@@ -13,7 +13,27 @@ nav: home
       sessions in a tool agnostic way.
     </p>
     <div class="hero-install">
-      <span class="prompt">$ </span>cargo install path-cli
+      <div class="install-option">
+        <span class="install-label">Quick install the <span class="cli-name">path</span> CLI</span>
+        <div class="install-cmd-line">
+          <code class="install-cmd"><span class="prompt">$ </span>curl --proto '=https' --tlsv1.2 -fsS \
+https://toolpath.net/install.sh | bash</code>
+          <button class="copy-btn" type="button" data-copy="curl --proto '=https' --tlsv1.2 -fsS https://toolpath.net/install.sh | bash" aria-label="Copy command to clipboard">
+            <svg class="copy-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="check-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="install-option">
+        <span class="install-label">From crates.io</span>
+        <div class="install-cmd-line">
+          <code class="install-cmd"><span class="prompt">$ </span>cargo install path-cli</code>
+          <button class="copy-btn" type="button" data-copy="cargo install path-cli" aria-label="Copy command to clipboard">
+            <svg class="copy-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="check-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+          </button>
+        </div>
+      </div>
       <button id="try-it-btn" class="try-it-btn">Try in browser</button>
     </div>
   </div>
@@ -50,6 +70,7 @@ Explore Toolpath documents in your browser. Real <code>path</code> commands, rea
 </div>
 <script src="/wasm/path.js"></script>
 <script src="/js/playground.js"></script>
+<script src="/js/copy-buttons.js"></script>
 
 ## The problem
 

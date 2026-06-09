@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install path — Toolpath CLI for artifact transformation provenance
-# Usage: curl -fsSL https://toolpath.net/install.sh | bash
+# Usage: curl --proto '=https' --tlsv1.2 -fsS https://toolpath.net/install.sh | bash
 #
 # Environment variables:
 #   TOOLPATH_INSTALL_DIR  Override install directory (default: ~/.local/bin)
