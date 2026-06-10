@@ -13,8 +13,9 @@ use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
 use crate::{
-    ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation, Item,
-    ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    Compaction, CompactionTrigger, ConversationEvent, ConversationView, DelegatedWork,
+    EnvironmentSnapshot, FileMutation, Item, KeptRange, ProducerInfo, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Extract a [`ConversationView`] from a toolpath [`Path`] document.
@@ -191,6 +192,38 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         data,
                     };
                     view.items.push(Item::Event(event));
+                }
+                "conversation.compact" => {
+                    let trigger = structural
+                        .extra
+                        .get("trigger")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| match s {
+                            "auto" => Some(CompactionTrigger::Auto),
+                            "manual" => Some(CompactionTrigger::Manual),
+                            _ => None,
+                        });
+                    let summary = structural
+                        .extra
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let pre_tokens = structural.extra.get("pre_tokens").and_then(|v| v.as_u64());
+                    let kept = structural
+                        .extra
+                        .get("kept")
+                        .and_then(|v| serde_json::from_value::<Vec<KeptRange>>(v.clone()).ok())
+                        .unwrap_or_default();
+                    let compaction = Compaction {
+                        id: step.step.id.clone(),
+                        parent_id: step.step.parents.first().cloned(),
+                        timestamp: step.step.timestamp.clone(),
+                        trigger,
+                        summary,
+                        pre_tokens,
+                        kept,
+                    };
+                    view.items.push(Item::Compaction(compaction));
                 }
                 "tool.invoke" => {
                     let invocation = build_tool_invocation(&structural.extra);
@@ -1333,6 +1366,86 @@ mod tests {
         let events: Vec<&ConversationEvent> = view.events().collect();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "unknown");
+    }
+
+    #[test]
+    fn test_compaction_round_trips_through_derive_and_extract() {
+        use crate::DeriveConfig;
+
+        let a = Turn {
+            id: "a".into(),
+            parent_id: None,
+            role: Role::User,
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            text: "first".into(),
+            thinking: None,
+            tool_uses: vec![],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+        };
+        let b = Turn {
+            id: "b".into(),
+            parent_id: Some("c".into()),
+            role: Role::Assistant,
+            timestamp: "2026-01-01T00:00:02Z".into(),
+            text: "second".into(),
+            thinking: None,
+            tool_uses: vec![],
+            model: Some("m".into()),
+            stop_reason: None,
+            token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+        };
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:01Z".into(),
+            trigger: Some(CompactionTrigger::Manual),
+            summary: Some("condensed".into()),
+            pre_tokens: Some(4096),
+            kept: vec![KeptRange {
+                from: "a".into(),
+                to: "a".into(),
+            }],
+        };
+
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![Item::Turn(a), Item::Compaction(c), Item::Turn(b)],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let view = extract_conversation(&path);
+
+        // Item order [Turn, Compaction, Turn] is preserved.
+        assert_eq!(view.items.len(), 3);
+        assert!(matches!(view.items[0], Item::Turn(_)));
+        assert!(matches!(view.items[2], Item::Turn(_)));
+
+        let Item::Compaction(rc) = &view.items[1] else {
+            panic!("middle item should be a compaction, got {:?}", view.items[1]);
+        };
+        assert_eq!(rc.id, "c");
+        assert_eq!(rc.parent_id.as_deref(), Some("a"));
+        assert_eq!(rc.timestamp, "2026-01-01T00:00:01Z");
+        assert_eq!(rc.trigger, Some(CompactionTrigger::Manual));
+        assert_eq!(rc.summary.as_deref(), Some("condensed"));
+        assert_eq!(rc.pre_tokens, Some(4096));
+        assert_eq!(
+            rc.kept,
+            vec![KeptRange {
+                from: "a".into(),
+                to: "a".into(),
+            }]
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ use toolpath::v1::{
     PathMeta, Step, StepIdentity, StructuralChange,
 };
 
-use crate::{ConversationView, Role, ToolCategory, ToolInvocation, Turn};
+use crate::{ConversationView, Item, Role, ToolCategory, ToolInvocation, Turn};
 
 /// Configuration for [`derive_path`].
 #[derive(Debug, Clone)]
@@ -104,321 +104,428 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let mut turn_to_step: HashMap<String, String> = HashMap::new();
     let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
 
-    for (idx, turn) in view.turns().enumerate() {
-        // Step id: use the turn's native id when set so it round-trips
-        // through `extract_conversation`; otherwise synthesize sequentially.
-        let step_id = if turn.id.is_empty() {
-            format!("step-{:04}", idx + 1)
-        } else {
-            turn.id.clone()
-        };
+    // Single ordered pass over `view.items`, dispatching per variant so each
+    // emitted step lands at its true position relative to its neighbors —
+    // crucial for compaction boundaries, which must sit between the turns
+    // they separate.
+    //
+    // Per-variant counters preserve the synthetic step ids of the old
+    // two-loop layout exactly: turns synthesize `step-{:04}` indexed by turn
+    // count, events `event-{:04}` indexed by event count.
+    //
+    // `last_step_id` tracks the previously emitted step so that events (and
+    // compactions) without an explicit parent chain off whatever came before.
+    let mut turn_idx = 0usize;
+    let mut event_idx = 0usize;
+    let mut compact_idx = 0usize;
+    let mut last_step_id: Option<String> = None;
 
-        let actor = actor_for_turn(turn, provider);
-        record_actor(&mut actors, &actor, turn, provider, view);
+    // Group ids in turn order, so a turn can tell whether it's the last of its
+    // message group (message-level token accounting, below).
+    let turn_groups: Vec<Option<String>> = view.turns().map(|t| t.group_id.clone()).collect();
 
-        let mut step = Step {
-            step: StepIdentity {
-                id: step_id,
-                parents: Vec::new(),
-                actor,
-                timestamp: turn.timestamp.clone(),
-            },
-            change: HashMap::new(),
-            meta: None,
-        };
+    for item in &view.items {
+        match item {
+            Item::Turn(turn) => {
+                let idx = turn_idx;
+                turn_idx += 1;
 
-        // Parent mapping
-        if let Some(parent_id) = &turn.parent_id
-            && let Some(parent_step_id) = turn_to_step.get(parent_id)
-        {
-            step.step.parents.push(parent_step_id.clone());
-        }
+                // Step id: use the turn's native id when set so it round-trips
+                // through `extract_conversation`; otherwise synthesize sequentially.
+                let step_id = if turn.id.is_empty() {
+                    format!("step-{:04}", idx + 1)
+                } else {
+                    turn.id.clone()
+                };
+                turn_to_step.insert(turn.id.clone(), step_id.clone());
 
-        // Build conversation.append structural change extras
-        let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
-        extra.insert(
-            "role".to_string(),
-            serde_json::Value::String(turn.role.to_string()),
-        );
-        extra.insert(
-            "text".to_string(),
-            serde_json::Value::String(turn.text.clone()),
-        );
+                let actor = actor_for_turn(turn, provider);
+                record_actor(&mut actors, &actor, turn, provider, view);
 
-        if config.include_thinking
-            && let Some(thinking) = &turn.thinking
-        {
-            extra.insert(
-                "thinking".to_string(),
-                serde_json::Value::String(thinking.clone()),
-            );
-        }
+                let mut step = Step {
+                    step: StepIdentity {
+                        id: step_id.clone(),
+                        parents: Vec::new(),
+                        actor,
+                        timestamp: turn.timestamp.clone(),
+                    },
+                    change: HashMap::new(),
+                    meta: None,
+                };
 
-        if config.include_tool_uses && !turn.tool_uses.is_empty() {
-            let arr: Vec<serde_json::Value> = turn
-                .tool_uses
-                .iter()
-                .map(|t| {
-                    let mut obj = serde_json::json!({
-                        "id": t.id,
-                        "name": t.name,
-                        "input": t.input,
-                        "category": t.category,
-                    });
-                    if let Some(result) = &t.result
-                        && let Ok(v) = serde_json::to_value(result)
-                    {
-                        obj.as_object_mut().unwrap().insert("result".to_string(), v);
-                    }
-                    obj
-                })
-                .collect();
-            extra.insert("tool_uses".to_string(), serde_json::Value::Array(arr));
-        }
+                // Parent mapping
+                if let Some(parent_id) = &turn.parent_id
+                    && let Some(parent_step_id) = turn_to_step.get(parent_id)
+                {
+                    step.step.parents.push(parent_step_id.clone());
+                }
 
-        // Message-level accounting lands exactly once per message: when a
-        // provider splits one message across several turns (group_id
-        // set on each), only the run's last turn carries token_usage, so
-        // summing over steps yields session totals. A turn without a
-        // group_id is its own accounting unit.
-        let last_of_message = match &turn.group_id {
-            None => true,
-            Some(mid) => view
-                .turns
-                .get(idx + 1)
-                .is_none_or(|next| next.group_id.as_ref() != Some(mid)),
-        };
-        if last_of_message
-            && let Some(usage) = &turn.token_usage
-            && let Ok(v) = serde_json::to_value(usage)
-        {
-            extra.insert("token_usage".to_string(), v);
-        }
-
-        // Per-step attributed spend rides its own key on every step that
-        // has it (independent of the once-per-message `token_usage`), so
-        // summing `token_usage` is unaffected while per-step cost stays
-        // readable structurally.
-        if let Some(attr) = &turn.attributed_token_usage
-            && let Ok(v) = serde_json::to_value(attr)
-        {
-            extra.insert("attributed_token_usage".to_string(), v);
-        }
-
-        if let Some(mid) = &turn.group_id {
-            extra.insert(
-                "group_id".to_string(),
-                serde_json::Value::String(mid.clone()),
-            );
-        }
-
-        if !turn.delegations.is_empty()
-            && let Ok(v) = serde_json::to_value(&turn.delegations)
-        {
-            extra.insert("delegations".to_string(), v);
-        }
-
-        if let Some(stop_reason) = &turn.stop_reason {
-            extra.insert(
-                "stop_reason".to_string(),
-                serde_json::Value::String(stop_reason.clone()),
-            );
-        }
-
-        if let Some(env) = &turn.environment
-            && let Ok(v) = serde_json::to_value(env)
-        {
-            extra.insert("environment".to_string(), v);
-        }
-
-        step.change.insert(
-            conv_artifact_key.clone(),
-            ArtifactChange {
-                raw: None,
-                structural: Some(StructuralChange {
-                    change_type: "conversation.append".to_string(),
-                    extra,
-                }),
-            },
-        );
-
-        // File mutations → sibling `file.write` change entries.
-        //
-        // Preferred: each `Turn::file_mutations` entry comes from the
-        // provider's `to_view` with the resolved diff already in
-        // `raw_diff` (claude's git-HEAD lookup, codex's `apply_patch_end`
-        // parse, opencode's git2 tree↔tree, etc.). `tool_id` links back
-        // to a specific `ToolInvocation` when the provider can attribute.
-        //
-        // Fallback (un-migrated providers): for any `FileWrite`-category
-        // tool with no matching mutation, synthesize from `tool.input`
-        // via `file_write_change`.
-        let attributed: std::collections::HashSet<String> = turn
-            .file_mutations
-            .iter()
-            .filter_map(|fm| fm.tool_id.clone())
-            .collect();
-        for fm in &turn.file_mutations {
-            let mut t_extra: HashMap<String, serde_json::Value> = HashMap::new();
-            if let Some(tid) = &fm.tool_id {
-                t_extra.insert(
-                    "tool_id".to_string(),
-                    serde_json::Value::String(tid.clone()),
+                // Build conversation.append structural change extras
+                let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
+                extra.insert(
+                    "role".to_string(),
+                    serde_json::Value::String(turn.role.to_string()),
                 );
-                if let Some(tool) = turn.tool_uses.iter().find(|t| &t.id == tid) {
+                extra.insert(
+                    "text".to_string(),
+                    serde_json::Value::String(turn.text.clone()),
+                );
+
+                if config.include_thinking
+                    && let Some(thinking) = &turn.thinking
+                {
+                    extra.insert(
+                        "thinking".to_string(),
+                        serde_json::Value::String(thinking.clone()),
+                    );
+                }
+
+                if config.include_tool_uses && !turn.tool_uses.is_empty() {
+                    let arr: Vec<serde_json::Value> = turn
+                        .tool_uses
+                        .iter()
+                        .map(|t| {
+                            let mut obj = serde_json::json!({
+                                "id": t.id,
+                                "name": t.name,
+                                "input": t.input,
+                                "category": t.category,
+                            });
+                            if let Some(result) = &t.result
+                                && let Ok(v) = serde_json::to_value(result)
+                            {
+                                obj.as_object_mut().unwrap().insert("result".to_string(), v);
+                            }
+                            obj
+                        })
+                        .collect();
+                    extra.insert("tool_uses".to_string(), serde_json::Value::Array(arr));
+                }
+
+                // Message-group accounting: a message's total `token_usage`
+                // lands once, on the group's last turn, so summing over a
+                // path's steps yields session totals. A turn with no `group_id`
+                // is its own group.
+                let last_of_group = match &turn.group_id {
+                    None => true,
+                    Some(mid) => match turn_groups.get(idx + 1) {
+                        Some(Some(next)) => next != mid,
+                        _ => true,
+                    },
+                };
+                if last_of_group
+                    && let Some(usage) = &turn.token_usage
+                    && let Ok(v) = serde_json::to_value(usage)
+                {
+                    extra.insert("token_usage".to_string(), v);
+                }
+
+                // Per-step attributed spend (when the source reports it) rides
+                // its own key, independent of the once-per-group `token_usage`.
+                if let Some(attr) = &turn.attributed_token_usage
+                    && let Ok(v) = serde_json::to_value(attr)
+                {
+                    extra.insert("attributed_token_usage".to_string(), v);
+                }
+
+                if let Some(mid) = &turn.group_id {
+                    extra.insert(
+                        "group_id".to_string(),
+                        serde_json::Value::String(mid.clone()),
+                    );
+                }
+
+                if !turn.delegations.is_empty()
+                    && let Ok(v) = serde_json::to_value(&turn.delegations)
+                {
+                    extra.insert("delegations".to_string(), v);
+                }
+
+                if let Some(stop_reason) = &turn.stop_reason {
+                    extra.insert(
+                        "stop_reason".to_string(),
+                        serde_json::Value::String(stop_reason.clone()),
+                    );
+                }
+
+                if let Some(env) = &turn.environment
+                    && let Ok(v) = serde_json::to_value(env)
+                {
+                    extra.insert("environment".to_string(), v);
+                }
+
+                step.change.insert(
+                    conv_artifact_key.clone(),
+                    ArtifactChange {
+                        raw: None,
+                        structural: Some(StructuralChange {
+                            change_type: "conversation.append".to_string(),
+                            extra,
+                        }),
+                    },
+                );
+
+                // File mutations → sibling `file.write` change entries.
+                //
+                // Preferred: each `Turn::file_mutations` entry comes from the
+                // provider's `to_view` with the resolved diff already in
+                // `raw_diff` (claude's git-HEAD lookup, codex's `apply_patch_end`
+                // parse, opencode's git2 tree↔tree, etc.). `tool_id` links back
+                // to a specific `ToolInvocation` when the provider can attribute.
+                //
+                // Fallback (un-migrated providers): for any `FileWrite`-category
+                // tool with no matching mutation, synthesize from `tool.input`
+                // via `file_write_change`.
+                let attributed: std::collections::HashSet<String> = turn
+                    .file_mutations
+                    .iter()
+                    .filter_map(|fm| fm.tool_id.clone())
+                    .collect();
+                for fm in &turn.file_mutations {
+                    let mut t_extra: HashMap<String, serde_json::Value> = HashMap::new();
+                    if let Some(tid) = &fm.tool_id {
+                        t_extra.insert(
+                            "tool_id".to_string(),
+                            serde_json::Value::String(tid.clone()),
+                        );
+                        if let Some(tool) = turn.tool_uses.iter().find(|t| &t.id == tid) {
+                            t_extra.insert(
+                                "tool".to_string(),
+                                serde_json::Value::String(tool.name.clone()),
+                            );
+                        }
+                    }
+                    if let Some(op) = &fm.operation {
+                        t_extra.insert(
+                            "operation".to_string(),
+                            serde_json::Value::String(op.clone()),
+                        );
+                    }
+                    if let Some(b) = &fm.before {
+                        t_extra.insert("before".to_string(), serde_json::Value::String(b.clone()));
+                    }
+                    if let Some(a) = &fm.after {
+                        t_extra.insert("after".to_string(), serde_json::Value::String(a.clone()));
+                    }
+                    if let Some(rt) = &fm.rename_to {
+                        t_extra.insert(
+                            "rename_to".to_string(),
+                            serde_json::Value::String(rt.clone()),
+                        );
+                    }
+                    step.change.insert(
+                        fm.path.clone(),
+                        ArtifactChange {
+                            raw: fm.raw_diff.clone(),
+                            structural: Some(StructuralChange {
+                                change_type: "file.write".to_string(),
+                                extra: t_extra,
+                            }),
+                        },
+                    );
+                }
+                for tool in &turn.tool_uses {
+                    if tool.category != Some(ToolCategory::FileWrite)
+                        || attributed.contains(&tool.id)
+                    {
+                        continue;
+                    }
+                    let Some(path) = extract_file_path(tool) else {
+                        continue;
+                    };
+                    let (raw, mut t_extra) = file_write_change(tool, &path, None);
                     t_extra.insert(
                         "tool".to_string(),
                         serde_json::Value::String(tool.name.clone()),
                     );
+                    t_extra.insert(
+                        "tool_id".to_string(),
+                        serde_json::Value::String(tool.id.clone()),
+                    );
+                    step.change.insert(
+                        path,
+                        ArtifactChange {
+                            raw,
+                            structural: Some(StructuralChange {
+                                change_type: "file.write".to_string(),
+                                extra: t_extra,
+                            }),
+                        },
+                    );
                 }
+
+                steps.push(step);
+                last_step_id = Some(step_id);
             }
-            if let Some(op) = &fm.operation {
-                t_extra.insert(
-                    "operation".to_string(),
-                    serde_json::Value::String(op.clone()),
+
+            // Emit `view.events` as `conversation.event` steps so that
+            // attachments, preamble lines (ai-title, last-prompt,
+            // queue-operation, permission-mode), and other non-turn entries
+            // survive the IR-to-Path-to-IR roundtrip. Without this,
+            // derive_path drops everything outside `turns`, so a Claude
+            // session loses ~10–25% of its lines on import/export. An event
+            // without an explicit `parent_id` chains off whatever step came
+            // before it.
+            Item::Event(event) => {
+                let idx = event_idx;
+                event_idx += 1;
+
+                // Event step id: prefer the event's native id so it round-trips.
+                let step_id = if event.id.is_empty() {
+                    format!("event-{:04}", idx + 1)
+                } else {
+                    event.id.clone()
+                };
+                let actor = format!("tool:{}", provider);
+                actors
+                    .entry(actor.clone())
+                    .or_insert_with(|| ActorDefinition {
+                        name: Some(provider.to_string()),
+                        provider: Some(provider.to_string()),
+                        ..Default::default()
+                    });
+
+                // event.data is flattened into StructuralChange.extra. Strip keys
+                // that collide with the typed fields on StructuralChange itself —
+                // most importantly `type`, which serde renames `change_type` to.
+                // A Codex `user_message` event carries `data["type"] = "user_message"`,
+                // which would otherwise overwrite our `change_type = "conversation.event"`
+                // and break PathOrRef untagged-enum disambiguation on parse.
+                let mut extra: HashMap<String, serde_json::Value> = event
+                    .data
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != "type")
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                // Stash the original `type` value under a non-colliding key so
+                // round-trip can recover it for providers that need it.
+                if let Some(t) = event.data.get("type") {
+                    extra.insert("event_data_type".to_string(), t.clone());
+                }
+                extra.insert(
+                    "entry_type".to_string(),
+                    serde_json::Value::String(event.event_type.clone()),
                 );
-            }
-            if let Some(b) = &fm.before {
-                t_extra.insert("before".to_string(), serde_json::Value::String(b.clone()));
-            }
-            if let Some(a) = &fm.after {
-                t_extra.insert("after".to_string(), serde_json::Value::String(a.clone()));
-            }
-            if let Some(rt) = &fm.rename_to {
-                t_extra.insert(
-                    "rename_to".to_string(),
-                    serde_json::Value::String(rt.clone()),
+                if !event.id.is_empty() {
+                    extra.insert(
+                        "event_source_id".to_string(),
+                        serde_json::Value::String(event.id.clone()),
+                    );
+                }
+
+                let parents: Vec<String> = event
+                    .parent_id
+                    .as_ref()
+                    .and_then(|pid| turn_to_step.get(pid).cloned())
+                    .or_else(|| last_step_id.clone())
+                    .into_iter()
+                    .collect();
+
+                let mut step = Step {
+                    step: StepIdentity {
+                        id: step_id.clone(),
+                        parents,
+                        actor,
+                        timestamp: event.timestamp.clone(),
+                    },
+                    change: HashMap::new(),
+                    meta: None,
+                };
+
+                step.change.insert(
+                    conv_artifact_key.clone(),
+                    ArtifactChange {
+                        raw: None,
+                        structural: Some(StructuralChange {
+                            change_type: "conversation.event".to_string(),
+                            extra,
+                        }),
+                    },
                 );
+                steps.push(step);
+                last_step_id = Some(step_id);
             }
-            step.change.insert(
-                fm.path.clone(),
-                ArtifactChange {
-                    raw: fm.raw_diff.clone(),
-                    structural: Some(StructuralChange {
-                        change_type: "file.write".to_string(),
-                        extra: t_extra,
-                    }),
-                },
-            );
-        }
-        for tool in &turn.tool_uses {
-            if tool.category != Some(ToolCategory::FileWrite) || attributed.contains(&tool.id) {
-                continue;
+
+            // A context-compaction boundary projects to one
+            // `conversation.compact` step, positioned between the turns it
+            // separates. Later turns whose `parent_id` references this
+            // compaction resolve to its step via `turn_to_step`, so the DAG
+            // is rewired through the boundary.
+            Item::Compaction(c) => {
+                let step_id = if c.id.is_empty() {
+                    compact_idx += 1;
+                    format!("compact-{:04}", compact_idx)
+                } else {
+                    c.id.clone()
+                };
+                turn_to_step.insert(c.id.clone(), step_id.clone());
+
+                let actor = format!("tool:{}", provider);
+                actors
+                    .entry(actor.clone())
+                    .or_insert_with(|| ActorDefinition {
+                        name: Some(provider.to_string()),
+                        provider: Some(provider.to_string()),
+                        ..Default::default()
+                    });
+
+                let parents: Vec<String> = c
+                    .parent_id
+                    .as_ref()
+                    .and_then(|pid| turn_to_step.get(pid).cloned())
+                    .into_iter()
+                    .collect();
+
+                let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
+                if let Some(trigger) = &c.trigger {
+                    let s = match trigger {
+                        crate::CompactionTrigger::Auto => "auto",
+                        crate::CompactionTrigger::Manual => "manual",
+                    };
+                    extra.insert("trigger".to_string(), serde_json::Value::String(s.into()));
+                }
+                if let Some(summary) = &c.summary {
+                    extra.insert(
+                        "summary".to_string(),
+                        serde_json::Value::String(summary.clone()),
+                    );
+                }
+                if let Some(pre_tokens) = c.pre_tokens {
+                    extra.insert(
+                        "pre_tokens".to_string(),
+                        serde_json::Value::Number(pre_tokens.into()),
+                    );
+                }
+                if !c.kept.is_empty()
+                    && let Ok(v) = serde_json::to_value(&c.kept)
+                {
+                    extra.insert("kept".to_string(), v);
+                }
+
+                let mut step = Step {
+                    step: StepIdentity {
+                        id: step_id.clone(),
+                        parents,
+                        actor,
+                        timestamp: c.timestamp.clone(),
+                    },
+                    change: HashMap::new(),
+                    meta: None,
+                };
+                step.change.insert(
+                    conv_artifact_key.clone(),
+                    ArtifactChange {
+                        raw: None,
+                        structural: Some(StructuralChange {
+                            change_type: "conversation.compact".to_string(),
+                            extra,
+                        }),
+                    },
+                );
+                steps.push(step);
+                last_step_id = Some(step_id);
             }
-            let Some(path) = extract_file_path(tool) else {
-                continue;
-            };
-            let (raw, mut t_extra) = file_write_change(tool, &path, None);
-            t_extra.insert(
-                "tool".to_string(),
-                serde_json::Value::String(tool.name.clone()),
-            );
-            t_extra.insert(
-                "tool_id".to_string(),
-                serde_json::Value::String(tool.id.clone()),
-            );
-            step.change.insert(
-                path,
-                ArtifactChange {
-                    raw,
-                    structural: Some(StructuralChange {
-                        change_type: "file.write".to_string(),
-                        extra: t_extra,
-                    }),
-                },
-            );
         }
-
-        // Emit the step, resolving any id collision. Map the turn's native id
-        // to whatever id its step ended up with (renamed on collision, or the
-        // survivor when a byte-identical re-emission is dropped) so later turns
-        // chaining off it — and the event pass below — resolve correctly.
-        let final_id = push_step(&mut steps, &mut by_id, step);
-        turn_to_step.insert(turn.id.clone(), final_id);
-    }
-
-    // Emit `view.events` as `conversation.event` steps so that attachments,
-    // preamble lines (ai-title, last-prompt, queue-operation, permission-mode),
-    // and other non-turn entries survive the IR-to-Path-to-IR roundtrip.
-    // Without this, derive_path drops everything outside `turns`, so a
-    // Claude session loses ~10–25% of its lines on import/export.
-    // Track the last emitted step id so events without an explicit
-    // `parent_id` can chain off whatever step came before them.
-    let mut last_step_id: Option<String> = steps.last().map(|s| s.step.id.clone());
-    for (idx, event) in view.events().enumerate() {
-        // Event step id: prefer the event's native id so it round-trips.
-        let step_id = if event.id.is_empty() {
-            format!("event-{:04}", idx + 1)
-        } else {
-            event.id.clone()
-        };
-        let actor = format!("tool:{}", provider);
-        actors
-            .entry(actor.clone())
-            .or_insert_with(|| ActorDefinition {
-                name: Some(provider.to_string()),
-                provider: Some(provider.to_string()),
-                ..Default::default()
-            });
-
-        // event.data is flattened into StructuralChange.extra. Strip keys
-        // that collide with the typed fields on StructuralChange itself —
-        // most importantly `type`, which serde renames `change_type` to.
-        // A Codex `user_message` event carries `data["type"] = "user_message"`,
-        // which would otherwise overwrite our `change_type = "conversation.event"`
-        // and break PathOrRef untagged-enum disambiguation on parse.
-        let mut extra: HashMap<String, serde_json::Value> = event
-            .data
-            .iter()
-            .filter(|(k, _)| k.as_str() != "type")
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        // Stash the original `type` value under a non-colliding key so
-        // round-trip can recover it for providers that need it.
-        if let Some(t) = event.data.get("type") {
-            extra.insert("event_data_type".to_string(), t.clone());
-        }
-        extra.insert(
-            "entry_type".to_string(),
-            serde_json::Value::String(event.event_type.clone()),
-        );
-        if !event.id.is_empty() {
-            extra.insert(
-                "event_source_id".to_string(),
-                serde_json::Value::String(event.id.clone()),
-            );
-        }
-
-        let parents: Vec<String> = event
-            .parent_id
-            .as_ref()
-            .and_then(|pid| turn_to_step.get(pid).cloned())
-            .or_else(|| last_step_id.clone())
-            .into_iter()
-            .collect();
-
-        let mut step = Step {
-            step: StepIdentity {
-                id: step_id.clone(),
-                parents,
-                actor,
-                timestamp: event.timestamp.clone(),
-            },
-            change: HashMap::new(),
-            meta: None,
-        };
-
-        step.change.insert(
-            conv_artifact_key.clone(),
-            ArtifactChange {
-                raw: None,
-                structural: Some(StructuralChange {
-                    change_type: "conversation.event".to_string(),
-                    extra,
-                }),
-            },
-        );
-        last_step_id = Some(push_step(&mut steps, &mut by_id, step));
     }
 
     // Enforce step-id uniqueness within the path (a toolpath invariant).
@@ -721,7 +828,10 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DelegatedWork, EnvironmentSnapshot, Item, TokenUsage, ToolInvocation, ToolResult};
+    use crate::{
+        Compaction, CompactionTrigger, DelegatedWork, EnvironmentSnapshot, KeptRange, TokenUsage,
+        ToolResult,
+    };
 
     fn base_turn(id: &str, role: Role) -> Turn {
         Turn {
@@ -1707,6 +1817,92 @@ mod tests {
             path.meta.unwrap().title.as_deref(),
             Some("pi session: abcdef01")
         );
+    }
+
+    #[test]
+    fn test_compaction_emits_compact_step_and_rewires_dag() {
+        // [Turn(a), Compaction(c, parent=a), Turn(b, parent=c)] must derive
+        // to three steps in order, with the middle step carrying a
+        // `conversation.compact` change whose extras survive, parented on a,
+        // and turn b rewired through the boundary onto c.
+        let a = base_turn("a", Role::User);
+        let mut b = base_turn("b", Role::Assistant);
+        b.parent_id = Some("c".into());
+        b.model = Some("m".into());
+
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            trigger: Some(CompactionTrigger::Manual),
+            summary: Some("s".into()),
+            pre_tokens: Some(100),
+            kept: vec![KeptRange {
+                from: "a".into(),
+                to: "a".into(),
+            }],
+        };
+
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+        view.items.push(Item::Turn(b));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "c", "b"], "items emitted in order");
+
+        let compact = &path.steps[1];
+        assert_eq!(compact.step.parents, vec!["a".to_string()]);
+        let sc = conv_change(compact);
+        assert_eq!(sc.change_type, "conversation.compact");
+        assert_eq!(sc.extra["trigger"], serde_json::json!("manual"));
+        assert_eq!(sc.extra["summary"], serde_json::json!("s"));
+        assert_eq!(sc.extra["pre_tokens"], serde_json::json!(100));
+        assert_eq!(
+            sc.extra["kept"],
+            serde_json::json!([{"from": "a", "to": "a"}])
+        );
+
+        // Turn b rewired through the boundary: its parent is the compact step.
+        assert_eq!(path.steps[2].step.parents, vec!["c".to_string()]);
+    }
+
+    #[test]
+    fn test_compaction_omits_optional_extras_when_absent() {
+        let a = base_turn("a", Role::User);
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let sc = conv_change(&path.steps[1]);
+        assert_eq!(sc.change_type, "conversation.compact");
+        assert!(!sc.extra.contains_key("trigger"));
+        assert!(!sc.extra.contains_key("summary"));
+        assert!(!sc.extra.contains_key("pre_tokens"));
+        assert!(!sc.extra.contains_key("kept"));
+    }
+
+    #[test]
+    fn test_compaction_synthesizes_id_when_empty() {
+        let a = base_turn("a", Role::User);
+        let c = Compaction {
+            id: String::new(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[1].step.id, "compact-0001");
     }
 
     #[test]
