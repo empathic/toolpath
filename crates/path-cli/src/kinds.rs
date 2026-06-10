@@ -38,8 +38,14 @@ pub const BUNDLED_KINDS: &[BundledKind] = &[
     BundledKind {
         name: "agent-coding-session",
         version: "v1.1.0",
-        uri: toolpath::v1::PATH_KIND_AGENT_CODING_SESSION,
+        uri: toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
         schema: include_str!("../kinds/agent-coding-session/v1.1.0/schema.json"),
+    },
+    BundledKind {
+        name: "agent-coding-session",
+        version: "v1.2.0",
+        uri: toolpath::v1::PATH_KIND_AGENT_CODING_SESSION,
+        schema: include_str!("../kinds/agent-coding-session/v1.2.0/schema.json"),
     },
 ];
 

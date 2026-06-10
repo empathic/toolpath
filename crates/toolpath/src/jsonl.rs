@@ -1250,7 +1250,7 @@ mod tests {
         };
         let jsonl = p.to_jsonl_string().unwrap();
         assert!(
-            jsonl.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.1.0""#)
+            jsonl.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.2.0""#)
         );
         let back = Path::from_jsonl_str(&jsonl).unwrap();
         assert_eq!(canonical_json(&p), canonical_json(&back));

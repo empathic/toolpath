@@ -980,7 +980,7 @@ mod tests {
         // ...and survives a JSON round-trip.
         let json = serde_json::to_string(&path).unwrap();
         assert!(
-            json.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.1.0""#)
+            json.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.2.0""#)
         );
     }
 
@@ -1243,7 +1243,7 @@ mod tests {
 
         let schema_src = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../path-cli/kinds/agent-coding-session/v1.1.0/schema.json"
+            "/../path-cli/kinds/agent-coding-session/v1.2.0/schema.json"
         ))
         .expect("read kind schema");
         let schema: serde_json::Value = serde_json::from_str(&schema_src).unwrap();

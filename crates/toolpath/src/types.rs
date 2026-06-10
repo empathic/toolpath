@@ -141,18 +141,25 @@ pub struct Base {
 }
 
 /// [`PathMeta::kind`] URI for a path derived from an AI coding conversation.
-/// Spec at <https://toolpath.net/kinds/agent-coding-session/v1.1.0>.
+/// Spec at <https://toolpath.net/kinds/agent-coding-session/v1.2.0>.
 ///
-/// v1.1.0 specifies message-level token accounting: steps derived from one
+/// v1.2.0 adds the `conversation.compact` step type — a context-compaction
+/// boundary recorded as its own step between the turns it separates — on top
+/// of v1.1.0's message-level token accounting: steps derived from one
 /// provider message share a `message_id`, and the message's `token_usage`
 /// appears on exactly one of them (the group's last step in document
 /// order), so summing usage over a path's steps yields session totals.
 pub const PATH_KIND_AGENT_CODING_SESSION: &str =
+    "https://toolpath.net/kinds/agent-coding-session/v1.2.0";
+
+/// The v1.1.0 URI. Documents produced with message-level token accounting
+/// but before `conversation.compact` carry this kind.
+pub const PATH_KIND_AGENT_CODING_SESSION_V1_1_0: &str =
     "https://toolpath.net/kinds/agent-coding-session/v1.1.0";
 
-/// The previous version URI. Documents produced before the v1.1.0
-/// accounting rule carry this kind; consumers summing their `token_usage`
-/// per step must deduplicate repeated message-level usage themselves.
+/// The v1.0.0 URI. Documents produced before the v1.1.0 accounting rule
+/// carry this kind; consumers summing their `token_usage` per step must
+/// deduplicate repeated message-level usage themselves.
 pub const PATH_KIND_AGENT_CODING_SESSION_V1_0_0: &str =
     "https://toolpath.net/kinds/agent-coding-session/v1.0.0";
 
@@ -836,12 +843,12 @@ mod tests {
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(
-            json.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.1.0""#)
+            json.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.2.0""#)
         );
         let parsed: PathMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(
             parsed.kind.as_deref(),
-            Some("https://toolpath.net/kinds/agent-coding-session/v1.1.0")
+            Some("https://toolpath.net/kinds/agent-coding-session/v1.2.0")
         );
     }
 
