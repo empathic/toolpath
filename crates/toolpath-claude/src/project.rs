@@ -65,7 +65,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // under `data["raw"]`. Dump them straight back. A headerless event is
     // identified by that `raw` key — no enumerated type list.
     let mut emitted_preamble = false;
-    for event in &view.events {
+    for event in view.events() {
         if let Some(raw) = event.data.get("raw") {
             convo.preamble.push(raw.clone());
             emitted_preamble = true;
@@ -86,7 +86,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // every downstream `parentUuid` reference valid.
     let mut tool_result_events_by_parent: HashMap<String, Vec<&toolpath_convo::ConversationEvent>> =
         HashMap::new();
-    for event in &view.events {
+    for event in view.events() {
         if event.event_type != TOOL_RESULT_USER_EVENT {
             continue;
         }
@@ -114,7 +114,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // intermediate streaming snapshots: they carry no per-step meaning, the
     // IR doesn't retain them, and the final total is what consumers sum.)
     let mut group_total: HashMap<&str, toolpath_convo::TokenUsage> = HashMap::new();
-    for turn in &view.turns {
+    for turn in view.turns() {
         if let (Some(mid), Some(usage)) = (turn.group_id.as_deref(), &turn.token_usage) {
             group_total
                 .entry(mid)
@@ -123,7 +123,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    for turn in &view.turns {
+    for turn in view.turns() {
         // Pre-rewrite this turn's parent_id if a synthesized tool_result
         // was emitted between it and its IR-recorded parent.
         let effective_parent = turn
@@ -202,7 +202,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     }
 
     // Emit non-preamble events (attachments, etc.) as entries.
-    for event in &view.events {
+    for event in view.events() {
         if event.data.contains_key("raw") {
             continue; // headerless line — already pushed onto convo.preamble
         }
@@ -1021,12 +1021,11 @@ mod tests {
             id: id.to_string(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }

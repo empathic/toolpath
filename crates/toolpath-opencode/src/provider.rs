@@ -229,7 +229,7 @@ impl<'a> Builder<'a> {
         // Refresh files_changed so it matches what landed on turns.
         let mut seen = std::collections::HashSet::new();
         let mut ordered = Vec::new();
-        for turn in &view.turns {
+        for turn in view.turns() {
             for fm in &turn.file_mutations {
                 if seen.insert(fm.path.clone()) {
                     ordered.push(fm.path.clone());
@@ -257,11 +257,18 @@ impl<'a> Builder<'a> {
             }
         }
 
+        let items = self
+            .turns
+            .into_iter()
+            .map(toolpath_convo::Item::Turn)
+            .chain(self.events.into_iter().map(toolpath_convo::Item::Event))
+            .collect();
+
         ConversationView {
             id: self.session.id.clone(),
             started_at: Utc.timestamp_millis_opt(self.session.time_created).single(),
             last_activity: Utc.timestamp_millis_opt(self.session.time_updated).single(),
-            turns: self.turns,
+            items,
             total_usage: if self.total_usage_set {
                 Some(self.total_usage)
             } else {
@@ -270,7 +277,6 @@ impl<'a> Builder<'a> {
             provider_id: Some("opencode".into()),
             files_changed: self.files_changed_order,
             session_ids: vec![self.session.id.clone()],
-            events: self.events,
             ..Default::default()
         }
     }
@@ -963,22 +969,20 @@ mod tests {
 
         assert_eq!(view.id, "ses_x");
         assert_eq!(view.provider_id.as_deref(), Some("opencode"));
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "make a pickle");
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "done!");
-        assert_eq!(
-            view.turns[1].thinking.as_deref(),
-            Some("I should write main.cpp")
-        );
+        let turns: Vec<_> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "make a pickle");
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "done!");
+        assert_eq!(turns[1].thinking.as_deref(), Some("I should write main.cpp"));
     }
 
     #[test]
     fn tool_invocations_paired() {
         let (_t, mgr) = setup(BASIC_SQL);
         let view = to_view(&mgr.read_session("ses_x").unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         assert_eq!(assistant.tool_uses.len(), 2);
         let bash = &assistant.tool_uses[0];
         assert_eq!(bash.name, "bash");
@@ -1000,7 +1004,7 @@ mod tests {
     fn step_finish_drives_token_usage() {
         let (_t, mgr) = setup(BASIC_SQL);
         let view = to_view(&mgr.read_session("ses_x").unwrap());
-        let u = view.turns[1].token_usage.as_ref().unwrap();
+        let u = view.turns().nth(1).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.input_tokens, Some(100));
         // output (20) + reasoning (5): opencode reports reasoning as a
         // separate additive category, folded into output here.
@@ -1098,7 +1102,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         let r = tool.result.as_ref().unwrap();
         assert!(r.is_error);
         assert_eq!(r.content, "exit 1");
@@ -1118,11 +1122,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(
-            view.events
-                .iter()
-                .any(|e| e.event_type == "part.compaction")
-        );
+        assert!(view.events().any(|e| e.event_type == "part.compaction"));
     }
 
     #[test]
@@ -1138,7 +1138,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(view.events.iter().any(|e| e.event_type == "part.unknown"));
+        assert!(view.events().any(|e| e.event_type == "part.unknown"));
     }
 
     #[test]
@@ -1159,6 +1159,6 @@ mod tests {
         let ids = ConversationProvider::list_conversations(&mgr, "").unwrap();
         assert_eq!(ids, vec!["ses_x".to_string()]);
         let v = ConversationProvider::load_conversation(&mgr, "", "ses_x").unwrap();
-        assert_eq!(v.turns.len(), 2);
+        assert_eq!(v.turns().count(), 2);
     }
 }

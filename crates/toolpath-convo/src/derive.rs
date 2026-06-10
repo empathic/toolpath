@@ -82,8 +82,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             })
         })
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
                 .map(|wd| {
                     let uri = if wd.starts_with('/') {
@@ -101,14 +100,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
 
     let conv_artifact_key = format!("{}://{}", provider, view.id);
 
-    let mut steps: Vec<Step> = Vec::with_capacity(view.turns.len());
-    // Final step id → index in `steps`, for resolving id collisions as steps
-    // are emitted (see `push_step`).
-    let mut by_id: HashMap<String, usize> = HashMap::new();
+    let mut steps: Vec<Step> = Vec::with_capacity(view.items.len());
     let mut turn_to_step: HashMap<String, String> = HashMap::new();
     let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
 
-    for (idx, turn) in view.turns.iter().enumerate() {
+    for (idx, turn) in view.turns().enumerate() {
         // Step id: use the turn's native id when set so it round-trips
         // through `extract_conversation`; otherwise synthesize sequentially.
         let step_id = if turn.id.is_empty() {
@@ -349,7 +345,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     // Track the last emitted step id so events without an explicit
     // `parent_id` can chain off whatever step came before them.
     let mut last_step_id: Option<String> = steps.last().map(|s| s.step.id.clone());
-    for (idx, event) in view.events.iter().enumerate() {
+    for (idx, event) in view.events().enumerate() {
         // Event step id: prefer the event's native id so it round-trips.
         let step_id = if event.id.is_empty() {
             format!("event-{:04}", idx + 1)
@@ -725,7 +721,7 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolInvocation, ToolResult};
+    use crate::{DelegatedWork, EnvironmentSnapshot, Item, TokenUsage, ToolInvocation, ToolResult};
 
     fn base_turn(id: &str, role: Role) -> Turn {
         Turn {
@@ -750,7 +746,7 @@ mod tests {
     fn view_with(turns: Vec<Turn>) -> ConversationView {
         ConversationView {
             id: "abcdef012345".to_string(),
-            turns,
+            items: turns.into_iter().map(Item::Turn).collect(),
             provider_id: Some("pi".to_string()),
             ..Default::default()
         }
@@ -1026,13 +1022,13 @@ mod tests {
         let other = base_turn("t4", Role::Other("bash".into()));
 
         let mut view = view_with(vec![user, assistant, system, other]);
-        view.events.push(crate::ConversationEvent {
+        view.items.push(Item::Event(crate::ConversationEvent {
             id: "e1".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
             parent_id: None,
             event_type: "attachment".into(),
             data: HashMap::new(),
-        });
+        }));
 
         let path = derive_path(&view, &DeriveConfig::default());
         let graph = serde_json::json!({
@@ -1120,13 +1116,13 @@ mod tests {
         other.text = "tool output".into();
 
         let mut view = view_with(vec![user, assistant, system, other]);
-        view.events.push(crate::ConversationEvent {
+        view.items.push(Item::Event(crate::ConversationEvent {
             id: "e1".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
             parent_id: None,
             event_type: "attachment".into(),
             data: HashMap::new(),
-        });
+        }));
 
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(

@@ -88,7 +88,7 @@ fn turn_timestamps_match_source_message_lines() {
     let s = session();
     let view = to_view(&s);
 
-    let turn_timestamps: HashSet<&str> = view.turns.iter().map(|t| t.timestamp.as_str()).collect();
+    let turn_timestamps: HashSet<&str> = view.turns().map(|t| t.timestamp.as_str()).collect();
 
     for line in &s.lines {
         if let RolloutItem::ResponseItem(ResponseItem::Message(_)) = line.item() {
@@ -161,9 +161,9 @@ fn actor_scheme_matches_source_role() {
     let view = to_view(&s);
     let path = derive::derive_path(&s, &derive::DeriveConfig::default());
 
-    let user_seen = view.turns.iter().any(|t| t.role == Role::User);
-    let assistant_seen = view.turns.iter().any(|t| t.role == Role::Assistant);
-    let system_seen = view.turns.iter().any(|t| t.role == Role::System);
+    let user_seen = view.turns().any(|t| t.role == Role::User);
+    let assistant_seen = view.turns().any(|t| t.role == Role::Assistant);
+    let system_seen = view.turns().any(|t| t.role == Role::System);
 
     let prefixes: HashSet<&str> = path
         .steps
@@ -247,7 +247,7 @@ fn function_call_arguments_preserved_in_view() {
 
     let mut tool_by_id: std::collections::HashMap<&str, &toolpath_convo::ToolInvocation> =
         std::collections::HashMap::new();
-    for t in &view.turns {
+    for t in view.turns() {
         for tu in &t.tool_uses {
             tool_by_id.insert(tu.id.as_str(), tu);
         }

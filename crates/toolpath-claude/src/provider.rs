@@ -438,16 +438,21 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         version: Some(v),
     });
 
+    let items: Vec<toolpath_convo::Item> = turns
+        .into_iter()
+        .map(toolpath_convo::Item::Turn)
+        .chain(events.into_iter().map(toolpath_convo::Item::Event))
+        .collect();
+
     ConversationView {
         id: convo.session_id.clone(),
         started_at: convo.started_at,
         last_activity: convo.last_activity,
-        turns,
+        items,
         total_usage,
         provider_id: Some("claude-code".into()),
         files_changed,
         session_ids: vec![],
-        events,
         base: view_base,
         producer,
     }
@@ -1039,52 +1044,50 @@ mod tests {
             .unwrap();
 
         assert_eq!(view.id, "session-1");
+        let turns: Vec<&Turn> = view.turns().collect();
         // 7 entries collapse to 5 turns (2 tool-result-only entries absorbed)
-        assert_eq!(view.turns.len(), 5);
+        assert_eq!(turns.len(), 5);
 
         // Turn 0: user "Fix the bug"
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "Fix the bug");
-        assert!(view.turns[0].parent_id.is_none());
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "Fix the bug");
+        assert!(turns[0].parent_id.is_none());
 
         // Turn 1: assistant with tool use + assembled result
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "I'll fix that.");
-        assert_eq!(
-            view.turns[1].thinking.as_deref(),
-            Some("The bug is in auth")
-        );
-        assert_eq!(view.turns[1].tool_uses.len(), 1);
-        assert_eq!(view.turns[1].tool_uses[0].name, "Read");
-        assert_eq!(view.turns[1].tool_uses[0].id, "t1");
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "I'll fix that.");
+        assert_eq!(turns[1].thinking.as_deref(), Some("The bug is in auth"));
+        assert_eq!(turns[1].tool_uses.len(), 1);
+        assert_eq!(turns[1].tool_uses[0].name, "Read");
+        assert_eq!(turns[1].tool_uses[0].id, "t1");
         // Key assertion: result is populated from the next entry
-        let result = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        let result = turns[1].tool_uses[0].result.as_ref().unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("fn main()"));
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-6"));
-        assert_eq!(view.turns[1].stop_reason.as_deref(), Some("tool_use"));
-        assert_eq!(view.turns[1].parent_id.as_deref(), Some("uuid-1"));
+        assert_eq!(turns[1].model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(turns[1].stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(turns[1].parent_id.as_deref(), Some("uuid-1"));
 
         // Token usage
-        let usage = view.turns[1].token_usage.as_ref().unwrap();
+        let usage = turns[1].token_usage.as_ref().unwrap();
         assert_eq!(usage.input_tokens, Some(100));
         assert_eq!(usage.output_tokens, Some(50));
 
         // Turn 2: second assistant with tool use + assembled result
-        assert_eq!(view.turns[2].role, Role::Assistant);
-        assert_eq!(view.turns[2].text, "I see the issue. Let me fix it.");
-        assert_eq!(view.turns[2].tool_uses[0].name, "Edit");
-        let result2 = view.turns[2].tool_uses[0].result.as_ref().unwrap();
+        assert_eq!(turns[2].role, Role::Assistant);
+        assert_eq!(turns[2].text, "I see the issue. Let me fix it.");
+        assert_eq!(turns[2].tool_uses[0].name, "Edit");
+        let result2 = turns[2].tool_uses[0].result.as_ref().unwrap();
         assert_eq!(result2.content, "File written successfully");
 
         // Turn 3: final assistant (no tools)
-        assert_eq!(view.turns[3].role, Role::Assistant);
-        assert_eq!(view.turns[3].text, "Done! The bug is fixed.");
-        assert!(view.turns[3].tool_uses.is_empty());
+        assert_eq!(turns[3].role, Role::Assistant);
+        assert_eq!(turns[3].text, "Done! The bug is fixed.");
+        assert!(turns[3].tool_uses.is_empty());
 
         // Turn 4: user "Thanks!"
-        assert_eq!(view.turns[4].role, Role::User);
-        assert_eq!(view.turns[4].text, "Thanks!");
+        assert_eq!(turns[4].role, Role::User);
+        assert_eq!(turns[4].text, "Thanks!");
     }
 
     #[test]
@@ -1094,7 +1097,7 @@ mod tests {
             .unwrap();
 
         // No turns should have empty text with User role (phantom turns)
-        for turn in &view.turns {
+        for turn in view.turns() {
             if turn.role == Role::User {
                 assert!(
                     !turn.text.is_empty(),
@@ -1124,8 +1127,9 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        assert_eq!(view.turns.len(), 2); // user + assistant (tool-result absorbed)
-        let result = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2); // user + assistant (tool-result absorbed)
+        let result = turns[1].tool_uses[0].result.as_ref().unwrap();
         assert!(result.is_error);
         assert_eq!(result.content, "File not found");
     }
@@ -1149,13 +1153,14 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[1].tool_uses.len(), 2);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1].tool_uses.len(), 2);
 
-        let r1 = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        let r1 = turns[1].tool_uses[0].result.as_ref().unwrap();
         assert_eq!(r1.content, "file a contents");
 
-        let r2 = view.turns[1].tool_uses[1].result.as_ref().unwrap();
+        let r2 = turns[1].tool_uses[1].result.as_ref().unwrap();
         assert_eq!(r2.content, "file b contents");
     }
 
@@ -1177,9 +1182,10 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].text, "Hello");
-        assert_eq!(view.turns[1].text, "Hi there!");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].text, "Hello");
+        assert_eq!(turns[1].text, "Hi there!");
     }
 
     #[test]
@@ -1201,8 +1207,9 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        assert_eq!(view.turns.len(), 2);
-        assert!(view.turns[1].tool_uses[0].result.is_none());
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert!(turns[1].tool_uses[0].result.is_none());
     }
 
     #[test]
@@ -1237,7 +1244,7 @@ mod tests {
             .read_conversation("/test/project", "session-1")
             .unwrap();
         let view = to_view(&convo);
-        assert_eq!(view.turns.len(), 5);
+        assert_eq!(view.turns().count(), 5);
         assert_eq!(view.title(20).unwrap(), "Fix the bug");
     }
 
@@ -1540,16 +1547,11 @@ mod tests {
         let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
             .unwrap();
 
+        let turns: Vec<&Turn> = view.turns().collect();
         // Turn 1 (assistant) has a Read tool
-        assert_eq!(
-            view.turns[1].tool_uses[0].category,
-            Some(ToolCategory::FileRead)
-        );
+        assert_eq!(turns[1].tool_uses[0].category, Some(ToolCategory::FileRead));
         // Turn 2 (assistant) has an Edit tool
-        assert_eq!(
-            view.turns[2].tool_uses[0].category,
-            Some(ToolCategory::FileWrite)
-        );
+        assert_eq!(turns[2].tool_uses[0].category, Some(ToolCategory::FileWrite));
     }
 
     #[test]
@@ -1570,14 +1572,15 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
+        let turns: Vec<&Turn> = view.turns().collect();
         // User turn has environment (entry has cwd and gitBranch)
-        let env = view.turns[0].environment.as_ref().unwrap();
+        let env = turns[0].environment.as_ref().unwrap();
         assert_eq!(env.working_dir.as_deref(), Some("/project/path"));
         assert_eq!(env.vcs_branch.as_deref(), Some("feat/auth"));
         assert!(env.vcs_revision.is_none());
 
         // Assistant turn has no environment (entry has no cwd/gitBranch)
-        assert!(view.turns[1].environment.is_none());
+        assert!(turns[1].environment.is_none());
     }
 
     #[test]
@@ -1598,7 +1601,7 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        let usage = view.turns[1].token_usage.as_ref().unwrap();
+        let usage = view.turns().nth(1).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(usage.cache_read_tokens, Some(500));
         assert_eq!(usage.cache_write_tokens, Some(200));
     }
@@ -1668,8 +1671,9 @@ mod tests {
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
         // Assistant turn should have one delegation
-        assert_eq!(view.turns[1].delegations.len(), 1);
-        let d = &view.turns[1].delegations[0];
+        let turn1 = view.turns().nth(1).unwrap();
+        assert_eq!(turn1.delegations.len(), 1);
+        let d = &turn1.delegations[0];
         assert_eq!(d.agent_id, "task-1");
         assert_eq!(d.prompt, "Find the authentication bug");
         assert!(d.turns.is_empty()); // Sub-agent turns are in separate files
@@ -1728,7 +1732,7 @@ mod tests {
             .unwrap();
 
         // No turns should have delegations (none use Task tool)
-        for turn in &view.turns {
+        for turn in view.turns() {
             assert!(turn.delegations.is_empty());
         }
     }
@@ -1773,11 +1777,12 @@ mod tests {
         // Should have turns from both segments (minus the bridge entry)
         // session-a: a1 (user), a2 (assistant)
         // session-b: b1 (user), b2 (assistant) — b0 is bridge, filtered
-        assert_eq!(view.turns.len(), 4);
-        assert_eq!(view.turns[0].text, "Fix the bug");
-        assert_eq!(view.turns[1].text, "I'll fix that.");
-        assert_eq!(view.turns[2].text, "What about the tests?");
-        assert_eq!(view.turns[3].text, "Tests pass now.");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 4);
+        assert_eq!(turns[0].text, "Fix the bug");
+        assert_eq!(turns[1].text, "I'll fix that.");
+        assert_eq!(turns[2].text, "What about the tests?");
+        assert_eq!(turns[3].text, "Tests pass now.");
 
         // Session IDs should be set
         assert_eq!(view.session_ids, vec!["session-a", "session-b"]);
@@ -1791,7 +1796,7 @@ mod tests {
             .unwrap();
 
         // Bridge entry text "Continue the fix" should NOT appear
-        for turn in &view.turns {
+        for turn in view.turns() {
             assert_ne!(turn.text, "Continue the fix");
         }
     }
@@ -1814,9 +1819,10 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "solo").unwrap();
 
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].text, "Hello");
-        assert_eq!(view.turns[1].text, "Hi there!");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].text, "Hello");
+        assert_eq!(turns[1].text, "Hi there!");
         // Single segment — session_ids should be empty
         assert!(view.session_ids.is_empty());
     }

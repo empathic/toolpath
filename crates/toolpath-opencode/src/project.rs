@@ -85,8 +85,7 @@ fn project_view(
         .directory
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
                 .map(PathBuf::from)
         })
@@ -116,8 +115,8 @@ fn project_view(
         .started_at
         .map(|t| t.timestamp_millis())
         .or_else(|| {
-            view.turns
-                .first()
+            view.turns()
+                .next()
                 .and_then(|t| parse_timestamp_ms(&t.timestamp))
         })
         .unwrap_or(0);
@@ -125,7 +124,7 @@ fn project_view(
         .last_activity
         .map(|t| t.timestamp_millis())
         .or_else(|| {
-            view.turns
+            view.turns()
                 .last()
                 .and_then(|t| parse_timestamp_ms(&t.timestamp))
         })
@@ -135,8 +134,7 @@ fn project_view(
         .title
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .filter(|t| matches!(t.role, Role::User))
                 .map(|t| t.text.as_str())
                 .find(|t| !t.is_empty() && !is_system_envelope(t))
@@ -159,7 +157,7 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
-    for turn in &view.turns {
+    for turn in view.turns() {
         match turn.role {
             Role::User => {
                 let msg = build_user_message(
@@ -795,12 +793,11 @@ mod tests {
             id: "session-uuid".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("opencode".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }

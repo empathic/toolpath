@@ -45,17 +45,16 @@ fn fixture_load_via_provider() {
     // Provider id set
     assert_eq!(view.provider_id.as_deref(), Some("gemini-cli"));
     // User and assistant turns both present
-    let user_turns = view.turns.iter().filter(|t| t.role == Role::User).count();
+    let user_turns = view.turns().filter(|t| t.role == Role::User).count();
     let assistant_turns = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| t.role == Role::Assistant)
         .count();
     assert!(user_turns >= 1);
     assert!(assistant_turns >= 1);
 
     // At least one FileRead-categorised tool (get_internal_docs)
-    let has_file_read = view.turns.iter().any(|t| {
+    let has_file_read = view.turns().any(|t| {
         t.tool_uses
             .iter()
             .any(|tu| tu.category == Some(ToolCategory::FileRead))

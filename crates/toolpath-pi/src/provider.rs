@@ -21,8 +21,8 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult,
-    Turn,
+    EnvironmentSnapshot, Item, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation,
+    ToolResult, Turn,
 };
 
 // ── Classification helpers ───────────────────────────────────────────
@@ -556,12 +556,11 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         id: session.header.id.clone(),
         started_at,
         last_activity,
-        turns,
+        items: turns.into_iter().map(Item::Turn).collect(),
         total_usage,
         provider_id: Some("pi".to_string()),
         files_changed,
         session_ids,
-        events: vec![],
         base,
         ..Default::default()
     }
@@ -752,7 +751,7 @@ mod tests {
     fn test_empty_session_produces_view() {
         let session = session_from(vec![], "/tmp/p");
         let v = session_to_view(&session);
-        assert_eq!(v.turns.len(), 0);
+        assert_eq!(v.turns().count(), 0);
         assert_eq!(v.provider_id.as_deref(), Some("pi"));
         assert_eq!(v.id, "sess-1");
     }
@@ -761,9 +760,9 @@ mod tests {
     fn test_user_message_becomes_user_turn() {
         let session = session_from(vec![user_text_entry("a", None, "hello")], "/tmp/p");
         let v = session_to_view(&session);
-        assert_eq!(v.turns.len(), 1);
-        assert_eq!(v.turns[0].role, Role::User);
-        assert_eq!(v.turns[0].text, "hello");
+        assert_eq!(v.turns().count(), 1);
+        assert_eq!(v.turns().next().unwrap().role, Role::User);
+        assert_eq!(v.turns().next().unwrap().text, "hello");
     }
 
     #[test]
@@ -793,7 +792,7 @@ mod tests {
         };
         let session = session_from(vec![entry], "/tmp/p");
         let v = session_to_view(&session);
-        assert_eq!(v.turns[0].text, "first\nsecond");
+        assert_eq!(v.turns().next().unwrap().text, "first\nsecond");
     }
 
     #[test]
@@ -810,10 +809,10 @@ mod tests {
             "claude-opus",
         );
         let v = session_to_view(&session_from(vec![entry], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::Assistant);
-        assert_eq!(v.turns[0].model.as_deref(), Some("claude-opus"));
-        assert_eq!(v.turns[0].stop_reason.as_deref(), Some("stop"));
-        let u = v.turns[0].token_usage.as_ref().unwrap();
+        assert_eq!(v.turns().next().unwrap().role, Role::Assistant);
+        assert_eq!(v.turns().next().unwrap().model.as_deref(), Some("claude-opus"));
+        assert_eq!(v.turns().next().unwrap().stop_reason.as_deref(), Some("stop"));
+        let u = v.turns().next().unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.input_tokens, Some(10));
         assert_eq!(u.output_tokens, Some(20));
     }
@@ -842,8 +841,8 @@ mod tests {
             "m",
         );
         let v = session_to_view(&session_from(vec![entry], "/tmp/p"));
-        assert_eq!(v.turns[0].text, "one\ntwo");
-        assert_eq!(v.turns[0].thinking.as_deref(), Some("mmm"));
+        assert_eq!(v.turns().next().unwrap().text, "one\ntwo");
+        assert_eq!(v.turns().next().unwrap().thinking.as_deref(), Some("mmm"));
     }
 
     #[test]
@@ -862,8 +861,8 @@ mod tests {
             "m",
         );
         let v = session_to_view(&session_from(vec![entry], "/tmp/p"));
-        assert_eq!(v.turns[0].tool_uses.len(), 1);
-        let inv = &v.turns[0].tool_uses[0];
+        assert_eq!(v.turns().next().unwrap().tool_uses.len(), 1);
+        let inv = &v.turns().next().unwrap().tool_uses[0];
         assert_eq!(inv.id, "tc1");
         assert_eq!(inv.name, "Read");
         assert_eq!(inv.category, Some(ToolCategory::FileRead));
@@ -916,7 +915,7 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![assistant, tr], "/tmp/p"));
-        let inv = &v.turns[0].tool_uses[0];
+        let inv = &v.turns().next().unwrap().tool_uses[0];
         let res = inv.result.as_ref().unwrap();
         assert_eq!(res.content, "result");
         assert!(!res.is_error);
@@ -943,7 +942,7 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![tr], "/tmp/p"));
-        assert_eq!(v.turns.len(), 0);
+        assert_eq!(v.turns().count(), 0);
     }
 
     #[test]
@@ -964,10 +963,10 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![e], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::Other("bash".to_string()));
-        assert!(v.turns[0].text.starts_with("$ ls"));
-        assert_eq!(v.turns[0].tool_uses.len(), 1);
-        assert_eq!(v.turns[0].tool_uses[0].category, Some(ToolCategory::Shell));
+        assert_eq!(v.turns().next().unwrap().role, Role::Other("bash".to_string()));
+        assert!(v.turns().next().unwrap().text.starts_with("$ ls"));
+        assert_eq!(v.turns().next().unwrap().tool_uses.len(), 1);
+        assert_eq!(v.turns().next().unwrap().tool_uses[0].category, Some(ToolCategory::Shell));
     }
 
     #[test]
@@ -979,7 +978,7 @@ mod tests {
             ],
             "/tmp/p",
         ));
-        assert_eq!(v.turns[1].parent_id.as_deref(), Some("a"));
+        assert_eq!(v.turns().nth(1).unwrap().parent_id.as_deref(), Some("a"));
     }
 
     #[test]
@@ -994,8 +993,8 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![c], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::System);
-        assert!(v.turns[0].text.starts_with("Compacted"));
+        assert_eq!(v.turns().next().unwrap().role, Role::System);
+        assert!(v.turns().next().unwrap().text.starts_with("Compacted"));
     }
 
     #[test]
@@ -1009,8 +1008,8 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![bs], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::System);
-        assert!(v.turns[0].text.starts_with("Branch summary"));
+        assert_eq!(v.turns().next().unwrap().role, Role::System);
+        assert!(v.turns().next().unwrap().text.starts_with("Branch summary"));
     }
 
     #[test]
@@ -1023,7 +1022,7 @@ mod tests {
         };
         let msg = user_text_entry("u", None, "hi");
         let v = session_to_view(&session_from(vec![mc, msg], "/tmp/p"));
-        assert_eq!(v.turns.len(), 1);
+        assert_eq!(v.turns().count(), 1);
     }
 
     #[test]
@@ -1035,7 +1034,7 @@ mod tests {
             ],
             "/Users/alex/p",
         ));
-        for t in &v.turns {
+        for t in v.turns() {
             assert_eq!(
                 t.environment.as_ref().unwrap().working_dir.as_deref(),
                 Some("/Users/alex/p")
@@ -1203,8 +1202,8 @@ mod tests {
         let pi = PiConvo::with_resolver(resolver);
         let v = ConversationProvider::load_conversation(&pi, "/tmp/p", "s1").unwrap();
         assert_eq!(v.id, "s1");
-        assert_eq!(v.turns.len(), 1);
-        assert_eq!(v.turns[0].role, Role::User);
+        assert_eq!(v.turns().count(), 1);
+        assert_eq!(v.turns().next().unwrap().role, Role::User);
     }
 
     #[test]
@@ -1259,9 +1258,9 @@ mod tests {
             "m",
         );
         let v = session_to_view(&session_from(vec![a], "/tmp/p"));
-        assert_eq!(v.turns[0].delegations.len(), 1);
-        assert_eq!(v.turns[0].delegations[0].prompt, "do the thing");
-        assert_eq!(v.turns[0].delegations[0].agent_id, "d1");
+        assert_eq!(v.turns().next().unwrap().delegations.len(), 1);
+        assert_eq!(v.turns().next().unwrap().delegations[0].prompt, "do the thing");
+        assert_eq!(v.turns().next().unwrap().delegations[0].agent_id, "d1");
     }
 
     #[test]
@@ -1275,7 +1274,7 @@ mod tests {
             "m",
         );
         let v = session_to_view(&session_from(vec![a], "/tmp/p"));
-        let sr = v.turns[0].stop_reason.as_deref().unwrap();
+        let sr = v.turns().next().unwrap().stop_reason.as_deref().unwrap();
         assert!(sr.to_lowercase().contains("tool"), "got: {}", sr);
     }
 
@@ -1290,7 +1289,7 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![cm], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::Other("custom:foo".to_string()));
-        assert_eq!(v.turns[0].text, "body");
+        assert_eq!(v.turns().next().unwrap().role, Role::Other("custom:foo".to_string()));
+        assert_eq!(v.turns().next().unwrap().text, "body");
     }
 }

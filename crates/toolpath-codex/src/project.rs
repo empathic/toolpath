@@ -116,8 +116,7 @@ fn project_view(
         .cwd
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
         })
         .unwrap_or_else(|| "/".to_string());
@@ -125,13 +124,13 @@ fn project_view(
     let model = cfg
         .model
         .clone()
-        .or_else(|| view.turns.iter().find_map(|t| t.model.clone()))
+        .or_else(|| view.turns().find_map(|t| t.model.clone()))
         .unwrap_or_else(|| "unknown".to_string());
 
     let session_timestamp = view
         .started_at
         .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-        .or_else(|| view.turns.first().map(|t| t.timestamp.clone()))
+        .or_else(|| view.turns().next().map(|t| t.timestamp.clone()))
         .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
 
     let mut lines: Vec<RolloutLine> = Vec::new();
@@ -143,7 +142,8 @@ fn project_view(
     // Codex annotates every other assistant turn with `phase: "commentary"`,
     // matching what real rollouts look like.
     let last_assistant_idx = view
-        .turns
+        .turns()
+        .collect::<Vec<_>>()
         .iter()
         .rposition(|t| matches!(t.role, Role::Assistant));
 
@@ -162,8 +162,7 @@ fn project_view(
     // grouping survive the round-trip — the reader keys `Turn.group_id`
     // off the turn_context `turn_id`.
     let first_group = view
-        .turns
-        .iter()
+        .turns()
         .enumerate()
         .find(|(_, t)| matches!(t.role, Role::Assistant))
         .map(|(i, t)| group_of(i, t))
@@ -181,7 +180,7 @@ fn project_view(
     // emit it after the turn, so a re-read differences it back to the same
     // per-step spend.
     let mut running = toolpath_convo::TokenUsage::default();
-    for (idx, turn) in view.turns.iter().enumerate() {
+    for (idx, turn) in view.turns().enumerate() {
         if matches!(turn.role, Role::Assistant) {
             let group = group_of(idx, turn);
             if current_group.as_deref() != Some(&group) {
@@ -760,12 +759,11 @@ mod tests {
             id: "session-uuid".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("codex".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }

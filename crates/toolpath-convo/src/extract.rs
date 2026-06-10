@@ -13,7 +13,7 @@ use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
 use crate::{
-    ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation,
+    ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation, Item,
     ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
@@ -71,7 +71,8 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
         view.producer = Some(p);
     }
 
-    // Map from step ID → index into view.turns, for parent lookups.
+    // Map from step ID → index into view.items (of a turn item), for
+    // parent lookups when attaching tool invocations.
     let mut step_to_turn: HashMap<&str, usize> = HashMap::new();
     // Track files_changed for dedup in insertion order.
     let mut files_seen: HashSet<String> = HashSet::new();
@@ -152,9 +153,9 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     if !step_mutations.is_empty() {
                         turn.file_mutations = std::mem::take(&mut step_mutations);
                     }
-                    let idx = view.turns.len();
+                    let idx = view.items.len();
                     step_to_turn.insert(&step.step.id, idx);
-                    view.turns.push(turn);
+                    view.items.push(Item::Turn(turn));
                 }
                 "conversation.event" => {
                     let event_type = structural
@@ -189,7 +190,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         event_type,
                         data,
                     };
-                    view.events.push(event);
+                    view.items.push(Item::Event(event));
                 }
                 "tool.invoke" => {
                     let invocation = build_tool_invocation(&structural.extra);
@@ -206,8 +207,9 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     // Attach to parent turn.
                     if let Some(parent_id) = step.step.parents.first()
                         && let Some(&turn_idx) = step_to_turn.get(parent_id.as_str())
+                        && let Some(Item::Turn(t)) = view.items.get_mut(turn_idx)
                     {
-                        view.turns[turn_idx].tool_uses.push(invocation);
+                        t.tool_uses.push(invocation);
                     }
                 }
                 _ => {
@@ -220,7 +222,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
     // Compute total_usage by summing across turns.
     let mut has_any_usage = false;
     let mut total = TokenUsage::default();
-    for turn in &view.turns {
+    for turn in view.turns() {
         if let Some(usage) = &turn.token_usage {
             has_any_usage = true;
             total.input_tokens = add_opt(total.input_tokens, usage.input_tokens);
@@ -233,14 +235,17 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
         view.total_usage = Some(total);
     }
 
-    // Parse timestamps from first/last turns.
-    if let Some(first) = view.turns.first() {
-        view.started_at = DateTime::parse_from_rfc3339(&first.timestamp)
+    // Parse timestamps from first/last turns. Clone the strings out first
+    // so the `turns()` borrow ends before we assign back into `view`.
+    let first_ts = view.turns().next().map(|t| t.timestamp.clone());
+    let last_ts = view.turns().last().map(|t| t.timestamp.clone());
+    if let Some(ts) = first_ts {
+        view.started_at = DateTime::parse_from_rfc3339(&ts)
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc));
     }
-    if let Some(last) = view.turns.last() {
-        view.last_activity = DateTime::parse_from_rfc3339(&last.timestamp)
+    if let Some(ts) = last_ts {
+        view.last_activity = DateTime::parse_from_rfc3339(&ts)
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc));
     }
@@ -629,7 +634,7 @@ mod tests {
         let path = make_path(vec![]);
         let view = extract_conversation(&path);
         assert!(view.id.is_empty());
-        assert!(view.turns.is_empty());
+        assert!(view.turns().next().is_none());
         assert!(view.total_usage.is_none());
         assert!(view.started_at.is_none());
         assert!(view.last_activity.is_none());
@@ -700,13 +705,14 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "Fix the bug");
-        assert_eq!(view.turns[0].id, "step-002");
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "I'll fix that.");
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-6"));
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "Fix the bug");
+        assert_eq!(turns[0].id, "step-002");
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "I'll fix that.");
+        assert_eq!(turns[1].model.as_deref(), Some("claude-opus-4-6"));
     }
 
     #[test]
@@ -769,16 +775,17 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 1);
-        assert_eq!(view.turns[0].tool_uses.len(), 1);
-        assert_eq!(view.turns[0].tool_uses[0].id, "tu-001");
-        assert_eq!(view.turns[0].tool_uses[0].name, "Read");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].tool_uses.len(), 1);
+        assert_eq!(turns[0].tool_uses[0].id, "tu-001");
+        assert_eq!(turns[0].tool_uses[0].name, "Read");
         assert_eq!(
-            view.turns[0].tool_uses[0].category,
+            turns[0].tool_uses[0].category,
             Some(ToolCategory::FileRead)
         );
-        assert!(view.turns[0].tool_uses[0].result.is_some());
-        assert!(!view.turns[0].tool_uses[0].result.as_ref().unwrap().is_error);
+        assert!(turns[0].tool_uses[0].result.is_some());
+        assert!(!turns[0].tool_uses[0].result.as_ref().unwrap().is_error);
     }
 
     #[test]
@@ -863,9 +870,10 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 1);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
         assert_eq!(
-            view.turns[0].thinking.as_deref(),
+            turns[0].thinking.as_deref(),
             Some("Let me think about this carefully...")
         );
     }
@@ -904,8 +912,9 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert!(view.turns[0].parent_id.is_none());
-        assert_eq!(view.turns[1].parent_id.as_deref(), Some("step-001"));
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert!(turns[0].parent_id.is_none());
+        assert_eq!(turns[1].parent_id.as_deref(), Some("step-001"));
     }
 
     #[test]
@@ -940,8 +949,9 @@ mod tests {
 
         let view = extract_conversation(&path);
         // Only the conversation.append step becomes a turn.
-        assert_eq!(view.turns.len(), 1);
-        assert_eq!(view.turns[0].text, "hello");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].text, "hello");
     }
 
     #[test]
@@ -984,9 +994,10 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[2].role, Role::System);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[2].role, Role::System);
     }
 
     #[test]
@@ -1043,10 +1054,11 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 1);
-        assert_eq!(view.turns[0].tool_uses.len(), 2);
-        assert_eq!(view.turns[0].tool_uses[0].id, "tu-001");
-        assert_eq!(view.turns[0].tool_uses[1].id, "tu-002");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].tool_uses.len(), 2);
+        assert_eq!(turns[0].tool_uses[0].id, "tu-001");
+        assert_eq!(turns[0].tool_uses[1].id, "tu-002");
     }
 
     #[test]
@@ -1155,7 +1167,7 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert!(view.turns.is_empty());
+        assert!(view.turns().next().is_none());
     }
 
     #[test]
@@ -1178,7 +1190,7 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        let env = view.turns[0].environment.as_ref().unwrap();
+        let env = view.turns().next().unwrap().environment.as_ref().unwrap();
         assert_eq!(env.working_dir.as_deref(), Some("/home/alex/project"));
         assert_eq!(env.vcs_branch.as_deref(), Some("feature/cool"));
         assert!(env.vcs_revision.is_none());
@@ -1202,7 +1214,7 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert!(view.turns[0].environment.is_none());
+        assert!(view.turns().next().unwrap().environment.is_none());
     }
 
     #[test]
@@ -1284,22 +1296,23 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert!(view.turns.is_empty());
-        assert_eq!(view.events.len(), 2);
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert!(view.turns().next().is_none());
+        assert_eq!(events.len(), 2);
 
-        assert_eq!(view.events[0].id, "step-001");
-        assert_eq!(view.events[0].event_type, "attachment");
+        assert_eq!(events[0].id, "step-001");
+        assert_eq!(events[0].event_type, "attachment");
         assert_eq!(
-            view.events[0].data["cwd"],
+            events[0].data["cwd"],
             serde_json::json!("/home/alex/project")
         );
-        assert_eq!(view.events[0].data["version"], serde_json::json!("1.0.30"));
-        assert!(view.events[0].parent_id.is_none());
+        assert_eq!(events[0].data["version"], serde_json::json!("1.0.30"));
+        assert!(events[0].parent_id.is_none());
 
-        assert_eq!(view.events[1].id, "step-002");
-        assert_eq!(view.events[1].event_type, "file-history-snapshot");
-        assert_eq!(view.events[1].parent_id.as_deref(), Some("step-001"));
-        assert!(view.events[1].data.contains_key("snapshot"));
+        assert_eq!(events[1].id, "step-002");
+        assert_eq!(events[1].event_type, "file-history-snapshot");
+        assert_eq!(events[1].parent_id.as_deref(), Some("step-001"));
+        assert!(events[1].data.contains_key("snapshot"));
     }
 
     #[test]
@@ -1317,8 +1330,9 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.events.len(), 1);
-        assert_eq!(view.events[0].event_type, "unknown");
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "unknown");
     }
 
     #[test]
@@ -1352,9 +1366,11 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 1);
-        assert_eq!(view.events.len(), 1);
-        assert_eq!(view.turns[0].text, "hello");
-        assert_eq!(view.events[0].event_type, "system");
+        let turns: Vec<&Turn> = view.turns().collect();
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(turns[0].text, "hello");
+        assert_eq!(events[0].event_type, "system");
     }
 }

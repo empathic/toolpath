@@ -108,8 +108,7 @@ fn project_view(
         .cwd
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
         })
         .unwrap_or_else(|| "/".to_string());
@@ -117,15 +116,15 @@ fn project_view(
     let timestamp = view
         .started_at
         .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-        .or_else(|| view.turns.first().map(|t| t.timestamp.clone()))
+        .or_else(|| view.turns().next().map(|t| t.timestamp.clone()))
         .unwrap_or_default();
 
     // Pi's session header optionally carries `parentSession` — the
     // forward path stashed it on the first turn's extras. Round-trip
     // it when present.
     let parent_session = view
-        .turns
-        .first()
+        .turns()
+        .next()
         .and_then(|t| pi_extras(t))
         .and_then(|pi| pi.get("parentSession").and_then(Value::as_str))
         .map(str::to_string);
@@ -151,8 +150,7 @@ fn project_view(
     // both populates `tool_uses[i].result` AND keeps the original
     // tool-result message as a separate turn).
     let covered: std::collections::HashSet<String> = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| matches!(t.role, Role::Other(ref s) if s == "tool"))
         .filter_map(|t| {
             pi_extras(t)
@@ -162,7 +160,7 @@ fn project_view(
         })
         .collect();
 
-    for turn in &view.turns {
+    for turn in view.turns() {
         let pi = pi_extras(turn).cloned().unwrap_or_default();
         emit_pending_meta(&mut entries, turn, &pi);
         emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
@@ -807,12 +805,11 @@ mod tests {
             id: "session-uuid".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("pi".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }

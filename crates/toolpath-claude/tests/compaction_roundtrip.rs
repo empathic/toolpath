@@ -59,7 +59,7 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
 fn fixture_loads_without_panic() {
     let view = load_view();
     assert!(
-        !view.turns.is_empty(),
+        view.turns().next().is_some(),
         "compaction fixture should produce turns"
     );
 }
@@ -73,29 +73,22 @@ fn pre_compact_content_survives_roundtrip() {
     let pre_assistant_text = "I'll start by reading the current auth code.";
 
     assert!(
-        original
-            .turns
-            .iter()
-            .any(|t| t.text.contains(pre_user_text)),
+        original.turns().any(|t| t.text.contains(pre_user_text)),
         "pre-compact user prompt missing from initial view"
     );
     assert!(
         original
-            .turns
-            .iter()
+            .turns()
             .any(|t| t.text.contains(pre_assistant_text)),
         "pre-compact assistant response missing from initial view"
     );
 
     assert!(
-        after.turns.iter().any(|t| t.text.contains(pre_user_text)),
+        after.turns().any(|t| t.text.contains(pre_user_text)),
         "pre-compact user prompt dropped after roundtrip"
     );
     assert!(
-        after
-            .turns
-            .iter()
-            .any(|t| t.text.contains(pre_assistant_text)),
+        after.turns().any(|t| t.text.contains(pre_assistant_text)),
         "pre-compact assistant response dropped after roundtrip"
     );
 }
@@ -111,11 +104,11 @@ fn post_compact_content_survives_roundtrip() {
 
     for needle in [post_user_text, post_assistant_text, post_summary_text] {
         assert!(
-            original.turns.iter().any(|t| t.text.contains(needle)),
+            original.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(needle)),
+            after.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} dropped after roundtrip"
         );
     }
@@ -128,13 +121,11 @@ fn pre_compact_tool_call_pairs_survive_roundtrip() {
 
     let target_id = "t-pre-1";
     let original_tool = original
-        .turns
-        .iter()
+        .turns()
         .find_map(|t| t.tool_uses.iter().find(|tu| tu.id == target_id))
         .expect("pre-compact tool call missing from initial view");
     let after_tool = after
-        .turns
-        .iter()
+        .turns()
         .find_map(|t| t.tool_uses.iter().find(|tu| tu.id == target_id))
         .expect("pre-compact tool call dropped after roundtrip");
 
@@ -157,13 +148,11 @@ fn post_compact_tool_call_pairs_survive_roundtrip() {
 
     let target_id = "t-post-1";
     let original_tool = original
-        .turns
-        .iter()
+        .turns()
         .find_map(|t| t.tool_uses.iter().find(|tu| tu.id == target_id))
         .expect("post-compact tool call missing from initial view");
     let after_tool = after
-        .turns
-        .iter()
+        .turns()
         .find_map(|t| t.tool_uses.iter().find(|tu| tu.id == target_id))
         .expect("post-compact tool call dropped after roundtrip");
 
@@ -208,13 +197,11 @@ fn projector_output_is_re_parseable_by_reader() {
 fn role_distribution_is_sane() {
     let view = load_view();
     let user_count = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| matches!(t.role, Role::User))
         .count();
     let assistant_count = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| matches!(t.role, Role::Assistant))
         .count();
     assert!(

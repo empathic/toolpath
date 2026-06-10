@@ -136,17 +136,11 @@ fn fixture_loads_with_compaction_part() {
 fn to_view_surfaces_compaction_as_event() {
     let (_temp, session) = setup_session();
     let view = to_view(&session);
-    let event = view
-        .events
-        .iter()
-        .find(|e| e.event_type == "part.compaction");
+    let event = view.events().find(|e| e.event_type == "part.compaction");
     assert!(
         event.is_some(),
         "expected a `part.compaction` ConversationEvent in view.events; got: {:?}",
-        view.events
-            .iter()
-            .map(|e| &e.event_type)
-            .collect::<Vec<_>>()
+        view.events().map(|e| &e.event_type).collect::<Vec<_>>()
     );
 }
 
@@ -158,11 +152,11 @@ fn pre_compact_user_turn_survives_roundtrip() {
 
     let needle = "refactor the auth module";
     assert!(
-        view.turns.iter().any(|t| t.text.contains(needle)),
+        view.turns().any(|t| t.text.contains(needle)),
         "pre-compact prompt missing from initial view"
     );
     assert!(
-        after.turns.iter().any(|t| t.text.contains(needle)),
+        after.turns().any(|t| t.text.contains(needle)),
         "pre-compact prompt dropped after roundtrip"
     );
 }
@@ -178,11 +172,11 @@ fn post_compact_user_and_assistant_turns_survive_roundtrip() {
         "added session validation to login()",
     ] {
         assert!(
-            view.turns.iter().any(|t| t.text.contains(needle)),
+            view.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(needle)),
+            after.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} dropped after roundtrip"
         );
     }

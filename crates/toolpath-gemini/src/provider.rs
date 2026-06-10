@@ -14,7 +14,7 @@ use crate::types::{ChatFile, Conversation, GeminiMessage, GeminiRole, Thought, T
 use serde_json::Value;
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    EnvironmentSnapshot, Item, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 // ── Role/tool mapping ────────────────────────────────────────────────
@@ -436,6 +436,26 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         }
     }
 
+    // Gemini reuses the same wire `id` across paired messages (a user
+    // prompt and the assistant response it triggered can share one id),
+    // so turn ids are not unique as-is. `derive_path` now enforces unique
+    // step ids (keep-first) and would silently drop the collisions, so
+    // disambiguate here by suffixing repeats with `#N` before the parent
+    // chain is built (the chain reads the already-uniquified ids).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for t in turns.iter_mut() {
+        if !seen.insert(t.id.clone()) {
+            let mut n = 1;
+            let mut candidate = format!("{}#{}", t.id, n);
+            while seen.contains(&candidate) {
+                n += 1;
+                candidate = format!("{}#{}", t.id, n);
+            }
+            t.id = candidate.clone();
+            seen.insert(candidate);
+        }
+    }
+
     // Gemini's wire format doesn't carry parent_id on messages, so link
     // turns sequentially. (Matches the old `derive_path_from_view`,
     // which used `last_step_id` as the parent for each new step.)
@@ -461,12 +481,11 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         id: convo.session_uuid.clone(),
         started_at: convo.started_at,
         last_activity: convo.last_activity,
-        turns,
+        items: turns.into_iter().map(Item::Turn).collect(),
         total_usage,
         provider_id: Some("gemini-cli".into()),
         files_changed,
         session_ids: vec![],
-        events: vec![],
         base: view_base,
         producer: Some(toolpath_convo::ProducerInfo {
             name: "gemini-cli".into(),
@@ -713,13 +732,13 @@ mod tests {
             ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
         assert_eq!(view.id, "session-uuid");
         assert_eq!(view.provider_id.as_deref(), Some("gemini-cli"));
-        assert_eq!(view.turns.len(), 4);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "Find the bug");
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "I'll delegate.");
+        assert_eq!(view.turns().count(), 4);
+        assert_eq!(view.turns().next().unwrap().role, Role::User);
+        assert_eq!(view.turns().next().unwrap().text, "Find the bug");
+        assert_eq!(view.turns().nth(1).unwrap().role, Role::Assistant);
+        assert_eq!(view.turns().nth(1).unwrap().text, "I'll delegate.");
         assert_eq!(
-            view.turns[1].model.as_deref(),
+            view.turns().nth(1).unwrap().model.as_deref(),
             Some("gemini-3-flash-preview")
         );
     }
@@ -729,7 +748,7 @@ mod tests {
         let (_t, p) = setup_provider();
         let view =
             ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
-        let delegations = &view.turns[1].delegations;
+        let delegations = &view.turns().nth(1).unwrap().delegations;
         assert_eq!(delegations.len(), 1);
         let d = &delegations[0];
         assert_eq!(d.agent_id, "qclszz");
@@ -745,7 +764,10 @@ mod tests {
         let (_t, p) = setup_provider();
         let view =
             ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
-        let result = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        let result = view.turns().nth(1).unwrap().tool_uses[0]
+            .result
+            .as_ref()
+            .unwrap();
         assert_eq!(result.content, "Found it");
         assert!(!result.is_error);
     }
@@ -756,11 +778,11 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
         assert_eq!(
-            view.turns[1].tool_uses[0].category,
+            view.turns().nth(1).unwrap().tool_uses[0].category,
             Some(ToolCategory::Delegation)
         );
         assert_eq!(
-            view.turns[2].tool_uses[0].category,
+            view.turns().nth(2).unwrap().tool_uses[0].category,
             Some(ToolCategory::FileWrite)
         );
     }
@@ -888,7 +910,7 @@ mod tests {
         let (_t, p) = setup_provider();
         let view =
             ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
-        for turn in &view.turns {
+        for turn in view.turns() {
             let wd = turn
                 .environment
                 .as_ref()
@@ -902,7 +924,7 @@ mod tests {
         let (_t, p) = setup_provider();
         let view =
             ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
-        let sub_turn = &view.turns[1].delegations[0].turns[1];
+        let sub_turn = &view.turns().nth(1).unwrap().delegations[0].turns[1];
         let thinking = sub_turn.thinking.as_ref().unwrap();
         assert!(thinking.contains("Searching"));
         assert!(thinking.contains("looking in /auth"));
@@ -940,7 +962,37 @@ mod tests {
         let (_t, p) = setup_provider();
         let convo = p.read_conversation("/abs/myrepo", "session-uuid").unwrap();
         let view = to_view(&convo);
-        assert_eq!(view.turns.len(), 4);
+        assert_eq!(view.turns().count(), 4);
+    }
+
+    #[test]
+    fn test_to_view_uniquifies_duplicate_turn_ids() {
+        // Gemini reuses the same wire `id` across paired messages, so two
+        // turns can share an id. `to_view` must disambiguate them (else the
+        // unique-step-id enforcement in `derive_path` drops the collisions),
+        // while keeping the sequential parent chain consistent.
+        let chat_json = r#"{"sessionId":"s","projectHash":"","messages":[
+  {"id":"dup","timestamp":"ts","type":"user","content":[{"text":"a"}]},
+  {"id":"dup","timestamp":"ts","type":"gemini","content":"b"},
+  {"id":"dup","timestamp":"ts","type":"user","content":[{"text":"c"}]},
+  {"id":"uniq","timestamp":"ts","type":"gemini","content":"d"}
+]}"#;
+        let chat: ChatFile = serde_json::from_str(chat_json).unwrap();
+        let convo = Conversation::new("s".into(), chat);
+        let view = to_view(&convo);
+
+        let ids: Vec<&str> = view.turns().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["dup", "dup#1", "dup#2", "uniq"]);
+
+        let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "turn ids must be unique");
+
+        // Sequential parent chain references the uniquified ids.
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert!(turns[0].parent_id.is_none());
+        assert_eq!(turns[1].parent_id.as_deref(), Some("dup"));
+        assert_eq!(turns[2].parent_id.as_deref(), Some("dup#1"));
+        assert_eq!(turns[3].parent_id.as_deref(), Some("dup#2"));
     }
 
     #[test]
@@ -1029,7 +1081,7 @@ mod tests {
         let mgr = GeminiConvo::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
         let view = ConversationProvider::load_conversation(&mgr, "/p", "s").unwrap();
 
-        let d = &view.turns[1].delegations[0];
+        let d = &view.turns().nth(1).unwrap().delegations[0];
         assert_eq!(d.agent_id, "t1");
         assert_eq!(d.prompt, "go");
         assert_eq!(d.result.as_deref(), Some("done"));
@@ -1068,7 +1120,7 @@ mod tests {
 
         let mgr = GeminiConvo::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
         let view = ConversationProvider::load_conversation(&mgr, "/p", "s").unwrap();
-        let delegations = &view.turns[1].delegations;
+        let delegations = &view.turns().nth(1).unwrap().delegations;
         assert_eq!(delegations.len(), 2);
         // a.json attaches to the task (first delegation), b.json is leftover
         assert_eq!(delegations[0].agent_id, "a");

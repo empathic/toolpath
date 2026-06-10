@@ -42,8 +42,8 @@ use crate::types::{
 use serde_json::Value;
 use toolpath_convo::{
     ConversationEvent, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
-    EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn,
+    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Provider for Codex sessions.
@@ -347,11 +347,18 @@ impl<'a> Builder<'a> {
             }
         }
 
+        // Build the unified ordered stream: all turns first (Item::Turn), then
+        // all events (Item::Event), reproducing the former separate-Vec layout
+        // so derive ↔ extract round-trips stay lossless.
+        let mut items: Vec<Item> = Vec::with_capacity(self.turns.len() + self.events.len());
+        items.extend(self.turns.into_iter().map(Item::Turn));
+        items.extend(self.events.into_iter().map(Item::Event));
+
         ConversationView {
             id: self.session.id.clone(),
             started_at: self.session.started_at(),
             last_activity: self.session.last_activity(),
-            turns: self.turns,
+            items,
             total_usage: if self.total_usage_set {
                 Some(self.total_usage)
             } else {
@@ -360,7 +367,6 @@ impl<'a> Builder<'a> {
             provider_id: Some("codex".into()),
             files_changed: self.files_changed_order,
             session_ids: vec![],
-            events: self.events,
             base,
             producer,
         }
@@ -1079,12 +1085,12 @@ mod tests {
 
         assert_eq!(view.id, "019dabc6-8fef-7681-a054-b5bb75fcb97d");
         assert_eq!(view.provider_id.as_deref(), Some("codex"));
-        assert_eq!(view.turns.len(), 3);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "please do a thing");
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "working on it");
-        assert_eq!(view.turns[1].model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(view.turns().count(), 3);
+        assert_eq!(view.turns().next().unwrap().role, Role::User);
+        assert_eq!(view.turns().next().unwrap().text, "please do a thing");
+        assert_eq!(view.turns().nth(1).unwrap().role, Role::Assistant);
+        assert_eq!(view.turns().nth(1).unwrap().text, "working on it");
+        assert_eq!(view.turns().nth(1).unwrap().model.as_deref(), Some("gpt-5.4"));
     }
 
     /// Two API rounds. Codex's `token_count` events carry cumulative
@@ -1338,7 +1344,7 @@ mod tests {
         // Turn.extra was removed, encrypted ciphertext is simply dropped.
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         assert!(
             assistant.thinking.is_none(),
             "encrypted ciphertext must not appear as thinking"
@@ -1358,7 +1364,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
         assert_eq!(
-            view.turns[0].thinking.as_deref(),
+            view.turns().next().unwrap().thinking.as_deref(),
             Some("I should check the file")
         );
     }
@@ -1367,7 +1373,7 @@ mod tests {
     fn function_call_pairs_with_output() {
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         assert_eq!(assistant.tool_uses.len(), 2);
         let exec = &assistant.tool_uses[0];
         assert_eq!(exec.name, "exec_command");
@@ -1380,7 +1386,7 @@ mod tests {
     fn custom_tool_call_preserves_raw_input() {
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         let apply = &assistant.tool_uses[1];
         assert_eq!(apply.name, "apply_patch");
         assert_eq!(apply.category, Some(ToolCategory::FileWrite));
@@ -1425,15 +1431,13 @@ mod tests {
         // Find the turn that hosts the `apply_patch` file mutation. The
         // mutation's `tool_id` should link back to the apply_patch tool.
         let apply_patch_id = view
-            .turns
-            .iter()
+            .turns()
             .flat_map(|t| t.tool_uses.iter())
             .find(|tu| tu.name == "apply_patch")
             .map(|tu| tu.id.clone())
             .expect("apply_patch tool invocation present");
         let fm = view
-            .turns
-            .iter()
+            .turns()
             .flat_map(|t| t.file_mutations.iter())
             .find(|fm| fm.path == "/tmp/proj/a.rs")
             .expect("file mutation present");
@@ -1456,7 +1460,7 @@ mod tests {
     fn events_preserve_non_turn_content() {
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let kinds: Vec<&str> = view.events.iter().map(|e| e.event_type.as_str()).collect();
+        let kinds: Vec<&str> = view.events().map(|e| e.event_type.as_str()).collect();
         assert!(kinds.contains(&"session_meta"));
         assert!(kinds.contains(&"turn_context"));
         assert!(kinds.contains(&"task_started"));
@@ -1492,7 +1496,7 @@ mod tests {
             "019dabc6-8fef-7681-a054-b5bb75fcb97d",
         )
         .unwrap();
-        assert_eq!(view.turns.len(), 3);
+        assert_eq!(view.turns().count(), 3);
     }
 
     #[test]
@@ -1504,6 +1508,6 @@ mod tests {
         .join("\n");
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
-        assert_eq!(view.turns[0].role, Role::System);
+        assert_eq!(view.turns().next().unwrap().role, Role::System);
     }
 }
