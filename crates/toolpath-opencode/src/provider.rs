@@ -286,6 +286,7 @@ impl<'a> Builder<'a> {
         self.turns.push(Turn {
             id: msg.id.clone(),
             parent_id: None,
+            message_id: None,
             role: Role::User,
             timestamp: millis_to_iso(msg.time_created),
             text,
@@ -415,8 +416,11 @@ impl<'a> Builder<'a> {
         }
 
         // Prefer step-summed tokens over the message-level snapshot —
-        // the step deltas capture the real per-step work.
-        let token_usage = if step_usage_set {
+        // the step deltas capture the real per-step work. Absent or
+        // all-zero counters mean "spend unknown", not "a zero-cost API
+        // call": decode to None, never Some(zeros) (foreign-source
+        // projections write zero placeholders into required fields).
+        let token_usage = if step_usage_set && !is_usage_zero(&step_usage) {
             Some(step_usage.clone())
         } else {
             let u = tokens_to_convo(&a.tokens);
@@ -450,6 +454,7 @@ impl<'a> Builder<'a> {
             } else {
                 Some(a.parent_id.clone())
             },
+            message_id: None,
             role: Role::Assistant,
             timestamp: millis_to_iso(msg.time_created),
             text: text_chunks.join("\n\n"),

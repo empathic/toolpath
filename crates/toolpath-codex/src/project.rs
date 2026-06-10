@@ -447,6 +447,21 @@ fn emit_assistant(
         let name = tool_native_name(tu);
         emit_tool_call(turn, tu, &name, &tool_extras, session_cwd, lines);
     }
+
+    // Close the accounting round. The reader accumulates `token_count`
+    // spend and attaches it to the round's final assistant turn when the
+    // round closes; without this boundary a re-read would lump every
+    // turn's spend onto the session's last assistant turn.
+    if turn.token_usage.is_some() {
+        lines.push(event_msg_line(
+            &turn.timestamp,
+            json!({
+                "type": "task_complete",
+                "turn_id": turn.message_id.clone().unwrap_or_default(),
+                "last_agent_message": Value::Null,
+            }),
+        ));
+    }
 }
 
 fn emit_tool_call(
@@ -655,6 +670,7 @@ mod tests {
         Turn {
             id: id.into(),
             parent_id: None,
+            message_id: None,
             role: Role::User,
             timestamp: "2026-04-20T16:00:00.000Z".into(),
             text: text.into(),
@@ -673,6 +689,7 @@ mod tests {
         Turn {
             id: id.into(),
             parent_id: None,
+            message_id: None,
             role: Role::Assistant,
             timestamp: "2026-04-20T16:00:01.000Z".into(),
             text: text.into(),
@@ -787,9 +804,12 @@ mod tests {
             .unwrap();
         let inner = inner_types(&s);
         // session_meta + turn_context + token_count + message + agent_message
-        // + function_call + function_call_output + exec_command_end.
-        // The token_count must precede the assistant message so the
-        // forward path's pending_token_usage attaches to this turn.
+        // + function_call + function_call_output + exec_command_end
+        // + task_complete. The token_count precedes the assistant message
+        // (the round's spend accumulates as counts arrive); the closing
+        // task_complete is the round boundary that makes the forward path
+        // attach the accumulated spend to THIS turn rather than lumping
+        // every round onto the session's last assistant.
         assert_eq!(
             inner,
             vec![
@@ -800,7 +820,8 @@ mod tests {
                 "agent_message",
                 "function_call",
                 "function_call_output",
-                "exec_command_end"
+                "exec_command_end",
+                "task_complete"
             ]
         );
 

@@ -12,4 +12,5 @@ Documents reference a specific version URI. They do not depend on this landing p
 
 ## Versions
 
-- [**v1.0.0**](/kinds/agent-coding-session/v1.0.0/): `https://toolpath.net/kinds/agent-coding-session/v1.0.0` _(current)_
+- [**v1.1.0**](/kinds/agent-coding-session/v1.1.0/): `https://toolpath.net/kinds/agent-coding-session/v1.1.0` _(current)_ — adds `message_id` and specifies message-level token accounting (a message's usage appears on exactly one step, so per-step sums equal session totals)
+- [**v1.0.0**](/kinds/agent-coding-session/v1.0.0/): `https://toolpath.net/kinds/agent-coding-session/v1.0.0` — superseded; see its erratum on token accounting

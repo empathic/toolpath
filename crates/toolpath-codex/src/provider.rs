@@ -17,8 +17,13 @@
 //! 6. `event_msg.patch_apply_end` is captured on the current turn's
 //!    `extra["codex"]["patch_changes"]` — the derive layer consumes it
 //!    for file-artifact sibling changes.
-//! 7. `event_msg.token_count` populates `Turn.token_usage` on the next
-//!    assistant turn emitted.
+//! 7. Rounds: `turn_context` / `task_started` open an API round
+//!    (`turn_id`); assistant turns emitted during it share that ID as
+//!    `Turn.message_id`. `event_msg.token_count` spend accumulates per
+//!    round (preferring `last_token_usage`, else delta of cumulative
+//!    totals) and lands on the round's final assistant turn at
+//!    `task_complete` / next round / EOF — `Turn.token_usage` always
+//!    means "the message group's total".
 //! 8. Everything else (`task_started`, `task_complete`, `turn_context`,
 //!    `user_message`/`agent_message` duplicates, unknown events) lands
 //!    in `ConversationView.events` as a typed [`ConversationEvent`].
@@ -180,7 +185,15 @@ struct Builder<'a> {
     /// Plaintext reasoning summaries (rare — only in configurations where
     /// OpenAI exposes public reasoning). These land on `Turn.thinking`.
     pending_reasoning_plaintext: Vec<String>,
-    pending_token_usage: Option<TokenUsage>,
+    /// The current API round (Codex "turn"), from `turn_context` /
+    /// `task_started`. Assistant turns emitted during a round share it as
+    /// their `message_id`.
+    current_round_id: Option<String>,
+    /// Spend accumulated from this round's `token_count` events; attached
+    /// to the round's final assistant turn when the round closes.
+    round_usage: Option<TokenUsage>,
+    /// Index of the round's most recent assistant turn — the flush target.
+    round_last_assistant: Option<usize>,
     working_dir: Option<String>,
     current_model: Option<String>,
     call_index: HashMap<String, (usize, usize)>,
@@ -197,7 +210,9 @@ impl<'a> Builder<'a> {
             turns: Vec::new(),
             events: Vec::new(),
             pending_reasoning_plaintext: Vec::new(),
-            pending_token_usage: None,
+            current_round_id: None,
+            round_usage: None,
+            round_last_assistant: None,
             working_dir: None,
             current_model: None,
             call_index: HashMap::new(),
@@ -220,6 +235,7 @@ impl<'a> Builder<'a> {
                     ));
                 }
                 RolloutItem::TurnContext(tc) => {
+                    self.start_round(&tc.turn_id);
                     if let Some(m) = &tc.model {
                         self.current_model = Some(m.clone());
                     }
@@ -251,6 +267,10 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+
+        // A session can end mid-round (no task_complete); attach whatever
+        // spend accumulated to the round's final assistant turn.
+        self.flush_round();
 
         // Path-level base context from session_meta (cwd + git).
         let meta = self.session.meta();
@@ -419,10 +439,21 @@ impl<'a> Builder<'a> {
         match ev {
             EventMsg::TokenCount(tc) => {
                 if let Some(info) = tc.info.as_ref() {
+                    let prev_total = self.total_usage.clone();
                     apply_token_count(&mut self.total_usage, info);
                     self.total_usage_set = true;
-                    if let Some(total) = info.total_token_usage.as_ref() {
-                        self.pending_token_usage = Some(codex_usage_to_convo(total));
+                    // Round spend, never the cumulative counter (stamping
+                    // that on a turn would make per-step sums grow
+                    // quadratically). Prefer the verbatim
+                    // `last_token_usage`; older rollouts carry only the
+                    // cumulative total, so fall back to the delta between
+                    // successive totals. Periodic counts within one round
+                    // accumulate; the sum lands on the round's final
+                    // assistant turn when the round closes.
+                    if let Some(last) = info.last_token_usage.as_ref() {
+                        self.add_round_usage(codex_usage_to_convo(last));
+                    } else if let Some(total) = info.total_token_usage.as_ref() {
+                        self.add_round_usage(usage_delta(&codex_usage_to_convo(total), &prev_total));
                     }
                 }
                 self.events
@@ -438,10 +469,23 @@ impl<'a> Builder<'a> {
                 self.events
                     .push(event_from_raw(timestamp, "patch_apply_end", raw_payload));
             }
-            EventMsg::AgentMessage(_)
-            | EventMsg::UserMessage(_)
-            | EventMsg::TaskStarted(_)
-            | EventMsg::TaskComplete(_) => {
+            EventMsg::TaskStarted(payload) => {
+                if let Some(tid) = payload.get("turn_id").and_then(|v| v.as_str()) {
+                    self.start_round(tid);
+                }
+                self.events
+                    .push(event_from_raw(timestamp, "task_started", raw_payload));
+            }
+            EventMsg::TaskComplete(_) => {
+                // Round over: its accumulated spend lands on the round's
+                // final assistant turn. Anything after the boundary is
+                // outside the round, so the grouping key resets too.
+                self.flush_round();
+                self.current_round_id = None;
+                self.events
+                    .push(event_from_raw(timestamp, "task_complete", raw_payload));
+            }
+            EventMsg::AgentMessage(_) | EventMsg::UserMessage(_) => {
                 self.events
                     .push(event_from_raw(timestamp, ev.kind(), raw_payload));
             }
@@ -464,13 +508,12 @@ impl<'a> Builder<'a> {
         let turn_idx = match self.last_assistant_turn_index() {
             Some(idx) => idx,
             None => {
-                let mut t = synthetic_assistant_turn(
+                let t = synthetic_assistant_turn(
                     timestamp,
                     self.working_dir.as_deref(),
                     self.current_model.as_deref(),
                 );
-                self.drain_pending_onto(&mut t);
-                self.turns.push(t);
+                self.push_turn(t);
                 self.turns.len() - 1
             }
         };
@@ -561,7 +604,22 @@ impl<'a> Builder<'a> {
 
     fn push_turn(&mut self, mut turn: Turn) {
         self.drain_pending_onto(&mut turn);
-        self.turns.push(turn);
+        if turn.role == Role::Assistant {
+            if turn.message_id.is_none() {
+                turn.message_id = self.current_round_id.clone();
+            }
+            self.turns.push(turn);
+            self.round_last_assistant = Some(self.turns.len() - 1);
+            // Outside any identified round (no turn_context/task_started
+            // in scope), counts can't be held for a round boundary that
+            // may never come: attach one-shot to the assistant turn that
+            // follows them.
+            if self.current_round_id.is_none() {
+                self.flush_round();
+            }
+        } else {
+            self.turns.push(turn);
+        }
     }
 
     fn drain_pending_onto(&mut self, turn: &mut Turn) {
@@ -573,8 +631,44 @@ impl<'a> Builder<'a> {
             turn.thinking = Some(self.pending_reasoning_plaintext.join("\n\n"));
             self.pending_reasoning_plaintext.clear();
         }
-        if let Some(tu) = self.pending_token_usage.take() {
-            turn.token_usage = Some(tu);
+    }
+
+    /// Begin a new API round. Flushes the previous round's accounting so a
+    /// round's spend always lands on that round's own final assistant turn.
+    fn start_round(&mut self, round_id: &str) {
+        if round_id.is_empty() || self.current_round_id.as_deref() == Some(round_id) {
+            return;
+        }
+        self.flush_round();
+        self.current_round_id = Some(round_id.to_string());
+    }
+
+    /// Attach the round's accumulated spend to its final assistant turn.
+    /// A round that produced counts but no assistant turn drops them from
+    /// per-turn accounting (they remain in `total_usage`).
+    fn flush_round(&mut self) {
+        if let Some(usage) = self.round_usage.take()
+            && let Some(idx) = self.round_last_assistant
+        {
+            self.turns[idx].token_usage = Some(usage);
+        }
+        self.round_last_assistant = None;
+    }
+
+    fn add_round_usage(&mut self, amount: TokenUsage) {
+        match &mut self.round_usage {
+            Some(acc) => {
+                let add = |a: &mut Option<u32>, b: Option<u32>| {
+                    if let Some(b) = b {
+                        *a = Some(a.unwrap_or(0) + b);
+                    }
+                };
+                add(&mut acc.input_tokens, amount.input_tokens);
+                add(&mut acc.output_tokens, amount.output_tokens);
+                add(&mut acc.cache_read_tokens, amount.cache_read_tokens);
+                add(&mut acc.cache_write_tokens, amount.cache_write_tokens);
+            }
+            None => self.round_usage = Some(amount),
         }
     }
 
@@ -678,6 +772,7 @@ fn message_to_turn(
     Turn {
         id: msg.id.clone().unwrap_or_default(),
         parent_id: None,
+        message_id: None,
         role: role.clone(),
         timestamp: timestamp.to_string(),
         text,
@@ -704,6 +799,7 @@ fn synthetic_assistant_turn(
     Turn {
         id: format!("synth-{}", timestamp),
         parent_id: None,
+        message_id: None,
         role: Role::Assistant,
         timestamp: timestamp.to_string(),
         text: String::new(),
@@ -728,6 +824,19 @@ fn codex_usage_to_convo(u: &CodexTokenUsage) -> TokenUsage {
         output_tokens: u.output_tokens,
         cache_read_tokens: u.cached_input_tokens,
         cache_write_tokens: None,
+    }
+}
+
+/// Component-wise `current - prev`, for recovering a round's spend from
+/// successive cumulative totals. Saturating: a counter reset (e.g. after
+/// compaction) yields 0 rather than wrapping.
+fn usage_delta(current: &TokenUsage, prev: &TokenUsage) -> TokenUsage {
+    let sub = |c: Option<u32>, p: Option<u32>| c.map(|c| c.saturating_sub(p.unwrap_or(0)));
+    TokenUsage {
+        input_tokens: sub(current.input_tokens, prev.input_tokens),
+        output_tokens: sub(current.output_tokens, prev.output_tokens),
+        cache_read_tokens: sub(current.cache_read_tokens, prev.cache_read_tokens),
+        cache_write_tokens: sub(current.cache_write_tokens, prev.cache_write_tokens),
     }
 }
 
@@ -881,6 +990,100 @@ mod tests {
         assert_eq!(view.turns[1].role, Role::Assistant);
         assert_eq!(view.turns[1].text, "working on it");
         assert_eq!(view.turns[1].model.as_deref(), Some("gpt-5.4"));
+    }
+
+    /// Two API rounds. Codex's `token_count` events carry cumulative
+    /// session totals in `total_token_usage` and the round's own spend in
+    /// `last_token_usage`; per-turn accounting must use the latter.
+    fn two_round_session(with_last: bool) -> String {
+        let last1 = r#","last_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":10,"total_tokens":130}"#;
+        let last2 = r#","last_token_usage":{"input_tokens":200,"output_tokens":30,"cached_input_tokens":30,"total_tokens":260}"#;
+        [
+            r#"{"timestamp":"2026-04-20T16:44:37.772Z","type":"session_meta","payload":{"id":"019dabc6-8fef-7681-a054-b5bb75fcb97d","timestamp":"2026-04-20T16:43:30.171Z","cwd":"/tmp/proj","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.773Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/tmp/proj","model":"gpt-5.4"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"round one"}]}}"#.to_string(),
+            format!(
+                r#"{{"timestamp":"2026-04-20T16:44:38.800Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":100,"output_tokens":20,"cached_input_tokens":10,"total_tokens":130}}{}}}}}}}"#,
+                if with_last { last1 } else { "" }
+            ),
+            r#"{"timestamp":"2026-04-20T16:44:38.900Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first"}],"phase":"final","end_turn":true}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:39.700Z","type":"turn_context","payload":{"turn_id":"t2","cwd":"/tmp/proj","model":"gpt-5.4"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:39.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"round two"}]}}"#.to_string(),
+            format!(
+                r#"{{"timestamp":"2026-04-20T16:44:40.800Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":300,"output_tokens":50,"cached_input_tokens":40,"total_tokens":390}}{}}}}}}}"#,
+                if with_last { last2 } else { "" }
+            ),
+            r#"{"timestamp":"2026-04-20T16:44:40.900Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"second"}],"phase":"final","end_turn":true}}"#.to_string(),
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn turn_usage_is_per_round_delta_from_last_token_usage() {
+        let (_t, mgr, id) = setup_session_fixture(&two_round_session(true));
+        let view = to_view(&mgr.read_session(&id).unwrap());
+
+        let first = view.turns[1].token_usage.as_ref().unwrap();
+        assert_eq!(first.input_tokens, Some(100));
+        assert_eq!(first.output_tokens, Some(20));
+        assert_eq!(first.cache_read_tokens, Some(10));
+
+        let second = view.turns[3].token_usage.as_ref().unwrap();
+        assert_eq!(second.input_tokens, Some(200));
+        assert_eq!(second.output_tokens, Some(30));
+        assert_eq!(second.cache_read_tokens, Some(30));
+
+        // Session total stays the final cumulative counter.
+        let total = view.total_usage.as_ref().unwrap();
+        assert_eq!(total.input_tokens, Some(300));
+        assert_eq!(total.output_tokens, Some(50));
+    }
+
+    #[test]
+    fn round_turns_share_message_id_and_usage_lands_on_round_final_turn() {
+        // One round emitting two assistant messages (commentary + final).
+        // Both belong to one API round, so they share a message_id (the
+        // round's turn_id) and the round total sits on the round's final
+        // assistant turn only — never on an interior turn, and never as a
+        // singleton claim on a turn whose siblings shared the spend.
+        let body = [
+            r#"{"timestamp":"2026-04-20T16:44:37.772Z","type":"session_meta","payload":{"id":"019dabc6-8fef-7681-a054-b5bb75fcb97d","timestamp":"2026-04-20T16:43:30.171Z","cwd":"/tmp/proj","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:37.773Z","type":"turn_context","payload":{"turn_id":"round-1","cwd":"/tmp/proj","model":"gpt-5.4"}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:37.775Z","type":"event_msg","payload":{"type":"task_started","turn_id":"round-1"}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:37.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:38.100Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"working on it"}],"phase":"commentary"}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:38.800Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":10,"total_tokens":130},"last_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":10,"total_tokens":130}}}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:38.900Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}],"phase":"final","end_turn":true}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:39.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"round-1","last_agent_message":"done"}}"#,
+        ]
+        .join("\n");
+        let (_t, mgr, id) = setup_session_fixture(&body);
+        let view = to_view(&mgr.read_session(&id).unwrap());
+
+        assert_eq!(view.turns.len(), 3);
+        assert!(view.turns[0].message_id.is_none(), "user turn ungrouped");
+        assert_eq!(view.turns[1].message_id.as_deref(), Some("round-1"));
+        assert_eq!(view.turns[2].message_id.as_deref(), Some("round-1"));
+        assert!(
+            view.turns[1].token_usage.is_none(),
+            "interior turn of the round must not carry usage"
+        );
+        let total = view.turns[2].token_usage.as_ref().unwrap();
+        assert_eq!(total.output_tokens, Some(20));
+        assert_eq!(total.input_tokens, Some(100));
+    }
+
+    #[test]
+    fn turn_usage_delta_is_computed_when_last_token_usage_missing() {
+        // Older rollouts carry only cumulative totals; the per-turn value
+        // must be the difference between successive totals, not the total.
+        let (_t, mgr, id) = setup_session_fixture(&two_round_session(false));
+        let view = to_view(&mgr.read_session(&id).unwrap());
+
+        let second = view.turns[3].token_usage.as_ref().unwrap();
+        assert_eq!(second.input_tokens, Some(200));
+        assert_eq!(second.output_tokens, Some(30));
+        assert_eq!(second.cache_read_tokens, Some(30));
     }
 
     #[test]

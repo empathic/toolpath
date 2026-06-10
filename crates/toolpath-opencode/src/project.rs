@@ -754,6 +754,7 @@ mod tests {
         Turn {
             id: "u1".into(),
             parent_id: None,
+            message_id: None,
             role: Role::User,
             timestamp: "2026-04-21T12:00:00.000Z".into(),
             text: text.into(),
@@ -772,6 +773,7 @@ mod tests {
         Turn {
             id: "a1".into(),
             parent_id: None,
+            message_id: None,
             role: Role::Assistant,
             timestamp: "2026-04-21T12:00:01.000Z".into(),
             text: text.into(),

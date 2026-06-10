@@ -306,9 +306,15 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
 
     let parent_id = step.step.parents.first().cloned();
 
+    let message_id = extra
+        .get("message_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     Turn {
         id: step.step.id.clone(),
         parent_id,
+        message_id,
         role,
         timestamp: step.step.timestamp.clone(),
         text,
@@ -695,6 +701,28 @@ mod tests {
         assert_eq!(view.turns[1].role, Role::Assistant);
         assert_eq!(view.turns[1].text, "I'll fix that.");
         assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-6"));
+    }
+
+    #[test]
+    fn test_message_id_round_trips_through_extraction() {
+        let path = make_path(vec![make_step(
+            "step-001",
+            "agent:claude-opus-4-6",
+            "2026-01-01T00:00:00Z",
+            vec![],
+            vec![(
+                "claude-code://sess-1",
+                "conversation.append",
+                extras(&[
+                    ("role", serde_json::json!("assistant")),
+                    ("text", serde_json::json!("")),
+                    ("message_id", serde_json::json!("msg_01abc")),
+                ]),
+            )],
+        )]);
+
+        let view = extract_conversation(&path);
+        assert_eq!(view.turns[0].message_id.as_deref(), Some("msg_01abc"));
     }
 
     #[test]

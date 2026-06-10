@@ -5,6 +5,31 @@ records the token counts Anthropic billed for that turn, including
 prompt-cache statistics. The shape has grown over time and now mixes
 flat fields with nested breakdowns that duplicate the flat totals.
 
+## One message, many lines: don't sum per entry
+
+Claude Code writes one JSONL line **per content block** of an assistant
+API message (see [entry-types](entry-types.md)) — and every line of the
+split repeats the **same message-level `usage` object** verbatim. A
+message with thinking + text + two `tool_use` blocks lands as four
+entries, each claiming the full bill. Summing `message.usage` across
+entries therefore over-counts by the block count (~3× on typical
+sessions).
+
+The grouping key is **`message.id`** (`msg_…`), identical on every line
+of the split. Correct accounting: take `usage` **once per distinct
+`message.id`** (lines of one message are consecutive; user entries
+between them don't reset the run). This is exactly what
+`toolpath-claude` does — turns carry `message_id`, derived paths put
+`token_usage` on only the last step of each message group, per the
+[`agent-coding-session` v1.1.0 kind](https://toolpath.net/kinds/agent-coding-session/v1.1.0/).
+
+Two related cautions. The `iterations` array (below) is a breakdown
+*inside* one message's `usage` — subordinate detail, not an alternative
+accounting unit; never sum it alongside the enclosing totals. And block-
+level attribution is unknowable from this format: the lines of a split
+all quote message-level totals, so "tokens spent on this tool_use" has
+no ground truth finer than the message.
+
 ## Full observed shape
 
 ```jsonc

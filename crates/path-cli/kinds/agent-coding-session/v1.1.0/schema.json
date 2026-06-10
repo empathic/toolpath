@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toolpath.net/kinds/agent-coding-session/v1.1.0/schema.json",
+  "title": "Toolpath kind: agent-coding-session v1.1.0",
+  "description": "Additive constraints on a Toolpath `Path` whose `meta.kind` is the agent-coding-session v1.1.0 URI. Apply alongside the base Toolpath schema; the path is valid when both pass. These constraints are by structural `type`, not by artifact key — a `change` entry is checked only when its `structural.type` matches one this kind defines (`conversation.append`, `file.write`, `conversation.event`). Everything is additive: unmentioned properties are allowed, so producer-specific extras never invalidate a path. New in v1.1.0: `message_id` on the turn payload, and the message-level accounting rule — within a `message_id` group, the last step (document order) carries the message's total `token_usage` verbatim from the source and the other steps carry none; values are per-message amounts (never cumulative session counters); summing `token_usage` over a path's steps therefore yields the session totals. The once-per-group rule is normative prose (JSON Schema cannot express it); producers must enforce it. The human-readable contract is at https://toolpath.net/kinds/agent-coding-session/v1.1.0/.",
+  "type": "object",
+
+  "$defs": {
+    "tokenUsage": {
+      "type": "object",
+      "description": "Token accounting for one provider message. `token_usage` always means the total for a message, verbatim from the source — never a cumulative session counter, never a per-step share. Within a `message_id` group the total sits on the group's last step (document order) and the other steps carry none; a step without a `message_id` is a one-step message, so its value is that message's total. Summing over a path's steps therefore yields the session totals. `input_tokens`/`output_tokens` are always emitted (possibly null); cache counters appear only when the source records them.",
+      "properties": {
+        "input_tokens": { "type": ["integer", "null"] },
+        "output_tokens": { "type": ["integer", "null"] },
+        "cache_read_tokens": { "type": "integer" },
+        "cache_write_tokens": { "type": "integer" }
+      },
+      "required": ["input_tokens", "output_tokens"]
+    },
+
+    "toolResult": {
+      "type": "object",
+      "properties": {
+        "content": { "type": "string" },
+        "is_error": { "type": "boolean" }
+      },
+      "required": ["content", "is_error"]
+    },
+
+    "toolUse": {
+      "type": "object",
+      "description": "One tool invocation. `input` is producer-specific JSON (left unconstrained). `category` is Toolpath's classification, or null when the tool is unrecognized. `result` is present only when the result was available in the same turn.",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "input": true,
+        "category": {
+          "type": ["string", "null"],
+          "enum": [
+            "file_read",
+            "file_write",
+            "file_search",
+            "shell",
+            "network",
+            "delegation",
+            null
+          ]
+        },
+        "result": { "$ref": "#/$defs/toolResult" }
+      },
+      "required": ["id", "name", "input", "category"]
+    },
+
+    "environment": {
+      "type": "object",
+      "description": "Working environment captured at the turn. All fields optional.",
+      "properties": {
+        "working_dir": { "type": "string" },
+        "vcs_branch": { "type": "string" },
+        "vcs_revision": { "type": "string" }
+      }
+    },
+
+    "delegation": {
+      "type": "object",
+      "description": "Sub-agent work spawned from a turn. `turns` carries the sub-agent's own turns when the producer inlines them.",
+      "properties": {
+        "agent_id": { "type": "string" },
+        "prompt": { "type": "string" },
+        "turns": { "type": "array" },
+        "result": { "type": "string" }
+      },
+      "required": ["agent_id", "prompt"]
+    },
+
+    "conversationAppend": {
+      "type": "object",
+      "description": "The turn payload: the `structural` object of the one `change` entry whose `type` is `conversation.append`. `role` and `text` are always present (text may be empty); everything else appears only when the turn carries it. `message_id` is the provider-assigned ID of the source message this turn was derived from — a grouping key, not a turn identifier: steps sharing a `message_id` were derived from one provider message (Claude Code writes one JSONL line per content block).",
+      "properties": {
+        "type": { "const": "conversation.append" },
+        "role": { "type": "string" },
+        "text": { "type": "string" },
+        "thinking": { "type": "string" },
+        "message_id": { "type": "string" },
+        "tool_uses": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/toolUse" }
+        },
+        "token_usage": { "$ref": "#/$defs/tokenUsage" },
+        "stop_reason": { "type": "string" },
+        "delegations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/delegation" }
+        },
+        "environment": { "$ref": "#/$defs/environment" }
+      },
+      "required": ["type", "role", "text"]
+    },
+
+    "fileWrite": {
+      "type": "object",
+      "description": "The `structural` object of a sibling `file.write` change keyed by file path. The unified diff (when present) lives on the artifact change's `raw`, not here. `tool_id`/`tool` link the mutation to the `ToolInvocation` that caused it when attributable.",
+      "properties": {
+        "type": { "const": "file.write" },
+        "tool_id": { "type": "string" },
+        "tool": { "type": "string" },
+        "operation": { "type": "string" },
+        "before": { "type": "string" },
+        "after": { "type": "string" },
+        "rename_to": { "type": "string" }
+      },
+      "required": ["type"]
+    },
+
+    "conversationEvent": {
+      "type": "object",
+      "description": "The `structural` object of a `conversation.event` change — a non-turn entry (attachment, preamble line, snapshot, …) preserved for round-trip fidelity. `entry_type` names the source entry kind; the producer's flattened event data rides alongside.",
+      "properties": {
+        "type": { "const": "conversation.event" },
+        "entry_type": { "type": "string" },
+        "event_source_id": { "type": "string" }
+      },
+      "required": ["type", "entry_type"]
+    },
+
+    "artifactChange": {
+      "type": "object",
+      "description": "An artifact change, constrained only when its `structural.type` is one this kind defines.",
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "structural": {
+                "type": "object",
+                "properties": { "type": { "const": "conversation.append" } },
+                "required": ["type"]
+              }
+            },
+            "required": ["structural"]
+          },
+          "then": {
+            "properties": {
+              "structural": { "$ref": "#/$defs/conversationAppend" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "structural": {
+                "type": "object",
+                "properties": { "type": { "const": "file.write" } },
+                "required": ["type"]
+              }
+            },
+            "required": ["structural"]
+          },
+          "then": {
+            "properties": {
+              "structural": { "$ref": "#/$defs/fileWrite" }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "structural": {
+                "type": "object",
+                "properties": { "type": { "const": "conversation.event" } },
+                "required": ["type"]
+              }
+            },
+            "required": ["structural"]
+          },
+          "then": {
+            "properties": {
+              "structural": { "$ref": "#/$defs/conversationEvent" }
+            }
+          }
+        }
+      ]
+    }
+  },
+
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "Path metadata. `kind` pins this spec; `source` names the producing harness; `producer`/`files_changed`/`vcs_remote` are flattened session-level fields (PathMeta carries `extra` via serde flatten, so they sit directly under `meta`, not under `meta.extra`).",
+      "properties": {
+        "kind": {
+          "const": "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+        },
+        "source": { "type": "string" },
+        "files_changed": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "vcs_remote": { "type": "string" },
+        "producer": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" }
+          },
+          "required": ["name"]
+        }
+      },
+      "required": ["kind"]
+    },
+
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "change": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/artifactChange" }
+          }
+        }
+      }
+    }
+  },
+
+  "required": ["meta"]
+}

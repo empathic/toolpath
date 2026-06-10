@@ -639,23 +639,31 @@ mod invariants {
         after_target: &ConversationView,
         failures: &mut Vec<String>,
     ) {
-        let pre: Vec<&Turn> = before_target
-            .turns
-            .iter()
-            .filter(|t| matches!(t.role, Role::Assistant))
-            .collect();
-        let post: Vec<&Turn> = after_target
-            .turns
-            .iter()
-            .filter(|t| matches!(t.role, Role::Assistant))
-            .collect();
-        for (i, (a, b)) in pre.iter().zip(post.iter()).enumerate() {
-            if a.token_usage.is_some() && b.token_usage.is_none() {
-                failures.push(format!(
-                    "token_usage at assistant #{} dropped (had {:?})",
-                    i, a.token_usage
-                ));
-            }
+        // Harnesses legitimately fold or split turns in translation
+        // (e.g. thinking-only claude turns merge into codex `reasoning`
+        // lines), so assistant indexes don't align across harnesses.
+        // The accounting invariant is order-preserving instead: the
+        // sequence of usage values on assistant turns survives, compared
+        // on input/output — the fields every wire carries (codex has no
+        // cache_write analog, cursor carries no cache counters at all).
+        let usage_seq = |v: &ConversationView| -> Vec<(Option<u32>, Option<u32>)> {
+            v.turns
+                .iter()
+                .filter(|t| matches!(t.role, Role::Assistant))
+                .filter_map(|t| t.token_usage.as_ref())
+                .map(|u| (u.input_tokens, u.output_tokens))
+                .collect()
+        };
+        let pre = usage_seq(before_target);
+        let post = usage_seq(after_target);
+        if pre != post {
+            failures.push(format!(
+                "assistant usage sequence diverged ({} -> {} entries)\n      first:  {:?}\n      second: {:?}",
+                pre.len(),
+                post.len(),
+                pre,
+                post
+            ));
         }
         if before_target.total_usage.is_some() && after_target.total_usage.is_none() {
             failures.push(format!(

@@ -1,7 +1,7 @@
 [
   {
     "name": "toolpath",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "description": "Core types, builders, and query API",
     "docs": "https://docs.rs/toolpath",
     "crate": "https://crates.io/crates/toolpath",
@@ -9,7 +9,7 @@
   },
   {
     "name": "toolpath-convo",
-    "version": "0.10.0",
+    "version": "0.11.0",
     "description": "Provider-agnostic conversation types, traits, and Toolpath-Path derivation",
     "docs": "https://docs.rs/toolpath-convo",
     "crate": "https://crates.io/crates/toolpath-convo",
@@ -17,7 +17,7 @@
   },
   {
     "name": "toolpath-git",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Derive from git repository history",
     "docs": "https://docs.rs/toolpath-git",
     "crate": "https://crates.io/crates/toolpath-git",
@@ -25,15 +25,15 @@
   },
   {
     "name": "toolpath-github",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Derive from GitHub pull requests",
     "docs": "https://docs.rs/toolpath-github",
     "crate": "https://crates.io/crates/toolpath-github",
-    "role": "Reads GitHub PRs via the REST API and maps commits, reviews, comments, and CI checks to Steps. Everything is a Step in the DAG — code changes, review threads, approvals, and CI results."
+    "role": "Reads GitHub PRs via the REST API and maps commits, reviews, comments, and CI checks to Steps. Everything is a Step in the DAG \u2014 code changes, review threads, approvals, and CI results."
   },
   {
     "name": "toolpath-claude",
-    "version": "0.11.1",
+    "version": "0.12.0",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",
@@ -41,7 +41,7 @@
   },
   {
     "name": "toolpath-gemini",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Derive from Gemini CLI conversation logs",
     "docs": "https://docs.rs/toolpath-gemini",
     "crate": "https://crates.io/crates/toolpath-gemini",
@@ -49,7 +49,7 @@
   },
   {
     "name": "toolpath-codex",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Derive from Codex CLI rollout files",
     "docs": "https://docs.rs/toolpath-codex",
     "crate": "https://crates.io/crates/toolpath-codex",
@@ -57,7 +57,7 @@
   },
   {
     "name": "toolpath-opencode",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "description": "Derive from opencode SQLite databases",
     "docs": "https://docs.rs/toolpath-opencode",
     "crate": "https://crates.io/crates/toolpath-opencode",
@@ -65,7 +65,7 @@
   },
   {
     "name": "toolpath-pi",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Derive Toolpath provenance documents from Pi (pi.dev) agent session logs",
     "docs": "https://docs.rs/toolpath-pi",
     "crate": "https://crates.io/crates/toolpath-pi",
@@ -73,15 +73,15 @@
   },
   {
     "name": "toolpath-cursor",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",
     "docs": "https://docs.rs/toolpath-cursor",
     "crate": "https://crates.io/crates/toolpath-cursor",
-    "role": "Reads Cursor.app's bubble store (`state.vscdb` SQLite, `cursorDiskKV` table) — composers, bubbles, content-addressed blobs — and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Round-trips back to a loadable composer via `CursorProjector` with full TOOL_TABLE coverage."
+    "role": "Reads Cursor.app's bubble store (`state.vscdb` SQLite, `cursorDiskKV` table) \u2014 composers, bubbles, content-addressed blobs \u2014 and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Round-trips back to a loadable composer via `CursorProjector` with full TOOL_TABLE coverage."
   },
   {
     "name": "toolpath-dot",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "description": "Graphviz DOT visualization",
     "docs": "https://docs.rs/toolpath-dot",
     "crate": "https://crates.io/crates/toolpath-dot",
@@ -89,11 +89,11 @@
   },
   {
     "name": "toolpath-md",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "description": "Markdown rendering for LLM consumption",
     "docs": "https://docs.rs/toolpath-md",
     "crate": "https://crates.io/crates/toolpath-md",
-    "role": "Renders a Toolpath Graph as readable Markdown — a narrative an LLM can reason about. Dead ends are called out explicitly, diffs are included at configurable detail levels, and the output preserves enough anchoring info for an LLM to reference back into the original document."
+    "role": "Renders a Toolpath Graph as readable Markdown \u2014 a narrative an LLM can reason about. Dead ends are called out explicitly, diffs are included at configurable detail levels, and the output preserves enough anchoring info for an LLM to reference back into the original document."
   },
   {
     "name": "pathbase-client",
@@ -105,15 +105,15 @@
   },
   {
     "name": "path-cli",
-    "version": "0.13.1",
+    "version": "0.14.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
-    "role": "One binary called `path` that ties everything together. Porcelain at the top level (share, resume, query, show, track, auth); plumbing under `path p …` (import, export, cache, list, render, merge, validate). Pathbase round-trip via `p import pathbase` / `p export pathbase` (authed default → secret pathstash; anon fallback when not logged in)."
+    "role": "One binary called `path` that ties everything together. Porcelain at the top level (share, resume, query, show, track, auth); plumbing under `path p \u2026` (import, export, cache, list, render, merge, validate). Pathbase round-trip via `p import pathbase` / `p export pathbase` (authed default \u2192 secret pathstash; anon fallback when not logged in)."
   },
   {
     "name": "toolpath-cli",
-    "version": "0.13.1",
+    "version": "0.14.0",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

@@ -502,6 +502,22 @@ Populated once the turn has real usage data:
 Absent/null `info` on the first `token_count` of a turn (delivered
 before the model responds); populated thereafter.
 
+**Cumulative vs. per-turn:** `total_token_usage` is the running
+**session-cumulative** counter — never attribute it to a single turn
+(summing it per turn grows quadratically). The round's own spend is
+`last_token_usage`; older rollouts that lack it require taking the
+delta between successive `total_token_usage` values.
+
+**Round scoping:** a Codex round (one user task) can emit several
+assistant messages (commentary + final) and several periodic
+`token_count` events. `toolpath-codex` therefore groups a round's
+assistant turns under `Turn.message_id` (the `turn_id` from
+`turn_context`/`task_started`), accumulates the round's `token_count`
+spend, and attaches the sum to the round's **final** assistant turn at
+`task_complete` / the next round / EOF — so `Turn.token_usage` always
+means "the message group's total" and per-turn sums equal session
+totals.
+
 ### `exec_command_end` detail
 
 ```json

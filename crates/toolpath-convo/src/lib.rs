@@ -246,6 +246,14 @@ pub struct Turn {
     /// Parent turn ID (for branching conversations).
     pub parent_id: Option<String>,
 
+    /// Provider-assigned ID of the source message this turn was derived
+    /// from. A grouping key, not a turn identifier: when a provider splits
+    /// one message across several turns (Claude Code writes one JSONL line
+    /// per content block), every sibling turn carries the same value, and
+    /// message-level accounting (`token_usage`) belongs to the group once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+
     /// Who produced this turn.
     pub role: Role,
 
@@ -543,6 +551,7 @@ mod tests {
                 Turn {
                     id: "t1".into(),
                     parent_id: None,
+                    message_id: None,
                     role: Role::User,
                     timestamp: "2026-01-01T00:00:00Z".into(),
                     text: "Fix the authentication bug in login.rs".into(),
@@ -558,6 +567,7 @@ mod tests {
                 Turn {
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
+                    message_id: None,
                     role: Role::Assistant,
                     timestamp: "2026-01-01T00:00:01Z".into(),
                     text: "I'll fix that for you.".into(),
@@ -587,6 +597,7 @@ mod tests {
                 Turn {
                     id: "t3".into(),
                     parent_id: Some("t2".into()),
+                    message_id: None,
                     role: Role::User,
                     timestamp: "2026-01-01T00:00:02Z".into(),
                     text: "Thanks!".into(),
@@ -924,6 +935,7 @@ mod tests {
         let turn = Turn {
             id: "t1".into(),
             parent_id: None,
+            message_id: None,
             role: Role::Assistant,
             timestamp: "2026-01-01T00:00:00Z".into(),
             text: "Delegating...".into(),

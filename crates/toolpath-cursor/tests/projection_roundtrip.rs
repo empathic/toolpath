@@ -229,6 +229,7 @@ fn projector_accepts_foreign_view_shape() {
             Turn {
                 id: "uA".into(),
                 parent_id: None,
+                message_id: None,
                 role: Role::User,
                 timestamp: "2026-06-01T00:00:00Z".into(),
                 text: "rename main".into(),
@@ -247,6 +248,7 @@ fn projector_accepts_foreign_view_shape() {
             Turn {
                 id: "aA".into(),
                 parent_id: Some("uA".into()),
+                message_id: None,
                 role: Role::Assistant,
                 timestamp: "2026-06-01T00:00:01Z".into(),
                 text: "done".into(),

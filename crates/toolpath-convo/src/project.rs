@@ -157,6 +157,7 @@ mod tests {
         Turn {
             id: id.into(),
             parent_id: None,
+            message_id: None,
             role,
             timestamp: "2026-01-01T00:00:00Z".into(),
             text: text.into(),
@@ -337,6 +338,7 @@ mod tests {
             turns: vec![Turn {
                 id: "t1".into(),
                 parent_id: None,
+                message_id: None,
                 role: Role::Assistant,
                 timestamp: "2026-01-01T00:00:00Z".into(),
                 text: "reading file".into(),
@@ -411,6 +413,7 @@ mod tests {
                 Turn {
                     id: "t1".into(),
                     parent_id: None,
+                    message_id: None,
                     role: Role::Assistant,
                     timestamp: "2026-01-01T00:00:00Z".into(),
                     text: "turn 1".into(),
@@ -431,6 +434,7 @@ mod tests {
                 Turn {
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
+                    message_id: None,
                     role: Role::Assistant,
                     timestamp: "2026-01-01T00:00:01Z".into(),
                     text: "turn 2".into(),

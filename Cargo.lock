@@ -2308,7 +2308,7 @@ dependencies = [
 
 [[package]]
 name = "path-cli"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3885,7 +3885,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3893,7 +3893,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-claude"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3910,7 +3910,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-codex"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3924,7 +3924,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-convo"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "jsonschema",
@@ -3937,7 +3937,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-cursor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3953,14 +3953,14 @@ dependencies = [
 
 [[package]]
 name = "toolpath-dot"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "toolpath",
 ]
 
 [[package]]
 name = "toolpath-gemini"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3975,7 +3975,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-git"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3986,7 +3986,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-github"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3998,7 +3998,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-md"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde_json",
  "toolpath",
@@ -4006,7 +4006,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-opencode"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4024,7 +4024,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-pi"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",

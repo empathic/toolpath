@@ -24,10 +24,16 @@ const SCHEMA_SOURCE: &str = toolpath::SCHEMA_JSON;
 /// `meta.kind` URI → bundled kind-schema source. Bundled (rather than
 /// fetched from `toolpath.net` at validation time) so validation is
 /// offline and deterministic.
-const KIND_SCHEMAS: &[(&str, &str)] = &[(
-    "https://toolpath.net/kinds/agent-coding-session/v1.0.0",
-    include_str!("../kinds/agent-coding-session/v1.0.0/schema.json"),
-)];
+const KIND_SCHEMAS: &[(&str, &str)] = &[
+    (
+        "https://toolpath.net/kinds/agent-coding-session/v1.0.0",
+        include_str!("../kinds/agent-coding-session/v1.0.0/schema.json"),
+    ),
+    (
+        "https://toolpath.net/kinds/agent-coding-session/v1.1.0",
+        include_str!("../kinds/agent-coding-session/v1.1.0/schema.json"),
+    ),
+];
 
 fn validator() -> &'static Validator {
     static VALIDATOR: OnceLock<Validator> = OnceLock::new();
@@ -223,7 +229,7 @@ mod tests {
         validate(&doc).expect("base is optional on path identity");
     }
 
-    const ACS_KIND: &str = "https://toolpath.net/kinds/agent-coding-session/v1.0.0";
+    const ACS_KIND: &str = "https://toolpath.net/kinds/agent-coding-session/v1.1.0";
 
     fn acs_graph(append: serde_json::Value) -> serde_json::Value {
         json!({

@@ -267,6 +267,7 @@ fn view_from_jsonl(
         turns.push(Turn {
             id: turn_id.clone(),
             parent_id: prev_id.clone(),
+            message_id: None,
             role,
             // Synthesize plausible monotonic timestamps; the
             // transcript carries no real ones.

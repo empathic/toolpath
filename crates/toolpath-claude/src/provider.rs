@@ -122,6 +122,11 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
     Turn {
         id: entry.uuid.clone(),
         parent_id: entry.parent_uuid.clone(),
+        // The API message ID (`msg_…`). Claude Code writes one JSONL line
+        // per content block, so several turns can share one message_id —
+        // and each repeats the message-level `usage`. Downstream accounting
+        // (sum_usage, derive_path) counts a message group once.
+        message_id: msg.id.clone(),
         role: claude_role_to_role(&msg.role),
         timestamp: entry.timestamp.clone(),
         text,
@@ -372,6 +377,20 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         turns.push(turn);
     }
 
+    // Canonicalize message-level accounting: the wire repeats the message
+    // total on every line of a split, but in the IR `token_usage` always
+    // means "the message's total" and lives only on the group's final
+    // turn. The projector re-expands the duplication when writing JSONL.
+    for idx in 0..turns.len() {
+        if let Some(mid) = &turns[idx].message_id
+            && turns
+                .get(idx + 1)
+                .is_some_and(|next| next.message_id.as_ref() == Some(mid))
+        {
+            turns[idx].token_usage = None;
+        }
+    }
+
     // Re-derive delegation results now that tool results are merged
     for turn in &mut turns {
         for delegation in &mut turn.delegations {
@@ -521,7 +540,16 @@ fn entry_to_event(entry: &ConversationEntry) -> toolpath_convo::ConversationEven
 fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
     let mut total = TokenUsage::default();
     let mut any = false;
-    for turn in turns {
+    for (idx, turn) in turns.iter().enumerate() {
+        // Turns split from one provider message all repeat that message's
+        // usage; count it once, on the run's last turn.
+        if let Some(mid) = &turn.message_id
+            && turns
+                .get(idx + 1)
+                .is_some_and(|next| next.message_id.as_ref() == Some(mid))
+        {
+            continue;
+        }
         if let Some(u) = &turn.token_usage {
             any = true;
             total.input_tokens =
@@ -763,6 +791,86 @@ mod tests {
 
         let resolver = PathResolver::new().with_claude_dir(&claude_dir);
         (temp, ClaudeConvo::with_resolver(resolver))
+    }
+
+    /// A session whose first assistant API message is split across three
+    /// JSONL lines (text, then one per tool_use) — the on-disk shape Claude
+    /// Code writes. Each line repeats the same `message.id` and the full
+    /// message-level `usage`, followed by a singleton assistant message.
+    fn setup_split_message_provider() -> (TempDir, ClaudeConvo) {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let usage_a = r#"{"input_tokens":6,"output_tokens":997,"cache_read_input_tokens":14842,"cache_creation_input_tokens":429831}"#;
+        let entries = [
+            r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Fix the bug"}}"#.to_string(),
+            format!(
+                r#"{{"uuid":"uuid-2","type":"assistant","parentUuid":"uuid-1","timestamp":"2024-01-01T00:00:01Z","message":{{"id":"msg_A","role":"assistant","content":[{{"type":"text","text":"Working on it."}}],"model":"claude-opus-4-7","stop_reason":null,"usage":{usage_a}}}}}"#
+            ),
+            format!(
+                r#"{{"uuid":"uuid-3","type":"assistant","parentUuid":"uuid-2","timestamp":"2024-01-01T00:00:02Z","message":{{"id":"msg_A","role":"assistant","content":[{{"type":"tool_use","id":"t1","name":"Read","input":{{"file_path":"a.rs"}}}}],"model":"claude-opus-4-7","stop_reason":null,"usage":{usage_a}}}}}"#
+            ),
+            format!(
+                r#"{{"uuid":"uuid-4","type":"assistant","parentUuid":"uuid-3","timestamp":"2024-01-01T00:00:03Z","message":{{"id":"msg_A","role":"assistant","content":[{{"type":"tool_use","id":"t2","name":"Read","input":{{"file_path":"b.rs"}}}}],"model":"claude-opus-4-7","stop_reason":"tool_use","usage":{usage_a}}}}}"#
+            ),
+            r#"{"uuid":"uuid-5","type":"assistant","parentUuid":"uuid-4","timestamp":"2024-01-01T00:00:04Z","message":{"id":"msg_B","role":"assistant","content":[{"type":"text","text":"Done."}],"model":"claude-opus-4-7","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":11}}}"#.to_string(),
+        ];
+        fs::write(project_dir.join("session-2.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        (temp, ClaudeConvo::with_resolver(resolver))
+    }
+
+    #[test]
+    fn test_split_message_turns_share_message_id() {
+        let (_temp, provider) = setup_split_message_provider();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-2")
+            .unwrap();
+
+        assert_eq!(view.turns.len(), 5);
+        assert!(view.turns[0].message_id.is_none(), "user lines carry no id");
+        for turn in &view.turns[1..=3] {
+            assert_eq!(turn.message_id.as_deref(), Some("msg_A"));
+        }
+        assert_eq!(view.turns[4].message_id.as_deref(), Some("msg_B"));
+    }
+
+    #[test]
+    fn test_view_usage_is_canonical_total_on_group_final_turn() {
+        // IR contract: `Turn.token_usage` always means "the message's
+        // total" and appears only on the message's final turn. The wire
+        // repeats the total on every line of a split; the view must not.
+        let (_temp, provider) = setup_split_message_provider();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-2")
+            .unwrap();
+
+        assert!(view.turns[1].token_usage.is_none());
+        assert!(view.turns[2].token_usage.is_none());
+        assert_eq!(
+            view.turns[3].token_usage.as_ref().unwrap().output_tokens,
+            Some(997)
+        );
+        assert_eq!(
+            view.turns[4].token_usage.as_ref().unwrap().output_tokens,
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn test_total_usage_counts_each_message_once() {
+        let (_temp, provider) = setup_split_message_provider();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-2")
+            .unwrap();
+
+        // msg_A's usage appears on three lines but is one API message;
+        // totals must be msg_A + msg_B, not 3×msg_A + msg_B.
+        let total = view.total_usage.as_ref().unwrap();
+        assert_eq!(total.output_tokens, Some(997 + 11));
+        assert_eq!(total.input_tokens, Some(6 + 5));
+        assert_eq!(total.cache_read_tokens, Some(14_842));
+        assert_eq!(total.cache_write_tokens, Some(429_831));
     }
 
     #[test]
@@ -1166,6 +1274,7 @@ mod tests {
         let mut turns = vec![Turn {
             id: "t1".into(),
             parent_id: None,
+            message_id: None,
             role: Role::Assistant,
             timestamp: "2024-01-01T00:00:00Z".into(),
             text: "test".into(),

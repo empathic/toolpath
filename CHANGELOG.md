@@ -2,6 +2,68 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Token usage once per message + kind v1.1.0 — 2026-06-10
+
+Fixes token over-counting in derived documents (reported by the Pathbase
+team: ~3× output-token inflation on real Claude sessions, unbounded on
+Codex). Two distinct bugs, one spec gap:
+
+- **Claude**: Claude Code writes one JSONL line per content block of an
+  assistant API message, repeating the message-level `usage` on every
+  line. `toolpath-claude` emitted one step per line, each carrying the
+  full usage — so summing `token_usage` per step over-counted by the
+  block count, and the disambiguating `message.id` was dropped.
+- **Codex**: `toolpath-codex` stamped the *cumulative* session counter
+  (`total_token_usage`) onto each assistant turn instead of the round's
+  own spend, so per-step sums grew quadratically.
+
+Changes:
+
+- `toolpath_convo::Turn` gains `message_id: Option<String>` — the
+  provider-assigned ID of the source message, a grouping key shared by
+  turns split from one message. `derive_path` writes it into the
+  `conversation.append` payload and emits `token_usage` on **exactly one
+  step per message group** (the run's last step in document order).
+  Summing `token_usage` over a path's steps now yields session totals.
+  `extract_conversation` reads `message_id` back for round-trips.
+- `toolpath-claude` populates `Turn.message_id` from the JSONL
+  `message.id`, canonicalizes the IR (a message's total `token_usage`
+  appears only on the group's final turn, so trait-level consumers
+  summing `ConversationView` turns are correct by construction), and
+  deduplicates `ConversationView.total_usage` by message group. The
+  projector re-expands the group total (and `message.id`) onto every
+  JSONL line of a split for wire fidelity.
+- `toolpath-codex` groups a round's assistant turns under
+  `Turn.message_id` (the round's `turn_id`), accumulates `token_count`
+  spend per round — preferring `last_token_usage`, else the delta
+  between successive cumulative totals (saturating, so counter resets
+  clamp to 0) — and attaches it to the round's final assistant turn at
+  `task_complete` / next round / EOF. The projector closes each
+  usage-bearing turn with a `task_complete` boundary so re-reads
+  attribute spend to the right turn.
+- `toolpath-pi` and `toolpath-opencode` decode absent/all-zero wire
+  usage counters as `token_usage: None` ("spend unknown") instead of
+  `Some(zeros)` — their wires require usage fields, which
+  foreign-source projections zero-fill.
+- **Kind `agent-coding-session` v1.1.0**: new version URI specifying the
+  accounting rule (per-message increments, once per `message_id` group,
+  per-step sums equal session totals) and the optional `message_id`
+  field. `PATH_KIND_AGENT_CODING_SESSION` now points at v1.1.0;
+  `PATH_KIND_AGENT_CODING_SESSION_V1_0_0` names the old URI. `path p
+  validate` bundles both schemas. The v1.0.0 spec page gains an erratum
+  documenting the historical duplication (consumers of v1.0.0 documents
+  still need dedup heuristics; the byte-identical-tuple heuristic does
+  not repair Codex documents).
+
+Crates bumped (every crate that depends on `toolpath`, matching the
+domain-rename precedent since the emitted kind URI changes): `toolpath`
+0.7.0, `toolpath-convo` 0.11.0, `toolpath-git` 0.6.0, `toolpath-github`
+0.6.0, `toolpath-claude` 0.12.0, `toolpath-gemini` 0.6.0,
+`toolpath-codex` 0.6.0, `toolpath-opencode` 0.5.0, `toolpath-cursor`
+0.2.0, `toolpath-pi` 0.6.0, `toolpath-dot` 0.5.0, `toolpath-md` 0.7.0,
+`path-cli` 0.14.0, `toolpath-cli` 0.14.0. `pathbase-client` is
+unaffected.
+
 ## toolpath-claude 0.11.1 + path-cli 0.13.1 + toolpath-cli 0.13.1: derive `project_path` from the file's parent directory — 2026-06-09
 
 `ConversationReader::read_conversation_metadata` used to set

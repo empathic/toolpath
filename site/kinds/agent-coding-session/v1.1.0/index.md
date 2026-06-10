@@ -1,29 +1,29 @@
 ---
 layout: base.njk
-title: "Kind: agent-coding-session v1.0.0"
-permalink: /kinds/agent-coding-session/v1.0.0/
+title: "Kind: agent-coding-session v1.1.0"
+permalink: /kinds/agent-coding-session/v1.1.0/
 ---
 
-# Kind: `agent-coding-session` v1.0.0
+# Kind: `agent-coding-session` v1.1.0
 
 <dl class="kind-meta">
   <dt>URI</dt>
-  <dd><code>https://toolpath.net/kinds/agent-coding-session/v1.0.0</code></dd>
+  <dd><code>https://toolpath.net/kinds/agent-coding-session/v1.1.0</code></dd>
   <dt>Schema</dt>
   <dd><a href="./schema.json"><code>schema.json</code></a></dd>
 </dl>
 
 A Toolpath path whose `meta.kind` is this URI records an AI coding conversation. It is an ordinary path with the extra structure described here. `head`-ancestry, dead ends, signatures, and `base` all behave as in the [base format](/format/).
 
-> **Erratum — token accounting.** This version leaves the relationship between per-step `token_usage` and API-message accounting unspecified, and producers of v1.0.0 documents duplicated it: when a provider message was split across several steps (Claude Code writes one JSONL line per content block), **every** step of the split carried the full message-level `token_usage` — and Codex-derived documents carried *cumulative session counters* rather than per-message increments. Summing `token_usage` over a v1.0.0 path's steps therefore over-counts (≈3× on real Claude sessions; unboundedly on Codex). Consumers of v1.0.0 documents must deduplicate (e.g. zero a step whose nonzero usage tuple is byte-identical to the previous step's; this heuristic does **not** repair Codex documents). [v1.1.0](/kinds/agent-coding-session/v1.1.0/) specifies the rule — usage once per message, on the last step of its `message_id` group — and producers enforce it from `toolpath-convo`'s shared derivation onward. This URI keeps meaning what it always meant; this note documents that meaning.
-
-Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`), which the provider crates (`toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-opencode`, `toolpath-pi`) all call. The field shapes below are therefore exact. The only producer-specific parts are the contents of a tool's `input` and the diff text in a change's `raw`.
+Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`), which the provider crates (`toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-opencode`, `toolpath-cursor`, `toolpath-pi`) all call. The field shapes below are therefore exact. The only producer-specific parts are the contents of a tool's `input`, the diff text in a change's `raw`, and the value (not the meaning) of `message_id`.
 
 Constraints apply by structural `type`, not by artifact key: a `change` entry is checked only when its `structural.type` is one named here, and extra properties never make a path invalid. [`schema.json`](./schema.json) encodes the rules; apply it alongside the base schema. The URI is immutable. Later revisions ship under a new version URI.
 
+**Changed from [v1.0.0](/kinds/agent-coding-session/v1.0.0/):** the turn payload gains an optional `message_id`, and message-level token accounting is now specified — see [Message accounting](#message-accounting). v1.1.0 documents are structurally valid v1.0.0 documents; the new version exists so consumers can rely on the accounting rule.
+
 ## The turn payload
 
-One entry in a turn's `change` map has `structural.type` of `"conversation.append"`. Find it by that type: the artifact key is producer-specific, formed as `<source>://<conversation-id>` from the harness in `meta.source` (e.g. `claude-code://…`, `gemini-cli://…`, `codex://…`, `opencode://…`, `pi://…`).
+One entry in a turn's `change` map has `structural.type` of `"conversation.append"`. Find it by that type: the artifact key is producer-specific, formed as `<source>://<conversation-id>` from the harness in `meta.source` (e.g. `claude-code://…`, `gemini-cli://…`, `codex://…`, `opencode://…`, `cursor://…`, `pi://…`).
 
 Its `structural` object always carries:
 
@@ -35,16 +35,37 @@ Its `structural` object always carries:
 
 It may also carry any of the following, present only when the turn has them:
 
-| Field         | Type   | Meaning                                             |
-| ------------- | ------ | --------------------------------------------------- |
-| `thinking`    | string | the model's reasoning text                          |
-| `tool_uses`   | array  | tools the agent invoked (shape below)               |
-| `token_usage` | object | per-turn token counts (shape below)                 |
-| `stop_reason` | string | why the model stopped (`end_turn`, `tool_use`, …)   |
-| `delegations` | array  | sub-agent work spawned from this turn (shape below) |
-| `environment` | object | working environment at this turn (shape below)      |
+| Field         | Type   | Meaning                                                       |
+| ------------- | ------ | ------------------------------------------------------------- |
+| `thinking`    | string | the model's reasoning text                                    |
+| `message_id`  | string | provider-assigned ID of the source message (see below)        |
+| `tool_uses`   | array  | tools the agent invoked (shape below)                         |
+| `token_usage` | object | the source message's token counts (shape and rule below)      |
+| `stop_reason` | string | why the model stopped (`end_turn`, `tool_use`, …)             |
+| `delegations` | array  | sub-agent work spawned from this turn (shape below)           |
+| `environment` | object | working environment at this turn (shape below)                |
 
 The model identifier is not on the change. It lives in `step.actor` (`agent:<model>`) and `meta.actors`. There is no provider-specific blob: every field the derivation captures is one of those listed above.
+
+### `message_id`
+
+The provider-assigned ID of the source message this turn was derived from — Claude Code's `message.id` (`msg_…`), for example. It is a **grouping key, not a turn identifier**: when a producer splits one provider message across several steps (Claude Code writes one JSONL line per content block), every sibling step carries the same `message_id`. A step without a `message_id` is its own message.
+
+### Message accounting
+
+How `token_usage` on steps relates to API-message accounting:
+
+1. `token_usage` records the source message's spend — a **per-message amount, never a cumulative session counter**.
+2. Within a run of consecutive steps sharing a `message_id` (document order), the run's **last step carries the message's total `token_usage`, verbatim from the source**. In this version, the run's other steps carry none.
+3. A step without a `message_id` is its own message and carries its own `token_usage` (when the source records one).
+
+Consequence: **summing `token_usage` over a v1.1.0 path's steps yields the session totals.** Consumers need no dedup heuristics. (JSON Schema cannot express the once-per-run rule, so it is normative prose, enforced by producer test suites.)
+
+`token_usage` has **one meaning everywhere it appears: the total for a message**. A step without a `message_id` is a one-step message, so its `token_usage` is that message's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `message_id` on the same payload tells you which message it totals. A producer that can attribute usage to individual steps fully expresses that by leaving `message_id` unset: each step is its own message. When a source format offers both a message total and a finer breakdown (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the total; the breakdown is subordinate detail and does not ride `token_usage`.
+
+For consumers: a step without `token_usage` inside a `message_id` group has no individually-known spend; its message's cost sits, whole, on the group's final step. Analytics finer than the message (e.g. cost per tool call) should aggregate at the group level rather than apportioning a group's total across its member steps — the source data does not support finer attribution.
+
+**Forward compatibility.** A future version of this kind may support *partial or full* per-step attribution within a group. When it does, attributed step amounts will ride a **separate field** (e.g. `attributed_token_usage`, "this step's own attributed share") — never `token_usage`, whose total-for-a-message meaning is permanent. Whether a number is a message total or a step share is therefore structural (the key it sits under), not positional (where its step falls in the run). Consequences that hold across the extension: `Σ token_usage` over a path's steps remains the exact session total, and the unattributed remainder is *computed* by consumers (`final step's token_usage − Σ group's attributed amounts`), never recorded — recorded values stay verbatim source observations, and source inconsistencies stay visible. The new field still arrives only under a new version URI, but it changes what consumers *can* read, not how they sum.
 
 ### `tool_uses`
 
@@ -52,7 +73,7 @@ Each element is an object:
 
 | Field      | Type           | Notes                                                                                                                              |
 | ---------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `id`       | string         | provider-assigned invocation id                                                                                                    |
+| `id`       | string         | provider-assigned invocation ID                                                                                                    |
 | `name`     | string         | provider tool name (`Read`, `Bash`, `edit`, …)                                                                                     |
 | `input`    | any            | tool arguments; shape is producer-specific                                                                                         |
 | `category` | string \| null | Toolpath's classification: `file_read`, `file_write`, `file_search`, `shell`, `network`, `delegation`, or `null` when unrecognized |
@@ -68,6 +89,8 @@ Each element is an object:
 | `output_tokens`      | integer \| null | always present                  |
 | `cache_read_tokens`  | integer         | only when the source records it |
 | `cache_write_tokens` | integer         | only when the source records it |
+
+Values follow the [message accounting](#message-accounting) rule above.
 
 ### `environment`
 
@@ -110,7 +133,7 @@ Entries that aren't turns (attachments, preamble lines, snapshots, hook results)
 | Field                | Meaning                                                                          |
 | -------------------- | -------------------------------------------------------------------------------- |
 | `meta.kind`          | this URI                                                                         |
-| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, or `pi` |
+| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, `cursor`, or `pi` |
 | `meta.title`         | session title                                                                    |
 | `meta.actors`        | the actor definitions the steps reference                                        |
 | `meta.files_changed` | file paths touched across the session                                            |
