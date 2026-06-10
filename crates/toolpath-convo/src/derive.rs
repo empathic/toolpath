@@ -425,6 +425,16 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         last_step_id = Some(push_step(&mut steps, &mut by_id, step));
     }
 
+    // Enforce step-id uniqueness within the path (a toolpath invariant).
+    // A conversation can carry the same id twice — e.g. Claude re-emits a
+    // block of earlier messages with their original uuids just before a
+    // compaction boundary. Keep the FIRST occurrence: it carries the true
+    // parent lineage; later copies are re-parented into a synthetic linear
+    // chain. Parent/head references by id already resolve to the kept step,
+    // so dropping the duplicates needs no remapping.
+    let mut seen_ids = std::collections::HashSet::new();
+    steps.retain(|s| seen_ids.insert(s.step.id.clone()));
+
     let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
 
     // Meta
@@ -952,6 +962,31 @@ mod tests {
         let view = view_with(vec![turn]);
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.steps[0].step.actor, "agent:unknown");
+    }
+
+    #[test]
+    fn test_duplicate_turn_ids_deduped_keep_first() {
+        // A conversation can carry the same turn id twice (e.g. Claude
+        // re-emits earlier messages with their original uuids at a
+        // compaction boundary). derive_path keeps the FIRST occurrence so
+        // step ids stay unique within the path.
+        let mut first = base_turn("dup", Role::User);
+        first.text = "original".into();
+        let mid = base_turn("mid", Role::Assistant);
+        let mut second = base_turn("dup", Role::User);
+        second.text = "replayed".into();
+        let view = view_with(vec![first, mid, second]);
+        let path = derive_path(&view, &DeriveConfig::default());
+
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
+        assert_eq!(ids.len(), unique.len(), "step ids must be unique: {ids:?}");
+        assert_eq!(path.steps.len(), 2, "the duplicate id was dropped");
+
+        // The kept "dup" step is the first occurrence (text "original").
+        let dup = path.steps.iter().find(|s| s.step.id == "dup").unwrap();
+        let txt = conv_change(dup).extra.get("text").and_then(|v| v.as_str());
+        assert_eq!(txt, Some("original"), "kept step must be the first occurrence");
     }
 
     #[test]
