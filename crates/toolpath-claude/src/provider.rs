@@ -540,7 +540,9 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         i += 1;
     }
 
-    canonicalize_message_usage(&mut turns);
+    let mut turn_refs: Vec<&mut Turn> = items.iter_mut().filter_map(item_turn_mut).collect();
+    canonicalize_message_usage(&mut turn_refs);
+    drop(turn_refs);
 
     // Re-derive delegation results now that tool results are merged
     for turn in items.iter_mut().filter_map(item_turn_mut) {
@@ -725,7 +727,7 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
 /// **final** turn to the field-wise **maximum** across the run (the message
 /// total — never under-counts whatever the stream order) and clears it from
 /// the others, so summing `token_usage` over turns yields session totals.
-fn canonicalize_message_usage(turns: &mut [Turn]) {
+fn canonicalize_message_usage(turns: &mut [&mut Turn]) {
     let mut i = 0;
     while i < turns.len() {
         let Some(mid) = turns[i].group_id.clone() else {
@@ -761,6 +763,7 @@ fn canonicalize_message_usage(turns: &mut [Turn]) {
 
 /// Sum token usage across all turns.
 fn sum_usage<'a>(turns: impl IntoIterator<Item = &'a Turn>) -> Option<TokenUsage> {
+    let turns: Vec<&Turn> = turns.into_iter().collect();
     let mut total = TokenUsage::default();
     let mut any = false;
     for (idx, turn) in turns.iter().enumerate() {

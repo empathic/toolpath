@@ -6,13 +6,15 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    Compaction, CompactionTrigger, ConversationProjector, ConversationView, ConvoError, Result,
+    Role, ToolInvocation, Turn,
 };
 
 use crate::types::{
-    AssistantMessage, Message, MessageData, MessagePath, MessageTime, ModelRef, Part, PartData,
-    ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange, Tokens, ToolPart,
-    ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
+    AssistantMessage, CompactionPart, Message, MessageData, MessagePath, MessageTime, ModelRef,
+    Part, PartData, ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange,
+    Tokens, ToolPart, ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
+    UserSummary,
 };
 
 const DEFAULT_AGENT: &str = "build";
@@ -157,42 +159,70 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
-    for turn in view.turns() {
-        match turn.role {
-            Role::User => {
-                let msg = build_user_message(
-                    turn,
+    // Walk the ordered item stream so compaction boundaries land at their
+    // true position (between the turns they separate) — the inverse of the
+    // forward Builder, which reads `compaction` parts in message order.
+    for item in &view.items {
+        match item {
+            toolpath_convo::Item::Turn(turn) => match turn.role {
+                Role::User => {
+                    let msg = build_user_message(
+                        turn,
+                        &session_id,
+                        &mut counter,
+                        &agent,
+                        &default_provider,
+                        &default_model,
+                    );
+                    prev_msg_id = Some(msg.id.clone());
+                    messages.push(msg);
+                }
+                Role::Assistant => {
+                    let parent = prev_msg_id
+                        .clone()
+                        .unwrap_or_else(|| mint_message_id(&session_id, counter));
+                    let msg = build_assistant_message(
+                        turn,
+                        &session_id,
+                        &mut counter,
+                        parent,
+                        &directory,
+                        &agent,
+                        &default_provider,
+                        &default_model,
+                    );
+                    prev_msg_id = Some(msg.id.clone());
+                    messages.push(msg);
+                }
+                Role::System | Role::Other(_) => {
+                    // opencode has no system-role message variant; fold the
+                    // text into the next user/assistant turn's context by
+                    // skipping. The system prompt itself rides on
+                    // UserMessage.system if needed.
+                }
+            },
+            toolpath_convo::Item::Compaction(c) => {
+                // Inverse of the forward Builder's compaction handling:
+                // emit a synthetic compaction-bearing user message so a
+                // re-read reproduces the `Item::Compaction`. When the
+                // boundary carries a summary, emit the synthetic summary
+                // user message the forward path reads from
+                // `UserMessage.summary.body`.
+                for msg in build_compaction_messages(
+                    c,
                     &session_id,
                     &mut counter,
                     &agent,
                     &default_provider,
                     &default_model,
-                );
-                prev_msg_id = Some(msg.id.clone());
-                messages.push(msg);
+                ) {
+                    prev_msg_id = Some(msg.id.clone());
+                    messages.push(msg);
+                }
             }
-            Role::Assistant => {
-                let parent = prev_msg_id
-                    .clone()
-                    .unwrap_or_else(|| mint_message_id(&session_id, counter));
-                let msg = build_assistant_message(
-                    turn,
-                    &session_id,
-                    &mut counter,
-                    parent,
-                    &directory,
-                    &agent,
-                    &default_provider,
-                    &default_model,
-                );
-                prev_msg_id = Some(msg.id.clone());
-                messages.push(msg);
-            }
-            Role::System | Role::Other(_) => {
-                // opencode has no system-role message variant; fold the
-                // text into the next user/assistant turn's context by
-                // skipping. The system prompt itself rides on
-                // UserMessage.system if needed.
+            toolpath_convo::Item::Event(_) => {
+                // Non-conversational events have no opencode message form;
+                // they're metadata that doesn't round-trip through parts.
             }
         }
     }
@@ -288,6 +318,114 @@ fn build_user_message(
         data: MessageData::User(user),
         parts,
     }
+}
+
+/// Inverse of the forward Builder's `push_compaction`: project an
+/// [`Item::Compaction`] back into opencode messages so a re-read
+/// reproduces it.
+///
+/// opencode writes a compaction as a synthetic user message carrying a
+/// single `compaction` part. We mirror that: one user message whose only
+/// part is a [`CompactionPart`]. When the boundary has a `summary`, we
+/// also emit the synthetic summary user message the forward path reads
+/// from `UserMessage.summary.body` (see `session_summary_text`).
+fn build_compaction_messages(
+    c: &Compaction,
+    session_id: &str,
+    counter: &mut u32,
+    agent: &str,
+    default_provider: &str,
+    default_model: &str,
+) -> Vec<Message> {
+    let time_created = parse_timestamp_ms(&c.timestamp).unwrap_or(0);
+    let model = ModelRef {
+        provider_id: default_provider.to_string(),
+        model_id: default_model.to_string(),
+        variant: None,
+    };
+
+    let mut out = Vec::new();
+
+    *counter += 1;
+    let msg_id = mint_message_id(session_id, *counter);
+    let user = UserMessage {
+        time: MessageTime {
+            created: time_created,
+            completed: None,
+        },
+        agent: agent.to_string(),
+        model: model.clone(),
+        format: None,
+        summary: Some(UserSummary {
+            title: None,
+            body: None,
+            diffs: vec![],
+            extra: HashMap::new(),
+        }),
+        system: None,
+        tools: None,
+        extra: HashMap::new(),
+    };
+
+    *counter += 1;
+    let compaction_part = Part {
+        id: mint_part_id(session_id, *counter),
+        message_id: msg_id.clone(),
+        session_id: session_id.to_string(),
+        time_created,
+        time_updated: time_created,
+        data: PartData::Compaction(CompactionPart {
+            auto: c.trigger == Some(CompactionTrigger::Auto),
+            overflow: None,
+            // The kept tail anchors on the first kept range's `from`; the
+            // field serializes back to the `tailStartID` wire key the
+            // reader round-trips.
+            tail_start_id: c.kept.first().map(|r| r.from.clone()),
+            extra: HashMap::new(),
+        }),
+    };
+
+    out.push(Message {
+        id: msg_id,
+        session_id: session_id.to_string(),
+        time_created,
+        time_updated: time_created,
+        data: MessageData::User(user),
+        parts: vec![compaction_part],
+    });
+
+    if let Some(summary) = c.summary.as_ref().filter(|s| !s.is_empty()) {
+        *counter += 1;
+        let summary_msg_id = mint_message_id(session_id, *counter);
+        let summary_user = UserMessage {
+            time: MessageTime {
+                created: time_created,
+                completed: None,
+            },
+            agent: agent.to_string(),
+            model,
+            format: None,
+            summary: Some(UserSummary {
+                title: None,
+                body: Some(summary.clone()),
+                diffs: vec![],
+                extra: HashMap::new(),
+            }),
+            system: None,
+            tools: None,
+            extra: HashMap::new(),
+        };
+        out.push(Message {
+            id: summary_msg_id,
+            session_id: session_id.to_string(),
+            time_created,
+            time_updated: time_created,
+            data: MessageData::User(summary_user),
+            parts: Vec::new(),
+        });
+    }
+
+    out
 }
 
 #[allow(clippy::too_many_arguments)]

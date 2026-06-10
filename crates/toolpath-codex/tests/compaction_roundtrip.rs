@@ -267,3 +267,85 @@ fn real_fixture_projector_output_is_re_parseable_by_reader() {
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     RolloutReader::read_session(tmp.path()).expect("re-read projected JSONL");
 }
+
+/// View → Codex `Session` → JSONL → `Session` → view: the compaction
+/// boundary the projector now emits as a `compacted` line must reappear
+/// as exactly one `Item::Compaction` when the projected session is read
+/// back, preserving the summary and its position between turns.
+///
+/// The real capture's `message` is empty, so the round-tripped summary is
+/// `Some("")` rather than `None` — present but empty.
+#[test]
+fn real_fixture_projection_round_trips_compaction() {
+    let original = load_view(real_fixture_path());
+    let orig_idx = sole_compaction_index(&original);
+    let Item::Compaction(orig) = &original.items[orig_idx] else {
+        unreachable!()
+    };
+    let orig_summary = orig.summary.clone();
+
+    // Project directly (no IR detour) so we exercise the projector's
+    // `Item::Compaction` → `compacted` line path on its own.
+    let session = CodexProjector::new().project(&original).expect("project");
+
+    // Exactly one `compacted` line, carrying the summary as `message`.
+    let compacted: Vec<&toolpath_codex::RolloutLine> = session
+        .lines
+        .iter()
+        .filter(|l| l.kind == "compacted")
+        .collect();
+    assert_eq!(
+        compacted.len(),
+        1,
+        "projector should emit exactly one compacted line"
+    );
+    assert_eq!(
+        compacted[0].payload.get("message").and_then(|m| m.as_str()),
+        orig_summary.as_deref(),
+        "compacted line `message` should carry the compaction summary"
+    );
+
+    // Serialize one JSON line per rollout entry and read it back through
+    // the crate's reader, then run the forward `to_view`.
+    let body = session
+        .lines
+        .iter()
+        .map(|l| serde_json::to_string(l).expect("serialize rollout line"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tmp = tempfile::Builder::new()
+        .suffix(".jsonl")
+        .tempfile()
+        .expect("tempfile");
+    std::fs::write(tmp.path(), body).expect("write tempfile");
+    let reread = RolloutReader::read_session(tmp.path()).expect("re-read projected JSONL");
+    let after = to_view(&reread);
+
+    // Exactly one compaction survives, with the original summary intact
+    // and no trigger (Codex never persists it).
+    let idx = sole_compaction_index(&after);
+    let Item::Compaction(c) = &after.items[idx] else {
+        unreachable!()
+    };
+    assert_eq!(c.summary, orig_summary, "summary should round-trip");
+    assert_eq!(c.trigger, None, "Codex never persists the trigger");
+    assert!(c.pre_tokens.is_none());
+    assert!(c.kept.is_empty());
+
+    // The compaction sits between turns: a turn precedes it and a turn
+    // follows it in the re-read item stream.
+    let turn_before = after.items[..idx]
+        .iter()
+        .rposition(|it| matches!(it, Item::Turn(_)));
+    let turn_after = after.items[idx + 1..]
+        .iter()
+        .position(|it| matches!(it, Item::Turn(_)));
+    assert!(
+        turn_before.is_some(),
+        "a turn should precede the round-tripped compaction"
+    );
+    assert!(
+        turn_after.is_some(),
+        "a turn should follow the round-tripped compaction"
+    );
+}

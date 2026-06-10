@@ -30,12 +30,13 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    Compaction, ConversationProjector, ConversationView, ConvoError, Item, Result, Role,
+    ToolInvocation, Turn,
 };
 
 use crate::types::{
-    ContentPart, CustomToolCall, CustomToolCallOutput, FunctionCall, FunctionCallOutput, Message,
-    Reasoning, RolloutLine, SessionMeta, TurnContext,
+    CompactedItem, ContentPart, CustomToolCall, CustomToolCallOutput, FunctionCall,
+    FunctionCallOutput, Message, Reasoning, RolloutLine, SessionMeta, TurnContext,
 };
 
 // ── CodexProjector ───────────────────────────────────────────────────
@@ -140,7 +141,8 @@ fn project_view(
 
     // Find the last assistant turn so we can mark it `phase: "final"`.
     // Codex annotates every other assistant turn with `phase: "commentary"`,
-    // matching what real rollouts look like.
+    // matching what real rollouts look like. Indexed over the turn stream
+    // (events/compactions don't count), matching `turn_idx` below.
     let last_assistant_idx = view
         .turns()
         .collect::<Vec<_>>()
@@ -167,12 +169,7 @@ fn project_view(
         .find(|(_, t)| matches!(t.role, Role::Assistant))
         .map(|(i, t)| group_of(i, t))
         .unwrap_or_else(|| view.id.clone());
-    lines.push(make_turn_context_line(
-        &first_group,
-        &session_timestamp,
-        &cwd,
-        &model,
-    ));
+    lines.push(make_turn_context_line(&first_group, &session_timestamp, &cwd, &model));
     let mut current_group = Some(first_group);
 
     // Running session-cumulative usage. Codex's `total_token_usage` is
@@ -180,29 +177,35 @@ fn project_view(
     // emit it after the turn, so a re-read differences it back to the same
     // per-step spend.
     let mut running = toolpath_convo::TokenUsage::default();
-    for (idx, turn) in view.turns().enumerate() {
-        if matches!(turn.role, Role::Assistant) {
-            let group = group_of(idx, turn);
-            if current_group.as_deref() != Some(&group) {
-                lines.push(make_turn_context_line(
-                    &group,
-                    &turn.timestamp,
-                    &cwd,
-                    &model,
-                ));
-                current_group = Some(group);
+
+    // Walk the full ordered item stream so compaction boundaries land at
+    // their true position between the surrounding turns. Events have no
+    // Codex analog on the return path and are dropped; turns and compactions
+    // both project to rollout lines.
+    let mut turn_idx = 0usize;
+    for item in &view.items {
+        match item {
+            Item::Turn(turn) => {
+                if matches!(turn.role, Role::Assistant) {
+                    let group = group_of(turn_idx, turn);
+                    if current_group.as_deref() != Some(&group) {
+                        lines.push(make_turn_context_line(
+                            &group,
+                            &turn.timestamp,
+                            &cwd,
+                            &model,
+                        ));
+                        current_group = Some(group);
+                    }
+                }
+                let codex = codex_extras(turn).cloned().unwrap_or_default();
+                let is_final_assistant = Some(turn_idx) == last_assistant_idx;
+                emit_turn_lines(turn, &codex, is_final_assistant, &cwd, &mut lines, &mut running);
+                turn_idx += 1;
             }
+            Item::Compaction(c) => emit_compaction(c, &mut lines),
+            Item::Event(_) => {}
         }
-        let codex = codex_extras(turn).cloned().unwrap_or_default();
-        let is_final_assistant = Some(idx) == last_assistant_idx;
-        emit_turn_lines(
-            turn,
-            &codex,
-            is_final_assistant,
-            &cwd,
-            &mut lines,
-            &mut running,
-        );
     }
 
     Ok(crate::types::Session {
@@ -250,7 +253,12 @@ fn make_session_meta_line(
     }
 }
 
-fn make_turn_context_line(turn_id: &str, timestamp: &str, cwd: &str, model: &str) -> RolloutLine {
+fn make_turn_context_line(
+    turn_id: &str,
+    timestamp: &str,
+    cwd: &str,
+    model: &str,
+) -> RolloutLine {
     let tc = TurnContext {
         turn_id: turn_id.to_string(),
         cwd: PathBuf::from(cwd),
@@ -277,6 +285,26 @@ fn make_turn_context_line(turn_id: &str, timestamp: &str, cwd: &str, model: &str
 /// reasonable defaults.
 fn codex_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
     None
+}
+
+/// Emit a `compacted` rollout line for a [`Compaction`] boundary — the
+/// inverse of `Builder::handle_compacted`. Codex's payload is
+/// `{message, replacement_history?, window_id?}`; only `summary` survives
+/// the forward path, so we round-trip it as `message` (defaulting to the
+/// empty string) and leave the other fields absent.
+fn emit_compaction(c: &Compaction, lines: &mut Vec<RolloutLine>) {
+    let payload = CompactedItem {
+        message: c.summary.clone().unwrap_or_default(),
+        replacement_history: None,
+        window_id: None,
+        extra: HashMap::new(),
+    };
+    lines.push(RolloutLine {
+        timestamp: c.timestamp.clone(),
+        kind: "compacted".to_string(),
+        payload: serde_json::to_value(&payload).unwrap_or(Value::Null),
+        extra: HashMap::new(),
+    });
 }
 
 fn emit_turn_lines(

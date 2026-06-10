@@ -11,9 +11,10 @@
 use std::path::{Path, PathBuf};
 
 use toolpath::v1::Graph;
-use toolpath_claude::ConversationReader;
+use toolpath_claude::{ClaudeProjector, ConversationReader};
 use toolpath_convo::{
-    CompactionTrigger, ConversationView, DeriveConfig, Item, derive_path, extract_conversation,
+    CompactionTrigger, ConversationProjector, ConversationView, DeriveConfig, Item, derive_path,
+    extract_conversation,
 };
 
 /// The real captured Claude session with one manual compaction boundary.
@@ -38,6 +39,15 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
     let back = Graph::from_json(&json).expect("parse Graph");
     let path = back.into_single_path().expect("single path");
     extract_conversation(&path)
+}
+
+/// Project the view back into a Claude `Conversation`, then re-read it with
+/// the forward path. The compaction must survive: project re-emits the
+/// boundary (+ summary) entries, and `to_view` re-folds them into one
+/// `Item::Compaction`.
+fn project_and_reread(view: &ConversationView) -> ConversationView {
+    let convo = ClaudeProjector.project(view).expect("project view");
+    toolpath_claude::provider::to_view(&convo)
 }
 
 fn only_compaction(view: &ConversationView) -> &toolpath_convo::Compaction {
@@ -155,4 +165,52 @@ fn surrounding_turns_survive_roundtrip() {
         after_turn_ids.contains(last),
         "last turn {last} dropped after roundtrip"
     );
+}
+
+#[test]
+fn compaction_survives_projection_roundtrip() {
+    let original = load_view();
+    let orig_c = only_compaction(&original).clone();
+
+    // view → project (emit boundary + summary entries) → to_view (re-fold).
+    let after = project_and_reread(&original);
+    let after_c = only_compaction(&after);
+
+    assert_eq!(after_c.trigger, orig_c.trigger, "trigger diverged");
+    assert_eq!(
+        after_c.summary.is_some(),
+        orig_c.summary.is_some(),
+        "summary presence diverged"
+    );
+    assert_eq!(after_c.pre_tokens, orig_c.pre_tokens, "pre_tokens diverged");
+    assert_eq!(after_c.kept, orig_c.kept, "kept ranges diverged");
+
+    // The re-folded compaction must sit between turns, not at an edge.
+    let pos = after
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Compaction(_)))
+        .expect("compaction present after projection roundtrip");
+    let turns_before = after.items[..pos]
+        .iter()
+        .filter(|i| matches!(i, Item::Turn(_)))
+        .count();
+    let turns_after = after.items[pos + 1..]
+        .iter()
+        .filter(|i| matches!(i, Item::Turn(_)))
+        .count();
+    assert!(turns_before > 0, "no pre-compaction turn after projection");
+    assert!(turns_after > 0, "no post-compaction turn after projection");
+
+    // The summary text must not have leaked into any turn — it stays folded
+    // on the Compaction.
+    let summary = after_c.summary.as_deref().expect("summary present");
+    let summary_head = &summary[..summary.len().min(60)];
+    for turn in after.turns() {
+        assert!(
+            !turn.text.contains(summary_head),
+            "summary text leaked into a turn after projection: {:?}",
+            turn.id
+        );
+    }
 }

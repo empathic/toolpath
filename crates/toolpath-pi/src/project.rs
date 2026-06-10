@@ -9,8 +9,10 @@
 //! The projector consumes provider-specific data the forward path
 //! stashed under `Turn.extra["pi"]` — `api`/`provider`, `stopReason`,
 //! `toolCallId`, bash-execution metadata, custom-message markers, and
-//! synthetic-turn structures (`compaction`, `branchSummary`, `custom`,
-//! `customMessage`). For `ConversationView`s from non-Pi sources, the
+//! synthetic-turn structures (`branchSummary`, `custom`,
+//! `customMessage`). Compaction boundaries are first-class
+//! `Item::Compaction`s in the view and project straight back to
+//! `Entry::Compaction`. For `ConversationView`s from non-Pi sources, the
 //! projector synthesizes sensible defaults (api: "anthropic",
 //! stop_reason: "stop", etc.).
 //!
@@ -22,7 +24,8 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    Compaction, ConversationProjector, ConversationView, ConvoError, Item, Result, Role,
+    ToolInvocation, Turn,
 };
 
 use crate::reader::PiSession;
@@ -160,10 +163,18 @@ fn project_view(
         })
         .collect();
 
-    for turn in view.turns() {
-        let pi = pi_extras(turn).cloned().unwrap_or_default();
-        emit_pending_meta(&mut entries, turn, &pi);
-        emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
+    // Walk `view.items` in order so compaction boundaries land at their
+    // true position in the entry stream (between the surrounding turns).
+    for item in &view.items {
+        match item {
+            Item::Turn(turn) => {
+                let pi = pi_extras(turn).cloned().unwrap_or_default();
+                emit_pending_meta(&mut entries, turn, &pi);
+                emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
+            }
+            Item::Compaction(comp) => emit_compaction(comp, &mut entries),
+            Item::Event(_) => {}
+        }
     }
 
     Ok(PiSession {
@@ -280,12 +291,9 @@ fn emit_turn_entries(
     covered_tool_ids: &std::collections::HashSet<String>,
     entries: &mut Vec<Entry>,
 ) {
-    // Synthetic compaction / branch_summary / custom turns map to
-    // their own Entry variants rather than `Entry::Message`.
-    if let Some(comp) = pi.get("compaction").and_then(Value::as_object) {
-        emit_compaction(turn, comp, entries);
-        return;
-    }
+    // Synthetic branch_summary / custom turns map to their own Entry
+    // variants rather than `Entry::Message`. (Compaction boundaries are
+    // `Item::Compaction`, not turns, and are handled in `project_view`.)
     if let Some(bs) = pi.get("branchSummary").and_then(Value::as_object) {
         emit_branch_summary(turn, bs, entries);
         return;
@@ -545,37 +553,31 @@ fn emit_bash_execution(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<E
     });
 }
 
-fn emit_compaction(turn: &Turn, comp: &Map<String, Value>, entries: &mut Vec<Entry>) {
-    let summary = comp
-        .get("summary")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            // Fall back to extracting from the text the forward path
-            // wrote ("Compacted (summary): X").
-            turn.text
-                .strip_prefix("Compacted (summary): ")
-                .unwrap_or(&turn.text)
-                .to_string()
-        });
+/// Reconstruct a Pi `Entry::Compaction` from an `Item::Compaction`.
+/// This is the inverse of the forward path's `Item::Compaction` mapping
+/// in [`crate::provider::session_to_view`].
+fn emit_compaction(comp: &Compaction, entries: &mut Vec<Entry>) {
+    let summary = comp.summary.clone().unwrap_or_default();
+    // Pi's format requires a `firstKeptEntryId`; the forward path stored
+    // it as the first kept range's `from`. Fall back to the parent id (or
+    // "") when no range survived.
     let first_kept_entry_id = comp
-        .get("firstKeptEntryId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+        .kept
+        .first()
+        .map(|r| r.from.clone())
+        .or_else(|| comp.parent_id.clone())
         .unwrap_or_default();
-    let tokens_before = comp
-        .get("tokensBefore")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let details = comp.get("details").cloned();
-    let from_hook = comp.get("fromHook").and_then(Value::as_bool);
     entries.push(Entry::Compaction {
-        base: base_for(turn),
+        base: EntryBase {
+            id: comp.id.clone(),
+            parent_id: comp.parent_id.clone(),
+            timestamp: comp.timestamp.clone(),
+        },
         summary,
         first_kept_entry_id,
-        tokens_before,
-        details,
-        from_hook,
+        tokens_before: comp.pre_tokens.unwrap_or(0),
+        details: None,
+        from_hook: None,
         extra: HashMap::new(),
     });
 }

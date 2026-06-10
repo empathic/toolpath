@@ -190,3 +190,76 @@ fn projector_output_is_re_parseable_by_reader() {
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
 }
+
+/// Direct projection round-trip on the real two-compaction fixture:
+/// view → `PiProjector` → JSONL → reader → `session_to_view`. Both
+/// `Item::Compaction`s must survive the projector reconstructing
+/// `Entry::Compaction` from the `Compaction` fields, and they must stay
+/// positioned between the surrounding turns.
+#[test]
+fn projector_reconstructs_compaction_entries() {
+    let view = load_real_view();
+
+    let session = PiProjector::new().project(&view).expect("project");
+
+    // The projector must emit a real `Entry::Compaction` per
+    // `Item::Compaction` (not fold them into turns).
+    let emitted_compactions = session
+        .entries
+        .iter()
+        .filter(|e| matches!(e, toolpath_pi::Entry::Compaction { .. }))
+        .count();
+    assert_eq!(
+        emitted_compactions, 2,
+        "projector should emit two compaction entries"
+    );
+
+    // Re-read the projected JSONL through the Pi reader and back into a view.
+    let lines: Vec<String> = session
+        .entries
+        .iter()
+        .map(|e| serde_json::to_string(e).expect("serialize pi entry"))
+        .collect();
+    let tmp = tempfile::Builder::new()
+        .suffix(".jsonl")
+        .tempfile()
+        .expect("tempfile");
+    std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
+    let reread = reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
+    let after = session_to_view(&reread);
+
+    let comps: Vec<&toolpath_convo::Compaction> =
+        after.items.iter().filter_map(Item::as_compaction).collect();
+    assert_eq!(comps.len(), 2, "both compactions survive projection");
+    for c in &comps {
+        assert!(c.summary.is_some(), "summary survives projection");
+        assert!(c.pre_tokens.is_some(), "pre_tokens survives projection");
+        assert_eq!(c.trigger, None, "Pi doesn't persist auto-vs-manual");
+        assert_eq!(c.kept.len(), 1, "one kept range per compaction");
+    }
+
+    // Each compaction is positioned in the entry stream after the turns
+    // it summarizes — never the first item, always preceded by a turn.
+    let comp_indices: Vec<usize> = after
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.as_compaction().is_some())
+        .map(|(idx, _)| idx)
+        .collect();
+    for &idx in &comp_indices {
+        assert!(idx > 0, "compaction should not be the first item");
+        assert!(
+            after.items[..idx].iter().any(|i| i.as_turn().is_some()),
+            "a turn precedes the compaction"
+        );
+    }
+    // And at least one compaction sits strictly between two turns (the
+    // first boundary in this fixture is followed by more conversation).
+    assert!(
+        comp_indices
+            .iter()
+            .any(|&idx| after.items[idx + 1..].iter().any(|i| i.as_turn().is_some())),
+        "at least one compaction is followed by a turn"
+    );
+}

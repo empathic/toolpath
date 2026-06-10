@@ -476,6 +476,72 @@ fn real_fixture_emits_one_manual_compaction_item() {
 }
 
 #[test]
+fn projector_reproduces_compaction_item_through_to_view() {
+    // Projection round-trip: source Session → view → project → Session →
+    // re-read view. Exactly one `Item::Compaction` must survive, carrying
+    // the fixture's manual trigger, and it must land between turns — i.e.
+    // the projector's inverse of the forward `compaction`-part mapping.
+    let source = load_compacted_fixture_session();
+    let view = to_view(&source);
+    assert_eq!(
+        view.compactions().count(),
+        1,
+        "source view should have exactly one Item::Compaction"
+    );
+
+    let projector = OpencodeProjector::new()
+        .with_directory(source.directory.clone())
+        .with_project_id(source.project_id.clone())
+        .with_version(source.version.clone());
+    let projected: Session = projector.project(&view).expect("project");
+
+    // The projected Session must carry a `compaction` part so a re-read
+    // reproduces the boundary.
+    let has_compaction_part = projected.messages.iter().any(|m| {
+        m.parts
+            .iter()
+            .any(|p| matches!(p.data, PartData::Compaction(_)))
+    });
+    assert!(
+        has_compaction_part,
+        "projected session should carry a compaction part"
+    );
+
+    let reread = to_view(&projected);
+    let compactions: Vec<_> = reread.compactions().collect();
+    assert_eq!(
+        compactions.len(),
+        1,
+        "exactly one Item::Compaction should survive the projection round-trip; got {}",
+        compactions.len()
+    );
+    assert_eq!(
+        compactions[0].trigger,
+        Some(CompactionTrigger::Manual),
+        "manual trigger (auto=false) should survive the projection round-trip"
+    );
+
+    // Positioned between turns: turns on both sides of the boundary.
+    let idx = reread
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Compaction(_)))
+        .expect("a Compaction item in the re-read view");
+    assert!(
+        reread.items[..idx]
+            .iter()
+            .any(|i| matches!(i, Item::Turn(_))),
+        "expected turns before the compaction in the re-read view"
+    );
+    assert!(
+        reread.items[idx + 1..]
+            .iter()
+            .any(|i| matches!(i, Item::Turn(_))),
+        "expected turns after the compaction in the re-read view"
+    );
+}
+
+#[test]
 fn real_fixture_compaction_and_surrounding_turns_survive_roundtrip() {
     let session = load_compacted_fixture_session();
     let view = to_view(&session);

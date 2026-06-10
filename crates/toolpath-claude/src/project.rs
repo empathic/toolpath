@@ -12,7 +12,8 @@ use crate::types::{
 use serde_json::json;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    Compaction, CompactionTrigger, ConversationProjector, ConversationView, ConvoError, Result,
+    Role, ToolInvocation, Turn,
 };
 
 // ── ClaudeProjector ───────────────────────────────────────────────────
@@ -123,7 +124,30 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    for turn in view.turns() {
+    // Iterate the full item stream (not just turns) so a compaction boundary
+    // lands at its true position between the turns it separates. Events are
+    // re-emitted by the dedicated `view.events()` pass below, so we skip them
+    // here.
+    for item in &view.items {
+        let turn = match item {
+            toolpath_convo::Item::Turn(t) => t,
+            toolpath_convo::Item::Compaction(c) => {
+                // Inverse of the forward detector: emit the boundary entry
+                // (+ optional summary entry) that `to_view` re-folds into
+                // exactly this `Item::Compaction`.
+                let effective_parent = c
+                    .parent_id
+                    .as_ref()
+                    .and_then(|pid| parent_rewrites.get(pid).cloned())
+                    .or_else(|| c.parent_id.clone());
+                for entry in compaction_entries(c, &view.id, effective_parent) {
+                    convo.add_entry(entry);
+                }
+                continue;
+            }
+            toolpath_convo::Item::Event(_) => continue,
+        };
+
         // Pre-rewrite this turn's parent_id if a synthesized tool_result
         // was emitted between it and its IR-recorded parent.
         let effective_parent = turn
@@ -221,6 +245,116 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     }
 
     Ok(convo)
+}
+
+/// Inverse of [`crate::provider::compaction_from_boundary`]: turn an
+/// [`Item::Compaction`](toolpath_convo::Item) back into the on-disk entries
+/// Claude writes for a compaction, so re-reading the projected conversation
+/// re-detects the same compaction.
+///
+/// Emits up to two entries:
+/// 1. The boundary (`type: "system"`, `subtype: "compact_boundary"`) carrying
+///    `logicalParentUuid` and `compactMetadata.{trigger,preTokens,
+///    preservedSegment}` in `extra` — exactly where
+///    [`crate::provider::is_compact_boundary`] and `compaction_from_boundary`
+///    read them.
+/// 2. The synthetic summary (`type: "user"`, `isCompactSummary: true`, message
+///    text = `summary`, `parentUuid` = boundary uuid), only when `summary` is
+///    `Some`. On re-read the forward path folds this into `Compaction.summary`
+///    rather than surfacing it as a turn.
+///
+/// `effective_parent` is the boundary's logical parent after any tool-result
+/// parent rewrites — it lands in `compactMetadata`'s `logicalParentUuid`.
+fn compaction_entries(
+    c: &Compaction,
+    session_id: &str,
+    effective_parent: Option<String>,
+) -> Vec<ConversationEntry> {
+    let mut compact_metadata = serde_json::Map::new();
+    if let Some(trigger) = c.trigger {
+        let s = match trigger {
+            CompactionTrigger::Auto => "auto",
+            CompactionTrigger::Manual => "manual",
+        };
+        compact_metadata.insert("trigger".into(), json!(s));
+    }
+    if let Some(pre_tokens) = c.pre_tokens {
+        compact_metadata.insert("preTokens".into(), json!(pre_tokens));
+    }
+    if let Some(range) = c.kept.first() {
+        compact_metadata.insert(
+            "preservedSegment".into(),
+            json!({ "headUuid": range.from, "tailUuid": range.to }),
+        );
+    }
+
+    let mut boundary_extra: HashMap<String, serde_json::Value> = HashMap::new();
+    boundary_extra.insert("subtype".into(), json!("compact_boundary"));
+    if let Some(parent) = &effective_parent {
+        boundary_extra.insert("logicalParentUuid".into(), json!(parent));
+    }
+    boundary_extra.insert(
+        "compactMetadata".into(),
+        serde_json::Value::Object(compact_metadata),
+    );
+
+    let boundary = ConversationEntry {
+        uuid: c.id.clone(),
+        // The boundary's own parentUuid is always null on the wire; the
+        // logical parent rides in compactMetadata's logicalParentUuid.
+        parent_uuid: None,
+        is_sidechain: false,
+        entry_type: "system".to_string(),
+        timestamp: c.timestamp.clone(),
+        session_id: Some(session_id.to_string()),
+        cwd: None,
+        git_branch: None,
+        message: None,
+        version: None,
+        user_type: None,
+        request_id: None,
+        tool_use_result: None,
+        snapshot: None,
+        message_id: None,
+        extra: boundary_extra,
+    };
+
+    let mut entries = vec![boundary];
+
+    if let Some(summary) = &c.summary {
+        let mut summary_extra: HashMap<String, serde_json::Value> = HashMap::new();
+        summary_extra.insert("isCompactSummary".into(), json!(true));
+
+        entries.push(ConversationEntry {
+            uuid: format!("{}-summary", c.id),
+            parent_uuid: Some(c.id.clone()),
+            is_sidechain: false,
+            entry_type: "user".to_string(),
+            timestamp: c.timestamp.clone(),
+            session_id: Some(session_id.to_string()),
+            cwd: None,
+            git_branch: None,
+            message: Some(Message {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text(summary.clone())),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            version: None,
+            user_type: None,
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: summary_extra,
+        });
+    }
+
+    entries
 }
 
 /// Rebuild a Claude tool-result user entry verbatim from a preserved event.
@@ -1136,10 +1270,7 @@ mod tests {
 
         // Wire: the total is stamped on every line of the split, each tagged
         // with the shared message.id.
-        for entry in content_entries(&convo)
-            .iter()
-            .filter(|e| e.entry_type == "assistant")
-        {
+        for entry in content_entries(&convo).iter().filter(|e| e.entry_type == "assistant") {
             let msg = entry.message.as_ref().unwrap();
             assert_eq!(msg.id.as_deref(), Some("msg_A"));
             assert_eq!(msg.usage.as_ref().unwrap().output_tokens, Some(164));
@@ -1147,11 +1278,7 @@ mod tests {
 
         // Re-read: total back on the final turn only; no fabricated attribution.
         let back = crate::provider::to_view(&convo);
-        let a: Vec<&Turn> = back
-            .turns
-            .iter()
-            .filter(|t| t.role == Role::Assistant)
-            .collect();
+        let a: Vec<&Turn> = back.turns().filter(|t| t.role == Role::Assistant).collect();
         assert!(a[0].token_usage.is_none());
         assert_eq!(a[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
         assert!(a.iter().all(|t| t.attributed_token_usage.is_none()));
