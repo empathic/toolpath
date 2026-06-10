@@ -1,26 +1,36 @@
-//! Compaction-event roundtrip: a Codex rollout that includes a
-//! `compacted` line in the middle should still preserve the
-//! pre-compact and post-compact conversation content through the
-//! projection round-trip.
+//! Compaction handling for Codex rollouts.
 //!
-//! Synthetic fixture is justified per project policy: real compaction
-//! fires when the model context window fills mid-session and can't
-//! reliably be triggered by a 5-minute capture prompt.
+//! Codex appends a single `compacted` line when it condenses history
+//! mid-session (same file, same session id). `toolpath-codex` now maps
+//! that marker to an `Item::Compaction` positioned between the turns it
+//! separates, rather than dropping it or surfacing it as a generic event.
 //!
-//! What this test asserts (and why):
+//! The marker payload is `{message, replacement_history?, window_id?}`
+//! (see `docs/agents/formats/codex.md`). Only `message` is consumed, as
+//! `Compaction.summary`. Codex never persists the manual-vs-auto trigger
+//! or the pre-compaction token count, and we don't fold in
+//! `replacement_history`, so `trigger`/`pre_tokens` are `None` and `kept`
+//! is empty.
 //!
-//!   - The fixture loads via `RolloutReader::read_session` without
+//! Two fixtures:
+//!   - synthetic `tests/fixtures/compacted_session.jsonl` — small,
+//!     deterministic pre/post turns around one compaction. (Justified per
+//!     project policy: real compaction fires only when the context window
+//!     fills mid-session, which a short capture prompt can't reliably
+//!     trigger.) Its `compacted` line uses the real
+//!     `{message, replacement_history}` shape.
+//!   - real `test-fixtures/codex/convo-compacted.jsonl` — a captured
+//!     production rollout that actually compacted (empty `message`).
+//!
+//! What these tests assert:
+//!   - The fixtures load via `RolloutReader::read_session` without
 //!     crashing on the `compacted` line.
-//!   - Pre-compact user/assistant content survives the round-trip.
-//!   - Post-compact user/assistant content survives the round-trip.
+//!   - Exactly one `Item::Compaction` is emitted, with the field shape
+//!     the Codex payload supports.
+//!   - The compaction and its surrounding turns survive the
+//!     `derive_path` → `extract_conversation` round-trip.
 //!   - The conversation projects back to JSONL that re-parses through
 //!     `RolloutReader`.
-//!
-//! Known limitation (documented, not asserted): the `compacted`
-//! rollout line itself carries an opaque payload (Codex doesn't model
-//! its inner shape — `Compacted(Value)`). Today the IR drops it on the
-//! floor. Acceptable loss for "good UX" — the surrounding messages
-//! are what users actually read.
 
 use std::path::{Path, PathBuf};
 
@@ -28,18 +38,27 @@ use toolpath::v1::Graph;
 use toolpath_codex::project::CodexProjector;
 use toolpath_codex::{RolloutReader, to_view};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, DeriveConfig, derive_path, extract_conversation,
+    ConversationProjector, ConversationView, DeriveConfig, Item, derive_path, extract_conversation,
 };
 
-fn fixture_path() -> PathBuf {
+fn synthetic_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
         .join("compacted_session.jsonl")
 }
 
-fn load_view() -> ConversationView {
-    let session = RolloutReader::read_session(fixture_path()).expect("read fixture");
+fn real_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("test-fixtures")
+        .join("codex")
+        .join("convo-compacted.jsonl")
+}
+
+fn load_view(path: PathBuf) -> ConversationView {
+    let session = RolloutReader::read_session(path).expect("read fixture");
     to_view(&session)
 }
 
@@ -52,9 +71,30 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
     extract_conversation(&path)
 }
 
+/// Index of the single compaction in the item stream, asserting there is
+/// exactly one.
+fn sole_compaction_index(view: &ConversationView) -> usize {
+    let indices: Vec<usize> = view
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| matches!(it, Item::Compaction(_)))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        indices.len(),
+        1,
+        "expected exactly one Item::Compaction, got {}",
+        indices.len()
+    );
+    indices[0]
+}
+
+// ── Synthetic fixture ───────────────────────────────────────────────
+
 #[test]
-fn fixture_loads_without_panic() {
-    let view = load_view();
+fn synthetic_fixture_loads_without_panic() {
+    let view = load_view(synthetic_fixture_path());
     assert!(
         view.turns().next().is_some(),
         "compaction fixture should produce turns"
@@ -62,47 +102,155 @@ fn fixture_loads_without_panic() {
 }
 
 #[test]
-fn pre_compact_content_survives_roundtrip() {
-    let original = load_view();
-    let after = ir_roundtrip(&original);
+fn synthetic_emits_one_compaction_with_codex_field_shape() {
+    let view = load_view(synthetic_fixture_path());
+    let idx = sole_compaction_index(&view);
+    let Item::Compaction(c) = &view.items[idx] else {
+        unreachable!()
+    };
 
-    let needles = ["refactor the auth module", "reading the current auth code"];
-    for n in needles {
-        assert!(
-            original.turns().any(|t| t.text.contains(n)),
-            "pre-compact text {n:?} missing from initial view"
-        );
-        assert!(
-            after.turns().any(|t| t.text.contains(n)),
-            "pre-compact text {n:?} dropped after roundtrip"
-        );
-    }
+    // `message` becomes the summary.
+    assert_eq!(
+        c.summary.as_deref(),
+        Some(
+            "Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation."
+        )
+    );
+    // Codex never persists trigger or pre-token count; we don't consume
+    // replacement_history, so no kept ranges.
+    assert_eq!(c.trigger, None);
+    assert_eq!(c.pre_tokens, None);
+    assert!(c.kept.is_empty());
+    // Synthesized stable id, and a parent that links to the prior turn.
+    assert_eq!(c.id, "compact-1");
+    assert!(
+        c.parent_id.is_some(),
+        "compaction should parent on the prior turn"
+    );
+
+    // The compaction sits between the pre-compact and post-compact turns.
+    let turn_idx_before = view.items[..idx]
+        .iter()
+        .rposition(|it| matches!(it, Item::Turn(_)));
+    let turn_idx_after = view.items[idx + 1..]
+        .iter()
+        .position(|it| matches!(it, Item::Turn(_)));
+    assert!(
+        turn_idx_before.is_some(),
+        "a turn should precede the compaction"
+    );
+    assert!(
+        turn_idx_after.is_some(),
+        "a turn should follow the compaction"
+    );
 }
 
 #[test]
-fn post_compact_content_survives_roundtrip() {
-    let original = load_view();
+fn synthetic_compaction_and_turns_survive_roundtrip() {
+    let original = load_view(synthetic_fixture_path());
     let after = ir_roundtrip(&original);
 
+    // The compaction itself survives, with its summary intact.
+    let idx = sole_compaction_index(&after);
+    let Item::Compaction(c) = &after.items[idx] else {
+        unreachable!()
+    };
+    assert!(c.summary.as_deref().unwrap().contains("session-token validation"));
+    assert!(c.parent_id.is_some());
+
+    // Surrounding pre/post turn content survives.
     let needles = [
+        "refactor the auth module",
+        "reading the current auth code",
         "now add session validation",
         "added session validation to login()",
     ];
     for n in needles {
         assert!(
             original.turns().any(|t| t.text.contains(n)),
-            "post-compact text {n:?} missing from initial view"
+            "text {n:?} missing from initial view"
         );
         assert!(
             after.turns().any(|t| t.text.contains(n)),
-            "post-compact text {n:?} dropped after roundtrip"
+            "text {n:?} dropped after roundtrip"
         );
     }
 }
 
 #[test]
-fn projector_output_is_re_parseable_by_reader() {
-    let view = load_view();
+fn synthetic_projector_output_is_re_parseable_by_reader() {
+    let view = load_view(synthetic_fixture_path());
+    let after = ir_roundtrip(&view);
+    let projector = CodexProjector::new();
+    let session = projector.project(&after).expect("project");
+
+    let mut lines: Vec<String> = Vec::new();
+    for line in &session.lines {
+        lines.push(serde_json::to_string(line).expect("serialize rollout line"));
+    }
+
+    let tmp = tempfile::Builder::new()
+        .suffix(".jsonl")
+        .tempfile()
+        .expect("tempfile");
+    std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
+    RolloutReader::read_session(tmp.path()).expect("re-read projected JSONL");
+}
+
+// ── Real captured fixture ───────────────────────────────────────────
+
+#[test]
+fn real_fixture_emits_one_compaction() {
+    let view = load_view(real_fixture_path());
+    let idx = sole_compaction_index(&view);
+    let Item::Compaction(c) = &view.items[idx] else {
+        unreachable!()
+    };
+
+    // The real capture's `message` is the empty string, so summary is
+    // `Some("")` — present but empty. The remaining fields follow the
+    // Codex payload shape: no trigger, no pre-token count, no kept ranges.
+    assert!(
+        c.summary.is_some(),
+        "summary should be Some (message field present, even if empty)"
+    );
+    assert_eq!(c.trigger, None);
+    assert_eq!(c.pre_tokens, None);
+    assert!(c.kept.is_empty());
+    assert!(
+        c.parent_id.is_some(),
+        "compaction should parent on the prior turn"
+    );
+    assert_eq!(c.id, "compact-1");
+}
+
+#[test]
+fn real_fixture_compaction_survives_roundtrip() {
+    let original = load_view(real_fixture_path());
+    let pre_turns = original.turns().count();
+    assert!(pre_turns > 0, "real fixture should have turns");
+
+    let after = ir_roundtrip(&original);
+
+    // Exactly one compaction survives the round-trip.
+    let idx = sole_compaction_index(&after);
+    let Item::Compaction(c) = &after.items[idx] else {
+        unreachable!()
+    };
+    assert!(c.summary.is_some());
+    assert!(c.parent_id.is_some());
+
+    // Surrounding turns survive (count preserved through derive ↔ extract).
+    assert_eq!(
+        after.turns().count(),
+        pre_turns,
+        "turn count should survive the round-trip"
+    );
+}
+
+#[test]
+fn real_fixture_projector_output_is_re_parseable_by_reader() {
+    let view = load_view(real_fixture_path());
     let after = ir_roundtrip(&view);
     let projector = CodexProjector::new();
     let session = projector.project(&after).expect("project");

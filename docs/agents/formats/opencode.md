@@ -707,7 +707,7 @@ Minimum viable mapping, if we follow the Pi-style approach (build a
 | `patch` part | file-artifact sibling `ArtifactChange.raw` from `git diff <from> <to>` |
 | `step-finish.tokens` | `Turn.token_usage` (delta) + summed into `ConversationView.total_usage` |
 | `subtask` part | `Turn.delegations[]`, with sub-session linked via `session.parent_id` |
-| `compaction` part | `ConversationEvent { event_type: "compaction" }` |
+| `compaction` part | `Item::Compaction` in place (parented on the prior turn; `auto` ⇒ `trigger`, `tailStartID` ⇒ `kept`); projects to a `conversation.compact` step |
 | `retry` part | `ConversationEvent { event_type: "retry" }` |
 | `todo` row | `ConversationEvent { event_type: "todo" }` or top-level path meta |
 | unknown part `type` | `ConversationEvent` preserving the raw payload |

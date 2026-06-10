@@ -12,8 +12,9 @@ use crate::types::{Conversation, ConversationEntry, Message, MessageContent, Mes
 #[cfg(any(feature = "watcher", test))]
 use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    Compaction, CompactionTrigger, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, KeptRange, Role, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -309,6 +310,39 @@ fn merge_tool_results(turns: &mut [Turn], msg: &Message) -> bool {
     merged
 }
 
+/// Mutable accessor for the turn inside an [`Item`], if it is one.
+fn item_turn_mut(item: &mut Item) -> Option<&mut Turn> {
+    match item {
+        Item::Turn(t) => Some(t),
+        _ => None,
+    }
+}
+
+/// Merge a tool-result-only message into the turns already pushed onto
+/// `items`. Equivalent to [`merge_tool_results`] but operating on the
+/// interleaved item stream — non-turn items (events, compaction) are skipped.
+fn merge_tool_results_into_items(items: &mut [Item], msg: &Message) -> bool {
+    let mut turns: Vec<&mut Turn> = items.iter_mut().filter_map(item_turn_mut).collect();
+    let mut merged = false;
+    for tr in msg.tool_results() {
+        for turn in turns.iter_mut().rev() {
+            if let Some(invocation) = turn
+                .tool_uses
+                .iter_mut()
+                .find(|tu| tu.id == tr.tool_use_id && tu.result.is_none())
+            {
+                invocation.result = Some(ToolResult {
+                    content: tr.content.text(),
+                    is_error: tr.is_error,
+                });
+                merged = true;
+                break;
+            }
+        }
+    }
+    merged
+}
+
 fn entry_to_turn(entry: &ConversationEntry) -> Option<Turn> {
     entry
         .message
@@ -316,39 +350,164 @@ fn entry_to_turn(entry: &ConversationEntry) -> Option<Turn> {
         .map(|msg| message_to_turn(entry, msg))
 }
 
+/// Returns true if this entry is Claude's inline compaction boundary marker.
+///
+/// Claude writes the boundary either as a top-level `type: "compact_boundary"`
+/// entry or as `type: "system"` with `subtype: "compact_boundary"`. The
+/// `subtype` field isn't in [`ConversationEntry`]'s typed fields, so it lands
+/// in `extra`.
+fn is_compact_boundary(entry: &ConversationEntry) -> bool {
+    entry.entry_type == "compact_boundary"
+        || entry
+            .extra
+            .get("subtype")
+            .and_then(|v| v.as_str())
+            .map(|s| s == "compact_boundary")
+            .unwrap_or(false)
+}
+
+/// Returns true if this entry is the synthetic compaction summary that Claude
+/// writes immediately after a boundary (`isCompactSummary: true`).
+fn is_compact_summary(entry: &ConversationEntry) -> bool {
+    entry
+        .extra
+        .get("isCompactSummary")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Build a [`Compaction`] from Claude's boundary marker and (optionally) the
+/// synthetic summary that follows it.
+///
+/// All the boundary's compaction-specific data lives in `entry.extra`
+/// (`logicalParentUuid`, `compactMetadata.{trigger,preTokens,preservedSegment}`).
+/// `summary` comes from the following `isCompactSummary` entry's message text.
+fn compaction_from_boundary(boundary: &ConversationEntry, summary: Option<String>) -> Compaction {
+    let extra = &boundary.extra;
+
+    // The pre-compaction message the boundary logically continues from.
+    // `parentUuid` is always null on the boundary, so use logicalParentUuid.
+    let parent_id = extra
+        .get("logicalParentUuid")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let meta = extra.get("compactMetadata");
+
+    let trigger = meta
+        .and_then(|m| m.get("trigger"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "auto" => Some(CompactionTrigger::Auto),
+            "manual" => Some(CompactionTrigger::Manual),
+            _ => None,
+        });
+
+    let pre_tokens = meta
+        .and_then(|m| m.get("preTokens"))
+        .and_then(|v| v.as_u64());
+
+    // The preserved segment (recent tail kept verbatim) maps to a single
+    // KeptRange [headUuid .. tailUuid]. Older boundaries omit it.
+    let kept = meta
+        .and_then(|m| m.get("preservedSegment"))
+        .and_then(|seg| {
+            let from = seg.get("headUuid").and_then(|v| v.as_str())?;
+            let to = seg.get("tailUuid").and_then(|v| v.as_str())?;
+            Some(vec![KeptRange {
+                from: from.to_string(),
+                to: to.to_string(),
+            }])
+        })
+        .unwrap_or_default();
+
+    Compaction {
+        id: boundary.uuid.clone(),
+        parent_id,
+        timestamp: boundary.timestamp.clone(),
+        trigger,
+        summary,
+        pre_tokens,
+        kept,
+    }
+}
+
 /// Convert a full conversation to a view with cross-entry tool result assembly.
 ///
 /// Tool-result-only user entries are absorbed into the preceding assistant
 /// turn's `ToolInvocation.result` fields rather than emitted as separate turns.
+///
+/// Compaction boundaries are detected and emitted as [`Item::Compaction`] at
+/// their position in the ordered item stream: the boundary's `compactMetadata`
+/// becomes the `Compaction`, and the immediately-following synthetic summary
+/// entry is folded into `Compaction.summary` rather than surfaced as a turn.
 fn conversation_to_view(convo: &Conversation) -> ConversationView {
-    let mut turns: Vec<Turn> = Vec::new();
-    let mut events: Vec<toolpath_convo::ConversationEvent> = Vec::new();
+    // Items are built in source order so a compaction boundary lands at its
+    // true position between the turns it separates. Preamble events come
+    // first — they precede all entries in the file.
+    let mut items: Vec<Item> = Vec::new();
 
     // Headerless preamble lines (ai-title, last-prompt, queue-operation,
     // permission-mode, file-history-snapshot, etc.) become events so they
     // round-trip back to JSONL.
     for (idx, raw) in convo.preamble.iter().enumerate() {
-        events.push(preamble_to_event(idx, raw));
+        items.push(Item::Event(preamble_to_event(idx, raw)));
     }
 
     // Map from "absorbed-or-skipped entry UUID" → "the previous
-    // turn-bearing entry's UUID". Used so that an assistant turn whose
-    // wire parentUuid points at a tool-result-only entry (or any other
-    // absorbed entry that didn't become a Turn) gets a Turn.parent_id
-    // that still maps onto a real Turn — keeping the IR's turn-to-turn
-    // chain intact for `derive_path`. The original UUID is preserved
-    // via the `tool_result_user` event.
+    // turn-or-compaction-bearing entry's UUID". Used so that a later turn
+    // whose wire parentUuid points at an absorbed entry (a tool-result-only
+    // entry, or the folded compaction summary) gets a `parent_id` that still
+    // maps onto a real Item — keeping the IR's chain intact for `derive_path`.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
-    let mut last_turn_uuid: Option<String> = None;
+    // The UUID of the last turn or compaction emitted into `items`, used to
+    // rewrite parents of subsequently absorbed entries.
+    let mut last_anchor_uuid: Option<String> = None;
 
-    for entry in &convo.entries {
+    let entries = &convo.entries;
+    let mut i = 0;
+    while i < entries.len() {
+        let entry = &entries[i];
+
+        // Compaction boundary: emit one Item::Compaction at this position,
+        // folding the immediately-following synthetic summary entry (if any)
+        // into Compaction.summary rather than surfacing it as a turn.
+        if is_compact_boundary(entry) {
+            let summary = entries.get(i + 1).filter(|next| is_compact_summary(next));
+            let summary_text = summary.map(|s| s.text());
+            let compaction = compaction_from_boundary(entry, summary_text);
+            // Rewire the compaction's logical parent through any prior
+            // absorption so it lands on a real Item in the derived DAG.
+            let mut compaction = compaction;
+            if let Some(pid) = compaction.parent_id.as_ref()
+                && let Some(real) = parent_rewrites.get(pid)
+            {
+                compaction.parent_id = Some(real.clone());
+            }
+            let boundary_uuid = compaction.id.clone();
+            items.push(Item::Compaction(compaction));
+            // Later turns whose wire parentUuid points at the boundary (or at
+            // the folded summary) chain through the compaction.
+            if let Some(prev) = &last_anchor_uuid {
+                parent_rewrites.insert(entry.uuid.clone(), prev.clone());
+            }
+            if let Some(s) = summary {
+                parent_rewrites.insert(s.uuid.clone(), boundary_uuid.clone());
+                i += 1; // consume the folded summary entry
+            }
+            last_anchor_uuid = Some(boundary_uuid);
+            i += 1;
+            continue;
+        }
+
         let Some(msg) = &entry.message else {
             // Message-less entries (attachments, snapshots) survive as
             // events so the projector can re-emit them.
-            events.push(entry_to_event(entry));
-            if let Some(prev) = &last_turn_uuid {
+            items.push(Item::Event(entry_to_event(entry)));
+            if let Some(prev) = &last_anchor_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
             }
+            i += 1;
             continue;
         };
 
@@ -362,10 +521,11 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         // but the Claude UI walks the chain by parentUuid, not by
         // specific UUIDs, so that's fine.)
         if is_tool_result_only(entry) {
-            merge_tool_results(&mut turns, msg);
-            if let Some(prev) = &last_turn_uuid {
+            merge_tool_results_into_items(&mut items, msg);
+            if let Some(prev) = &last_anchor_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
             }
+            i += 1;
             continue;
         }
 
@@ -375,14 +535,15 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         {
             turn.parent_id = Some(real.clone());
         }
-        last_turn_uuid = Some(turn.id.clone());
-        turns.push(turn);
+        last_anchor_uuid = Some(turn.id.clone());
+        items.push(Item::Turn(turn));
+        i += 1;
     }
 
     canonicalize_message_usage(&mut turns);
 
     // Re-derive delegation results now that tool results are merged
-    for turn in &mut turns {
+    for turn in items.iter_mut().filter_map(item_turn_mut) {
         for delegation in &mut turn.delegations {
             if delegation.result.is_none()
                 && let Some(tu) = turn
@@ -395,8 +556,8 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         }
     }
 
-    let total_usage = sum_usage(&turns);
-    let files_changed = extract_files_changed(&turns);
+    let total_usage = sum_usage(items.iter().filter_map(Item::as_turn));
+    let files_changed = extract_files_changed(items.iter().filter_map(Item::as_turn));
 
     // Pull path-level base/producer from the first entry that carries the
     // metadata (Claude records cwd / git_branch / version on every
@@ -437,12 +598,6 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         name: "claude-code".into(),
         version: Some(v),
     });
-
-    let items: Vec<toolpath_convo::Item> = turns
-        .into_iter()
-        .map(toolpath_convo::Item::Turn)
-        .chain(events.into_iter().map(toolpath_convo::Item::Event))
-        .collect();
 
     ConversationView {
         id: convo.session_id.clone(),
@@ -605,7 +760,7 @@ fn canonicalize_message_usage(turns: &mut [Turn]) {
 }
 
 /// Sum token usage across all turns.
-fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
+fn sum_usage<'a>(turns: impl IntoIterator<Item = &'a Turn>) -> Option<TokenUsage> {
     let mut total = TokenUsage::default();
     let mut any = false;
     for (idx, turn) in turns.iter().enumerate() {
@@ -642,7 +797,7 @@ fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
 }
 
 /// Extract deduplicated file paths from file-write tool invocations.
-fn extract_files_changed(turns: &[Turn]) -> Vec<String> {
+fn extract_files_changed<'a>(turns: impl IntoIterator<Item = &'a Turn>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut files = Vec::new();
     for turn in turns {

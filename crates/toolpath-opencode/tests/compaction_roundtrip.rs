@@ -10,33 +10,28 @@
 //! What this test asserts (and why):
 //!
 //!   - A compacted session loads via the SQLite reader without crashing.
-//!   - `to_view` surfaces the compaction part as a `ConversationEvent`
-//!     in `view.events` (this is the documented contract).
-//!   - User/assistant content surrounding the compaction part survives
-//!     the IR derive/extract round-trip and the projector emits a
+//!   - `to_view` surfaces the compaction part as an `Item::Compaction`
+//!     at its position in `view.items` (this is the documented contract),
+//!     not a generic `ConversationEvent`.
+//!   - The compaction boundary survives the IR derive/extract round-trip
+//!     as a `conversation.compact` step, and the user/assistant content
+//!     surrounding it survives too, with the projector emitting a
 //!     functionally equivalent `Session`.
-//!
-//! Known limitation (documented, not asserted as fully preserved): the
-//! `ConversationEvent` carrying the compaction metadata does not
-//! survive the `derive → extract` round-trip today — `derive_path` does
-//! not emit `conversation.event` steps for `view.events`, and the
-//! opencode projector does not consume `view.events`. The compaction
-//! marker is purely structural metadata (the surrounding messages
-//! carry the actual content), so for "good UX" today this is an
-//! acceptable loss; if/when we close the gap, this test gets
-//! tightened.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
+use serde_json::Value;
 use tempfile::TempDir;
 use toolpath::v1::Graph;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, DeriveConfig, derive_path, extract_conversation,
+    CompactionTrigger, ConversationProjector, ConversationView, DeriveConfig, Item, derive_path,
+    extract_conversation,
 };
 use toolpath_opencode::project::OpencodeProjector;
-use toolpath_opencode::types::{MessageData, PartData};
-use toolpath_opencode::{OpencodeConvo, PathResolver, Session, to_view};
+use toolpath_opencode::types::{Message, MessageData, Part, PartData, Session};
+use toolpath_opencode::{OpencodeConvo, PathResolver, to_view};
 
 /// Mid-session compaction. Schema mirrors `tests/projection_roundtrip.rs`
 /// but adds a `compaction` part in the middle of the assistant flow.
@@ -133,15 +128,46 @@ fn fixture_loads_with_compaction_part() {
 }
 
 #[test]
-fn to_view_surfaces_compaction_as_event() {
+fn to_view_surfaces_compaction_as_compaction_item() {
     let (_temp, session) = setup_session();
     let view = to_view(&session);
-    let event = view.events().find(|e| e.event_type == "part.compaction");
+
     assert!(
-        event.is_some(),
-        "expected a `part.compaction` ConversationEvent in view.events; got: {:?}",
-        view.events().map(|e| &e.event_type).collect::<Vec<_>>()
+        !view.events().any(|e| e.event_type == "part.compaction"),
+        "compaction should no longer surface as a generic event"
     );
+
+    let compactions: Vec<_> = view.compactions().collect();
+    assert_eq!(
+        compactions.len(),
+        1,
+        "expected exactly one Item::Compaction; got {}",
+        compactions.len()
+    );
+    let c = compactions[0];
+    // The synthetic SQL fixture's compaction part has `auto: true`.
+    assert_eq!(c.trigger, Some(CompactionTrigger::Auto));
+    assert!(
+        c.parent_id.is_some(),
+        "compaction should parent on the prior turn"
+    );
+    // `tailStartId` is present in the SQL fixture, so a kept range is set.
+    assert!(!c.kept.is_empty(), "tailStartId present ⇒ kept range");
+}
+
+#[test]
+fn compaction_item_survives_derive_extract() {
+    let (_temp, session) = setup_session();
+    let view = to_view(&session);
+    let after = ir_roundtrip(&view);
+
+    let before_count = view.compactions().count();
+    let after_count = after.compactions().count();
+    assert_eq!(
+        before_count, after_count,
+        "compaction count changed across round-trip: {before_count} → {after_count}"
+    );
+    assert_eq!(after_count, 1, "the compaction boundary should survive");
 }
 
 #[test]
@@ -253,4 +279,230 @@ fn projected_session_serdes_symmetrically() {
 
     let json = serde_json::to_string(&projected).expect("serialize");
     let _: Session = serde_json::from_str(&json).expect("re-parse");
+}
+
+// ── Real-fixture assertions ────────────────────────────────────────────
+//
+// `test-fixtures/opencode/convo-compacted.json` is a captured opencode
+// session with a real manual `/compact` boundary (a synthetic
+// compaction-bearing user message, `auto: false`, no `tailStartId`).
+// It exercises the user-message compaction path that the synthetic SQL
+// fixture above (an assistant-message compaction) doesn't.
+
+fn compacted_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("test-fixtures")
+        .join("opencode")
+        .join("convo-compacted.json")
+}
+
+/// Translate opencode's `path export` wrapper (camelCase + nested `info`)
+/// into the flat snake-case `Session` shape `to_view` expects. Mirrors the
+/// helper in `tests/real_fixture_roundtrip.rs`.
+fn parse_opencode_export(json: &str) -> Session {
+    let v: Value = serde_json::from_str(json).expect("opencode wrapper parse");
+    let info = &v["info"];
+    let msgs_in = v["messages"].as_array().cloned().unwrap_or_default();
+
+    let str_or = |key: &str, fallback: &str| -> String {
+        info.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or(fallback)
+            .to_string()
+    };
+    let i64_at = |path: &[&str]| -> Option<i64> {
+        let mut cur = info;
+        for k in path {
+            cur = cur.get(*k)?;
+        }
+        cur.as_i64()
+    };
+
+    let mut messages: Vec<Message> = Vec::with_capacity(msgs_in.len());
+    for m in msgs_in {
+        let mi = m.get("info").cloned().unwrap_or(Value::Null);
+        let mi_obj = mi.as_object().cloned().unwrap_or_default();
+        let id = mi_obj
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let session_id = mi_obj
+            .get("sessionID")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let time_created = mi_obj
+            .get("time")
+            .and_then(|t| t.get("created"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+
+        let mut data_obj = mi_obj.clone();
+        data_obj.remove("id");
+        data_obj.remove("sessionID");
+        let data: MessageData =
+            serde_json::from_value(Value::Object(data_obj)).unwrap_or(MessageData::Other);
+
+        let mut parts: Vec<Part> = Vec::new();
+        if let Some(parts_in) = m.get("parts").and_then(Value::as_array) {
+            for p in parts_in {
+                let p_obj = p.as_object().cloned().unwrap_or_default();
+                let pid = p_obj
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let pmsg = p_obj
+                    .get("messageID")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&id)
+                    .to_string();
+                let psess = p_obj
+                    .get("sessionID")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&session_id)
+                    .to_string();
+                let mut data_obj = p_obj.clone();
+                data_obj.remove("id");
+                data_obj.remove("messageID");
+                data_obj.remove("sessionID");
+                let part_data: PartData =
+                    serde_json::from_value(Value::Object(data_obj)).unwrap_or(PartData::Unknown);
+                parts.push(Part {
+                    id: pid,
+                    message_id: pmsg,
+                    session_id: psess,
+                    time_created,
+                    time_updated: time_created,
+                    data: part_data,
+                });
+            }
+        }
+
+        messages.push(Message {
+            id,
+            session_id,
+            time_created,
+            time_updated: time_created,
+            data,
+            parts,
+        });
+    }
+
+    Session {
+        id: str_or("id", ""),
+        project_id: str_or("projectID", ""),
+        workspace_id: info
+            .get("workspaceID")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        parent_id: info
+            .get("parentID")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        slug: str_or("slug", ""),
+        directory: PathBuf::from(str_or("directory", "/")),
+        title: str_or("title", ""),
+        version: str_or("version", "0.0.0"),
+        share_url: info
+            .get("shareURL")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        summary_additions: i64_at(&["summary", "additions"]),
+        summary_deletions: i64_at(&["summary", "deletions"]),
+        summary_files: i64_at(&["summary", "files"]),
+        time_created: i64_at(&["time", "created"]).unwrap_or(0),
+        time_updated: i64_at(&["time", "updated"])
+            .or_else(|| i64_at(&["time", "created"]))
+            .unwrap_or(0),
+        time_compacting: i64_at(&["time", "compacting"]),
+        time_archived: i64_at(&["time", "archived"]),
+        messages,
+    }
+}
+
+fn load_compacted_fixture_session() -> Session {
+    let json = std::fs::read_to_string(compacted_fixture_path()).expect("read compacted fixture");
+    parse_opencode_export(&json)
+}
+
+#[test]
+fn real_fixture_emits_one_manual_compaction_item() {
+    let session = load_compacted_fixture_session();
+    let view = to_view(&session);
+
+    let compactions: Vec<_> = view.compactions().collect();
+    assert_eq!(
+        compactions.len(),
+        1,
+        "expected exactly one Item::Compaction in the real fixture; got {}",
+        compactions.len()
+    );
+    let c = compactions[0];
+    // The fixture's `/compact` boundary has `auto: false` ⇒ Manual.
+    assert_eq!(c.trigger, Some(CompactionTrigger::Manual));
+    // No `tailStartId` and no synthetic summary message in this fixture.
+    assert!(
+        c.kept.is_empty(),
+        "no tailStartId ⇒ empty kept range; got {:?}",
+        c.kept
+    );
+    assert!(
+        c.parent_id.is_some(),
+        "compaction should parent on the turn before it"
+    );
+
+    // The compaction is positioned mid-stream, with turns on both sides.
+    let compaction_idx = view
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Compaction(_)))
+        .expect("a Compaction item");
+    assert!(
+        view.items[..compaction_idx]
+            .iter()
+            .any(|i| matches!(i, Item::Turn(_))),
+        "expected turns before the compaction"
+    );
+    assert!(
+        view.items[compaction_idx + 1..]
+            .iter()
+            .any(|i| matches!(i, Item::Turn(_))),
+        "expected turns after the compaction"
+    );
+}
+
+#[test]
+fn real_fixture_compaction_and_surrounding_turns_survive_roundtrip() {
+    let session = load_compacted_fixture_session();
+    let view = to_view(&session);
+    let after = ir_roundtrip(&view);
+
+    assert_eq!(
+        view.compactions().count(),
+        after.compactions().count(),
+        "compaction count diverged across round-trip"
+    );
+    assert_eq!(
+        after.compactions().count(),
+        1,
+        "the manual compaction boundary should survive the round-trip"
+    );
+    assert_eq!(
+        after.compactions().next().unwrap().trigger,
+        Some(CompactionTrigger::Manual),
+        "trigger should survive as Manual"
+    );
+
+    // Surrounding turns (pre- and post-compaction) survive intact.
+    let before_turns = view.turns().count();
+    let after_turns = after.turns().count();
+    assert_eq!(
+        before_turns, after_turns,
+        "turn count diverged across round-trip: {before_turns} → {after_turns}"
+    );
+    assert!(before_turns >= 2, "fixture should have multiple turns");
 }

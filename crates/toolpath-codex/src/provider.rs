@@ -41,9 +41,9 @@ use crate::types::{
 };
 use serde_json::Value;
 use toolpath_convo::{
-    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
-    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
-    ToolCategory, ToolInvocation, ToolResult, Turn,
+    Compaction, ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError, EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase,
+    TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Provider for Codex sessions.
@@ -182,10 +182,26 @@ pub fn to_turn(line_payload: &ResponseItem) -> Option<Turn> {
     }
 }
 
+/// A `compacted` marker captured during the walk, to be slotted into the
+/// turn stream at assembly time. `prev_turn` is the buffer index of the
+/// turn that immediately preceded the marker (`None` if it came before any
+/// turn); the compaction is emitted right after that turn so it lands at
+/// its true position between the turns it separates.
+struct PendingCompaction {
+    compaction: Compaction,
+    prev_turn: Option<usize>,
+}
+
 struct Builder<'a> {
     session: &'a Session,
     turns: Vec<Turn>,
     events: Vec<ConversationEvent>,
+    /// `compacted` markers captured in source order, slotted into the turn
+    /// stream during assembly. Events stay grouped after the turns (as
+    /// before); only the compaction boundary moves into the turn sequence.
+    pending_compactions: Vec<PendingCompaction>,
+    /// Running count of `compacted` markers, used to synthesize stable ids.
+    compact_count: usize,
     /// Plaintext reasoning summaries (rare — only in configurations where
     /// OpenAI exposes public reasoning). These land on `Turn.thinking`.
     pending_reasoning_plaintext: Vec<String>,
@@ -211,6 +227,8 @@ impl<'a> Builder<'a> {
             session,
             turns: Vec::new(),
             events: Vec::new(),
+            pending_compactions: Vec::new(),
+            compact_count: 0,
             pending_reasoning_plaintext: Vec::new(),
             current_round_id: None,
             pending_attributed: None,
@@ -259,8 +277,7 @@ impl<'a> Builder<'a> {
                         .push(event_from_raw(&line.timestamp, "session_state", &payload));
                 }
                 RolloutItem::Compacted(payload) => {
-                    self.events
-                        .push(event_from_raw(&line.timestamp, "compacted", &payload));
+                    self.handle_compacted(&line.timestamp, &payload);
                 }
                 RolloutItem::Unknown { kind, payload } => {
                     self.events
@@ -309,36 +326,84 @@ impl<'a> Builder<'a> {
 
         // Filter empty carrier turns (no text, no thinking, no tool calls).
         // Previously done inside `derive_path_from_view`; moved here so the
-        // canonical `derive_path` sees only meaningful turns.
-        self.turns
-            .retain(|t| !(t.text.is_empty() && t.thinking.is_none() && t.tool_uses.is_empty()));
+        // canonical `derive_path` sees only meaningful turns. We compute a
+        // keep-mask instead of `retain`-ing in place so the buffer indices
+        // recorded for pending compactions stay valid.
+        let keep: Vec<bool> = self
+            .turns
+            .iter()
+            .map(|t| !(t.text.is_empty() && t.thinking.is_none() && t.tool_uses.is_empty()))
+            .collect();
 
-        // Assign synthetic ids to turns whose source message didn't carry
-        // one, then link sequentially via `parent_id` so the shared
+        // Assign synthetic ids to surviving turns whose source message didn't
+        // carry one, then link them sequentially via `parent_id` so the shared
         // `derive_path` can walk a connected DAG. Codex turns don't carry
-        // explicit parent ids on the wire; this preserves the linear
-        // ordering the old `derive_path_from_view` produced.
-        for (idx, t) in self.turns.iter_mut().enumerate() {
-            if t.id.is_empty() {
-                t.id = format!("codex-turn-{:04}", idx + 1);
-            }
-        }
+        // explicit parent ids on the wire; this preserves the linear ordering
+        // the old `derive_path_from_view` produced. Numbering follows the
+        // post-filter position to match the prior `retain`-then-enumerate id.
+        let mut surviving = 0usize;
         let mut prev: Option<String> = None;
-        for t in self.turns.iter_mut() {
+        // Final id of each surviving turn, indexed by its position in
+        // `self.turns`; `None` for dropped turns. Used to resolve a
+        // compaction's `parent_id` back to a real turn step.
+        let mut turn_final_id: Vec<Option<String>> = vec![None; self.turns.len()];
+        for (idx, t) in self.turns.iter_mut().enumerate() {
+            if !keep[idx] {
+                continue;
+            }
+            surviving += 1;
+            if t.id.is_empty() {
+                t.id = format!("codex-turn-{:04}", surviving);
+            }
             if t.parent_id.is_none() {
                 t.parent_id = prev.clone();
             }
             prev = Some(t.id.clone());
+            turn_final_id[idx] = Some(t.id.clone());
+        }
+
+        // Resolve each pending compaction's `parent_id` to the nearest
+        // surviving turn at or before its marker, and bucket it by that
+        // turn's buffer index so it can be emitted right after that turn.
+        // Markers before any surviving turn go into `compactions_first`.
+        let mut compactions_after: HashMap<usize, Vec<Compaction>> = HashMap::new();
+        let mut compactions_first: Vec<Compaction> = Vec::new();
+        for pending in self.pending_compactions {
+            let PendingCompaction {
+                mut compaction,
+                prev_turn,
+            } = pending;
+            match resolve_surviving_turn(prev_turn, &keep) {
+                Some(survivor_idx) => {
+                    compaction.parent_id = turn_final_id[survivor_idx].clone();
+                    compactions_after
+                        .entry(survivor_idx)
+                        .or_default()
+                        .push(compaction);
+                }
+                None => {
+                    compaction.parent_id = None;
+                    compactions_first.push(compaction);
+                }
+            }
         }
 
         // Disambiguate event ids. `event_from_raw` synthesizes
         // `<event_type>-<timestamp>`, which collides when codex emits
         // multiple events of the same type at the same timestamp (rare
         // but real). Suffix duplicates with their position so each step
-        // gets a unique ID.
+        // gets a unique id. Compaction ids (`compact-<n>`) are unique by
+        // construction and are reserved here so events can't collide with
+        // them either.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for t in &self.turns {
-            seen.insert(t.id.clone());
+        for id in turn_final_id.iter().flatten() {
+            seen.insert(id.clone());
+        }
+        for c in compactions_first
+            .iter()
+            .chain(compactions_after.values().flatten())
+        {
+            seen.insert(c.id.clone());
         }
         for (i, e) in self.events.iter_mut().enumerate() {
             if !seen.insert(e.id.clone()) {
@@ -347,11 +412,23 @@ impl<'a> Builder<'a> {
             }
         }
 
-        // Build the unified ordered stream: all turns first (Item::Turn), then
-        // all events (Item::Event), reproducing the former separate-Vec layout
-        // so derive ↔ extract round-trips stay lossless.
-        let mut items: Vec<Item> = Vec::with_capacity(self.turns.len() + self.events.len());
-        items.extend(self.turns.into_iter().map(Item::Turn));
+        // Assemble the ordered stream: surviving turns first (with each
+        // compaction slotted in right after the turn it follows), then all
+        // events. Keeping events grouped after the turns reproduces the
+        // former layout, so the derived DAG stays a single connected
+        // ancestry; only the compaction boundary moves into the turn stream.
+        let mut items: Vec<Item> =
+            Vec::with_capacity(self.turns.len() + self.events.len() + 1);
+        items.extend(compactions_first.into_iter().map(Item::Compaction));
+        for (idx, turn) in self.turns.into_iter().enumerate() {
+            if !keep[idx] {
+                continue;
+            }
+            items.push(Item::Turn(turn));
+            if let Some(cs) = compactions_after.remove(&idx) {
+                items.extend(cs.into_iter().map(Item::Compaction));
+            }
+        }
         items.extend(self.events.into_iter().map(Item::Event));
 
         ConversationView {
@@ -616,6 +693,40 @@ impl<'a> Builder<'a> {
         self.turns.push(turn);
     }
 
+    /// Map a Codex `compacted` marker to a [`Compaction`], recorded for
+    /// slotting into the turn stream at its source position. Codex's payload
+    /// is `{message, replacement_history?, window_id?}` — only `message` is
+    /// consumed (as `summary`). The trigger (manual vs. auto) and
+    /// pre-compaction token count are never persisted to the rollout, and
+    /// `replacement_history` is a wholesale replacement we don't fold in, so
+    /// `trigger`/`pre_tokens` are `None` and `kept` is empty. The marker
+    /// carries no id of its own, so we synthesize a stable `compact-<n>`.
+    /// See `docs/agents/formats/codex.md`.
+    fn handle_compacted(&mut self, timestamp: &str, payload: &Value) {
+        self.compact_count += 1;
+        let summary = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let compaction = Compaction {
+            id: format!("compact-{}", self.compact_count),
+            parent_id: None,
+            timestamp: timestamp.to_string(),
+            trigger: None,
+            summary,
+            pre_tokens: None,
+            kept: Vec::new(),
+        };
+        // Buffer index of the last turn pushed before this marker; the
+        // compaction is slotted right after it during assembly, and its
+        // final id becomes the compaction's `parent_id`.
+        let prev_turn = self.turns.len().checked_sub(1);
+        self.pending_compactions.push(PendingCompaction {
+            compaction,
+            prev_turn,
+        });
+    }
+
     fn drain_pending_onto(&mut self, turn: &mut Turn) {
         if turn.role != Role::Assistant {
             return;
@@ -722,6 +833,21 @@ impl<'a> Builder<'a> {
             .iter()
             .rposition(|t| t.role == Role::Assistant)
             .or_else(|| self.turns.len().checked_sub(1))
+    }
+}
+
+/// Walk backward from a compaction's recorded predecessor-turn buffer index
+/// to the nearest surviving turn at or before it. Empty carrier turns are
+/// filtered out before assembly, so a dropped predecessor falls through to
+/// the real prior turn the boundary hangs off of. `None` means the marker
+/// preceded every surviving turn.
+fn resolve_surviving_turn(prev_turn: Option<usize>, keep: &[bool]) -> Option<usize> {
+    let mut idx = prev_turn?;
+    loop {
+        if keep.get(idx).copied().unwrap_or(false) {
+            return Some(idx);
+        }
+        idx = idx.checked_sub(1)?;
     }
 }
 

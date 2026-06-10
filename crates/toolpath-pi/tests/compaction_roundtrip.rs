@@ -14,23 +14,21 @@
 //!
 //!   - The fixture loads via `reader::read_session_from_file` without
 //!     crashing on the `Entry::Compaction` line.
+//!   - Each `Entry::Compaction` becomes an `Item::Compaction` at its
+//!     position in the stream (not a synthetic `System` turn).
 //!   - Pre-compact user/assistant content survives the round-trip.
 //!   - Post-compact user/assistant content survives the round-trip.
+//!   - The compaction items round-trip through
+//!     `derive_path → extract_conversation` (a `conversation.compact`
+//!     step in between), carrying `summary` and `pre_tokens`.
 //!   - The conversation projects back to JSONL that re-parses through
 //!     the Pi reader.
-//!
-//! Known limitation (documented, not asserted): the compaction marker
-//! itself (with its `summary` text and `tokensBefore` metadata) lands
-//! in `Turn.extra["pi"]["compaction"]` per the format docs, but the
-//! full structural preservation through `derive → extract → project`
-//! is not asserted here. Acceptable loss for "good UX" — the real
-//! conversation content lives in the surrounding messages.
 
 use std::path::{Path, PathBuf};
 
 use toolpath::v1::Graph;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, DeriveConfig, derive_path, extract_conversation,
+    ConversationProjector, ConversationView, DeriveConfig, Item, derive_path, extract_conversation,
 };
 use toolpath_pi::project::PiProjector;
 use toolpath_pi::{reader, session_to_view};
@@ -42,8 +40,23 @@ fn fixture_path() -> PathBuf {
         .join("compacted_session.jsonl")
 }
 
+/// The real captured Pi session with two compaction boundaries.
+fn real_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("test-fixtures")
+        .join("pi")
+        .join("convo-compacted.jsonl")
+}
+
 fn load_view() -> ConversationView {
     let session = reader::read_session_from_file(&fixture_path()).expect("read fixture");
+    session_to_view(&session)
+}
+
+fn load_real_view() -> ConversationView {
+    let session = reader::read_session_from_file(&real_fixture_path()).expect("read real fixture");
     session_to_view(&session)
 }
 
@@ -100,6 +113,60 @@ fn post_compact_content_survives_roundtrip() {
         assert!(
             after.turns().any(|t| t.text.contains(n)),
             "post-compact text {n:?} dropped after roundtrip"
+        );
+    }
+}
+
+#[test]
+fn compaction_entry_becomes_compaction_item() {
+    let view = load_view();
+    let comps: Vec<&toolpath_convo::Compaction> =
+        view.items.iter().filter_map(Item::as_compaction).collect();
+    assert_eq!(comps.len(), 1, "synthetic fixture has one compaction");
+    // No synthetic System turn stands in for the compaction.
+    assert!(
+        !view.turns().any(|t| t.text.starts_with("Compacted")),
+        "compaction should not emit a synthetic turn"
+    );
+}
+
+#[test]
+fn real_fixture_has_two_compaction_items() {
+    let view = load_real_view();
+    let comps: Vec<&toolpath_convo::Compaction> =
+        view.items.iter().filter_map(Item::as_compaction).collect();
+    assert_eq!(comps.len(), 2, "real fixture has two compactions");
+    for c in &comps {
+        assert!(c.summary.is_some(), "summary should be carried");
+        assert!(c.pre_tokens.is_some(), "pre_tokens should be carried");
+        assert_eq!(c.trigger, None, "Pi doesn't persist auto-vs-manual");
+        assert_eq!(c.kept.len(), 1, "one kept range per compaction");
+    }
+}
+
+#[test]
+fn real_fixture_compactions_and_turns_survive_roundtrip() {
+    let original = load_real_view();
+    let after = ir_roundtrip(&original);
+
+    let comps_after = after.items.iter().filter_map(Item::as_compaction).count();
+    assert_eq!(
+        comps_after, 2,
+        "both compactions survive derive → extract"
+    );
+    for c in after.items.iter().filter_map(Item::as_compaction) {
+        assert!(c.summary.is_some(), "summary survives roundtrip");
+        assert!(c.pre_tokens.is_some(), "pre_tokens survives roundtrip");
+    }
+
+    // Surrounding turns (pre- and post-compaction) survive too.
+    for needle in [
+        "walk through a small set of tasks",
+        "Now print the single word: done.",
+    ] {
+        assert!(
+            after.turns().any(|t| t.text.contains(needle)),
+            "turn text {needle:?} dropped after roundtrip"
         );
     }
 }
