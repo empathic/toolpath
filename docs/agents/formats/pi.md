@@ -79,6 +79,24 @@ Tagged by `type`. Every non-session entry shares an [`EntryBase`]
 Future entry types should round-trip via `extra` — Pi has added
 variants between minor versions.
 
+#### `compaction` entry fields
+
+The `Compaction` entry (`crates/toolpath-pi/src/types.rs`) carries:
+
+| Field | Type | Notes |
+|---|---|---|
+| `summary` | string | The summary that replaces the discarded prefix. |
+| `firstKeptEntryId` | string | First entry **not** discarded — everything before it was summarized. A single contiguous-tail anchor. |
+| `tokensBefore` | u64 | Context token count before compaction. |
+| `details` | object? | Optional opaque detail. |
+| `fromHook` | bool? | `true` if an **extension** supplied the summary (via the `session_before_compact` hook); `false`/absent for Pi's default compaction. **Not** an auto-vs-manual flag — manual `/compact` and automatic compaction both use Pi's default path and produce the same entry. (Legacy field name.) |
+
+Compaction is an **in-file** marker on the existing id/parentId tree —
+it does **not** start a new session or reuse entry ids, so there's no
+duplicate-id hazard. (The separate `parentSession` header field links a
+*forked/resumed* session to a parent file; that is unrelated to
+compaction.)
+
 ### Message roles
 
 `message` entries wrap an `AgentMessage` discriminated by `role`:

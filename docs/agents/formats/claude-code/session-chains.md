@@ -134,10 +134,21 @@ The JSONL records this inline with a `compact_boundary` entry.
   "type": "compact_boundary",    // or "system" with "subtype": "compact_boundary"
   "uuid": "...",
   "parentUuid": null,            // always null on the boundary
-  "logicalParentUuid": "...",    // points at the real prior message
+  "logicalParentUuid": "...",    // == preservedSegment.tailUuid (the kept tail's last message)
   "compactMetadata": {
     "trigger": "auto",           // "auto" or "manual" (user ran /compact)
-    "preTokens": 180000          // conversation size before compaction
+    "preTokens": 1008497,        // conversation size before compaction
+    "postTokens": 11528,         // size after the summary replaced the middle
+    "durationMs": 106367,        // how long the compaction pass took
+    "preservedSegment": {        // the recent tail kept verbatim
+      "headUuid": "...",         //   first kept message
+      "anchorUuid": "...",       //   == the synthetic summary's uuid (below)
+      "tailUuid": "..."          //   last kept message (== logicalParentUuid)
+    },
+    "preservedMessages": {       // explicit enumeration of the kept tail
+      "anchorUuid": "...",
+      "uuids": ["...", "..."]    //   every uuid in [headUuid .. tailUuid]
+    }
   },
   "sessionId": "...",
   "timestamp": "..."
@@ -147,6 +158,14 @@ The JSONL records this inline with a `compact_boundary` entry.
 Key property: `parentUuid` is `null`, resetting the DAG. The actual
 prior message is referenced via `logicalParentUuid` so UIs can still
 render the pre-compact history.
+
+`compactMetadata` is richer than just `{trigger, preTokens}` — current
+2.1.x boundaries enumerate **exactly which messages survived**:
+`preservedSegment` gives the contiguous recent tail (`headUuid` →
+`tailUuid`), and `preservedMessages.uuids` lists every uuid in it. The
+`anchorUuid` is the synthetic summary message's own uuid. Older
+versions emit only `{trigger, preTokens}` with no preserved-set
+detail, so treat the segment fields as optional.
 
 ### The synthetic summary
 
@@ -176,6 +195,33 @@ These flags tell the loader:
 When rendering a transcript, skip these synthetic summary entries or
 mark them specially; treating them as real user messages will confuse
 consumers.
+
+### Re-emitted messages with duplicate UUIDs
+
+Observed in long `[1m]`-context 2.1.x sessions that auto-compact a
+>1M-token conversation: in the run of entries **immediately before**
+the `compact_boundary`, Claude re-materializes an earlier block of the
+conversation (e.g. the original task and setup turns) as fresh entries
+that **reuse the original `uuid`s**, with `parentUuid` chains
+re-threaded into a synthetic linear sequence. So a single file can
+contain the same `uuid` twice — once in its original position early in
+the file, once in this re-emitted block.
+
+These re-emitted entries:
+- are **not** listed in `compactMetadata.preservedMessages` (that lists
+  only the recent tail) — so they are a separate phenomenon from the
+  marked preserved segment;
+- carry the same `uuid` but a **different** `parentUuid` than their
+  earlier counterpart (the original has the true lineage; the copy is
+  re-parented linearly);
+- sit between the preserved tail and the boundary marker.
+
+This breaks the usual "uuid is unique within a file" assumption. A
+consumer that keys on `uuid` (or stores steps under a `(file, uuid)`
+primary key) **must dedupe** — keep the **first** occurrence, which
+carries the real `parentUuid` lineage; the re-emitted copies are the
+ones to drop. See [known-issues.md §Duplicate UUIDs at compaction
+boundaries](known-issues.md#duplicate-uuids-at-compaction-boundaries).
 
 ### Compaction strategies
 

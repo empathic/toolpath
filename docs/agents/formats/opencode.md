@@ -516,6 +516,15 @@ context window. Messages before `tail_start_id` are summarized into
 a single synthetic user message; the history above the marker is
 kept in the DB for reverts.
 
+Compaction stays **within one session** — it sets the session row's
+`time_compacting` timestamp but does not create a new session row.
+(`session.parent_id` is for forked sub-agent sessions, not
+compaction.) `tail_start_id` is a single anchor describing a
+**contiguous** kept tail — everything from it forward survives, so
+there is no non-contiguous "pinned" retention here. Message and part
+ids are **not** reused across the boundary, so opencode compaction
+carries no duplicate-id hazard.
+
 ## Tool catalogue
 
 A reader should not enumerate tool names — any agent config can

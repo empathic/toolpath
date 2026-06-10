@@ -175,6 +175,37 @@ pub enum RolloutItem {
 | `session_state` | Mid-session state updates (e.g. model switch) | 0 |
 | `compacted` | Inserted when Codex compacts history mid-session | 0 |
 
+### `compacted` — context compaction
+
+When Codex compacts mid-session it appends a single `compacted` line to
+the **same rollout file** — no new file, no new session id:
+
+```json
+{"type":"compacted","payload":{"message":"…summary text…","replacement_history":[…],"window_id":1}}
+```
+
+Per current Codex `main` (`codex-rs/protocol/src/protocol.rs`,
+`CompactedItem`), `payload` is `{message, replacement_history?,
+window_id?}`: `message` is the summary text, `replacement_history` is
+the new condensed history that replaces the old, `window_id` is the
+auto-compact window counter. **There is no `trigger`, `preTokens`, or
+`summary` field** — manual `/compact` and automatic (overflow)
+compaction write an **identical** record; the manual/auto distinction
+(`CompactionTrigger`) is analytics-only and never persisted to the
+rollout. (A separate field-less `event_msg` `ContextCompacted` is also
+written — "either automatically or manually".)
+
+The turns on either side keep their original ids — Codex does **not**
+replay or re-id messages across the boundary, so there's no
+duplicate-id hazard. `toolpath-codex` treats the payload as opaque and
+currently drops it (see `tests/compaction_roundtrip.rs`); the
+surrounding turns survive intact.
+
+> Note: the repo fixture `tests/fixtures/compacted_session.jsonl` uses
+> an older/synthetic `{trigger, preTokens, summary}` payload that does
+> **not** match current Codex. Because the payload is parsed opaquely
+> this doesn't affect derivation, but the fixture isn't representative.
+
 ## `session_meta` — first line of every file
 
 ```json
