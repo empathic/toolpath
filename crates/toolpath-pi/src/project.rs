@@ -185,9 +185,8 @@ fn project_view(
     })
 }
 
-/// Used to return `Turn.extra["pi"]`; the IR no longer carries
-/// provider-namespaced extras. Always `None`. Callers fall back to
-/// reconstructing source-format details from typed IR fields and
+/// The IR carries no provider-namespaced extras, so this is always `None`;
+/// callers reconstruct source-format details from typed IR fields and
 /// reasonable defaults.
 fn pi_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
     None

@@ -114,9 +114,8 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> crate::Res
     // crucial for compaction boundaries, which must sit between the turns
     // they separate.
     //
-    // Per-variant counters preserve the synthetic step ids of the old
-    // two-loop layout exactly: turns synthesize `step-{:04}` indexed by turn
-    // count, events `event-{:04}` indexed by event count.
+    // Per-variant counters drive the synthetic step ids: turns synthesize
+    // `step-{:04}` indexed by turn count, events `event-{:04}` by event count.
     //
     // `last_step_id` tracks the previously emitted step so that events (and
     // compactions) without an explicit parent chain off whatever came before.
@@ -642,6 +641,9 @@ fn steps_content_eq(a: &Step, b: &Step) -> bool {
 fn actor_for_turn(turn: &Turn, provider: &str) -> String {
     match &turn.role {
         Role::User => "human:user".to_string(),
+        Role::Assistant if turn.model.as_deref() == Some("<synthetic>") => {
+            format!("tool:{}", provider)
+        }
         Role::Assistant => {
             let model = turn.model.as_deref().unwrap_or("unknown");
             format!("agent:{}", model)

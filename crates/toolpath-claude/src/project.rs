@@ -503,11 +503,9 @@ fn apply_turn_metadata(entry: &mut ConversationEntry, turn: &Turn) {
         }
     }
 
-    // Source-format details (`version`, `user_type`, `request_id`,
-    // per-entry catch-all) used to ride through `Turn.extra["claude"]` for
-    // claude → IR → claude round-trip. The IR no longer carries
-    // provider-specific extras; the projected entry's fields stay `None`
-    // and the harness fills in defaults at write time.
+    // The IR carries no provider-specific extras, so source-format details
+    // (`version`, `user_type`, `request_id`, per-entry catch-all) stay `None`
+    // here and the harness fills in defaults at write time.
 }
 
 /// Build a `ConversationEntry` for a user turn.

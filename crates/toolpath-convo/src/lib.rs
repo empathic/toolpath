@@ -438,10 +438,9 @@ pub struct ConversationView {
     pub last_activity: Option<DateTime<Utc>>,
 
     /// The conversation's ordered stream: turns, non-conversational
-    /// events, and compaction boundaries, interleaved in real order.
-    /// Replaces the former separate `turns`/`events` so the interleaving
-    /// survives derive ↔ extract round-trips. Use `turns()` / `events()` /
-    /// `compactions()` to read one kind.
+    /// events, and compaction boundaries, interleaved in real order so the
+    /// interleaving survives derive ↔ extract round-trips. Use `turns()` /
+    /// `events()` / `compactions()` to read one kind.
     pub items: Vec<Item>,
 
     /// Aggregate token usage across all turns.
