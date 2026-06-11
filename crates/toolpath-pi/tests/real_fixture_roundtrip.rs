@@ -37,7 +37,7 @@ fn load_fixture_view() -> ConversationView {
 }
 
 fn ir_roundtrip(view: &ConversationView) -> ConversationView {
-    let path = derive_path(view, &DeriveConfig::default());
+    let path = derive_path(view, &DeriveConfig::default()).expect("derive");
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");
@@ -54,9 +54,7 @@ fn is_system_envelope(turn: &Turn) -> bool {
 }
 
 fn meaningful(view: &ConversationView) -> Vec<&Turn> {
-    view.turns()
-        .filter(|t| !is_system_envelope(t))
-        .collect()
+    view.turns().filter(|t| !is_system_envelope(t)).collect()
 }
 
 fn norm(s: &str) -> String {

@@ -1056,7 +1056,10 @@ mod tests {
         assert_eq!(turns[0].text, "make a pickle");
         assert_eq!(turns[1].role, Role::Assistant);
         assert_eq!(turns[1].text, "done!");
-        assert_eq!(turns[1].thinking.as_deref(), Some("I should write main.cpp"));
+        assert_eq!(
+            turns[1].thinking.as_deref(),
+            Some("I should write main.cpp")
+        );
     }
 
     #[test]
@@ -1217,7 +1220,11 @@ mod tests {
         );
 
         let compactions: Vec<_> = view.compactions().collect();
-        assert_eq!(compactions.len(), 1, "expected exactly one Item::Compaction");
+        assert_eq!(
+            compactions.len(),
+            1,
+            "expected exactly one Item::Compaction"
+        );
         let c = compactions[0];
         assert_eq!(c.id, "pc");
         assert_eq!(c.trigger, Some(CompactionTrigger::Auto), "auto=true ⇒ Auto");

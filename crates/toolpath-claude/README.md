@@ -33,7 +33,7 @@ let manager = ClaudeConvo::new();
 let convo = manager.read_conversation("/Users/alex/project", "session-uuid")?;
 
 let config = DeriveConfig::default();
-let path = derive_path(&convo, &config);
+let path = derive_path(&convo, &config)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

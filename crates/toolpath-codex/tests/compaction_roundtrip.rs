@@ -63,7 +63,7 @@ fn load_view(path: PathBuf) -> ConversationView {
 }
 
 fn ir_roundtrip(view: &ConversationView) -> ConversationView {
-    let path = derive_path(view, &DeriveConfig::default());
+    let path = derive_path(view, &DeriveConfig::default()).expect("derive");
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");
@@ -155,7 +155,12 @@ fn synthetic_compaction_and_turns_survive_roundtrip() {
     let Item::Compaction(c) = &after.items[idx] else {
         unreachable!()
     };
-    assert!(c.summary.as_deref().unwrap().contains("session-token validation"));
+    assert!(
+        c.summary
+            .as_deref()
+            .unwrap()
+            .contains("session-token validation")
+    );
     assert!(c.parent_id.is_some());
 
     // Surrounding pre/post turn content survives.

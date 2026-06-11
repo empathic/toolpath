@@ -35,10 +35,7 @@ fn view_has_expected_turn_count() {
         view.turns().count()
     );
     let users = view.turns().filter(|t| t.role == Role::User).count();
-    let assistants = view
-        .turns()
-        .filter(|t| t.role == Role::Assistant)
-        .count();
+    let assistants = view.turns().filter(|t| t.role == Role::Assistant).count();
     let system = view.turns().filter(|t| t.role == Role::System).count();
     // The fixture has two user messages: the actual prompt plus a
     // `function_call_output`-style carrier that encodes tool output.
@@ -229,9 +226,7 @@ fn events_preserve_non_turn_content() {
     let has_turn_context = view.events().any(|e| e.event_type == "turn_context");
     let has_task_started = view.events().any(|e| e.event_type == "task_started");
     let has_task_complete = view.events().any(|e| e.event_type == "task_complete");
-    let has_patch_apply = view
-        .events()
-        .any(|e| e.event_type == "patch_apply_end");
+    let has_patch_apply = view.events().any(|e| e.event_type == "patch_apply_end");
     assert!(has_turn_context);
     assert!(has_task_started);
     assert!(has_task_complete);
@@ -241,7 +236,7 @@ fn events_preserve_non_turn_content() {
 #[test]
 fn derive_path_produces_file_artifacts_with_raw_diffs() {
     let s = session();
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default()).expect("derive");
 
     let convo_prefix = "codex://";
     let file_artifacts: Vec<(&str, &toolpath::v1::ArtifactChange)> = path
@@ -271,7 +266,7 @@ fn derive_path_produces_file_artifacts_with_raw_diffs() {
 #[test]
 fn derive_path_validates_as_path_document() {
     let s = session();
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default()).expect("derive");
     let doc = toolpath::v1::Graph::from_path(path);
     let json = doc.to_json().unwrap();
     let parsed = toolpath::v1::Graph::from_json(&json).unwrap();

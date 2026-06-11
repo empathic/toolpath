@@ -94,7 +94,7 @@ fn test_derive_path_from_fixture() {
     write_fixture(manager.resolver().sessions_dir());
     let session = manager.read_session(PROJECT_CWD, "demo-session-1").unwrap();
 
-    let path = toolpath_pi::derive_path(&session, &DeriveConfig::default());
+    let path = toolpath_pi::derive_path(&session, &DeriveConfig::default()).expect("derive");
 
     // Path has 3 steps (one per turn; tool-result entries fold into the
     // matching assistant turn rather than emitting standalone turns).
@@ -125,7 +125,7 @@ fn test_derive_roundtrip_serde() {
     write_fixture(manager.resolver().sessions_dir());
     let session = manager.read_session(PROJECT_CWD, "demo-session-1").unwrap();
 
-    let path = toolpath_pi::derive_path(&session, &DeriveConfig::default());
+    let path = toolpath_pi::derive_path(&session, &DeriveConfig::default()).expect("derive");
     let doc = toolpath::v1::Graph::from_path(path);
     let json = doc.to_json_pretty().unwrap();
     let parsed = toolpath::v1::Graph::from_json(&json).unwrap();

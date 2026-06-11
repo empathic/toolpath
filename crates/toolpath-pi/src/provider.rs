@@ -827,8 +827,14 @@ mod tests {
         );
         let v = session_to_view(&session_from(vec![entry], "/tmp/p"));
         assert_eq!(v.turns().next().unwrap().role, Role::Assistant);
-        assert_eq!(v.turns().next().unwrap().model.as_deref(), Some("claude-opus"));
-        assert_eq!(v.turns().next().unwrap().stop_reason.as_deref(), Some("stop"));
+        assert_eq!(
+            v.turns().next().unwrap().model.as_deref(),
+            Some("claude-opus")
+        );
+        assert_eq!(
+            v.turns().next().unwrap().stop_reason.as_deref(),
+            Some("stop")
+        );
         let u = v.turns().next().unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.input_tokens, Some(10));
         assert_eq!(u.output_tokens, Some(20));
@@ -980,10 +986,16 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![e], "/tmp/p"));
-        assert_eq!(v.turns().next().unwrap().role, Role::Other("bash".to_string()));
+        assert_eq!(
+            v.turns().next().unwrap().role,
+            Role::Other("bash".to_string())
+        );
         assert!(v.turns().next().unwrap().text.starts_with("$ ls"));
         assert_eq!(v.turns().next().unwrap().tool_uses.len(), 1);
-        assert_eq!(v.turns().next().unwrap().tool_uses[0].category, Some(ToolCategory::Shell));
+        assert_eq!(
+            v.turns().next().unwrap().tool_uses[0].category,
+            Some(ToolCategory::Shell)
+        );
     }
 
     #[test]
@@ -1332,7 +1344,10 @@ mod tests {
         );
         let v = session_to_view(&session_from(vec![a], "/tmp/p"));
         assert_eq!(v.turns().next().unwrap().delegations.len(), 1);
-        assert_eq!(v.turns().next().unwrap().delegations[0].prompt, "do the thing");
+        assert_eq!(
+            v.turns().next().unwrap().delegations[0].prompt,
+            "do the thing"
+        );
         assert_eq!(v.turns().next().unwrap().delegations[0].agent_id, "d1");
     }
 
@@ -1362,7 +1377,10 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![cm], "/tmp/p"));
-        assert_eq!(v.turns().next().unwrap().role, Role::Other("custom:foo".to_string()));
+        assert_eq!(
+            v.turns().next().unwrap().role,
+            Role::Other("custom:foo".to_string())
+        );
         assert_eq!(v.turns().next().unwrap().text, "body");
     }
 }

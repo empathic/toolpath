@@ -33,7 +33,7 @@ fn load_view() -> ConversationView {
 }
 
 fn ir_roundtrip(view: &ConversationView) -> ConversationView {
-    let path = derive_path(view, &DeriveConfig::default());
+    let path = derive_path(view, &DeriveConfig::default()).expect("derive");
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");
@@ -71,8 +71,14 @@ fn boundary_becomes_single_compaction_item_with_expected_fields() {
         Some(CompactionTrigger::Manual),
         "fixture ran /compact (manual trigger)"
     );
-    assert!(c.summary.is_some(), "summary folded from isCompactSummary entry");
-    assert!(c.pre_tokens.is_some(), "preTokens carried from compactMetadata");
+    assert!(
+        c.summary.is_some(),
+        "summary folded from isCompactSummary entry"
+    );
+    assert!(
+        c.pre_tokens.is_some(),
+        "preTokens carried from compactMetadata"
+    );
     assert_eq!(
         c.kept.len(),
         1,

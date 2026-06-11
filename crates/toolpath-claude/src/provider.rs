@@ -13,8 +13,8 @@ use crate::types::{Conversation, ConversationEntry, Message, MessageContent, Mes
 use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
     Compaction, CompactionTrigger, ConversationMeta, ConversationProvider, ConversationView,
-    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, KeptRange, Role, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn,
+    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, KeptRange, Role, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -1709,7 +1709,10 @@ mod tests {
         // Turn 1 (assistant) has a Read tool
         assert_eq!(turns[1].tool_uses[0].category, Some(ToolCategory::FileRead));
         // Turn 2 (assistant) has an Edit tool
-        assert_eq!(turns[2].tool_uses[0].category, Some(ToolCategory::FileWrite));
+        assert_eq!(
+            turns[2].tool_uses[0].category,
+            Some(ToolCategory::FileWrite)
+        );
     }
 
     #[test]

@@ -61,7 +61,7 @@ fn load_real_view() -> ConversationView {
 }
 
 fn ir_roundtrip(view: &ConversationView) -> ConversationView {
-    let path = derive_path(view, &DeriveConfig::default());
+    let path = derive_path(view, &DeriveConfig::default()).expect("derive");
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");
@@ -150,10 +150,7 @@ fn real_fixture_compactions_and_turns_survive_roundtrip() {
     let after = ir_roundtrip(&original);
 
     let comps_after = after.items.iter().filter_map(Item::as_compaction).count();
-    assert_eq!(
-        comps_after, 2,
-        "both compactions survive derive → extract"
-    );
+    assert_eq!(comps_after, 2, "both compactions survive derive → extract");
     for c in after.items.iter().filter_map(Item::as_compaction) {
         assert!(c.summary.is_some(), "summary survives roundtrip");
         assert!(c.pre_tokens.is_some(), "pre_tokens survives roundtrip");

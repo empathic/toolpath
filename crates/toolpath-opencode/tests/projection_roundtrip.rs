@@ -93,7 +93,7 @@ fn setup_session() -> (TempDir, Session) {
 fn roundtrip(source: &Session) -> (ConversationView, Session, Path) {
     let view_forward: ConversationView = to_view(source);
 
-    let path = derive_path(&view_forward, &DeriveConfig::default());
+    let path = derive_path(&view_forward, &DeriveConfig::default()).expect("derive");
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");

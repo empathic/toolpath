@@ -294,7 +294,8 @@ mod tests {
             .join("../../test-fixtures/claude/convo.jsonl");
         let convo = toolpath_claude::ConversationReader::read_conversation(&fixture)
             .expect("read claude fixture");
-        let path = toolpath_claude::derive::derive_path(&convo, &Default::default());
+        let path =
+            toolpath_claude::derive::derive_path(&convo, &Default::default()).expect("derive");
         assert_eq!(
             path.meta.as_ref().and_then(|m| m.kind.as_deref()),
             Some(ACS_KIND),

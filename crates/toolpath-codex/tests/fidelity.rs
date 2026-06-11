@@ -27,7 +27,7 @@ fn session() -> toolpath_codex::Session {
 }
 
 fn derived() -> toolpath::v1::Path {
-    derive::derive_path(&session(), &derive::DeriveConfig::default())
+    derive::derive_path(&session(), &derive::DeriveConfig::default()).expect("derive")
 }
 
 // ── Step-level invariants ──────────────────────────────────────────
@@ -56,7 +56,7 @@ fn step_timestamps_match_source_message_lines() {
     // This proves the line→turn→step pipeline doesn't silently
     // re-clock or zero out timestamps anywhere.
     let s = session();
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default()).expect("derive");
 
     let step_timestamps: HashSet<&str> = path
         .steps
@@ -159,7 +159,7 @@ fn actor_scheme_matches_source_role() {
     // view reaches a step with the expected actor prefix.
     let s = session();
     let view = to_view(&s);
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default()).expect("derive");
 
     let user_seen = view.turns().any(|t| t.role == Role::User);
     let assistant_seen = view.turns().any(|t| t.role == Role::Assistant);
@@ -211,7 +211,7 @@ fn collect_derived_tool_call_ids(path: &toolpath::v1::Path) -> HashSet<String> {
 #[test]
 fn every_function_call_call_id_surfaces_in_steps() {
     let s = session();
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default()).expect("derive");
     let derived_ids = collect_derived_tool_call_ids(&path);
 
     for line in &s.lines {
@@ -302,7 +302,7 @@ fn patch_apply_files_all_surface_as_artifacts() {
     // This catches any bug where we drop files because of a change
     // variant we didn't recognize.
     let s = session();
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default()).expect("derive");
 
     let artifact_keys: HashSet<&str> = path
         .steps

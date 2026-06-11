@@ -46,10 +46,7 @@ fn fixture_load_via_provider() {
     assert_eq!(view.provider_id.as_deref(), Some("gemini-cli"));
     // User and assistant turns both present
     let user_turns = view.turns().filter(|t| t.role == Role::User).count();
-    let assistant_turns = view
-        .turns()
-        .filter(|t| t.role == Role::Assistant)
-        .count();
+    let assistant_turns = view.turns().filter(|t| t.role == Role::Assistant).count();
     assert!(user_turns >= 1);
     assert!(assistant_turns >= 1);
 
@@ -78,7 +75,8 @@ fn fixture_derives_to_valid_path() {
             project_path: Some("/Users/ben/empathic/oss/toolpath".into()),
             include_thinking: false,
         },
-    );
+    )
+    .expect("derive");
     let doc = toolpath::v1::Graph::from_path(path);
     let json = doc.to_json().unwrap();
     // Roundtrip verifies serde is well-formed

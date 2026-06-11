@@ -14,8 +14,8 @@ use toolpath::v1::{Path, Step};
 
 use crate::{
     Compaction, CompactionTrigger, ConversationEvent, ConversationView, DelegatedWork,
-    EnvironmentSnapshot, FileMutation, Item, KeptRange, ProducerInfo, Role, SessionBase, TokenUsage,
-    ToolCategory, ToolInvocation, ToolResult, Turn,
+    EnvironmentSnapshot, FileMutation, Item, KeptRange, ProducerInfo, Role, SessionBase,
+    TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Extract a [`ConversationView`] from a toolpath [`Path`] document.
@@ -813,10 +813,7 @@ mod tests {
         assert_eq!(turns[0].tool_uses.len(), 1);
         assert_eq!(turns[0].tool_uses[0].id, "tu-001");
         assert_eq!(turns[0].tool_uses[0].name, "Read");
-        assert_eq!(
-            turns[0].tool_uses[0].category,
-            Some(ToolCategory::FileRead)
-        );
+        assert_eq!(turns[0].tool_uses[0].category, Some(ToolCategory::FileRead));
         assert!(turns[0].tool_uses[0].result.is_some());
         assert!(!turns[0].tool_uses[0].result.as_ref().unwrap().is_error);
     }
@@ -1422,7 +1419,7 @@ mod tests {
             ..Default::default()
         };
 
-        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default()).unwrap();
         let view = extract_conversation(&path);
 
         // Item order [Turn, Compaction, Turn] is preserved.
@@ -1431,7 +1428,10 @@ mod tests {
         assert!(matches!(view.items[2], Item::Turn(_)));
 
         let Item::Compaction(rc) = &view.items[1] else {
-            panic!("middle item should be a compaction, got {:?}", view.items[1]);
+            panic!(
+                "middle item should be a compaction, got {:?}",
+                view.items[1]
+            );
         };
         assert_eq!(rc.id, "c");
         assert_eq!(rc.parent_id.as_deref(), Some("a"));

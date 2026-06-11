@@ -417,8 +417,7 @@ impl<'a> Builder<'a> {
         // events. Keeping events grouped after the turns reproduces the
         // former layout, so the derived DAG stays a single connected
         // ancestry; only the compaction boundary moves into the turn stream.
-        let mut items: Vec<Item> =
-            Vec::with_capacity(self.turns.len() + self.events.len() + 1);
+        let mut items: Vec<Item> = Vec::with_capacity(self.turns.len() + self.events.len() + 1);
         items.extend(compactions_first.into_iter().map(Item::Compaction));
         for (idx, turn) in self.turns.into_iter().enumerate() {
             if !keep[idx] {
@@ -1216,7 +1215,10 @@ mod tests {
         assert_eq!(view.turns().next().unwrap().text, "please do a thing");
         assert_eq!(view.turns().nth(1).unwrap().role, Role::Assistant);
         assert_eq!(view.turns().nth(1).unwrap().text, "working on it");
-        assert_eq!(view.turns().nth(1).unwrap().model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(
+            view.turns().nth(1).unwrap().model.as_deref(),
+            Some("gpt-5.4")
+        );
     }
 
     /// Two API rounds. Codex's `token_count` events carry cumulative

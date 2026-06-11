@@ -44,7 +44,12 @@ impl Default for DeriveConfig {
 }
 
 /// Derive a [`Path`] from a [`ConversationView`].
-pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
+///
+/// Returns [`ConvoError::DuplicateStepId`](crate::ConvoError::DuplicateStepId)
+/// if two steps would share an id — a toolpath invariant violation. The
+/// derivation never silently drops or renames a colliding step; producing
+/// unique ids is the provider's responsibility.
+pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> crate::Result<Path> {
     let provider = view.provider_id.as_deref().unwrap_or("unknown");
     let id_prefix: String = view.id.chars().take(8).collect();
 
@@ -528,15 +533,20 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         }
     }
 
-    // Enforce step-id uniqueness within the path (a toolpath invariant).
-    // A conversation can carry the same id twice — e.g. Claude re-emits a
-    // block of earlier messages with their original uuids just before a
-    // compaction boundary. Keep the FIRST occurrence: it carries the true
-    // parent lineage; later copies are re-parented into a synthetic linear
-    // chain. Parent/head references by id already resolve to the kept step,
-    // so dropping the duplicates needs no remapping.
-    let mut seen_ids = std::collections::HashSet::new();
-    steps.retain(|s| seen_ids.insert(s.step.id.clone()));
+    // Step ids must be unique within a path (a toolpath invariant). If the
+    // conversation produced two steps with the same id — e.g. a Claude
+    // compaction replay re-emitting earlier messages with their original
+    // uuids — fail loudly. We deliberately do NOT silently drop or rename a
+    // colliding step: that is surprising, undefined behavior. Producing
+    // unique ids is the provider's job.
+    {
+        let mut seen = std::collections::HashSet::new();
+        for s in &steps {
+            if !seen.insert(s.step.id.as_str()) {
+                return Err(crate::ConvoError::DuplicateStepId(s.step.id.clone()));
+            }
+        }
+    }
 
     let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
 
@@ -580,7 +590,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         meta.extra.insert("producer".to_string(), v);
     }
 
-    Path {
+    Ok(Path {
         path: PathIdentity {
             id: path_id,
             base,
@@ -589,7 +599,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         },
         steps,
         meta: Some(meta),
-    }
+    })
 }
 
 /// Push `step` into `steps`, resolving an id collision with an already-emitted
@@ -964,7 +974,7 @@ mod tests {
     #[test]
     fn test_empty_view() {
         let view = view_with(vec![]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert!(path.steps.is_empty());
         assert_eq!(path.path.head, "");
     }
@@ -972,7 +982,7 @@ mod tests {
     #[test]
     fn test_meta_kind_is_convo() {
         let view = view_with(vec![base_turn("t1", Role::User)]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(
             path.meta.as_ref().unwrap().kind.as_deref(),
             Some(PATH_KIND_AGENT_CODING_SESSION)
@@ -1047,7 +1057,7 @@ mod tests {
         let mut turn = base_turn("t1", Role::User);
         turn.text = "hello".into();
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.steps.len(), 1);
         assert_eq!(path.steps[0].step.actor, "human:user");
         assert_eq!(path.steps[0].step.id, "t1");
@@ -1058,7 +1068,7 @@ mod tests {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.model = Some("claude-opus-4-7".into());
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.steps[0].step.actor, "agent:claude-opus-4-7");
     }
 
@@ -1066,40 +1076,37 @@ mod tests {
     fn test_assistant_without_model() {
         let turn = base_turn("t1", Role::Assistant);
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.steps[0].step.actor, "agent:unknown");
     }
 
     #[test]
-    fn test_duplicate_turn_ids_deduped_keep_first() {
+    fn test_duplicate_turn_ids_error() {
         // A conversation can carry the same turn id twice (e.g. Claude
         // re-emits earlier messages with their original uuids at a
-        // compaction boundary). derive_path keeps the FIRST occurrence so
-        // step ids stay unique within the path.
+        // compaction boundary). Two items that produce steps with the same
+        // id must surface as an error rather than silently dropping one —
+        // step ids have to be unique within a path.
         let mut first = base_turn("dup", Role::User);
         first.text = "original".into();
         let mid = base_turn("mid", Role::Assistant);
         let mut second = base_turn("dup", Role::User);
         second.text = "replayed".into();
         let view = view_with(vec![first, mid, second]);
-        let path = derive_path(&view, &DeriveConfig::default());
 
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
-        assert_eq!(ids.len(), unique.len(), "step ids must be unique: {ids:?}");
-        assert_eq!(path.steps.len(), 2, "the duplicate id was dropped");
-
-        // The kept "dup" step is the first occurrence (text "original").
-        let dup = path.steps.iter().find(|s| s.step.id == "dup").unwrap();
-        let txt = conv_change(dup).extra.get("text").and_then(|v| v.as_str());
-        assert_eq!(txt, Some("original"), "kept step must be the first occurrence");
+        let err = derive_path(&view, &DeriveConfig::default())
+            .expect_err("duplicate step ids must error");
+        assert!(
+            matches!(err, crate::ConvoError::DuplicateStepId(ref id) if id == "dup"),
+            "expected DuplicateStepId(\"dup\"), got {err:?}"
+        );
     }
 
     #[test]
     fn test_system_role() {
         let turn = base_turn("t1", Role::System);
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.steps[0].step.actor, "tool:pi");
     }
 
@@ -1107,7 +1114,7 @@ mod tests {
     fn test_other_role() {
         let turn = base_turn("t1", Role::Other("tool".into()));
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.steps[0].step.actor, "tool:pi");
     }
 
@@ -1118,7 +1125,7 @@ mod tests {
         t2.parent_id = Some("t1".into());
         t2.model = Some("m".into());
         let view = view_with(vec![t1, t2]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.steps[1].step.parents, vec!["t1".to_string()]);
     }
 
@@ -1140,7 +1147,7 @@ mod tests {
             data: HashMap::new(),
         }));
 
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let graph = serde_json::json!({
             "graph": { "id": "g1" },
             "paths": [serde_json::to_value(&path).unwrap()],
@@ -1234,7 +1241,7 @@ mod tests {
             data: HashMap::new(),
         }));
 
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(
             path.meta.as_ref().and_then(|m| m.kind.as_deref()),
             Some(toolpath::v1::PATH_KIND_AGENT_CODING_SESSION),
@@ -1279,7 +1286,7 @@ mod tests {
             serde_json::json!({"file_path": "src/main.rs"}),
         )];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert!(path.steps[0].change.contains_key("src/main.rs"));
         let sc = path.steps[0].change["src/main.rs"]
             .structural
@@ -1295,7 +1302,7 @@ mod tests {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.tool_uses = vec![fw_tool("Edit", "tu1", serde_json::json!({"path": "a.rs"}))];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert!(path.steps[0].change.contains_key("a.rs"));
     }
 
@@ -1304,7 +1311,7 @@ mod tests {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.tool_uses = vec![fw_tool("W", "tu1", serde_json::json!({"filename": "b.rs"}))];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert!(path.steps[0].change.contains_key("b.rs"));
     }
 
@@ -1313,7 +1320,7 @@ mod tests {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.tool_uses = vec![fw_tool("W", "tu1", serde_json::json!({"file": "c.rs"}))];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert!(path.steps[0].change.contains_key("c.rs"));
     }
 
@@ -1322,7 +1329,7 @@ mod tests {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.tool_uses = vec![fw_tool("W", "tu1", serde_json::json!({"other": "foo"}))];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.steps[0].change.len(), 1);
         let sc = conv_change(&path.steps[0]);
         assert!(sc.extra.contains_key("tool_uses"));
@@ -1339,7 +1346,7 @@ mod tests {
             category: Some(ToolCategory::FileRead),
         }];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert!(!path.steps[0].change.contains_key("x.rs"));
         assert_eq!(path.steps[0].change.len(), 1);
     }
@@ -1357,7 +1364,7 @@ mod tests {
             }),
         )];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let ch = &path.steps[0].change["src/login.rs"];
         let raw = ch.raw.as_deref().expect("edit should emit unified diff");
         assert!(raw.contains("--- a/src/login.rs"));
@@ -1381,7 +1388,7 @@ mod tests {
             }),
         )];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let ch = &path.steps[0].change["hello.txt"];
         let raw = ch.raw.as_deref().expect("write should emit diff");
         assert!(raw.contains("+hi"));
@@ -1487,7 +1494,7 @@ mod tests {
             }),
         )];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let ch = &path.steps[0].change["m.rs"];
         let raw = ch.raw.as_deref().expect("multiedit should emit diff");
         assert!(raw.contains("# edit 1/2"));
@@ -1503,7 +1510,7 @@ mod tests {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.thinking = Some("hmm".into());
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let sc = conv_change(&path.steps[0]);
         assert_eq!(sc.extra["thinking"], serde_json::json!("hmm"));
     }
@@ -1517,7 +1524,7 @@ mod tests {
             include_thinking: false,
             ..Default::default()
         };
-        let path = derive_path(&view, &cfg);
+        let path = derive_path(&view, &cfg).unwrap();
         let sc = conv_change(&path.steps[0]);
         assert!(!sc.extra.contains_key("thinking"));
     }
@@ -1536,7 +1543,7 @@ mod tests {
             category: Some(ToolCategory::FileRead),
         }];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let sc = conv_change(&path.steps[0]);
         assert!(sc.extra.contains_key("tool_uses"));
     }
@@ -1556,7 +1563,7 @@ mod tests {
             include_tool_uses: false,
             ..Default::default()
         };
-        let path = derive_path(&view, &cfg);
+        let path = derive_path(&view, &cfg).unwrap();
         let sc = conv_change(&path.steps[0]);
         assert!(!sc.extra.contains_key("tool_uses"));
     }
@@ -1569,7 +1576,7 @@ mod tests {
             ..Default::default()
         });
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.path.base.unwrap().uri, "file:///Users/alex/proj");
     }
 
@@ -1585,7 +1592,7 @@ mod tests {
             base_uri: Some("github:org/repo".into()),
             ..Default::default()
         };
-        let path = derive_path(&view, &cfg);
+        let path = derive_path(&view, &cfg).unwrap();
         assert_eq!(path.path.base.unwrap().uri, "github:org/repo");
     }
 
@@ -1593,7 +1600,7 @@ mod tests {
     fn test_base_uri_absent_when_no_source() {
         let turn = base_turn("t1", Role::User);
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert!(path.path.base.is_none());
     }
 
@@ -1604,14 +1611,14 @@ mod tests {
             path_id: Some("my-custom-id".into()),
             ..Default::default()
         };
-        let path = derive_path(&view, &cfg);
+        let path = derive_path(&view, &cfg).unwrap();
         assert_eq!(path.path.id, "my-custom-id");
     }
 
     #[test]
     fn test_path_id_default_format() {
         let view = view_with(vec![]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.path.id, "path-pi-abcdef01");
     }
 
@@ -1619,7 +1626,7 @@ mod tests {
     fn test_files_changed_in_meta() {
         let mut view = view_with(vec![]);
         view.files_changed = vec!["a.rs".into(), "b.rs".into()];
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let meta = path.meta.unwrap();
         assert_eq!(
             meta.extra["files_changed"],
@@ -1633,7 +1640,7 @@ mod tests {
         let mut a = base_turn("t2", Role::Assistant);
         a.model = Some("claude-opus-4-7".into());
         let view = view_with(vec![u, a]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let actors = path.meta.unwrap().actors.unwrap();
         assert!(actors.contains_key("human:user"));
         assert!(actors.contains_key("agent:claude-opus-4-7"));
@@ -1652,7 +1659,7 @@ mod tests {
             base_turn("t3", Role::User),
         ];
         let view = view_with(turns);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.path.head, "t3");
     }
 
@@ -1667,7 +1674,7 @@ mod tests {
             ..Default::default()
         });
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let sc = conv_change(&path.steps[0]);
         assert!(sc.extra.contains_key("token_usage"));
         assert_eq!(
@@ -1789,7 +1796,7 @@ mod tests {
             result: None,
         }];
         let view = view_with(vec![turn]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let sc = conv_change(&path.steps[0]);
         assert!(sc.extra.contains_key("delegations"));
         assert_eq!(
@@ -1805,14 +1812,14 @@ mod tests {
             title: Some("My Session".into()),
             ..Default::default()
         };
-        let path = derive_path(&view, &cfg);
+        let path = derive_path(&view, &cfg).unwrap();
         assert_eq!(path.meta.unwrap().title.as_deref(), Some("My Session"));
     }
 
     #[test]
     fn test_title_default_when_unset() {
         let view = view_with(vec![]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(
             path.meta.unwrap().title.as_deref(),
             Some("pi session: abcdef01")
@@ -1847,7 +1854,7 @@ mod tests {
         view.items.push(Item::Compaction(c));
         view.items.push(Item::Turn(b));
 
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
 
         let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "c", "b"], "items emitted in order");
@@ -1880,7 +1887,7 @@ mod tests {
         let mut view = view_with(vec![a]);
         view.items.push(Item::Compaction(c));
 
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let sc = conv_change(&path.steps[1]);
         assert_eq!(sc.change_type, "conversation.compact");
         assert!(!sc.extra.contains_key("trigger"));
@@ -1901,7 +1908,7 @@ mod tests {
         let mut view = view_with(vec![a]);
         view.items.push(Item::Compaction(c));
 
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         assert_eq!(path.steps[1].step.id, "compact-0001");
     }
 
@@ -1925,7 +1932,7 @@ mod tests {
         let mut view = view_with(vec![t1, t2]);
         view.files_changed = vec!["x.rs".into()];
 
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).unwrap();
         let json = serde_json::to_string(&path).unwrap();
         let back: Path = serde_json::from_str(&json).unwrap();
         assert_eq!(back.path.id, path.path.id);

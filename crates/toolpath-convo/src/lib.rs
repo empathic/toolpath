@@ -25,6 +25,14 @@ pub enum ConvoError {
     #[error("provider error: {0}")]
     Provider(String),
 
+    #[error(
+        "duplicate step id {0:?}: the conversation produced two steps with the same id. \
+         This usually means the source reused an id (e.g. a Claude compaction replay that \
+         re-emits earlier messages with their original uuids); the provider must give every \
+         step a unique id before derivation."
+    )]
+    DuplicateStepId(String),
+
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -866,7 +874,8 @@ mod tests {
         let turn_event = WatcherEvent::Turn(Box::new(view.turns().next().unwrap().clone()));
         assert!(matches!(turn_event, WatcherEvent::Turn(_)));
 
-        let updated_event = WatcherEvent::TurnUpdated(Box::new(view.turns().nth(1).unwrap().clone()));
+        let updated_event =
+            WatcherEvent::TurnUpdated(Box::new(view.turns().nth(1).unwrap().clone()));
         assert!(matches!(updated_event, WatcherEvent::TurnUpdated(_)));
 
         let progress_event = WatcherEvent::Progress {
@@ -911,7 +920,8 @@ mod tests {
         let turn = WatcherEvent::Turn(Box::new(sample_view().turns().next().unwrap().clone()));
         assert!(!turn.is_update());
 
-        let updated = WatcherEvent::TurnUpdated(Box::new(sample_view().turns().next().unwrap().clone()));
+        let updated =
+            WatcherEvent::TurnUpdated(Box::new(sample_view().turns().next().unwrap().clone()));
         assert!(updated.is_update());
 
         let progress = WatcherEvent::Progress {
@@ -926,7 +936,8 @@ mod tests {
         let turn = WatcherEvent::Turn(Box::new(sample_view().turns().nth(1).unwrap().clone()));
         assert_eq!(turn.turn_id(), Some("t2"));
 
-        let updated = WatcherEvent::TurnUpdated(Box::new(sample_view().turns().next().unwrap().clone()));
+        let updated =
+            WatcherEvent::TurnUpdated(Box::new(sample_view().turns().next().unwrap().clone()));
         assert_eq!(updated.turn_id(), Some("t1"));
 
         let progress = WatcherEvent::Progress {
