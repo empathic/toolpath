@@ -14,8 +14,8 @@ use toolpath::v1::{Path, Step};
 
 use crate::{
     Compaction, CompactionTrigger, ConversationEvent, ConversationView, DelegatedWork,
-    EnvironmentSnapshot, FileMutation, Item, KeptRange, ProducerInfo, Role, SessionBase,
-    TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Extract a [`ConversationView`] from a toolpath [`Path`] document.
@@ -212,7 +212,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     let kept = structural
                         .extra
                         .get("kept")
-                        .and_then(|v| serde_json::from_value::<Vec<KeptRange>>(v.clone()).ok())
+                        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
                         .unwrap_or_default();
                     let compaction = Compaction {
                         id: step.step.id.clone(),
@@ -1406,10 +1406,7 @@ mod tests {
             trigger: Some(CompactionTrigger::Manual),
             summary: Some("condensed".into()),
             pre_tokens: Some(4096),
-            kept: vec![KeptRange {
-                from: "a".into(),
-                to: "a".into(),
-            }],
+            kept: vec!["a".into(), "a".into()],
         };
 
         let source = ConversationView {
@@ -1439,13 +1436,7 @@ mod tests {
         assert_eq!(rc.trigger, Some(CompactionTrigger::Manual));
         assert_eq!(rc.summary.as_deref(), Some("condensed"));
         assert_eq!(rc.pre_tokens, Some(4096));
-        assert_eq!(
-            rc.kept,
-            vec![KeptRange {
-                from: "a".into(),
-                to: "a".into(),
-            }]
-        );
+        assert_eq!(rc.kept, vec!["a".to_string(), "a".to_string()]);
     }
 
     #[test]

@@ -13,8 +13,8 @@ use crate::types::{Conversation, ConversationEntry, Message, MessageContent, Mes
 use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
     Compaction, CompactionTrigger, ConversationMeta, ConversationProvider, ConversationView,
-    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, KeptRange, Role, TokenUsage,
-    ToolCategory, ToolInvocation, ToolResult, Turn,
+    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, Role, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -380,9 +380,21 @@ fn is_compact_summary(entry: &ConversationEntry) -> bool {
 /// synthetic summary that follows it.
 ///
 /// All the boundary's compaction-specific data lives in `entry.extra`
-/// (`logicalParentUuid`, `compactMetadata.{trigger,preTokens,preservedSegment}`).
+/// (`logicalParentUuid`, `compactMetadata.{trigger,preTokens,preservedMessages}`).
 /// `summary` comes from the following `isCompactSummary` entry's message text.
-fn compaction_from_boundary(boundary: &ConversationEntry, summary: Option<String>) -> Compaction {
+///
+/// `replayed` is the set of turn-ids that Claude re-emitted just before this
+/// boundary (detected by duplicate-uuid stripping in [`conversation_to_view`]):
+/// the tool_use/tool_result entries it "pins" into the post-compaction window.
+/// `kept` becomes the de-duplicated union, in order, of (a) the explicit
+/// preserved tail (`compactMetadata.preservedMessages.uuids`) and (b) that
+/// replayed set — every turn-id that survives verbatim into the post-compaction
+/// context.
+fn compaction_from_boundary(
+    boundary: &ConversationEntry,
+    summary: Option<String>,
+    replayed: &[String],
+) -> Compaction {
     let extra = &boundary.extra;
 
     // The pre-compaction message the boundary logically continues from.
@@ -407,19 +419,28 @@ fn compaction_from_boundary(boundary: &ConversationEntry, summary: Option<String
         .and_then(|m| m.get("preTokens"))
         .and_then(|v| v.as_u64());
 
-    // The preserved segment (recent tail kept verbatim) maps to a single
-    // KeptRange [headUuid .. tailUuid]. Older boundaries omit it.
-    let kept = meta
-        .and_then(|m| m.get("preservedSegment"))
-        .and_then(|seg| {
-            let from = seg.get("headUuid").and_then(|v| v.as_str())?;
-            let to = seg.get("tailUuid").and_then(|v| v.as_str())?;
-            Some(vec![KeptRange {
-                from: from.to_string(),
-                to: to.to_string(),
-            }])
-        })
-        .unwrap_or_default();
+    // The turn-ids that survive verbatim into the post-compaction window: the
+    // explicit preserved tail (preservedMessages.uuids) plus the re-emitted
+    // "pinned" set we detected via duplicate-uuid stripping. Union in order,
+    // de-duplicated — the two sets are disjoint in practice but we guard anyway.
+    let mut kept: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let preserved_tail = meta
+        .and_then(|m| m.get("preservedMessages"))
+        .and_then(|p| p.get("uuids"))
+        .and_then(|v| v.as_array());
+    if let Some(uuids) = preserved_tail {
+        for u in uuids.iter().filter_map(|v| v.as_str()) {
+            if seen.insert(u.to_string()) {
+                kept.push(u.to_string());
+            }
+        }
+    }
+    for u in replayed {
+        if seen.insert(u.clone()) {
+            kept.push(u.clone());
+        }
+    }
 
     Compaction {
         id: boundary.uuid.clone(),
@@ -464,10 +485,34 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // rewrite parents of subsequently absorbed entries.
     let mut last_anchor_uuid: Option<String> = None;
 
+    // Duplicate-uuid stripping. When Claude compacts, it re-emits a block of
+    // earlier tool_use/tool_result entries — already-seen uuids — that it
+    // "pins" into the post-compaction context, immediately before the
+    // boundary. We keep only the FIRST occurrence of each uuid; the
+    // re-emitted duplicates are dropped so step ids stay unique (otherwise
+    // `derive_path` errors with DuplicateStepId). The stripped uuids since the
+    // last boundary are the "replayed" set, attached to the next boundary's
+    // `Compaction.kept`.
+    let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut replayed_since_boundary: Vec<String> = Vec::new();
+
     let entries = &convo.entries;
     let mut i = 0;
     while i < entries.len() {
         let entry = &entries[i];
+
+        // Strip re-emitted entries: any non-boundary entry whose uuid already
+        // appeared earlier in this conversation. Boundary entries are exempt
+        // (their uuid is always unique). Record the uuid as replayed so the
+        // next boundary can list it in `kept`.
+        if !is_compact_boundary(entry)
+            && !entry.uuid.is_empty()
+            && !seen_uuids.insert(entry.uuid.clone())
+        {
+            replayed_since_boundary.push(entry.uuid.clone());
+            i += 1;
+            continue;
+        }
 
         // Compaction boundary: emit one Item::Compaction at this position,
         // folding the immediately-following synthetic summary entry (if any)
@@ -475,7 +520,12 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         if is_compact_boundary(entry) {
             let summary = entries.get(i + 1).filter(|next| is_compact_summary(next));
             let summary_text = summary.map(|s| s.text());
-            let compaction = compaction_from_boundary(entry, summary_text);
+            let replayed = std::mem::take(&mut replayed_since_boundary);
+            let compaction = compaction_from_boundary(entry, summary_text, &replayed);
+            seen_uuids.insert(entry.uuid.clone());
+            if let Some(s) = summary {
+                seen_uuids.insert(s.uuid.clone());
+            }
             // Rewire the compaction's logical parent through any prior
             // absorption so it lands on a real Item in the derived DAG.
             let mut compaction = compaction;

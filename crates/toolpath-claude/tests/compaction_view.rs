@@ -80,9 +80,14 @@ fn boundary_becomes_single_compaction_item_with_expected_fields() {
         "preTokens carried from compactMetadata"
     );
     assert_eq!(
-        c.kept.len(),
-        1,
-        "preservedSegment maps to a single KeptRange"
+        c.kept,
+        vec![
+            "8a1c3178-ba2b-43cc-a376-3ad159a03d25".to_string(),
+            "1b85db73-91ac-4095-a45e-6feb3e495282".to_string(),
+        ],
+        "kept = the de-duplicated union of preservedMessages.uuids and the \
+         re-emitted (replayed) set; this fixture has no re-emission, so it's \
+         exactly the two preserved-tail uuids"
     );
     assert!(
         c.parent_id.is_some(),
@@ -217,6 +222,62 @@ fn compaction_survives_projection_roundtrip() {
             !turn.text.contains(summary_head),
             "summary text leaked into a turn after projection: {:?}",
             turn.id
+        );
+    }
+}
+
+/// The re-emission strip keeps step ids unique so `derive_path` succeeds, the
+/// `Compaction.kept` set is populated, every surviving turn appears exactly
+/// once, and the compaction survives a project → re-read roundtrip with the
+/// same `kept`.
+#[test]
+fn re_emission_is_stripped_and_kept_round_trips() {
+    use std::collections::HashSet;
+
+    let view = load_view();
+
+    // Forward: derive_path must NOT error on duplicate step ids — the
+    // re-emitted (duplicate-uuid) entries were stripped during `to_view`.
+    let path = derive_path(&view, &DeriveConfig::default())
+        .expect("derive_path must succeed (no duplicate step ids)");
+    let mut ids = HashSet::new();
+    for step in &path.steps {
+        assert!(
+            ids.insert(step.step.id.clone()),
+            "duplicate step id leaked through: {}",
+            step.step.id
+        );
+    }
+
+    // Every turn in the view appears exactly once (re-emission stripped).
+    let mut turn_ids = HashSet::new();
+    for turn in view.turns() {
+        assert!(
+            turn_ids.insert(turn.id.clone()),
+            "turn {} appears more than once — re-emission not stripped",
+            turn.id
+        );
+    }
+
+    // kept is populated.
+    let c = only_compaction(&view);
+    assert!(!c.kept.is_empty(), "Compaction.kept should be populated");
+
+    // Reverse: project (re-synthesizing the replay block) → re-read. The
+    // compaction survives with the same `kept`, and re-reading still produces
+    // unique step ids (the re-synthesized replay block is stripped again).
+    let after = project_and_reread(&view);
+    let after_c = only_compaction(&after);
+    assert_eq!(after_c.kept, c.kept, "kept diverged after projection");
+
+    let path2 =
+        derive_path(&after, &DeriveConfig::default()).expect("re-read derive_path must succeed");
+    let mut ids2 = HashSet::new();
+    for step in &path2.steps {
+        assert!(
+            ids2.insert(step.step.id.clone()),
+            "duplicate step id after projection roundtrip: {}",
+            step.step.id
         );
     }
 }

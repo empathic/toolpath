@@ -213,15 +213,6 @@ pub enum CompactionTrigger {
     Manual,
 }
 
-/// A run of turns retained verbatim past a compaction boundary, inclusive,
-/// in transcript order. `from`/`to` reference turn ids that survive in the
-/// derived path as ancestor steps.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeptRange {
-    pub from: String,
-    pub to: String,
-}
-
 /// A context-compaction boundary: the agent summarized older turns and
 /// continued. Every harness records this as an inline marker within one
 /// session (never a new session), so it's modeled as one item in the
@@ -254,10 +245,15 @@ pub struct Compaction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_tokens: Option<u64>,
 
-    /// Ranges of turns kept verbatim past the boundary. Empty = the whole
-    /// prior context was condensed into `summary` (wholesale replace).
+    /// Ids of the prior turns that survive verbatim into the
+    /// post-compaction context window — the harness-agnostic "what's kept".
+    /// May be non-contiguous (Claude keeps a recent tail PLUS a scattered
+    /// set of pinned tool results). Empty = wholesale (the summary replaced
+    /// everything). Each harness's projector renders this set in its own
+    /// form: Claude re-emits these turns on-chain before the boundary;
+    /// opencode/Pi anchor a kept tail at the earliest id; Codex keeps none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub kept: Vec<KeptRange>,
+    pub kept: Vec<String>,
 }
 
 /// One element of a conversation's ordered stream — a turn, a

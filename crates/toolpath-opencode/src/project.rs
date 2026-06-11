@@ -377,10 +377,10 @@ fn build_compaction_messages(
         data: PartData::Compaction(CompactionPart {
             auto: c.trigger == Some(CompactionTrigger::Auto),
             overflow: None,
-            // The kept tail anchors on the first kept range's `from`; the
+            // The kept tail anchors on the earliest surviving turn id; the
             // field serializes back to the `tailStartID` wire key the
             // reader round-trips.
-            tail_start_id: c.kept.first().map(|r| r.from.clone()),
+            tail_start_id: c.kept.first().cloned(),
             extra: HashMap::new(),
         }),
     };

@@ -80,7 +80,7 @@ const COMPACTION_SQL: &str = r#"
       ('prt_u1_1','msg_u1','ses_compact',1001,1001,'{"type":"text","text":"refactor the auth module"}'),
       ('prt_a1_1','msg_a1','ses_compact',1002,1002,'{"type":"step-start"}'),
       ('prt_a1_2','msg_a1','ses_compact',1100,1100,'{"type":"text","text":"reading the current auth code"}'),
-      ('prt_a1_3','msg_a1','ses_compact',1500,1500,'{"type":"compaction","auto":true,"overflow":true,"tailStartId":"prt_a1_3"}'),
+      ('prt_a1_3','msg_a1','ses_compact',1500,1500,'{"type":"compaction","auto":true,"overflow":true,"tailStartId":"msg_u1"}'),
       ('prt_u2_1','msg_u2','ses_compact',1600,1600,'{"type":"text","text":"now add session validation"}'),
       ('prt_a2_1','msg_a2','ses_compact',1700,1700,'{"type":"step-start"}'),
       ('prt_a2_2','msg_a2','ses_compact',1900,1900,'{"type":"text","text":"added session validation to login()"}'),
@@ -151,8 +151,15 @@ fn to_view_surfaces_compaction_as_compaction_item() {
         c.parent_id.is_some(),
         "compaction should parent on the prior turn"
     );
-    // `tailStartId` is present in the SQL fixture, so a kept range is set.
-    assert!(!c.kept.is_empty(), "tailStartId present ⇒ kept range");
+    // `tailStartId` anchors on `msg_u1`. The compaction part lives inside
+    // `msg_a1`, so that assistant turn isn't emitted yet when the boundary
+    // is recorded — the kept tail is just the turns emitted so far from the
+    // anchor onward, i.e. `[msg_u1]`.
+    assert_eq!(
+        c.kept,
+        vec!["msg_u1".to_string()],
+        "tailStartId present ⇒ surviving turn ids from anchor to last emitted turn"
+    );
 }
 
 #[test]

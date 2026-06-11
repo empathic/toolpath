@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use toolpath_convo::{
     Compaction, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
-    DelegatedWork, EnvironmentSnapshot, Item, KeptRange, Role, SessionBase, TokenUsage,
-    ToolCategory, ToolInvocation, ToolResult, Turn,
+    DelegatedWork, EnvironmentSnapshot, Item, Role, SessionBase, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn,
 };
 
 // ── Classification helpers ───────────────────────────────────────────
@@ -222,6 +222,28 @@ fn truncate_output(output: &str, max: usize) -> String {
     }
 }
 
+/// Expand Pi's single `firstKeptEntryId` anchor into the flat list of
+/// surviving turn ids for a `Compaction.kept`.
+///
+/// Pi records only the *first* retained entry; the surviving prefix runs
+/// from there through the last turn before the compaction boundary. We
+/// recover the full set by scanning the turns already emitted into
+/// `items` for the anchor, then taking every turn id from that point to
+/// the end. If the anchor doesn't match an emitted turn (it can point at
+/// a metadata entry we discard, like a `model_change`), we fall back to
+/// the bare anchor id so the list is never silently empty.
+fn kept_ids_from(items: &[Item], first_kept_entry_id: &str) -> Vec<String> {
+    let turn_ids: Vec<&str> = items
+        .iter()
+        .filter_map(Item::as_turn)
+        .map(|t| t.id.as_str())
+        .collect();
+    match turn_ids.iter().position(|id| *id == first_kept_entry_id) {
+        Some(start) => turn_ids[start..].iter().map(|s| s.to_string()).collect(),
+        None => vec![first_kept_entry_id.to_string()],
+    }
+}
+
 // ── Main conversion ──────────────────────────────────────────────────
 
 /// Convert a PiSession into a provider-agnostic ConversationView.
@@ -259,14 +281,13 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 tokens_before,
                 ..
             } => {
-                // Kept range: from the first retained entry to the boundary's
-                // parent (the last turn before compaction). When there's no
-                // parent we record a degenerate single-entry range so the
-                // range still references a real surviving turn.
-                let kept_to = base
-                    .parent_id
-                    .clone()
-                    .unwrap_or_else(|| first_kept_entry_id.clone());
+                // Expand Pi's `firstKeptEntryId` anchor into the flat list of
+                // turn ids that survive verbatim: every turn we've already
+                // emitted from `firstKeptEntryId` onward through the last turn
+                // before this compaction. If the anchor doesn't line up with an
+                // emitted turn (e.g. it points at a discarded metadata entry),
+                // fall back to the bare anchor id so `kept` is never empty.
+                let kept = kept_ids_from(&items, first_kept_entry_id);
                 items.push(Item::Compaction(Compaction {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
@@ -276,10 +297,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     trigger: None,
                     summary: Some(summary.clone()),
                     pre_tokens: Some(*tokens_before),
-                    kept: vec![KeptRange {
-                        from: first_kept_entry_id.clone(),
-                        to: kept_to,
-                    }],
+                    kept,
                 }));
             }
 
@@ -1031,14 +1049,13 @@ mod tests {
         assert_eq!(comp.summary.as_deref(), Some("sum"));
         assert_eq!(comp.pre_tokens, Some(100));
         assert_eq!(comp.trigger, None);
-        assert_eq!(comp.kept.len(), 1);
-        assert_eq!(comp.kept[0].from, "x");
-        // `to` = the boundary's parent (last turn before compaction).
-        assert_eq!(comp.kept[0].to, "u1");
+        // `firstKeptEntryId` ("x") matches no emitted turn here, so `kept`
+        // falls back to the bare anchor id.
+        assert_eq!(comp.kept, vec!["x".to_string()]);
     }
 
     #[test]
-    fn test_compaction_without_parent_uses_degenerate_kept_range() {
+    fn test_compaction_anchor_without_matching_turn_falls_back_to_bare_id() {
         let c = Entry::Compaction {
             base: base("c", None, "t"),
             summary: "sum".into(),
@@ -1051,10 +1068,34 @@ mod tests {
         let v = session_to_view(&session_from(vec![c], "/tmp/p"));
         let comp = v.items[0].as_compaction().expect("compaction item");
         assert_eq!(comp.parent_id, None);
-        // Degenerate single-entry range: `to` falls back to `from`.
-        assert_eq!(comp.kept.len(), 1);
-        assert_eq!(comp.kept[0].from, "x");
-        assert_eq!(comp.kept[0].to, "x");
+        // No emitted turn matches the anchor, so `kept` is the bare anchor id
+        // rather than silently empty.
+        assert_eq!(comp.kept, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn test_compaction_kept_expands_anchor_into_surviving_turn_ids() {
+        // Two emitted turns precede the compaction; the anchor points at the
+        // first of them, so `kept` expands to both turn ids (anchor through
+        // the last turn before the boundary).
+        let v = session_to_view(&session_from(
+            vec![
+                user_text_entry("u1", None, "first"),
+                user_text_entry("u2", Some("u1"), "second"),
+                Entry::Compaction {
+                    base: base("c", Some("u2"), "t"),
+                    summary: "sum".into(),
+                    first_kept_entry_id: "u1".into(),
+                    tokens_before: 50,
+                    details: None,
+                    from_hook: None,
+                    extra: HashMap::new(),
+                },
+            ],
+            "/tmp/p",
+        ));
+        let comp = v.items[2].as_compaction().expect("compaction item");
+        assert_eq!(comp.kept, vec!["u1".to_string(), "u2".to_string()]);
     }
 
     #[test]

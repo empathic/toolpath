@@ -839,8 +839,7 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
 mod tests {
     use super::*;
     use crate::{
-        Compaction, CompactionTrigger, DelegatedWork, EnvironmentSnapshot, KeptRange, TokenUsage,
-        ToolResult,
+        Compaction, CompactionTrigger, DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolResult,
     };
 
     fn base_turn(id: &str, role: Role) -> Turn {
@@ -1844,10 +1843,7 @@ mod tests {
             trigger: Some(CompactionTrigger::Manual),
             summary: Some("s".into()),
             pre_tokens: Some(100),
-            kept: vec![KeptRange {
-                from: "a".into(),
-                to: "a".into(),
-            }],
+            kept: vec!["a".into(), "a".into()],
         };
 
         let mut view = view_with(vec![a]);
@@ -1866,10 +1862,7 @@ mod tests {
         assert_eq!(sc.extra["trigger"], serde_json::json!("manual"));
         assert_eq!(sc.extra["summary"], serde_json::json!("s"));
         assert_eq!(sc.extra["pre_tokens"], serde_json::json!(100));
-        assert_eq!(
-            sc.extra["kept"],
-            serde_json::json!([{"from": "a", "to": "a"}])
-        );
+        assert_eq!(sc.extra["kept"], serde_json::json!(["a", "a"]));
 
         // Turn b rewired through the boundary: its parent is the compact step.
         assert_eq!(path.steps[2].step.parents, vec!["c".to_string()]);

@@ -140,8 +140,14 @@ fn real_fixture_has_two_compaction_items() {
         assert!(c.summary.is_some(), "summary should be carried");
         assert!(c.pre_tokens.is_some(), "pre_tokens should be carried");
         assert_eq!(c.trigger, None, "Pi doesn't persist auto-vs-manual");
-        assert_eq!(c.kept.len(), 1, "one kept range per compaction");
+        // `kept` is now a flat list of surviving turn ids, never empty.
+        assert!(!c.kept.is_empty(), "kept should carry surviving turn ids");
     }
+    // The first boundary's anchor is a discarded `model_change` entry, so it
+    // falls back to the bare anchor id; the second anchors at an emitted
+    // assistant turn that is the last turn before the boundary.
+    assert_eq!(comps[0].kept, vec!["4cc7b46c".to_string()]);
+    assert_eq!(comps[1].kept, vec!["3a47185e".to_string()]);
 }
 
 #[test]
@@ -232,8 +238,12 @@ fn projector_reconstructs_compaction_entries() {
         assert!(c.summary.is_some(), "summary survives projection");
         assert!(c.pre_tokens.is_some(), "pre_tokens survives projection");
         assert_eq!(c.trigger, None, "Pi doesn't persist auto-vs-manual");
-        assert_eq!(c.kept.len(), 1, "one kept range per compaction");
+        assert!(!c.kept.is_empty(), "kept survives projection");
     }
+    // The anchor (`kept.first()`) round-trips through projection: it's
+    // written back as `firstKeptEntryId` and recovered on re-read.
+    assert_eq!(comps[0].kept, vec!["4cc7b46c".to_string()]);
+    assert_eq!(comps[1].kept, vec!["3a47185e".to_string()]);
 
     // Each compaction is positioned in the entry stream after the turns
     // it summarizes — never the first item, always preceded by a turn.

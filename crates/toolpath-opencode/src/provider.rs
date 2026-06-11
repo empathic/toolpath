@@ -230,14 +230,20 @@ impl<'a> Builder<'a> {
             CompactionTrigger::Manual
         });
         // `tail_start_id` anchors the kept tail. When present, the kept
-        // range runs from it to the last turn before the boundary; absent
-        // means the whole prior context was condensed.
-        let kept = match (&c.tail_start_id, &self.last_turn_id) {
-            (Some(from), Some(to)) => vec![toolpath_convo::KeptRange {
-                from: from.clone(),
-                to: to.clone(),
-            }],
-            _ => Vec::new(),
+        // tail is every turn from it through the last turn before the
+        // boundary; absent means the whole prior context was condensed.
+        let kept = match &c.tail_start_id {
+            Some(anchor) => self
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Turn(t) => Some(&t.id),
+                    _ => None,
+                })
+                .skip_while(|id| *id != anchor)
+                .cloned()
+                .collect(),
+            None => Vec::new(),
         };
         self.items.push(Item::Compaction(Compaction {
             id: part.id.clone(),
@@ -1235,11 +1241,8 @@ mod tests {
         );
         assert_eq!(
             c.kept,
-            vec![toolpath_convo::KeptRange {
-                from: "mu".into(),
-                to: "ma".into(),
-            }],
-            "tailStartId present ⇒ kept range from anchor to last pre-compaction turn"
+            vec!["mu".to_string(), "ma".to_string()],
+            "tailStartId present ⇒ surviving turn ids from anchor to last pre-compaction turn"
         );
 
         // Item order: user turn, assistant turn, then the compaction.

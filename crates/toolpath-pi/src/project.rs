@@ -558,15 +558,11 @@ fn emit_bash_execution(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<E
 /// in [`crate::provider::session_to_view`].
 fn emit_compaction(comp: &Compaction, entries: &mut Vec<Entry>) {
     let summary = comp.summary.clone().unwrap_or_default();
-    // Pi's format requires a `firstKeptEntryId`; the forward path stored
-    // it as the first kept range's `from`. Fall back to the parent id (or
-    // "") when no range survived.
-    let first_kept_entry_id = comp
-        .kept
-        .first()
-        .map(|r| r.from.clone())
-        .or_else(|| comp.parent_id.clone())
-        .unwrap_or_default();
+    // Pi's format requires a single `firstKeptEntryId` anchor; the forward
+    // path expands it into a flat list of surviving turn ids, the earliest
+    // of which is the anchor. Recover it as the first kept id (empty string
+    // when nothing survived).
+    let first_kept_entry_id = comp.kept.first().cloned().unwrap_or_default();
     entries.push(Entry::Compaction {
         base: EntryBase {
             id: comp.id.clone(),
