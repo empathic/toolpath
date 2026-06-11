@@ -27,6 +27,12 @@ trait Harness {
     /// root) through the harness's native reader and forward it to IR.
     /// Returns `None` if the fixture isn't on disk.
     fn load_fixture(&self) -> Option<ConversationView>;
+    /// The `convo-compacted.{jsonl,json}` fixture — a captured session that
+    /// contains a real context compaction. `None` when the harness has no
+    /// compaction concept or no such fixture on disk.
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        None
+    }
     /// Project the IR view, serialize the native output to its on-disk
     /// wire format, and re-parse through the harness's own reader.
     /// Returns Err with a descriptive message if the wire round-trip
@@ -34,6 +40,13 @@ trait Harness {
     /// Some harnesses don't have a JSON/JSONL wire (opencode is SQL);
     /// those can return Ok(()) with the rationale documented inline.
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String>;
+    /// Whether the harness persists a compaction to its on-disk format.
+    /// Gemini compresses context in memory but writes no boundary or summary
+    /// to the chat file, so a compaction projected into it has nowhere to
+    /// land — `compaction_survives` skips such targets.
+    fn persists_compaction(&self) -> bool {
+        true
+    }
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -60,6 +73,15 @@ impl Harness for ClaudeHarness {
         }
         let convo = toolpath_claude::ConversationReader::read_conversation(&path)
             .expect("claude fixture parse");
+        Some(toolpath_claude::provider::to_view(&convo))
+    }
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("claude/convo-compacted.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let convo = toolpath_claude::ConversationReader::read_conversation(&path)
+            .expect("claude compacted fixture parse");
         Some(toolpath_claude::provider::to_view(&convo))
     }
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
@@ -102,6 +124,15 @@ impl Harness for CodexHarness {
         }
         let session =
             toolpath_codex::RolloutReader::read_session(&path).expect("codex fixture parse");
+        Some(toolpath_codex::to_view(&session))
+    }
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("codex/convo-compacted.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let session = toolpath_codex::RolloutReader::read_session(&path)
+            .expect("codex compacted fixture parse");
         Some(toolpath_codex::to_view(&session))
     }
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
@@ -185,6 +216,15 @@ impl Harness for PiHarness {
         let session = toolpath_pi::reader::read_session_from_file(&path).expect("pi fixture parse");
         Some(toolpath_pi::session_to_view(&session))
     }
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("pi/convo-compacted.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let session =
+            toolpath_pi::reader::read_session_from_file(&path).expect("pi compacted fixture parse");
+        Some(toolpath_pi::session_to_view(&session))
+    }
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
         let projector = toolpath_pi::project::PiProjector::new();
         let session = projector
@@ -209,6 +249,9 @@ struct GeminiHarness;
 impl Harness for GeminiHarness {
     fn name(&self) -> &'static str {
         "gemini"
+    }
+    fn persists_compaction(&self) -> bool {
+        false
     }
     fn roundtrip(&self, view: &ConversationView) -> ConversationView {
         let projector = toolpath_gemini::project::GeminiProjector::default();
@@ -282,6 +325,15 @@ impl Harness for OpencodeHarness {
             return None;
         }
         let json = std::fs::read_to_string(&path).expect("opencode fixture read");
+        let session = parse_opencode_export(&json);
+        Some(toolpath_opencode::to_view(&session))
+    }
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("opencode/convo-compacted.json");
+        if !path.exists() {
+            return None;
+        }
+        let json = std::fs::read_to_string(&path).expect("opencode compacted fixture read");
         let session = parse_opencode_export(&json);
         Some(toolpath_opencode::to_view(&session))
     }
@@ -533,6 +585,38 @@ mod invariants {
                 failures.push(format!(
                     "role at turn {} diverged: first={:?} second={:?}",
                     i, a.role, b.role
+                ));
+            }
+        }
+    }
+
+    /// Every compaction in `original` must survive: the boundary count and
+    /// each one's summary presence are preserved. `kept` is not compared —
+    /// wholesale harnesses (Codex) drop it by design, so it isn't a
+    /// cross-harness invariant. An empty summary counts as absent because
+    /// Codex always carries a (possibly empty) message.
+    pub fn compaction_survives(
+        original: &ConversationView,
+        result: &ConversationView,
+        failures: &mut Vec<String>,
+    ) {
+        let want = original.compactions().count();
+        let got = result.compactions().count();
+        if want != got {
+            failures.push(format!(
+                "compaction count diverged: first={want} second={got}"
+            ));
+            return;
+        }
+        let has_summary = |c: &toolpath_convo::Compaction| {
+            c.summary.as_deref().is_some_and(|s| !s.trim().is_empty())
+        };
+        for (i, (a, b)) in original.compactions().zip(result.compactions()).enumerate() {
+            if has_summary(a) != has_summary(b) {
+                failures.push(format!(
+                    "compaction {i} summary presence diverged: first={} second={}",
+                    has_summary(a),
+                    has_summary(b)
                 ));
             }
         }
@@ -1009,6 +1093,9 @@ fn run_cell(
     invariants::delegations(&view_first, &view_second, &mut failures);
     invariants::delegations_survive(&view_after_source, &view_first, &mut failures);
     invariants::files_changed(&view_first, &view_second, &mut failures);
+    if target.persists_compaction() {
+        invariants::compaction_survives(&view_after_source, &view_first, &mut failures);
+    }
     failures
 }
 
@@ -1135,4 +1222,32 @@ fn matrix_schema_validation() {
             failures.len()
         );
     }
+}
+
+#[test]
+fn matrix_translation_compacted() {
+    // The same matrix, sourced from each harness's captured COMPACTED
+    // session, so `compaction_survives` in every cell exercises a real
+    // boundary alongside the usual translation invariants. Gemini has no
+    // compaction fixture and is skipped as a source.
+    let harnesses = all_harnesses();
+    let mut sources: Vec<(String, ConversationView)> = Vec::new();
+    for h in &harnesses {
+        if let Some(view) = h.load_compacted_fixture() {
+            assert!(
+                view.compactions().count() > 0,
+                "{} compacted fixture carries no compaction",
+                h.name()
+            );
+            eprintln!(
+                "loaded {} compacted fixture: {} turns, {} compaction(s)",
+                h.name(),
+                view.turns().count(),
+                view.compactions().count()
+            );
+            sources.push((h.name().to_string(), view));
+        }
+    }
+    assert!(!sources.is_empty(), "no compacted fixtures on disk");
+    run_matrix("matrix (compacted fixtures)", &sources);
 }
