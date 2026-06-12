@@ -40,11 +40,11 @@ trait Harness {
     /// Some harnesses don't have a JSON/JSONL wire (opencode is SQL);
     /// those can return Ok(()) with the rationale documented inline.
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String>;
-    /// Whether the harness persists a compaction to its on-disk format.
-    /// Gemini compresses context in memory but writes no boundary or summary
-    /// to the chat file, so a compaction projected into it has nowhere to
-    /// land — `compaction_survives` skips such targets.
-    fn persists_compaction(&self) -> bool {
+    /// Whether our derive↔project pipeline round-trips a context compaction
+    /// for this harness. When false, `compaction_survives` skips it as a
+    /// translation target — either the on-disk format carries no boundary
+    /// (gemini) or the provider doesn't implement compaction yet (cursor).
+    fn roundtrips_compaction(&self) -> bool {
         true
     }
 }
@@ -250,7 +250,9 @@ impl Harness for GeminiHarness {
     fn name(&self) -> &'static str {
         "gemini"
     }
-    fn persists_compaction(&self) -> bool {
+    fn roundtrips_compaction(&self) -> bool {
+        // Gemini compresses context in memory but persists no boundary to the
+        // chat file, so there's nothing to round-trip.
         false
     }
     fn roundtrip(&self, view: &ConversationView) -> ConversationView {
@@ -361,6 +363,13 @@ struct CursorHarness;
 impl Harness for CursorHarness {
     fn name(&self) -> &'static str {
         "cursor"
+    }
+    fn roundtrips_compaction(&self) -> bool {
+        // The cursor provider doesn't derive or render compaction yet. Cursor's
+        // format does appear to persist summarization
+        // (`speculativeSummarizationEncryptionKey`, `summarizedComposers`), so
+        // this is a gap to revisit, not a claim that Cursor lacks compaction.
+        false
     }
     fn roundtrip(&self, view: &ConversationView) -> ConversationView {
         let projector = toolpath_cursor::project::CursorProjector::new();
@@ -1093,7 +1102,7 @@ fn run_cell(
     invariants::delegations(&view_first, &view_second, &mut failures);
     invariants::delegations_survive(&view_after_source, &view_first, &mut failures);
     invariants::files_changed(&view_first, &view_second, &mut failures);
-    if target.persists_compaction() {
+    if target.roundtrips_compaction() {
         invariants::compaction_survives(&view_after_source, &view_first, &mut failures);
     }
     failures

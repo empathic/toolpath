@@ -1290,7 +1290,7 @@ fn derive_cursor(
                 .read_session(sid)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_cursor::DeriveConfig::default();
-            Ok(toolpath_cursor::derive_path(&s, &cfg))
+            Ok(toolpath_cursor::derive_path(&s, &cfg)?)
         };
 
         let workspace_filter = project
@@ -1362,7 +1362,7 @@ pub(crate) fn derive_cursor_session(session: &str) -> Result<DerivedDoc> {
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let cfg = toolpath_cursor::DeriveConfig::default();
-    let path = toolpath_cursor::derive_path(&s, &cfg);
+    let path = toolpath_cursor::derive_path(&s, &cfg)?;
     let cache_id = make_id("cursor", &path.path.id);
     Ok(DerivedDoc {
         cache_id,

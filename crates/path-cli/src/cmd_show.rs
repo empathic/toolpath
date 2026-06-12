@@ -175,7 +175,7 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_cursor::DeriveConfig::default();
-            Ok(toolpath_cursor::derive_path(&s, &cfg))
+            Ok(toolpath_cursor::derive_path(&s, &cfg)?)
         }
         ShowSource::Pi {
             project,

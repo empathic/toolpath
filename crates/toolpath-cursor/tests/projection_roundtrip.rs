@@ -65,7 +65,7 @@ fn load_source() -> CursorSession {
 fn roundtrip(source: &CursorSession) -> (ConversationView, CursorSession, Path) {
     let view_forward: ConversationView = session_to_view(source);
 
-    let path = derive_path(&view_forward, &DeriveConfig::default());
+    let path = derive_path(&view_forward, &DeriveConfig::default()).expect("derive");
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");
@@ -157,8 +157,8 @@ fn rebuilt_session_re_lifts_to_equivalent_view() {
     let (_, rebuilt, _) = roundtrip(&source);
     let view_again = session_to_view(&rebuilt);
 
-    assert_eq!(view_forward.turns.len(), view_again.turns.len());
-    for (a, b) in view_forward.turns.iter().zip(view_again.turns.iter()) {
+    assert_eq!(view_forward.turns().count(), view_again.turns().count());
+    for (a, b) in view_forward.turns().zip(view_again.turns()) {
         assert_eq!(a.role, b.role, "role mismatch on turn {}", a.id);
         assert_eq!(a.text, b.text, "text mismatch on turn {}", a.id);
         assert_eq!(
@@ -214,7 +214,7 @@ fn projector_serializes_to_disk_readable_shape() {
 fn projector_accepts_foreign_view_shape() {
     use serde_json::json;
     use toolpath_convo::{
-        EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage,
+        EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
         ToolCategory, ToolInvocation, ToolResult, Turn,
     };
 
@@ -229,8 +229,8 @@ fn projector_accepts_foreign_view_shape() {
             working_dir: Some("/foreign".into()),
             ..Default::default()
         }),
-        turns: vec![
-            Turn {
+        items: vec![
+            Item::Turn(Turn {
                 id: "uA".into(),
                 parent_id: None,
                 group_id: None,
@@ -249,8 +249,8 @@ fn projector_accepts_foreign_view_shape() {
                 }),
                 delegations: vec![],
                 file_mutations: vec![],
-            },
-            Turn {
+            }),
+            Item::Turn(Turn {
                 id: "aA".into(),
                 parent_id: Some("uA".into()),
                 group_id: None,
@@ -292,7 +292,7 @@ fn projector_accepts_foreign_view_shape() {
                     after: Some("new\n".into()),
                     rename_to: None,
                 }],
-            },
+            }),
         ],
         ..Default::default()
     };

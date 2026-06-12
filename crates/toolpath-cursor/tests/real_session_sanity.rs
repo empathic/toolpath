@@ -51,10 +51,10 @@ fn real_cursor_db_round_trips_when_present() {
         assert_eq!(view.id, *id, "view.id should equal composer id");
         assert_eq!(view.provider_id.as_deref(), Some("cursor"));
         assert_eq!(view.session_ids, vec![id.clone()]);
-        for turn in &view.turns {
+        for turn in view.turns() {
             assert!(!turn.id.is_empty(), "every turn carries a bubble id");
         }
-        let path = derive_path(&session, &DeriveConfig::default());
+        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
         assert!(path.path.id.starts_with("path-cursor-"));
         // The derived doc must validate as a single-path graph.
         let graph = Graph::from_path(path);

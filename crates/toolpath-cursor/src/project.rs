@@ -100,8 +100,7 @@ fn project_view(
         .workspace_path
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
                 .map(PathBuf::from)
         })
@@ -132,29 +131,29 @@ fn project_view(
         .unwrap_or_else(|| DEFAULT_MODEL_NAME.to_string());
 
     let created_at = view.started_at.map(|t| t.timestamp_millis()).or_else(|| {
-        view.turns
-            .first()
+        view.turns()
+            .next()
             .and_then(|t| parse_timestamp_ms(&t.timestamp))
     });
     let last_updated_at = view
         .last_activity
         .map(|t| t.timestamp_millis())
         .or_else(|| {
-            view.turns
+            view.turns()
                 .last()
                 .and_then(|t| parse_timestamp_ms(&t.timestamp))
         })
         .or(created_at);
 
     let mut content_blobs: HashMap<String, String> = HashMap::new();
-    let mut bubbles: Vec<Bubble> = Vec::with_capacity(view.turns.len());
-    let mut headers: Vec<BubbleHeader> = Vec::with_capacity(view.turns.len());
+    let mut bubbles: Vec<Bubble> = Vec::with_capacity(view.turns().count());
+    let mut headers: Vec<BubbleHeader> = Vec::with_capacity(view.turns().count());
 
     let mut total_input: u64 = 0;
     let mut total_output: u64 = 0;
     let mut total_files: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for turn in &view.turns {
+    for turn in view.turns() {
         if !is_projectable(turn) {
             continue;
         }
@@ -963,16 +962,16 @@ mod tests {
     }
 
     fn view_with(turns: Vec<Turn>) -> ConversationView {
+        use toolpath_convo::Item;
         ConversationView {
             id: "comp-1".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("cursor".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             base: Some(SessionBase {
                 working_dir: Some("/proj".into()),
                 vcs_revision: None,
