@@ -124,15 +124,6 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    // Index turns by id so a compaction's `kept` set can be re-synthesized:
-    // each preserved/pinned turn is re-logged just before the boundary.
-    let turn_index: HashMap<&str, &Turn> = view
-        .items
-        .iter()
-        .filter_map(toolpath_convo::Item::as_turn)
-        .map(|t| (t.id.as_str(), t))
-        .collect();
-
     // Iterate the full item stream (not just turns) so a compaction boundary
     // lands at its true position between the turns it separates. Events are
     // re-emitted by the dedicated `view.events()` pass below, so we skip them
@@ -141,17 +132,16 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         let turn = match item {
             toolpath_convo::Item::Turn(t) => t,
             toolpath_convo::Item::Compaction(c) => {
-                // Inverse of the forward detector: re-synthesize the replay
-                // block (the pinned/preserved turns in `c.kept`, re-logged with
-                // their original ids and chained linearly) followed by the
-                // boundary entry (+ optional summary entry) that `to_view`
-                // re-folds into exactly this `Item::Compaction`.
+                // Emit the boundary (+ summary) that `to_view` re-folds into
+                // this `Item::Compaction`. `kept` rides in
+                // compactMetadata.preservedMessages, which is how re-read
+                // recovers it.
                 let effective_parent = c
                     .parent_id
                     .as_ref()
                     .and_then(|pid| parent_rewrites.get(pid).cloned())
                     .or_else(|| c.parent_id.clone());
-                for entry in compaction_entries(c, &view.id, effective_parent, &turn_index) {
+                for entry in compaction_entries(c, &view.id, effective_parent) {
                     convo.add_entry(entry);
                 }
                 continue;
@@ -258,41 +248,24 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     Ok(convo)
 }
 
-/// Re-log a [`Turn`] as a [`ConversationEntry`], dispatching on role. Used to
-/// reconstruct the replay block a compaction pins ahead of its boundary. The
-/// caller overrides `parent_uuid` to chain the replay linearly.
-fn turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
-    let mut entry = match turn.role {
-        Role::User => user_turn_to_entry(turn, session_id),
-        Role::Assistant => assistant_turn_to_entry(turn, session_id),
-        Role::System => system_turn_to_entry(turn, session_id),
-        Role::Other(_) => other_turn_to_entry(turn, session_id),
-    };
-    apply_turn_metadata(&mut entry, turn);
-    entry
-}
-
 /// Inverse of [`crate::provider::compaction_from_boundary`]: turn an
 /// [`Item::Compaction`](toolpath_convo::Item) back into the on-disk entries
-/// Claude writes for a compaction, so re-reading the projected conversation
-/// re-detects the same compaction with the same `kept` set.
+/// Claude writes for a compaction, so re-reading re-detects the same
+/// compaction with the same `kept` set.
 ///
-/// Emits, in order:
-/// 1. The replay block: each turn in `c.kept` (looked up in `turn_index`),
-///    re-logged with its original uuid and chained linearly so it's reachable.
-///    These are the earlier turns Claude pins into the post-compaction window;
-///    on re-read [`crate::provider::conversation_to_view`] strips them as
-///    duplicate uuids and folds them back into `kept`. (Functional
-///    reproduction — parent pointers need not match Claude's exact wire form.)
-/// 2. The boundary (`type: "system"`, `subtype: "compact_boundary"`) carrying
-///    `logicalParentUuid` and `compactMetadata.{trigger,preTokens,
-///    preservedMessages}` in `extra` — exactly where
-///    [`crate::provider::is_compact_boundary`] and `compaction_from_boundary`
-///    read them. The full `kept` set rides in `preservedMessages.uuids`.
-/// 3. The synthetic summary (`type: "user"`, `isCompactSummary: true`, message
-///    text = `summary`, `parentUuid` = boundary uuid), only when `summary` is
-///    `Some`. On re-read the forward path folds this into `Compaction.summary`
-///    rather than surfacing it as a turn.
+/// Emits the boundary (`type: "system"`, `subtype: "compact_boundary"`)
+/// carrying `logicalParentUuid` and `compactMetadata.{trigger, preTokens,
+/// preservedMessages}` in `extra` — where [`crate::provider::is_compact_boundary`]
+/// and `compaction_from_boundary` read them; `kept` rides in
+/// `preservedMessages.uuids`, which is how re-read recovers it. Then the
+/// synthetic summary (`type: "user"`, `isCompactSummary: true`, `parentUuid` =
+/// boundary), only when `summary` is `Some`.
+///
+/// `kept` turns are NOT re-logged as a replay block. Claude's resume rebuilds
+/// context from the summary plus post-boundary turns only — anything before the
+/// boundary's `parentUuid: null` is unreachable — so a replay is dead weight (a
+/// resume test confirmed it changes nothing), and `kept` already round-trips
+/// through `preservedMessages`.
 ///
 /// `effective_parent` is the boundary's logical parent after any tool-result
 /// parent rewrites — it lands in `compactMetadata`'s `logicalParentUuid`.
@@ -300,23 +273,8 @@ fn compaction_entries(
     c: &Compaction,
     session_id: &str,
     effective_parent: Option<String>,
-    turn_index: &HashMap<&str, &Turn>,
 ) -> Vec<ConversationEntry> {
-    // Re-synthesize the replay block: re-log each kept turn (in order) with its
-    // original uuid, chained linearly so the entries are reachable, immediately
-    // before the boundary. Turns not present in this view (e.g. a kept id that
-    // was itself condensed away) are skipped.
     let mut entries: Vec<ConversationEntry> = Vec::new();
-    let mut replay_parent: Option<String> = effective_parent.clone();
-    for id in &c.kept {
-        let Some(turn) = turn_index.get(id.as_str()) else {
-            continue;
-        };
-        let mut entry = turn_to_entry(turn, session_id);
-        entry.parent_uuid = replay_parent.take();
-        replay_parent = Some(entry.uuid.clone());
-        entries.push(entry);
-    }
 
     let mut compact_metadata = serde_json::Map::new();
     if let Some(trigger) = c.trigger {
