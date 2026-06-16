@@ -147,8 +147,8 @@ fn project_view(
         .iter()
         .rposition(|t| matches!(t.role, Role::Assistant));
 
-    // A turn's group id is its `group_id`; an assistant turn without one
-    // is its own group (a unique synthesized id) so its own total survives.
+    // A turn's group ID is its `group_id`; an assistant turn without one
+    // is its own group (a unique synthesized ID) so its own total survives.
     let group_of = |idx: usize, turn: &Turn| -> String {
         turn.group_id
             .clone()

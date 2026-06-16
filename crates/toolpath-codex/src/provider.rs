@@ -18,7 +18,7 @@
 //!    `extra["codex"]["patch_changes"]` — the derive layer consumes it
 //!    for file-artifact sibling changes.
 //! 7. Token accounting. `turn_context` / `task_started` open an API round
-//!    (`turn_id`); assistant turns in it share that id as `Turn.group_id`.
+//!    (`turn_id`); assistant turns in it share that ID as `Turn.group_id`.
 //!    `event_msg.token_count` carries the SESSION-cumulative
 //!    `total_token_usage`; each step's spend is the increase since the
 //!    previous count — differencing the cumulative is dedup-safe (Codex
@@ -335,7 +335,7 @@ impl<'a> Builder<'a> {
         // `<event_type>-<timestamp>`, which collides when codex emits
         // multiple events of the same type at the same timestamp (rare
         // but real). Suffix duplicates with their position so each step
-        // gets a unique id.
+        // gets a unique ID.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for t in &self.turns {
             seen.insert(t.id.clone());

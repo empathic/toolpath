@@ -980,7 +980,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(view.turns.len(), 5);
-        assert!(view.turns[0].group_id.is_none(), "user lines carry no id");
+        assert!(view.turns[0].group_id.is_none(), "user lines carry no ID");
         for turn in &view.turns[1..=3] {
             assert_eq!(turn.group_id.as_deref(), Some("msg_A"));
         }
