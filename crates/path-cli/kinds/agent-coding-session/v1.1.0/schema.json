@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://toolpath.net/kinds/agent-coding-session/v1.1.0/schema.json",
   "title": "Toolpath kind: agent-coding-session v1.1.0",
-  "description": "Additive constraints on a Toolpath `Path` whose `meta.kind` is the agent-coding-session v1.1.0 URI. Apply alongside the base Toolpath schema; the path is valid when both pass. These constraints are by structural `type`, not by artifact key — a `change` entry is checked only when its `structural.type` matches one this kind defines (`conversation.append`, `file.write`, `conversation.event`). Everything is additive: unmentioned properties are allowed, so producer-specific extras never invalidate a path. New in v1.1.0: `message_id` on the turn payload, and the message-level accounting rule — within a `message_id` group, the last step (document order) carries the message's total `token_usage` verbatim from the source and the other steps carry none; values are per-message amounts (never cumulative session counters); summing `token_usage` over a path's steps therefore yields the session totals. The once-per-group rule is normative prose (JSON Schema cannot express it); producers must enforce it. The human-readable contract is at https://toolpath.net/kinds/agent-coding-session/v1.1.0/.",
+  "description": "Additive constraints on a Toolpath `Path` whose `meta.kind` is the agent-coding-session v1.1.0 URI. Apply alongside the base Toolpath schema; the path is valid when both pass. These constraints are by structural `type`, not by artifact key — a `change` entry is checked only when its `structural.type` matches one this kind defines (`conversation.append`, `file.write`, `conversation.event`). Everything is additive: unmentioned properties are allowed, so producer-specific extras never invalidate a path. New in v1.1.0: `group_id` on the turn payload, and the group-level accounting rule — within a `group_id` group, the last step (document order) carries the group's total `token_usage` verbatim from the source and the other steps carry none; values are per-group amounts (never cumulative session counters); summing `token_usage` over a path's steps therefore yields the session totals. The once-per-group rule is normative prose (JSON Schema cannot express it); producers must enforce it. The human-readable contract is at https://toolpath.net/kinds/agent-coding-session/v1.1.0/.",
   "type": "object",
 
   "$defs": {
     "tokenUsage": {
       "type": "object",
-      "description": "Token accounting for one provider message. `token_usage` always means the total for a message, verbatim from the source — never a cumulative session counter, never a per-step share. Within a `message_id` group the total sits on the group's last step (document order) and the other steps carry none; a step without a `message_id` is a one-step message, so its value is that message's total. Summing over a path's steps therefore yields the session totals. `input_tokens`/`output_tokens` are always emitted (possibly null); cache counters appear only when the source records them.",
+      "description": "Token accounting for one source group (a message for Claude, a round for Codex). `token_usage` always means the total for a group, verbatim from the source — never a cumulative session counter, never a per-step share. Within a `group_id` group the total sits on the group's last step (document order) and the other steps carry none; a step without a `group_id` is a group of one, so its value is that group's total. Summing over a path's steps therefore yields the session totals. `input_tokens`/`output_tokens` are always emitted (possibly null); cache counters appear only when the source records them.",
       "properties": {
         "input_tokens": { "type": ["integer", "null"] },
         "output_tokens": { "type": ["integer", "null"] },
@@ -20,7 +20,7 @@
 
     "attributedTokenUsage": {
       "type": "object",
-      "description": "This step's own attributed spend, when the source provides step-aligned data — distinct from `token_usage` (the message total). Optional and orthogonal: it rides its own key so summing `token_usage` over steps is unaffected. Within a `message_id` group, the sum of `attributed_token_usage` over its steps is the group's attributed spend; the unattributed remainder (`group token_usage − Σ attributed`) is computed by consumers, never recorded. Same field shape as `tokenUsage`. A producer populates it only when the source genuinely reports per-step spend — among current producers, Codex does (each step is a separate API call with a reported per-call delta); Claude does not (its per-block usage is a cumulative streaming snapshot, not a per-block cost), so Claude-derived steps carry the message total only.",
+      "description": "This step's own attributed spend, when the source provides step-aligned data — distinct from `token_usage` (the group total). Optional and orthogonal: it rides its own key so summing `token_usage` over steps is unaffected. Within a `group_id` group, the sum of `attributed_token_usage` over its steps is the group's attributed spend; the unattributed remainder (`group token_usage − Σ attributed`) is computed by consumers, never recorded. Same field shape as `tokenUsage`. A producer populates it only when the source genuinely reports per-step spend — among current producers, Codex does (each step is a separate API call with a reported per-call delta); Claude does not (its per-block usage is a cumulative streaming snapshot, not a per-block cost), so Claude-derived steps carry the group total only.",
       "properties": {
         "input_tokens": { "type": ["integer", "null"] },
         "output_tokens": { "type": ["integer", "null"] },
@@ -86,13 +86,13 @@
 
     "conversationAppend": {
       "type": "object",
-      "description": "The turn payload: the `structural` object of the one `change` entry whose `type` is `conversation.append`. `role` and `text` are always present (text may be empty); everything else appears only when the turn carries it. `message_id` is the provider-assigned ID of the source message this turn was derived from — a grouping key, not a turn identifier: steps sharing a `message_id` were derived from one provider message (Claude Code writes one JSONL line per content block).",
+      "description": "The turn payload: the `structural` object of the one `change` entry whose `type` is `conversation.append`. `role` and `text` are always present (text may be empty); everything else appears only when the turn carries it. `group_id` is the provider's identifier for the source accounting unit this turn was derived from — a message for Claude (`message.id`), a round for Codex (`turn_id`). A grouping key, not a step identifier: steps sharing a `group_id` came from one accounting unit (Claude Code writes one JSONL line per content block; a Codex round emits several turns).",
       "properties": {
         "type": { "const": "conversation.append" },
         "role": { "type": "string" },
         "text": { "type": "string" },
         "thinking": { "type": "string" },
-        "message_id": { "type": "string" },
+        "group_id": { "type": "string" },
         "tool_uses": {
           "type": "array",
           "items": { "$ref": "#/$defs/toolUse" }

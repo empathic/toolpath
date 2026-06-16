@@ -286,7 +286,7 @@ impl<'a> Builder<'a> {
         self.turns.push(Turn {
             id: msg.id.clone(),
             parent_id: None,
-            message_id: None,
+            group_id: None,
             role: Role::User,
             timestamp: millis_to_iso(msg.time_created),
             text,
@@ -455,7 +455,7 @@ impl<'a> Builder<'a> {
             } else {
                 Some(a.parent_id.clone())
             },
-            message_id: None,
+            group_id: None,
             role: Role::Assistant,
             timestamp: millis_to_iso(msg.time_created),
             text: text_chunks.join("\n\n"),

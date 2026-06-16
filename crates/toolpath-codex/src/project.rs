@@ -147,10 +147,10 @@ fn project_view(
         .iter()
         .rposition(|t| matches!(t.role, Role::Assistant));
 
-    // A turn's group id is its `message_id`; an assistant turn without one
+    // A turn's group id is its `group_id`; an assistant turn without one
     // is its own group (a unique synthesized id) so its own total survives.
     let group_of = |idx: usize, turn: &Turn| -> String {
-        turn.message_id
+        turn.group_id
             .clone()
             .unwrap_or_else(|| format!("{}-t{}", view.id, idx))
     };
@@ -159,7 +159,7 @@ fn project_view(
     // session_meta, before the first user turn). Its turn_id is the first
     // group's, so leading user turns and the first assistant share it; later
     // group boundaries emit their own. This is what makes the source's
-    // grouping survive the round-trip — the reader keys `Turn.message_id`
+    // grouping survive the round-trip — the reader keys `Turn.group_id`
     // off the turn_context `turn_id`.
     let first_group = view
         .turns
@@ -701,7 +701,7 @@ mod tests {
         Turn {
             id: id.into(),
             parent_id: None,
-            message_id: None,
+            group_id: None,
             role: Role::User,
             timestamp: "2026-04-20T16:00:00.000Z".into(),
             text: text.into(),
@@ -721,7 +721,7 @@ mod tests {
         Turn {
             id: id.into(),
             parent_id: None,
-            message_id: None,
+            group_id: None,
             role: Role::Assistant,
             timestamp: "2026-04-20T16:00:01.000Z".into(),
             text: text.into(),

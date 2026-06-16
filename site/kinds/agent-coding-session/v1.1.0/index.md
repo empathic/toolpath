@@ -15,11 +15,11 @@ permalink: /kinds/agent-coding-session/v1.1.0/
 
 A Toolpath path whose `meta.kind` is this URI records an AI coding conversation. It is an ordinary path with the extra structure described here. `head`-ancestry, dead ends, signatures, and `base` all behave as in the [base format](/format/).
 
-Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`), which the provider crates (`toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-opencode`, `toolpath-cursor`, `toolpath-pi`) all call. The field shapes below are therefore exact. The only producer-specific parts are the contents of a tool's `input`, the diff text in a change's `raw`, and the value (not the meaning) of `message_id`.
+Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`), which the provider crates (`toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-opencode`, `toolpath-cursor`, `toolpath-pi`) all call. The field shapes below are therefore exact. The only producer-specific parts are the contents of a tool's `input`, the diff text in a change's `raw`, and the value (not the meaning) of `group_id`.
 
 Constraints apply by structural `type`, not by artifact key: a `change` entry is checked only when its `structural.type` is one named here, and extra properties never make a path invalid. [`schema.json`](./schema.json) encodes the rules; apply it alongside the base schema. The URI is immutable. Later revisions ship under a new version URI.
 
-**Changed from [v1.0.0](/kinds/agent-coding-session/v1.0.0/):** the turn payload gains an optional `message_id`, and message-level token accounting is now specified — see [Message accounting](#message-accounting). v1.1.0 documents are structurally valid v1.0.0 documents; the new version exists so consumers can rely on the accounting rule.
+**Changed from [v1.0.0](/kinds/agent-coding-session/v1.0.0/):** the turn payload gains an optional `group_id`, and group-level token accounting is now specified — see [Group accounting](#group-accounting). v1.1.0 documents are structurally valid v1.0.0 documents; the new version exists so consumers can rely on the accounting rule.
 
 ## The turn payload
 
@@ -38,9 +38,9 @@ It may also carry any of the following, present only when the turn has them:
 | Field         | Type   | Meaning                                                       |
 | ------------- | ------ | ------------------------------------------------------------- |
 | `thinking`    | string | the model's reasoning text                                    |
-| `message_id`  | string | provider-assigned ID of the source message (see below)        |
+| `group_id`  | string | groups the steps derived from one source accounting unit (see below) |
 | `tool_uses`   | array  | tools the agent invoked (shape below)                         |
-| `token_usage` | object | the source message's token counts (shape and rule below)      |
+| `token_usage` | object | the group's token counts (shape and rule below)      |
 | `attributed_token_usage` | object | this step's own attributed spend, when known (see below) |
 | `stop_reason` | string | why the model stopped (`end_turn`, `tool_use`, …)             |
 | `delegations` | array  | sub-agent work spawned from this turn (shape below)           |
@@ -48,35 +48,35 @@ It may also carry any of the following, present only when the turn has them:
 
 The model identifier is not on the change. It lives in `step.actor` (`agent:<model>`) and `meta.actors`. There is no provider-specific blob: every field the derivation captures is one of those listed above.
 
-### `message_id`
+### `group_id`
 
-The provider-assigned ID of the source message this turn was derived from — Claude Code's `message.id` (`msg_…`), for example. It is a **grouping key, not a turn identifier**: when a producer splits one provider message across several steps (Claude Code writes one JSONL line per content block), every sibling step carries the same `message_id`. A step without a `message_id` is its own message.
+The provider's identifier for the **source accounting unit** these steps were derived from — Claude Code's `message.id` (`msg_…`) for one split message, Codex's round `turn_id` for one round (which may itself contain several messages). It is a **grouping key, not a step identifier**: when a producer derives several steps from one accounting unit (Claude Code writes one JSONL line per content block; a Codex round emits a commentary turn plus a final turn), every sibling step carries the same `group_id`. A step without a `group_id` is its own group of one. The stored value is the provider's verbatim id; only its *meaning* (which unit it names) is provider-specific.
 
-### Message accounting
+### Group accounting
 
-How `token_usage` on steps relates to API-message accounting:
+How `token_usage` on steps relates to the source's accounting units:
 
-1. `token_usage` records the source message's spend — a **per-message amount, never a cumulative session counter**.
-2. Within a run of consecutive steps sharing a `message_id` (document order), the run's **last step carries the message's total `token_usage`, verbatim from the source**. In this version, the run's other steps carry none.
-3. A step without a `message_id` is its own message and carries its own `token_usage` (when the source records one).
+1. `token_usage` records a group's spend — a **per-group amount, never a cumulative session counter**.
+2. Within a run of consecutive steps sharing a `group_id` (document order), the run's **last step carries the group's total `token_usage`, verbatim from the source**. In this version, the run's other steps carry none.
+3. A step without a `group_id` is its own group and carries its own `token_usage` (when the source records one).
 
 Consequence: **summing `token_usage` over a v1.1.0 path's steps yields the session totals.** Consumers need no dedup heuristics. (JSON Schema cannot express the once-per-run rule, so it is normative prose, enforced by producer test suites.)
 
-`token_usage` has **one meaning everywhere it appears: the total for a message**. A step without a `message_id` is a one-step message, so its `token_usage` is that message's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `message_id` on the same payload tells you which message it totals. Per-step spend, when the source has it, rides a separate [`attributed_token_usage`](#per-step-attribution-attributed_token_usage) key — never `token_usage`. When a source format offers both a message total and a finer breakdown (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the total; the breakdown is subordinate detail and does not ride `token_usage`.
+`token_usage` has **one meaning everywhere it appears: the total for a group**. A step without a `group_id` is a one-step group, so its `token_usage` is that group's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `group_id` on the same payload tells you which group it totals. Per-step spend, when the source has it, rides a separate [`attributed_token_usage`](#per-step-attribution-attributed_token_usage) key — never `token_usage`. When a source format offers both a group total and a finer breakdown (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the total; the breakdown is subordinate detail and does not ride `token_usage`.
 
 ### Per-step attribution: `attributed_token_usage`
 
-Some sources expose, per step, the spend attributable to that step alone — distinct from the message total. Where a producer has it, the step carries an **`attributed_token_usage`** object (same shape as [`token_usage`](#token_usage)) holding *this step's own share*. It is **optional and orthogonal to `token_usage`**: whether a number is a message total or a step share is structural — the key it sits under — never positional. This is the rule that lets per-step accounting be added by any producer at any time without a new kind version.
+Some sources expose, per step, the spend attributable to that step alone — distinct from the group total. Where a producer has it, the step carries an **`attributed_token_usage`** object (same shape as [`token_usage`](#token_usage)) holding *this step's own share*. It is **optional and orthogonal to `token_usage`**: whether a number is a group total or a step share is structural — the key it sits under — never positional. This is the rule that lets per-step accounting be added by any producer at any time without a new kind version.
 
-How it relates to the message total:
+How it relates to the group total:
 
-- Within a `message_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is *computed* by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay verbatim source observations and source inconsistencies stay visible.
+- Within a `group_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is *computed* by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay verbatim source observations and source inconsistencies stay visible.
 - For a group where the source attributes everything (e.g. Codex, where each step is a separate API call and the per-call delta is reported directly), the remainder is zero and `Σ attributed_token_usage == token_usage`.
-- A group with no per-step data carries no `attributed_token_usage` at all — only the message total. Producers must not fabricate a split.
+- A group with no per-step data carries no `attributed_token_usage` at all — only the group total. Producers must not fabricate a split.
 
-A producer populates `attributed_token_usage` only when the source genuinely reports per-step spend. Among current producers, **Codex does** (its `token_count` events carry a per-call delta). **Claude does not**: its per-content-block `usage` values are cumulative streaming snapshots stamped at flush time, not per-block costs, so deriving a split from them would be fabrication — Claude-derived steps carry the message total only.
+A producer populates `attributed_token_usage` only when the source genuinely reports per-step spend. Among current producers, **Codex does** (its `token_count` events carry a per-call delta). **Claude does not**: its per-content-block `usage` values are cumulative streaming snapshots stamped at flush time, not per-block costs, so deriving a split from them would be fabrication — Claude-derived steps carry the group total only.
 
-`Σ token_usage` over a path's steps is unaffected by `attributed_token_usage` (they are separate keys), so the session-total guarantee above always holds. A consumer wanting per-step cost reads `attributed_token_usage` where present and falls back to the message total otherwise.
+`Σ token_usage` over a path's steps is unaffected by `attributed_token_usage` (they are separate keys), so the session-total guarantee above always holds. A consumer wanting per-step cost reads `attributed_token_usage` where present and falls back to the group total otherwise.
 
 ### `tool_uses`
 
@@ -101,7 +101,7 @@ Each element is an object:
 | `cache_read_tokens`  | integer         | only when the source records it |
 | `cache_write_tokens` | integer         | only when the source records it |
 
-Values follow the [message accounting](#message-accounting) rule above.
+Values follow the [group accounting](#group-accounting) rule above.
 
 ### `environment`
 

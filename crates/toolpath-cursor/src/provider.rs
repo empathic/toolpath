@@ -389,7 +389,7 @@ impl<'a> Builder<'a> {
         Turn {
             id: bubble.bubble_id.clone(),
             parent_id: parent.map(str::to_string),
-            message_id: None,
+            group_id: None,
             role: Role::User,
             timestamp: bubble.created_at.clone().unwrap_or_default(),
             text: bubble.text.clone(),
@@ -470,7 +470,7 @@ impl<'a> Builder<'a> {
         Turn {
             id: bubble.bubble_id.clone(),
             parent_id: parent.map(str::to_string),
-            message_id: None,
+            group_id: None,
             role: Role::Assistant,
             timestamp: bubble.created_at.clone().unwrap_or_default(),
             text: bubble.text.clone(),

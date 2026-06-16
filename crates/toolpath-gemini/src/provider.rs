@@ -119,7 +119,7 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
     Turn {
         id: msg.id.clone(),
         parent_id: None,
-        message_id: None,
+        group_id: None,
         role: gemini_role_to_role(&msg.role),
         timestamp: msg.timestamp.clone(),
         text,

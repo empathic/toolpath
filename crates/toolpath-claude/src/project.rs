@@ -115,7 +115,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // IR doesn't retain them, and the final total is what consumers sum.)
     let mut group_total: HashMap<&str, toolpath_convo::TokenUsage> = HashMap::new();
     for turn in &view.turns {
-        if let (Some(mid), Some(usage)) = (turn.message_id.as_deref(), &turn.token_usage) {
+        if let (Some(mid), Some(usage)) = (turn.group_id.as_deref(), &turn.token_usage) {
             group_total
                 .entry(mid)
                 .and_modify(|acc| *acc = crate::provider::max_usage(acc, usage))
@@ -142,7 +142,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
             Role::Assistant => {
                 // Grouped: the message total on every line of the split.
                 // Ungrouped: the turn's own usage.
-                let wire_usage: Option<toolpath_convo::TokenUsage> = match turn.message_id.as_deref()
+                let wire_usage: Option<toolpath_convo::TokenUsage> = match turn.group_id.as_deref()
                 {
                     Some(mid) => group_total.get(mid).cloned(),
                     None => turn.token_usage.clone(),
@@ -402,7 +402,7 @@ fn assistant_turn_to_entry_with_usage(
             role: MessageRole::Assistant,
             content: Some(content),
             model: turn.model.clone(),
-            id: turn.message_id.clone(),
+            id: turn.group_id.clone(),
             message_type: None,
             stop_reason: turn.stop_reason.clone(),
             stop_sequence: None,
@@ -1035,7 +1035,7 @@ mod tests {
         Turn {
             id: id.to_string(),
             parent_id: None,
-            message_id: None,
+            group_id: None,
             role: Role::User,
             timestamp: "2024-01-01T00:00:00Z".to_string(),
             text: text.to_string(),
@@ -1055,7 +1055,7 @@ mod tests {
         Turn {
             id: id.to_string(),
             parent_id: None,
-            message_id: None,
+            group_id: None,
             role: Role::Assistant,
             timestamp: "2024-01-01T00:00:01Z".to_string(),
             text: text.to_string(),
@@ -1090,9 +1090,9 @@ mod tests {
             cache_write_tokens: Some(429_831),
         };
         let mut a1 = assistant_turn("a1", "Working on it.");
-        a1.message_id = Some("msg_A".into());
+        a1.group_id = Some("msg_A".into());
         let mut a2 = assistant_turn("a2", "");
-        a2.message_id = Some("msg_A".into());
+        a2.group_id = Some("msg_A".into());
         a2.token_usage = Some(usage);
 
         let view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2]);
@@ -1120,9 +1120,9 @@ mod tests {
         // on the final turn. Summing per step yields the session total
         // either way.
         let mut a1 = assistant_turn("a1", "first");
-        a1.message_id = Some("msg_A".into());
+        a1.group_id = Some("msg_A".into());
         let mut a2 = assistant_turn("a2", "second");
-        a2.message_id = Some("msg_A".into());
+        a2.group_id = Some("msg_A".into());
         a2.token_usage = Some(toolpath_convo::TokenUsage {
             input_tokens: Some(6),
             output_tokens: Some(164),

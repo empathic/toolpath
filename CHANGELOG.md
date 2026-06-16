@@ -36,9 +36,9 @@ kind version):
 
 Changes:
 
-- `toolpath_convo::Turn` gains `message_id` (grouping key) and
+- `toolpath_convo::Turn` gains `group_id` (grouping key) and
   `attributed_token_usage`. `derive_path` writes `token_usage` once per
-  `message_id` group and `attributed_token_usage` on each step that has
+  `group_id` group and `attributed_token_usage` on each step that has
   it; `extract_conversation` reads both back.
 - `toolpath-claude`: a split message's lines carry `message.usage` as a
   **cumulative streaming snapshot**, not a per-line bill — per the
@@ -46,7 +46,7 @@ Changes:
   zero and each `message_delta` reports the running cumulative total
   (confirmed across every session sampled: input/cache constant, output
   climbing to the final-line total; ~27% of multi-line messages vary).
-  Each `message_id` run is reduced to the **field-wise maximum** total
+  Each `group_id` run is reduced to the **field-wise maximum** total
   (never under-counts whatever the line order) on its final turn. The
   intermediate snapshots are flush-time artifacts, *not* per-block costs
   (a real prose block routinely shows `output_tokens: 1`), so Claude

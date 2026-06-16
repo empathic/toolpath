@@ -523,7 +523,7 @@ downstream tools that trust `last_token_usage` directly over-count
 **Round scoping + attribution:** a Codex round (one user task) can emit
 several assistant messages (commentary + final) and many `token_count`
 events. `toolpath-codex` groups a round's assistant turns under
-`Turn.message_id` (the `turn_id` from `turn_context`/`task_started`),
+`Turn.group_id` (the `turn_id` from `turn_context`/`task_started`),
 records each per-step delta as that step's `attributed_token_usage`, and
 sets the round's total `Turn.token_usage` (on its final turn) to the sum
 of those attributions — one source of truth, so the total and the

@@ -246,13 +246,15 @@ pub struct Turn {
     /// Parent turn ID (for branching conversations).
     pub parent_id: Option<String>,
 
-    /// Provider-assigned ID of the source message this turn was derived
-    /// from. A grouping key, not a turn identifier: when a provider splits
-    /// one message across several turns (Claude Code writes one JSONL line
-    /// per content block), every sibling turn carries the same value, and
-    /// message-level accounting (`token_usage`) belongs to the group once.
+    /// Identifier of the source accounting unit this turn belongs to —
+    /// a message for Claude (`message.id`), a round for Codex (`turn_id`).
+    /// A grouping key, not a turn identifier: when a provider derives
+    /// several turns from one unit (Claude writes one JSONL line per
+    /// content block; a Codex round emits several turns), every sibling
+    /// turn carries the same value, and group-level accounting
+    /// (`token_usage`) belongs to the group once (on its final turn).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message_id: Option<String>,
+    pub group_id: Option<String>,
 
     /// Who produced this turn.
     pub role: Role,
@@ -275,7 +277,7 @@ pub struct Turn {
     /// Why the turn ended (e.g. "end_turn", "tool_use", "max_tokens").
     pub stop_reason: Option<String>,
 
-    /// Token usage for this turn. When this turn belongs to a `message_id`
+    /// Token usage for this turn. When this turn belongs to a `group_id`
     /// group, this is the **whole message's total**, carried on the
     /// group's final turn only (it always means "the total for a
     /// message"; summing over turns yields session totals).
@@ -287,7 +289,7 @@ pub struct Turn {
     /// Populated where a provider streams per-step counts (Claude's
     /// per-content-block cumulative `usage`, Codex's per-step
     /// `token_count` deltas); absent where it can't be attributed.
-    /// Within a `message_id` group, `Σ attributed_token_usage` is the
+    /// Within a `group_id` group, `Σ attributed_token_usage` is the
     /// group's attributed output; the unattributed remainder
     /// (prompt-side input/cache, inherently per-message) stays in
     /// `token_usage` on the group's final turn. A separate field from
@@ -568,7 +570,7 @@ mod tests {
                 Turn {
                     id: "t1".into(),
                     parent_id: None,
-                    message_id: None,
+                    group_id: None,
                     role: Role::User,
                     timestamp: "2026-01-01T00:00:00Z".into(),
                     text: "Fix the authentication bug in login.rs".into(),
@@ -585,7 +587,7 @@ mod tests {
                 Turn {
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
-                    message_id: None,
+                    group_id: None,
                     role: Role::Assistant,
                     timestamp: "2026-01-01T00:00:01Z".into(),
                     text: "I'll fix that for you.".into(),
@@ -616,7 +618,7 @@ mod tests {
                 Turn {
                     id: "t3".into(),
                     parent_id: Some("t2".into()),
-                    message_id: None,
+                    group_id: None,
                     role: Role::User,
                     timestamp: "2026-01-01T00:00:02Z".into(),
                     text: "Thanks!".into(),
@@ -955,7 +957,7 @@ mod tests {
         let turn = Turn {
             id: "t1".into(),
             parent_id: None,
-            message_id: None,
+            group_id: None,
             role: Role::Assistant,
             timestamp: "2026-01-01T00:00:00Z".into(),
             text: "Delegating...".into(),

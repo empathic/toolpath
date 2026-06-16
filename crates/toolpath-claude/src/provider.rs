@@ -123,10 +123,10 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         id: entry.uuid.clone(),
         parent_id: entry.parent_uuid.clone(),
         // The API message ID (`msg_…`). Claude Code writes one JSONL line
-        // per content block, so several turns can share one message_id —
+        // per content block, so several turns can share one group_id —
         // and each repeats the message-level `usage`. Downstream accounting
         // (sum_usage, derive_path) counts a message group once.
-        message_id: msg.id.clone(),
+        group_id: msg.id.clone(),
         role: claude_role_to_role(&msg.role),
         timestamp: entry.timestamp.clone(),
         text,
@@ -559,19 +559,19 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
 /// per-step attribution from them, and — the format being undocumented — we
 /// do not trust line order.
 ///
-/// For each consecutive `message_id` run this sets `token_usage` on the run's
+/// For each consecutive `group_id` run this sets `token_usage` on the run's
 /// **final** turn to the field-wise **maximum** across the run (the message
 /// total — never under-counts whatever the stream order) and clears it from
 /// the others, so summing `token_usage` over turns yields session totals.
 fn canonicalize_message_usage(turns: &mut [Turn]) {
     let mut i = 0;
     while i < turns.len() {
-        let Some(mid) = turns[i].message_id.clone() else {
+        let Some(mid) = turns[i].group_id.clone() else {
             i += 1;
             continue;
         };
         let mut j = i;
-        while j < turns.len() && turns[j].message_id.as_deref() == Some(mid.as_str()) {
+        while j < turns.len() && turns[j].group_id.as_deref() == Some(mid.as_str()) {
             j += 1;
         }
 
@@ -604,10 +604,10 @@ fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
     for (idx, turn) in turns.iter().enumerate() {
         // Turns split from one provider message all repeat that message's
         // usage; count it once, on the run's last turn.
-        if let Some(mid) = &turn.message_id
+        if let Some(mid) = &turn.group_id
             && turns
                 .get(idx + 1)
-                .is_some_and(|next| next.message_id.as_ref() == Some(mid))
+                .is_some_and(|next| next.group_id.as_ref() == Some(mid))
         {
             continue;
         }
@@ -837,7 +837,7 @@ mod tests {
     /// output varies across a split, so input/cache are fixed here).
     fn grp_turn(id: &str, mid: &str, output: u32) -> Turn {
         let mut t = message_turn_stub(id);
-        t.message_id = Some(mid.into());
+        t.group_id = Some(mid.into());
         t.token_usage = Some(TokenUsage {
             input_tokens: Some(6),
             output_tokens: Some(output),
@@ -851,7 +851,7 @@ mod tests {
         Turn {
             id: id.into(),
             parent_id: None,
-            message_id: None,
+            group_id: None,
             role: Role::Assistant,
             timestamp: "2024-01-01T00:00:00Z".into(),
             text: String::new(),
@@ -974,17 +974,17 @@ mod tests {
     }
 
     #[test]
-    fn test_split_message_turns_share_message_id() {
+    fn test_split_message_turns_share_group_id() {
         let (_temp, provider) = setup_split_message_provider();
         let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-2")
             .unwrap();
 
         assert_eq!(view.turns.len(), 5);
-        assert!(view.turns[0].message_id.is_none(), "user lines carry no id");
+        assert!(view.turns[0].group_id.is_none(), "user lines carry no id");
         for turn in &view.turns[1..=3] {
-            assert_eq!(turn.message_id.as_deref(), Some("msg_A"));
+            assert_eq!(turn.group_id.as_deref(), Some("msg_A"));
         }
-        assert_eq!(view.turns[4].message_id.as_deref(), Some("msg_B"));
+        assert_eq!(view.turns[4].group_id.as_deref(), Some("msg_B"));
     }
 
     #[test]
@@ -1424,7 +1424,7 @@ mod tests {
         let mut turns = vec![Turn {
             id: "t1".into(),
             parent_id: None,
-            message_id: None,
+            group_id: None,
             role: Role::Assistant,
             timestamp: "2024-01-01T00:00:00Z".into(),
             text: "test".into(),

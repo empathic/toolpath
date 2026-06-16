@@ -18,7 +18,7 @@
 //!    `extra["codex"]["patch_changes"]` — the derive layer consumes it
 //!    for file-artifact sibling changes.
 //! 7. Token accounting. `turn_context` / `task_started` open an API round
-//!    (`turn_id`); assistant turns in it share that id as `Turn.message_id`.
+//!    (`turn_id`); assistant turns in it share that id as `Turn.group_id`.
 //!    `event_msg.token_count` carries the SESSION-cumulative
 //!    `total_token_usage`; each step's spend is the increase since the
 //!    previous count — differencing the cumulative is dedup-safe (Codex
@@ -191,7 +191,7 @@ struct Builder<'a> {
     pending_reasoning_plaintext: Vec<String>,
     /// The current API round (Codex "turn"), from `turn_context` /
     /// `task_started`. Assistant turns emitted during a round share it as
-    /// their `message_id`.
+    /// their `group_id`.
     current_round_id: Option<String>,
     /// Per-step spend awaiting an assistant turn to attach to (a token_count
     /// arriving before this round's first assistant turn exists).
@@ -604,8 +604,8 @@ impl<'a> Builder<'a> {
 
     fn push_turn(&mut self, mut turn: Turn) {
         self.drain_pending_onto(&mut turn);
-        if turn.role == Role::Assistant && turn.message_id.is_none() {
-            turn.message_id = self.current_round_id.clone();
+        if turn.role == Role::Assistant && turn.group_id.is_none() {
+            turn.group_id = self.current_round_id.clone();
         }
         self.turns.push(turn);
     }
@@ -637,7 +637,7 @@ impl<'a> Builder<'a> {
             .enumerate()
             .rev()
             .find(|(_, t)| t.role == Role::Assistant)
-            .filter(|(_, t)| t.message_id == self.current_round_id)
+            .filter(|(_, t)| t.group_id == self.current_round_id)
             .map(|(i, _)| i);
         match target {
             Some(idx) => add_usage(
@@ -654,7 +654,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Begin a new API round; later assistant turns share `round_id` as
-    /// their `message_id`. Totals are computed once in [`Self::finalize_usage`].
+    /// their `group_id`. Totals are computed once in [`Self::finalize_usage`].
     fn start_round(&mut self, round_id: &str) {
         if round_id.is_empty() || self.current_round_id.as_deref() == Some(round_id) {
             return;
@@ -666,7 +666,7 @@ impl<'a> Builder<'a> {
     /// turns' per-step attributions, on the group's final turn (the kind's
     /// once-per-group rule). One source of truth — the group total and its
     /// per-step shares can't drift, and `Σ token_usage == Σ attributed ==`
-    /// session total. A run of assistant turns sharing a `message_id` is one
+    /// session total. A run of assistant turns sharing a `group_id` is one
     /// round; an assistant turn without one is its own group.
     fn finalize_usage(&mut self) {
         // A step's spend that arrived after the last assistant turn (no
@@ -688,10 +688,10 @@ impl<'a> Builder<'a> {
         let mut k = 0;
         while k < assistants.len() {
             let start = k;
-            let mid = self.turns[assistants[k]].message_id.clone();
+            let mid = self.turns[assistants[k]].group_id.clone();
             if mid.is_some() {
                 while k + 1 < assistants.len()
-                    && self.turns[assistants[k + 1]].message_id == mid
+                    && self.turns[assistants[k + 1]].group_id == mid
                 {
                     k += 1;
                 }
@@ -809,7 +809,7 @@ fn message_to_turn(
     Turn {
         id: msg.id.clone().unwrap_or_default(),
         parent_id: None,
-        message_id: None,
+        group_id: None,
         role: role.clone(),
         timestamp: timestamp.to_string(),
         text,
@@ -837,7 +837,7 @@ fn synthetic_assistant_turn(
     Turn {
         id: format!("synth-{}", timestamp),
         parent_id: None,
-        message_id: None,
+        group_id: None,
         role: Role::Assistant,
         timestamp: timestamp.to_string(),
         text: String::new(),
@@ -1132,9 +1132,9 @@ mod tests {
     }
 
     #[test]
-    fn round_turns_share_message_id_and_usage_lands_on_round_final_turn() {
+    fn round_turns_share_group_id_and_usage_lands_on_round_final_turn() {
         // One round emitting two assistant messages (commentary + final).
-        // Both belong to one API round, so they share a message_id (the
+        // Both belong to one API round, so they share a group_id (the
         // round's turn_id) and the round total sits on the round's final
         // assistant turn only — never on an interior turn, and never as a
         // singleton claim on a turn whose siblings shared the spend.
@@ -1153,9 +1153,9 @@ mod tests {
         let view = to_view(&mgr.read_session(&id).unwrap());
 
         assert_eq!(view.turns.len(), 3);
-        assert!(view.turns[0].message_id.is_none(), "user turn ungrouped");
-        assert_eq!(view.turns[1].message_id.as_deref(), Some("round-1"));
-        assert_eq!(view.turns[2].message_id.as_deref(), Some("round-1"));
+        assert!(view.turns[0].group_id.is_none(), "user turn ungrouped");
+        assert_eq!(view.turns[1].group_id.as_deref(), Some("round-1"));
+        assert_eq!(view.turns[2].group_id.as_deref(), Some("round-1"));
         assert!(
             view.turns[1].token_usage.is_none(),
             "interior turn of the round must not carry usage"

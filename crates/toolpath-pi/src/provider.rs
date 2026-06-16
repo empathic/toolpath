@@ -245,7 +245,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 turns.push(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
-                    message_id: None,
+                    group_id: None,
                     role: Role::System,
                     timestamp: base.timestamp.clone(),
                     text: format!("Compacted (summary): {}", summary),
@@ -265,7 +265,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 turns.push(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
-                    message_id: None,
+                    group_id: None,
                     role: Role::System,
                     timestamp: base.timestamp.clone(),
                     text: format!("Branch summary: {}", summary),
@@ -285,7 +285,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 turns.push(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
-                    message_id: None,
+                    group_id: None,
                     role: Role::Other("custom".to_string()),
                     timestamp: base.timestamp.clone(),
                     text: String::new(),
@@ -310,7 +310,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 turns.push(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
-                    message_id: None,
+                    group_id: None,
                     role: Role::Other(format!("custom:{}", custom_type)),
                     timestamp: base.timestamp.clone(),
                     text: extract_user_text(content),
@@ -450,7 +450,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 turns.push(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
-                    message_id: None,
+                    group_id: None,
                     role,
                     timestamp: base.timestamp.clone(),
                     text,

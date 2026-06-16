@@ -306,8 +306,8 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
 
     let parent_id = step.step.parents.first().cloned();
 
-    let message_id = extra
-        .get("message_id")
+    let group_id = extra
+        .get("group_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
@@ -318,7 +318,7 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
     Turn {
         id: step.step.id.clone(),
         parent_id,
-        message_id,
+        group_id,
         role,
         timestamp: step.step.timestamp.clone(),
         text,
@@ -709,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn test_message_id_round_trips_through_extraction() {
+    fn test_group_id_round_trips_through_extraction() {
         let path = make_path(vec![make_step(
             "step-001",
             "agent:claude-opus-4-6",
@@ -721,13 +721,13 @@ mod tests {
                 extras(&[
                     ("role", serde_json::json!("assistant")),
                     ("text", serde_json::json!("")),
-                    ("message_id", serde_json::json!("msg_01abc")),
+                    ("group_id", serde_json::json!("msg_01abc")),
                 ]),
             )],
         )]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns[0].message_id.as_deref(), Some("msg_01abc"));
+        assert_eq!(view.turns[0].group_id.as_deref(), Some("msg_01abc"));
     }
 
     #[test]
