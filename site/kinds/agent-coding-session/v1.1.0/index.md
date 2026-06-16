@@ -71,9 +71,10 @@ Some sources expose, per step, the spend attributable to that step alone — dis
 How it relates to the message total:
 
 - Within a `message_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is *computed* by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay verbatim source observations and source inconsistencies stay visible.
-- For a group where the source attributes everything (e.g. Codex, where each step is a separate API call), the remainder is zero and `Σ attributed_token_usage == token_usage`.
-- For a group where the source attributes only part (e.g. Claude streams per-block `output_tokens` but the prompt-side input/cache is inherently per-message), the remainder holds the per-message part.
+- For a group where the source attributes everything (e.g. Codex, where each step is a separate API call and the per-call delta is reported directly), the remainder is zero and `Σ attributed_token_usage == token_usage`.
 - A group with no per-step data carries no `attributed_token_usage` at all — only the message total. Producers must not fabricate a split.
+
+A producer populates `attributed_token_usage` only when the source genuinely reports per-step spend. Among current producers, **Codex does** (its `token_count` events carry a per-call delta). **Claude does not**: its per-content-block `usage` values are cumulative streaming snapshots stamped at flush time, not per-block costs, so deriving a split from them would be fabrication — Claude-derived steps carry the message total only.
 
 `Σ token_usage` over a path's steps is unaffected by `attributed_token_usage` (they are separate keys), so the session-total guarantee above always holds. A consumer wanting per-step cost reads `attributed_token_usage` where present and falls back to the message total otherwise.
 

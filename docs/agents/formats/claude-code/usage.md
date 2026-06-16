@@ -31,13 +31,23 @@ is what `toolpath-claude` does — derived paths put the message total on
 the last step of each `message.id` group, per the
 [`agent-coding-session` v1.1.0 kind](https://toolpath.net/kinds/agent-coding-session/v1.1.0/).
 
-**Per-block attribution (where it streams).** Because `output_tokens` is
-cumulative, the *difference* between consecutive lines is the output a
-block produced — genuine per-step attribution, available for the ~27% of
-messages that stream. `toolpath-claude` records these deltas as
-`attributed_token_usage`; it does not fabricate a split for the repeating
-~73% (there the per-block breakdown is genuinely unknown). Only
-`output_tokens` is attributable — input/cache are per-message.
+**Why this is a snapshot, not a per-block bill.** The Anthropic
+[streaming API](https://platform.claude.com/docs/en/build-with-claude/streaming.md)
+reports usage incrementally: the `message_start` event seeds
+`output_tokens` near zero, and each `message_delta` carries the running
+**cumulative** total, the final delta being the message total. Claude
+Code stamps each content-block line with whatever snapshot was current
+when it flushed the line — so the early lines hold near-`message_start`
+values and the full total lands on the last line. A real prose `text`
+block routinely shows `output_tokens: 1`. The per-line values therefore
+track *flush timing*, not the tokens a given block cost.
+
+**No per-block attribution.** Because of the above, differencing
+consecutive lines does **not** yield per-block token costs — the
+intermediate values are streaming snapshots, not block bills. We take
+the max as the message total and do not derive `attributed_token_usage`
+for Claude. (Codex, by contrast, reports a genuine per-call delta — see
+[`codex.md`](../codex.md).)
 
 One caution: the `iterations` array (below) is a breakdown *inside* one
 message's `usage` — subordinate detail, not an accounting unit; never sum

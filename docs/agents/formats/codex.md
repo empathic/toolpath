@@ -502,16 +502,23 @@ Populated once the turn has real usage data:
 Absent/null `info` on the first `token_count` of a turn (delivered
 before the model responds); populated thereafter.
 
-**Cumulative vs. per-step — and the doubling trap:** `total_token_usage`
-is the running **session-cumulative** counter — never attribute it to a
-single turn (summing it per turn grows quadratically). A step's own
-spend is the **increase** in `total_token_usage` since the previous
-count. Crucially, derive that by **differencing the cumulative**, not by
-summing `last_token_usage`: Codex emits **each `token_count` event
-twice** (two lines, distinct timestamps, identical values), so summing
-`last_token_usage` double-counts, while a repeated cumulative total is a
-0 delta. Each `token_count` follows the step it measures (a
-`function_call` or a `message`), so the delta attributes to that step.
+**Cumulative vs. per-step — and the doubling trap:** per OpenAI's own
+field definitions, `total_token_usage` is "cumulative tokens consumed
+across the entire session" and `last_token_usage` is "the incremental
+token delta for that specific event" (a single API call's tokens). Never
+attribute the cumulative counter to a single turn (summing it per turn
+grows quadratically). A step's own spend is the **increase** in
+`total_token_usage` since the previous count. Crucially, derive that by
+**differencing the cumulative**, not by summing `last_token_usage`: Codex
+re-emits `token_count` events with a stale, repeated `last_token_usage`
+(observed as duplicate events with identical values; OpenAI documents it
+for rate-limit-only updates), so summing `last_token_usage` double-counts
+— while a repeated cumulative total is a 0 delta. This is a known trap:
+downstream tools that trust `last_token_usage` directly over-count
+(openai/codex [#14489](https://github.com/openai/codex/issues/14489),
+[#17539](https://github.com/openai/codex/issues/17539)). Each
+`token_count` follows the step it measures (a `function_call` or a
+`message`), so the delta attributes to that step.
 
 **Round scoping + attribution:** a Codex round (one user task) can emit
 several assistant messages (commentary + final) and many `token_count`

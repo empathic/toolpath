@@ -546,24 +546,23 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
 /// Canonicalize message-level accounting for split messages.
 ///
 /// Claude Code writes one JSONL line per content block of an assistant API
-/// message, each stamped with the message's **cumulative** usage as of that
-/// block. Empirically across every session sampled: `input`/`cache` are
-/// constant across a message's lines, `output_tokens` streams upward, and
-/// the final line is the complete total — but the format is undocumented,
-/// so we do not trust line order.
+/// message, each stamped with `message.usage`. That `usage` is a **streaming
+/// snapshot**, not a per-line bill: per the Anthropic streaming API,
+/// `message_start` seeds `output_tokens` near zero and each `message_delta`
+/// reports the running **cumulative** total, with the final value being the
+/// message total. So across a split message's lines, `input`/`cache` are
+/// constant and `output_tokens` climbs to the total on the final line —
+/// confirmed across every session sampled (~27% of multi-line messages vary;
+/// the rest repeat one value stamped after generation). The intermediate
+/// values are flush-time snapshots, **not** per-content-block costs (a real
+/// prose block routinely shows `output_tokens: 1`), so we do not derive
+/// per-step attribution from them, and — the format being undocumented — we
+/// do not trust line order.
 ///
-/// For each consecutive `message_id` run this:
-///  - sets `token_usage` on the run's **final** turn to the field-wise
-///    **maximum** across the run (the message total — never under-counts
-///    whatever the stream order) and clears it from the others, so summing
-///    `token_usage` over turns yields session totals; and
-///  - where the run's output actually streamed (cumulative output varies),
-///    records each turn's own output delta in `attributed_token_usage`,
-///    differenced against the running max so `Σ attributed.output` equals
-///    the message's total output regardless of ordering. A run whose lines
-///    merely repeat one total carries no per-step split — we don't
-///    fabricate attribution. Only `output_tokens` is attributed; input and
-///    cache are prompt-side, inherently per-message, and stay in the total.
+/// For each consecutive `message_id` run this sets `token_usage` on the run's
+/// **final** turn to the field-wise **maximum** across the run (the message
+/// total — never under-counts whatever the stream order) and clears it from
+/// the others, so summing `token_usage` over turns yields session totals.
 fn canonicalize_message_usage(turns: &mut [Turn]) {
     let mut i = 0;
     while i < turns.len() {
@@ -576,38 +575,14 @@ fn canonicalize_message_usage(turns: &mut [Turn]) {
             j += 1;
         }
 
-        // Message total = field-wise max across the run; detect whether the
-        // run's output streamed (varies) vs. merely repeats one total.
+        // Message total = field-wise max across the run (the final streaming
+        // snapshot, found without trusting line order).
         let mut total: Option<TokenUsage> = None;
-        let (mut min_out, mut max_out): (Option<u32>, Option<u32>) = (None, None);
         for t in &turns[i..j] {
             if let Some(u) = &t.token_usage {
                 total = Some(match total {
                     Some(acc) => max_usage(&acc, u),
                     None => u.clone(),
-                });
-                if let Some(o) = u.output_tokens {
-                    min_out = Some(min_out.map_or(o, |m| m.min(o)));
-                    max_out = Some(max_out.map_or(o, |m| m.max(o)));
-                }
-            }
-        }
-        let streamed = matches!((min_out, max_out), (Some(a), Some(b)) if a != b);
-
-        if streamed {
-            let mut running: u32 = 0;
-            for t in &mut turns[i..j] {
-                let cum = t
-                    .token_usage
-                    .as_ref()
-                    .and_then(|u| u.output_tokens)
-                    .unwrap_or(running);
-                let new_running = running.max(cum);
-                let delta = new_running - running;
-                running = new_running;
-                t.attributed_token_usage = Some(TokenUsage {
-                    output_tokens: Some(delta),
-                    ..TokenUsage::default()
                 });
             }
         }
@@ -893,36 +868,31 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_streamed_group_gives_total_and_per_step_deltas() {
-        // Cumulative output streams 55 -> 164 across two lines of one
-        // message. Final turn carries the message total (164); each turn
-        // carries its own output delta; deltas sum to the total.
+    fn canonicalize_streamed_group_keeps_total_only_on_final_turn() {
+        // Streaming snapshots climb 55 -> 164 across two lines of one
+        // message. The final turn carries the message total (the final
+        // snapshot); earlier turns carry nothing. The intermediate snapshot
+        // (55) is NOT per-block attribution — it's where generation happened
+        // to be when the line was flushed — so we never record it.
         let mut turns = vec![grp_turn("t1", "msg_A", 55), grp_turn("t2", "msg_A", 164)];
         canonicalize_message_usage(&mut turns);
 
         assert!(turns[0].token_usage.is_none(), "total only on final turn");
         assert_eq!(turns[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
         assert_eq!(turns[1].token_usage.as_ref().unwrap().input_tokens, Some(6));
-
-        let a0 = turns[0].attributed_token_usage.as_ref().unwrap();
-        let a1 = turns[1].attributed_token_usage.as_ref().unwrap();
-        assert_eq!(a0.output_tokens, Some(55));
-        assert_eq!(a1.output_tokens, Some(109));
-        assert_eq!(
-            a0.output_tokens.unwrap() + a1.output_tokens.unwrap(),
-            164,
-            "attributed deltas telescope to the message total"
-        );
-        // Prompt-side cost is not attributed per step.
-        assert_eq!(a0.input_tokens, None);
-        assert_eq!(a0.cache_read_tokens, None);
+        for t in &turns {
+            assert!(
+                t.attributed_token_usage.is_none(),
+                "Claude per-line snapshots are not per-step attribution"
+            );
+        }
     }
 
     #[test]
     fn canonicalize_does_not_trust_line_order() {
         // Defensive: the complete total arrives FIRST (out of order). We
-        // must still report 164 as the total (not the last line's 55) and
-        // keep Σ attributed == total.
+        // must still report 164 as the message total — the field-wise max,
+        // not the last line's snapshot.
         let mut turns = vec![grp_turn("t1", "msg_A", 164), grp_turn("t2", "msg_A", 55)];
         canonicalize_message_usage(&mut turns);
 
@@ -931,17 +901,12 @@ mod tests {
             Some(164),
             "field-wise max, not the last line"
         );
-        let sum: u32 = turns
-            .iter()
-            .filter_map(|t| t.attributed_token_usage.as_ref()?.output_tokens)
-            .sum();
-        assert_eq!(sum, 164, "Σ attributed still telescopes to the total");
     }
 
     #[test]
-    fn canonicalize_does_not_fabricate_attribution_for_repeated_total() {
-        // Byte-identical lines (the 73% case): we only know the message
-        // total, so no per-step split is invented.
+    fn canonicalize_collapses_repeated_total_to_one_turn() {
+        // Byte-identical lines (the ~73% case): the total lands once, on the
+        // final turn; no attribution either way.
         let mut turns = vec![
             grp_turn("t1", "msg_A", 997),
             grp_turn("t2", "msg_A", 997),
@@ -949,12 +914,11 @@ mod tests {
         ];
         canonicalize_message_usage(&mut turns);
 
+        assert!(turns[0].token_usage.is_none());
+        assert!(turns[1].token_usage.is_none());
         assert_eq!(turns[2].token_usage.as_ref().unwrap().output_tokens, Some(997));
         for t in &turns {
-            assert!(
-                t.attributed_token_usage.is_none(),
-                "no fabricated attribution when lines merely repeat the total"
-            );
+            assert!(t.attributed_token_usage.is_none());
         }
     }
 

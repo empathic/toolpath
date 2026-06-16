@@ -5,10 +5,12 @@ All notable changes to the Toolpath workspace are documented here.
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-16
 
 Fixes token over-counting in derived documents (~3× output-token
-inflation on real Claude sessions, unbounded on Codex) and adds true
-per-step token attribution. Two over-counting bugs, one spec gap, plus a
-new capability the corrected reads make possible. Verified against every
-Claude session and all Codex sessions on disk.
+inflation on real Claude sessions, unbounded on Codex) and adds per-step
+token attribution where the source genuinely reports it (Codex). Two
+over-counting bugs, one spec gap, plus a capability the corrected reads
+make possible. Verified against every Claude session and all Codex
+sessions on disk, and cross-checked against the Anthropic streaming API
+reference and OpenAI's codex issue tracker.
 
 - **Claude**: Claude Code writes one JSONL line per content block of an
   assistant API message, repeating the message-level `usage` on every
@@ -38,25 +40,29 @@ Changes:
   `attributed_token_usage`. `derive_path` writes `token_usage` once per
   `message_id` group and `attributed_token_usage` on each step that has
   it; `extract_conversation` reads both back.
-- `toolpath-claude`: empirically (every session sampled), a split
-  message's lines repeat `input`/`cache` but stream `output_tokens`
-  upward to a final total — and ~27% genuinely disagree, so line order
-  is not trusted. Each `message_id` run is reduced to the **field-wise
-  maximum** total (never under-counts whatever the order) on its final
-  turn, and where output streamed, each turn's output delta (running-max
-  differenced, so `Σ` telescopes to the total) becomes its
-  `attributed_token_usage`. The projector reconstructs the cumulative
-  per-line wire so attribution survives a round-trip. `total_usage` is
-  deduped by group.
+- `toolpath-claude`: a split message's lines carry `message.usage` as a
+  **cumulative streaming snapshot**, not a per-line bill — per the
+  Anthropic streaming API, `message_start` seeds `output_tokens` near
+  zero and each `message_delta` reports the running cumulative total
+  (confirmed across every session sampled: input/cache constant, output
+  climbing to the final-line total; ~27% of multi-line messages vary).
+  Each `message_id` run is reduced to the **field-wise maximum** total
+  (never under-counts whatever the line order) on its final turn. The
+  intermediate snapshots are flush-time artifacts, *not* per-block costs
+  (a real prose block routinely shows `output_tokens: 1`), so Claude
+  emits **no** `attributed_token_usage`. `total_usage` is deduped by
+  group; the projector re-expands the total onto every line of a split.
 - `toolpath-codex`: per-step spend is the increase in the cumulative
   `total_token_usage` since the previous count — **differencing the
-  cumulative is dedup-safe** (Codex emits each `token_count` twice; a
-  repeated total is a 0 delta) where summing `last_token_usage` would
-  double. Each delta is attributed to the step it follows; a round's
-  `token_usage` total is the sum of its steps' attributions (one source
-  of truth — total and shares cannot drift). The projector emits a
-  `turn_context` per group and a cumulative `token_count` after each
-  step, so grouping and attribution survive the round-trip.
+  cumulative is dedup-safe**, where summing `last_token_usage` would
+  double-count because Codex re-emits a stale `last_token_usage` on
+  repeated `token_count` events (a documented trap: openai/codex #14489,
+  #17539). Each per-call delta is attributed to the step it follows as
+  `attributed_token_usage`; a round's `token_usage` total is the sum of
+  its steps' attributions (one source of truth — total and shares cannot
+  drift). The projector emits a `turn_context` per group and a cumulative
+  `token_count` after each step, so grouping and attribution survive the
+  round-trip.
 - `toolpath-pi` and `toolpath-opencode` decode absent/all-zero wire
   usage counters as `token_usage: None` ("spend unknown") instead of
   `Some(zeros)` — their wires require usage fields, which
