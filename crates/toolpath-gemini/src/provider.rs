@@ -128,6 +128,7 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
         model: msg.model.clone(),
         stop_reason: None,
         token_usage,
+        attributed_token_usage: None,
         environment,
         delegations: vec![],
         file_mutations,

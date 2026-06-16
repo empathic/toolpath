@@ -238,6 +238,7 @@ fn projector_accepts_foreign_view_shape() {
                 model: None,
                 stop_reason: None,
                 token_usage: None,
+                attributed_token_usage: None,
                 environment: Some(EnvironmentSnapshot {
                     working_dir: Some("/foreign".into()),
                     ..Default::default()
@@ -271,6 +272,7 @@ fn projector_accepts_foreign_view_shape() {
                     cache_read_tokens: None,
                     cache_write_tokens: None,
                 }),
+                attributed_token_usage: None,
                 environment: Some(EnvironmentSnapshot {
                     working_dir: Some("/foreign".into()),
                     ..Default::default()

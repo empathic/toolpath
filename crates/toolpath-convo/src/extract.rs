@@ -311,6 +311,10 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    let attributed_token_usage = extra
+        .get("attributed_token_usage")
+        .and_then(|v| serde_json::from_value::<TokenUsage>(v.clone()).ok());
+
     Turn {
         id: step.step.id.clone(),
         parent_id,
@@ -323,6 +327,7 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         model,
         stop_reason,
         token_usage,
+        attributed_token_usage,
         environment,
         delegations,
         file_mutations: Vec::new(),

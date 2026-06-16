@@ -8,27 +8,40 @@ flat fields with nested breakdowns that duplicate the flat totals.
 ## One message, many lines: don't sum per entry
 
 Claude Code writes one JSONL line **per content block** of an assistant
-API message (see [entry-types](entry-types.md)) — and every line of the
-split repeats the **same message-level `usage` object** verbatim. A
-message with thinking + text + two `tool_use` blocks lands as four
-entries, each claiming the full bill. Summing `message.usage` across
-entries therefore over-counts by the block count (~3× on typical
-sessions).
+API message (see [entry-types](entry-types.md)), each stamped with a
+`usage` object. A message with thinking + text + two `tool_use` blocks
+lands as four entries. Summing `message.usage` across entries
+over-counts (~3× on typical sessions) — the values are **cumulative
+snapshots of one message, not per-line bills.**
 
 The grouping key is **`message.id`** (`msg_…`), identical on every line
-of the split. Correct accounting: take `usage` **once per distinct
-`message.id`** (lines of one message are consecutive; user entries
-between them don't reset the run). This is exactly what
-`toolpath-claude` does — turns carry `message_id`, derived paths put
-`token_usage` on only the last step of each message group, per the
+of the split. Empirically, across every session sampled:
+
+- `input_tokens` and the cache counters are **constant** across a
+  message's lines (prompt-side cost, paid once for the message).
+- `output_tokens` is **cumulative and non-decreasing**: it streams
+  upward as the model generates, and the **last line carries the
+  message total**. ~73% of split messages repeat one value on every
+  line (stamped after generation); ~27% genuinely stream (distinct
+  values). Either way the max — which is the last line — is the total.
+
+Correct accounting: take the **maximum** `usage` per distinct
+`message.id` (don't trust line order; the format is undocumented). This
+is what `toolpath-claude` does — derived paths put the message total on
+the last step of each `message.id` group, per the
 [`agent-coding-session` v1.1.0 kind](https://toolpath.net/kinds/agent-coding-session/v1.1.0/).
 
-Two related cautions. The `iterations` array (below) is a breakdown
-*inside* one message's `usage` — subordinate detail, not an alternative
-accounting unit; never sum it alongside the enclosing totals. And block-
-level attribution is unknowable from this format: the lines of a split
-all quote message-level totals, so "tokens spent on this tool_use" has
-no ground truth finer than the message.
+**Per-block attribution (where it streams).** Because `output_tokens` is
+cumulative, the *difference* between consecutive lines is the output a
+block produced — genuine per-step attribution, available for the ~27% of
+messages that stream. `toolpath-claude` records these deltas as
+`attributed_token_usage`; it does not fabricate a split for the repeating
+~73% (there the per-block breakdown is genuinely unknown). Only
+`output_tokens` is attributable — input/cache are per-message.
+
+One caution: the `iterations` array (below) is a breakdown *inside* one
+message's `usage` — subordinate detail, not an accounting unit; never sum
+it alongside the enclosing totals.
 
 ## Full observed shape
 

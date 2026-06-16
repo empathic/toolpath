@@ -18,6 +18,17 @@
       "required": ["input_tokens", "output_tokens"]
     },
 
+    "attributedTokenUsage": {
+      "type": "object",
+      "description": "This step's own attributed spend, when the source provides step-aligned data — distinct from `token_usage` (the message total). Optional and orthogonal: it rides its own key so summing `token_usage` over steps is unaffected. Within a `message_id` group, the sum of `attributed_token_usage` over its steps is the group's attributed spend; the unattributed remainder (`group token_usage − Σ attributed`) is computed by consumers, never recorded. Same field shape as `tokenUsage`; producers populate only what they can attribute (e.g. Claude attributes `output_tokens` only — input/cache are per-message; Codex attributes every field, since each step is a separate API call).",
+      "properties": {
+        "input_tokens": { "type": ["integer", "null"] },
+        "output_tokens": { "type": ["integer", "null"] },
+        "cache_read_tokens": { "type": "integer" },
+        "cache_write_tokens": { "type": "integer" }
+      }
+    },
+
     "toolResult": {
       "type": "object",
       "properties": {
@@ -87,6 +98,7 @@
           "items": { "$ref": "#/$defs/toolUse" }
         },
         "token_usage": { "$ref": "#/$defs/tokenUsage" },
+        "attributed_token_usage": { "$ref": "#/$defs/attributedTokenUsage" },
         "stop_reason": { "type": "string" },
         "delegations": {
           "type": "array",

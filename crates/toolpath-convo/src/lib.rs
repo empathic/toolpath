@@ -275,8 +275,25 @@ pub struct Turn {
     /// Why the turn ended (e.g. "end_turn", "tool_use", "max_tokens").
     pub stop_reason: Option<String>,
 
-    /// Token usage for this turn.
+    /// Token usage for this turn. When this turn belongs to a `message_id`
+    /// group, this is the **whole message's total**, carried on the
+    /// group's final turn only (it always means "the total for a
+    /// message"; summing over turns yields session totals).
     pub token_usage: Option<TokenUsage>,
+
+    /// This turn's own attributed spend, when the source provides
+    /// step-aligned data — the output tokens generated *for this turn*,
+    /// distinct from [`Turn::token_usage`] (the whole message's total).
+    /// Populated where a provider streams per-step counts (Claude's
+    /// per-content-block cumulative `usage`, Codex's per-step
+    /// `token_count` deltas); absent where it can't be attributed.
+    /// Within a `message_id` group, `Σ attributed_token_usage` is the
+    /// group's attributed output; the unattributed remainder
+    /// (prompt-side input/cache, inherently per-message) stays in
+    /// `token_usage` on the group's final turn. A separate field from
+    /// `token_usage` precisely so the session-total sum is unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attributed_token_usage: Option<TokenUsage>,
 
     /// Environment at time of this turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -560,6 +577,7 @@ mod tests {
                     model: None,
                     stop_reason: None,
                     token_usage: None,
+                    attributed_token_usage: None,
                     environment: None,
                     delegations: vec![],
                     file_mutations: Vec::new(),
@@ -590,6 +608,7 @@ mod tests {
                         cache_read_tokens: None,
                         cache_write_tokens: None,
                     }),
+                    attributed_token_usage: None,
                     environment: None,
                     delegations: vec![],
                     file_mutations: Vec::new(),
@@ -606,6 +625,7 @@ mod tests {
                     model: None,
                     stop_reason: None,
                     token_usage: None,
+                    attributed_token_usage: None,
                     environment: None,
                     delegations: vec![],
                     file_mutations: Vec::new(),
@@ -944,6 +964,7 @@ mod tests {
             model: None,
             stop_reason: None,
             token_usage: None,
+            attributed_token_usage: None,
             environment: Some(EnvironmentSnapshot {
                 working_dir: Some("/project".into()),
                 vcs_branch: Some("feat/auth".into()),

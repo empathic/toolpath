@@ -197,6 +197,16 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             extra.insert("token_usage".to_string(), v);
         }
 
+        // Per-step attributed spend rides its own key on every step that
+        // has it (independent of the once-per-message `token_usage`), so
+        // summing `token_usage` is unaffected while per-step cost stays
+        // readable structurally.
+        if let Some(attr) = &turn.attributed_token_usage
+            && let Ok(v) = serde_json::to_value(attr)
+        {
+            extra.insert("attributed_token_usage".to_string(), v);
+        }
+
         if let Some(mid) = &turn.message_id {
             extra.insert(
                 "message_id".to_string(),
@@ -677,6 +687,7 @@ mod tests {
             model: None,
             stop_reason: None,
             token_usage: None,
+            attributed_token_usage: None,
             environment: None,
             delegations: vec![],
             file_mutations: Vec::new(),
@@ -837,6 +848,10 @@ mod tests {
             output_tokens: Some(20),
             cache_read_tokens: Some(50),
             cache_write_tokens: None,
+        });
+        assistant.attributed_token_usage = Some(TokenUsage {
+            output_tokens: Some(20),
+            ..Default::default()
         });
         assistant.environment = Some(EnvironmentSnapshot {
             working_dir: Some("/repo".into()),

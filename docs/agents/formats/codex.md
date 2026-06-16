@@ -502,21 +502,27 @@ Populated once the turn has real usage data:
 Absent/null `info` on the first `token_count` of a turn (delivered
 before the model responds); populated thereafter.
 
-**Cumulative vs. per-turn:** `total_token_usage` is the running
-**session-cumulative** counter — never attribute it to a single turn
-(summing it per turn grows quadratically). The round's own spend is
-`last_token_usage`; older rollouts that lack it require taking the
-delta between successive `total_token_usage` values.
+**Cumulative vs. per-step — and the doubling trap:** `total_token_usage`
+is the running **session-cumulative** counter — never attribute it to a
+single turn (summing it per turn grows quadratically). A step's own
+spend is the **increase** in `total_token_usage` since the previous
+count. Crucially, derive that by **differencing the cumulative**, not by
+summing `last_token_usage`: Codex emits **each `token_count` event
+twice** (two lines, distinct timestamps, identical values), so summing
+`last_token_usage` double-counts, while a repeated cumulative total is a
+0 delta. Each `token_count` follows the step it measures (a
+`function_call` or a `message`), so the delta attributes to that step.
 
-**Round scoping:** a Codex round (one user task) can emit several
-assistant messages (commentary + final) and several periodic
-`token_count` events. `toolpath-codex` therefore groups a round's
-assistant turns under `Turn.message_id` (the `turn_id` from
-`turn_context`/`task_started`), accumulates the round's `token_count`
-spend, and attaches the sum to the round's **final** assistant turn at
-`task_complete` / the next round / EOF — so `Turn.token_usage` always
-means "the message group's total" and per-turn sums equal session
-totals.
+**Round scoping + attribution:** a Codex round (one user task) can emit
+several assistant messages (commentary + final) and many `token_count`
+events. `toolpath-codex` groups a round's assistant turns under
+`Turn.message_id` (the `turn_id` from `turn_context`/`task_started`),
+records each per-step delta as that step's `attributed_token_usage`, and
+sets the round's total `Turn.token_usage` (on its final turn) to the sum
+of those attributions — one source of truth, so the total and the
+per-step shares cannot drift, and `Σ token_usage == Σ attributed ==`
+session total. Every field is per-step here (each step is a separate API
+call re-sending context), so Codex attribution is full, not output-only.
 
 ### `exec_command_end` detail
 

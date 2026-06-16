@@ -105,16 +105,31 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // ran in between. Track those rewrites so we can patch the chain.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
 
-    // Message-group totals: the IR carries a message's `token_usage` only
-    // on the group's final turn, but every wire line of a split repeats
-    // the total. Index totals by message_id so each member turn can be
-    // re-expanded on the way out.
-    let mut group_usage: HashMap<&str, &toolpath_convo::TokenUsage> = HashMap::new();
+    // Message-group accounting. The IR carries a message's total
+    // `token_usage` only on the group's final turn; the wire repeats usage
+    // on every line of a split. Two reconstruction modes:
+    //   - groups WITHOUT per-step attribution (the wire merely repeated one
+    //     total): write that total on every line.
+    //   - groups WITH attribution (the wire streamed): rebuild each line's
+    //     cumulative output as the running sum of attributed deltas, with
+    //     input/cache held at the message total — so a re-read differences
+    //     it straight back into the same deltas and total.
+    let mut group_total: HashMap<&str, toolpath_convo::TokenUsage> = HashMap::new();
+    let mut group_streamed: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for turn in &view.turns {
-        if let (Some(mid), Some(usage)) = (&turn.message_id, &turn.token_usage) {
-            group_usage.insert(mid.as_str(), usage);
+        if let Some(mid) = turn.message_id.as_deref() {
+            if let Some(usage) = &turn.token_usage {
+                group_total
+                    .entry(mid)
+                    .and_modify(|acc| *acc = crate::provider::max_usage(acc, usage))
+                    .or_insert_with(|| usage.clone());
+            }
+            if turn.attributed_token_usage.is_some() {
+                group_streamed.insert(mid);
+            }
         }
     }
+    let mut group_running_output: HashMap<&str, u32> = HashMap::new();
 
     for turn in &view.turns {
         // Pre-rewrite this turn's parent_id if a synthesized tool_result
@@ -133,13 +148,36 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 convo.add_entry(entry);
             }
             Role::Assistant => {
-                let wire_usage = turn.token_usage.as_ref().or_else(|| {
-                    turn.message_id
-                        .as_deref()
-                        .and_then(|mid| group_usage.get(mid).copied())
-                });
+                let wire_usage: Option<toolpath_convo::TokenUsage> = match turn
+                    .message_id
+                    .as_deref()
+                {
+                    // Streamed group: reconstruct this line's cumulative
+                    // output (running sum of attributed deltas), input/cache
+                    // pinned to the message total.
+                    Some(mid) if group_streamed.contains(mid) => {
+                        let delta = turn
+                            .attributed_token_usage
+                            .as_ref()
+                            .and_then(|a| a.output_tokens)
+                            .unwrap_or(0);
+                        let run = group_running_output.entry(mid).or_insert(0);
+                        *run += delta;
+                        let total = group_total.get(mid);
+                        Some(toolpath_convo::TokenUsage {
+                            output_tokens: Some(*run),
+                            input_tokens: total.and_then(|t| t.input_tokens),
+                            cache_read_tokens: total.and_then(|t| t.cache_read_tokens),
+                            cache_write_tokens: total.and_then(|t| t.cache_write_tokens),
+                        })
+                    }
+                    // Repeated-total group: the message total on every line.
+                    Some(mid) => group_total.get(mid).cloned(),
+                    // Ungrouped: the turn's own usage.
+                    None => turn.token_usage.clone(),
+                };
                 let mut assistant_entry =
-                    assistant_turn_to_entry_with_usage(turn, &view.id, wire_usage);
+                    assistant_turn_to_entry_with_usage(turn, &view.id, wire_usage.as_ref());
                 apply_turn_metadata(&mut assistant_entry, turn);
                 assistant_entry.parent_uuid = effective_parent;
                 convo.add_entry(assistant_entry);
@@ -1035,6 +1073,7 @@ mod tests {
             model: None,
             stop_reason: None,
             token_usage: None,
+            attributed_token_usage: None,
             environment: None,
             delegations: vec![],
             file_mutations: Vec::new(),
@@ -1054,6 +1093,7 @@ mod tests {
             model: None,
             stop_reason: None,
             token_usage: None,
+            attributed_token_usage: None,
             environment: None,
             delegations: vec![],
             file_mutations: Vec::new(),
@@ -1099,6 +1139,56 @@ mod tests {
             assert_eq!(u.output_tokens, Some(997));
             assert_eq!(u.cache_creation_input_tokens, Some(429_831));
         }
+    }
+
+    #[test]
+    fn test_attribution_survives_projector_roundtrip() {
+        // A streamed group: per-step output deltas in the IR. The projector
+        // must rebuild the cumulative wire (output 55, then 164) so that
+        // re-reading recovers the same deltas and total — not a flat repeat
+        // that would erase attribution.
+        let mut a1 = assistant_turn("a1", "first");
+        a1.message_id = Some("msg_A".into());
+        a1.attributed_token_usage = Some(toolpath_convo::TokenUsage {
+            output_tokens: Some(55),
+            ..Default::default()
+        });
+        let mut a2 = assistant_turn("a2", "second");
+        a2.message_id = Some("msg_A".into());
+        a2.attributed_token_usage = Some(toolpath_convo::TokenUsage {
+            output_tokens: Some(109),
+            ..Default::default()
+        });
+        a2.token_usage = Some(toolpath_convo::TokenUsage {
+            input_tokens: Some(6),
+            output_tokens: Some(164),
+            cache_read_tokens: Some(100),
+            cache_write_tokens: Some(200),
+        });
+
+        let view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2]);
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        // Wire: cumulative output streams 55 -> 164, input/cache constant.
+        let outs: Vec<Option<u32>> = content_entries(&convo)
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+            .map(|e| e.message.as_ref().unwrap().usage.as_ref().unwrap().output_tokens)
+            .collect();
+        assert_eq!(outs, vec![Some(55), Some(164)]);
+
+        // Re-read recovers the deltas and the total.
+        let back = crate::provider::to_view(&convo);
+        let a: Vec<&Turn> = back.turns.iter().filter(|t| t.role == Role::Assistant).collect();
+        assert_eq!(
+            a[0].attributed_token_usage.as_ref().unwrap().output_tokens,
+            Some(55)
+        );
+        assert_eq!(
+            a[1].attributed_token_usage.as_ref().unwrap().output_tokens,
+            Some(109)
+        );
+        assert_eq!(a[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
     }
 
     // ── Permission-mode preamble ─────────────────────────────────────

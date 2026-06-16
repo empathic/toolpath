@@ -282,6 +282,7 @@ fn view_from_jsonl(
             model: None,
             stop_reason: None,
             token_usage: None,
+            attributed_token_usage: None,
             environment: env_for(),
             delegations: Vec::new(),
             file_mutations: Vec::new(),

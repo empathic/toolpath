@@ -933,6 +933,7 @@ mod tests {
             model: None,
             stop_reason: None,
             token_usage: None,
+            attributed_token_usage: None,
             environment: Some(EnvironmentSnapshot {
                 working_dir: Some("/proj".into()),
                 vcs_branch: None,
@@ -961,6 +962,7 @@ mod tests {
                 cache_read_tokens: None,
                 cache_write_tokens: None,
             }),
+            attributed_token_usage: None,
             environment: Some(EnvironmentSnapshot {
                 working_dir: Some("/proj".into()),
                 vcs_branch: None,

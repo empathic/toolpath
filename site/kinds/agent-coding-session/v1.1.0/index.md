@@ -41,6 +41,7 @@ It may also carry any of the following, present only when the turn has them:
 | `message_id`  | string | provider-assigned ID of the source message (see below)        |
 | `tool_uses`   | array  | tools the agent invoked (shape below)                         |
 | `token_usage` | object | the source message's token counts (shape and rule below)      |
+| `attributed_token_usage` | object | this step's own attributed spend, when known (see below) |
 | `stop_reason` | string | why the model stopped (`end_turn`, `tool_use`, …)             |
 | `delegations` | array  | sub-agent work spawned from this turn (shape below)           |
 | `environment` | object | working environment at this turn (shape below)                |
@@ -61,11 +62,20 @@ How `token_usage` on steps relates to API-message accounting:
 
 Consequence: **summing `token_usage` over a v1.1.0 path's steps yields the session totals.** Consumers need no dedup heuristics. (JSON Schema cannot express the once-per-run rule, so it is normative prose, enforced by producer test suites.)
 
-`token_usage` has **one meaning everywhere it appears: the total for a message**. A step without a `message_id` is a one-step message, so its `token_usage` is that message's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `message_id` on the same payload tells you which message it totals. A producer that can attribute usage to individual steps fully expresses that by leaving `message_id` unset: each step is its own message. When a source format offers both a message total and a finer breakdown (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the total; the breakdown is subordinate detail and does not ride `token_usage`.
+`token_usage` has **one meaning everywhere it appears: the total for a message**. A step without a `message_id` is a one-step message, so its `token_usage` is that message's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `message_id` on the same payload tells you which message it totals. Per-step spend, when the source has it, rides a separate [`attributed_token_usage`](#per-step-attribution-attributed_token_usage) key — never `token_usage`. When a source format offers both a message total and a finer breakdown (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the total; the breakdown is subordinate detail and does not ride `token_usage`.
 
-For consumers: a step without `token_usage` inside a `message_id` group has no individually-known spend; its message's cost sits, whole, on the group's final step. Analytics finer than the message (e.g. cost per tool call) should aggregate at the group level rather than apportioning a group's total across its member steps — the source data does not support finer attribution.
+### Per-step attribution: `attributed_token_usage`
 
-**Forward compatibility.** A future version of this kind may support *partial or full* per-step attribution within a group. When it does, attributed step amounts will ride a **separate field** (e.g. `attributed_token_usage`, "this step's own attributed share") — never `token_usage`, whose total-for-a-message meaning is permanent. Whether a number is a message total or a step share is therefore structural (the key it sits under), not positional (where its step falls in the run). Consequences that hold across the extension: `Σ token_usage` over a path's steps remains the exact session total, and the unattributed remainder is *computed* by consumers (`final step's token_usage − Σ group's attributed amounts`), never recorded — recorded values stay verbatim source observations, and source inconsistencies stay visible. The new field still arrives only under a new version URI, but it changes what consumers *can* read, not how they sum.
+Some sources expose, per step, the spend attributable to that step alone — distinct from the message total. Where a producer has it, the step carries an **`attributed_token_usage`** object (same shape as [`token_usage`](#token_usage)) holding *this step's own share*. It is **optional and orthogonal to `token_usage`**: whether a number is a message total or a step share is structural — the key it sits under — never positional. This is the rule that lets per-step accounting be added by any producer at any time without a new kind version.
+
+How it relates to the message total:
+
+- Within a `message_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is *computed* by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay verbatim source observations and source inconsistencies stay visible.
+- For a group where the source attributes everything (e.g. Codex, where each step is a separate API call), the remainder is zero and `Σ attributed_token_usage == token_usage`.
+- For a group where the source attributes only part (e.g. Claude streams per-block `output_tokens` but the prompt-side input/cache is inherently per-message), the remainder holds the per-message part.
+- A group with no per-step data carries no `attributed_token_usage` at all — only the message total. Producers must not fabricate a split.
+
+`Σ token_usage` over a path's steps is unaffected by `attributed_token_usage` (they are separate keys), so the session-total guarantee above always holds. A consumer wanting per-step cost reads `attributed_token_usage` where present and falls back to the message total otherwise.
 
 ### `tool_uses`
 

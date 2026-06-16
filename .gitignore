@@ -10,3 +10,6 @@ site/wasm/
 .claude/worktrees/
 # Synthetic benchmark fixtures — generate locally via gen_synthetic_path.
 /bench/fixtures/
+
+# macOS
+.DS_Store

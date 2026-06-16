@@ -139,18 +139,6 @@ fn project_view(
     // Line 1: session_meta. Codex always writes this first.
     lines.push(make_session_meta_line(cfg, view, &session_timestamp, &cwd));
 
-    // Line 2: turn_context. Codex writes one per turn; we emit a
-    // single one up front since cross-harness turns don't change
-    // per-turn context. (For Codex→View→Codex, the original per-turn
-    // contexts live on `view.events` and are NOT round-tripped today
-    // — a pragmatic loss for cross-harness output.)
-    lines.push(make_turn_context_line(
-        view,
-        &session_timestamp,
-        &cwd,
-        &model,
-    ));
-
     // Find the last assistant turn so we can mark it `phase: "final"`.
     // Codex annotates every other assistant turn with `phase: "commentary"`,
     // matching what real rollouts look like.
@@ -159,10 +147,46 @@ fn project_view(
         .iter()
         .rposition(|t| matches!(t.role, Role::Assistant));
 
+    // A turn's group id is its `message_id`; an assistant turn without one
+    // is its own group (a unique synthesized id) so its own total survives.
+    let group_of = |idx: usize, turn: &Turn| -> String {
+        turn.message_id
+            .clone()
+            .unwrap_or_else(|| format!("{}-t{}", view.id, idx))
+    };
+
+    // Line 2: an opening turn_context (real Codex writes it right after
+    // session_meta, before the first user turn). Its turn_id is the first
+    // group's, so leading user turns and the first assistant share it; later
+    // group boundaries emit their own. This is what makes the source's
+    // grouping survive the round-trip — the reader keys `Turn.message_id`
+    // off the turn_context `turn_id`.
+    let first_group = view
+        .turns
+        .iter()
+        .enumerate()
+        .find(|(_, t)| matches!(t.role, Role::Assistant))
+        .map(|(i, t)| group_of(i, t))
+        .unwrap_or_else(|| view.id.clone());
+    lines.push(make_turn_context_line(&first_group, &session_timestamp, &cwd, &model));
+    let mut current_group = Some(first_group);
+
+    // Running session-cumulative usage. Codex's `total_token_usage` is
+    // cumulative; we advance it by each turn's per-step contribution and
+    // emit it after the turn, so a re-read differences it back to the same
+    // per-step spend.
+    let mut running = toolpath_convo::TokenUsage::default();
     for (idx, turn) in view.turns.iter().enumerate() {
+        if matches!(turn.role, Role::Assistant) {
+            let group = group_of(idx, turn);
+            if current_group.as_deref() != Some(&group) {
+                lines.push(make_turn_context_line(&group, &turn.timestamp, &cwd, &model));
+                current_group = Some(group);
+            }
+        }
         let codex = codex_extras(turn).cloned().unwrap_or_default();
         let is_final_assistant = Some(idx) == last_assistant_idx;
-        emit_turn_lines(turn, &codex, is_final_assistant, &cwd, &mut lines);
+        emit_turn_lines(turn, &codex, is_final_assistant, &cwd, &mut lines, &mut running);
     }
 
     Ok(crate::types::Session {
@@ -211,14 +235,13 @@ fn make_session_meta_line(
 }
 
 fn make_turn_context_line(
-    view: &ConversationView,
+    turn_id: &str,
     timestamp: &str,
     cwd: &str,
     model: &str,
 ) -> RolloutLine {
-    let turn_id = view.id.clone();
     let tc = TurnContext {
-        turn_id,
+        turn_id: turn_id.to_string(),
         cwd: PathBuf::from(cwd),
         current_date: None,
         timezone: None,
@@ -251,10 +274,13 @@ fn emit_turn_lines(
     is_final_assistant: bool,
     session_cwd: &str,
     lines: &mut Vec<RolloutLine>,
+    running: &mut toolpath_convo::TokenUsage,
 ) {
     match &turn.role {
         Role::User => emit_user_message(turn, lines),
-        Role::Assistant => emit_assistant(turn, codex, is_final_assistant, session_cwd, lines),
+        Role::Assistant => {
+            emit_assistant(turn, codex, is_final_assistant, session_cwd, lines, running)
+        }
         Role::System => emit_developer_message(turn, lines),
         Role::Other(_) => {
             // Unknown roles don't have a clean Codex analog; emit them
@@ -326,6 +352,7 @@ fn emit_assistant(
     is_final_assistant: bool,
     session_cwd: &str,
     lines: &mut Vec<RolloutLine>,
+    running: &mut toolpath_convo::TokenUsage,
 ) {
     // Order matches what Codex itself emits per turn:
     //   reasoning? → message → (function_call → function_call_output)*
@@ -373,23 +400,6 @@ fn emit_assistant(
             &turn.timestamp,
             "reasoning",
             serde_json::to_value(&r).unwrap_or(Value::Null),
-        ));
-    }
-
-    // The forward path's `pending_token_usage` attaches to the next turn
-    // pushed, so this `token_count` event must precede the assistant
-    // message line below.
-    if let Some(usage) = &turn.token_usage {
-        lines.push(event_msg_line(
-            &turn.timestamp,
-            json!({
-                "type": "token_count",
-                "info": {
-                    "total_token_usage": convo_usage_to_codex_json(usage),
-                    "last_token_usage": convo_usage_to_codex_json(usage),
-                },
-                "rate_limits": Value::Null,
-            }),
         ));
     }
 
@@ -448,20 +458,41 @@ fn emit_assistant(
         emit_tool_call(turn, tu, &name, &tool_extras, session_cwd, lines);
     }
 
-    // Close the accounting round. The reader accumulates `token_count`
-    // spend and attaches it to the round's final assistant turn when the
-    // round closes; without this boundary a re-read would lump every
-    // turn's spend onto the session's last assistant turn.
-    if turn.token_usage.is_some() {
+    // Advance the session-cumulative counter by this step's contribution
+    // (its attributed per-step spend, or its group total when no per-step
+    // split exists), then emit `token_count` AFTER the turn — the reader
+    // differences the cumulative and attributes the delta to the step it
+    // follows. Mirrors how real Codex streams cumulative counts per step.
+    if let Some(contribution) = turn
+        .attributed_token_usage
+        .as_ref()
+        .or(turn.token_usage.as_ref())
+    {
+        add_codex_usage(running, contribution);
         lines.push(event_msg_line(
             &turn.timestamp,
             json!({
-                "type": "task_complete",
-                "turn_id": turn.message_id.clone().unwrap_or_default(),
-                "last_agent_message": Value::Null,
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": convo_usage_to_codex_json(running),
+                },
+                "rate_limits": Value::Null,
             }),
         ));
     }
+}
+
+/// Component-wise `acc += delta` on the convo usage type (None as 0).
+fn add_codex_usage(acc: &mut toolpath_convo::TokenUsage, delta: &toolpath_convo::TokenUsage) {
+    let add = |a: &mut Option<u32>, b: Option<u32>| {
+        if let Some(b) = b {
+            *a = Some(a.unwrap_or(0) + b);
+        }
+    };
+    add(&mut acc.input_tokens, delta.input_tokens);
+    add(&mut acc.output_tokens, delta.output_tokens);
+    add(&mut acc.cache_read_tokens, delta.cache_read_tokens);
+    add(&mut acc.cache_write_tokens, delta.cache_write_tokens);
 }
 
 fn emit_tool_call(
@@ -679,6 +710,7 @@ mod tests {
             model: None,
             stop_reason: None,
             token_usage: None,
+            attributed_token_usage: None,
             environment: None,
             delegations: vec![],
             file_mutations: Vec::new(),
@@ -703,6 +735,7 @@ mod tests {
                 cache_read_tokens: None,
                 cache_write_tokens: None,
             }),
+            attributed_token_usage: None,
             environment: None,
             delegations: vec![],
             file_mutations: Vec::new(),
@@ -803,30 +836,27 @@ mod tests {
             .project(&view_with(vec![t]))
             .unwrap();
         let inner = inner_types(&s);
-        // session_meta + turn_context + token_count + message + agent_message
+        // session_meta + turn_context + message + agent_message
         // + function_call + function_call_output + exec_command_end
-        // + task_complete. The token_count precedes the assistant message
-        // (the round's spend accumulates as counts arrive); the closing
-        // task_complete is the round boundary that makes the forward path
-        // attach the accumulated spend to THIS turn rather than lumping
-        // every round onto the session's last assistant.
+        // + token_count. The token_count follows the turn (the reader
+        // differences the cumulative and attributes the delta to the step
+        // it follows); the per-step spend is the turn's contribution.
         assert_eq!(
             inner,
             vec![
                 "",
                 "",
-                "token_count",
                 "message",
                 "agent_message",
                 "function_call",
                 "function_call_output",
                 "exec_command_end",
-                "task_complete"
+                "token_count"
             ]
         );
 
         // FunctionCall.arguments is a JSON STRING, not a parsed value.
-        let fc_payload = &s.lines[5].payload;
+        let fc_payload = &s.lines[4].payload;
         assert_eq!(fc_payload["type"], "function_call");
         assert_eq!(fc_payload["call_id"], "call_001");
         assert_eq!(fc_payload["name"], "exec_command");
@@ -834,13 +864,13 @@ mod tests {
         let parsed: Value = serde_json::from_str(args).unwrap();
         assert_eq!(parsed["cmd"], "pwd");
 
-        let fco_payload = &s.lines[6].payload;
+        let fco_payload = &s.lines[5].payload;
         assert_eq!(fco_payload["type"], "function_call_output");
         assert_eq!(fco_payload["call_id"], "call_001");
         assert_eq!(fco_payload["output"], "/tmp\n");
 
         // exec_command_end: TUI counterpart with the aggregated output.
-        let exec = &s.lines[7].payload;
+        let exec = &s.lines[6].payload;
         assert_eq!(exec["type"], "exec_command_end");
         assert_eq!(exec["call_id"], "call_001");
         assert_eq!(exec["aggregated_output"], "/tmp\n");

@@ -17,13 +17,17 @@
 //! 6. `event_msg.patch_apply_end` is captured on the current turn's
 //!    `extra["codex"]["patch_changes"]` — the derive layer consumes it
 //!    for file-artifact sibling changes.
-//! 7. Rounds: `turn_context` / `task_started` open an API round
-//!    (`turn_id`); assistant turns emitted during it share that ID as
-//!    `Turn.message_id`. `event_msg.token_count` spend accumulates per
-//!    round (preferring `last_token_usage`, else delta of cumulative
-//!    totals) and lands on the round's final assistant turn at
-//!    `task_complete` / next round / EOF — `Turn.token_usage` always
-//!    means "the message group's total".
+//! 7. Token accounting. `turn_context` / `task_started` open an API round
+//!    (`turn_id`); assistant turns in it share that id as `Turn.message_id`.
+//!    `event_msg.token_count` carries the SESSION-cumulative
+//!    `total_token_usage`; each step's spend is the increase since the
+//!    previous count — differencing the cumulative is dedup-safe (Codex
+//!    emits each count twice; a repeated total is a 0 delta) where summing
+//!    `last_token_usage` would double. Each delta is attributed to the step
+//!    it follows (`Turn.attributed_token_usage`); `finalize_usage` then
+//!    sets each group's total `Turn.token_usage` to the sum of its
+//!    attributions, on the group's final turn — one source of truth, so
+//!    `Σ token_usage == Σ attributed ==` session total.
 //! 8. Everything else (`task_started`, `task_complete`, `turn_context`,
 //!    `user_message`/`agent_message` duplicates, unknown events) lands
 //!    in `ConversationView.events` as a typed [`ConversationEvent`].
@@ -33,7 +37,7 @@ use std::collections::HashMap;
 use crate::io::ConvoIO;
 use crate::types::{
     EventMsg, ExecCommandEnd, Message, PatchApplyEnd, PatchChange, ResponseItem, RolloutItem,
-    Session, TokenCountInfo, TokenUsage as CodexTokenUsage,
+    Session, TokenCountInfo,
 };
 use serde_json::Value;
 use toolpath_convo::{
@@ -189,11 +193,9 @@ struct Builder<'a> {
     /// `task_started`. Assistant turns emitted during a round share it as
     /// their `message_id`.
     current_round_id: Option<String>,
-    /// Spend accumulated from this round's `token_count` events; attached
-    /// to the round's final assistant turn when the round closes.
-    round_usage: Option<TokenUsage>,
-    /// Index of the round's most recent assistant turn — the flush target.
-    round_last_assistant: Option<usize>,
+    /// Per-step spend awaiting an assistant turn to attach to (a token_count
+    /// arriving before this round's first assistant turn exists).
+    pending_attributed: Option<TokenUsage>,
     working_dir: Option<String>,
     current_model: Option<String>,
     call_index: HashMap<String, (usize, usize)>,
@@ -211,8 +213,7 @@ impl<'a> Builder<'a> {
             events: Vec::new(),
             pending_reasoning_plaintext: Vec::new(),
             current_round_id: None,
-            round_usage: None,
-            round_last_assistant: None,
+            pending_attributed: None,
             working_dir: None,
             current_model: None,
             call_index: HashMap::new(),
@@ -268,9 +269,8 @@ impl<'a> Builder<'a> {
             }
         }
 
-        // A session can end mid-round (no task_complete); attach whatever
-        // spend accumulated to the round's final assistant turn.
-        self.flush_round();
+        // Compute message-group totals from per-step attributions.
+        self.finalize_usage();
 
         // Path-level base context from session_meta (cwd + git).
         let meta = self.session.meta();
@@ -439,21 +439,22 @@ impl<'a> Builder<'a> {
         match ev {
             EventMsg::TokenCount(tc) => {
                 if let Some(info) = tc.info.as_ref() {
+                    // `total_token_usage` is the SESSION-cumulative counter;
+                    // the spend of the step that just completed is the
+                    // increase since the previous count. Differencing the
+                    // cumulative (not summing `last_token_usage`) is
+                    // dedup-safe: Codex emits each token_count twice, so a
+                    // repeated total contributes a 0 delta instead of
+                    // double-counting. The delta accrues to the round total
+                    // (a per-step `token_usage` sum can't exceed it) and is
+                    // attributed to the step it follows — for Codex every
+                    // field is per-step, since each call re-sends context.
                     let prev_total = self.total_usage.clone();
                     apply_token_count(&mut self.total_usage, info);
                     self.total_usage_set = true;
-                    // Round spend, never the cumulative counter (stamping
-                    // that on a turn would make per-step sums grow
-                    // quadratically). Prefer the verbatim
-                    // `last_token_usage`; older rollouts carry only the
-                    // cumulative total, so fall back to the delta between
-                    // successive totals. Periodic counts within one round
-                    // accumulate; the sum lands on the round's final
-                    // assistant turn when the round closes.
-                    if let Some(last) = info.last_token_usage.as_ref() {
-                        self.add_round_usage(codex_usage_to_convo(last));
-                    } else if let Some(total) = info.total_token_usage.as_ref() {
-                        self.add_round_usage(usage_delta(&codex_usage_to_convo(total), &prev_total));
+                    let delta = usage_delta(&self.total_usage, &prev_total);
+                    if !is_usage_zero(&delta) {
+                        self.attribute_delta(delta);
                     }
                 }
                 self.events
@@ -477,10 +478,9 @@ impl<'a> Builder<'a> {
                     .push(event_from_raw(timestamp, "task_started", raw_payload));
             }
             EventMsg::TaskComplete(_) => {
-                // Round over: its accumulated spend lands on the round's
-                // final assistant turn. Anything after the boundary is
-                // outside the round, so the grouping key resets too.
-                self.flush_round();
+                // Round over: anything after the boundary is outside the
+                // round, so the grouping key resets. Totals are computed
+                // once in `finalize_usage`.
                 self.current_round_id = None;
                 self.events
                     .push(event_from_raw(timestamp, "task_complete", raw_payload));
@@ -604,22 +604,10 @@ impl<'a> Builder<'a> {
 
     fn push_turn(&mut self, mut turn: Turn) {
         self.drain_pending_onto(&mut turn);
-        if turn.role == Role::Assistant {
-            if turn.message_id.is_none() {
-                turn.message_id = self.current_round_id.clone();
-            }
-            self.turns.push(turn);
-            self.round_last_assistant = Some(self.turns.len() - 1);
-            // Outside any identified round (no turn_context/task_started
-            // in scope), counts can't be held for a round boundary that
-            // may never come: attach one-shot to the assistant turn that
-            // follows them.
-            if self.current_round_id.is_none() {
-                self.flush_round();
-            }
-        } else {
-            self.turns.push(turn);
+        if turn.role == Role::Assistant && turn.message_id.is_none() {
+            turn.message_id = self.current_round_id.clone();
         }
+        self.turns.push(turn);
     }
 
     fn drain_pending_onto(&mut self, turn: &mut Turn) {
@@ -631,44 +619,93 @@ impl<'a> Builder<'a> {
             turn.thinking = Some(self.pending_reasoning_plaintext.join("\n\n"));
             self.pending_reasoning_plaintext.clear();
         }
+        // A step's spend that arrived before any assistant turn existed
+        // attaches to this, the first one.
+        if let Some(pending) = self.pending_attributed.take() {
+            add_usage(turn.attributed_token_usage.get_or_insert_with(TokenUsage::default), &pending);
+        }
     }
 
-    /// Begin a new API round. Flushes the previous round's accounting so a
-    /// round's spend always lands on that round's own final assistant turn.
+    /// Attribute one step's spend to the most recent assistant turn **of the
+    /// current round** (the step the `token_count` followed). If this round
+    /// has no assistant turn yet, buffer it for the round's first one —
+    /// never leak a round's spend onto a prior round's turn.
+    fn attribute_delta(&mut self, delta: TokenUsage) {
+        let target = self
+            .turns
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, t)| t.role == Role::Assistant)
+            .filter(|(_, t)| t.message_id == self.current_round_id)
+            .map(|(i, _)| i);
+        match target {
+            Some(idx) => add_usage(
+                self.turns[idx]
+                    .attributed_token_usage
+                    .get_or_insert_with(TokenUsage::default),
+                &delta,
+            ),
+            None => match &mut self.pending_attributed {
+                Some(acc) => add_usage(acc, &delta),
+                None => self.pending_attributed = Some(delta),
+            },
+        }
+    }
+
+    /// Begin a new API round; later assistant turns share `round_id` as
+    /// their `message_id`. Totals are computed once in [`Self::finalize_usage`].
     fn start_round(&mut self, round_id: &str) {
         if round_id.is_empty() || self.current_round_id.as_deref() == Some(round_id) {
             return;
         }
-        self.flush_round();
         self.current_round_id = Some(round_id.to_string());
     }
 
-    /// Attach the round's accumulated spend to its final assistant turn.
-    /// A round that produced counts but no assistant turn drops them from
-    /// per-turn accounting (they remain in `total_usage`).
-    fn flush_round(&mut self) {
-        if let Some(usage) = self.round_usage.take()
-            && let Some(idx) = self.round_last_assistant
+    /// Set each message group's total `token_usage` to the sum of its
+    /// turns' per-step attributions, on the group's final turn (the kind's
+    /// once-per-group rule). One source of truth — the group total and its
+    /// per-step shares can't drift, and `Σ token_usage == Σ attributed ==`
+    /// session total. A run of assistant turns sharing a `message_id` is one
+    /// round; an assistant turn without one is its own group.
+    fn finalize_usage(&mut self) {
+        // A step's spend that arrived after the last assistant turn (no
+        // later turn to drain onto) still belongs to that turn.
+        if let Some(pending) = self.pending_attributed.take()
+            && let Some(idx) = self.turns.iter().rposition(|t| t.role == Role::Assistant)
         {
-            self.turns[idx].token_usage = Some(usage);
+            add_usage(
+                self.turns[idx]
+                    .attributed_token_usage
+                    .get_or_insert_with(TokenUsage::default),
+                &pending,
+            );
         }
-        self.round_last_assistant = None;
-    }
 
-    fn add_round_usage(&mut self, amount: TokenUsage) {
-        match &mut self.round_usage {
-            Some(acc) => {
-                let add = |a: &mut Option<u32>, b: Option<u32>| {
-                    if let Some(b) = b {
-                        *a = Some(a.unwrap_or(0) + b);
-                    }
-                };
-                add(&mut acc.input_tokens, amount.input_tokens);
-                add(&mut acc.output_tokens, amount.output_tokens);
-                add(&mut acc.cache_read_tokens, amount.cache_read_tokens);
-                add(&mut acc.cache_write_tokens, amount.cache_write_tokens);
+        let assistants: Vec<usize> = (0..self.turns.len())
+            .filter(|&i| self.turns[i].role == Role::Assistant)
+            .collect();
+        let mut k = 0;
+        while k < assistants.len() {
+            let start = k;
+            let mid = self.turns[assistants[k]].message_id.clone();
+            if mid.is_some() {
+                while k + 1 < assistants.len()
+                    && self.turns[assistants[k + 1]].message_id == mid
+                {
+                    k += 1;
+                }
             }
-            None => self.round_usage = Some(amount),
+            let mut total: Option<TokenUsage> = None;
+            for &gi in &assistants[start..=k] {
+                if let Some(a) = &self.turns[gi].attributed_token_usage {
+                    add_usage(total.get_or_insert_with(TokenUsage::default), a);
+                }
+            }
+            if let Some(total) = total {
+                self.turns[assistants[k]].token_usage = Some(total);
+            }
+            k += 1;
         }
     }
 
@@ -785,6 +822,7 @@ fn message_to_turn(
         },
         stop_reason: None,
         token_usage: None,
+        attributed_token_usage: None,
         environment,
         delegations: Vec::new(),
         file_mutations: Vec::new(),
@@ -808,6 +846,7 @@ fn synthetic_assistant_turn(
         model: model.map(str::to_string),
         stop_reason: None,
         token_usage: None,
+        attributed_token_usage: None,
         environment: working_dir.map(|wd| EnvironmentSnapshot {
             working_dir: Some(wd.to_string()),
             vcs_branch: None,
@@ -818,13 +857,29 @@ fn synthetic_assistant_turn(
     }
 }
 
-fn codex_usage_to_convo(u: &CodexTokenUsage) -> TokenUsage {
-    TokenUsage {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-        cache_read_tokens: u.cached_input_tokens,
-        cache_write_tokens: None,
-    }
+/// Component-wise `acc += delta`, treating `None` as 0 on the addend.
+fn add_usage(acc: &mut TokenUsage, delta: &TokenUsage) {
+    let add = |a: &mut Option<u32>, b: Option<u32>| {
+        if let Some(b) = b {
+            *a = Some(a.unwrap_or(0) + b);
+        }
+    };
+    add(&mut acc.input_tokens, delta.input_tokens);
+    add(&mut acc.output_tokens, delta.output_tokens);
+    add(&mut acc.cache_read_tokens, delta.cache_read_tokens);
+    add(&mut acc.cache_write_tokens, delta.cache_write_tokens);
+}
+
+/// True when every counter is absent or zero (no real spend to record).
+fn is_usage_zero(u: &TokenUsage) -> bool {
+    [
+        u.input_tokens,
+        u.output_tokens,
+        u.cache_read_tokens,
+        u.cache_write_tokens,
+    ]
+    .iter()
+    .all(|f| f.unwrap_or(0) == 0)
 }
 
 /// Component-wise `current - prev`, for recovering a round's spend from
@@ -1037,6 +1092,43 @@ mod tests {
         let total = view.total_usage.as_ref().unwrap();
         assert_eq!(total.input_tokens, Some(300));
         assert_eq!(total.output_tokens, Some(50));
+    }
+
+    #[test]
+    fn per_step_attribution_from_deduped_cumulative_deltas() {
+        // Real Codex emits each token_count TWICE (identical values). Per-step
+        // spend must come from differencing the cumulative total — a repeated
+        // total yields a 0 delta — never from summing, which would double.
+        // Two tool calls in one round: cumulative output 0->40->100, so the
+        // steps cost 40 and 60; the round total is 100.
+        let dup = |total_out: u32, total_in: u32| {
+            format!(
+                r#"{{"timestamp":"2026-04-20T16:44:38.800Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{total_in},"output_tokens":{total_out},"cached_input_tokens":0,"total_tokens":{}}}}}}}}}"#,
+                total_in + total_out
+            )
+        };
+        let body = [
+            r#"{"timestamp":"2026-04-20T16:44:37.772Z","type":"session_meta","payload":{"id":"019dabc6-8fef-7681-a054-b5bb75fcb97d","timestamp":"2026-04-20T16:43:30.171Z","cwd":"/tmp/proj","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.773Z","type":"turn_context","payload":{"turn_id":"r1","cwd":"/tmp/proj","model":"gpt-5.4"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:38.100Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"step one"}],"phase":"commentary"}}"#.to_string(),
+            dup(40, 10), dup(40, 10),       // step 1: out 40 (emitted twice)
+            r#"{"timestamp":"2026-04-20T16:44:38.900Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"step two"}],"phase":"final","end_turn":true}}"#.to_string(),
+            dup(100, 20), dup(100, 20),     // step 2: out 100-40=60 (emitted twice)
+            r#"{"timestamp":"2026-04-20T16:44:39.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"r1"}}"#.to_string(),
+        ].join("\n");
+        let (_t, mgr, id) = setup_session_fixture(&body);
+        let view = to_view(&mgr.read_session(&id).unwrap());
+
+        let assistants: Vec<&Turn> = view.turns.iter().filter(|t| t.role == Role::Assistant).collect();
+        assert_eq!(assistants.len(), 2);
+        // Per-step attribution: 40 then 60 — NOT 80/120 (which doubling gives).
+        assert_eq!(assistants[0].attributed_token_usage.as_ref().unwrap().output_tokens, Some(40));
+        assert_eq!(assistants[1].attributed_token_usage.as_ref().unwrap().output_tokens, Some(60));
+        // Σ attributed == round total on the final turn.
+        assert_eq!(assistants[1].token_usage.as_ref().unwrap().output_tokens, Some(100));
+        let sum: u32 = assistants.iter().filter_map(|t| t.attributed_token_usage.as_ref()?.output_tokens).sum();
+        assert_eq!(sum, 100);
     }
 
     #[test]

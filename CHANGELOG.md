@@ -2,11 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## Token usage once per message + kind v1.1.0 — 2026-06-10
+## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-16
 
-Fixes token over-counting in derived documents (reported by the Pathbase
-team: ~3× output-token inflation on real Claude sessions, unbounded on
-Codex). Two distinct bugs, one spec gap:
+Fixes token over-counting in derived documents (~3× output-token
+inflation on real Claude sessions, unbounded on Codex) and adds true
+per-step token attribution. Two over-counting bugs, one spec gap, plus a
+new capability the corrected reads make possible. Verified against every
+Claude session and all Codex sessions on disk.
 
 - **Claude**: Claude Code writes one JSONL line per content block of an
   assistant API message, repeating the message-level `usage` on every
@@ -14,41 +16,52 @@ Codex). Two distinct bugs, one spec gap:
   full usage — so summing `token_usage` per step over-counted by the
   block count, and the disambiguating `message.id` was dropped.
 - **Codex**: `toolpath-codex` stamped the *cumulative* session counter
-  (`total_token_usage`) onto each assistant turn instead of the round's
-  own spend, so per-step sums grew quadratically.
+  (`total_token_usage`) onto each assistant turn instead of per-step
+  spend, so per-step sums grew quadratically.
+
+Core model (kind `agent-coding-session` **v1.1.0**, both fields optional
+so any producer can populate per-step attribution later with no further
+kind version):
+
+- `token_usage` always means **the total for a message**, on the
+  group's final step (`Σ token_usage` over a path = session total).
+- `attributed_token_usage` (new) is **this step's own attributed
+  spend**, on its own key so the sum above is unaffected. Whether a
+  number is a total or a share is structural (the key), never
+  positional. The unattributed remainder
+  (`group token_usage − Σ attributed`) is computed by consumers, never
+  recorded — stored values stay verbatim source observations.
 
 Changes:
 
-- `toolpath_convo::Turn` gains `message_id: Option<String>` — the
-  provider-assigned ID of the source message, a grouping key shared by
-  turns split from one message. `derive_path` writes it into the
-  `conversation.append` payload and emits `token_usage` on **exactly one
-  step per message group** (the run's last step in document order).
-  Summing `token_usage` over a path's steps now yields session totals.
-  `extract_conversation` reads `message_id` back for round-trips.
-- `toolpath-claude` populates `Turn.message_id` from the JSONL
-  `message.id`, canonicalizes the IR (a message's total `token_usage`
-  appears only on the group's final turn, so trait-level consumers
-  summing `ConversationView` turns are correct by construction), and
-  deduplicates `ConversationView.total_usage` by message group. The
-  projector re-expands the group total (and `message.id`) onto every
-  JSONL line of a split for wire fidelity.
-- `toolpath-codex` groups a round's assistant turns under
-  `Turn.message_id` (the round's `turn_id`), accumulates `token_count`
-  spend per round — preferring `last_token_usage`, else the delta
-  between successive cumulative totals (saturating, so counter resets
-  clamp to 0) — and attaches it to the round's final assistant turn at
-  `task_complete` / next round / EOF. The projector closes each
-  usage-bearing turn with a `task_complete` boundary so re-reads
-  attribute spend to the right turn.
+- `toolpath_convo::Turn` gains `message_id` (grouping key) and
+  `attributed_token_usage`. `derive_path` writes `token_usage` once per
+  `message_id` group and `attributed_token_usage` on each step that has
+  it; `extract_conversation` reads both back.
+- `toolpath-claude`: empirically (every session sampled), a split
+  message's lines repeat `input`/`cache` but stream `output_tokens`
+  upward to a final total — and ~27% genuinely disagree, so line order
+  is not trusted. Each `message_id` run is reduced to the **field-wise
+  maximum** total (never under-counts whatever the order) on its final
+  turn, and where output streamed, each turn's output delta (running-max
+  differenced, so `Σ` telescopes to the total) becomes its
+  `attributed_token_usage`. The projector reconstructs the cumulative
+  per-line wire so attribution survives a round-trip. `total_usage` is
+  deduped by group.
+- `toolpath-codex`: per-step spend is the increase in the cumulative
+  `total_token_usage` since the previous count — **differencing the
+  cumulative is dedup-safe** (Codex emits each `token_count` twice; a
+  repeated total is a 0 delta) where summing `last_token_usage` would
+  double. Each delta is attributed to the step it follows; a round's
+  `token_usage` total is the sum of its steps' attributions (one source
+  of truth — total and shares cannot drift). The projector emits a
+  `turn_context` per group and a cumulative `token_count` after each
+  step, so grouping and attribution survive the round-trip.
 - `toolpath-pi` and `toolpath-opencode` decode absent/all-zero wire
   usage counters as `token_usage: None` ("spend unknown") instead of
   `Some(zeros)` — their wires require usage fields, which
   foreign-source projections zero-fill.
-- **Kind `agent-coding-session` v1.1.0**: new version URI specifying the
-  accounting rule (per-message increments, once per `message_id` group,
-  per-step sums equal session totals) and the optional `message_id`
-  field. `PATH_KIND_AGENT_CODING_SESSION` now points at v1.1.0;
+- `PATH_KIND_AGENT_CODING_SESSION` now points at v1.1.0;
   `PATH_KIND_AGENT_CODING_SESSION_V1_0_0` names the old URI. `path p
   validate` bundles both schemas. The v1.0.0 spec page gains an erratum
   documenting the historical duplication (consumers of v1.0.0 documents
