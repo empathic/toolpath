@@ -67,7 +67,7 @@ pub struct TokenUsage {
     /// Tokens written to cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u32>,
-    /// Optional priced decomposition of a top-level class (keyed by the class
+    /// Optional decomposition of a top-level class into named sub-classes (keyed by the class
     /// being broken down, e.g. "output"; inner map is sub-class → tokens, e.g.
     /// {"reasoning": 450} or {"text": 300, "image": 500}). INFORMATIONAL ONLY:
     /// breakdowns are never summed into the total — the parent class already

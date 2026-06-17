@@ -16,7 +16,7 @@
         "cache_write_tokens": { "type": "integer" },
         "breakdowns": {
           "type": "object",
-          "description": "Optional priced decomposition of a top-level class, keyed by the class being broken down (e.g. \"output\"); each value maps sub-class → tokens. INFORMATIONAL: never summed into the total — the parent class already counts these. Invariant: Σ(inner) ≤ the parent class's value.",
+          "description": "Optional decomposition of a top-level class into named sub-classes, keyed by the class being broken down (e.g. \"output\"); each value maps sub-class → tokens. INFORMATIONAL: never summed into the total — the parent class already counts these. Invariant: Σ(inner) ≤ the parent class's value.",
           "additionalProperties": { "type": "object", "additionalProperties": { "type": "integer" } }
         }
       },

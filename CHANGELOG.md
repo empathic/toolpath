@@ -33,8 +33,8 @@ kind version):
   positional. The unattributed remainder
   (`group token_usage − Σ attributed`) is computed by consumers, never
   recorded — stored values stay verbatim source observations.
-- `breakdowns` (new, optional) is a **priced decomposition of a
-  top-level class** — keyed by the class being broken down (e.g.
+- `breakdowns` (new, optional) is a **decomposition of a top-level
+  class into named sub-classes** — keyed by the class being broken down (e.g.
   `"output"`), inner map sub-class → tokens (e.g. `{"output":
   {"reasoning": 243}}`). It is **informational and never summed into
   any total** — the parent class already counts those tokens — so the
