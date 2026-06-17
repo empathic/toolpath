@@ -10,7 +10,7 @@
 //!   [`DelegatedWork`].
 
 use crate::GeminiConvo;
-use crate::types::{ChatFile, Conversation, GeminiMessage, GeminiRole, Thought, ToolCall};
+use crate::types::{ChatFile, Conversation, GeminiMessage, GeminiRole, Thought, Tokens, ToolCall};
 use serde_json::Value;
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
@@ -103,12 +103,7 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
         .collect();
     let file_mutations = compute_file_mutations(msg.tool_calls());
 
-    let token_usage = msg.tokens.as_ref().map(|t| TokenUsage {
-        input_tokens: t.input,
-        output_tokens: t.output,
-        cache_read_tokens: t.cached,
-        cache_write_tokens: None,
-    });
+    let token_usage = msg.tokens.as_ref().map(tokens_to_usage);
 
     let environment = working_dir.map(|wd| EnvironmentSnapshot {
         working_dir: Some(wd.to_string()),
@@ -133,6 +128,64 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
         delegations: vec![],
         file_mutations,
     }
+}
+
+/// Map Gemini's on-disk [`Tokens`] struct onto the provider-agnostic
+/// [`TokenUsage`].
+///
+/// Gemini records `thoughts` (reasoning) as a **separate additive**
+/// counter, sibling to `output` — across real sessions
+/// `total == input + output + thoughts` exactly, and the format doc
+/// describes `output` as "generated tokens *excluding reasoning*."
+/// Google bills reasoning as output, so we fold `thoughts` into
+/// `output_tokens` (same convention as opencode) — that way the IR's
+/// `output` means "all generated tokens" and the session total isn't
+/// under-counted.
+///
+/// The folded reasoning slice is *also* recorded under
+/// `breakdowns["output"]["reasoning"]`. It's INFORMATIONAL: breakdowns
+/// are never summed into the total (output already counts it), and the
+/// invariant `Σ(inner) = reasoning ≤ output` holds because we fold the
+/// same number in. It's also what lets the projector un-fold reasoning
+/// back out of `output_tokens` (see `tokens_from_common`), so the
+/// `output`/`thoughts` split round-trips losslessly. The entry is
+/// recorded whenever `thoughts` is present (including a genuine `Some(0)`),
+/// preserving the `Some(0)` vs `None` distinction; when `thoughts` is
+/// absent the map stays empty and is omitted from serialization.
+///
+/// `tool` is prompt-side (tool-result tokens billed separately) and
+/// `total` is a Gemini-side sum; neither is folded here — both remain
+/// available raw via `Turn.extra["gemini"]["tokens"]`.
+fn tokens_to_usage(t: &Tokens) -> TokenUsage {
+    let output = t.output.unwrap_or(0);
+    let thoughts = t.thoughts.unwrap_or(0);
+    let generated = output.saturating_add(thoughts);
+
+    let mut usage = TokenUsage {
+        input_tokens: t.input,
+        // Fold reasoning into output (additive in Gemini — billed as
+        // output). None only when both output and thoughts are
+        // absent/zero, mirroring the per-field Option semantics.
+        output_tokens: if generated == 0 { None } else { Some(generated) },
+        cache_read_tokens: t.cached,
+        cache_write_tokens: None,
+        ..Default::default()
+    };
+
+    // Memoize the reasoning slice folded into output so the projector can
+    // un-fold it back out losslessly. Recorded whenever `thoughts` is
+    // present — including a genuine `Some(0)` — so the projector
+    // reconstructs `Some(0)` rather than `None`; absent only when the
+    // source had no reasoning counter at all.
+    if let Some(thoughts) = t.thoughts {
+        usage
+            .breakdowns
+            .entry("output".to_string())
+            .or_default()
+            .insert("reasoning".to_string(), thoughts);
+    }
+
+    usage
 }
 
 /// For each file-write tool call in this message, build a
@@ -714,10 +767,105 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
         let total = view.total_usage.as_ref().unwrap();
-        // Main turns: (100,50), (200,80). Sub-agent turn: (20,5).
+        // Main turns: input/(output+thoughts) = (100, 50+10), (200, 80+0).
+        // Sub-agent turn: (20, 5+0). thoughts is additive reasoning, folded
+        // into output (billed as output by Google).
         assert_eq!(total.input_tokens, Some(320));
-        assert_eq!(total.output_tokens, Some(135));
+        assert_eq!(total.output_tokens, Some(145));
         assert_eq!(total.cache_read_tokens, Some(50));
+    }
+
+    #[test]
+    fn test_thoughts_folded_into_output_with_breakdown() {
+        // Real-fixture-shaped numbers: total == input + output + thoughts
+        // (8665 + 94 + 243 == 9002). output EXCLUDES reasoning, so folding
+        // gives output_tokens = 94 + 243 = 337, and the reasoning slice is
+        // recorded under breakdowns["output"]["reasoning"] = 243 (≤ output).
+        let t = Tokens {
+            input: Some(8665),
+            output: Some(94),
+            cached: Some(0),
+            thoughts: Some(243),
+            tool: Some(0),
+            total: Some(9002),
+        };
+        let u = tokens_to_usage(&t);
+        assert_eq!(u.input_tokens, Some(8665));
+        assert_eq!(u.output_tokens, Some(337));
+        let reasoning = u
+            .breakdowns
+            .get("output")
+            .and_then(|m| m.get("reasoning"))
+            .copied();
+        assert_eq!(reasoning, Some(243));
+        // reasoning ≤ output invariant holds.
+        assert!(reasoning.unwrap() <= u.output_tokens.unwrap());
+    }
+
+    #[test]
+    fn test_present_zero_thoughts_records_zero_breakdown() {
+        // thoughts == Some(0) → breakdown records reasoning: 0 so the
+        // projector reconstructs Some(0) (not None) on the reverse path.
+        // output_tokens is unchanged (folding 0 is a no-op).
+        let t = Tokens {
+            input: Some(200),
+            output: Some(80),
+            cached: Some(50),
+            thoughts: Some(0),
+            tool: Some(0),
+            total: Some(330),
+        };
+        let u = tokens_to_usage(&t);
+        assert_eq!(u.output_tokens, Some(80));
+        assert_eq!(
+            u.breakdowns.get("output").and_then(|m| m.get("reasoning")),
+            Some(&0)
+        );
+    }
+
+    #[test]
+    fn test_absent_thoughts_yields_no_breakdown() {
+        // thoughts absent (Gemini 2.5) → treated as 0: no breakdown,
+        // output_tokens == output.
+        let t = Tokens {
+            input: Some(20),
+            output: Some(5),
+            cached: Some(0),
+            thoughts: None,
+            tool: None,
+            total: None,
+        };
+        let u = tokens_to_usage(&t);
+        assert_eq!(u.output_tokens, Some(5));
+        assert!(u.breakdowns.is_empty());
+    }
+
+    #[test]
+    fn test_zero_output_and_thoughts_yields_none_output() {
+        // Both output and thoughts zero → output_tokens None (mirrors the
+        // per-field Option semantics; no fabricated zero). thoughts is
+        // present (Some(0)), so the breakdown still records reasoning: 0
+        // for lossless round-trip of the Some(0) distinction.
+        let t = Tokens {
+            input: Some(100),
+            output: Some(0),
+            cached: Some(0),
+            thoughts: Some(0),
+            tool: Some(0),
+            total: Some(100),
+        };
+        let u = tokens_to_usage(&t);
+        assert_eq!(u.output_tokens, None);
+        assert_eq!(
+            u.breakdowns.get("output").and_then(|m| m.get("reasoning")),
+            Some(&0)
+        );
+
+        // And the fully-absent case: thoughts None → no breakdown.
+        let empty = Tokens::default();
+        let u2 = tokens_to_usage(&empty);
+        assert_eq!(u2.output_tokens, None);
+        assert!(u2.breakdowns.is_empty());
     }
 
     #[test]

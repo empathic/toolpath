@@ -229,9 +229,14 @@ fn roundtrip_preserves_tool_calls_with_results() {
 
 #[test]
 fn roundtrip_preserves_input_output_tokens() {
-    // Input/output/cached tokens survive via Turn.token_usage.
-    // Thoughts/tool/total tokens were Gemini-extra only and don't
-    // round-trip now that Turn.extra is gone.
+    // Input/cached tokens survive via Turn.token_usage. Output is folded
+    // on the forward path: Gemini's `thoughts` (reasoning) is an additive
+    // sibling of `output` (billed as output), so the derived
+    // `output_tokens` is `output + thoughts`. The reasoning slice is
+    // recorded in `breakdowns["output"]["reasoning"]`, so the projector
+    // un-folds it back out on projection — `output` and `thoughts` both
+    // round-trip losslessly. Only the `tool`/`total` counters were
+    // Gemini-extra only (no IR home) and don't survive.
     let source = load_source_conversation();
     let (_, rebuilt, _) = roundtrip(&source);
 
@@ -249,6 +254,7 @@ fn roundtrip_preserves_input_output_tokens() {
             .unwrap_or_else(|| panic!("tokens lost at message {}", i));
         assert_eq!(bt.input, at.input, "input tokens at msg {}", i);
         assert_eq!(bt.output, at.output, "output tokens at msg {}", i);
+        assert_eq!(bt.thoughts, at.thoughts, "thoughts tokens at msg {}", i);
         assert_eq!(bt.cached, at.cached, "cached tokens at msg {}", i);
     }
 }

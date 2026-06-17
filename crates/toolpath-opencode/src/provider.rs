@@ -599,9 +599,35 @@ fn to_invocation(
 
 fn accumulate_tokens(total: &mut TokenUsage, step: &Tokens) {
     add_u32(&mut total.input_tokens, step.input as u32);
-    add_u32(&mut total.output_tokens, step.output as u32);
+    // opencode reports `reasoning` as a SEPARATE additive category
+    // (`total == input + output + reasoning + cache`), unlike Claude/OpenAI
+    // where reasoning is already inside `output`. Fold it into output_tokens
+    // so the IR's `output` means "all generated tokens" consistently and the
+    // session total isn't under-counted.
+    add_u32(&mut total.output_tokens, (step.output + step.reasoning) as u32);
     add_u32(&mut total.cache_read_tokens, step.cache.read as u32);
     add_u32(&mut total.cache_write_tokens, step.cache.write as u32);
+    // Memoize the reasoning slice we just folded into output. It's
+    // INFORMATIONAL (never summed into the total — output already counts
+    // it); the invariant is Σ(inner) = reasoning ≤ output. Accumulates
+    // across step-finish parts exactly like output does.
+    add_reasoning_breakdown(total, step.reasoning as u32);
+}
+
+/// Add `reasoning` to `breakdowns["output"]["reasoning"]`, creating the
+/// nested maps as needed. No-op when `reasoning` is 0 so a zero-reasoning
+/// turn keeps an empty `breakdowns` map (omitted from serialization).
+fn add_reasoning_breakdown(usage: &mut TokenUsage, reasoning: u32) {
+    if reasoning == 0 {
+        return;
+    }
+    let slot = usage
+        .breakdowns
+        .entry("output".to_string())
+        .or_default()
+        .entry("reasoning".to_string())
+        .or_insert(0);
+    *slot = slot.saturating_add(reasoning);
 }
 
 fn add_u32(slot: &mut Option<u32>, delta: u32) {
@@ -612,16 +638,18 @@ fn add_u32(slot: &mut Option<u32>, delta: u32) {
 }
 
 fn tokens_to_convo(t: &Tokens) -> TokenUsage {
-    TokenUsage {
+    let mut usage = TokenUsage {
         input_tokens: if t.input == 0 {
             None
         } else {
             Some(t.input as u32)
         },
-        output_tokens: if t.output == 0 {
+        // Fold reasoning into output (additive in opencode — see
+        // `accumulate_tokens`).
+        output_tokens: if t.output + t.reasoning == 0 {
             None
         } else {
-            Some(t.output as u32)
+            Some((t.output + t.reasoning) as u32)
         },
         cache_read_tokens: if t.cache.read == 0 {
             None
@@ -633,7 +661,11 @@ fn tokens_to_convo(t: &Tokens) -> TokenUsage {
         } else {
             Some(t.cache.write as u32)
         },
-    }
+        ..Default::default()
+    };
+    // Memoize the reasoning slice folded into output (no-op when 0).
+    add_reasoning_breakdown(&mut usage, t.reasoning as u32);
+    usage
 }
 
 fn is_usage_zero(u: &TokenUsage) -> bool {
@@ -967,12 +999,80 @@ mod tests {
         let view = to_view(&mgr.read_session("ses_x").unwrap());
         let u = view.turns[1].token_usage.as_ref().unwrap();
         assert_eq!(u.input_tokens, Some(100));
-        assert_eq!(u.output_tokens, Some(20));
+        // output (20) + reasoning (5): opencode reports reasoning as a
+        // separate additive category, folded into output here.
+        assert_eq!(u.output_tokens, Some(25));
         assert_eq!(u.cache_read_tokens, Some(10));
+
+        // The reasoning slice (5) is also memoized under
+        // breakdowns["output"]["reasoning"] — it's the SAME number folded
+        // into output, so Σ(inner) = 5 ≤ output (25).
+        assert_eq!(u.breakdowns.get("output").and_then(|m| m.get("reasoning")), Some(&5u32));
 
         let total = view.total_usage.as_ref().unwrap();
         assert_eq!(total.input_tokens, Some(100));
-        assert_eq!(total.output_tokens, Some(20));
+        assert_eq!(total.output_tokens, Some(25));
+    }
+
+    #[test]
+    fn zero_reasoning_yields_no_breakdowns() {
+        // output present but reasoning 0 → token_usage exists, but no
+        // breakdowns entry (empty map, omitted from serialization).
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m','s',1,1,'{"parentID":"","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":10,"output":20,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":1}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m','s',1,1,'{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":20,"reasoning":0,"cache":{"read":0,"write":0}}}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+        let u = view.turns[0].token_usage.as_ref().unwrap();
+        assert_eq!(u.output_tokens, Some(20));
+        assert!(u.breakdowns.is_empty());
+    }
+
+    #[test]
+    fn reasoning_accumulates_across_step_finishes() {
+        // Two step-finish parts in one turn: reasoning 5 then 7 → output
+        // total folds 12, and breakdowns["output"]["reasoning"] == 12.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m','s',1,1,'{"parentID":"","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":1}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m','s',1,1,'{"type":"step-finish","reason":"tool-calls","tokens":{"input":10,"output":20,"reasoning":5,"cache":{"read":0,"write":0}}}'),
+              ('p2','m','s',2,2,'{"type":"step-finish","reason":"stop","tokens":{"input":3,"output":4,"reasoning":7,"cache":{"read":0,"write":0}}}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+        let u = view.turns[0].token_usage.as_ref().unwrap();
+        // output total: (20+5) + (4+7) = 36; reasoning slice: 5+7 = 12.
+        assert_eq!(u.output_tokens, Some(36));
+        assert_eq!(u.breakdowns.get("output").and_then(|m| m.get("reasoning")), Some(&12u32));
+    }
+
+    #[test]
+    fn all_zero_usage_yields_none_and_no_breakdowns() {
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m','s',1,1,'{"parentID":"","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":1}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m','s',1,1,'{"type":"step-finish","reason":"stop","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+        assert!(view.turns[0].token_usage.is_none());
     }
 
     #[test]

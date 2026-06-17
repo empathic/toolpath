@@ -271,11 +271,22 @@ fn build_tokens(turn: &Turn, gemini_extras: &Map<String, Value>) -> Option<Token
 }
 
 fn tokens_from_common(u: &TokenUsage) -> Tokens {
+    // Reasoning is folded into `output_tokens` on the forward path and the
+    // slice is recorded in `breakdowns["output"]["reasoning"]`. Un-fold it
+    // back out here so `output`/`thoughts` round-trip losslessly.
+    let thoughts = u
+        .breakdowns
+        .get("output")
+        .and_then(|m| m.get("reasoning"))
+        .copied();
     Tokens {
         input: u.input_tokens,
-        output: u.output_tokens,
+        output: match (u.output_tokens, thoughts) {
+            (Some(o), Some(r)) => Some(o.saturating_sub(r)),
+            (o, _) => o,
+        },
         cached: u.cache_read_tokens,
-        thoughts: None,
+        thoughts,
         tool: None,
         total: None,
     }
@@ -551,7 +562,35 @@ fn delegation_to_chat_file(d: &DelegatedWork, project_hash: &str) -> ChatFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use toolpath_convo::{EnvironmentSnapshot, ToolCategory, ToolResult};
+
+    #[test]
+    fn tokens_from_common_unfolds_reasoning_out_of_output() {
+        let mut breakdowns: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
+        breakdowns.insert("output".into(), BTreeMap::from([("reasoning".into(), 243u32)]));
+        let usage = TokenUsage {
+            output_tokens: Some(337),
+            breakdowns,
+            ..Default::default()
+        };
+
+        let tokens = tokens_from_common(&usage);
+        assert_eq!(tokens.output, Some(94));
+        assert_eq!(tokens.thoughts, Some(243));
+    }
+
+    #[test]
+    fn tokens_from_common_without_breakdown_leaves_output_unchanged() {
+        let usage = TokenUsage {
+            output_tokens: Some(337),
+            ..Default::default()
+        };
+
+        let tokens = tokens_from_common(&usage);
+        assert_eq!(tokens.output, Some(337));
+        assert_eq!(tokens.thoughts, None);
+    }
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
@@ -677,6 +716,7 @@ mod tests {
             output_tokens: Some(50),
             cache_read_tokens: Some(20),
             cache_write_tokens: None,
+            ..Default::default()
         });
         let convo = GeminiProjector::default()
             .project(&view_with(vec![t]))
@@ -802,6 +842,7 @@ mod tests {
             output_tokens: Some(5),
             cache_read_tokens: None,
             cache_write_tokens: None,
+            ..Default::default()
         });
         t.tool_uses = vec![ToolInvocation {
             id: "tc1".into(),

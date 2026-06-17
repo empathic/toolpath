@@ -100,8 +100,11 @@ Each element is an object:
 | `output_tokens`      | integer \| null | always present                  |
 | `cache_read_tokens`  | integer         | only when the source records it |
 | `cache_write_tokens` | integer         | only when the source records it |
+| `breakdowns`         | object          | only when the source itemizes a class (see below) |
 
 Values follow the [group accounting](#group-accounting) rule above.
+
+`breakdowns` is an **optional, informational** priced decomposition of a top-level class. It is keyed by the class being broken down (e.g. `"output"`); each value is a map of sub-class → tokens (e.g. `{ "output": { "reasoning": 450 } }`). Breakdowns are **never summed into any total** — the parent class already counts these tokens; a breakdown only says *how* that class divides. Invariant: **`Σ(inner) ≤` the parent class's value**. The field is omitted entirely when empty. The same shape and rule apply on `attributed_token_usage`. Among current producers, Gemini, OpenCode, and Codex record `output → { reasoning }` (their reasoning/thoughts tokens are part of `output_tokens`); Claude records none (its JSONL `usage` does not itemize thinking tokens).
 
 ### `environment`
 

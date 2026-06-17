@@ -858,6 +858,8 @@ fn synthetic_assistant_turn(
 }
 
 /// Component-wise `acc += delta`, treating `None` as 0 on the addend.
+/// Breakdowns merge key-wise (inner values add) rather than overwrite, so a
+/// round's per-call reasoning slices accumulate into the group total.
 fn add_usage(acc: &mut TokenUsage, delta: &TokenUsage) {
     let add = |a: &mut Option<u32>, b: Option<u32>| {
         if let Some(b) = b {
@@ -868,6 +870,12 @@ fn add_usage(acc: &mut TokenUsage, delta: &TokenUsage) {
     add(&mut acc.output_tokens, delta.output_tokens);
     add(&mut acc.cache_read_tokens, delta.cache_read_tokens);
     add(&mut acc.cache_write_tokens, delta.cache_write_tokens);
+    for (class, inner) in &delta.breakdowns {
+        let target = acc.breakdowns.entry(class.clone()).or_default();
+        for (sub, n) in inner {
+            *target.entry(sub.clone()).or_insert(0) += *n;
+        }
+    }
 }
 
 /// True when every counter is absent or zero (no real spend to record).
@@ -887,12 +895,31 @@ fn is_usage_zero(u: &TokenUsage) -> bool {
 /// compaction) yields 0 rather than wrapping.
 fn usage_delta(current: &TokenUsage, prev: &TokenUsage) -> TokenUsage {
     let sub = |c: Option<u32>, p: Option<u32>| c.map(|c| c.saturating_sub(p.unwrap_or(0)));
-    TokenUsage {
+    let mut delta = TokenUsage {
         input_tokens: sub(current.input_tokens, prev.input_tokens),
         output_tokens: sub(current.output_tokens, prev.output_tokens),
         cache_read_tokens: sub(current.cache_read_tokens, prev.cache_read_tokens),
         cache_write_tokens: sub(current.cache_write_tokens, prev.cache_write_tokens),
+        ..Default::default()
+    };
+    // Breakdowns (e.g. output→reasoning) are cumulative subsets of their
+    // parent class, so difference them the same saturating way. Only retain
+    // sub-classes whose delta is > 0 so a flat round stays breakdown-free.
+    for (class, inner) in &current.breakdowns {
+        let prev_inner = prev.breakdowns.get(class);
+        let mut diffed: std::collections::BTreeMap<String, u32> = Default::default();
+        for (sub, cur) in inner {
+            let p = prev_inner.and_then(|m| m.get(sub)).copied().unwrap_or(0);
+            let d = cur.saturating_sub(p);
+            if d > 0 {
+                diffed.insert(sub.clone(), d);
+            }
+        }
+        if !diffed.is_empty() {
+            delta.breakdowns.insert(class.clone(), diffed);
+        }
     }
+    delta
 }
 
 fn apply_token_count(total: &mut TokenUsage, info: &TokenCountInfo) {
@@ -900,6 +927,17 @@ fn apply_token_count(total: &mut TokenUsage, info: &TokenCountInfo) {
         total.input_tokens = t.input_tokens.or(total.input_tokens);
         total.output_tokens = t.output_tokens.or(total.output_tokens);
         total.cache_read_tokens = t.cached_input_tokens.or(total.cache_read_tokens);
+        // `reasoning_output_tokens` ⊆ `output_tokens` (informational); carry the
+        // cumulative reasoning counter under breakdowns["output"]["reasoning"]
+        // so `usage_delta` differences it per call just like the others. Only
+        // record it when present and > 0 to keep zero-reasoning rounds clean.
+        if let Some(r) = t.reasoning_output_tokens.filter(|&r| r > 0) {
+            total
+                .breakdowns
+                .entry("output".to_string())
+                .or_default()
+                .insert("reasoning".to_string(), r);
+        }
     }
 }
 
@@ -1129,6 +1167,75 @@ mod tests {
         assert_eq!(assistants[1].token_usage.as_ref().unwrap().output_tokens, Some(100));
         let sum: u32 = assistants.iter().filter_map(|t| t.attributed_token_usage.as_ref()?.output_tokens).sum();
         assert_eq!(sum, 100);
+    }
+
+    /// Read the `breakdowns["output"]["reasoning"]` slice off a usage, or None.
+    fn reasoning_of(u: Option<&TokenUsage>) -> Option<u32> {
+        u?.breakdowns.get("output")?.get("reasoning").copied()
+    }
+
+    #[test]
+    fn reasoning_breakdown_is_per_step_delta_and_round_sum() {
+        // `reasoning_output_tokens` is a SUBSET of output and rides on the
+        // cumulative `total_token_usage`. It must be differenced exactly like
+        // output: cumulative reasoning 0->100->260 ⇒ step deltas 100 then 160,
+        // and the round total carries their sum (260) under
+        // breakdowns["output"]["reasoning"]. Each token_count is emitted twice
+        // (dedup-safe: a repeated total yields a 0 delta).
+        let dup = |total_out: u32, total_reason: u32| {
+            format!(
+                r#"{{"timestamp":"2026-04-20T16:44:38.800Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":10,"output_tokens":{total_out},"reasoning_output_tokens":{total_reason},"cached_input_tokens":0,"total_tokens":{}}}}}}}}}"#,
+                10 + total_out
+            )
+        };
+        let body = [
+            r#"{"timestamp":"2026-04-20T16:44:37.772Z","type":"session_meta","payload":{"id":"019dabc6-8fef-7681-a054-b5bb75fcb97d","timestamp":"2026-04-20T16:43:30.171Z","cwd":"/tmp/proj","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.773Z","type":"turn_context","payload":{"turn_id":"r1","cwd":"/tmp/proj","model":"gpt-5.4"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:38.100Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"step one"}],"phase":"commentary"}}"#.to_string(),
+            dup(200, 100), dup(200, 100),   // step 1: output 200, reasoning 100
+            r#"{"timestamp":"2026-04-20T16:44:38.900Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"step two"}],"phase":"final","end_turn":true}}"#.to_string(),
+            dup(500, 260), dup(500, 260),   // step 2: output 300, reasoning 160
+            r#"{"timestamp":"2026-04-20T16:44:39.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"r1"}}"#.to_string(),
+        ].join("\n");
+        let (_t, mgr, id) = setup_session_fixture(&body);
+        let view = to_view(&mgr.read_session(&id).unwrap());
+
+        let assistants: Vec<&Turn> = view.turns.iter().filter(|t| t.role == Role::Assistant).collect();
+        assert_eq!(assistants.len(), 2);
+        // Per-step reasoning deltas, NOT cumulative (100/260) and NOT doubled.
+        assert_eq!(reasoning_of(assistants[0].attributed_token_usage.as_ref()), Some(100));
+        assert_eq!(reasoning_of(assistants[1].attributed_token_usage.as_ref()), Some(160));
+        // Round total breakdown is the sum of attributions.
+        let round = assistants[1].token_usage.as_ref().unwrap();
+        assert_eq!(reasoning_of(Some(round)), Some(260));
+        // Invariant: Σ(reasoning) ≤ output.
+        assert!(260 <= round.output_tokens.unwrap());
+    }
+
+    #[test]
+    fn zero_reasoning_produces_no_breakdown_entry() {
+        // A round whose cumulative reasoning never rises (absent or 0) must
+        // leave breakdowns empty so the field is omitted on the wire.
+        let dup = |total_out: u32| {
+            format!(
+                r#"{{"timestamp":"2026-04-20T16:44:38.800Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":10,"output_tokens":{total_out},"reasoning_output_tokens":0,"cached_input_tokens":0,"total_tokens":{}}}}}}}}}"#,
+                10 + total_out
+            )
+        };
+        let body = [
+            r#"{"timestamp":"2026-04-20T16:44:37.772Z","type":"session_meta","payload":{"id":"019dabc6-8fef-7681-a054-b5bb75fcb97d","timestamp":"2026-04-20T16:43:30.171Z","cwd":"/tmp/proj","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.773Z","type":"turn_context","payload":{"turn_id":"r1","cwd":"/tmp/proj","model":"gpt-5.4"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:38.100Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}],"phase":"final","end_turn":true}}"#.to_string(),
+            dup(40), dup(40),
+            r#"{"timestamp":"2026-04-20T16:44:39.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"r1"}}"#.to_string(),
+        ].join("\n");
+        let (_t, mgr, id) = setup_session_fixture(&body);
+        let view = to_view(&mgr.read_session(&id).unwrap());
+        let a = view.turns.iter().find(|t| t.role == Role::Assistant).unwrap();
+        assert!(a.attributed_token_usage.as_ref().unwrap().breakdowns.is_empty());
+        assert!(a.token_usage.as_ref().unwrap().breakdowns.is_empty());
     }
 
     #[test]

@@ -439,14 +439,24 @@ impl<'a> Builder<'a> {
             tool_uses.push(invocation);
         }
 
-        // Token usage (per-bubble snapshot — only populated when the
-        // server returned non-zero counts).
+        // Token usage. POSSIBLE GAP, UNVERIFIED: we read only the bubble's
+        // `tokenCount`. When that's `{0,0}` (as in the one real session we
+        // have) we report `None`. Community exporters read fallback fields
+        // (a snake_case `usage` object, `contextWindowStatusAtCreation`,
+        // `promptDryRunInfo`), which hints `tokenCount` isn't always
+        // sufficient — but we have too little real Cursor data to know how
+        // often it's empty or to verify those field shapes. Wiring fallbacks
+        // in needs a live session with non-zero counts. We report `None`
+        // rather than fabricate — never derive usage from the
+        // `promptTokenBreakdown`/`contextUsagePercent` estimates, which are
+        // context-size gauges, not billed spend.
         let token_usage = bubble.token_count.as_ref().and_then(|t| {
             let u = TokenUsage {
                 input_tokens: t.input_tokens.map(|n| n as u32).filter(|n| *n > 0),
                 output_tokens: t.output_tokens.map(|n| n as u32).filter(|n| *n > 0),
                 cache_read_tokens: None,
                 cache_write_tokens: None,
+                ..Default::default()
             };
             if u.input_tokens.is_none() && u.output_tokens.is_none() {
                 None

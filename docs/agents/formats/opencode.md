@@ -417,6 +417,21 @@ finish reason (`stop`, `tool-calls`, `length`, `content-filter`, …).
 `tokens` is a per-step delta; sum over all `step-finish` parts in a
 session for a total. `cost` is USD for that step.
 
+`reasoning` is an **additive** category, separate from `output` —
+`total == input + output + reasoning + cache.read + cache.write` (verified
+against real sessions; the Vercel AI SDK opencode uses reports
+`reasoningTokens` separately from `outputTokens`). This differs from
+Claude/OpenAI, where reasoning is already inside `output`. `toolpath-opencode`
+therefore folds `reasoning` into the derived `output_tokens` so the IR's
+`output` consistently means "all generated tokens" and the session total
+isn't under-counted. So we don't discard the slice, the same folded
+reasoning count is additionally recorded under
+`token_usage.breakdowns["output"]["reasoning"]` — purely informational,
+never summed into the total (output already counts it), preserving the
+invariant `Σ(inner) = reasoning ≤ output`. It accumulates across all
+`step-finish` parts in a turn exactly like the output total does, and is
+omitted entirely when reasoning is 0.
+
 ### `snapshot`, `patch`
 
 ```json

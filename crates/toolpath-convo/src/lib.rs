@@ -8,7 +8,7 @@ pub use derive::{DeriveConfig, derive_path, file_write_diff, unified_diff};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 // ── Error ────────────────────────────────────────────────────────────
@@ -67,6 +67,13 @@ pub struct TokenUsage {
     /// Tokens written to cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u32>,
+    /// Optional priced decomposition of a top-level class (keyed by the class
+    /// being broken down, e.g. "output"; inner map is sub-class → tokens, e.g.
+    /// {"reasoning": 450} or {"text": 300, "image": 500}). INFORMATIONAL ONLY:
+    /// breakdowns are never summed into the total — the parent class already
+    /// counts these tokens. Invariant: Σ(inner) ≤ the parent class's value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub breakdowns: BTreeMap<String, BTreeMap<String, u32>>,
 }
 
 /// Identity of the software that produced a session: e.g.
@@ -609,6 +616,7 @@ mod tests {
                         output_tokens: Some(50),
                         cache_read_tokens: None,
                         cache_write_tokens: None,
+                        ..Default::default()
                     }),
                     attributed_token_usage: None,
                     environment: None,
@@ -832,6 +840,7 @@ mod tests {
             output_tokens: Some(50),
             cache_read_tokens: Some(500),
             cache_write_tokens: Some(200),
+            ..Default::default()
         };
         let json = serde_json::to_string(&usage).unwrap();
         let back: TokenUsage = serde_json::from_str(&json).unwrap();
@@ -1011,6 +1020,7 @@ mod tests {
                 output_tokens: Some(500),
                 cache_read_tokens: Some(800),
                 cache_write_tokens: None,
+                ..Default::default()
             }),
             provider_id: Some("claude-code".into()),
             files_changed: vec!["src/main.rs".into(), "src/lib.rs".into()],

@@ -961,6 +961,7 @@ mod tests {
                 output_tokens: Some(5),
                 cache_read_tokens: None,
                 cache_write_tokens: None,
+                ..Default::default()
             }),
             attributed_token_usage: None,
             environment: Some(EnvironmentSnapshot {

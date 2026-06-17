@@ -136,6 +136,72 @@ fn token_usage_captured() {
     let u = view.total_usage.expect("total_usage missing");
     assert!(u.input_tokens.unwrap_or(0) > 0);
     assert!(u.output_tokens.unwrap_or(0) > 0);
+    // Reasoning is surfaced under breakdowns["output"]["reasoning"], derived
+    // by differencing the cumulative `reasoning_output_tokens` counter — never
+    // raw-summed. The fixture's final cumulative reasoning is 979 ≤ output
+    // 11929, so the session total breakdown must match and respect the
+    // reasoning ⊆ output invariant.
+    let session_reasoning = u
+        .breakdowns
+        .get("output")
+        .and_then(|m| m.get("reasoning"))
+        .copied()
+        .expect("session reasoning breakdown present");
+    assert_eq!(session_reasoning, 979);
+    assert!(session_reasoning <= u.output_tokens.unwrap());
+}
+
+#[test]
+fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
+    use toolpath_convo::TokenUsage;
+    let s = session();
+    let view = to_view(&s);
+
+    let reasoning_of = |u: Option<&TokenUsage>| -> u32 {
+        u.and_then(|u| u.breakdowns.get("output"))
+            .and_then(|m| m.get("reasoning"))
+            .copied()
+            .unwrap_or(0)
+    };
+
+    // Sum of per-step attributed reasoning across the whole session must equal
+    // the final cumulative reasoning (979). If differencing were unsafe —
+    // summing the twice-emitted counts, or stamping the cumulative — this would
+    // overshoot. This is the dedup-safe / no-double-count proof on real data.
+    let attributed_reasoning: u32 = view
+        .turns
+        .iter()
+        .map(|t| reasoning_of(t.attributed_token_usage.as_ref()))
+        .sum();
+    assert_eq!(attributed_reasoning, 979, "Σ attributed reasoning != cumulative");
+
+    // Per step, reasoning ⊆ output.
+    for t in &view.turns {
+        if let Some(a) = t.attributed_token_usage.as_ref() {
+            let r = reasoning_of(Some(a));
+            assert!(
+                r <= a.output_tokens.unwrap_or(0),
+                "step reasoning {} exceeds output {:?}",
+                r,
+                a.output_tokens
+            );
+        }
+    }
+
+    // Round (group) totals: Σ over group token_usage reasoning == 979 too, and
+    // each round's reasoning ⊆ its output.
+    let round_reasoning: u32 = view
+        .turns
+        .iter()
+        .filter(|t| t.token_usage.is_some())
+        .map(|t| {
+            let u = t.token_usage.as_ref().unwrap();
+            let r = reasoning_of(Some(u));
+            assert!(r <= u.output_tokens.unwrap_or(0));
+            r
+        })
+        .sum();
+    assert_eq!(round_reasoning, 979, "Σ round-total reasoning != cumulative");
 }
 
 #[test]

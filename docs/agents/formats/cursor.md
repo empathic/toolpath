@@ -359,7 +359,7 @@ but the load-bearing ones are:
 | `isAgentic` | bool | Whether the bubble was produced under agent mode |
 | `requestId` | string | Joins to a server-side request log (often `""`) |
 | `checkpointId` | UUID | Joins to a `cursor-commits/checkpoints/<request-uuid>/` directory |
-| `tokenCount` | object | `{ inputTokens, outputTokens }` |
+| `tokenCount` | object | `{ inputTokens, outputTokens }` — the per-bubble spend. **Reliability unverified**: community Cursor exporters read usage with fallbacks across `tokenCount`, a snake_case `usage` object, `contextWindowStatusAtCreation`, and `promptDryRunInfo`, which suggests `tokenCount` alone is not always sufficient — but we have too little real Cursor data to say how often it's populated. Confirm against live sessions before relying on it. |
 | `modelInfo` | object | `{ modelName }` (only on bubbles that produced model output) |
 | `toolFormerData` | object \| absent | **The tool call.** See below. |
 | `toolResults` | array | Always empty in observed `_v: 3` rows — superseded by `toolFormerData.result` |

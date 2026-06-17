@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-16
+## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 
 Fixes token over-counting in derived documents (~3× output-token
 inflation on real Claude sessions, unbounded on Codex) and adds per-step
@@ -33,9 +33,36 @@ kind version):
   positional. The unattributed remainder
   (`group token_usage − Σ attributed`) is computed by consumers, never
   recorded — stored values stay verbatim source observations.
+- `breakdowns` (new, optional) is a **priced decomposition of a
+  top-level class** — keyed by the class being broken down (e.g.
+  `"output"`), inner map sub-class → tokens (e.g. `{"output":
+  {"reasoning": 243}}`). It is **informational and never summed into
+  any total** — the parent class already counts those tokens — so the
+  session-total guarantee is untouched. Invariant: `Σ(inner) ≤` the
+  parent class's value; the field is omitted when empty. It rides both
+  `token_usage` and `attributed_token_usage`.
 
 Changes:
 
+- `toolpath_convo::TokenUsage` gains `breakdowns`
+  (`BTreeMap<class, BTreeMap<sub-class, tokens>>`); the kind
+  `tokenUsage` `$def` gains a matching optional `breakdowns` property.
+- **Gemini under-count FIX**: Gemini reports `thoughts` (reasoning) as
+  an additive sibling of `output_tokens` that the derivation was
+  **dropping** — so Gemini output totals were under-counted by the
+  reasoning spend. `thoughts` is now **folded into `output_tokens`**
+  (correcting the total) *and* recorded under
+  `breakdowns["output"]["reasoning"]`; the projector **un-folds** it on
+  the reverse path for a lossless round-trip (`Some(0)` is preserved as
+  a real Gemini-3 zero-reasoning signal, not collapsed to absent).
+- **OpenCode**: continues folding `reasoning` into `output_tokens`, and
+  now also records it under `breakdowns["output"]["reasoning"]`.
+- **Codex**: `reasoning_output_tokens` (a subset of `output_tokens`,
+  cumulative → differenced like the other counters) is surfaced under
+  `breakdowns["output"]["reasoning"]` on both the per-step
+  `attributed_token_usage` and the per-round `token_usage`.
+- **Claude**: records no breakdown — its JSONL `usage` does not itemize
+  thinking tokens.
 - `toolpath_convo::Turn` gains `group_id` (grouping key) and
   `attributed_token_usage`. `derive_path` writes `token_usage` once per
   `group_id` group and `attributed_token_usage` on each step that has

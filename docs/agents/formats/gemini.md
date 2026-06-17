@@ -249,10 +249,58 @@ not concatenated into the visible text.
 | `tool` | Tool-result tokens billed separately. |
 | `total` | Sum of the above (not always exactly — Gemini's total occasionally includes overhead). |
 
-All fields are optional. `input_tokens` / `output_tokens` / `cached`
-map cleanly to the common `TokenUsage` schema; the other three
-(`thoughts`, `tool`, `total`) are Gemini-specific and should be
-preserved in a provider-namespaced extras bucket.
+All fields are optional. `input` → `input_tokens` and `cached` →
+`cache_read_tokens` map cleanly to the common `TokenUsage` schema. The
+standalone `tool` and `total` counters are Gemini-specific and are
+preserved raw in a provider-namespaced extras bucket
+(`Turn.extra["gemini"]["tokens"]`).
+
+#### `thoughts` is additive reasoning — folded into `output_tokens`
+
+`thoughts` is **not** a subset of `output`: the doc above states
+`output` is "generated tokens *excluding reasoning*," and the recorded
+numbers confirm it exactly. Across real sessions
+`total == input + output + thoughts` to the token (e.g.
+`8665 + 94 + 243 = 9002`; `9562 + 157 + 24 = 9743`), and `thoughts`
+routinely *exceeds* `output` (243 vs 94 in the first example).
+
+Google bills reasoning as output, so `thoughts` is a sibling category
+of `output`, not a breakdown of it. To avoid **under-counting**
+generated tokens, the derived `output_tokens` folds reasoning in:
+`output_tokens = output + thoughts` (same convention as opencode, whose
+`reasoning` is likewise additive and billed as output). That way the
+IR's `output` consistently means "all generated tokens" and a Σ over a
+path is the real generated total. `output_tokens` is left `None` only
+when both `output` and `thoughts` are absent/zero.
+
+The folded reasoning slice is **also** recorded under
+`breakdowns["output"]["reasoning"] = thoughts`. This is informational:
+`TokenUsage.breakdowns` is never summed into the total (output already
+counts it), and the invariant `Σ(inner) = reasoning ≤ output` holds
+because the same number is folded in. The entry is recorded whenever
+`thoughts` is **present** (including a genuine `Some(0)`), preserving the
+`Some(0)`-vs-absent distinction; only when `thoughts` is absent entirely
+does the map stay empty and get omitted from serialization. (For the
+worked example, `output_tokens = 94 + 243 = 337` with
+`breakdowns["output"]["reasoning"] = 243`.)
+
+Crucially, this record is what makes the **reverse path lossless**: on
+projection (`Path → Tokens`) the projector reads
+`breakdowns["output"]["reasoning"]` and un-folds reasoning back out of
+the folded `output_tokens` (`output = output_tokens − reasoning`,
+`thoughts = reasoning`). So `output` and `thoughts` round-trip
+losslessly through the IR. Only the Gemini-extra-only `tool`/`total`
+counters remain lossy on round-trip — they have no IR home.
+
+The stored `Tokens` struct otherwise carries **no** nested modality
+detail (no `candidatesTokensDetails` / `promptTokensDetails`, no
+image/text/audio split). Should a future Gemini CLI version persist
+genuine modality details
+(e.g. `candidatesTokensDetails: [{modality: "IMAGE", tokenCount: …}]`,
+which the API exposes but the CLI does not currently write to disk),
+that would be a real per-modality split of `output` and could populate
+`breakdowns["output"]["image"]` / `["text"]` — but only from those
+recorded fields, never fabricated.
 
 ### Tool calls
 

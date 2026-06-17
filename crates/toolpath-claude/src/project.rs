@@ -1088,6 +1088,7 @@ mod tests {
             output_tokens: Some(997),
             cache_read_tokens: Some(14_842),
             cache_write_tokens: Some(429_831),
+            ..Default::default()
         };
         let mut a1 = assistant_turn("a1", "Working on it.");
         a1.group_id = Some("msg_A".into());
@@ -1128,6 +1129,7 @@ mod tests {
             output_tokens: Some(164),
             cache_read_tokens: Some(100),
             cache_write_tokens: Some(200),
+            ..Default::default()
         });
 
         let view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2]);
@@ -1369,6 +1371,7 @@ mod tests {
             output_tokens: Some(50),
             cache_read_tokens: Some(500),  // → cache_read_input_tokens
             cache_write_tokens: Some(200), // → cache_creation_input_tokens
+            ..Default::default()
         });
 
         let view = make_view("sess-1", vec![turn]);

@@ -430,6 +430,7 @@ fn build_token_usage(extra: &HashMap<String, serde_json::Value>) -> Option<Token
             output_tokens: output,
             cache_read_tokens: cache_read,
             cache_write_tokens: cache_write,
+            ..Default::default()
         })
     } else {
         None

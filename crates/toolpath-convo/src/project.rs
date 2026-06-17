@@ -428,6 +428,7 @@ mod tests {
                         output_tokens: Some(50),
                         cache_read_tokens: None,
                         cache_write_tokens: None,
+                        ..Default::default()
                     }),
                     attributed_token_usage: None,
                     environment: None,
@@ -450,6 +451,7 @@ mod tests {
                         output_tokens: Some(75),
                         cache_read_tokens: None,
                         cache_write_tokens: None,
+                        ..Default::default()
                     }),
                     attributed_token_usage: None,
                     environment: None,

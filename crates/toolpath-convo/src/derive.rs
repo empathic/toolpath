@@ -736,6 +736,64 @@ mod tests {
     }
 
     #[test]
+    fn test_token_usage_breakdowns_round_trip() {
+        use std::collections::BTreeMap;
+        // A Turn whose token_usage carries breakdowns should derive into a
+        // Path and extract back out with the breakdowns intact.
+        let mut breakdowns = BTreeMap::new();
+        breakdowns.insert(
+            "output".to_string(),
+            BTreeMap::from([("reasoning".to_string(), 450u32)]),
+        );
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.model = Some("claude-opus-4-7".into());
+        turn.token_usage = Some(TokenUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(900),
+            breakdowns: breakdowns.clone(),
+            ..Default::default()
+        });
+        let view = view_with(vec![turn]);
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let extracted = crate::extract::extract_conversation(&path);
+
+        let usage = extracted.turns[0]
+            .token_usage
+            .as_ref()
+            .expect("token_usage survives round-trip");
+        assert_eq!(usage.input_tokens, Some(100));
+        assert_eq!(usage.output_tokens, Some(900));
+        assert_eq!(usage.breakdowns, breakdowns);
+        assert_eq!(usage.breakdowns["output"]["reasoning"], 450);
+    }
+
+    #[test]
+    fn test_token_usage_empty_breakdowns_omitted_in_json() {
+        // skip_serializing_if guarantees no "breakdowns" key for the empty map,
+        // keeping the wire format byte-compatible with pre-breakdowns producers.
+        let usage = TokenUsage {
+            input_tokens: Some(10),
+            output_tokens: Some(20),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&usage).unwrap();
+        assert!(
+            !json.contains("breakdowns"),
+            "empty breakdowns must be omitted, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_token_usage_absent_breakdowns_defaults_empty() {
+        // Deserializing an old-style token_usage object with no breakdowns key
+        // yields an empty map (serde default).
+        let usage: TokenUsage =
+            serde_json::from_str(r#"{"input_tokens":10,"output_tokens":20}"#).unwrap();
+        assert!(usage.breakdowns.is_empty());
+    }
+
+    #[test]
     fn test_single_user_turn() {
         let mut turn = base_turn("t1", Role::User);
         turn.text = "hello".into();
@@ -848,6 +906,7 @@ mod tests {
             output_tokens: Some(20),
             cache_read_tokens: Some(50),
             cache_write_tokens: None,
+            ..Default::default()
         });
         assistant.attributed_token_usage = Some(TokenUsage {
             output_tokens: Some(20),
@@ -1331,6 +1390,7 @@ mod tests {
             output_tokens: Some(50),
             cache_read_tokens: None,
             cache_write_tokens: None,
+            ..Default::default()
         });
         let view = view_with(vec![turn]);
         let path = derive_path(&view, &DeriveConfig::default());
@@ -1348,6 +1408,7 @@ mod tests {
             output_tokens: Some(output),
             cache_read_tokens: Some(14_842),
             cache_write_tokens: Some(429_831),
+            ..Default::default()
         }
     }
 

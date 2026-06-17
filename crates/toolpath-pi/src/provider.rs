@@ -192,6 +192,7 @@ fn usage_to_token_usage(usage: &Usage) -> Option<TokenUsage> {
         } else {
             None
         },
+        ..Default::default()
     })
 }
 

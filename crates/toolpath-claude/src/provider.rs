@@ -105,6 +105,7 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         output_tokens: u.output_tokens,
         cache_read_tokens: u.cache_read_input_tokens,
         cache_write_tokens: u.cache_creation_input_tokens,
+        ..Default::default()
     });
 
     let environment = if entry.cwd.is_some() || entry.git_branch.is_some() {
@@ -540,6 +541,7 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
         output_tokens: m(a.output_tokens, b.output_tokens),
         cache_read_tokens: m(a.cache_read_tokens, b.cache_read_tokens),
         cache_write_tokens: m(a.cache_write_tokens, b.cache_write_tokens),
+        ..Default::default()
     }
 }
 
@@ -843,6 +845,7 @@ mod tests {
             output_tokens: Some(output),
             cache_read_tokens: Some(14_842),
             cache_write_tokens: Some(429_831),
+            ..Default::default()
         });
         t
     }

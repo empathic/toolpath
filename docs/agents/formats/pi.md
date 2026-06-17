@@ -145,9 +145,15 @@ splits them across two entries by design.
 }
 ```
 
-`totalTokens` is canonically `input + output`. The `cost` breakdown is
-Pi-specific; not present in real sessions where cost can't be
-computed.
+`usage` is **per API call** (per assistant message), not cumulative.
+`totalTokens`'s formula is **version-dependent and not load-bearing for us**:
+older Pi reported `input + output`, but Pi 0.2.0+ redefined its headline
+token metric to `input + output + cacheWrite` (cacheRead deliberately
+excluded so repeated cache hits don't dominate). `toolpath-pi` does **not**
+read `totalTokens` — it reads the raw `input`/`output`/`cacheRead`/`cacheWrite`
+fields and sums each independently, so it's correct regardless of which
+`totalTokens` convention a session used. The `cost` breakdown is
+Pi-specific; not present in real sessions where cost can't be computed.
 
 ### Stop reasons
 
