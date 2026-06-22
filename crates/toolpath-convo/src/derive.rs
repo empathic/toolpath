@@ -1015,10 +1015,13 @@ mod tests {
         });
         let view = view_with(vec![turn]);
 
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).expect("derive");
         let extracted = crate::extract::extract_conversation(&path);
 
-        let usage = extracted.turns[0]
+        let usage = extracted
+            .turns()
+            .next()
+            .unwrap()
             .token_usage
             .as_ref()
             .expect("token_usage survives round-trip");
@@ -1714,7 +1717,7 @@ mod tests {
         turns.push(t4);
 
         let view = view_with(turns);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).expect("derive");
         let changes: Vec<&StructuralChange> = path.steps.iter().map(conv_change).collect();
 
         assert!(!changes[0].extra.contains_key("token_usage"));
@@ -1744,7 +1747,7 @@ mod tests {
             turns.push(t);
         }
         let view = view_with(turns);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).expect("derive");
         for (i, step) in path.steps.iter().enumerate() {
             let sc = conv_change(step);
             assert_eq!(
@@ -1771,7 +1774,7 @@ mod tests {
             mk("t2", "msg_02", 200),
             mk("t3", "msg_01", 300),
         ]);
-        let path = derive_path(&view, &DeriveConfig::default());
+        let path = derive_path(&view, &DeriveConfig::default()).expect("derive");
         let changes: Vec<&StructuralChange> = path.steps.iter().map(conv_change).collect();
         assert_eq!(
             changes[0].extra["token_usage"]["output_tokens"],

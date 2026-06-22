@@ -767,7 +767,10 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns[0].group_id.as_deref(), Some("msg_01abc"));
+        assert_eq!(
+            view.turns().next().unwrap().group_id.as_deref(),
+            Some("msg_01abc")
+        );
     }
 
     #[test]
@@ -1383,6 +1386,8 @@ mod tests {
             environment: None,
             delegations: vec![],
             file_mutations: vec![],
+            group_id: None,
+            attributed_token_usage: None,
         };
         let b = Turn {
             id: "b".into(),
@@ -1398,6 +1403,8 @@ mod tests {
             environment: None,
             delegations: vec![],
             file_mutations: vec![],
+            group_id: None,
+            attributed_token_usage: None,
         };
         let c = Compaction {
             id: "c".into(),

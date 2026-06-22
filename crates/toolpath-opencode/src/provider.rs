@@ -1130,7 +1130,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let u = view.turns[0].token_usage.as_ref().unwrap();
+        let u = view.turns().next().unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.output_tokens, Some(20));
         assert!(u.breakdowns.is_empty());
     }
@@ -1152,7 +1152,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let u = view.turns[0].token_usage.as_ref().unwrap();
+        let u = view.turns().next().unwrap().token_usage.as_ref().unwrap();
         // output total: (20+5) + (4+7) = 36; reasoning slice: 5+7 = 12.
         assert_eq!(u.output_tokens, Some(36));
         assert_eq!(
@@ -1175,7 +1175,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(view.turns[0].token_usage.is_none());
+        assert!(view.turns().next().unwrap().token_usage.is_none());
     }
 
     #[test]

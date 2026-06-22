@@ -1252,12 +1252,12 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&two_round_session(true));
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let first = view.turns[1].token_usage.as_ref().unwrap();
+        let first = view.turns().nth(1).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(first.input_tokens, Some(100));
         assert_eq!(first.output_tokens, Some(20));
         assert_eq!(first.cache_read_tokens, Some(10));
 
-        let second = view.turns[3].token_usage.as_ref().unwrap();
+        let second = view.turns().nth(3).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(second.input_tokens, Some(200));
         assert_eq!(second.output_tokens, Some(30));
         assert_eq!(second.cache_read_tokens, Some(30));
@@ -1294,11 +1294,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let assistants: Vec<&Turn> = view
-            .turns
-            .iter()
-            .filter(|t| t.role == Role::Assistant)
-            .collect();
+        let assistants: Vec<&Turn> = view.turns().filter(|t| t.role == Role::Assistant).collect();
         assert_eq!(assistants.len(), 2);
         // Per-step attribution: 40 then 60 — NOT 80/120 (which doubling gives).
         assert_eq!(
@@ -1361,11 +1357,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let assistants: Vec<&Turn> = view
-            .turns
-            .iter()
-            .filter(|t| t.role == Role::Assistant)
-            .collect();
+        let assistants: Vec<&Turn> = view.turns().filter(|t| t.role == Role::Assistant).collect();
         assert_eq!(assistants.len(), 2);
         // Per-step reasoning deltas, NOT cumulative (100/260) and NOT doubled.
         assert_eq!(
@@ -1403,11 +1395,7 @@ mod tests {
         ].join("\n");
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let a = view
-            .turns
-            .iter()
-            .find(|t| t.role == Role::Assistant)
-            .unwrap();
+        let a = view.turns().find(|t| t.role == Role::Assistant).unwrap();
         assert!(
             a.attributed_token_usage
                 .as_ref()
@@ -1439,15 +1427,16 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        assert_eq!(view.turns.len(), 3);
-        assert!(view.turns[0].group_id.is_none(), "user turn ungrouped");
-        assert_eq!(view.turns[1].group_id.as_deref(), Some("round-1"));
-        assert_eq!(view.turns[2].group_id.as_deref(), Some("round-1"));
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 3);
+        assert!(turns[0].group_id.is_none(), "user turn ungrouped");
+        assert_eq!(turns[1].group_id.as_deref(), Some("round-1"));
+        assert_eq!(turns[2].group_id.as_deref(), Some("round-1"));
         assert!(
-            view.turns[1].token_usage.is_none(),
+            turns[1].token_usage.is_none(),
             "interior turn of the round must not carry usage"
         );
-        let total = view.turns[2].token_usage.as_ref().unwrap();
+        let total = turns[2].token_usage.as_ref().unwrap();
         assert_eq!(total.output_tokens, Some(20));
         assert_eq!(total.input_tokens, Some(100));
     }
@@ -1459,7 +1448,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&two_round_session(false));
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let second = view.turns[3].token_usage.as_ref().unwrap();
+        let second = view.turns().nth(3).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(second.input_tokens, Some(200));
         assert_eq!(second.output_tokens, Some(30));
         assert_eq!(second.cache_read_tokens, Some(30));

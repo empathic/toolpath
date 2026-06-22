@@ -773,56 +773,69 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
 /// per-step attribution from them, and — the format being undocumented — we
 /// do not trust line order.
 ///
-/// For each consecutive `group_id` run this sets `token_usage` on the run's
-/// **final** turn to the field-wise **maximum** across the run (the message
-/// total — never under-counts whatever the stream order) and clears it from
-/// the others, so summing `token_usage` over turns yields session totals.
+/// For each `group_id` this sets `token_usage` on the group's
+/// **last-occurring** turn to the field-wise **maximum** across the group (the
+/// message total — never under-counts whatever the stream order) and clears it
+/// from the others, so summing `token_usage` over turns yields session totals.
+///
+/// Grouping is by `group_id` across the whole sequence, not by consecutive run:
+/// a single message's turns can be interrupted by an unrelated turn (e.g. a
+/// `<subagent_notification>` user message lands between two assistant turns of
+/// the same Codex round). Collapsing per run would leave the message total on
+/// two turns — once per run — double-counting it. Keying on `group_id` lands it
+/// exactly once.
 fn canonicalize_message_usage(turns: &mut [&mut Turn]) {
-    let mut i = 0;
-    while i < turns.len() {
-        let Some(mid) = turns[i].group_id.clone() else {
-            i += 1;
+    // First pass: per group_id, the field-wise max usage and the index of the
+    // group's last-occurring turn.
+    let mut group_total: HashMap<String, TokenUsage> = HashMap::new();
+    let mut group_last_idx: HashMap<String, usize> = HashMap::new();
+    for (idx, t) in turns.iter().enumerate() {
+        let Some(mid) = t.group_id.clone() else {
             continue;
         };
-        let mut j = i;
-        while j < turns.len() && turns[j].group_id.as_deref() == Some(mid.as_str()) {
-            j += 1;
+        group_last_idx.insert(mid.clone(), idx);
+        if let Some(u) = &t.token_usage {
+            group_total
+                .entry(mid)
+                .and_modify(|acc| *acc = max_usage(acc, u))
+                .or_insert_with(|| u.clone());
         }
+    }
 
-        // Message total = field-wise max across the run (the final streaming
-        // snapshot, found without trusting line order).
-        let mut total: Option<TokenUsage> = None;
-        for t in &turns[i..j] {
-            if let Some(u) = &t.token_usage {
-                total = Some(match total {
-                    Some(acc) => max_usage(&acc, u),
-                    None => u.clone(),
-                });
-            }
-        }
-
-        for t in &mut turns[i..j] {
+    // Second pass: clear usage off every grouped turn, then stamp each
+    // group's total back onto its last-occurring turn.
+    for t in turns.iter_mut() {
+        if t.group_id.is_some() {
             t.token_usage = None;
         }
-        if let Some(total) = total {
-            turns[j - 1].token_usage = Some(total);
+    }
+    for (mid, total) in group_total {
+        if let Some(&idx) = group_last_idx.get(&mid) {
+            turns[idx].token_usage = Some(total);
         }
-        i = j;
     }
 }
 
 /// Sum token usage across all turns.
 fn sum_usage<'a>(turns: impl IntoIterator<Item = &'a Turn>) -> Option<TokenUsage> {
     let turns: Vec<&Turn> = turns.into_iter().collect();
+
+    // A message's usage repeats across every turn split from it; count it
+    // once, on the group's last-occurring turn. Key on `group_id` rather than
+    // adjacency so an interrupted group (a turn of another group landing in
+    // the middle) still counts once.
+    let mut group_last_idx: HashMap<&str, usize> = HashMap::new();
+    for (idx, turn) in turns.iter().enumerate() {
+        if let Some(mid) = &turn.group_id {
+            group_last_idx.insert(mid.as_str(), idx);
+        }
+    }
+
     let mut total = TokenUsage::default();
     let mut any = false;
     for (idx, turn) in turns.iter().enumerate() {
-        // Turns split from one provider message all repeat that message's
-        // usage; count it once, on the run's last turn.
         if let Some(mid) = &turn.group_id
-            && turns
-                .get(idx + 1)
-                .is_some_and(|next| next.group_id.as_ref() == Some(mid))
+            && group_last_idx.get(mid.as_str()) != Some(&idx)
         {
             continue;
         }
@@ -1091,7 +1104,8 @@ mod tests {
         // (55) is NOT per-block attribution — it's where generation happened
         // to be when the line was flushed — so we never record it.
         let mut turns = vec![grp_turn("t1", "msg_A", 55), grp_turn("t2", "msg_A", 164)];
-        canonicalize_message_usage(&mut turns);
+        let mut refs: Vec<&mut Turn> = turns.iter_mut().collect();
+        canonicalize_message_usage(&mut refs);
 
         assert!(turns[0].token_usage.is_none(), "total only on final turn");
         assert_eq!(
@@ -1112,8 +1126,9 @@ mod tests {
         // Defensive: the complete total arrives FIRST (out of order). We
         // must still report 164 as the message total — the field-wise max,
         // not the last line's snapshot.
-        let mut turns = vec![grp_turn("t1", "msg_A", 164), grp_turn("t2", "msg_A", 55)];
-        canonicalize_message_usage(&mut turns);
+        let mut turns = [grp_turn("t1", "msg_A", 164), grp_turn("t2", "msg_A", 55)];
+        let mut refs: Vec<&mut Turn> = turns.iter_mut().collect();
+        canonicalize_message_usage(&mut refs);
 
         assert_eq!(
             turns[1].token_usage.as_ref().unwrap().output_tokens,
@@ -1131,7 +1146,8 @@ mod tests {
             grp_turn("t2", "msg_A", 997),
             grp_turn("t3", "msg_A", 997),
         ];
-        canonicalize_message_usage(&mut turns);
+        let mut refs: Vec<&mut Turn> = turns.iter_mut().collect();
+        canonicalize_message_usage(&mut refs);
 
         assert!(turns[0].token_usage.is_none());
         assert!(turns[1].token_usage.is_none());
@@ -1142,6 +1158,38 @@ mod tests {
         for t in &turns {
             assert!(t.attributed_token_usage.is_none());
         }
+    }
+
+    #[test]
+    fn canonicalize_groups_across_an_interrupting_turn() {
+        // A message group can be interrupted by an unrelated turn (e.g. a
+        // `<subagent_notification>` user turn lands between two assistant
+        // turns of the same Codex round, both stamped with the group total).
+        // Grouping must key on `group_id`, not adjacency: the total lands on
+        // the group's LAST-occurring turn ONCE — collapsing per consecutive
+        // run would leave it on two turns, double-counting.
+        let mut t1 = grp_turn("t1", "msg_A", 997);
+        let mut interrupt = message_turn_stub("u1");
+        interrupt.role = Role::User;
+        interrupt.group_id = None;
+        let mut t2 = grp_turn("t2", "msg_A", 997);
+
+        {
+            let mut turns = [&mut t1, &mut interrupt, &mut t2];
+            canonicalize_message_usage(&mut turns);
+        }
+
+        assert!(t1.token_usage.is_none(), "earlier group turn cleared");
+        assert!(interrupt.token_usage.is_none(), "ungrouped turn untouched");
+        assert_eq!(
+            t2.token_usage.as_ref().unwrap().output_tokens,
+            Some(997),
+            "total lands once on the group's last-occurring turn"
+        );
+
+        // And the session sum counts the group exactly once.
+        let total = sum_usage([&t1, &interrupt, &t2]).expect("total");
+        assert_eq!(total.output_tokens, Some(997));
     }
 
     fn setup_provider() -> (TempDir, ClaudeConvo) {
@@ -1201,12 +1249,13 @@ mod tests {
         let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-2")
             .unwrap();
 
-        assert_eq!(view.turns.len(), 5);
-        assert!(view.turns[0].group_id.is_none(), "user lines carry no ID");
-        for turn in &view.turns[1..=3] {
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 5);
+        assert!(turns[0].group_id.is_none(), "user lines carry no ID");
+        for turn in &turns[1..=3] {
             assert_eq!(turn.group_id.as_deref(), Some("msg_A"));
         }
-        assert_eq!(view.turns[4].group_id.as_deref(), Some("msg_B"));
+        assert_eq!(turns[4].group_id.as_deref(), Some("msg_B"));
     }
 
     #[test]
@@ -1218,14 +1267,15 @@ mod tests {
         let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-2")
             .unwrap();
 
-        assert!(view.turns[1].token_usage.is_none());
-        assert!(view.turns[2].token_usage.is_none());
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert!(turns[1].token_usage.is_none());
+        assert!(turns[2].token_usage.is_none());
         assert_eq!(
-            view.turns[3].token_usage.as_ref().unwrap().output_tokens,
+            turns[3].token_usage.as_ref().unwrap().output_tokens,
             Some(997)
         );
         assert_eq!(
-            view.turns[4].token_usage.as_ref().unwrap().output_tokens,
+            turns[4].token_usage.as_ref().unwrap().output_tokens,
             Some(11)
         );
     }

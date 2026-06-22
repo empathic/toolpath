@@ -1271,7 +1271,10 @@ mod tests {
 
         // Wire: the total is stamped on every line of the split, each tagged
         // with the shared message.id.
-        for entry in content_entries(&convo).iter().filter(|e| e.entry_type == "assistant") {
+        for entry in content_entries(&convo)
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+        {
             let msg = entry.message.as_ref().unwrap();
             assert_eq!(msg.id.as_deref(), Some("msg_A"));
             assert_eq!(msg.usage.as_ref().unwrap().output_tokens, Some(164));

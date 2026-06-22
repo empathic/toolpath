@@ -436,6 +436,46 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         }
     }
 
+    // Gemini sometimes writes one assistant message across two consecutive
+    // lines that share a wire `id` (an empty content-only flush, then the
+    // same id again carrying the tool calls), each repeating the SAME
+    // `tokens` snapshot. Those are one message, so tag both with a shared
+    // `group_id` (the wire id). Downstream message-group accounting then
+    // counts that token total once per group instead of once per line —
+    // without it, summing across the split double-counts the message's
+    // tokens, and a wholesale-merging target (Codex) attributes the doubled
+    // total to the surviving turn. Only consecutive same-id ASSISTANT turns
+    // group; a user turn sharing an id with the next assistant does not.
+    //
+    // Compare BASE ids (the `#N` disambiguation suffix below stripped) so
+    // the grouping survives a project→read round-trip: after the first read
+    // the split's second turn carries `<id>#1`, and on the way back through
+    // Gemini's wire (which has no group field) the boundary is re-detected
+    // only if `<id>` and `<id>#1` are recognized as the same message.
+    {
+        let mut i = 0;
+        while i < turns.len() {
+            if matches!(turns[i].role, Role::Assistant) {
+                let base = base_id(&turns[i].id).to_string();
+                let mut j = i + 1;
+                while j < turns.len()
+                    && matches!(turns[j].role, Role::Assistant)
+                    && base_id(&turns[j].id) == base
+                {
+                    j += 1;
+                }
+                if j - i > 1 {
+                    for t in &mut turns[i..j] {
+                        t.group_id = Some(base.clone());
+                    }
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     // Gemini reuses the same wire `id` across paired messages (a user
     // prompt and the assistant response it triggered can share one id),
     // so turn ids are not unique as-is. `derive_path` now enforces unique
@@ -494,11 +534,39 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     }
 }
 
+/// Strip a trailing `#N` disambiguation suffix added when two turns share a
+/// wire id, recovering the original Gemini message id. `<uuid>#1` → `<uuid>`;
+/// ids without the suffix pass through unchanged.
+fn base_id(id: &str) -> &str {
+    match id.rsplit_once('#') {
+        Some((base, suffix))
+            if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            base
+        }
+        _ => id,
+    }
+}
+
 fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
+    // A split message repeats its token snapshot on every line, all sharing
+    // one `group_id`; count it once, on the group's last-occurring turn.
+    let mut group_last_idx: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for (idx, turn) in turns.iter().enumerate() {
+        if let Some(mid) = &turn.group_id {
+            group_last_idx.insert(mid.as_str(), idx);
+        }
+    }
+
     let mut total = TokenUsage::default();
     let mut any = false;
-    for turn in turns {
-        if let Some(u) = &turn.token_usage {
+    for (idx, turn) in turns.iter().enumerate() {
+        let counts = turn
+            .group_id
+            .as_deref()
+            .is_none_or(|mid| group_last_idx.get(mid) == Some(&idx));
+        if counts && let Some(u) = &turn.token_usage {
             any = true;
             total.input_tokens =
                 Some(total.input_tokens.unwrap_or(0) + u.input_tokens.unwrap_or(0));
@@ -993,6 +1061,50 @@ mod tests {
         assert_eq!(turns[1].parent_id.as_deref(), Some("dup"));
         assert_eq!(turns[2].parent_id.as_deref(), Some("dup#1"));
         assert_eq!(turns[3].parent_id.as_deref(), Some("dup#2"));
+    }
+
+    #[test]
+    fn test_split_assistant_message_shares_group_id_and_counts_tokens_once() {
+        // Gemini writes one assistant message across two consecutive lines
+        // sharing a wire id (an empty flush, then the same id with tool
+        // calls), each repeating the SAME `tokens` snapshot. They are one
+        // message: both turns must share a `group_id`, and the session total
+        // must count the snapshot once, not twice.
+        let tokens = r#"{"input":100,"output":20,"cached":0,"thoughts":0,"tool":0,"total":120}"#;
+        let chat_json = format!(
+            r#"{{"sessionId":"s","projectHash":"","messages":[
+  {{"id":"u","timestamp":"ts","type":"user","content":[{{"text":"go"}}]}},
+  {{"id":"m","timestamp":"ts","type":"gemini","content":"","tokens":{tokens}}},
+  {{"id":"m","timestamp":"ts","type":"gemini","content":"","tokens":{tokens},"toolCalls":[{{"id":"c0","name":"ls","args":{{}}}}]}}
+]}}"#
+        );
+        let chat: ChatFile = serde_json::from_str(&chat_json).unwrap();
+        let view = to_view(&Conversation::new("s".into(), chat));
+
+        let asst: Vec<&Turn> = view
+            .turns()
+            .filter(|t| matches!(t.role, Role::Assistant))
+            .collect();
+        assert_eq!(asst.len(), 2);
+        assert_eq!(asst[0].group_id.as_deref(), Some("m"));
+        assert_eq!(asst[1].group_id.as_deref(), Some("m"));
+
+        // Session total counts the message's tokens once.
+        let total = view.total_usage.as_ref().expect("total usage");
+        assert_eq!(total.output_tokens, Some(20));
+        assert_eq!(total.input_tokens, Some(100));
+    }
+
+    #[test]
+    fn test_base_id_strips_numeric_suffix_only() {
+        assert_eq!(base_id("abc"), "abc");
+        assert_eq!(base_id("abc#1"), "abc");
+        assert_eq!(base_id("abc#12"), "abc");
+        // Non-numeric or empty suffix is left intact (not a dedup suffix).
+        assert_eq!(base_id("abc#x"), "abc#x");
+        assert_eq!(base_id("abc#"), "abc#");
+        // A uuid containing no '#' passes through.
+        assert_eq!(base_id("d1a8c61a-247c"), "d1a8c61a-247c");
     }
 
     #[test]

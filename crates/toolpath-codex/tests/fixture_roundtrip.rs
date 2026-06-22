@@ -162,8 +162,7 @@ fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
     // summing the twice-emitted counts, or stamping the cumulative — this would
     // overshoot. This is the dedup-safe / no-double-count proof on real data.
     let attributed_reasoning: u32 = view
-        .turns
-        .iter()
+        .turns()
         .map(|t| reasoning_of(t.attributed_token_usage.as_ref()))
         .sum();
     assert_eq!(
@@ -172,7 +171,7 @@ fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
     );
 
     // Per step, reasoning ⊆ output.
-    for t in &view.turns {
+    for t in view.turns() {
         if let Some(a) = t.attributed_token_usage.as_ref() {
             let r = reasoning_of(Some(a));
             assert!(
@@ -187,8 +186,7 @@ fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
     // Round (group) totals: Σ over group token_usage reasoning == 979 too, and
     // each round's reasoning ⊆ its output.
     let round_reasoning: u32 = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| t.token_usage.is_some())
         .map(|t| {
             let u = t.token_usage.as_ref().unwrap();
