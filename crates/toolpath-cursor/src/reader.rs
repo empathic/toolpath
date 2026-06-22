@@ -72,7 +72,7 @@ impl DbReader {
 
     /// All composer ids known to the DB, in the order they appear in
     /// `composer.composerHeaders.allComposers`. Composers with no
-    /// bubbles are included — call [`composer_has_bubbles`] to filter
+    /// bubbles are included — call [`Self::composer_has_bubbles`] to filter
     /// drafts.
     pub fn list_composer_ids(&self) -> Result<Vec<String>> {
         Ok(self

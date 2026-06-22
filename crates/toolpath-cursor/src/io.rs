@@ -52,7 +52,7 @@ impl CursorIO {
     }
 
     /// All composer ids known to the database, including drafts. Use
-    /// [`list_composers`] when you only want sessions that have at
+    /// [`Self::list_composers`] when you only want sessions that have at
     /// least one bubble on disk.
     pub fn list_composer_ids(&self) -> Result<Vec<String>> {
         self.open_db()?.list_composer_ids()
