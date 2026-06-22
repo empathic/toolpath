@@ -365,10 +365,11 @@ impl Harness for CursorHarness {
         "cursor"
     }
     fn roundtrips_compaction(&self) -> bool {
-        // The cursor provider doesn't derive or render compaction yet. Cursor's
-        // format does appear to persist summarization
-        // (`speculativeSummarizationEncryptionKey`, `summarizedComposers`), so
-        // this is a gap to revisit, not a claim that Cursor lacks compaction.
+        // Cursor DOES compact (`/summarize`) and writes a `capabilityType: 22`
+        // boundary marker bubble, but the summary text and kept set live
+        // server-side — not in the local store — so there's nothing
+        // reconstructable to round-trip. Like gemini, we don't derive a
+        // compaction. See docs/agents/formats/cursor.md.
         false
     }
     fn roundtrip(&self, view: &ConversationView) -> ConversationView {

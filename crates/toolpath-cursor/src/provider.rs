@@ -309,6 +309,14 @@ impl<'a> Builder<'a> {
     fn build(mut self) -> ConversationView {
         let mut prev_turn_id: Option<String> = None;
         for bubble in &self.session.bubbles {
+            // Cursor's `/summarize` boundary marker (capabilityType 22) carries
+            // no recoverable summary or kept set — those live server-side, not
+            // in the local store — so there's nothing to derive a compaction
+            // from. Skip it rather than surface it as an empty turn. See
+            // docs/agents/formats/cursor.md.
+            if bubble.is_summarization() {
+                continue;
+            }
             let turn = match bubble.kind {
                 BUBBLE_TYPE_USER => self.user_turn(bubble, prev_turn_id.as_deref()),
                 BUBBLE_TYPE_ASSISTANT => self.assistant_turn(bubble, prev_turn_id.as_deref()),

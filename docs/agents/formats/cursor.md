@@ -462,6 +462,43 @@ For `run_terminal_command_v2`, the structure is richer:
 Pair tool-call bubbles to their downstream effect via `toolCallId` and
 `checkpointId` (see below).
 
+## Compaction (`/summarize`) — boundary marker on disk, summary server-side
+
+Cursor compacts context three ways: automatically as a conversation nears
+the context-window limit, manually via the **`/summarize`** slash command
+(Cursor 1.6+), and — for the Composer model family — via RL-trained
+"self-summarization" that compresses the model's own context in-loop.
+
+On disk a compaction leaves **one durable marker**: a bubble with
+`type: 2` and **`capabilityType: 22`**, empty `text`, written into the
+stream at the point compaction occurred. All original bubbles are
+retained (compaction changes what the model sees, not what's stored), so
+the pre-compaction history stays intact.
+
+But the **summary text and the kept-message set are not recoverable from
+the local store** — verified against a live `/summarize`d session:
+
+- The marker bubble carries no summary (empty `text`; its
+  `conversationState` is just `"~"`).
+- There is **no `latestConversationSummary`** field on `composerData`
+  (the schema some older reverse-engineering describes is absent in
+  current Cursor).
+- The composer's `conversationState` (a `~`-prefixed base64 **protobuf**
+  blob) holds the recompacted *context* — system prompt, tool/agent/skill
+  definitions — but not the summary prose and no kept-bubble references.
+- The `speculativeSummarizationEncryptionKey` on each composer gates a
+  summarization payload that **isn't stored locally** (it's server-side);
+  no encrypted local blob is tied to the composer.
+
+Net for us: like Gemini, there is **no reconstructable compaction to
+model** — but for a different reason. Gemini persists nothing; Cursor
+persists a boundary *marker* whose content lives server-side. A
+content-less `conversation.compact` (no summary, empty `kept`) would be
+misleading, so `toolpath-cursor` recognizes the `capabilityType: 22`
+bubble (`Bubble::is_summarization`) and **skips it** — emitting neither a
+turn nor a compaction. The marker is documented here for whoever later
+gains access to Cursor's server-side summary payload.
+
 ## Tool catalogue
 
 Cursor's wire-level tool inventory is defined by the
