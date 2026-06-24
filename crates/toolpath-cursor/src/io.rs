@@ -88,10 +88,7 @@ impl CursorIO {
             match db.load_session(&head.composer_id) {
                 Ok(s) => out.push(to_metadata(&s)),
                 Err(e) => {
-                    eprintln!(
-                        "Warning: skipping composer {}: {}",
-                        head.composer_id, e
-                    );
+                    eprintln!("Warning: skipping composer {}: {}", head.composer_id, e);
                 }
             }
         }
@@ -138,10 +135,7 @@ impl CursorIO {
             return None;
         }
         let slug = paths::slug_from_abs_path(&abs);
-        let p = self
-            .resolver
-            .transcript_path(&slug, session.id())
-            .ok()?;
+        let p = self.resolver.transcript_path(&slug, session.id()).ok()?;
         p.exists().then_some(p)
     }
 }
@@ -212,7 +206,10 @@ mod tests {
         assert_eq!(metas[0].id, "c1");
         assert_eq!(metas[0].message_count, 3);
         assert_eq!(metas[0].first_user_message.as_deref(), Some("hello"));
-        assert_eq!(metas[0].workspace_path.as_deref(), Some(std::path::Path::new("/p")));
+        assert_eq!(
+            metas[0].workspace_path.as_deref(),
+            Some(std::path::Path::new("/p"))
+        );
     }
 
     #[test]

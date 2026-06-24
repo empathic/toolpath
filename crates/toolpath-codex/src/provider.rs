@@ -622,7 +622,11 @@ impl<'a> Builder<'a> {
         // A step's spend that arrived before any assistant turn existed
         // attaches to this, the first one.
         if let Some(pending) = self.pending_attributed.take() {
-            add_usage(turn.attributed_token_usage.get_or_insert_with(TokenUsage::default), &pending);
+            add_usage(
+                turn.attributed_token_usage
+                    .get_or_insert_with(TokenUsage::default),
+                &pending,
+            );
         }
     }
 
@@ -690,9 +694,7 @@ impl<'a> Builder<'a> {
             let start = k;
             let mid = self.turns[assistants[k]].group_id.clone();
             if mid.is_some() {
-                while k + 1 < assistants.len()
-                    && self.turns[assistants[k + 1]].group_id == mid
-                {
+                while k + 1 < assistants.len() && self.turns[assistants[k + 1]].group_id == mid {
                     k += 1;
                 }
             }
@@ -1158,14 +1160,38 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let assistants: Vec<&Turn> = view.turns.iter().filter(|t| t.role == Role::Assistant).collect();
+        let assistants: Vec<&Turn> = view
+            .turns
+            .iter()
+            .filter(|t| t.role == Role::Assistant)
+            .collect();
         assert_eq!(assistants.len(), 2);
         // Per-step attribution: 40 then 60 — NOT 80/120 (which doubling gives).
-        assert_eq!(assistants[0].attributed_token_usage.as_ref().unwrap().output_tokens, Some(40));
-        assert_eq!(assistants[1].attributed_token_usage.as_ref().unwrap().output_tokens, Some(60));
+        assert_eq!(
+            assistants[0]
+                .attributed_token_usage
+                .as_ref()
+                .unwrap()
+                .output_tokens,
+            Some(40)
+        );
+        assert_eq!(
+            assistants[1]
+                .attributed_token_usage
+                .as_ref()
+                .unwrap()
+                .output_tokens,
+            Some(60)
+        );
         // Σ attributed == round total on the final turn.
-        assert_eq!(assistants[1].token_usage.as_ref().unwrap().output_tokens, Some(100));
-        let sum: u32 = assistants.iter().filter_map(|t| t.attributed_token_usage.as_ref()?.output_tokens).sum();
+        assert_eq!(
+            assistants[1].token_usage.as_ref().unwrap().output_tokens,
+            Some(100)
+        );
+        let sum: u32 = assistants
+            .iter()
+            .filter_map(|t| t.attributed_token_usage.as_ref()?.output_tokens)
+            .sum();
         assert_eq!(sum, 100);
     }
 
@@ -1201,11 +1227,21 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let assistants: Vec<&Turn> = view.turns.iter().filter(|t| t.role == Role::Assistant).collect();
+        let assistants: Vec<&Turn> = view
+            .turns
+            .iter()
+            .filter(|t| t.role == Role::Assistant)
+            .collect();
         assert_eq!(assistants.len(), 2);
         // Per-step reasoning deltas, NOT cumulative (100/260) and NOT doubled.
-        assert_eq!(reasoning_of(assistants[0].attributed_token_usage.as_ref()), Some(100));
-        assert_eq!(reasoning_of(assistants[1].attributed_token_usage.as_ref()), Some(160));
+        assert_eq!(
+            reasoning_of(assistants[0].attributed_token_usage.as_ref()),
+            Some(100)
+        );
+        assert_eq!(
+            reasoning_of(assistants[1].attributed_token_usage.as_ref()),
+            Some(160)
+        );
         // Round total breakdown is the sum of attributions.
         let round = assistants[1].token_usage.as_ref().unwrap();
         assert_eq!(reasoning_of(Some(round)), Some(260));
@@ -1233,8 +1269,18 @@ mod tests {
         ].join("\n");
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let a = view.turns.iter().find(|t| t.role == Role::Assistant).unwrap();
-        assert!(a.attributed_token_usage.as_ref().unwrap().breakdowns.is_empty());
+        let a = view
+            .turns
+            .iter()
+            .find(|t| t.role == Role::Assistant)
+            .unwrap();
+        assert!(
+            a.attributed_token_usage
+                .as_ref()
+                .unwrap()
+                .breakdowns
+                .is_empty()
+        );
         assert!(a.token_usage.as_ref().unwrap().breakdowns.is_empty());
     }
 

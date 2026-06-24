@@ -1137,7 +1137,10 @@ mod tests {
 
         // Wire: the total is stamped on every line of the split, each tagged
         // with the shared message.id.
-        for entry in content_entries(&convo).iter().filter(|e| e.entry_type == "assistant") {
+        for entry in content_entries(&convo)
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+        {
             let msg = entry.message.as_ref().unwrap();
             assert_eq!(msg.id.as_deref(), Some("msg_A"));
             assert_eq!(msg.usage.as_ref().unwrap().output_tokens, Some(164));
@@ -1145,7 +1148,11 @@ mod tests {
 
         // Re-read: total back on the final turn only; no fabricated attribution.
         let back = crate::provider::to_view(&convo);
-        let a: Vec<&Turn> = back.turns.iter().filter(|t| t.role == Role::Assistant).collect();
+        let a: Vec<&Turn> = back
+            .turns
+            .iter()
+            .filter(|t| t.role == Role::Assistant)
+            .collect();
         assert!(a[0].token_usage.is_none());
         assert_eq!(a[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
         assert!(a.iter().all(|t| t.attributed_token_usage.is_none()));

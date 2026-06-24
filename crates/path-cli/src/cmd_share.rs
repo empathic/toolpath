@@ -836,10 +836,7 @@ fn harness_status_pi(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> 
     }
 }
 
-fn harness_status_cursor(
-    bundle: &HarnessBundle,
-    home: Option<&std::path::Path>,
-) -> HarnessStatus {
+fn harness_status_cursor(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
     let Some(mgr) = &bundle.cursor else {
         return HarnessStatus::unresolved();
     };

@@ -419,6 +419,13 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         last_step_id = Some(step_id);
     }
 
+    // A path's step ids must be unique. A source can reuse an id across
+    // distinct records — Claude Code, for one, reuses `uuid` on `attachment`
+    // lines, so two unrelated events arrive with the same id — and carrying
+    // that through breaks any consumer that keys on the id (e.g. a store with
+    // a `UNIQUE (path_id, step_id)` constraint). Resolve at generation time.
+    enforce_unique_step_ids(&mut steps);
+
     let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
 
     // Meta
@@ -471,6 +478,43 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         steps,
         meta: Some(meta),
     }
+}
+
+/// Enforce the path invariant that each step id occurs at most once.
+///
+/// Some sources reuse an id across distinct records — Claude Code reuses the
+/// line `uuid` on `attachment` events — so two records can arrive with the
+/// same id and emit two steps that share one, breaking consumers that key on
+/// it. Keep the first step for an id, drop byte-identical repeats (the same
+/// record emitted twice), and re-id genuinely-distinct collisions to
+/// `<id>#<n>` so no information is lost. Parent references resolve to the
+/// first occurrence, which always retains the original id.
+fn enforce_unique_step_ids(steps: &mut Vec<Step>) {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut out: Vec<Step> = Vec::with_capacity(steps.len());
+    for step in std::mem::take(steps) {
+        let id = step.step.id.clone();
+        let Some(&idx) = index.get(&id) else {
+            index.insert(id, out.len());
+            out.push(step);
+            continue;
+        };
+        // Seen this id before: drop an exact repeat, else mint a fresh id.
+        if serde_json::to_value(&out[idx]).ok() == serde_json::to_value(&step).ok() {
+            continue;
+        }
+        let mut n = 2;
+        let mut new_id = format!("{id}#{n}");
+        while index.contains_key(&new_id) {
+            n += 1;
+            new_id = format!("{id}#{n}");
+        }
+        let mut step = step;
+        step.step.id = new_id.clone();
+        index.insert(new_id, out.len());
+        out.push(step);
+    }
+    *steps = out;
 }
 
 fn actor_for_turn(turn: &Turn, provider: &str) -> String {
@@ -882,6 +926,56 @@ mod tests {
             errors.is_empty(),
             "base-schema violations:\n{}",
             errors.join("\n")
+        );
+    }
+
+    #[test]
+    fn duplicate_event_ids_are_resolved_to_unique_step_ids() {
+        // A source can reuse an id across records (Claude Code reuses `uuid`
+        // on attachment lines). derive_path must still yield unique step ids:
+        // drop a byte-identical repeat, re-id a genuinely-distinct collision.
+        let mut view = view_with(vec![base_turn("t1", Role::User)]);
+        // Two byte-identical attachment events (same id, parent, data) ...
+        for _ in 0..2 {
+            view.events.push(crate::ConversationEvent {
+                id: "dup".into(),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                parent_id: Some("t1".into()),
+                event_type: "attachment".into(),
+                data: HashMap::from([("k".to_string(), serde_json::json!(1))]),
+            });
+        }
+        // ... and a distinct event that collides on the same id.
+        view.events.push(crate::ConversationEvent {
+            id: "dup".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: Some("t1".into()),
+            event_type: "attachment".into(),
+            data: HashMap::from([("k".to_string(), serde_json::json!(2))]),
+        });
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+
+        // The invariant: no id repeats within the path.
+        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "step ids must be unique: {ids:?}");
+        // Repeat dropped, distinct collision kept under a fresh id — so exactly
+        // two `dup*` steps survive (not three, not one), losing no real data.
+        let dups: Vec<&&str> = ids.iter().filter(|id| id.starts_with("dup")).collect();
+        assert_eq!(dups.len(), 2, "repeat dropped, distinct re-id'd: {ids:?}");
+        assert!(
+            ids.contains(&"dup"),
+            "first occurrence keeps the original id"
+        );
+        assert!(
+            ids.contains(&"dup#2"),
+            "distinct collision re-id'd: {ids:?}"
+        );
+        // The head points at a real, surviving step.
+        assert!(
+            ids.contains(&path.path.head.as_str()),
+            "head references a surviving step"
         );
     }
 

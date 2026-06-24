@@ -1144,16 +1144,15 @@ fn derive_cursor(
             Ok(toolpath_cursor::derive_path(&s, &cfg))
         };
 
-        let workspace_filter = project.as_deref().map(|p| {
-            std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p))
-        });
+        let workspace_filter = project
+            .as_deref()
+            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p)));
         let workspace_match = |m: &toolpath_cursor::CursorSessionMetadata| -> bool {
             match (&workspace_filter, &m.workspace_path) {
                 (None, _) => true,
                 (Some(_), None) => false,
                 (Some(want), Some(have)) => {
-                    let canonical =
-                        std::fs::canonicalize(have).unwrap_or_else(|_| have.clone());
+                    let canonical = std::fs::canonicalize(have).unwrap_or_else(|_| have.clone());
                     &canonical == want
                 }
             }

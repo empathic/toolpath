@@ -568,7 +568,10 @@ mod tests {
     #[test]
     fn tokens_from_common_unfolds_reasoning_out_of_output() {
         let mut breakdowns: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
-        breakdowns.insert("output".into(), BTreeMap::from([("reasoning".into(), 243u32)]));
+        breakdowns.insert(
+            "output".into(),
+            BTreeMap::from([("reasoning".into(), 243u32)]),
+        );
         let usage = TokenUsage {
             output_tokens: Some(337),
             breakdowns,

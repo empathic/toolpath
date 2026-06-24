@@ -120,10 +120,7 @@ fn project_view(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| workspace_hash(&workspace_path_str));
 
-    let title = cfg
-        .title
-        .clone()
-        .or_else(|| view.title(80));
+    let title = cfg.title.clone().or_else(|| view.title(80));
 
     let agent_backend = cfg
         .agent_backend
@@ -134,14 +131,11 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_NAME.to_string());
 
-    let created_at = view
-        .started_at
-        .map(|t| t.timestamp_millis())
-        .or_else(|| {
-            view.turns
-                .first()
-                .and_then(|t| parse_timestamp_ms(&t.timestamp))
-        });
+    let created_at = view.started_at.map(|t| t.timestamp_millis()).or_else(|| {
+        view.turns
+            .first()
+            .and_then(|t| parse_timestamp_ms(&t.timestamp))
+    });
     let last_updated_at = view
         .last_activity
         .map(|t| t.timestamp_millis())
@@ -295,10 +289,13 @@ fn build_bubble(turn: &Turn, content_blobs: &mut HashMap<String, String>) -> Bub
     let model_info = if is_tool_bubble {
         None
     } else {
-        turn.model.as_deref().filter(|m| !m.is_empty()).map(|m| ModelInfo {
-            model_name: Some(m.to_string()),
-            extra: HashMap::new(),
-        })
+        turn.model
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .map(|m| ModelInfo {
+                model_name: Some(m.to_string()),
+                extra: HashMap::new(),
+            })
     };
 
     // Empty-text bubbles must omit richText — emitting an empty
@@ -415,9 +412,7 @@ fn normalize_input_for_cursor(tool_id: u32, input: &Value) -> Value {
     };
 
     let renames: &[(&str, &str)] = match tool_id {
-        crate::types::TOOL_RUN_TERMINAL_COMMAND_V2 => &[
-            ("description", "commandDescription"),
-        ],
+        crate::types::TOOL_RUN_TERMINAL_COMMAND_V2 => &[("description", "commandDescription")],
         crate::types::TOOL_EDIT_FILE_V2 => &[
             ("file_path", "relativeWorkspacePath"),
             ("filePath", "relativeWorkspacePath"),
@@ -440,9 +435,7 @@ fn normalize_input_for_cursor(tool_id: u32, input: &Value) -> Value {
             ("target_directory", "path"),
             ("case_insensitive", "caseInsensitive"),
         ],
-        crate::types::TOOL_TASK_V2 => &[
-            ("subagent_type", "subagentType"),
-        ],
+        crate::types::TOOL_TASK_V2 => &[("subagent_type", "subagentType")],
         _ => &[],
     };
 
@@ -450,7 +443,8 @@ fn normalize_input_for_cursor(tool_id: u32, input: &Value) -> Value {
     let mut renamed: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (foreign, cursor) in renames {
         if let Some(v) = obj.get(*foreign) {
-            out.entry((*cursor).to_string()).or_insert_with(|| v.clone());
+            out.entry((*cursor).to_string())
+                .or_insert_with(|| v.clone());
             renamed.insert(*foreign);
         }
     }
@@ -463,11 +457,9 @@ fn normalize_input_for_cursor(tool_id: u32, input: &Value) -> Value {
             "parsingResult",
             "requestedSandboxPolicy",
         ]),
-        crate::types::TOOL_EDIT_FILE_V2 => Some(&[
-            "relativeWorkspacePath",
-            "noCodeblock",
-            "cloudAgentEdit",
-        ]),
+        crate::types::TOOL_EDIT_FILE_V2 => {
+            Some(&["relativeWorkspacePath", "noCodeblock", "cloudAgentEdit"])
+        }
         crate::types::TOOL_READ_FILE_V2 => Some(&[
             "targetFile",
             "effectiveUri",
@@ -476,24 +468,13 @@ fn normalize_input_for_cursor(tool_id: u32, input: &Value) -> Value {
             "startLineOneIndexed",
             "endLineOneIndexedInclusive",
         ]),
-        crate::types::TOOL_GLOB_FILE_SEARCH => Some(&[
-            "globPattern",
-            "targetDirectory",
-        ]),
-        crate::types::TOOL_RIPGREP_RAW_SEARCH => Some(&[
-            "pattern",
-            "path",
-            "caseInsensitive",
-            "includes",
-            "excludes",
-        ]),
-        crate::types::TOOL_TASK_V2 => Some(&[
-            "description",
-            "prompt",
-            "subagentType",
-            "model",
-            "name",
-        ]),
+        crate::types::TOOL_GLOB_FILE_SEARCH => Some(&["globPattern", "targetDirectory"]),
+        crate::types::TOOL_RIPGREP_RAW_SEARCH => {
+            Some(&["pattern", "path", "caseInsensitive", "includes", "excludes"])
+        }
+        crate::types::TOOL_TASK_V2 => {
+            Some(&["description", "prompt", "subagentType", "model", "name"])
+        }
         _ => None,
     };
     for (k, v) in obj {
@@ -509,8 +490,10 @@ fn normalize_input_for_cursor(tool_id: u32, input: &Value) -> Value {
         }
     }
     if tool_id == crate::types::TOOL_EDIT_FILE_V2 {
-        out.entry("noCodeblock".to_string()).or_insert(Value::Bool(true));
-        out.entry("cloudAgentEdit".to_string()).or_insert(Value::Bool(false));
+        out.entry("noCodeblock".to_string())
+            .or_insert(Value::Bool(true));
+        out.entry("cloudAgentEdit".to_string())
+            .or_insert(Value::Bool(false));
     }
     Value::Object(out)
 }
@@ -528,10 +511,7 @@ fn tool_id_and_name(tu: &ToolInvocation) -> (u32, String) {
         Some(ToolCategory::FileWrite) => (TOOL_EDIT_FILE_V2, "edit_file_v2".into()),
         Some(ToolCategory::FileRead) => (TOOL_READ_FILE_V2, "read_file_v2".into()),
         Some(ToolCategory::FileSearch) => (TOOL_GLOB_FILE_SEARCH, "glob_file_search".into()),
-        Some(ToolCategory::Network) => (
-            crate::types::TOOL_WEB_SEARCH,
-            "web_search".into(),
-        ),
+        Some(ToolCategory::Network) => (crate::types::TOOL_WEB_SEARCH, "web_search".into()),
         Some(ToolCategory::Delegation) => (TOOL_TASK_V2, "task_v2".into()),
         None => (crate::types::TOOL_UNSPECIFIED, tu.name.clone()),
     }
@@ -661,7 +641,9 @@ fn reconstruct_hunks_from_diff(diff: &str) -> (String, String) {
 fn register_blob(blobs: &mut HashMap<String, String>, body: Option<&str>) -> Option<String> {
     let body = body?;
     let hash = sha256_hex(body.as_bytes());
-    blobs.entry(hash.clone()).or_insert_with(|| body.to_string());
+    blobs
+        .entry(hash.clone())
+        .or_insert_with(|| body.to_string());
     Some(hash)
 }
 
@@ -669,10 +651,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut h = Sha256::new();
     h.update(bytes);
-    h.finalize().iter().fold(String::with_capacity(64), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    h.finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 fn workspace_hash(path: &str) -> String {
@@ -684,7 +668,11 @@ fn parse_timestamp_ms(ts: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(ts)
         .ok()
         .map(|dt| dt.timestamp_millis())
-        .or_else(|| ts.parse::<DateTime<Utc>>().ok().map(|dt| dt.timestamp_millis()))
+        .or_else(|| {
+            ts.parse::<DateTime<Utc>>()
+                .ok()
+                .map(|dt| dt.timestamp_millis())
+        })
         .or_else(|| ts.parse::<i64>().ok())
 }
 
@@ -1099,9 +1087,10 @@ mod tests {
         }];
         let s = CursorProjector::new().project(&view_with(vec![t])).unwrap();
 
-        assert!(s.content_blobs.contains_key(
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        ));
+        assert!(
+            s.content_blobs
+                .contains_key("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
         let after_hash = sha256_hex("fn main() {}".as_bytes());
         assert_eq!(
             s.content_blobs.get(&after_hash).map(String::as_str),
@@ -1297,7 +1286,10 @@ mod tests {
     #[test]
     fn parse_hunk_header_basic() {
         assert_eq!(super::parse_hunk_header("@@ -1,3 +1,4 @@"), Some((1, 1)));
-        assert_eq!(super::parse_hunk_header("@@ -10,5 +20,7 @@ fn foo()"), Some((10, 20)));
+        assert_eq!(
+            super::parse_hunk_header("@@ -10,5 +20,7 @@ fn foo()"),
+            Some((10, 20))
+        );
         assert_eq!(super::parse_hunk_header("@@ -1 +1 @@"), Some((1, 1)));
         assert_eq!(super::parse_hunk_header("@@ -0,0 +1,3 @@"), Some((0, 1)));
         assert_eq!(super::parse_hunk_header("not a hunk"), None);
@@ -1344,9 +1336,7 @@ mod tests {
             path: "/proj/x.rs".into(),
             tool_id: Some("tc1".into()),
             operation: Some("edit".into()),
-            raw_diff: Some(
-                "@@ -1,1 +1,1 @@\n-old\n+new\n".into(),
-            ),
+            raw_diff: Some("@@ -1,1 +1,1 @@\n-old\n+new\n".into()),
             before: None,
             after: None,
             rename_to: None,
@@ -1361,8 +1351,14 @@ mod tests {
         assert_ne!(before_id, after_id);
         let before_hash = before_id.trim_start_matches("composer.content.");
         let after_hash = after_id.trim_start_matches("composer.content.");
-        assert_eq!(s.content_blobs.get(before_hash).map(String::as_str), Some("old\n"));
-        assert_eq!(s.content_blobs.get(after_hash).map(String::as_str), Some("new\n"));
+        assert_eq!(
+            s.content_blobs.get(before_hash).map(String::as_str),
+            Some("old\n")
+        );
+        assert_eq!(
+            s.content_blobs.get(after_hash).map(String::as_str),
+            Some("new\n")
+        );
     }
 
     #[test]
@@ -1390,12 +1386,21 @@ mod tests {
         let s = CursorProjector::new().project(&view_with(vec![t])).unwrap();
         let tf = s.bubbles[0].tool_former_data.as_ref().unwrap();
         let result = tf.parse_result().unwrap().unwrap();
-        let before_hash = result["beforeContentId"].as_str().unwrap()
+        let before_hash = result["beforeContentId"]
+            .as_str()
+            .unwrap()
             .trim_start_matches("composer.content.");
-        let after_hash = result["afterContentId"].as_str().unwrap()
+        let after_hash = result["afterContentId"]
+            .as_str()
+            .unwrap()
             .trim_start_matches("composer.content.");
-        assert_eq!(s.content_blobs.get(before_hash).map(String::as_str), Some("real before"));
-        assert_eq!(s.content_blobs.get(after_hash).map(String::as_str), Some("real after"));
+        assert_eq!(
+            s.content_blobs.get(before_hash).map(String::as_str),
+            Some("real before")
+        );
+        assert_eq!(
+            s.content_blobs.get(after_hash).map(String::as_str),
+            Some("real after")
+        );
     }
-
 }

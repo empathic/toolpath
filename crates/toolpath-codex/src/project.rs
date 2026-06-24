@@ -168,7 +168,12 @@ fn project_view(
         .find(|(_, t)| matches!(t.role, Role::Assistant))
         .map(|(i, t)| group_of(i, t))
         .unwrap_or_else(|| view.id.clone());
-    lines.push(make_turn_context_line(&first_group, &session_timestamp, &cwd, &model));
+    lines.push(make_turn_context_line(
+        &first_group,
+        &session_timestamp,
+        &cwd,
+        &model,
+    ));
     let mut current_group = Some(first_group);
 
     // Running session-cumulative usage. Codex's `total_token_usage` is
@@ -180,13 +185,25 @@ fn project_view(
         if matches!(turn.role, Role::Assistant) {
             let group = group_of(idx, turn);
             if current_group.as_deref() != Some(&group) {
-                lines.push(make_turn_context_line(&group, &turn.timestamp, &cwd, &model));
+                lines.push(make_turn_context_line(
+                    &group,
+                    &turn.timestamp,
+                    &cwd,
+                    &model,
+                ));
                 current_group = Some(group);
             }
         }
         let codex = codex_extras(turn).cloned().unwrap_or_default();
         let is_final_assistant = Some(idx) == last_assistant_idx;
-        emit_turn_lines(turn, &codex, is_final_assistant, &cwd, &mut lines, &mut running);
+        emit_turn_lines(
+            turn,
+            &codex,
+            is_final_assistant,
+            &cwd,
+            &mut lines,
+            &mut running,
+        );
     }
 
     Ok(crate::types::Session {
@@ -234,12 +251,7 @@ fn make_session_meta_line(
     }
 }
 
-fn make_turn_context_line(
-    turn_id: &str,
-    timestamp: &str,
-    cwd: &str,
-    model: &str,
-) -> RolloutLine {
+fn make_turn_context_line(turn_id: &str, timestamp: &str, cwd: &str, model: &str) -> RolloutLine {
     let tc = TurnContext {
         turn_id: turn_id.to_string(),
         cwd: PathBuf::from(cwd),

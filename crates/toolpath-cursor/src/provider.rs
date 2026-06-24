@@ -35,8 +35,8 @@ use crate::io::CursorIO;
 use crate::paths::PathResolver;
 use crate::reader::CONTENT_PREFIX;
 use crate::types::{
-    Bubble, CursorSession, CursorSessionMetadata, ToolFormerData, BUBBLE_TYPE_ASSISTANT,
-    BUBBLE_TYPE_USER, TOOL_EDIT_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2, tool_name_for_id,
+    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, CursorSession, CursorSessionMetadata,
+    TOOL_EDIT_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2, ToolFormerData, tool_name_for_id,
 };
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError as ConvoTraitError,
@@ -56,7 +56,9 @@ pub struct CursorConvo {
 
 impl CursorConvo {
     pub fn new() -> Self {
-        Self { io: CursorIO::new() }
+        Self {
+            io: CursorIO::new(),
+        }
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
@@ -87,9 +89,10 @@ impl CursorConvo {
         // maintains roughly newest-first. Fall back to last_activity
         // when present so this stays right even if the header order
         // ever drifts.
-        let pick = metas
-            .iter()
-            .max_by_key(|m| m.last_activity.unwrap_or_else(chrono::DateTime::<chrono::Utc>::default));
+        let pick = metas.iter().max_by_key(|m| {
+            m.last_activity
+                .unwrap_or_else(chrono::DateTime::<chrono::Utc>::default)
+        });
         match pick {
             Some(m) => Ok(Some(self.read_session(&m.id)?)),
             None => Ok(None),
@@ -178,24 +181,9 @@ fn category_by_name(name: &str) -> Option<ToolCategory> {
         // (`create_rm_files`, `save_file`, `undo_edit`, `apply_agent_diff`,
         // `reapply`), and the agent-side friendly aliases
         // `Write`/`StrReplace`/`edit`/`delete`/`Edit`.
-        "edit_file_v2"
-        | "edit_file"
-        | "edit"
-        | "Edit"
-        | "Write"
-        | "StrReplace"
-        | "delete_file"
-        | "delete"
-        | "new_edit"
-        | "new_file"
-        | "save_file"
-        | "reapply"
-        | "undo_edit"
-        | "apply_agent_diff"
-        | "create_rm_files"
-        | "add_test"
-        | "delete_test"
-        | "fix_lints"
+        "edit_file_v2" | "edit_file" | "edit" | "Edit" | "Write" | "StrReplace" | "delete_file"
+        | "delete" | "new_edit" | "new_file" | "save_file" | "reapply" | "undo_edit"
+        | "apply_agent_diff" | "create_rm_files" | "add_test" | "delete_test" | "fix_lints"
         | "fix_lints_subagent" => Some(ToolCategory::FileWrite),
 
         // ── FileRead ─────────────────────────────────────────────
@@ -252,11 +240,9 @@ fn category_by_name(name: &str) -> Option<ToolCategory> {
         // outside the local fs / shell: web fetch + search, GitHub
         // PR retrieval, and MCP tool dispatch (`call_mcp_tool`
         // proxies a model-driven call to a remote MCP server).
-        "web_search"
-        | "web_fetch"
-        | "fetch_pull_request"
-        | "fetch"
-        | "call_mcp_tool" => Some(ToolCategory::Network),
+        "web_search" | "web_fetch" | "fetch_pull_request" | "fetch" | "call_mcp_tool" => {
+            Some(ToolCategory::Network)
+        }
 
         // ── Delegation ───────────────────────────────────────────
         // `Task`/`task_v2` is the dispatch primitive. `TaskSubagent`,
@@ -335,24 +321,16 @@ impl<'a> Builder<'a> {
             self.turns.push(turn);
         }
 
-        let started_at = self
-            .session
-            .started_at()
-            .or_else(|| {
-                self.session
-                    .bubbles
-                    .first()
-                    .and_then(|b| b.created_at_utc())
-            });
+        let started_at = self.session.started_at().or_else(|| {
+            self.session
+                .bubbles
+                .first()
+                .and_then(|b| b.created_at_utc())
+        });
         let last_activity = self
             .session
             .last_activity()
-            .or_else(|| {
-                self.session
-                    .bubbles
-                    .last()
-                    .and_then(|b| b.created_at_utc())
-            });
+            .or_else(|| self.session.bubbles.last().and_then(|b| b.created_at_utc()));
 
         ConversationView {
             id: self.session.id().to_string(),
@@ -552,11 +530,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn file_mutation_for_edit(
-        &self,
-        tf: &ToolFormerData,
-        tool_id: &str,
-    ) -> Option<FileMutation> {
+    fn file_mutation_for_edit(&self, tf: &ToolFormerData, tool_id: &str) -> Option<FileMutation> {
         let params = tf.parse_params().ok()?;
         let path = params
             .get("relativeWorkspacePath")
@@ -633,14 +607,11 @@ fn result_to_text(tf: &ToolFormerData, v: &Value) -> String {
             // ids. We surface a deterministic summary so consumers
             // (audit, diff inspection) get something readable while the
             // structured file mutation carries the real payload.
-            let path = tf
-                .parse_params()
-                .ok()
-                .and_then(|p| {
-                    p.get("relativeWorkspacePath")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                });
+            let path = tf.parse_params().ok().and_then(|p| {
+                p.get("relativeWorkspacePath")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            });
             match path {
                 Some(p) => format!("edited {p}"),
                 None => "edited file".into(),
@@ -785,7 +756,10 @@ mod tests {
         assert_eq!(view.turns[1].role, Role::Assistant);
         assert_eq!(view.turns[1].text, "hi back");
         assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-7"));
-        assert_eq!(view.turns[1].token_usage.as_ref().unwrap().input_tokens, Some(10));
+        assert_eq!(
+            view.turns[1].token_usage.as_ref().unwrap().input_tokens,
+            Some(10)
+        );
 
         assert_eq!(view.turns[2].role, Role::Assistant);
         assert_eq!(view.turns[2].tool_uses.len(), 1);
@@ -920,10 +894,22 @@ mod tests {
             tool_category(15, "run_terminal_command_v2"),
             Some(ToolCategory::Shell)
         );
-        assert_eq!(tool_category(38, "edit_file_v2"), Some(ToolCategory::FileWrite));
-        assert_eq!(tool_category(40, "read_file_v2"), Some(ToolCategory::FileRead));
-        assert_eq!(tool_category(41, "ripgrep_raw_search"), Some(ToolCategory::FileSearch));
-        assert_eq!(tool_category(42, "glob_file_search"), Some(ToolCategory::FileSearch));
+        assert_eq!(
+            tool_category(38, "edit_file_v2"),
+            Some(ToolCategory::FileWrite)
+        );
+        assert_eq!(
+            tool_category(40, "read_file_v2"),
+            Some(ToolCategory::FileRead)
+        );
+        assert_eq!(
+            tool_category(41, "ripgrep_raw_search"),
+            Some(ToolCategory::FileSearch)
+        );
+        assert_eq!(
+            tool_category(42, "glob_file_search"),
+            Some(ToolCategory::FileSearch)
+        );
         assert_eq!(tool_category(48, "task_v2"), Some(ToolCategory::Delegation));
     }
 
@@ -932,7 +918,10 @@ mod tests {
         // Agent-side names from the JSONL transcript layer.
         assert_eq!(tool_category(9999, "Shell"), Some(ToolCategory::Shell));
         assert_eq!(tool_category(9999, "Write"), Some(ToolCategory::FileWrite));
-        assert_eq!(tool_category(9999, "StrReplace"), Some(ToolCategory::FileWrite));
+        assert_eq!(
+            tool_category(9999, "StrReplace"),
+            Some(ToolCategory::FileWrite)
+        );
         assert_eq!(tool_category(9999, "Read"), Some(ToolCategory::FileRead));
         assert_eq!(tool_category(9999, "Glob"), Some(ToolCategory::FileSearch));
         assert_eq!(tool_category(9999, "Grep"), Some(ToolCategory::FileSearch));
@@ -1093,7 +1082,10 @@ mod tests {
     #[test]
     fn tool_category_unknown_id_falls_through_to_name() {
         // Future numeric ids we haven't seen still classify via name.
-        assert_eq!(tool_category(7777, "edit_file_v2"), Some(ToolCategory::FileWrite));
+        assert_eq!(
+            tool_category(7777, "edit_file_v2"),
+            Some(ToolCategory::FileWrite)
+        );
         assert_eq!(tool_category(7777, "future_tool"), None);
     }
 }

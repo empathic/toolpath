@@ -173,7 +173,10 @@ fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
         .iter()
         .map(|t| reasoning_of(t.attributed_token_usage.as_ref()))
         .sum();
-    assert_eq!(attributed_reasoning, 979, "Σ attributed reasoning != cumulative");
+    assert_eq!(
+        attributed_reasoning, 979,
+        "Σ attributed reasoning != cumulative"
+    );
 
     // Per step, reasoning ⊆ output.
     for t in &view.turns {
@@ -201,7 +204,10 @@ fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
             r
         })
         .sum();
-    assert_eq!(round_reasoning, 979, "Σ round-total reasoning != cumulative");
+    assert_eq!(
+        round_reasoning, 979,
+        "Σ round-total reasoning != cumulative"
+    );
 }
 
 #[test]

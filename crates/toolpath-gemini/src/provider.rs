@@ -166,7 +166,11 @@ fn tokens_to_usage(t: &Tokens) -> TokenUsage {
         // Fold reasoning into output (additive in Gemini — billed as
         // output). None only when both output and thoughts are
         // absent/zero, mirroring the per-field Option semantics.
-        output_tokens: if generated == 0 { None } else { Some(generated) },
+        output_tokens: if generated == 0 {
+            None
+        } else {
+            Some(generated)
+        },
         cache_read_tokens: t.cached,
         cache_write_tokens: None,
         ..Default::default()
