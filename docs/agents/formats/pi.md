@@ -97,6 +97,16 @@ duplicate-id hazard. (The separate `parentSession` header field links a
 *forked/resumed* session to a parent file; that is unrelated to
 compaction.)
 
+**Projecting a foreign compaction into pi is lossy by format.** pi's entry
+can't carry everything the cross-harness IR holds, so a `Compaction` from
+another harness is coerced on the way in: `trigger` is dropped (no
+auto-vs-manual concept — see `fromHook` above), `pre_tokens` becomes `0`
+when unknown (`tokensBefore` is a mandatory `u64`), and `kept` is never
+empty — a "wholesale" boundary that kept nothing gains the
+`firstKeptEntryId` anchor. After a round-trip through pi you therefore
+can't distinguish a real `0` from an unknown pre-token count, nor a
+kept-nothing boundary from one that kept a single turn.
+
 ### Message roles
 
 `message` entries wrap an `AgentMessage` discriminated by `role`:

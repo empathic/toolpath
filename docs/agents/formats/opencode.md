@@ -525,6 +525,15 @@ there is no non-contiguous "pinned" retention here. Message and part
 ids are **not** reused across the boundary, so opencode compaction
 carries no duplicate-id hazard.
 
+**IR-projection notes.** `auto` is a plain boolean, so the IR `trigger`
+round-trips as auto / not-auto only: a boundary with no trigger (or a
+`manual` one) reads back as `Manual`, and only context-overflow boundaries
+read back as `Auto`. Each boundary's summary is the `summary.body` of *its
+own* synthetic summary message (the one opencode writes at that boundary),
+so a session with several compactions keeps a distinct summary per
+boundary — they are not collapsed onto the session's first summary.
+opencode carries no per-boundary `pre_tokens`.
+
 ## Tool catalogue
 
 A reader should not enumerate tool names — any agent config can
