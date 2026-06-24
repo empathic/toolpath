@@ -601,10 +601,14 @@ mod invariants {
     }
 
     /// Every compaction in `original` must survive: the boundary count and
-    /// each one's summary presence are preserved. `kept` is not compared —
-    /// wholesale harnesses (Codex) drop it by design, so it isn't a
-    /// cross-harness invariant. An empty summary counts as absent because
-    /// Codex always carries a (possibly empty) message.
+    /// each one's summary *text* (whitespace-normalized) are preserved.
+    /// Comparing the text — not just its presence — catches a boundary that
+    /// keeps *a* summary but the wrong one (e.g. a multi-compaction session
+    /// collapsing every boundary onto the first summary). An empty summary
+    /// normalizes to `None`, so an absent and an empty summary compare equal
+    /// — Codex always carries a (possibly empty) message, and that empty
+    /// survives as empty. `kept` is still not compared — wholesale harnesses
+    /// (Codex) drop it by design, so it isn't a cross-harness invariant.
     pub fn compaction_survives(
         original: &ConversationView,
         result: &ConversationView,
@@ -618,15 +622,18 @@ mod invariants {
             ));
             return;
         }
-        let has_summary = |c: &toolpath_convo::Compaction| {
-            c.summary.as_deref().is_some_and(|s| !s.trim().is_empty())
+        let summary = |c: &toolpath_convo::Compaction| -> Option<String> {
+            c.summary.as_deref().map(norm).filter(|s| !s.is_empty())
         };
         for (i, (a, b)) in original.compactions().zip(result.compactions()).enumerate() {
-            if has_summary(a) != has_summary(b) {
+            let (sa, sb) = (summary(a), summary(b));
+            if sa != sb {
+                let clip =
+                    |s: &Option<String>| s.as_deref().map(|t| t.chars().take(80).collect::<String>());
                 failures.push(format!(
-                    "compaction {i} summary presence diverged: first={} second={}",
-                    has_summary(a),
-                    has_summary(b)
+                    "compaction {i} summary diverged:\n      first:  {:?}\n      second: {:?}",
+                    clip(&sa),
+                    clip(&sb)
                 ));
             }
         }

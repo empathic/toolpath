@@ -188,10 +188,13 @@ struct Builder<'a> {
     /// `before` of the next turn's snapshot pair so intermediate state
     /// captures correctly.
     prev_snapshot_after: Option<String>,
-    /// Text of the session's synthetic summary message (the condensed
-    /// prefix opencode writes at a compaction), if one exists. Used as
-    /// every compaction's `summary`. Computed once up front.
-    summary_text: Option<String>,
+    /// Items index of the most recently emitted compaction boundary that
+    /// is still awaiting its summary. opencode condenses each compaction's
+    /// pre-boundary prefix into a synthetic summary-bearing user message at
+    /// the boundary; the next such message's `summary.body` is *that*
+    /// compaction's summary. Tracked per-boundary (not session-global) so a
+    /// session with several compactions keeps each one's distinct summary.
+    pending_compaction_idx: Option<usize>,
 }
 
 impl<'a> Builder<'a> {
@@ -206,7 +209,7 @@ impl<'a> Builder<'a> {
             total_usage_set: false,
             snapshot_repo: None,
             prev_snapshot_after: None,
-            summary_text: session_summary_text(session),
+            pending_compaction_idx: None,
         }
     }
 
@@ -250,10 +253,26 @@ impl<'a> Builder<'a> {
             parent_id: self.last_turn_id.clone(),
             timestamp: millis_to_iso(part.time_created),
             trigger,
-            summary: self.summary_text.clone(),
+            // Filled in by `attach_pending_summary` from this boundary's own
+            // summary message (the next summary-bearing user message), not a
+            // single session-global summary shared across boundaries.
+            summary: None,
             pre_tokens: None,
             kept,
         }));
+        self.pending_compaction_idx = Some(self.items.len() - 1);
+    }
+
+    /// Attach `body` to the most recent compaction boundary still awaiting a
+    /// summary, then clear the pending marker so the next boundary claims its
+    /// own. An orphan summary (no boundary pending) is ignored, matching the
+    /// prior behavior of never surfacing a summary message as a turn.
+    fn attach_pending_summary(&mut self, body: String) {
+        if let Some(idx) = self.pending_compaction_idx.take()
+            && let Some(Item::Compaction(c)) = self.items.get_mut(idx)
+        {
+            c.summary = Some(body);
+        }
     }
 
     fn build_with_resolver(mut self, resolver: &PathResolver) -> ConversationView {
@@ -335,7 +354,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn handle_user_message(&mut self, msg: &Message, _u: &UserMessage) {
+    fn handle_user_message(&mut self, msg: &Message, u: &UserMessage) {
         let text = concat_text_parts(&msg.parts);
 
         // A compaction marker can ride on a user message (opencode writes a
@@ -345,6 +364,20 @@ impl<'a> Builder<'a> {
             if let PartData::Compaction(c) = &p.data {
                 self.push_compaction(p, c);
             }
+        }
+
+        // opencode condenses each compaction's pre-boundary prefix into a
+        // synthetic user message whose `summary.body` holds the summary text.
+        // Pair it with the boundary still awaiting one — whether the body
+        // rides on the compaction-bearing message itself or the immediately
+        // following synthetic message.
+        if let Some(body) = u
+            .summary
+            .as_ref()
+            .and_then(|s| s.body.as_deref())
+            .filter(|b| !b.is_empty())
+        {
+            self.attach_pending_summary(body.to_string());
         }
 
         // Skip an empty user turn when the message carried only a
@@ -616,26 +649,6 @@ impl<'a> Builder<'a> {
 
         out
     }
-}
-
-/// Text of the session's synthetic compaction-summary message, if any.
-///
-/// At a compaction, opencode condenses the prior prefix into a synthetic
-/// user message and stores the condensed text in that message's
-/// `summary.body`. When such a message exists, its body is the natural
-/// `Compaction.summary`. Most small sessions have none (the surrounding
-/// messages still carry the real content), so this returns `None`.
-fn session_summary_text(session: &Session) -> Option<String> {
-    session.messages.iter().find_map(|m| {
-        let MessageData::User(u) = &m.data else {
-            return None;
-        };
-        u.summary
-            .as_ref()
-            .and_then(|s| s.body.as_ref())
-            .filter(|b| !b.is_empty())
-            .cloned()
-    })
 }
 
 fn concat_text_parts(parts: &[Part]) -> String {
@@ -1249,6 +1262,52 @@ mod tests {
         assert!(matches!(view.items[0], Item::Turn(ref t) if t.role == Role::User));
         assert!(matches!(view.items[1], Item::Turn(ref t) if t.role == Role::Assistant));
         assert!(matches!(view.items[2], Item::Compaction(_)));
+    }
+
+    #[test]
+    fn multiple_compactions_keep_distinct_summaries() {
+        // Two boundaries, each followed by its own synthetic summary
+        // message. Each compaction must carry ITS OWN summary, not a single
+        // session-global one stamped onto every boundary — the regression
+        // this guards (a multi-compaction session collapsing both summaries
+        // onto the first).
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,9,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,9);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('mu','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('ma','s',2,2,'{"parentID":"mu","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":2}}'),
+              ('mc1','s',3,3,'{"role":"user","time":{"created":3},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('ms1','s',4,4,'{"role":"user","time":{"created":4},"agent":"b","model":{"providerID":"p","modelID":"m"},"summary":{"body":"FIRST compaction summary"}}'),
+              ('mu2','s',5,5,'{"role":"user","time":{"created":5},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('ma2','s',6,6,'{"parentID":"mu2","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":6}}'),
+              ('mc2','s',7,7,'{"role":"user","time":{"created":7},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('ms2','s',8,8,'{"role":"user","time":{"created":8},"agent":"b","model":{"providerID":"p","modelID":"m"},"summary":{"body":"SECOND compaction summary — distinct and longer"}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('pu','mu','s',1,1,'{"type":"text","text":"do the thing"}'),
+              ('pa','ma','s',2,2,'{"type":"text","text":"did it"}'),
+              ('pc1','mc1','s',3,3,'{"type":"compaction","auto":true,"overflow":false,"tailStartId":"mu"}'),
+              ('pu2','mu2','s',5,5,'{"type":"text","text":"do another thing"}'),
+              ('pa2','ma2','s',6,6,'{"type":"text","text":"did it again"}'),
+              ('pc2','mc2','s',7,7,'{"type":"compaction","auto":false,"overflow":false,"tailStartId":"mu2"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+
+        let compactions: Vec<_> = view.compactions().collect();
+        assert_eq!(compactions.len(), 2, "expected two boundaries");
+        assert_eq!(
+            compactions[0].summary.as_deref(),
+            Some("FIRST compaction summary"),
+            "first boundary keeps its own summary"
+        );
+        assert_eq!(
+            compactions[1].summary.as_deref(),
+            Some("SECOND compaction summary — distinct and longer"),
+            "second boundary keeps ITS OWN summary, not the first's"
+        );
     }
 
     #[test]

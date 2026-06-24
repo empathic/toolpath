@@ -327,8 +327,8 @@ fn build_user_message(
 /// opencode writes a compaction as a synthetic user message carrying a
 /// single `compaction` part. We mirror that: one user message whose only
 /// part is a [`CompactionPart`]. When the boundary has a `summary`, we
-/// also emit the synthetic summary user message the forward path reads
-/// from `UserMessage.summary.body` (see `session_summary_text`).
+/// also emit, immediately after, the synthetic summary user message the
+/// forward path pairs with this boundary via its `UserMessage.summary.body`.
 fn build_compaction_messages(
     c: &Compaction,
     session_id: &str,
