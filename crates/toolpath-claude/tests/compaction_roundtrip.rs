@@ -16,15 +16,13 @@
 //!   - The conversation can be re-projected to Claude JSONL and
 //!     re-parsed by `ConversationReader` without error.
 //!
-//! Known limitation (documented, not asserted): the `compact_boundary`
-//! marker entry itself has no `message` field, so the current
-//! provider drops it on the floor going Claude → IR. The synthetic
-//! `isCompactSummary: true` summary entry is currently surfaced as a
-//! plain `Role::User` turn — `toolpath-claude` does not yet recognize
-//! the `isCompactSummary` flag. Both are acceptable losses for "good
-//! UX" today (the compacted summary text still lands in the
-//! transcript), but if/when we tighten this, this test gets
-//! tightened with it.
+//! Boundary handling — asserted in depth by `compaction_view.rs` — is now
+//! first-class: the `compact_boundary` marker is read as an
+//! `Item::Compaction`, and the synthetic `isCompactSummary: true` entry is
+//! folded into that boundary's `summary` rather than surfaced as a
+//! `Role::User` turn. This test covers the complement: the *surrounding*
+//! content — the pre- and post-compact turns and their tool-call pairs —
+//! surviving the derive → project → re-read round-trip intact.
 
 use std::path::{Path, PathBuf};
 
