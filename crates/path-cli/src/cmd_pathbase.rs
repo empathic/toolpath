@@ -407,13 +407,25 @@ pub(crate) fn anon_graphs_post(base_url: &str, document_json: &str) -> Result<An
                 url: inner.url,
             })
         }
-        Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
-            413 => bail!(
-                "anon upload exceeds the size cap — log in (`path auth login`) for a listable upload without that limit"
-            ),
-            429 => bail!("anon upload rate-limited; retry shortly or log in"),
-            code => bail!("anon upload failed (HTTP {code})"),
-        },
+        Err(pathbase_client::Error::ErrorResponse(resp)) => {
+            let code = resp.status().as_u16();
+            match code {
+                413 => bail!(
+                    "anon upload exceeds the size cap — log in (`path auth login`) for a listable upload without that limit"
+                ),
+                429 => bail!("anon upload rate-limited; retry shortly or log in"),
+                _ => {
+                    // Surface the server's `ApiErrorResponse.error` (e.g. the
+                    // 400 naming duplicate step IDs) instead of just the code.
+                    let msg = resp.into_inner().error;
+                    if msg.is_empty() {
+                        bail!("anon upload failed (HTTP {code})")
+                    } else {
+                        bail!("anon upload failed (HTTP {code}): {msg}")
+                    }
+                }
+            }
+        }
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
             let status = resp.status();
             let body = block_on(resp.text()).unwrap_or_default();
@@ -467,14 +479,25 @@ pub(crate) fn graphs_post(
                 visibility: inner.visibility,
             })
         }
-        Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
-            401 => bail!(
-                "{base_url} rejected your stored credentials (HTTP 401). \
-                 Run `path auth login --url {base_url}` to authenticate against this server, \
-                 or pass `--anon` to upload anonymously."
-            ),
-            code => bail!("upload to {owner}/{repo} failed (HTTP {code})"),
-        },
+        Err(pathbase_client::Error::ErrorResponse(resp)) => {
+            let code = resp.status().as_u16();
+            if code == 401 {
+                bail!(
+                    "{base_url} rejected your stored credentials (HTTP 401). \
+                     Run `path auth login --url {base_url}` to authenticate against this server, \
+                     or pass `--anon` to upload anonymously."
+                )
+            }
+            // Declared error responses (e.g. the 400 from duplicate step IDs)
+            // carry an `ApiErrorResponse { code, error }` body — surface the
+            // human-readable `error` rather than just the status code.
+            let msg = resp.into_inner().error;
+            if msg.is_empty() {
+                bail!("upload to {owner}/{repo} failed (HTTP {code})")
+            } else {
+                bail!("upload to {owner}/{repo} failed (HTTP {code}): {msg}")
+            }
+        }
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
             let status = resp.status();
             let body = block_on(resp.text()).unwrap_or_default();
