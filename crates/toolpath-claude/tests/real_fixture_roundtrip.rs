@@ -40,7 +40,7 @@ fn load_fixture_view() -> ConversationView {
 }
 
 fn ir_roundtrip(view: &ConversationView) -> ConversationView {
-    let path = derive_path(view, &DeriveConfig::default()).expect("derive");
+    let path = derive_path(view, &DeriveConfig::default());
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");
@@ -354,8 +354,7 @@ fn cache_roundtrip_preserves_line_counts_per_type() {
             include_thinking: false,
             ..Default::default()
         },
-    )
-    .expect("derive");
+    );
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize cached graph");
     let back = Graph::from_json(&json).expect("re-parse cached graph");

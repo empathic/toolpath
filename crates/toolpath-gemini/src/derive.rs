@@ -23,7 +23,7 @@ pub struct DeriveConfig {
 pub fn derive_path(
     conversation: &Conversation,
     config: &DeriveConfig,
-) -> toolpath_convo::Result<Path> {
+) -> Path {
     let view = to_view(conversation);
     let prefix: String = view.id.chars().take(8).collect();
     let base_uri = config.project_path.as_ref().map(|p| {
@@ -46,7 +46,7 @@ pub fn derive_path(
 pub fn derive_project(
     conversations: &[Conversation],
     config: &DeriveConfig,
-) -> toolpath_convo::Result<Vec<Path>> {
+) -> Vec<Path> {
     conversations
         .iter()
         .map(|c| derive_path(c, config))
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn derive_path_basic_shape() {
         let convo = make_convo();
-        let path = derive_path(&convo, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&convo, &DeriveConfig::default());
         assert!(path.path.id.starts_with("path-gemini-cli-"));
         let base = path.path.base.as_ref().expect("base");
         assert_eq!(base.uri, "file:///tmp/proj");
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn derive_path_producer_in_meta_extra() {
         let convo = make_convo();
-        let path = derive_path(&convo, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&convo, &DeriveConfig::default());
         let producer = path.meta.as_ref().unwrap().extra.get("producer").unwrap();
         assert_eq!(producer["name"], "gemini-cli");
     }
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn derive_path_actors_populated() {
         let convo = make_convo();
-        let path = derive_path(&convo, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&convo, &DeriveConfig::default());
         let actors = path.meta.as_ref().unwrap().actors.as_ref().unwrap();
         assert!(actors.contains_key("human:user"));
         assert!(actors.contains_key("agent:gemini-3-flash-preview"));
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn derive_path_validates_as_single_path_graph() {
         let convo = make_convo();
-        let path = derive_path(&convo, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&convo, &DeriveConfig::default());
         let doc = Graph::from_path(path);
         let json = doc.to_json().unwrap();
         let parsed = Graph::from_json(&json).unwrap();

@@ -22,7 +22,7 @@ pub struct DeriveConfig {
 }
 
 /// Derive a [`Path`] from an opencode [`Session`].
-pub fn derive_path(session: &Session, config: &DeriveConfig) -> toolpath_convo::Result<Path> {
+pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
     derive_path_with_resolver(session, config, &PathResolver::new())
 }
 
@@ -32,7 +32,7 @@ pub fn derive_path_with_resolver(
     session: &Session,
     config: &DeriveConfig,
     resolver: &PathResolver,
-) -> toolpath_convo::Result<Path> {
+) -> Path {
     let view = if config.no_snapshot_diffs {
         to_view(session)
     } else {
@@ -57,7 +57,7 @@ pub fn derive_path_with_resolver(
 pub fn derive_project(
     sessions: &[Session],
     config: &DeriveConfig,
-) -> toolpath_convo::Result<Vec<Path>> {
+) -> Vec<Path> {
     sessions.iter().map(|s| derive_path(s, config)).collect()
 }
 
@@ -146,8 +146,7 @@ mod tests {
                 ..Default::default()
             },
             &resolver,
-        )
-        .expect("derive");
+        );
 
         assert!(p.path.id.starts_with("path-opencode-"));
         assert_eq!(p.path.base.as_ref().unwrap().uri, "file:///tmp/proj");
@@ -182,8 +181,7 @@ mod tests {
                 ..Default::default()
             },
             &resolver,
-        )
-        .expect("derive");
+        );
         let producer = p.meta.as_ref().unwrap().extra.get("producer").unwrap();
         assert_eq!(producer["name"], "opencode");
         assert_eq!(producer["version"], "0.10.0");
@@ -200,8 +198,7 @@ mod tests {
                 ..Default::default()
             },
             &resolver,
-        )
-        .expect("derive");
+        );
         // The assistant turn's `write` tool produces a sibling `file.write`
         // entry via the tool-input fallback (no snapshot repo on disk).
         let file_step = p
@@ -228,8 +225,7 @@ mod tests {
                 ..Default::default()
             },
             &resolver,
-        )
-        .expect("derive");
+        );
         let doc = Graph::from_path(p);
         let json = doc.to_json().unwrap();
         let parsed = Graph::from_json(&json).unwrap();

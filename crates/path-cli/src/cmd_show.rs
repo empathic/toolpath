@@ -116,7 +116,7 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 project_path: Some(project),
                 include_thinking: false,
             };
-            Ok(toolpath_claude::derive::derive_path(&convo, &cfg)?)
+            Ok(toolpath_claude::derive::derive_path(&convo, &cfg))
         }
         ShowSource::Gemini { project, session } => {
             let manager = toolpath_gemini::GeminiConvo::new();
@@ -127,7 +127,7 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 project_path: Some(project),
                 include_thinking: false,
             };
-            Ok(toolpath_gemini::derive::derive_path(&convo, &cfg)?)
+            Ok(toolpath_gemini::derive::derive_path(&convo, &cfg))
         }
         ShowSource::Codex {
             session,
@@ -138,7 +138,7 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_codex::derive::DeriveConfig { project_path: None };
-            Ok(toolpath_codex::derive::derive_path(&s, &cfg)?)
+            Ok(toolpath_codex::derive::derive_path(&s, &cfg))
         }
         ShowSource::Copilot {
             session,
@@ -164,7 +164,7 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 &s,
                 &cfg,
                 manager.resolver(),
-            )?)
+            ))
         }
         ShowSource::Cursor {
             session,
@@ -175,7 +175,7 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_cursor::DeriveConfig::default();
-            Ok(toolpath_cursor::derive_path(&s, &cfg)?)
+            Ok(toolpath_cursor::derive_path(&s, &cfg))
         }
         ShowSource::Pi {
             project,
@@ -192,7 +192,7 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 .read_session(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_pi::DeriveConfig::default();
-            Ok(toolpath_pi::derive::derive_path(&s, &cfg)?)
+            Ok(toolpath_pi::derive::derive_path(&s, &cfg))
         }
     }
 }

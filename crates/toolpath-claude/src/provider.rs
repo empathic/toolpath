@@ -488,10 +488,12 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // Duplicate-uuid stripping. When Claude compacts, it re-emits a block of
     // earlier tool_use/tool_result entries — already-seen uuids — that it
     // "pins" into the post-compaction context, immediately before the
-    // boundary. We keep only the FIRST occurrence of each uuid; the
-    // re-emitted duplicates are dropped so step ids stay unique (otherwise
-    // `derive_path` errors with DuplicateStepId). The stripped uuids since the
-    // last boundary are the "replayed" set, attached to the next boundary's
+    // boundary. We keep only the FIRST occurrence of each uuid and capture the
+    // re-emitted ones as the boundary's `kept` set rather than surfacing them
+    // as turns. (`derive_path` would otherwise dedupe them itself — dropping a
+    // byte-identical re-emission, renaming a changed one — but doing it here is
+    // what lets the boundary record `kept`.) The stripped uuids since the last
+    // boundary are the "replayed" set, attached to the next boundary's
     // `Compaction.kept`.
     let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut replayed_since_boundary: Vec<String> = Vec::new();

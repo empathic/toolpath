@@ -46,7 +46,7 @@ fn roundtrip_claude_conversation() {
         project_path: Some("/test/project".to_string()),
         include_thinking: true,
     };
-    let path = derive_path(&conversation, &config).expect("derive");
+    let path = derive_path(&conversation, &config);
 
     // Step 3: Extract a ConversationView from the Path.
     let extracted_view = extract_conversation(&path);

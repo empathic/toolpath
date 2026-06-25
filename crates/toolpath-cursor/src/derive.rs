@@ -23,7 +23,7 @@ pub struct DeriveConfig {
 }
 
 /// Derive a [`Path`] from a Cursor [`CursorSession`].
-pub fn derive_path(session: &CursorSession, config: &DeriveConfig) -> toolpath_convo::Result<Path> {
+pub fn derive_path(session: &CursorSession, config: &DeriveConfig) -> Path {
     let view = session_to_view(session);
     let base_uri = config.project_path.as_ref().map(|p| {
         if p.starts_with('/') {
@@ -48,7 +48,7 @@ pub fn derive_path(session: &CursorSession, config: &DeriveConfig) -> toolpath_c
 pub fn derive_project(
     sessions: &[CursorSession],
     config: &DeriveConfig,
-) -> toolpath_convo::Result<Vec<Path>> {
+) -> Vec<Path> {
     sessions.iter().map(|s| derive_path(s, config)).collect()
 }
 
@@ -79,7 +79,7 @@ mod tests {
     fn derive_basic_shape() {
         let (_t, mgr) = setup();
         let session = mgr.read_session("c1").unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
 
         assert!(path.path.id.starts_with("path-cursor-"));
         assert_eq!(path.path.base.as_ref().unwrap().uri, "file:///p");
@@ -103,7 +103,7 @@ mod tests {
     fn derive_emits_producer() {
         let (_t, mgr) = setup();
         let session = mgr.read_session("c1").unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         let producer = path.meta.as_ref().unwrap().extra.get("producer").unwrap();
         assert_eq!(producer["name"], "cursor");
         assert_eq!(producer["version"], "cursor-agent");
@@ -113,7 +113,7 @@ mod tests {
     fn derive_emits_file_write_with_real_diff() {
         let (_t, mgr) = setup();
         let session = mgr.read_session("c1").unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         let file_step = path
             .steps
             .iter()
@@ -134,7 +134,7 @@ mod tests {
     fn derive_emits_path_kind_marker() {
         let (_t, mgr) = setup();
         let session = mgr.read_session("c1").unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         let kind = path.meta.as_ref().unwrap().kind.as_deref().unwrap();
         assert_eq!(kind, toolpath::v1::PATH_KIND_AGENT_CODING_SESSION);
     }
@@ -143,7 +143,7 @@ mod tests {
     fn derive_validates_as_single_path_graph() {
         let (_t, mgr) = setup();
         let session = mgr.read_session("c1").unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         let doc = Graph::from_path(path);
         let json = doc.to_json().unwrap();
         let parsed = Graph::from_json(&json).unwrap();
@@ -162,8 +162,7 @@ mod tests {
                 title: Some("explicit".into()),
                 ..Default::default()
             },
-        )
-        .expect("derive");
+        );
         assert_eq!(path.meta.unwrap().title.unwrap(), "explicit");
     }
 }

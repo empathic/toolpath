@@ -543,7 +543,7 @@ fn parse_opencode_export(json: &str) -> toolpath_opencode::Session {
 }
 
 fn ir_roundtrip(view: &ConversationView) -> ConversationView {
-    let path = derive_path(view, &DeriveConfig::default()).expect("derive");
+    let path = derive_path(view, &DeriveConfig::default());
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");

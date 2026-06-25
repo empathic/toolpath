@@ -33,7 +33,7 @@ fn load_view() -> ConversationView {
 }
 
 fn ir_roundtrip(view: &ConversationView) -> ConversationView {
-    let path = derive_path(view, &DeriveConfig::default()).expect("derive");
+    let path = derive_path(view, &DeriveConfig::default());
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");
@@ -238,8 +238,7 @@ fn re_emission_is_stripped_and_kept_round_trips() {
 
     // Forward: derive_path must NOT error on duplicate step ids — the
     // re-emitted (duplicate-uuid) entries were stripped during `to_view`.
-    let path = derive_path(&view, &DeriveConfig::default())
-        .expect("derive_path must succeed (no duplicate step ids)");
+    let path = derive_path(&view, &DeriveConfig::default());
     let mut ids = HashSet::new();
     for step in &path.steps {
         assert!(
@@ -271,7 +270,7 @@ fn re_emission_is_stripped_and_kept_round_trips() {
     assert_eq!(after_c.kept, c.kept, "kept diverged after projection");
 
     let path2 =
-        derive_path(&after, &DeriveConfig::default()).expect("re-read derive_path must succeed");
+        derive_path(&after, &DeriveConfig::default());
     let mut ids2 = HashSet::new();
     for step in &path2.steps {
         assert!(

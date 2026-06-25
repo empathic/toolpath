@@ -43,7 +43,7 @@ fn roundtrip(source: &Conversation) -> (ConversationView, Conversation, Path) {
     let view_forward: ConversationView = to_view(source);
 
     // Serialize & re-parse the Path to simulate on-disk storage.
-    let path = derive_path(&view_forward, &DeriveConfig::default()).expect("derive");
+    let path = derive_path(&view_forward, &DeriveConfig::default());
     let doc = Graph::from_path(path.clone());
     let json = serde_json::to_string(&doc).expect("serialize Graph");
     let back: Graph = serde_json::from_str(&json).expect("parse Graph");

@@ -75,8 +75,7 @@ fn fixture_derives_to_valid_path() {
             project_path: Some("/Users/ben/empathic/oss/toolpath".into()),
             include_thinking: false,
         },
-    )
-    .expect("derive");
+    );
     let doc = toolpath::v1::Graph::from_path(path);
     let json = doc.to_json().unwrap();
     // Roundtrip verifies serde is well-formed

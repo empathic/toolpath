@@ -1423,7 +1423,7 @@ mod tests {
             ..Default::default()
         };
 
-        let path = crate::derive::derive_path(&source, &DeriveConfig::default()).unwrap();
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
         let view = extract_conversation(&path);
 
         // Item order [Turn, Compaction, Turn] is preserved.

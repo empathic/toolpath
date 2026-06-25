@@ -15,7 +15,7 @@ use toolpath_convo::DeriveConfig;
 ///
 /// Thin wrapper: converts the session to a provider-agnostic
 /// `ConversationView` and hands off to [`toolpath_convo::derive_path`].
-pub fn derive_path(session: &PiSession, config: &DeriveConfig) -> toolpath_convo::Result<Path> {
+pub fn derive_path(session: &PiSession, config: &DeriveConfig) -> Path {
     toolpath_convo::derive_path(&session_to_view(session), config)
 }
 
@@ -24,11 +24,7 @@ pub fn derive_path(session: &PiSession, config: &DeriveConfig) -> toolpath_convo
 /// Each session becomes one `PathOrRef::Path` entry in the graph. `title`
 /// becomes `graph.meta.title`; empty input produces a graph with no paths
 /// and `graph.id == "graph-pi-empty"`.
-pub fn derive_graph(
-    sessions: &[PiSession],
-    title: Option<&str>,
-    config: &DeriveConfig,
-) -> crate::Result<Graph> {
+pub fn derive_graph(sessions: &[PiSession], title: Option<&str>, config: &DeriveConfig) -> Graph {
     let id_suffix = sessions
         .first()
         .map(|s| s.header.id.chars().take(8).collect::<String>())
@@ -37,19 +33,19 @@ pub fn derive_graph(
 
     let paths: Vec<PathOrRef> = sessions
         .iter()
-        .map(|s| Ok(PathOrRef::Path(Box::new(derive_path(s, config)?))))
-        .collect::<crate::Result<_>>()?;
+        .map(|s| PathOrRef::Path(Box::new(derive_path(s, config))))
+        .collect();
 
     let meta = title.map(|t| GraphMeta {
         title: Some(t.to_string()),
         ..Default::default()
     });
 
-    Ok(Graph {
+    Graph {
         graph: GraphIdentity { id: graph_id },
         paths,
         meta,
-    })
+    }
 }
 
 /// Derive a [`Graph`] from all sessions in a project.
@@ -60,7 +56,7 @@ pub fn derive_project(
     config: &DeriveConfig,
 ) -> crate::Result<Graph> {
     let sessions = manager.read_all_sessions(project)?;
-    derive_graph(&sessions, title, config)
+    Ok(derive_graph(&sessions, title, config))
 }
 
 #[cfg(test)]
@@ -103,7 +99,7 @@ mod tests {
     #[test]
     fn test_derive_path_wraps_provider() {
         let session = make_session("abcd1234xxxx");
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         assert_eq!(path.steps.len(), 1);
         assert!(
             path.path.id.starts_with("path-pi-"),
@@ -124,13 +120,13 @@ mod tests {
             path_id: Some("custom-id".into()),
             ..Default::default()
         };
-        let path = derive_path(&session, &cfg).expect("derive");
+        let path = derive_path(&session, &cfg);
         assert_eq!(path.path.id, "custom-id");
     }
 
     #[test]
     fn test_derive_graph_empty_sessions() {
-        let g = derive_graph(&[], None, &DeriveConfig::default()).expect("derive");
+        let g = derive_graph(&[], None, &DeriveConfig::default());
         assert!(g.paths.is_empty());
         assert_eq!(g.graph.id, "graph-pi-empty");
     }
@@ -139,7 +135,7 @@ mod tests {
     fn test_derive_graph_single_session() {
         let s = make_session("sess-alpha");
         let g =
-            derive_graph(std::slice::from_ref(&s), None, &DeriveConfig::default()).expect("derive");
+            derive_graph(std::slice::from_ref(&s), None, &DeriveConfig::default());
         assert_eq!(g.paths.len(), 1);
         assert!(matches!(&g.paths[0], PathOrRef::Path(_)));
     }
@@ -148,14 +144,14 @@ mod tests {
     fn test_derive_graph_multiple_sessions() {
         let s1 = make_session("sess-one");
         let s2 = make_session("sess-two");
-        let g = derive_graph(&[s1, s2], None, &DeriveConfig::default()).expect("derive");
+        let g = derive_graph(&[s1, s2], None, &DeriveConfig::default());
         assert_eq!(g.paths.len(), 2);
     }
 
     #[test]
     fn test_derive_graph_with_title() {
         let s = make_session("sess-alpha");
-        let g = derive_graph(&[s], Some("My Release"), &DeriveConfig::default()).expect("derive");
+        let g = derive_graph(&[s], Some("My Release"), &DeriveConfig::default());
         assert_eq!(
             g.meta.as_ref().and_then(|m| m.title.as_deref()),
             Some("My Release")
@@ -165,7 +161,7 @@ mod tests {
     #[test]
     fn test_derive_graph_no_title() {
         let s = make_session("sess-alpha");
-        let g = derive_graph(&[s], None, &DeriveConfig::default()).expect("derive");
+        let g = derive_graph(&[s], None, &DeriveConfig::default());
         assert!(g.meta.is_none());
     }
 }

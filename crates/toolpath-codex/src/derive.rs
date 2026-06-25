@@ -27,7 +27,7 @@ pub struct DeriveConfig {
 }
 
 /// Derive a [`Path`] from a Codex [`Session`].
-pub fn derive_path(session: &Session, config: &DeriveConfig) -> toolpath_convo::Result<Path> {
+pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
     let view = to_view(session);
     let prefix: String = view.id.chars().take(8).collect();
     let base_uri = config.project_path.as_ref().map(|p| {
@@ -49,7 +49,7 @@ pub fn derive_path(session: &Session, config: &DeriveConfig) -> toolpath_convo::
 pub fn derive_project(
     sessions: &[Session],
     config: &DeriveConfig,
-) -> toolpath_convo::Result<Vec<Path>> {
+) -> Vec<Path> {
     sessions.iter().map(|s| derive_path(s, config)).collect()
 }
 
@@ -89,7 +89,7 @@ mod tests {
     fn derive_path_basic() {
         let (_t, mgr, id) = fixture_session(&minimal_body());
         let session = mgr.read_session(&id).unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
 
         assert!(path.path.id.starts_with("path-codex-"));
         assert_eq!(path.path.base.as_ref().unwrap().uri, "file:///tmp/proj");
@@ -107,7 +107,7 @@ mod tests {
     fn derive_path_actors_populated() {
         let (_t, mgr, id) = fixture_session(&minimal_body());
         let session = mgr.read_session(&id).unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         let actors = path.meta.as_ref().unwrap().actors.as_ref().unwrap();
         assert!(actors.contains_key("human:user"));
         assert!(actors.contains_key("agent:gpt-5.4"));
@@ -117,7 +117,7 @@ mod tests {
     fn derive_path_producer_in_canonical_slot() {
         let (_t, mgr, id) = fixture_session(&minimal_body());
         let session = mgr.read_session(&id).unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         let meta_extra = &path.meta.as_ref().unwrap().extra;
         // Producer (originator + cli_version) lives in its canonical slot.
         let producer = meta_extra
@@ -140,7 +140,7 @@ mod tests {
     fn derive_path_apply_patch_emits_file_write_sibling() {
         let (_t, mgr, id) = fixture_session(&minimal_body());
         let session = mgr.read_session(&id).unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         // The assistant turn that ran `apply_patch` carries a sibling
         // `file.write` entry keyed by the file path.
         let file_step = path
@@ -163,7 +163,7 @@ mod tests {
     fn derive_path_validates_as_single_path_graph() {
         let (_t, mgr, id) = fixture_session(&minimal_body());
         let session = mgr.read_session(&id).unwrap();
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         let doc = Graph::from_path(path);
         let json = doc.to_json().unwrap();
         let parsed = Graph::from_json(&json).unwrap();
@@ -177,7 +177,7 @@ mod tests {
         let (_t, mgr, id) = fixture_session(&minimal_body());
         let s1 = mgr.read_session(&id).unwrap();
         let paths =
-            derive_project(std::slice::from_ref(&s1), &DeriveConfig::default()).expect("derive");
+            derive_project(std::slice::from_ref(&s1), &DeriveConfig::default());
         assert_eq!(paths.len(), 1);
     }
 }

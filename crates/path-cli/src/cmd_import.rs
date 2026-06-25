@@ -421,7 +421,7 @@ fn derive_claude_with_manager(
                 .read_all_conversations(&p)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = make_config(&p);
-            return wrap_paths_claude(toolpath_claude::derive::derive_project(&convos, &cfg)?);
+            return wrap_paths_claude(toolpath_claude::derive::derive_project(&convos, &cfg));
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -438,7 +438,7 @@ fn derive_claude_with_manager(
                     let cfg = make_config(&p);
                     return wrap_paths_claude(vec![toolpath_claude::derive::derive_path(
                         &convo, &cfg,
-                    )?]);
+                    )]);
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -450,7 +450,7 @@ fn derive_claude_with_manager(
                 let cfg = make_config(&p);
                 return wrap_paths_claude(vec![toolpath_claude::derive::derive_path(
                     &convo, &cfg,
-                )?]);
+                )]);
             }
         }
         (None, _, _) => {
@@ -477,7 +477,7 @@ fn derive_claude_with_manager(
             .read_conversation(project_path, session_id)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         let cfg = make_config(project_path);
-        paths.push(toolpath_claude::derive::derive_path(&convo, &cfg)?);
+        paths.push(toolpath_claude::derive::derive_path(&convo, &cfg));
     }
     wrap_paths_claude(paths)
 }
@@ -494,7 +494,7 @@ pub(crate) fn derive_claude_session(project: &str, session: &str) -> Result<Deri
     let convo = manager
         .read_conversation(project, session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let path = toolpath_claude::derive::derive_path(&convo, &cfg)?;
+    let path = toolpath_claude::derive::derive_path(&convo, &cfg);
     let cache_id = make_id("claude", &path.path.id);
     Ok(DerivedDoc {
         cache_id,
@@ -646,7 +646,7 @@ fn derive_gemini_with_manager(
                 .read_all_conversations(&p)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = make_config(&p);
-            return wrap_paths_gemini(toolpath_gemini::derive::derive_project(&convos, &cfg)?);
+            return wrap_paths_gemini(toolpath_gemini::derive::derive_project(&convos, &cfg));
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -663,7 +663,7 @@ fn derive_gemini_with_manager(
                     let cfg = make_config(&p);
                     return wrap_paths_gemini(vec![toolpath_gemini::derive::derive_path(
                         &convo, &cfg,
-                    )?]);
+                    )]);
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -675,7 +675,7 @@ fn derive_gemini_with_manager(
                 let cfg = make_config(&p);
                 return wrap_paths_gemini(vec![toolpath_gemini::derive::derive_path(
                     &convo, &cfg,
-                )?]);
+                )]);
             }
         }
         (None, _, _) => {
@@ -702,7 +702,7 @@ fn derive_gemini_with_manager(
             .read_conversation(project_path, session_uuid)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         let cfg = make_config(project_path);
-        paths.push(toolpath_gemini::derive::derive_path(&convo, &cfg)?);
+        paths.push(toolpath_gemini::derive::derive_path(&convo, &cfg));
     }
     wrap_paths_gemini(paths)
 }
@@ -721,7 +721,7 @@ pub(crate) fn derive_gemini_session(
     let convo = manager
         .read_conversation(project, session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let path = toolpath_gemini::derive::derive_path(&convo, &cfg)?;
+    let path = toolpath_gemini::derive::derive_path(&convo, &cfg);
     let cache_id = make_id("gemini", &path.path.id);
     Ok(DerivedDoc {
         cache_id,
@@ -855,7 +855,7 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
             if sessions.is_empty() {
                 anyhow::bail!("No Codex sessions found in ~/.codex/sessions");
             }
-            return wrap_paths_codex(toolpath_codex::derive::derive_project(&sessions, &config)?);
+            return wrap_paths_codex(toolpath_codex::derive::derive_project(&sessions, &config));
         }
         (None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -871,7 +871,7 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
                             })?;
                         return wrap_paths_codex(vec![toolpath_codex::derive::derive_path(
                             &s, &config,
-                        )?]);
+                        )]);
                     }
                 }
             }
@@ -883,7 +883,7 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
                     .ok_or_else(|| {
                         anyhow::anyhow!("No Codex sessions found in ~/.codex/sessions")
                     })?;
-                return wrap_paths_codex(vec![toolpath_codex::derive::derive_path(&s, &config)?]);
+                return wrap_paths_codex(vec![toolpath_codex::derive::derive_path(&s, &config)]);
             }
         }
     };
@@ -893,7 +893,7 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
         let s = manager
             .read_session(sid)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        paths.push(toolpath_codex::derive::derive_path(&s, &config)?);
+        paths.push(toolpath_codex::derive::derive_path(&s, &config));
     }
     wrap_paths_codex(paths)
 }
@@ -905,7 +905,7 @@ pub(crate) fn derive_codex_session(session: &str) -> Result<DerivedDoc> {
     let s = manager
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let path = toolpath_codex::derive::derive_path(&s, &config)?;
+    let path = toolpath_codex::derive::derive_path(&s, &config);
     let cache_id = make_id("codex", &path.path.id);
     Ok(DerivedDoc {
         cache_id,
@@ -1133,7 +1133,7 @@ fn derive_opencode(
                 &s,
                 &config,
                 manager.resolver(),
-            )?)
+            ))
         };
 
         let session_ids: Vec<String> = match (session, all) {
@@ -1164,7 +1164,7 @@ fn derive_opencode(
                             &s,
                             &config,
                             manager.resolver(),
-                        )?,
+                        ),
                     ]);
                 }
             },
@@ -1193,7 +1193,7 @@ pub(crate) fn derive_opencode_session(
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let path =
-        toolpath_opencode::derive::derive_path_with_resolver(&s, &config, manager.resolver())?;
+        toolpath_opencode::derive::derive_path_with_resolver(&s, &config, manager.resolver());
     let cache_id = make_id("opencode", &path.path.id);
     Ok(DerivedDoc {
         cache_id,
@@ -1290,7 +1290,7 @@ fn derive_cursor(
                 .read_session(sid)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_cursor::DeriveConfig::default();
-            Ok(toolpath_cursor::derive_path(&s, &cfg)?)
+            Ok(toolpath_cursor::derive_path(&s, &cfg))
         };
 
         let workspace_filter = project
@@ -1362,7 +1362,7 @@ pub(crate) fn derive_cursor_session(session: &str) -> Result<DerivedDoc> {
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let cfg = toolpath_cursor::DeriveConfig::default();
-    let path = toolpath_cursor::derive_path(&s, &cfg)?;
+    let path = toolpath_cursor::derive_path(&s, &cfg);
     let cache_id = make_id("cursor", &path.path.id);
     Ok(DerivedDoc {
         cache_id,
@@ -1484,7 +1484,7 @@ fn derive_pi_with_manager(
             if sessions.is_empty() {
                 anyhow::bail!("No Pi sessions found for project: {}", p);
             }
-            let doc = toolpath_pi::derive::derive_graph(&sessions, None, &config)?;
+            let doc = toolpath_pi::derive::derive_graph(&sessions, None, &config);
             let cache_id = make_id("pi", &doc_inner_id(&doc));
             return Ok(vec![DerivedDoc { cache_id, doc }]);
         }
@@ -1501,7 +1501,7 @@ fn derive_pi_with_manager(
                             anyhow::anyhow!("No Pi sessions found for project: {}", p)
                         })?;
                     let doc =
-                        Graph::from_path(toolpath_pi::derive::derive_path(&session, &config)?);
+                        Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                     let cache_id = make_id("pi", &doc_inner_id(&doc));
                     return Ok(vec![DerivedDoc { cache_id, doc }]);
                 }
@@ -1512,7 +1512,7 @@ fn derive_pi_with_manager(
                     .most_recent_session(&p)
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No Pi sessions found for project: {}", p))?;
-                let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config)?);
+                let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                 let cache_id = make_id("pi", &doc_inner_id(&doc));
                 return Ok(vec![DerivedDoc { cache_id, doc }]);
             }
@@ -1540,7 +1540,7 @@ fn derive_pi_with_manager(
         let session = manager
             .read_session(project_path, session_id)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config)?);
+        let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
         let cache_id = make_id("pi", &doc_inner_id(&doc));
         docs.push(DerivedDoc { cache_id, doc });
     }
@@ -1563,7 +1563,7 @@ pub(crate) fn derive_pi_session(
     let session = manager
         .read_session(project, session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config)?);
+    let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
     let cache_id = make_id("pi", &doc_inner_id(&doc));
     Ok(DerivedDoc { cache_id, doc })
 }

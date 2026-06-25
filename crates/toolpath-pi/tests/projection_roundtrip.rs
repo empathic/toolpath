@@ -45,7 +45,7 @@ fn roundtrip(source: &PiSession) -> (ConversationView, PiSession, Path) {
     let view_forward: ConversationView = session_to_view(source);
 
     // Serialize & re-parse the Path to simulate on-disk storage.
-    let path = derive_path(&view_forward, &DeriveConfig::default()).expect("derive");
+    let path = derive_path(&view_forward, &DeriveConfig::default());
     let graph = Graph::from_path(path);
     let json = graph.to_json().expect("serialize Graph");
     let back = Graph::from_json(&json).expect("parse Graph");

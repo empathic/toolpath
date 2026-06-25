@@ -478,10 +478,11 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
 
     // Gemini reuses the same wire `id` across paired messages (a user
     // prompt and the assistant response it triggered can share one id),
-    // so turn ids are not unique as-is. `derive_path` now enforces unique
-    // step ids (keep-first) and would silently drop the collisions, so
-    // disambiguate here by suffixing repeats with `#N` before the parent
-    // chain is built (the chain reads the already-uniquified ids).
+    // so turn ids are not unique as-is. Disambiguate here by suffixing
+    // repeats with `#N` *before* the parent chain is built, so the chain
+    // links to the right turn. (`derive_path` also re-IDs same-id
+    // collisions, but only after parents are resolved on the colliding
+    // ids — doing it up front keeps the Gemini parent graph correct.)
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for t in turns.iter_mut() {
         if !seen.insert(t.id.clone()) {

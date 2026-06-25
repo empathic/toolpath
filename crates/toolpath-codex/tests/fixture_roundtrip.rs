@@ -234,7 +234,7 @@ fn events_preserve_non_turn_content() {
 #[test]
 fn derive_path_produces_file_artifacts_with_raw_diffs() {
     let s = session();
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default()).expect("derive");
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
 
     let convo_prefix = "codex://";
     let file_artifacts: Vec<(&str, &toolpath::v1::ArtifactChange)> = path
@@ -264,7 +264,7 @@ fn derive_path_produces_file_artifacts_with_raw_diffs() {
 #[test]
 fn derive_path_validates_as_path_document() {
     let s = session();
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default()).expect("derive");
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
     let doc = toolpath::v1::Graph::from_path(path);
     let json = doc.to_json().unwrap();
     let parsed = toolpath::v1::Graph::from_json(&json).unwrap();

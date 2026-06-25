@@ -54,7 +54,7 @@ fn real_cursor_db_round_trips_when_present() {
         for turn in view.turns() {
             assert!(!turn.id.is_empty(), "every turn carries a bubble id");
         }
-        let path = derive_path(&session, &DeriveConfig::default()).expect("derive");
+        let path = derive_path(&session, &DeriveConfig::default());
         assert!(path.path.id.starts_with("path-cursor-"));
         // The derived doc must validate as a single-path graph.
         let graph = Graph::from_path(path);

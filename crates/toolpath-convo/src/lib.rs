@@ -25,14 +25,6 @@ pub enum ConvoError {
     #[error("provider error: {0}")]
     Provider(String),
 
-    #[error(
-        "duplicate step id {0:?}: the conversation produced two steps with the same id. \
-         This usually means the source reused an id (e.g. a Claude compaction replay that \
-         re-emits earlier messages with their original uuids); the provider must give every \
-         step a unique id before derivation."
-    )]
-    DuplicateStepId(String),
-
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
