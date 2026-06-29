@@ -328,11 +328,21 @@ impl<'a> Builder<'a> {
         // Previously done inside `derive_path_from_view`; moved here so the
         // canonical `derive_path` sees only meaningful turns. We compute a
         // keep-mask instead of `retain`-ing in place so the buffer indices
-        // recorded for pending compactions stay valid.
+        // recorded for pending compactions stay valid. A turn that carries
+        // token accounting is NOT empty: `finalize_usage` (above) may have
+        // stamped a group's total `token_usage` onto an otherwise-bare
+        // group-final turn, and dropping it would make Σ token_usage < the
+        // session total.
         let keep: Vec<bool> = self
             .turns
             .iter()
-            .map(|t| !(t.text.is_empty() && t.thinking.is_none() && t.tool_uses.is_empty()))
+            .map(|t| {
+                !(t.text.is_empty()
+                    && t.thinking.is_none()
+                    && t.tool_uses.is_empty()
+                    && t.token_usage.is_none()
+                    && t.attributed_token_usage.is_none())
+            })
             .collect();
 
         // Assign synthetic ids to surviving turns whose source message didn't
@@ -1200,6 +1210,43 @@ mod tests {
             r#"{"timestamp":"2026-04-20T16:44:39.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done"}}"#,
         ]
         .join("\n")
+    }
+
+    #[test]
+    fn empty_group_final_assistant_turn_keeps_its_usage() {
+        // A round whose only assistant message is empty (no text, no tools)
+        // but which still incurs token spend. `finalize_usage` stamps the
+        // round total onto that turn; the empty-carrier keep-mask must NOT
+        // drop it, or the spend disappears from per-step accounting while the
+        // session total still counts it (Σ token_usage < session total).
+        let body = [
+            r#"{"timestamp":"2026-04-20T16:44:37.772Z","type":"session_meta","payload":{"id":"019dabc6-8fef-7681-a054-b5bb75fcb97d","timestamp":"2026-04-20T16:43:30.171Z","cwd":"/tmp/proj","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:37.773Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/tmp/proj","model":"gpt-5.4"}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:37.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:38.800Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":0,"total_tokens":120}}}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:38.900Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":""}],"phase":"final","end_turn":true}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:39.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":""}}"#,
+        ]
+        .join("\n");
+
+        let (_t, mgr, id) = setup_session_fixture(&body);
+        let session = mgr.read_session(&id).unwrap();
+        let view = to_view(&session);
+
+        let assistant = view
+            .turns()
+            .find(|t| t.role == Role::Assistant)
+            .expect("empty assistant turn carrying the round's usage must survive");
+        let usage = assistant
+            .token_usage
+            .as_ref()
+            .or(assistant.attributed_token_usage.as_ref())
+            .expect("surviving turn must carry the round's usage");
+        assert_eq!(
+            usage.output_tokens,
+            Some(20),
+            "the round's output spend must land on the surviving turn"
+        );
     }
 
     #[test]

@@ -483,6 +483,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     .parent_id
                     .as_ref()
                     .and_then(|pid| turn_to_step.get(pid).cloned())
+                    // Fall back to whatever step came before (as events do)
+                    // so a compaction with a missing/unresolvable parent_id
+                    // still chains onto the DAG instead of becoming a
+                    // disconnected root that orphans the pre-compaction turns.
+                    .or_else(|| last_step_id.clone())
                     .into_iter()
                     .collect();
 
@@ -541,10 +546,14 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         }
     }
 
-    // The head is the last item's step id. Use `last_step_id` rather than
-    // `steps.last()` because a duplicate final item may have been dropped, in
-    // which case the head is the surviving step it collapsed into.
-    let head = last_step_id.unwrap_or_default();
+    // The head is the last emitted step. Use `steps.last()` rather than
+    // `last_step_id`: when the final item is a byte-identical duplicate that
+    // `push_step` drops, `last_step_id` regresses to the earlier step it
+    // collapsed into, which would orphan any real step emitted after that
+    // earlier step (e.g. a `conversation.compact` between a turn and its
+    // replay) as a spurious dead end. The last surviving step keeps the whole
+    // chain on the head's ancestry.
+    let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
 
     // Meta
     let title = config
@@ -1134,7 +1143,39 @@ mod tests {
         let path = derive_path(&view, &DeriveConfig::default());
         let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
         assert_eq!(ids, vec!["dup", "mid"], "identical re-emission dropped");
-        assert_eq!(path.path.head, "dup", "head resolves to the surviving step");
+        // Head is the last surviving step in document order, not the earlier
+        // step the dropped duplicate collapsed into — so any real step after
+        // that earlier one (here `mid`) stays on the head's ancestry.
+        assert_eq!(path.path.head, "mid", "head is the last surviving step");
+    }
+
+    #[test]
+    fn test_dropped_final_duplicate_keeps_compaction_on_head_ancestry() {
+        // Regression for the head-regression bug: a compaction sits between a
+        // turn and that turn's byte-identical replay at the end of the stream.
+        // The replay is dropped, but `head` must remain the compaction (the
+        // last surviving step) so the boundary is on the head's ancestry
+        // rather than orphaned as a dead end.
+        let mut a = base_turn("a", Role::User);
+        a.text = "same".into();
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let mut replay = base_turn("a", Role::User);
+        replay.text = "same".into();
+
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+        view.items.push(Item::Turn(replay));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "c"], "byte-identical replay dropped");
+        assert_eq!(path.path.head, "c", "head is the compaction, not turn a");
+        assert_eq!(path.steps[1].step.parents, vec!["a".to_string()]);
     }
 
     #[test]
@@ -1969,6 +2010,30 @@ mod tests {
 
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.steps[1].step.id, "compact-0001");
+    }
+
+    #[test]
+    fn test_compaction_with_unresolvable_parent_chains_onto_previous_step() {
+        // A compaction whose parent_id resolves to no emitted step must chain
+        // onto whatever step came before it (the same fallback events use),
+        // not become a disconnected root that orphans the pre-compaction turns.
+        let a = base_turn("a", Role::User);
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("ghost".into()), // resolves to nothing
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[1].step.id, "c");
+        assert_eq!(
+            path.steps[1].step.parents,
+            vec!["a".to_string()],
+            "unresolvable parent falls back to the previous step, not an empty (root) parent set"
+        );
     }
 
     #[test]

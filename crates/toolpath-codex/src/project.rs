@@ -589,6 +589,15 @@ fn add_codex_usage(acc: &mut toolpath_convo::TokenUsage, delta: &toolpath_convo:
     add(&mut acc.output_tokens, delta.output_tokens);
     add(&mut acc.cache_read_tokens, delta.cache_read_tokens);
     add(&mut acc.cache_write_tokens, delta.cache_write_tokens);
+    // Breakdowns (e.g. output→reasoning) are cumulative subsets of their
+    // parent class; accumulate them the same way so the running cumulative
+    // carries reasoning and `convo_usage_to_codex_json` can re-emit it.
+    for (class, inner) in &delta.breakdowns {
+        let acc_inner = acc.breakdowns.entry(class.clone()).or_default();
+        for (sub, v) in inner {
+            *acc_inner.entry(sub.clone()).or_insert(0) += v;
+        }
+    }
 }
 
 fn emit_tool_call(
@@ -782,6 +791,12 @@ fn convo_usage_to_codex_json(u: &toolpath_convo::TokenUsage) -> Value {
     }
     if let Some(v) = u.output_tokens {
         m.insert("output_tokens".to_string(), Value::from(v));
+    }
+    // `reasoning_output_tokens` ⊆ `output_tokens`; the reader differences it
+    // into `breakdowns["output"]["reasoning"]`, so emit it back from there to
+    // round-trip reasoning provenance (kind v1.2.0).
+    if let Some(r) = u.breakdowns.get("output").and_then(|m| m.get("reasoning")) {
+        m.insert("reasoning_output_tokens".to_string(), Value::from(*r));
     }
     Value::Object(m)
 }
@@ -1133,6 +1148,55 @@ mod tests {
         // Counted once: 20, not 40.
         assert_eq!(last["output_tokens"], 20);
         assert_eq!(last["input_tokens"], 100);
+    }
+
+    #[test]
+    fn reasoning_breakdown_round_trips_through_projection() {
+        use std::collections::BTreeMap;
+        // A turn whose token_usage records a reasoning breakdown must project
+        // to a `token_count` carrying `reasoning_output_tokens`, and re-read
+        // back into the IR breakdown — otherwise reasoning provenance is lost
+        // on an IR→Codex→IR round-trip.
+        let mut breakdowns = BTreeMap::new();
+        breakdowns.insert(
+            "output".to_string(),
+            BTreeMap::from([("reasoning".to_string(), 30u32)]),
+        );
+        let mut a = assistant_turn("a1", "answer");
+        a.token_usage = Some(TokenUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(80),
+            breakdowns,
+            ..Default::default()
+        });
+
+        let s = CodexProjector::default()
+            .project(&view_with(vec![a]))
+            .unwrap();
+
+        // Projection: the emitted cumulative token_count carries reasoning.
+        let tc = s
+            .lines
+            .iter()
+            .rfind(|l| l.payload.get("type").and_then(Value::as_str) == Some("token_count"))
+            .expect("a token_count line");
+        assert_eq!(
+            tc.payload["info"]["total_token_usage"]["reasoning_output_tokens"],
+            30
+        );
+
+        // Re-read: the breakdown survives back into the IR.
+        let view = crate::to_view(&s);
+        let turn = view
+            .turns()
+            .find(|t| t.role == Role::Assistant)
+            .expect("assistant turn");
+        let usage = turn
+            .token_usage
+            .as_ref()
+            .or(turn.attributed_token_usage.as_ref())
+            .expect("usage survives");
+        assert_eq!(usage.breakdowns["output"]["reasoning"], 30);
     }
 
     #[test]

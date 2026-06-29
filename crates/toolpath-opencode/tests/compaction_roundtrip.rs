@@ -21,13 +21,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use serde_json::Value;
 use tempfile::TempDir;
 use toolpath::v1::Graph;
 use toolpath_convo::{
-    CompactionTrigger, ConversationProjector, ConversationView, DeriveConfig, Item, derive_path,
-    extract_conversation,
+    Compaction, CompactionTrigger, ConversationProjector, ConversationView, DeriveConfig, Item,
+    Role, Turn, derive_path, extract_conversation,
 };
 use toolpath_opencode::project::OpencodeProjector;
 use toolpath_opencode::types::{Message, MessageData, Part, PartData, Session};
@@ -578,4 +578,235 @@ fn real_fixture_compaction_and_surrounding_turns_survive_roundtrip() {
         "turn count diverged across round-trip: {before_turns} → {after_turns}"
     );
     assert!(before_turns >= 2, "fixture should have multiple turns");
+}
+
+// ── True SQLite wire round-trip ─────────────────────────────────────────
+//
+// The tests above stop at `to_view(&projected)` — an IN-MEMORY re-read that
+// walks `Session.messages` in insertion order. opencode's real reader instead
+// loads rows from SQLite with `ORDER BY time_created ASC, id ASC` (see
+// reader.rs), and turn ids are re-minted on projection. The test below closes
+// that gap: it projects a compaction carrying BOTH a summary and a kept tail,
+// writes the projected `Session` into a real temp `.db`, and reads it back
+// through the actual reader — exercising the SQL ordering and id re-minting
+// that the in-memory tests cannot.
+
+const SCHEMA_SQL: &str = r#"
+    CREATE TABLE project (
+      id text PRIMARY KEY, worktree text NOT NULL, vcs text, name text,
+      icon_url text, icon_color text,
+      time_created integer NOT NULL, time_updated integer NOT NULL,
+      time_initialized integer, sandboxes text NOT NULL, commands text
+    );
+    CREATE TABLE session (
+      id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
+      slug text NOT NULL, directory text NOT NULL, title text NOT NULL,
+      version text NOT NULL, share_url text,
+      summary_additions integer, summary_deletions integer,
+      summary_files integer, summary_diffs text, revert text, permission text,
+      time_created integer NOT NULL, time_updated integer NOT NULL,
+      time_compacting integer, time_archived integer, workspace_id text
+    );
+    CREATE TABLE message (
+      id text PRIMARY KEY, session_id text NOT NULL,
+      time_created integer NOT NULL, time_updated integer NOT NULL,
+      data text NOT NULL
+    );
+    CREATE TABLE part (
+      id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
+      time_created integer NOT NULL, time_updated integer NOT NULL,
+      data text NOT NULL
+    );
+"#;
+
+fn mk_turn(id: &str, role: Role, text: &str, ts: &str, model: Option<&str>) -> Turn {
+    Turn {
+        id: id.into(),
+        parent_id: None,
+        group_id: None,
+        role,
+        timestamp: ts.into(),
+        text: text.into(),
+        thinking: None,
+        tool_uses: vec![],
+        model: model.map(str::to_string),
+        stop_reason: None,
+        token_usage: None,
+        attributed_token_usage: None,
+        environment: None,
+        delegations: vec![],
+        file_mutations: vec![],
+    }
+}
+
+/// Persist a projected `Session` into a real SQLite `opencode.db` and read it
+/// back through the actual reader (which applies `ORDER BY time_created, id`),
+/// then to the IR. This is the wire round-trip the in-memory tests skip.
+fn persist_and_reread(projected: &Session) -> ConversationView {
+    let temp = TempDir::new().unwrap();
+    let data = temp.path().join(".local/share/opencode");
+    fs::create_dir_all(&data).unwrap();
+    let conn = Connection::open(data.join("opencode.db")).unwrap();
+    conn.execute_batch(SCHEMA_SQL).unwrap();
+
+    let dir = projected.directory.to_string_lossy().to_string();
+    conn.execute(
+        "INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+         VALUES (?1, ?2, ?3, ?4, '[]')",
+        params![
+            projected.project_id,
+            dir,
+            projected.time_created,
+            projected.time_updated
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO session
+           (id, project_id, slug, directory, title, version, time_created, time_updated)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            projected.id,
+            projected.project_id,
+            projected.slug,
+            dir,
+            projected.title,
+            projected.version,
+            projected.time_created,
+            projected.time_updated,
+        ],
+    )
+    .unwrap();
+
+    for m in &projected.messages {
+        let mdata = serde_json::to_string(&m.data).unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![m.id, m.session_id, m.time_created, m.time_updated, mdata],
+        )
+        .unwrap();
+        for p in &m.parts {
+            let pdata = serde_json::to_string(&p.data).unwrap();
+            conn.execute(
+                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    p.id,
+                    p.message_id,
+                    p.session_id,
+                    p.time_created,
+                    p.time_updated,
+                    pdata
+                ],
+            )
+            .unwrap();
+        }
+    }
+    drop(conn);
+
+    let resolver = PathResolver::new()
+        .with_home(temp.path())
+        .with_data_dir(&data);
+    let mgr = OpencodeConvo::with_resolver(resolver);
+    let session = mgr.read_session(&projected.id).expect("read_session");
+    to_view(&session)
+}
+
+#[test]
+fn compaction_summary_and_kept_survive_real_sqlite_wire_roundtrip() {
+    // Source: u1 → a1 → [compaction: summary + kept=[a1]] → u2.
+    let source = ConversationView {
+        id: "src-sess".into(),
+        items: vec![
+            Item::Turn(mk_turn(
+                "u1",
+                Role::User,
+                "refactor the auth module",
+                "2026-01-01T00:00:00.000Z",
+                None,
+            )),
+            Item::Turn(mk_turn(
+                "a1",
+                Role::Assistant,
+                "reading the current auth code",
+                "2026-01-01T00:00:01.000Z",
+                Some("claude-sonnet-4-6"),
+            )),
+            Item::Compaction(Compaction {
+                id: "c1".into(),
+                parent_id: Some("a1".into()),
+                timestamp: "2026-01-01T00:00:02.000Z".into(),
+                trigger: Some(CompactionTrigger::Auto),
+                summary: Some("condensed everything up to the auth refactor".into()),
+                pre_tokens: None,
+                kept: vec!["a1".into()],
+            }),
+            Item::Turn(mk_turn(
+                "u2",
+                Role::User,
+                "now add session validation",
+                "2026-01-01T00:00:03.000Z",
+                None,
+            )),
+        ],
+        provider_id: Some("opencode".into()),
+        ..Default::default()
+    };
+
+    let projector = OpencodeProjector::new()
+        .with_directory(PathBuf::from("/tmp/proj"))
+        .with_project_id("proj-test");
+    let projected: Session = projector.project(&source).expect("project");
+
+    // Re-read through the actual SQLite reader (ORDER BY time_created, id).
+    let reread = persist_and_reread(&projected);
+
+    let compactions: Vec<_> = reread.compactions().collect();
+    assert_eq!(
+        compactions.len(),
+        1,
+        "exactly one compaction must survive the SQLite wire round-trip"
+    );
+    let c = compactions[0];
+
+    // #3: the summary must survive. It survives only because the projector
+    // gives the summary message a strictly-later timestamp than the boundary
+    // message; on a shared timestamp the SQL `id ASC` tiebreak would sometimes
+    // sort the summary first and the reader would drop it.
+    assert_eq!(
+        c.summary.as_deref(),
+        Some("condensed everything up to the auth refactor"),
+        "compaction summary lost across the SQLite wire round-trip"
+    );
+
+    // #4: the kept tail must survive and resolve to a real re-read turn id.
+    // It survives only because the projector rewrote the kept anchor to the
+    // re-minted message id; with the raw source id it would match no message
+    // and the reader would yield an empty kept set.
+    assert_eq!(
+        c.kept.len(),
+        1,
+        "kept tail collapsed across the SQLite wire round-trip: {:?}",
+        c.kept
+    );
+    let kept_id = &c.kept[0];
+    assert!(
+        reread.turns().any(|t| &t.id == kept_id),
+        "kept anchor {kept_id:?} does not resolve to any re-read turn"
+    );
+
+    // Sanity: surrounding turns survived too.
+    assert!(
+        reread
+            .turns()
+            .any(|t| t.text.contains("refactor the auth module")),
+        "pre-compaction turn lost"
+    );
+    assert!(
+        reread
+            .turns()
+            .any(|t| t.text.contains("now add session validation")),
+        "post-compaction turn lost"
+    );
 }
