@@ -1188,11 +1188,15 @@ pub(crate) mod tests {
     }
 
     /// Test-helper guard for `std::env::set_var`. Process env is shared
-    /// across all `cargo test` threads, so concurrent tests that mutate
-    /// the same key would race — `EnvGuard` serializes them via a global
-    /// mutex held for the guard's lifetime. Drop restores the prior value.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+    /// across all `cargo test` threads, so concurrent tests that mutate or
+    /// read *any* env var would race — `std::env::set_var`/`var_os` are not
+    /// thread-safe. `EnvGuard` serializes against every other env-touching
+    /// test in the crate via the *shared* [`crate::config::TEST_ENV_LOCK`]
+    /// (held for the guard's lifetime), not a private lock: these tests set
+    /// `TOOLPATH_CONFIG_DIR`, which `cmd_resume`/`cmd_cache`/`cmd_export`
+    /// also read/write under that same lock. A separate mutex here would
+    /// only exclude EnvGuard users from each other while still racing those
+    /// modules. Drop restores the prior value.
     struct EnvGuard {
         key: String,
         prior: Option<std::ffi::OsString>,
@@ -1202,12 +1206,13 @@ pub(crate) mod tests {
         fn set(key: &str, val: &str) -> Self {
             // PoisonError on a previously-panicked test still gives us a
             // valid lock — recover the inner guard and proceed.
-            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let lock = crate::config::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let prior = std::env::var_os(key);
-            // SAFETY: ENV_LOCK serializes EnvGuard-using tests against
-            // each other. The only env var these tests touch is
-            // TOOLPATH_CONFIG_DIR, and no other tests in this crate
-            // mutate or read it from the test process.
+            // SAFETY: TEST_ENV_LOCK serializes this against every other
+            // env-touching test in the crate, so no concurrent
+            // set_var/var_os on the shared environ can occur.
             unsafe {
                 std::env::set_var(key, val);
             }
