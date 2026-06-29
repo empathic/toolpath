@@ -1,314 +1,105 @@
+//! `path query` — load every cached step into one JSON array and transform it
+//! with a jaq (jq) filter.
+//!
+//! This is a thin clap layer over [`crate::query`]; the scope flags choose
+//! *which* documents load and the filter does the rest. See the design at
+//! `docs/superpowers/specs/2026-06-22-path-query-command-design.md` and
+//! `path kind` for the per-step field reference.
+
 use anyhow::Result;
-use clap::Subcommand;
+use clap::Parser;
+use std::io::IsTerminal;
 use std::path::PathBuf;
-use toolpath::v1::{Graph, PathOrRef, query};
 
-#[derive(Subcommand, Debug)]
-pub enum QueryOp {
-    /// Walk the parent chain from a step
-    Ancestors {
-        /// Input file
-        #[arg(short, long)]
-        input: PathBuf,
+use crate::query::Scope;
 
-        /// Step ID to trace from
-        #[arg(long)]
-        step_id: String,
-    },
-    /// Find steps not on the path to head
-    DeadEnds {
-        /// Input file
-        #[arg(short, long)]
-        input: PathBuf,
-    },
-    /// Filter steps by criteria
-    Filter {
-        /// Input file
-        #[arg(short, long)]
-        input: PathBuf,
+/// Each array element is a Toolpath step (`step`/`change`/`meta` verbatim)
+/// wrapped with three keys: `cache_id`, `path` (the parent path's `id`/`base`/
+/// `meta`), and `dead_end` (whether the step sits off the head's ancestry).
+/// Reach a step's fields with the usual jq paths, e.g.
+/// `.change[].structural.token_usage`. Run `path kind` for the field reference.
+#[derive(Parser, Debug)]
+#[command(after_long_help = WRAPPER_HELP)]
+pub struct QueryArgs {
+    /// jaq (jq) filter to run over the scoped step array. Omit to emit the
+    /// array unchanged (equivalent to the `.` filter).
+    filter: Option<String>,
 
-        /// Actor prefix (e.g., "human:", "agent:claude")
-        #[arg(long)]
-        actor: Option<String>,
+    /// Select cached files by source prefix
+    /// (claude/gemini/codex/opencode/cursor/pi/git/github).
+    #[arg(long)]
+    source: Option<String>,
 
-        /// Artifact path
-        #[arg(long)]
-        artifact: Option<String>,
+    /// Load a specific cached document by id (repeatable).
+    #[arg(long = "id")]
+    ids: Vec<String>,
 
-        /// Start time (ISO 8601)
-        #[arg(long)]
-        after: Option<String>,
+    /// Load an off-cache document (`-` for stdin; repeatable).
+    #[arg(long)]
+    input: Vec<String>,
 
-        /// End time (ISO 8601)
-        #[arg(long)]
-        before: Option<String>,
-    },
+    /// Keep only paths whose base resolves to this project directory.
+    #[arg(long)]
+    project: Option<PathBuf>,
+
+    /// Keep only paths whose meta.kind matches this selector
+    /// (semver prefix, e.g. `agent-coding-session` or `…/v1.0`).
+    #[arg(long)]
+    kind: Option<String>,
+
+    /// Force compact (single-line) JSON output.
+    #[arg(short = 'c', long)]
+    compact: bool,
+
+    /// Output raw strings without JSON quotes/escaping (like `jq -r`).
+    /// Applies only to string results; non-strings still print as JSON.
+    /// Handy for piping a column of ids/paths into another command, or
+    /// reading text/diff content. Composes with `-c`.
+    #[arg(short = 'r', long)]
+    raw: bool,
 }
 
-pub fn run(op: QueryOp, pretty: bool) -> Result<()> {
-    match op {
-        QueryOp::Ancestors { input, step_id } => run_ancestors(input, step_id, pretty),
-        QueryOp::DeadEnds { input } => run_dead_ends(input, pretty),
-        QueryOp::Filter {
-            input,
-            actor,
-            artifact,
-            after,
-            before,
-        } => run_filter(input, actor, artifact, after, before, pretty),
-    }
-}
+const WRAPPER_HELP: &str = "\
+Each array element wraps a Toolpath step:
 
-fn read_doc(path: &std::path::Path) -> Result<Graph> {
-    crate::io::read_document_auto(path)
-}
+  {
+    \"cache_id\": \"claude-abc123\",
+    \"path\": { \"id\": …, \"base\": …, \"meta\": { \"kind\": …, \"source\": … } },
+    \"step\":   { \"id\": …, \"parents\": [...], \"actor\": …, \"timestamp\": … },
+    \"change\": { \"<artifact>\": { \"raw\": …, \"structural\": … } },
+    \"meta\":   { … },
+    \"dead_end\": false
+  }
 
-/// Returns (steps, head) extracted from the graph's first inline path.
-fn extract_steps(doc: &Graph) -> (&[toolpath::v1::Step], Option<&str>) {
-    for entry in &doc.paths {
-        if let PathOrRef::Path(path) = entry {
-            return (path.steps.as_slice(), Some(path.path.head.as_str()));
-        }
-    }
-    (&[], None)
-}
+The fields under `change[].structural` are defined by the path's kind;
+run `path kind <kind>` for the schema, or `path query --kind … '.[0]'` to
+read a sample. Identity is the triple (cache_id, path.id, step.id).
 
-fn print_steps(steps: &[&toolpath::v1::Step], pretty: bool) -> Result<()> {
-    let json = if pretty {
-        serde_json::to_string_pretty(&steps)?
-    } else {
-        serde_json::to_string(&steps)?
+A real cache mixes provider and tool versions, so a field's shape can vary
+(e.g. `tool_uses[]` is sometimes an object, sometimes a bare name string).
+Guard element access with `?` (`.name?`) and `// empty` so one odd value
+doesn't abort the run; sample with `'.[0]'` when unsure.
+
+Examples:
+  path query 'map(select(any(.. | strings; test(\"RefCell\"))))'
+  path query 'map(select(any(.change | keys[]; endswith(\"cmd_resume.rs\"))))'
+  path query --source claude 'map(select(any(.change[].structural.tool_uses[]?; .name? == \"Bash\" and .result.is_error? == true)))'
+  path query 'group_by(.path.meta.source) | map({source: .[0].path.meta.source, steps: length})'
+  path query -r '.[].cache_id' | sort -u            # raw ids, pipeable to xargs/grep
+  path query -r '.[0].change[].structural.text'     # read a turn's text, unescaped";
+
+pub fn run(args: QueryArgs, pretty: bool) -> Result<()> {
+    let scope = Scope {
+        source: args.source,
+        ids: args.ids,
+        inputs: args.input,
+        project: args.project,
+        kind: args.kind,
     };
-    println!("{}", json);
-    Ok(())
-}
 
-fn run_ancestors(input: PathBuf, step_id: String, pretty: bool) -> Result<()> {
-    let doc = read_doc(&input)?;
-    let (steps, _) = extract_steps(&doc);
-    let ancestor_ids = query::ancestors(steps, &step_id);
+    // Output policy mirrors jq: compact when forced with `-c` or when piped;
+    // pretty on a TTY or when the global `--pretty` flag is set.
+    let compact = args.compact || (!pretty && !std::io::stdout().is_terminal());
 
-    let ancestor_steps: Vec<&toolpath::v1::Step> = steps
-        .iter()
-        .filter(|s| ancestor_ids.contains(&s.step.id))
-        .collect();
-
-    print_steps(&ancestor_steps, pretty)
-}
-
-fn run_dead_ends(input: PathBuf, pretty: bool) -> Result<()> {
-    let doc = read_doc(&input)?;
-    let (steps, head) = extract_steps(&doc);
-    let head = head.ok_or_else(|| anyhow::anyhow!("Graph has no head step"))?;
-
-    let dead = query::dead_ends(steps, head);
-    print_steps(&dead, pretty)
-}
-
-fn run_filter(
-    input: PathBuf,
-    actor: Option<String>,
-    artifact: Option<String>,
-    after: Option<String>,
-    before: Option<String>,
-    pretty: bool,
-) -> Result<()> {
-    let doc = read_doc(&input)?;
-    let (steps, _) = extract_steps(&doc);
-
-    let mut result: Vec<&toolpath::v1::Step> = steps.iter().collect();
-
-    if let Some(ref actor_prefix) = actor {
-        let filtered = query::filter_by_actor(steps, actor_prefix);
-        let ids: std::collections::HashSet<&str> =
-            filtered.iter().map(|s| s.step.id.as_str()).collect();
-        result.retain(|s| ids.contains(s.step.id.as_str()));
-    }
-
-    if let Some(ref art) = artifact {
-        let filtered = query::filter_by_artifact(steps, art);
-        let ids: std::collections::HashSet<&str> =
-            filtered.iter().map(|s| s.step.id.as_str()).collect();
-        result.retain(|s| ids.contains(s.step.id.as_str()));
-    }
-
-    if after.is_some() || before.is_some() {
-        let start = after.as_deref().unwrap_or("");
-        let end = before.as_deref().unwrap_or("9999-12-31T23:59:59Z");
-        let filtered = query::filter_by_time_range(steps, start, end);
-        let ids: std::collections::HashSet<&str> =
-            filtered.iter().map(|s| s.step.id.as_str()).collect();
-        result.retain(|s| ids.contains(s.step.id.as_str()));
-    }
-
-    print_steps(&result, pretty)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use toolpath::v1::{Base, Path, PathIdentity, Step};
-
-    fn make_path_doc() -> Graph {
-        let s1 = Step::new("s1", "human:alex", "2026-01-01T10:00:00Z")
-            .with_raw_change("src/main.rs", "@@");
-        let s2 = Step::new("s2", "agent:claude", "2026-01-01T11:00:00Z")
-            .with_parent("s1")
-            .with_raw_change("src/lib.rs", "@@");
-        let s2a = Step::new("s2a", "agent:claude", "2026-01-01T11:30:00Z")
-            .with_parent("s1")
-            .with_raw_change("src/main.rs", "@@");
-        let s3 = Step::new("s3", "human:alex", "2026-01-01T12:00:00Z")
-            .with_parent("s2")
-            .with_raw_change("src/main.rs", "@@");
-        Graph::from_path(Path {
-            path: PathIdentity {
-                id: "p1".into(),
-                base: Some(Base::vcs("github:org/repo", "abc")),
-                head: "s3".into(),
-                graph_ref: None,
-            },
-            steps: vec![s1, s2, s2a, s3],
-            meta: None,
-        })
-    }
-
-    fn write_temp_doc(doc: &Graph) -> tempfile::NamedTempFile {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        write!(f, "{}", doc.to_json().unwrap()).unwrap();
-        f.flush().unwrap();
-        f
-    }
-
-    #[test]
-    fn test_extract_steps_from_single_path_graph() {
-        let doc = make_path_doc();
-        let (steps, head) = extract_steps(&doc);
-        assert_eq!(steps.len(), 4);
-        assert_eq!(head, Some("s3"));
-    }
-
-    #[test]
-    fn test_extract_steps_from_empty_graph() {
-        let doc = Graph::new("g1");
-        let (steps, head) = extract_steps(&doc);
-        assert!(steps.is_empty());
-        assert!(head.is_none());
-    }
-
-    #[test]
-    fn test_run_ancestors() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_ancestors(f.path().to_path_buf(), "s3".to_string(), false);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_dead_ends() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_dead_ends(f.path().to_path_buf(), false);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_filter_by_actor() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_filter(
-            f.path().to_path_buf(),
-            Some("human:".to_string()),
-            None,
-            None,
-            None,
-            false,
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_filter_by_artifact() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_filter(
-            f.path().to_path_buf(),
-            None,
-            Some("src/main.rs".to_string()),
-            None,
-            None,
-            false,
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_filter_by_time_range() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_filter(
-            f.path().to_path_buf(),
-            None,
-            None,
-            Some("2026-01-01T10:30:00Z".to_string()),
-            Some("2026-01-01T11:30:00Z".to_string()),
-            false,
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_filter_pretty() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_filter(f.path().to_path_buf(), None, None, None, None, true);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_filter_after_only() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_filter(
-            f.path().to_path_buf(),
-            None,
-            None,
-            Some("2026-01-01T11:00:00Z".to_string()),
-            None,
-            false,
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_dead_ends_on_empty_graph() {
-        let doc = Graph::new("g1");
-        let f = write_temp_doc(&doc);
-        let result = run_dead_ends(f.path().to_path_buf(), false);
-        // Empty graphs have no head step.
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_run_ancestors_pretty() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_ancestors(f.path().to_path_buf(), "s3".to_string(), true);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_run_dead_ends_pretty() {
-        let doc = make_path_doc();
-        let f = write_temp_doc(&doc);
-        let result = run_dead_ends(f.path().to_path_buf(), true);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_read_doc_invalid_path() {
-        let result = read_doc(&PathBuf::from("/nonexistent/file.json"));
-        assert!(result.is_err());
-    }
+    crate::query::run(&scope, args.filter.as_deref(), compact, args.raw)
 }

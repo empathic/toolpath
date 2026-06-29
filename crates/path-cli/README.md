@@ -42,7 +42,7 @@ path p import git --repo . --branch main:HEAD~20 --no-cache | path p render dot 
 **Review what an AI agent changed:**
 
 ```bash
-path p import claude --project . --no-cache --pretty | path query filter --actor "agent:" --pretty
+path p import claude --project . --no-cache | path query --input - 'map(select(.step.actor | startswith("agent:")))'
 ```
 
 **Record provenance for a live editing session:**
@@ -101,19 +101,54 @@ path p import claude --project /path/to/project --all
 
 ### query
 
-Query Toolpath documents.
+Load every step in the local cache into one JSON array and transform it with
+an in-process jaq (jq) filter. Each element wraps a Toolpath step with
+`cache_id`, `path` (the parent path's `id`/`base`/`meta`), and `dead_end`.
+Scope flags choose which documents load; the filter does the rest.
+
+```bash
+# Find abandoned branches (the former `dead-ends` subcommand)
+path query 'map(select(.dead_end))'
+
+# Steps by an agent actor (the former `filter --actor`)
+path query --input doc.json 'map(select(.step.actor | startswith("agent:")))'
+
+# Turns over 50k input tokens, in Claude sessions only
+path query --source claude 'map(select(any(.change[].structural.token_usage; .input_tokens > 50000)))'
+
+# Top 10 steps by total tokens
+path query --kind agent-coding-session \
+  'map({step: .step.id, t: ([.change[].structural.token_usage//empty | (.input_tokens//0)+(.output_tokens//0)] | add//0)}) | sort_by(-.t) | .[:10]'
+
+# Raw output (-r): a column of ids straight into another command
+path query -r '.[].cache_id' | sort -u
+```
+
+Scope flags: `--source <name>` / `--id <cache-id>` / `--input <file>` (file
+selection), `--project <path>` / `--kind <selector>` (content scoping). Output
+mirrors jq: pretty on a TTY, compact when piped (`-c` forces compact); `-r`
+prints string results unquoted (for piping ids/paths onward, or reading
+text/diff content unescaped).
+
+### kind
+
+List the document kinds the binary bundles a spec for, or print a kind's
+bundled `schema.json` — the per-field type and semantics reference for writing
+`path query` filters.
+
+```bash
+path kind                                # list bundled kinds
+path kind agent-coding-session           # newest version's schema
+path kind agent-coding-session/v1.0.0    # pin a version
+```
+
+### p query
+
+Low-level graph traversal on a single document.
 
 ```bash
 # Walk ancestry from a step
-path query ancestors --input doc.json --step-id step-003
-
-# Find abandoned branches
-path query dead-ends --input doc.json
-
-# Filter by criteria (combinable)
-path query filter --input doc.json --actor "agent:"
-path query filter --input doc.json --artifact "src/main.rs"
-path query filter --input doc.json --after "2026-01-29T00:00:00Z" --before "2026-01-30T00:00:00Z"
+path p query ancestors --input doc.json --step-id step-003
 ```
 
 ### p render

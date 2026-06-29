@@ -21,20 +21,6 @@ use jsonschema::Validator;
 
 const SCHEMA_SOURCE: &str = toolpath::SCHEMA_JSON;
 
-/// `meta.kind` URI → bundled kind-schema source. Bundled (rather than
-/// fetched from `toolpath.net` at validation time) so validation is
-/// offline and deterministic.
-const KIND_SCHEMAS: &[(&str, &str)] = &[
-    (
-        "https://toolpath.net/kinds/agent-coding-session/v1.0.0",
-        include_str!("../kinds/agent-coding-session/v1.0.0/schema.json"),
-    ),
-    (
-        "https://toolpath.net/kinds/agent-coding-session/v1.1.0",
-        include_str!("../kinds/agent-coding-session/v1.1.0/schema.json"),
-    ),
-];
-
 fn validator() -> &'static Validator {
     static VALIDATOR: OnceLock<Validator> = OnceLock::new();
     VALIDATOR.get_or_init(|| {
@@ -46,18 +32,25 @@ fn validator() -> &'static Validator {
 }
 
 /// Compiled validator for each known kind URI, built once on first use.
+/// Sourced from [`crate::kinds::BUNDLED_KINDS`] so the validator set and the
+/// `path kind` / `path query --kind` surface stay in lockstep.
 fn kind_validators() -> &'static HashMap<&'static str, Validator> {
     static VALIDATORS: OnceLock<HashMap<&'static str, Validator>> = OnceLock::new();
     VALIDATORS.get_or_init(|| {
-        KIND_SCHEMAS
+        crate::kinds::BUNDLED_KINDS
             .iter()
-            .map(|(uri, source)| {
-                let schema: serde_json::Value = serde_json::from_str(source)
-                    .unwrap_or_else(|e| panic!("bundled kind schema {uri} is not valid JSON: {e}"));
+            .map(|k| {
+                let schema: serde_json::Value =
+                    serde_json::from_str(k.schema).unwrap_or_else(|e| {
+                        panic!("bundled kind schema {} is not valid JSON: {e}", k.uri)
+                    });
                 let v = jsonschema::validator_for(&schema).unwrap_or_else(|e| {
-                    panic!("bundled kind schema {uri} is not a valid JSON Schema: {e}")
+                    panic!(
+                        "bundled kind schema {} is not a valid JSON Schema: {e}",
+                        k.uri
+                    )
                 });
-                (*uri, v)
+                (k.uri, v)
             })
             .collect()
     })

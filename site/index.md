@@ -233,11 +233,9 @@ path p import git --repo . --branch main --no-cache | path p render dot | dot -T
 # Import from Claude conversation logs
 path p import claude --project /path/to/project --no-cache --pretty
 
-# Query for dead ends
-path query dead-ends --input doc.json
-
-# Filter by actor
-path query filter --input doc.json --actor "agent:"
+# Query the local cache with a jaq (jq) filter — dead ends, or steps by an agent
+path query 'map(select(.dead_end))'
+path query --input doc.json 'map(select(.step.actor | startswith("agent:")))'
 ```
 
 <svg class="topo topo-wide" viewBox="0 0 900 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

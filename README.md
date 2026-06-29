@@ -114,14 +114,17 @@ path p import pathbase https://pathbase.dev/alex/pathstash/path-pr-42
 path resume https://pathbase.dev/alex/pathstash/path-pr-42
 path resume claude-<session-id> --harness claude -C /path/to/project
 
-# Query for dead ends (abandoned approaches)
-path query dead-ends --input doc.json
+# Query the whole local cache with a jaq (jq) filter over wrapped steps
+# (e.g. dead ends, or turns by an agent actor)
+path query 'map(select(.dead_end))'
+path query --input doc.json 'map(select(.step.actor | startswith("agent:")))'
 
-# Filter steps by actor
-path query filter --input doc.json --actor "agent:"
+# List bundled document kinds, or print a kind's schema (the field reference)
+path kind
+path kind agent-coding-session
 
-# Walk the ancestry of a step
-path query ancestors --input doc.json --step-id step-003
+# Walk the ancestry of a step (plumbing)
+path p query ancestors --input doc.json --step-id step-003
 
 # Merge multiple documents into a graph
 path p merge doc1.json doc2.json --title "Release v2" --pretty

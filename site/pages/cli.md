@@ -127,10 +127,10 @@ Reads the most recent Claude conversation for that project and maps it to a Tool
 ### Find abandoned approaches
 
 ```bash
-path query dead-ends --input doc.json --pretty
+path query --input doc.json 'map(select(.dead_end))'
 ```
 
-Returns steps that have no descendants leading to the path head. These are the things that were tried and discarded.
+`path query` loads every step in the local cache into one JSON array and transforms it with a jaq (jq) filter; `--input` scopes it to a single document instead. Each element wraps a step with `cache_id`, `path`, and `dead_end` — so `map(select(.dead_end))` returns the steps that have no descendants leading to the path head: the things that were tried and discarded.
 
 ### Track changes in real time
 

@@ -86,6 +86,11 @@ pub enum PCommand {
         #[command(subcommand)]
         op: crate::cmd_track::TrackOp,
     },
+    /// Low-level graph traversal on a single document (ancestors)
+    Query {
+        #[command(subcommand)]
+        op: crate::cmd_p_query::PQueryOp,
+    },
 }
 
 pub fn run(command: PCommand, pretty: bool) -> Result<()> {
@@ -105,5 +110,6 @@ pub fn run(command: PCommand, pretty: bool) -> Result<()> {
         PCommand::Project { target } => crate::cmd_project::run(target),
         PCommand::Incept { target } => crate::cmd_incept::run(target),
         PCommand::Track { op } => crate::cmd_track::run(op, pretty),
+        PCommand::Query { op } => crate::cmd_p_query::run(op, pretty),
     }
 }

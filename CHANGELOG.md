@@ -12,6 +12,40 @@ All notable changes to the Toolpath workspace are documented here.
   `UNIQUE (path_id, step_id)` constraint). Collisions are resolved before the
   path is returned: a byte-identical re-emission is dropped, and a
   same-id-but-different step is re-IDed to `<id>#<n>` so no data is lost.
+## `path query` — query the local cache with jaq — 2026-06-29
+
+Adds `path query`, a porcelain that loads every step in the local cache
+(`~/.toolpath/documents/`) into a single JSON array and transforms it with
+an in-process jaq (pure-Rust jq) filter. Selection, projection, ranking,
+grouping, and top-N are all just jaq, so one command answers "find every
+turn that mentions `RefCell`", "which sessions touched `cmd_resume.rs`?",
+"the 10 steps that cost the most tokens", and so on.
+
+- **`path query [scope flags] ['<jq filter>']`** — each array element is a
+  Toolpath step (`step`/`change`/`meta` verbatim) wrapped with `cache_id`,
+  `path` (the parent path's `id`/`base`/`meta`), and `dead_end` (whether the
+  step is off the head's ancestry). With no filter it emits the array; a
+  filter is the same as piping that array to `jq`. Output mirrors jq:
+  pretty on a TTY, compact when piped (`-c` forces compact), and `-r`
+  prints string results unquoted (pipe a column of ids/paths into another
+  command, or read a turn's text/diff unescaped).
+- **Scope flags.** File selection (before parse): `--source <name>`
+  (cache-id prefix, e.g. `claude`/`git`), `--id <cache-id>` (repeatable),
+  `--input <file>` (`-` for stdin, repeatable). Content scoping (per path):
+  `--project <path>` (matches a `file://` base) and `--kind <selector>`
+  (semver-prefix match, e.g. `agent-coding-session/v1`). Everything else is
+  a jaq predicate on the real structure.
+- **`path kind`** — the cold-start companion: lists the kinds the binary
+  bundles a spec for; `path kind <kind>` prints that kind's bundled
+  `schema.json` (the per-field type + semantics reference for writing
+  filters). A trailing `/<version>` pins a version with the same prefix
+  rule as `--kind`.
+
+**Breaking** (pre-1.0): the former `path query` subcommands change.
+`ancestors` moves to `path p query ancestors`; `dead-ends` and `filter`
+are gone in favor of jaq forms — `path query 'map(select(.dead_end))'` and
+`path query 'map(select(.step.actor | startswith("agent:")))'`. `path-cli`
+0.14.0 → 0.15.0; adds the `jaq-core`/`jaq-std`/`jaq-json` dependencies.
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 

@@ -75,10 +75,10 @@ Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
 The binary is called `path` (package: `path-cli`; the older `toolpath-cli` package is a deprecated shim that still installs the same binary for users running `cargo install toolpath-cli`):
 
 The top-level surface is the porcelain (`show`, `share`, `resume`,
-`query`, `auth`, `haiku`). Lower-level building blocks live under
+`query`, `kind`, `auth`, `haiku`). Lower-level building blocks live under
 `path p …` (plumbing): `p list`, `p import`, `p export`, `p cache`,
 `p render`, `p merge`, `p validate`, `p derive`, `p project`,
-`p incept`, `p track`.
+`p incept`, `p track`, `p query` (graph traversal: `ancestors`).
 
 ```bash
 # Plumbing: import from external formats into the local toolpath cache
@@ -118,9 +118,13 @@ cargo run -p path-cli -- p cache rm <cache-id>
 # Inspect / analyze
 cargo run -p path-cli -- p render dot --input doc.json
 cargo run -p path-cli -- p render md --input doc.json --detail full
-cargo run -p path-cli -- query dead-ends --input doc.json
-cargo run -p path-cli -- query ancestors --input doc.json --step-id step-003
-cargo run -p path-cli -- query filter --input doc.json --actor "agent:"
+# Query the whole local cache with a jaq (jq) filter over wrapped steps
+cargo run -p path-cli -- query 'map(select(.dead_end)) | map(.step.id)'
+cargo run -p path-cli -- query --source claude 'map(select(any(.change[].structural.token_usage; .input_tokens > 50000)))'
+cargo run -p path-cli -- query --input doc.json 'map(select(.step.actor | startswith("agent:")))'
+cargo run -p path-cli -- kind                          # list bundled kinds
+cargo run -p path-cli -- kind agent-coding-session     # print a kind's schema (field reference)
+cargo run -p path-cli -- p query ancestors --input doc.json --step-id step-003
 cargo run -p path-cli -- p merge doc1.json doc2.json --title "Combined"
 cargo run -p path-cli -- p list git --repo .
 cargo run -p path-cli -- p list github --repo owner/repo
@@ -186,7 +190,7 @@ Tests live alongside the code (`#[cfg(test)] mod tests`), plus `path-cli` has in
 - `toolpath-cursor`: 78 unit + 8 integration round-trip + 1 real-DB sanity + 1 doc test (state.vscdb SQLite reader, bubble store + composer header parsing, content-addressed blob lookup, projector with full TOOL_TABLE coverage, JSONL transcript ingest in `examples/dump_fixture.rs`)
 - `toolpath-pi`: 133 unit + 26 integration + 5 doc tests (types, paths, error, reader, io, provider)
 - `toolpath-dot`: 30 unit + 2 doc tests (render, visual conventions, escaping)
-- `path-cli`: 294 unit + 65 integration tests (import/export/cache, track sessions, merge, validate, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, fzf-friendly TSV output, `path resume` orchestration with injectable `ExecStrategy`). For an end-to-end check against a real Pathbase deployment, run `scripts/test-pathbase-live.sh <url>` — it does an anon round-trip in a sandboxed config dir and, if you're logged into that URL, an authed pathstash round-trip too.
+- `path-cli`: 309 unit + 86 integration tests (import/export/cache, track sessions, merge, validate, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, fzf-friendly TSV output, `path resume` orchestration with injectable `ExecStrategy`, `path query`/`path kind` jaq filters + kind-selector matching + step wrapping over a `$TOOLPATH_CONFIG_DIR` cache sandbox). For an end-to-end check against a real Pathbase deployment, run `scripts/test-pathbase-live.sh <url>` — it does an anon round-trip in a sandboxed config dir and, if you're logged into that URL, an authed pathstash round-trip too.
 - `toolpath-cli`: 0 tests (it's a one-line `path_cli::run()` shim crate that exists only so `cargo install toolpath-cli` keeps installing the `path` binary)
 
 Validate example documents: `for f in examples/*.json; do cargo run -p path-cli -- p validate --input "$f"; done`

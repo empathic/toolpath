@@ -6,9 +6,11 @@ mod cmd_export;
 mod cmd_haiku;
 mod cmd_import;
 mod cmd_incept;
+mod cmd_kind;
 mod cmd_list;
 mod cmd_merge;
 mod cmd_p;
+mod cmd_p_query;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_pathbase;
 mod cmd_project;
@@ -26,6 +28,8 @@ mod config;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
 mod io;
+mod kinds;
+mod query;
 mod schema;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
@@ -82,10 +86,17 @@ enum Commands {
         #[command(flatten)]
         args: cmd_resume::ResumeArgs,
     },
-    /// Query Toolpath documents
+    /// Query the local cache: load every step into one JSON array and
+    /// transform it with a jaq (jq) filter
     Query {
-        #[command(subcommand)]
-        op: cmd_query::QueryOp,
+        #[command(flatten)]
+        args: cmd_query::QueryArgs,
+    },
+    /// List bundled document kinds, or print a kind's schema (the field
+    /// reference for `path query`)
+    Kind {
+        #[command(flatten)]
+        args: cmd_kind::KindArgs,
     },
     /// Manage Pathbase credentials for trace uploads
     #[cfg(not(target_os = "emscripten"))]
@@ -121,7 +132,8 @@ pub fn run() -> Result<()> {
         Commands::Share { args } => cmd_share::run(args),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Resume { args } => cmd_resume::run(args),
-        Commands::Query { op } => cmd_query::run(op, cli.pretty),
+        Commands::Query { args } => cmd_query::run(args, cli.pretty),
+        Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Auth { op } => cmd_auth::run(op),
         Commands::P { command } => cmd_p::run(command, cli.pretty),
