@@ -1,0 +1,8 @@
+{
+  "agent:main:whatsapp:direct:15555550123": {
+    "sessionId": "sess-abc",
+    "sessionFile": "dm_session.jsonl",
+    "updatedAt": "2026-06-30T12:00:08.600Z",
+    "sessionStartedAt": "2026-06-30T12:00:00.000Z"
+  }
+}
