@@ -35,6 +35,14 @@ culting.
 - **[`gemini.md`](gemini.md)** — Gemini CLI chats under
   `~/.gemini/tmp/<project>/chats/`, including the main-file + sibling
   sub-agent UUID directory layout.
+- **[`openclaw/`](openclaw/README.md)** — OpenClaw, a multi-channel
+  local-first assistant. JSONL transcripts under
+  `~/.openclaw/agents/<id>/sessions/`, with a tree/visible-leaf entry
+  model and channel/peer-keyed sessions. Split into focused docs covering
+  directory layout, the version-3 envelope, the ten entry types, messages
+  and content blocks, tools and file-ops, token usage, lineage, the
+  channel/actor identity model, known issues, a walkthrough, and a format
+  changelog. Sourced from upstream code only — no first-hand sample yet.
 - **[`opencode.md`](opencode.md)** — opencode's SQLite database
   (`~/.local/share/opencode/opencode.db`), its 12 typed message-part
   variants, and the sibling bare-git snapshot repo used for file diffs.
@@ -45,9 +53,11 @@ culting.
 The Claude Code reference is the most detailed because it's the
 longest-standing provider and has the most moving parts (JSONL
 envelope variants, session chaining, compaction, sidechains, and the
-loader's own undocumented strictness on what it will accept). The
-other three sit in single files because their formats are either
-simpler or sufficiently covered there.
+loader's own undocumented strictness on what it will accept). OpenClaw
+also gets a folder — its tree/visible-leaf entry model and
+multi-channel actor identity have enough moving parts to warrant the
+breakout. The rest sit in single files because their formats are
+either simpler or sufficiently covered there.
 
 ## Conventions used in these docs
 

@@ -2,6 +2,15 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-convo 0.12.0: session-level `user_actor` override — 2026-06-30
+
+Adds `DeriveConfig.user_actor: Option<String>` so a provider can set a
+session-level actor string for user turns (e.g. a channel-aware
+`human:whatsapp/<peerId>`) instead of the default `human:user`. Additive
+and backward-compatible — existing callers using `..Default::default()`
+are unaffected. Enables the multi-channel human identity in the new
+`toolpath-openclaw` provider.
+
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 
 Fixes token over-counting in derived documents (~3× output-token

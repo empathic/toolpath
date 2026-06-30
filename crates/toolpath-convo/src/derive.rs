@@ -29,6 +29,11 @@ pub struct DeriveConfig {
     pub include_thinking: bool,
     /// Include `Turn.tool_uses` in the structural change extras.
     pub include_tool_uses: bool,
+    /// Session-level actor string for user turns (e.g. a channel-aware
+    /// `human:whatsapp/<peerId>`). When `None`, user turns get the default
+    /// `human:user`. Used by providers (OpenClaw) whose human is a known
+    /// per-session identity rather than the local shell user.
+    pub user_actor: Option<String>,
 }
 
 impl Default for DeriveConfig {
@@ -39,6 +44,7 @@ impl Default for DeriveConfig {
             title: None,
             include_thinking: true,
             include_tool_uses: true,
+            user_actor: None,
         }
     }
 }
@@ -115,7 +121,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         };
         turn_to_step.insert(turn.id.clone(), step_id.clone());
 
-        let actor = actor_for_turn(turn, provider);
+        let actor = actor_for_turn(turn, provider, config.user_actor.as_deref());
         record_actor(&mut actors, &actor, turn, provider, view);
 
         let mut step = Step {
@@ -473,9 +479,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     }
 }
 
-fn actor_for_turn(turn: &Turn, provider: &str) -> String {
+fn actor_for_turn(turn: &Turn, provider: &str, user_actor: Option<&str>) -> String {
     match &turn.role {
-        Role::User => "human:user".to_string(),
+        Role::User => user_actor
+            .map(str::to_string)
+            .unwrap_or_else(|| "human:user".to_string()),
         Role::Assistant => {
             let model = turn.model.as_deref().unwrap_or("unknown");
             format!("agent:{}", model)
@@ -802,6 +810,26 @@ mod tests {
         assert_eq!(path.steps.len(), 1);
         assert_eq!(path.steps[0].step.actor, "human:user");
         assert_eq!(path.steps[0].step.id, "t1");
+    }
+
+    #[test]
+    fn user_actor_override_sets_human_actor() {
+        let turn = base_turn("t1", Role::User);
+        let view = view_with(vec![turn]);
+        let cfg = DeriveConfig {
+            user_actor: Some("human:whatsapp/15555550123".into()),
+            ..Default::default()
+        };
+        let path = derive_path(&view, &cfg);
+        assert_eq!(path.steps[0].step.actor, "human:whatsapp/15555550123");
+    }
+
+    #[test]
+    fn user_actor_default_is_human_user() {
+        let turn = base_turn("t1", Role::User);
+        let view = view_with(vec![turn]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[0].step.actor, "human:user");
     }
 
     #[test]
