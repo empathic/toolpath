@@ -65,6 +65,17 @@ pub enum ListSource {
         #[arg(long)]
         base: Option<PathBuf>,
     },
+    /// List OpenClaw agents or sessions
+    Openclaw {
+        /// Agent bucket — if omitted, lists all agents (pretty) or all
+        /// sessions across agents (tsv/json).
+        #[arg(short, long)]
+        agent: Option<String>,
+
+        /// Override the OpenClaw state directory (default: ~/.openclaw)
+        #[arg(long)]
+        base: Option<PathBuf>,
+    },
 }
 
 /// Output format selector. When neither `--format` nor `--json` is set, the
@@ -107,6 +118,7 @@ pub fn run(source: ListSource, format: Option<ListFormat>, json_flag: bool) -> R
         ListSource::Opencode { project } => run_opencode(project, fmt),
         ListSource::Cursor { project } => run_cursor(project, fmt),
         ListSource::Pi { project, base } => run_pi(project, base, fmt),
+        ListSource::Openclaw { agent, base } => run_openclaw(agent, base, fmt),
     }
 }
 
@@ -1056,6 +1068,123 @@ fn emit_pi_tsv(project: &str, m: &toolpath_pi::SessionMeta) {
     println!(
         "{}\t{}\t{}\t{}\t{}",
         sanitize_tsv(project),
+        sanitize_tsv(&m.id),
+        sanitize_tsv(&m.timestamp),
+        m.entry_count,
+        m.first_user_message
+            .as_deref()
+            .map(sanitize_tsv)
+            .unwrap_or_default(),
+    );
+}
+
+// ── OpenClaw ────────────────────────────────────────────────────────────────
+
+fn run_openclaw(agent: Option<String>, base: Option<PathBuf>, fmt: ListFormat) -> Result<()> {
+    let manager = match base {
+        Some(p) => toolpath_openclaw::OpenClawConvo::with_resolver(
+            toolpath_openclaw::PathResolver::with_state_dir(&p),
+        ),
+        None => toolpath_openclaw::OpenClawConvo::new(),
+    };
+    match (agent, fmt) {
+        (None, ListFormat::Pretty) => list_openclaw_agents(&manager),
+        (None, f) => list_openclaw_sessions_all(&manager, f),
+        (Some(a), f) => list_openclaw_sessions(&manager, &a, f),
+    }
+}
+
+fn list_openclaw_agents(manager: &toolpath_openclaw::OpenClawConvo) -> Result<()> {
+    let agents = manager.list_agents().map_err(|e| anyhow::anyhow!("{}", e))?;
+    if agents.is_empty() {
+        println!(
+            "No OpenClaw agents found. State dir: {:?}",
+            manager.resolver().state_dir()
+        );
+    } else {
+        println!("OpenClaw agents:");
+        println!();
+        for a in &agents {
+            println!("  {a}");
+        }
+    }
+    Ok(())
+}
+
+fn list_openclaw_sessions(
+    manager: &toolpath_openclaw::OpenClawConvo,
+    agent: &str,
+    fmt: ListFormat,
+) -> Result<()> {
+    let sessions = manager
+        .list_sessions(agent)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    match fmt {
+        ListFormat::Json => print_openclaw_json(&sessions)?,
+        ListFormat::Tsv => {
+            for m in &sessions {
+                emit_openclaw_tsv(m);
+            }
+        }
+        ListFormat::Pretty => {
+            if sessions.is_empty() {
+                println!("No sessions found for agent: {agent}");
+            } else {
+                println!("Sessions for {agent}:");
+                println!();
+                for m in &sessions {
+                    println!("  {}\t{}\t{} entries", m.id, m.timestamp, m.entry_count);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn list_openclaw_sessions_all(
+    manager: &toolpath_openclaw::OpenClawConvo,
+    fmt: ListFormat,
+) -> Result<()> {
+    let sessions = manager
+        .list_all_sessions()
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    match fmt {
+        ListFormat::Json => print_openclaw_json(&sessions)?,
+        ListFormat::Tsv => {
+            for m in &sessions {
+                emit_openclaw_tsv(m);
+            }
+        }
+        ListFormat::Pretty => unreachable!("pretty falls back to agent listing"),
+    }
+    Ok(())
+}
+
+fn print_openclaw_json(sessions: &[toolpath_openclaw::SessionMeta]) -> Result<()> {
+    let items: Vec<serde_json::Value> = sessions
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "agent": m.agent_id,
+                "timestamp": m.timestamp,
+                "entry_count": m.entry_count,
+                "file_path": m.file_path,
+                "cwd": m.cwd,
+                "session_key": m.session_key,
+                "first_user_message": m.first_user_message,
+            })
+        })
+        .collect();
+    let output = serde_json::json!({ "source": "openclaw", "sessions": items });
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn emit_openclaw_tsv(m: &toolpath_openclaw::SessionMeta) {
+    println!(
+        "{}\t{}\t{}\t{}\t{}",
+        sanitize_tsv(&m.agent_id),
         sanitize_tsv(&m.id),
         sanitize_tsv(&m.timestamp),
         m.entry_count,

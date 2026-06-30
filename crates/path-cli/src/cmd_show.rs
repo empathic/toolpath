@@ -77,6 +77,20 @@ pub enum ShowSource {
         #[arg(long)]
         base: Option<std::path::PathBuf>,
     },
+    /// Show an OpenClaw session as a markdown summary
+    Openclaw {
+        /// Agent bucket (default: `main`)
+        #[arg(short, long)]
+        agent: Option<String>,
+
+        /// Session id
+        #[arg(short, long)]
+        session: String,
+
+        /// Override the OpenClaw state directory (default: ~/.openclaw)
+        #[arg(long)]
+        base: Option<std::path::PathBuf>,
+    },
 }
 
 pub fn run(source: ShowSource, ansi: bool) -> Result<()> {
@@ -172,6 +186,25 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_pi::DeriveConfig::default();
             Ok(toolpath_pi::derive::derive_path(&s, &cfg))
+        }
+        ShowSource::Openclaw {
+            agent,
+            session,
+            base,
+        } => {
+            let manager = match base {
+                Some(p) => toolpath_openclaw::OpenClawConvo::with_resolver(
+                    toolpath_openclaw::PathResolver::with_state_dir(&p),
+                ),
+                None => toolpath_openclaw::OpenClawConvo::new(),
+            };
+            let agent =
+                agent.unwrap_or_else(|| toolpath_openclaw::DEFAULT_AGENT_ID.to_string());
+            let s = manager
+                .read_session(&agent, &session)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let cfg = toolpath_openclaw::DeriveConfig::default();
+            Ok(toolpath_openclaw::derive::derive_path(&s, &cfg))
         }
     }
 }
