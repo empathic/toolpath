@@ -63,6 +63,17 @@ pub fn derive_graph(
     }
 }
 
+/// Derive a [`Graph`] from all sessions under one agent.
+pub fn derive_project(
+    manager: &crate::OpenClawConvo,
+    agent_id: &str,
+    title: Option<&str>,
+    config: &DeriveConfig,
+) -> crate::Result<Graph> {
+    let sessions = manager.read_all_sessions(agent_id)?;
+    Ok(derive_graph(&sessions, title, config))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

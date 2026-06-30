@@ -11,10 +11,12 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
 use toolpath_convo::{
-    ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation, Role, SessionBase,
-    TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
+    EnvironmentSnapshot, FileMutation, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation,
+    ToolResult, Turn,
 };
 
+use crate::OpenClawConvo;
 use crate::paths::ParsedKey;
 use crate::reader::OpenClawSession;
 use crate::types::{AgentMessage, ContentBlock, Entry, StopReason, Usage};
@@ -472,6 +474,63 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
         events: vec![],
         base,
         ..Default::default()
+    }
+}
+
+// ── ConversationProvider impl ────────────────────────────────────────
+
+fn to_convo_err(e: crate::error::OpenClawError) -> ConvoError {
+    ConvoError::Provider(e.to_string())
+}
+
+fn meta_to_conversation_meta(meta: crate::io::SessionMeta) -> ConversationMeta {
+    let ts = parse_ts(&meta.timestamp);
+    ConversationMeta {
+        id: meta.id,
+        started_at: ts,
+        last_activity: ts,
+        message_count: meta.entry_count,
+        file_path: Some(meta.file_path),
+        predecessor: None,
+        successor: None,
+    }
+}
+
+/// The `project` argument is the OpenClaw **agent id** (default
+/// [`crate::DEFAULT_AGENT_ID`]).
+impl ConversationProvider for OpenClawConvo {
+    fn list_conversations(&self, project: &str) -> Result<Vec<String>, ConvoError> {
+        let metas = self.list_sessions(project).map_err(to_convo_err)?;
+        Ok(metas.into_iter().map(|m| m.id).collect())
+    }
+
+    fn load_conversation(
+        &self,
+        project: &str,
+        conversation_id: &str,
+    ) -> Result<ConversationView, ConvoError> {
+        let session = self
+            .read_session(project, conversation_id)
+            .map_err(to_convo_err)?;
+        Ok(session_to_view(&session))
+    }
+
+    fn load_metadata(
+        &self,
+        project: &str,
+        conversation_id: &str,
+    ) -> Result<ConversationMeta, ConvoError> {
+        let metas = self.list_sessions(project).map_err(to_convo_err)?;
+        let meta = metas
+            .into_iter()
+            .find(|m| m.id == conversation_id)
+            .ok_or_else(|| ConvoError::Provider(format!("session not found: {conversation_id}")))?;
+        Ok(meta_to_conversation_meta(meta))
+    }
+
+    fn list_metadata(&self, project: &str) -> Result<Vec<ConversationMeta>, ConvoError> {
+        let metas = self.list_sessions(project).map_err(to_convo_err)?;
+        Ok(metas.into_iter().map(meta_to_conversation_meta).collect())
     }
 }
 
