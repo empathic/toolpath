@@ -157,6 +157,24 @@ pub enum ImportSource {
         #[arg(long)]
         base: Option<PathBuf>,
     },
+    /// Import from OpenClaw agent-session logs
+    Openclaw {
+        /// Agent bucket (default: `main`)
+        #[arg(short, long)]
+        agent: Option<String>,
+
+        /// Specific session id (default: most recent or interactive pick)
+        #[arg(short, long)]
+        session: Option<String>,
+
+        /// Process all sessions for the agent (emits a Graph)
+        #[arg(long)]
+        all: bool,
+
+        /// Override the OpenClaw state directory (default: ~/.openclaw)
+        #[arg(long)]
+        base: Option<PathBuf>,
+    },
     /// Import from Pathbase (download a previously uploaded path)
     Pathbase {
         /// Full Pathbase URL or bare `<owner>/<repo>/<slug>` triple
@@ -268,6 +286,12 @@ fn derive(source: ImportSource) -> Result<Vec<DerivedDoc>> {
             all,
             base,
         } => derive_pi(project, session, all, base),
+        ImportSource::Openclaw {
+            agent,
+            session,
+            all,
+            base,
+        } => derive_openclaw(agent, session, all, base),
         ImportSource::Pathbase { target, url } => derive_pathbase(target, url),
     }
 }
@@ -1419,6 +1443,163 @@ pub(crate) fn derive_pi_session(
     Ok(DerivedDoc { cache_id, doc })
 }
 
+fn openclaw_manager(base: Option<PathBuf>) -> toolpath_openclaw::OpenClawConvo {
+    match base {
+        Some(p) => toolpath_openclaw::OpenClawConvo::with_resolver(
+            toolpath_openclaw::PathResolver::with_state_dir(&p),
+        ),
+        None => toolpath_openclaw::OpenClawConvo::new(),
+    }
+}
+
+fn derive_openclaw(
+    agent: Option<String>,
+    session: Option<String>,
+    all: bool,
+    base: Option<PathBuf>,
+) -> Result<Vec<DerivedDoc>> {
+    let manager = openclaw_manager(base);
+    derive_openclaw_with_manager(&manager, agent, session, all)
+}
+
+fn derive_openclaw_with_manager(
+    manager: &toolpath_openclaw::OpenClawConvo,
+    agent: Option<String>,
+    session: Option<String>,
+    all: bool,
+) -> Result<Vec<DerivedDoc>> {
+    let config = toolpath_openclaw::DeriveConfig::default();
+    let default_agent = || toolpath_openclaw::DEFAULT_AGENT_ID.to_string();
+
+    let pairs: Vec<(String, String)> = match (agent, session, all) {
+        (a, Some(s), _) => vec![(a.unwrap_or_else(default_agent), s)],
+        (a, None, true) => {
+            let agent_id = a.unwrap_or_else(default_agent);
+            let sessions = manager
+                .read_all_sessions(&agent_id)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            if sessions.is_empty() {
+                anyhow::bail!("No OpenClaw sessions found for agent: {}", agent_id);
+            }
+            let doc = toolpath_openclaw::derive::derive_graph(&sessions, None, &config);
+            let cache_id = make_id("openclaw", &doc_inner_id(&doc));
+            return Ok(vec![DerivedDoc { cache_id, doc }]);
+        }
+        (a, None, false) => {
+            #[cfg(not(target_os = "emscripten"))]
+            {
+                if let Some(picks) = pick_openclaw(manager, a.as_deref())? {
+                    picks
+                } else {
+                    let agent_id = a.unwrap_or_else(default_agent);
+                    let s = manager
+                        .most_recent_session(&agent_id)
+                        .map_err(|e| anyhow::anyhow!("{}", e))?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("No OpenClaw sessions found for agent: {}", agent_id)
+                        })?;
+                    let doc =
+                        Graph::from_path(toolpath_openclaw::derive::derive_path(&s, &config));
+                    let cache_id = make_id("openclaw", &doc_inner_id(&doc));
+                    return Ok(vec![DerivedDoc { cache_id, doc }]);
+                }
+            }
+            #[cfg(target_os = "emscripten")]
+            {
+                let agent_id = a.unwrap_or_else(default_agent);
+                let s = manager
+                    .most_recent_session(&agent_id)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("No OpenClaw sessions found for agent: {}", agent_id)
+                    })?;
+                let doc = Graph::from_path(toolpath_openclaw::derive::derive_path(&s, &config));
+                let cache_id = make_id("openclaw", &doc_inner_id(&doc));
+                return Ok(vec![DerivedDoc { cache_id, doc }]);
+            }
+        }
+    };
+
+    let mut docs: Vec<DerivedDoc> = Vec::with_capacity(pairs.len());
+    for (agent_id, session_id) in &pairs {
+        let s = manager
+            .read_session(agent_id, session_id)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let doc = Graph::from_path(toolpath_openclaw::derive::derive_path(&s, &config));
+        let cache_id = make_id("openclaw", &doc_inner_id(&doc));
+        docs.push(DerivedDoc { cache_id, doc });
+    }
+    Ok(docs)
+}
+
+/// Derive a single OpenClaw session given an explicit agent + session.
+/// Used by `path share` / `path p export`.
+#[allow(dead_code)]
+pub(crate) fn derive_openclaw_session(
+    agent: &str,
+    session: &str,
+    base: Option<PathBuf>,
+) -> Result<DerivedDoc> {
+    let manager = openclaw_manager(base);
+    let config = toolpath_openclaw::DeriveConfig::default();
+    let s = manager
+        .read_session(agent, session)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let doc = Graph::from_path(toolpath_openclaw::derive::derive_path(&s, &config));
+    let cache_id = make_id("openclaw", &doc_inner_id(&doc));
+    Ok(DerivedDoc { cache_id, doc })
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn pick_openclaw(
+    manager: &toolpath_openclaw::OpenClawConvo,
+    agent: Option<&str>,
+) -> Result<Option<Vec<(String, String)>>> {
+    if !fuzzy::available() {
+        return Ok(None);
+    }
+    let metas = match agent {
+        Some(a) => manager.list_sessions(a).map_err(|e| anyhow::anyhow!("{}", e))?,
+        None => manager
+            .list_all_sessions()
+            .map_err(|e| anyhow::anyhow!("{}", e))?,
+    };
+    if metas.is_empty() {
+        return Ok(None);
+    }
+    let lines: Vec<String> = metas
+        .iter()
+        .map(|m| {
+            format!(
+                "{}\t{}\t{}",
+                tab_safe(&m.agent_id),
+                tab_safe(&m.id),
+                render_row(
+                    None,
+                    parse_rfc3339(&m.timestamp),
+                    &count(m.entry_count, "entries"),
+                    None,
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
+            )
+        })
+        .collect();
+    let opts = fuzzy::PickOptions {
+        with_nth: "3",
+        prompt: "openclaw session> ",
+        preview: Some("{exe} show --ansi openclaw --agent {1} --session {2}"),
+        header: Some("pick an OpenClaw session (TAB = multi-select, Enter = confirm)"),
+        preview_window: "right:60%:wrap-word",
+        tiebreak: "index",
+        multi: true,
+    };
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
+    };
+    Ok(Some(parse_project_session(&selected)))
+}
+
 #[cfg(not(target_os = "emscripten"))]
 fn pick_pi_in_project(
     manager: &toolpath_pi::PiConvo,
@@ -1721,6 +1902,40 @@ mod tests {
                 repo: "pathstash".into(),
                 id: UUID.into(),
             }
+        );
+    }
+
+    #[test]
+    fn openclaw_import_derives_channel_aware_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("agents/main/sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("s1.jsonl"),
+            "{\"type\":\"session\",\"version\":3,\"id\":\"s1\",\"timestamp\":\"2026-06-30T12:00:00Z\",\"cwd\":\"/p\"}\n\
+             {\"type\":\"message\",\"id\":\"e1\",\"parentId\":null,\"timestamp\":\"2026-06-30T12:00:01Z\",\"message\":{\"role\":\"user\",\"content\":\"hi\",\"timestamp\":1}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("sessions.json"),
+            "{\"agent:main:whatsapp:direct:42\":{\"sessionId\":\"s1\",\"sessionFile\":\"s1.jsonl\"}}",
+        )
+        .unwrap();
+
+        let manager = toolpath_openclaw::OpenClawConvo::with_resolver(
+            toolpath_openclaw::PathResolver::with_state_dir(tmp.path()),
+        );
+        let docs =
+            derive_openclaw_with_manager(&manager, Some("main".into()), Some("s1".into()), false)
+                .unwrap();
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].cache_id.starts_with("openclaw-"));
+        let path = docs[0].doc.single_path().unwrap();
+        assert_eq!(path.meta.as_ref().unwrap().source.as_deref(), Some("openclaw"));
+        assert!(
+            path.steps
+                .iter()
+                .any(|s| s.step.actor == "human:whatsapp/42")
         );
     }
 

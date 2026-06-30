@@ -45,6 +45,7 @@ toolpath-codex = { workspace = true }
 toolpath-opencode = { workspace = true }
 toolpath-cursor = { workspace = true }
 toolpath-pi = { workspace = true }
+toolpath-openclaw = { workspace = true }
 toolpath-convo = { workspace = true }
 toolpath-github = { workspace = true }
 pathbase-client = { workspace = true }
@@ -69,6 +70,7 @@ toolpath-claude = { workspace = true }
 toolpath-gemini = { workspace = true }
 toolpath-codex = { workspace = true }
 toolpath-pi = { workspace = true }
+toolpath-openclaw = { workspace = true }
 
 [features]
 default = ["embedded-picker"]
