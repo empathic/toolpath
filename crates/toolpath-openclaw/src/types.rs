@@ -409,15 +409,9 @@ pub enum AgentMessage {
         api: String,
         /// Provider id.
         provider: String,
-        /// Requested model.
+        /// Requested model. (`responseModel`, when present, is preserved via
+        /// `extra`.)
         model: String,
-        /// Concrete served model when it differs.
-        #[serde(
-            rename = "responseModel",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        response_model: Option<String>,
         /// Token usage for this call.
         usage: Usage,
         /// Why the turn ended.
@@ -559,8 +553,8 @@ pub struct Usage {
     #[serde(default, rename = "totalTokens")]
     pub total_tokens: u64,
     /// Per-class cost breakdown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost: Option<CostBreakdown>,
+    #[serde(default)]
+    pub cost: CostBreakdown,
 }
 
 /// Dollar cost breakdown accompanying [`Usage`].
