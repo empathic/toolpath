@@ -87,14 +87,14 @@ pub fn parse_session_key(key: &str) -> ParsedKey {
 }
 
 /// One entry in `sessions.json` (keyed by routing key).
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexEntry {
     /// The transcript session id (filename stem).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// The transcript filename (relative to the sessions dir, or absolute).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_file: Option<String>,
     /// Anything else OpenClaw stores per session.
     #[serde(flatten)]
