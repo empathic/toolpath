@@ -425,6 +425,7 @@ pub(crate) fn argv_for(harness: crate::cmd_share::Harness, session_id: &str) -> 
         Harness::Claude => vec!["-r".into(), session_id.into()],
         Harness::Gemini => vec!["--resume".into(), session_id.into()],
         Harness::Codex => vec!["resume".into(), session_id.into()],
+        Harness::Copilot => vec!["--resume".into(), session_id.into()],
         Harness::Opencode => vec!["--session".into(), session_id.into()],
         // Cursor.app has no "open composer by id" flag — we exec the
         // workspace path so Cursor opens on that folder; the projected
@@ -484,6 +485,10 @@ pub(crate) fn project_into_harness(
         Harness::Claude => crate::cmd_export::project_claude(path, cwd),
         Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
         Harness::Codex => crate::cmd_export::project_codex(path, cwd),
+        Harness::Copilot => anyhow::bail!(
+            "resume into Copilot CLI is not supported yet: it has no projector \
+             (Path → events.jsonl). Copilot is import/list/show/share-only for now."
+        ),
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
         Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
         Harness::Pi => crate::cmd_export::project_pi(path, cwd),

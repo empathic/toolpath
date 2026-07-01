@@ -1022,6 +1022,21 @@ fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>>
     wrap_paths_copilot(paths)
 }
 
+/// Derive a single Copilot session given an explicit session id.
+pub(crate) fn derive_copilot_session(session: &str) -> Result<DerivedDoc> {
+    let manager = toolpath_copilot::CopilotConvo::new();
+    let config = toolpath_copilot::derive::DeriveConfig { project_path: None };
+    let s = manager
+        .read_session(session)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let path = toolpath_copilot::derive::derive_path(&s, &config);
+    let cache_id = make_id("copilot", &path.path.id);
+    Ok(DerivedDoc {
+        cache_id,
+        doc: Graph::from_path(path),
+    })
+}
+
 fn wrap_paths_copilot(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
     Ok(paths
         .into_iter()

@@ -16,6 +16,7 @@ pub enum HarnessArg {
     Claude,
     Gemini,
     Codex,
+    Copilot,
     Opencode,
     Cursor,
     Pi,
@@ -71,6 +72,7 @@ pub(crate) enum Harness {
     Claude,
     Gemini,
     Codex,
+    Copilot,
     Opencode,
     Cursor,
     Pi,
@@ -82,6 +84,7 @@ impl Harness {
             Harness::Claude => "claude",
             Harness::Gemini => "gemini",
             Harness::Codex => "codex",
+            Harness::Copilot => "copilot",
             Harness::Opencode => "opencode",
             Harness::Cursor => "cursor",
             Harness::Pi => "pi",
@@ -95,6 +98,7 @@ impl Harness {
             Harness::Claude => "claude  ",
             Harness::Gemini => "gemini  ",
             Harness::Codex => "codex   ",
+            Harness::Copilot => "copilot ",
             Harness::Opencode => "opencode",
             Harness::Cursor => "cursor  ",
             Harness::Pi => "pi      ",
@@ -114,6 +118,7 @@ impl Harness {
             HarnessArg::Claude => Harness::Claude,
             HarnessArg::Gemini => Harness::Gemini,
             HarnessArg::Codex => Harness::Codex,
+            HarnessArg::Copilot => Harness::Copilot,
             HarnessArg::Opencode => Harness::Opencode,
             HarnessArg::Cursor => Harness::Cursor,
             HarnessArg::Pi => Harness::Pi,
@@ -125,6 +130,7 @@ impl Harness {
             "claude" => Some(Harness::Claude),
             "gemini" => Some(Harness::Gemini),
             "codex" => Some(Harness::Codex),
+            "copilot" => Some(Harness::Copilot),
             "opencode" => Some(Harness::Opencode),
             "cursor" => Some(Harness::Cursor),
             "pi" => Some(Harness::Pi),
@@ -156,6 +162,7 @@ pub(crate) struct HarnessBundle {
     pub(crate) claude: Option<toolpath_claude::ClaudeConvo>,
     pub(crate) gemini: Option<toolpath_gemini::GeminiConvo>,
     pub(crate) codex: Option<toolpath_codex::CodexConvo>,
+    pub(crate) copilot: Option<toolpath_copilot::CopilotConvo>,
     pub(crate) opencode: Option<toolpath_opencode::OpencodeConvo>,
     pub(crate) cursor: Option<toolpath_cursor::CursorConvo>,
     pub(crate) pi: Option<toolpath_pi::PiConvo>,
@@ -170,6 +177,7 @@ impl HarnessBundle {
             claude: Some(toolpath_claude::ClaudeConvo::new()),
             gemini: Some(toolpath_gemini::GeminiConvo::new()),
             codex: Some(toolpath_codex::CodexConvo::new()),
+            copilot: Some(toolpath_copilot::CopilotConvo::new()),
             opencode: Some(toolpath_opencode::OpencodeConvo::new()),
             cursor: Some(toolpath_cursor::CursorConvo::new()),
             pi: Some(toolpath_pi::PiConvo::new()),
@@ -215,6 +223,11 @@ pub(crate) fn gather_sessions(
         && let Some(mgr) = &bundle.codex
     {
         collect_codex(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
+    if want(Harness::Copilot)
+        && let Some(mgr) = &bundle.copilot
+    {
+        collect_copilot(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
     if want(Harness::Opencode)
         && let Some(mgr) = &bundle.opencode
@@ -434,6 +447,49 @@ fn collect_codex(
     }
 }
 
+fn collect_copilot(
+    mgr: &toolpath_copilot::CopilotConvo,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<SessionRow>,
+) {
+    let metas = match mgr.list_sessions() {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => return,
+        Err(e) if is_not_found_copilot(&e) => return,
+        Err(e) => {
+            eprintln!("warning: copilot aggregation failed: {e}");
+            return;
+        }
+    };
+    for m in metas {
+        // Copilot stores cwd as a String (from session.start `context.cwd`).
+        let stored = m.cwd.as_deref().map(std::path::PathBuf::from);
+        if let Some(filter) = project_filter {
+            match &stored {
+                Some(p) if paths_match(p, filter) => {}
+                _ => continue,
+            }
+        }
+        let matches_cwd = stored
+            .as_deref()
+            .map(|p| paths_match(p, canonical_cwd))
+            .unwrap_or(false);
+        out.push(SessionRow {
+            harness: Harness::Copilot,
+            project: None,
+            cwd: m.cwd,
+            session_id: m.id,
+            title: m
+                .first_user_message
+                .unwrap_or_else(|| "(no prompt)".to_string()),
+            last_activity: m.last_activity,
+            message_count: m.line_count,
+            matches_cwd,
+        });
+    }
+}
+
 fn collect_opencode(
     mgr: &toolpath_opencode::OpencodeConvo,
     canonical_cwd: &std::path::Path,
@@ -549,6 +605,13 @@ fn is_not_found_codex(err: &toolpath_codex::ConvoError) -> bool {
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::CodexDirectoryNotFound(_))
+}
+
+fn is_not_found_copilot(err: &toolpath_copilot::ConvoError) -> bool {
+    use toolpath_copilot::ConvoError;
+    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, ConvoError::NoHomeDirectory)
+        || matches!(err, ConvoError::CopilotDirectoryNotFound(_))
 }
 
 fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
@@ -678,6 +741,7 @@ fn harness_to_arg(h: Harness) -> HarnessArg {
         Harness::Claude => HarnessArg::Claude,
         Harness::Gemini => HarnessArg::Gemini,
         Harness::Codex => HarnessArg::Codex,
+        Harness::Copilot => HarnessArg::Copilot,
         Harness::Opencode => HarnessArg::Opencode,
         Harness::Cursor => HarnessArg::Cursor,
         Harness::Pi => HarnessArg::Pi,
@@ -710,6 +774,10 @@ fn bail_no_sessions(
     summary.push_str(&format_status_line(
         "codex",
         &harness_status_codex(bundle, home.as_deref()),
+    ));
+    summary.push_str(&format_status_line(
+        "copilot",
+        &harness_status_copilot(bundle, home.as_deref()),
     ));
     summary.push_str(&format_status_line(
         "opencode",
@@ -801,6 +869,19 @@ fn harness_status_codex(bundle: &HarnessBundle, home: Option<&std::path::Path>) 
         return HarnessStatus::unresolved();
     };
     match mgr.resolver().sessions_root() {
+        Ok(p) => HarnessStatus {
+            path: home_relative(&p, home),
+            exists: p.exists(),
+        },
+        Err(_) => HarnessStatus::unresolved(),
+    }
+}
+
+fn harness_status_copilot(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
+    let Some(mgr) = &bundle.copilot else {
+        return HarnessStatus::unresolved();
+    };
+    match mgr.resolver().session_state_dir() {
         Ok(p) => HarnessStatus {
             path: home_relative(&p, home),
             exists: p.exists(),
@@ -987,6 +1068,7 @@ fn derive_session(
             crate::cmd_import::derive_pi_session(project.expect("project_keyed"), session, None)
         }
         Harness::Codex => crate::cmd_import::derive_codex_session(session),
+        Harness::Copilot => crate::cmd_import::derive_copilot_session(session),
         Harness::Opencode => crate::cmd_import::derive_opencode_session(session, false),
         Harness::Cursor => crate::cmd_import::derive_cursor_session(session),
     }
@@ -1173,6 +1255,49 @@ mod tests {
         assert_eq!(rows[0].harness, Harness::Codex);
         assert_eq!(rows[0].cwd.as_deref(), Some("/work/proj"));
         assert!(rows[0].matches_cwd);
+    }
+
+    fn copilot_only_bundle(home: &Path) -> HarnessBundle {
+        let copilot_dir = home.join(".copilot");
+        std::fs::create_dir_all(&copilot_dir).unwrap();
+        let resolver = toolpath_copilot::PathResolver::new().with_copilot_dir(&copilot_dir);
+        HarnessBundle {
+            copilot: Some(toolpath_copilot::CopilotConvo::with_resolver(resolver)),
+            ..Default::default()
+        }
+    }
+
+    fn write_copilot_session(copilot_dir: &Path, id: &str, cwd: &str) {
+        // ~/.copilot/session-state/<id>/events.jsonl (cwd under session.start.context)
+        let dir = copilot_dir.join("session-state").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let start = format!(
+            r#"{{"type":"session.start","timestamp":"2026-07-01T00:00:00Z","data":{{"copilotVersion":"1.0.67","context":{{"cwd":"{cwd}"}}}}}}"#
+        );
+        let user = r#"{"type":"user.message","timestamp":"2026-07-01T00:00:01Z","data":{"content":"hi"}}"#;
+        std::fs::write(dir.join("events.jsonl"), format!("{start}\n{user}\n")).unwrap();
+    }
+
+    #[test]
+    fn gather_sessions_includes_copilot_rows_with_cwd_match() {
+        let temp = TempDir::new().unwrap();
+        write_copilot_session(&temp.path().join(".copilot"), "sess-aa", "/work/proj");
+        let bundle = copilot_only_bundle(temp.path());
+        let rows = gather_sessions(&bundle, Path::new("/work/proj"), None, None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].harness, Harness::Copilot);
+        assert_eq!(rows[0].cwd.as_deref(), Some("/work/proj"));
+        assert!(rows[0].matches_cwd);
+    }
+
+    #[test]
+    fn gather_sessions_filters_to_copilot() {
+        let temp = TempDir::new().unwrap();
+        write_copilot_session(&temp.path().join(".copilot"), "sess-aa", "/work/proj");
+        let bundle = copilot_only_bundle(temp.path());
+        // Filtering to a different harness drops the copilot row.
+        let rows = gather_sessions(&bundle, Path::new("/work/proj"), Some(Harness::Codex), None);
+        assert!(rows.is_empty());
     }
 
     #[test]

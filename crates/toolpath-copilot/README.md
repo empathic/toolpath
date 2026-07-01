@@ -59,16 +59,18 @@ content — a `raw` unified-diff perspective.
 
 ## Status & limitations
 
-- **Forward derivation only.** There is no projector (`Path` → Copilot session)
-  yet, so `path resume` into Copilot is not wired up.
-- **File fidelity is best-effort.** Copilot appears to record file edits as
-  tool-call args plus separate `checkpoints/` snapshots rather than inline diffs
+- **Forward only.** Wired into `path p import/list/show copilot` and
+  `path share` (derive → upload needs no projector). There is **no projector**
+  (`Path` → Copilot `events.jsonl`) yet, so `path p export copilot` and
+  `path resume` into Copilot bail with a clear message.
+- **File fidelity is best-effort.** Copilot records file edits as tool-call args
+  plus separate `checkpoints/`/`rewind-snapshots/` rather than inline diffs
   (unlike Codex). This crate synthesizes a `raw` diff when the tool args contain
   full file content; edit-shaped calls without the full file yield a structural
   change only. Snapshot-based diff reconstruction is deferred.
-- **Token accounting** is taken from `session.shutdown` as a session total only;
-  per-turn attribution is not attempted (the per-event token semantics are
-  unverified).
+- **Token accounting** sums per-message `outputTokens` for the session output
+  total (falling back to `session.shutdown` when present); no per-turn
+  attribution, and no input-token total observed in an open session.
 
 See the [known-gaps doc](../../docs/agents/formats/copilot-cli/known-gaps-and-sourcing.md)
 for the full list and the checklist to run once a real session is captured.
