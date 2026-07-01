@@ -81,9 +81,13 @@ tracks what's left.
    with Codex's `patch_apply_end`, and what that means for a future toolpath
    `raw` perspective.
 6. **[resume-and-sessions.md](resume-and-sessions.md)** — the CLI flags and
-   slash commands that list, resume, and manage sessions; the surface a future
-   projector / `path resume` integration must match.
-7. **[known-gaps-and-sourcing.md](known-gaps-and-sourcing.md)** — the
+   slash commands that list, resume, and manage sessions; the surface the
+   `CopilotProjector` / `path resume` integration matches.
+7. **[writing-compatible.md](writing-compatible.md)** — the loader constraints
+   a synthesized `events.jsonl` must satisfy for `copilot --resume` to accept
+   it (UUID envelope ids, offset-bearing timestamps, …), discovered from live
+   resume runs and updated as new rejections surface.
+8. **[known-gaps-and-sourcing.md](known-gaps-and-sourcing.md)** — the
    consolidated open questions, the full source list, and the
    "verify-once-we-have-samples" checklist.
 

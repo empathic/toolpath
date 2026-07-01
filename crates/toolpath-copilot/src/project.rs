@@ -90,22 +90,34 @@ impl CopilotProjector {
     fn build(&self, view: &ConversationView) -> Session {
         let mut b = LineBuilder::new();
 
+        // Copilot's loader requires every event `timestamp` to be an ISO 8601
+        // date-time WITH a timezone offset. Pick a base (first valid turn ts, or
+        // the view's start) and normalize each event's timestamp against it.
+        let base_ts = view
+            .turns
+            .iter()
+            .map(|t| t.timestamp.as_str())
+            .find(|s| is_iso_offset(s))
+            .map(str::to_string)
+            .or_else(|| view.started_at.map(|dt| dt.to_rfc3339()))
+            .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_string());
+
         // session.start with git context from the view's base.
-        b.push("session.start", "", self.session_start_data(view));
+        b.push("session.start", &base_ts, self.session_start_data(view));
 
         for turn in &view.turns {
-            let ts = turn.timestamp.as_str();
+            let ts = iso_or(&turn.timestamp, &base_ts);
             match &turn.role {
-                Role::User => b.push("user.message", ts, json!({ "content": turn.text })),
+                Role::User => b.push("user.message", &ts, json!({ "content": turn.text })),
                 Role::System => b.push(
                     "system.message",
-                    ts,
+                    &ts,
                     json!({ "role": "system", "content": turn.text }),
                 ),
-                Role::Assistant => self.push_assistant(&mut b, turn),
+                Role::Assistant => self.push_assistant(&mut b, turn, &ts),
                 // Unknown/other roles (e.g. pi's `tool` role) fold into a user
                 // message so the forward path reproduces them stably.
-                Role::Other(_) => b.push("user.message", ts, json!({ "content": turn.text })),
+                Role::Other(_) => b.push("user.message", &ts, json!({ "content": turn.text })),
             }
         }
 
@@ -149,8 +161,7 @@ impl CopilotProjector {
         })
     }
 
-    fn push_assistant(&self, b: &mut LineBuilder, turn: &Turn) {
-        let ts = turn.timestamp.as_str();
+    fn push_assistant(&self, b: &mut LineBuilder, turn: &Turn, ts: &str) {
         b.push("assistant.turn_start", ts, json!({}));
 
         // assistant.message carries text, model, reasoning, tokens, and the
@@ -269,6 +280,21 @@ fn strip_file_uri(s: &str) -> String {
 /// projector output reproducible.
 fn event_uuid(n: usize) -> String {
     format!("00000000-0000-4000-8000-{:012x}", n)
+}
+
+/// True when `s` is an ISO 8601 / RFC 3339 date-time WITH a timezone offset
+/// (what Copilot's loader requires on every event `timestamp`).
+fn is_iso_offset(s: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(s).is_ok()
+}
+
+/// `s` if it's a valid offset-bearing ISO timestamp, else `fallback`.
+fn iso_or(s: &str, fallback: &str) -> String {
+    if is_iso_offset(s) {
+        s.to_string()
+    } else {
+        fallback.to_string()
+    }
 }
 
 #[cfg(test)]

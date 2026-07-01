@@ -40,6 +40,11 @@ and the checklist for the next (feature-rich) capture.
    `[reverse-eng, Medium]` — see [session-store-db.md](session-store-db.md).
 7. **`parentId` tree** — the provider derives turns sequentially and doesn't yet
    use the tree; confirm it's always linear for coding sessions.
+8. **Resume loader contract** — whether the real `copilot --resume` accepts a
+   *synthesized* session is being mapped incrementally from live rejections:
+   envelope `id` must be a UUID string and every `timestamp` must be
+   offset-bearing ISO 8601 are confirmed; more requirements may surface. Live
+   list: [writing-compatible.md](writing-compatible.md).
 8. **Legacy migration** (`history-session-state/` → `session-state/`). `[unverified]`.
 9. **XDG support.** No evidence of `XDG_CONFIG_HOME`; likely absent `[unverified]`.
 
