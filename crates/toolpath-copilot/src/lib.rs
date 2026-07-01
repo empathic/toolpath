@@ -16,6 +16,9 @@ pub use types::{
 };
 
 pub mod provider;
-pub use provider::{CopilotConvo, PRODUCER_NAME, PROVIDER_ID, to_view, tool_category};
+pub use provider::{CopilotConvo, PRODUCER_NAME, PROVIDER_ID, native_name, to_view, tool_category};
+
+pub mod project;
+pub use project::CopilotProjector;
 
 pub mod derive;

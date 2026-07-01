@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use toolpath_convo::TokenUsage;
 
 // ── Event type discriminants (v1.0.54, reverse-engineered) ───────────
 
@@ -235,6 +236,12 @@ pub struct MessageEvent {
     pub reasoning: Option<String>,
     /// Output tokens attributed to this message (`outputTokens`).
     pub output_tokens: Option<u32>,
+    /// Input/prompt tokens, when present. Real Copilot sessions record only
+    /// `outputTokens` per message; `inputTokens`/cache fields are read too so a
+    /// projected session (from a harness that does carry them) round-trips.
+    pub input_tokens: Option<u32>,
+    pub cache_read_tokens: Option<u32>,
+    pub cache_write_tokens: Option<u32>,
 }
 
 impl MessageEvent {
@@ -245,7 +252,28 @@ impl MessageEvent {
             id: str_field(p, &["messageId", "message_id", "id"]),
             reasoning: payload_text_keys(p, &["reasoningText", "reasoning", "thinking"]),
             output_tokens: u32_field(p, &["outputTokens", "output_tokens"]),
+            input_tokens: u32_field(p, &["inputTokens", "input_tokens", "promptTokens"]),
+            cache_read_tokens: u32_field(p, &["cacheReadTokens", "cache_read_tokens"]),
+            cache_write_tokens: u32_field(p, &["cacheWriteTokens", "cache_write_tokens"]),
         }
+    }
+
+    /// Per-message token usage, or `None` when no token field was present.
+    pub fn token_usage(&self) -> Option<TokenUsage> {
+        if self.output_tokens.is_none()
+            && self.input_tokens.is_none()
+            && self.cache_read_tokens.is_none()
+            && self.cache_write_tokens.is_none()
+        {
+            return None;
+        }
+        Some(TokenUsage {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_read_tokens: self.cache_read_tokens,
+            cache_write_tokens: self.cache_write_tokens,
+            breakdowns: Default::default(),
+        })
     }
 }
 

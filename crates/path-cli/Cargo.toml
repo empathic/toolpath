@@ -53,7 +53,7 @@ git2 = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 rusqlite = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 # Embedded fuzzy picker — used when external `fzf` isn't on PATH.
 # Disable default features to avoid pulling in skim's CLI deps
 # (clap, clap_mangen, env_logger); keep `frizbee` for the matcher.

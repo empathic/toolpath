@@ -131,6 +131,7 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<crate::cmd_share::Har
             "claude-code" => return Some(Harness::Claude),
             "gemini-cli" => return Some(Harness::Gemini),
             "codex" => return Some(Harness::Codex),
+            "copilot" => return Some(Harness::Copilot),
             "opencode" => return Some(Harness::Opencode),
             "cursor" => return Some(Harness::Cursor),
             "pi" => return Some(Harness::Pi),
@@ -326,6 +327,7 @@ const ALL_HARNESSES: &[crate::cmd_share::Harness] = &[
     crate::cmd_share::Harness::Claude,
     crate::cmd_share::Harness::Gemini,
     crate::cmd_share::Harness::Codex,
+    crate::cmd_share::Harness::Copilot,
     crate::cmd_share::Harness::Opencode,
     crate::cmd_share::Harness::Cursor,
     crate::cmd_share::Harness::Pi,
@@ -485,10 +487,7 @@ pub(crate) fn project_into_harness(
         Harness::Claude => crate::cmd_export::project_claude(path, cwd),
         Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
         Harness::Codex => crate::cmd_export::project_codex(path, cwd),
-        Harness::Copilot => anyhow::bail!(
-            "resume into Copilot CLI is not supported yet: it has no projector \
-             (Path → events.jsonl). Copilot is import/list/show/share-only for now."
-        ),
+        Harness::Copilot => crate::cmd_export::project_copilot(path, cwd),
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
         Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
         Harness::Pi => crate::cmd_export::project_pi(path, cwd),

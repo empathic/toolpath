@@ -106,6 +106,41 @@ fn file_input_explicit_codex_projects_and_records_exec() {
 }
 
 #[test]
+fn file_input_explicit_copilot_projects_and_records_exec() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("copilot");
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:copilot", "copilot://resume-copilot-int");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(
+        args_explicit(doc_file, cwd.path(), HarnessArg::Copilot),
+        &recorder,
+    )
+    .unwrap();
+
+    // Resume argv is `copilot --resume <fresh-id>`.
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "copilot");
+    assert_eq!(cap.args[0], "--resume");
+    assert!(!cap.args[1].is_empty());
+
+    // A session-state/<id>/events.jsonl was projected under the temp ~/.copilot.
+    let state = std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".copilot/session-state"))
+        .unwrap();
+    assert!(state.exists(), "copilot session-state dir not created");
+    let has_events = std::fs::read_dir(&state)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| e.path().join("events.jsonl").is_file());
+    assert!(has_events, "no session-state/<id>/events.jsonl written");
+}
+
+#[test]
 fn file_input_explicit_opencode_projects_and_records_exec() {
     let _env = env_lock();
     let _home = ScopedHome::new();

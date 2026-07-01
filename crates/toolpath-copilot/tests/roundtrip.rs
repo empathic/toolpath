@@ -94,10 +94,11 @@ fn view_has_delegation_skill_and_usage() {
     assert!(view.events.iter().any(|e| e.event_type == "skill.invoked"));
     assert!(view.events.iter().any(|e| e.event_type == "session.task_complete"));
 
-    // Token totals from session.shutdown.
+    // Session output total = sum of per-message outputTokens (120+90+60),
+    // no per-message input in an open session (no session.shutdown).
     let u = view.total_usage.as_ref().unwrap();
-    assert_eq!(u.input_tokens, Some(4200));
-    assert_eq!(u.output_tokens, Some(880));
+    assert_eq!(u.output_tokens, Some(270));
+    assert_eq!(u.input_tokens, None);
 
     // File change tracked.
     assert_eq!(view.files_changed, vec!["src/main.rs".to_string()]);

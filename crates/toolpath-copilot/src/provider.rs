@@ -67,6 +67,55 @@ pub fn tool_category(name: &str) -> Option<ToolCategory> {
     }
 }
 
+/// Reverse of [`tool_category`]: the Copilot-native tool name for a category.
+///
+/// Used by the projector to remap a foreign harness's tool name (e.g. Claude's
+/// `Bash`, codex's `shell`) into Copilot's vocabulary. `FileWrite`/`FileSearch`
+/// are too coarse alone, so the arg shape disambiguates. Every returned name
+/// re-classifies back to the same category via [`tool_category`], so a
+/// Copilot→Copilot round-trip is stable.
+pub fn native_name(category: ToolCategory, input: &serde_json::Value) -> &'static str {
+    match category {
+        ToolCategory::Shell => "bash",
+        ToolCategory::FileRead => "view",
+        ToolCategory::FileWrite => {
+            if input.get("old_string").is_some() || input.get("old_str").is_some() {
+                "edit_file"
+            } else {
+                "create_file"
+            }
+        }
+        ToolCategory::FileSearch => {
+            if input.get("query").is_some()
+                || input.get("pattern").is_some()
+                || input.get("regex").is_some()
+            {
+                "grep"
+            } else {
+                "glob"
+            }
+        }
+        ToolCategory::Network => "fetch",
+        ToolCategory::Delegation => "task",
+    }
+}
+
+/// Fold `add` into `slot` field-wise (summing counts). Used to merge several
+/// assistant messages into one turn's usage, and to sum per-turn usage into the
+/// session total.
+pub(crate) fn merge_turn_usage(slot: &mut Option<TokenUsage>, add: Option<TokenUsage>) {
+    let Some(add) = add else { return };
+    let sum = |a: Option<u32>, b: Option<u32>| match (a, b) {
+        (None, None) => None,
+        (x, y) => Some(x.unwrap_or(0) + y.unwrap_or(0)),
+    };
+    let s = slot.get_or_insert_with(TokenUsage::default);
+    s.input_tokens = sum(s.input_tokens, add.input_tokens);
+    s.output_tokens = sum(s.output_tokens, add.output_tokens);
+    s.cache_read_tokens = sum(s.cache_read_tokens, add.cache_read_tokens);
+    s.cache_write_tokens = sum(s.cache_write_tokens, add.cache_write_tokens);
+}
+
 /// Convert a parsed Copilot [`Session`] into a [`ConversationView`].
 pub fn to_view(session: &Session) -> ConversationView {
     let start = session.start();
@@ -75,12 +124,15 @@ pub fn to_view(session: &Session) -> ConversationView {
     let mut turns: Vec<Turn> = Vec::new();
     let mut current: Option<Turn> = None;
     let mut events: Vec<ConversationEvent> = Vec::new();
-    let mut total_usage: Option<TokenUsage> = None;
-    // Copilot reports per-message `outputTokens` (no session-level input count
-    // in an open session); sum them as the session output total when there's
-    // no `session.shutdown`.
-    let mut output_token_sum: u32 = 0;
+    // Copilot reports per-message tokens (`outputTokens`, and — on a projected
+    // session — `inputTokens`/cache). We set them per-turn and sum for the
+    // session total; `session.shutdown` (when present) is the fallback total.
+    let mut shutdown_usage: Option<TokenUsage> = None;
+    // `seq` numbers turns (stable across re-derivation); `aux_seq` numbers
+    // fallback tool/sub-agent ids so a turn's id never depends on how many
+    // tools preceded it (which would break parent-graph idempotency).
     let mut seq: usize = 0;
+    let mut aux_seq: usize = 0;
 
     for (i, line) in session.lines.iter().enumerate() {
         let ts = line.timestamp.clone().unwrap_or_default();
@@ -88,7 +140,7 @@ pub fn to_view(session: &Session) -> ConversationView {
             CopilotEvent::SessionStart(_) => {}
             CopilotEvent::SessionShutdown(s) => {
                 if s.input_tokens.is_some() || s.output_tokens.is_some() {
-                    total_usage = Some(TokenUsage {
+                    shutdown_usage = Some(TokenUsage {
                         input_tokens: s.input_tokens,
                         output_tokens: s.output_tokens,
                         cache_read_tokens: None,
@@ -112,10 +164,9 @@ pub fn to_view(session: &Session) -> ConversationView {
                 current = Some(t);
             }
             CopilotEvent::AssistantMessage(m) => {
-                if let Some(ot) = m.output_tokens {
-                    output_token_sum = output_token_sum.saturating_add(ot);
-                }
+                let usage = m.token_usage();
                 let cur = ensure_assistant(&mut current, &mut seq, &default_model, &ts);
+                merge_turn_usage(&mut cur.token_usage, usage);
                 append_text(&mut cur.text, &m.text);
                 if let Some(r) = &m.reasoning {
                     match &mut cur.thinking {
@@ -135,8 +186,8 @@ pub fn to_view(session: &Session) -> ConversationView {
             }
             CopilotEvent::ToolStart(te) => {
                 let cur = ensure_assistant(&mut current, &mut seq, &default_model, &ts);
-                seq += 1;
-                let tool_id = te.id.clone().unwrap_or_else(|| format!("tool{seq}"));
+                aux_seq += 1;
+                let tool_id = te.id.clone().unwrap_or_else(|| format!("tool{aux_seq}"));
                 if let Some(fm) = file_mutation_for(&tool_id, &te.name, &te.args) {
                     cur.file_mutations.push(fm);
                 }
@@ -162,8 +213,8 @@ pub fn to_view(session: &Session) -> ConversationView {
                 ) {
                     // No matching start seen — synthesize a carrier invocation.
                     let cur = ensure_assistant(&mut current, &mut seq, &default_model, &ts);
-                    seq += 1;
-                    let tool_id = te.id.clone().unwrap_or_else(|| format!("tool{seq}"));
+                    aux_seq += 1;
+                    let tool_id = te.id.clone().unwrap_or_else(|| format!("tool{aux_seq}"));
                     if let Some(fm) = file_mutation_for(&tool_id, &te.name, &te.args) {
                         cur.file_mutations.push(fm);
                     }
@@ -178,9 +229,9 @@ pub fn to_view(session: &Session) -> ConversationView {
             }
             CopilotEvent::SubagentStarted(s) => {
                 let cur = ensure_assistant(&mut current, &mut seq, &default_model, &ts);
-                seq += 1;
+                aux_seq += 1;
                 cur.delegations.push(DelegatedWork {
-                    agent_id: s.id.clone().unwrap_or_else(|| format!("sub{seq}")),
+                    agent_id: s.id.clone().unwrap_or_else(|| format!("sub{aux_seq}")),
                     prompt: s.prompt.unwrap_or_default(),
                     turns: Vec::new(),
                     result: s.result,
@@ -209,17 +260,24 @@ pub fn to_view(session: &Session) -> ConversationView {
     }
     flush(&mut turns, &mut current);
 
-    // Session output total from summed per-message tokens, unless a
-    // `session.shutdown` already gave us a total.
-    if total_usage.is_none() && output_token_sum > 0 {
-        total_usage = Some(TokenUsage {
-            input_tokens: None,
-            output_tokens: Some(output_token_sum),
-            cache_read_tokens: None,
-            cache_write_tokens: None,
-            breakdowns: Default::default(),
-        });
+    // Renumber turns by final position so ids don't depend on how many turns
+    // were created-then-dropped as empty (which differs across re-derivation
+    // and would break parent-graph idempotency). Turn ids are only used for the
+    // step DAG; tool/delegation pairing keys off tool/agent ids, not turn ids.
+    for (i, t) in turns.iter_mut().enumerate() {
+        t.id = format!("t{i}");
+        t.parent_id = (i > 0).then(|| format!("t{}", i - 1));
     }
+
+    // Session total = field-wise sum of per-turn usage (Σ turns = session
+    // total); fall back to `session.shutdown` when no per-turn usage exists.
+    let mut summed: Option<TokenUsage> = None;
+    for t in &turns {
+        if let Some(u) = &t.token_usage {
+            merge_turn_usage(&mut summed, Some(u.clone()));
+        }
+    }
+    let total_usage = summed.or(shutdown_usage);
 
     // Files changed, in first-touch order, deduped.
     let mut files_changed: Vec<String> = Vec::new();
@@ -589,12 +647,12 @@ mod tests {
             r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"copilotVersion":"1.0.66","producer":"copilot-agent","context":{"cwd":"/tmp/proj"}}}"#,
             r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"build a thing"}}"#,
             r#"{"type":"assistant.turn_start","timestamp":"2026-06-30T10:00:02.000Z","data":{}}"#,
-            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"Listing files.","model":"claude-haiku-4.5","reasoningText":"Let me look at the files.","outputTokens":50}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"Listing files.","model":"claude-haiku-4.5","reasoningText":"Let me look at the files."}}"#,
             r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:04.000Z","data":{"toolCallId":"c1","toolName":"bash","arguments":{"command":"ls"}}}"#,
             r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:05.000Z","data":{"toolCallId":"c1","success":true,"result":{"content":"a.rs","detailedContent":"a.rs"}}}"#,
             r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:06.000Z","data":{"toolCallId":"c2","toolName":"create_file","arguments":{"path":"a.rs","content":"fn main() {}\n"}}}"#,
             r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:07.000Z","data":{"toolCallId":"c2","success":true}}"#,
-            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:08.000Z","data":{"content":"Done.","outputTokens":20}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:08.000Z","data":{"content":"Done."}}"#,
             r#"{"type":"assistant.turn_end","timestamp":"2026-06-30T10:00:09.000Z","data":{}}"#,
             r#"{"type":"session.shutdown","timestamp":"2026-06-30T10:00:10.000Z","data":{"modelMetrics":{"model":"claude-haiku-4.5"},"usage":{"inputTokens":1200,"outputTokens":340}}}"#,
         ]

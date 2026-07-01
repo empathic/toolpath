@@ -124,6 +124,48 @@ impl Harness for CodexHarness {
     }
 }
 
+struct CopilotHarness;
+impl Harness for CopilotHarness {
+    fn name(&self) -> &'static str {
+        "copilot"
+    }
+    fn roundtrip(&self, view: &ConversationView) -> ConversationView {
+        let projector = toolpath_copilot::CopilotProjector::new();
+        let session = projector.project(view).expect("copilot project");
+        toolpath_copilot::to_view(&session)
+    }
+    fn load_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("copilot/convo.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let lines = toolpath_copilot::EventReader::read_lines(&path).expect("copilot fixture parse");
+        let session = toolpath_copilot::Session {
+            id: "fixture".to_string(),
+            dir_path: path.clone(),
+            lines,
+            workspace: None,
+        };
+        Some(toolpath_copilot::to_view(&session))
+    }
+    fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
+        let projector = toolpath_copilot::CopilotProjector::new();
+        let session = projector
+            .project(view)
+            .map_err(|e| format!("project: {}", e))?;
+        let mut lines: Vec<String> = Vec::new();
+        for line in &session.lines {
+            lines.push(serde_json::to_string(line).map_err(|e| format!("line: {}", e))?);
+        }
+        let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {}", e))?;
+        std::fs::write(dir.path().join("events.jsonl"), lines.join("\n"))
+            .map_err(|e| format!("write: {}", e))?;
+        toolpath_copilot::EventReader::read_session_dir(dir.path())
+            .map_err(|e| format!("re-read: {}", e))?;
+        Ok(())
+    }
+}
+
 struct PiHarness;
 impl Harness for PiHarness {
     fn name(&self) -> &'static str {
@@ -982,6 +1024,7 @@ fn run_matrix(label: &str, sources: &[(String, ConversationView)]) {
     let harnesses: Vec<Box<dyn Harness>> = vec![
         Box::new(ClaudeHarness),
         Box::new(CodexHarness),
+        Box::new(CopilotHarness),
         Box::new(PiHarness),
         Box::new(GeminiHarness),
         Box::new(OpencodeHarness),
@@ -1032,6 +1075,7 @@ fn all_harnesses() -> Vec<Box<dyn Harness>> {
     vec![
         Box::new(ClaudeHarness),
         Box::new(CodexHarness),
+        Box::new(CopilotHarness),
         Box::new(PiHarness),
         Box::new(GeminiHarness),
         Box::new(OpencodeHarness),

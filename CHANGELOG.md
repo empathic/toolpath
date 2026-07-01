@@ -40,14 +40,17 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
   the `checkpoints/` format remain unverified; the parser stays tolerant.
 - Adds the on-disk format reference at `docs/agents/formats/copilot-cli/`
   (folder, every claim confidence-tagged) and its verification checklist.
-- Wired into the CLI for the **forward path**: `path p import copilot`,
-  `path p list copilot`, `path show copilot`, and **`path share`** (Copilot is
-  now in the share harness picker/probe — the forward derive→upload path needs
-  no projector). No projector yet, so `path p export copilot` and `path resume`
-  into Copilot bail with a clear "not supported yet" message — those are
-  follow-ups, gated on the reverse (Path → `events.jsonl`) mapping.
-- Bumps **`path-cli` to 0.15.0** (new `toolpath-copilot` dependency + the new
-  subcommands + Copilot in `path share`).
+- Wired into the CLI **both directions**: forward (`path p import/list/show
+  copilot`, `path share`) and reverse via a new `CopilotProjector`
+  (`path p export copilot`, `path resume`). Resume/export write
+  `~/.copilot/session-state/<id>/` + a `session-store.db` `sessions` row
+  (INSERTing only a fresh id, never touching existing sessions). **Whether the
+  real `copilot --resume` loads a synthesized session is unverified** (untestable
+  without the CLI) — the projector is validated in isolation by the
+  **cross-harness conformance matrix** (`test-fixtures/copilot/`) and a
+  round-trip test.
+- Bumps **`path-cli` to 0.15.0** (new `toolpath-copilot` dependency, the new
+  subcommands, Copilot in `path share`/`path resume`, and `uuid` `v4`).
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 
