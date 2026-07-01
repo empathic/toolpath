@@ -26,6 +26,14 @@ culting.
   `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Single-file reference
   covering the date-bucketed session format and the `patch_apply_end`
   events that drive file-change fidelity.
+- **[`copilot-cli/`](copilot-cli/README.md)** — the standalone agentic
+  GitHub Copilot CLI (`@github/copilot`), whose sessions live under
+  `~/.copilot/session-state/<id>/` (`events.jsonl` + `workspace.yaml` +
+  `checkpoints/`) alongside a cross-session `session-store.db` SQLite
+  index. Split into a folder because the format has several moving parts;
+  **unusually, it is not yet sample-grounded** — built from official docs
+  plus reverse-engineering, with every claim confidence-tagged. Start at
+  its README's sourcing-posture note.
 - **[`cursor.md`](cursor.md)** — Cursor's split storage: the JSONL
   agent transcript at `~/.cursor/projects/<slug>/agent-transcripts/`
   and the rich SQLite bubble store at
@@ -45,9 +53,13 @@ culting.
 The Claude Code reference is the most detailed because it's the
 longest-standing provider and has the most moving parts (JSONL
 envelope variants, session chaining, compaction, sidechains, and the
-loader's own undocumented strictness on what it will accept). The
-other three sit in single files because their formats are either
-simpler or sufficiently covered there.
+loader's own undocumented strictness on what it will accept). Claude
+Code and Copilot CLI get folders; the rest sit in single files because
+their formats are either simpler or sufficiently covered there. The
+Copilot CLI folder is the odd one out on sourcing: it's the only
+reference not yet built on first-hand session samples, so it leans on
+official docs plus reverse-engineering and tags every claim with a
+confidence level.
 
 ## Conventions used in these docs
 

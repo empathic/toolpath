@@ -53,6 +53,7 @@ crates/
   toolpath-claude/    Derive from Claude conversation logs
   toolpath-gemini/    Derive from Gemini CLI conversation logs
   toolpath-codex/     Derive from Codex CLI rollout files
+  toolpath-copilot/   Derive from GitHub Copilot CLI session logs (preview)
   toolpath-opencode/  Derive from opencode SQLite databases
   toolpath-cursor/    Derive from Cursor (IDE) state.vscdb bubble store
   toolpath-pi/        Derive from Pi (pi.dev) agent sessions

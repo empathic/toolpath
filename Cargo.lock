@@ -2308,7 +2308,7 @@ dependencies = [
 
 [[package]]
 name = "path-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2335,6 +2335,7 @@ dependencies = [
  "toolpath-claude",
  "toolpath-codex",
  "toolpath-convo",
+ "toolpath-copilot",
  "toolpath-cursor",
  "toolpath-dot",
  "toolpath-gemini",
@@ -3933,6 +3934,20 @@ dependencies = [
  "similar",
  "thiserror 1.0.69",
  "toolpath",
+]
+
+[[package]]
+name = "toolpath-copilot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toolpath",
+ "toolpath-convo",
 ]
 
 [[package]]

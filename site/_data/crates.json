@@ -56,6 +56,14 @@
     "role": "Reads Codex CLI rollout JSONL from ~/.codex/sessions/ and maps session_meta, response_item, event_msg, and turn_context records to Toolpath documents. File changes from patch_apply_end preserve the real unified diff as the raw perspective. Sessions are global (date-bucketed), not project-keyed."
   },
   {
+    "name": "toolpath-copilot",
+    "version": "0.1.0",
+    "description": "Derive from GitHub Copilot CLI session logs (preview)",
+    "docs": "https://docs.rs/toolpath-copilot",
+    "crate": "https://crates.io/crates/toolpath-copilot",
+    "role": "Reads the GitHub Copilot CLI (@github/copilot) events.jsonl stream from ~/.copilot/session-state/<id>/ and maps its session/user/assistant/tool/subagent events to Toolpath documents. Preview: the events.jsonl schema is undocumented, so the parser is tolerant and the on-disk reference (docs/agents/formats/copilot-cli/) tags every claim with a confidence level pending first-hand samples."
+  },
+  {
     "name": "toolpath-opencode",
     "version": "0.5.0",
     "description": "Derive from opencode SQLite databases",
@@ -105,7 +113,7 @@
   },
   {
     "name": "path-cli",
-    "version": "0.14.0",
+    "version": "0.15.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",

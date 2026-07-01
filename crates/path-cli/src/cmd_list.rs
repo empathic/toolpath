@@ -39,6 +39,8 @@ pub enum ListSource {
     },
     /// List Codex CLI sessions (global, newest first)
     Codex {},
+    /// List GitHub Copilot CLI sessions (global, newest first; preview)
+    Copilot {},
     /// List opencode sessions (global, newest first)
     Opencode {
         /// Filter by project id (SHA of repo's first root commit)
@@ -104,6 +106,7 @@ pub fn run(source: ListSource, format: Option<ListFormat>, json_flag: bool) -> R
         ListSource::Claude { project } => run_claude(project, fmt),
         ListSource::Gemini { project } => run_gemini(project, fmt),
         ListSource::Codex {} => run_codex(fmt),
+        ListSource::Copilot {} => run_copilot(fmt),
         ListSource::Opencode { project } => run_opencode(project, fmt),
         ListSource::Cursor { project } => run_cursor(project, fmt),
         ListSource::Pi { project, base } => run_pi(project, base, fmt),
@@ -678,6 +681,81 @@ fn run_codex(fmt: ListFormat) -> Result<()> {
                         .as_ref()
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
+                    println!(
+                        "  {} {:>4} lines  {}  {}  {}",
+                        id_short, m.line_count, date, cwd, prompt
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── Copilot (preview) ─────────────────────────────────────────────────────────
+
+fn run_copilot(fmt: ListFormat) -> Result<()> {
+    let manager = toolpath_copilot::CopilotConvo::new();
+    let sessions = manager
+        .list_sessions()
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    match fmt {
+        ListFormat::Json => {
+            let items: Vec<serde_json::Value> = sessions
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "id": m.id,
+                        "started_at": m.started_at.map(|t| t.to_rfc3339()),
+                        "last_activity": m.last_activity.map(|t| t.to_rfc3339()),
+                        "cwd": m.cwd,
+                        "cli_version": m.version,
+                        "first_user_message": m.first_user_message,
+                        "line_count": m.line_count,
+                        "dir_path": m.dir_path,
+                    })
+                })
+                .collect();
+            let output = serde_json::json!({
+                "source": "copilot",
+                "sessions": items,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        ListFormat::Tsv => {
+            for m in &sessions {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    sanitize_tsv(&m.id),
+                    m.last_activity.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                    m.line_count,
+                    m.cwd.as_deref().map(sanitize_tsv).unwrap_or_default(),
+                    m.first_user_message
+                        .as_deref()
+                        .map(sanitize_tsv)
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        ListFormat::Pretty => {
+            if sessions.is_empty() {
+                println!("No Copilot sessions found in ~/.copilot/session-state.");
+            } else {
+                println!("Copilot sessions:");
+                println!();
+                for m in &sessions {
+                    let date = m
+                        .last_activity
+                        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let prompt = m
+                        .first_user_message
+                        .as_deref()
+                        .map(|s| truncate(s, 60))
+                        .unwrap_or_default();
+                    let id_short: String = m.id.chars().take(8).collect();
+                    let cwd = m.cwd.clone().unwrap_or_default();
                     println!(
                         "  {} {:>4} lines  {}  {}  {}",
                         id_short, m.line_count, date, cwd, prompt

@@ -1,0 +1,22 @@
+{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"version":"1.0.66","cwd":"/tmp/demo","model":"gpt-5-copilot"}}
+{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"text":"Set up a tiny Rust project and check it for TODOs."}}
+{"type":"assistant.turn_start","timestamp":"2026-06-30T10:00:02.000Z","data":{}}
+{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"text":"I'll start by listing the directory.","model":"gpt-5-copilot"}}
+{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:04.000Z","data":{"id":"c1","name":"shell","args":{"command":"ls -la"}}}
+{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:05.000Z","data":{"id":"c1","name":"shell","args":{"command":"ls -la"},"success":true,"output":"Cargo.toml\nsrc\n"}}
+{"type":"assistant.message","timestamp":"2026-06-30T10:00:06.000Z","data":{"text":"Creating the entry point."}}
+{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:07.000Z","data":{"id":"c2","name":"create_file","args":{"path":"src/main.rs","content":"fn main() {\n    println!(\"hi\");\n}\n"}}}
+{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:08.000Z","data":{"id":"c2","name":"create_file","args":{"path":"src/main.rs","content":"fn main() {\n    println!(\"hi\");\n}\n"},"success":true}}
+{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:09.000Z","data":{"id":"c3","name":"read_file","args":{"path":"Cargo.toml"}}}
+{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:10.000Z","data":{"id":"c3","name":"read_file","args":{"path":"Cargo.toml"},"success":true,"output":"[package]\nname = \"demo\"\n"}}
+{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:11.000Z","data":{"id":"c4","name":"grep_search","args":{"query":"TODO","path":"."}}}
+{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:12.000Z","data":{"id":"c4","name":"grep_search","args":{"query":"TODO","path":"."},"success":true,"output":"no matches found"}}
+{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:13.000Z","data":{"id":"c5","name":"read_file","args":{"path":"missing.txt"}}}
+{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:14.000Z","data":{"id":"c5","name":"read_file","args":{"path":"missing.txt"},"success":false,"output":"Error: no such file or directory (os error 2)"}}
+{"type":"subagent.started","timestamp":"2026-06-30T10:00:15.000Z","data":{"id":"sub-1","prompt":"review src/main.rs for issues"}}
+{"type":"subagent.completed","timestamp":"2026-06-30T10:00:18.000Z","data":{"id":"sub-1","result":"looks good, no issues"}}
+{"type":"skill.invoked","timestamp":"2026-06-30T10:00:19.000Z","data":{"skill":"rustfmt"}}
+{"type":"assistant.message","timestamp":"2026-06-30T10:00:20.000Z","data":{"text":"Done. Created src/main.rs; no TODOs found."}}
+{"type":"assistant.turn_end","timestamp":"2026-06-30T10:00:21.000Z","data":{}}
+{"type":"session.task_complete","timestamp":"2026-06-30T10:00:22.000Z","data":{"summary":"Created a tiny Rust project; scanned for TODOs."}}
+{"type":"session.shutdown","timestamp":"2026-06-30T10:00:23.000Z","data":{"modelMetrics":{"model":"gpt-5-copilot"},"usage":{"inputTokens":4200,"outputTokens":880}}}

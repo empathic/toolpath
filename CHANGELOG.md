@@ -13,6 +13,37 @@ All notable changes to the Toolpath workspace are documented here.
   path is returned: a byte-identical re-emission is dropped, and a
   same-id-but-different step is re-IDed to `<id>#<n>` so no data is lost.
 
+## New provider: GitHub Copilot CLI (preview) — 2026-06-30
+
+Adds **`toolpath-copilot` 0.1.0**, a forward provider that derives Toolpath
+documents from GitHub Copilot CLI (`@github/copilot`) sessions under
+`~/.copilot/session-state/<id>/events.jsonl`.
+
+- Parses the `events.jsonl` stream (`session.*`, `user.message`,
+  `assistant.*`, `tool.execution_*`, `subagent.*`, `skill.*`, `hook.*`,
+  `abort`) into `toolpath_convo::ConversationView` and hands off to the shared
+  `derive_path`. Tool names are classified into the `ToolCategory` ontology;
+  file writes whose args carry full content get a `raw` unified-diff
+  perspective.
+- Reads git context (root / repository / branch / revision) from the sibling
+  `workspace.yaml` into `Path.base`, via a tolerant key-scan parser (no YAML
+  dependency — the file's schema is itself reverse-engineered).
+- **Preview / schema reverse-engineered.** Copilot CLI's `events.jsonl` format
+  is undocumented and this crate was authored without first-hand session
+  samples, so the parser is deliberately tolerant (payload inline or nested,
+  multiple key spellings, unknown events preserved) and may need correction
+  once a real session is captured.
+- Adds the on-disk format reference at `docs/agents/formats/copilot-cli/`
+  (folder, every claim confidence-tagged) and its verification checklist.
+- Wired into the CLI for the **forward path only**: `path p import copilot`,
+  `path p list copilot`, and `path show copilot` (mirrors the codex commands —
+  global, id-keyed, with an fzf picker). No projector yet, so
+  `path p export copilot`, `path resume` into Copilot, and `path share` are not
+  available — those are follow-ups, gated on capturing a real session to verify
+  the schema.
+- Bumps **`path-cli` to 0.15.0** (new `toolpath-copilot` dependency + the three
+  new subcommands).
+
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 
 Fixes token over-counting in derived documents (~3× output-token

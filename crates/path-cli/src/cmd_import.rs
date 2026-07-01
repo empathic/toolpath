@@ -104,6 +104,16 @@ pub enum ImportSource {
         #[arg(long)]
         all: bool,
     },
+    /// Import from GitHub Copilot CLI session logs (preview)
+    Copilot {
+        /// Session id or unique prefix (default: most recent)
+        #[arg(short, long)]
+        session: Option<String>,
+
+        /// Process all sessions (emits one Path per session)
+        #[arg(long)]
+        all: bool,
+    },
     /// Import from opencode session databases
     Opencode {
         /// Session id (default: most recent)
@@ -251,6 +261,7 @@ fn derive(source: ImportSource) -> Result<Vec<DerivedDoc>> {
             include_thinking,
         } => derive_gemini(project, session, all, include_thinking),
         ImportSource::Codex { session, all } => derive_codex(session, all),
+        ImportSource::Copilot { session, all } => derive_copilot(session, all),
         ImportSource::Opencode {
             session,
             all,
@@ -944,6 +955,119 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
         prompt: "codex session> ",
         preview: Some("{exe} show --ansi codex --session {1}"),
         header: Some("pick a Codex session (TAB = multi-select, Enter = confirm)"),
+        preview_window: "right:60%:wrap-word",
+        tiebreak: "index",
+        multi: true,
+    };
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
+    };
+    Ok(Some(parse_single_id(&selected)))
+}
+
+fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
+    let manager = toolpath_copilot::CopilotConvo::new();
+    let config = toolpath_copilot::derive::DeriveConfig { project_path: None };
+
+    let session_ids: Vec<String> = match (session, all) {
+        (Some(s), _) => vec![s],
+        (None, true) => {
+            let sessions = manager
+                .read_all_sessions()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            if sessions.is_empty() {
+                anyhow::bail!("No Copilot sessions found in ~/.copilot/session-state");
+            }
+            return wrap_paths_copilot(toolpath_copilot::derive::derive_project(&sessions, &config));
+        }
+        (None, false) => {
+            #[cfg(not(target_os = "emscripten"))]
+            {
+                match pick_copilot(&manager)? {
+                    Some(picks) => picks,
+                    None => {
+                        let s = manager
+                            .most_recent_session()
+                            .map_err(|e| anyhow::anyhow!("{}", e))?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("No Copilot sessions found in ~/.copilot/session-state")
+                            })?;
+                        return wrap_paths_copilot(vec![toolpath_copilot::derive::derive_path(
+                            &s, &config,
+                        )]);
+                    }
+                }
+            }
+            #[cfg(target_os = "emscripten")]
+            {
+                let s = manager
+                    .most_recent_session()
+                    .map_err(|e| anyhow::anyhow!("{}", e))?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("No Copilot sessions found in ~/.copilot/session-state")
+                    })?;
+                return wrap_paths_copilot(vec![toolpath_copilot::derive::derive_path(&s, &config)]);
+            }
+        }
+    };
+
+    let mut paths: Vec<toolpath::v1::Path> = Vec::with_capacity(session_ids.len());
+    for sid in &session_ids {
+        let s = manager
+            .read_session(sid)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        paths.push(toolpath_copilot::derive::derive_path(&s, &config));
+    }
+    wrap_paths_copilot(paths)
+}
+
+fn wrap_paths_copilot(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
+    Ok(paths
+        .into_iter()
+        .map(|p| {
+            let cache_id = make_id("copilot", &p.path.id);
+            DerivedDoc {
+                cache_id,
+                doc: Graph::from_path(p),
+            }
+        })
+        .collect())
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn pick_copilot(manager: &toolpath_copilot::CopilotConvo) -> Result<Option<Vec<String>>> {
+    if !fuzzy::available() {
+        return Ok(None);
+    }
+    let metas = manager
+        .list_sessions()
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    if metas.is_empty() {
+        return Ok(None);
+    }
+    let lines: Vec<String> = metas
+        .iter()
+        .map(|m| {
+            let cwd_short = m.cwd.as_deref().map(project_short);
+            format!(
+                "{}\t{}",
+                tab_safe(&m.id),
+                render_row(
+                    None,
+                    m.last_activity,
+                    &count(m.line_count, "lines"),
+                    cwd_short.as_deref(),
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
+            )
+        })
+        .collect();
+    let opts = fuzzy::PickOptions {
+        with_nth: "2",
+        prompt: "copilot session> ",
+        preview: Some("{exe} show --ansi copilot --session {1}"),
+        header: Some("pick a Copilot session (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
         multi: true,

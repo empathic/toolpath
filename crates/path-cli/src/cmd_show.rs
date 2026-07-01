@@ -43,6 +43,16 @@ pub enum ShowSource {
         #[arg(long, hide = true)]
         project: Option<std::path::PathBuf>,
     },
+    /// Show a GitHub Copilot CLI session as a markdown summary (preview)
+    Copilot {
+        /// Session id or unique prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Compatibility shim for the unified `path share` preview template; ignored.
+        #[arg(long, hide = true)]
+        project: Option<std::path::PathBuf>,
+    },
     /// Show an opencode session as a markdown summary
     Opencode {
         /// Session id (`ses_…`)
@@ -129,6 +139,17 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_codex::derive::DeriveConfig { project_path: None };
             Ok(toolpath_codex::derive::derive_path(&s, &cfg))
+        }
+        ShowSource::Copilot {
+            session,
+            project: _,
+        } => {
+            let manager = toolpath_copilot::CopilotConvo::new();
+            let s = manager
+                .read_session(&session)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let cfg = toolpath_copilot::derive::DeriveConfig { project_path: None };
+            Ok(toolpath_copilot::derive::derive_path(&s, &cfg))
         }
         ShowSource::Opencode {
             session,

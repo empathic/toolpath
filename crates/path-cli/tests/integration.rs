@@ -427,6 +427,79 @@ fn import_help_lists_sources_including_pathbase() {
         .stdout(predicate::str::contains("pathbase"));
 }
 
+/// Lay a minimal Copilot session out under `<home>/.copilot/session-state/<id>/`
+/// and return (temp_home, session_id). The resolver honors `COPILOT_HOME`.
+fn copilot_home_fixture() -> (tempfile::TempDir, String) {
+    let home = tempfile::tempdir().unwrap();
+    let id = "demo-sess-01";
+    let dir = home.path().join("session-state").join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = [
+        r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"version":"1.0.66","cwd":"/tmp/demo","model":"gpt-5-copilot"}}"#,
+        r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"text":"hello copilot"}}"#,
+        r#"{"type":"assistant.turn_start","data":{}}"#,
+        r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"text":"hi there"}}"#,
+        r#"{"type":"assistant.turn_end","data":{}}"#,
+    ]
+    .join("\n");
+    std::fs::write(dir.join("events.jsonl"), body).unwrap();
+    (home, id.to_string())
+}
+
+#[test]
+fn import_help_lists_copilot() {
+    cmd()
+        .args(["p", "import", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("copilot"));
+}
+
+#[test]
+fn import_copilot_writes_cache() {
+    let (home, id) = copilot_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .args(["p", "import", "copilot", "--session", &id])
+        .env("COPILOT_HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .assert()
+        .success()
+        // The cache file path is printed to stdout; the summary to stderr.
+        .stdout(predicate::str::contains("copilot-path-copilot-"))
+        .stderr(predicate::str::contains("Imported"));
+    // And the cache file actually landed.
+    assert!(
+        cfg.path()
+            .join("documents/copilot-path-copilot-demo-ses.json")
+            .exists()
+    );
+}
+
+#[test]
+fn list_copilot_tsv_shows_session() {
+    let (home, _id) = copilot_home_fixture();
+    cmd()
+        .args(["p", "list", "copilot", "--format", "tsv"])
+        .env("COPILOT_HOME", home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("demo-sess-01"))
+        .stdout(predicate::str::contains("hello copilot"));
+}
+
+#[test]
+fn show_copilot_renders_markdown() {
+    let (home, id) = copilot_home_fixture();
+    cmd()
+        .args(["show", "copilot", "--session", &id])
+        .env("COPILOT_HOME", home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Copilot session"))
+        .stdout(predicate::str::contains("hello copilot"));
+}
+
 #[test]
 fn export_help_lists_claude_and_pathbase() {
     cmd()
