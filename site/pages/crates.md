@@ -20,6 +20,7 @@ path-cli (binary: path)
  +-- toolpath-codex   -> toolpath, toolpath-convo
  +-- toolpath-opencode -> toolpath, toolpath-convo
  +-- toolpath-pi      -> toolpath, toolpath-convo
+ +-- toolpath-openclaw -> toolpath, toolpath-convo
  +-- toolpath-cursor  -> toolpath, toolpath-convo
  +-- toolpath-dot     -> toolpath
  +-- toolpath-md      -> toolpath
@@ -30,7 +31,7 @@ toolpath-cli (deprecated shim, binary: path)
  +-- path-cli
 ```
 
-Cross-dependencies between satellite crates: `toolpath-claude -> toolpath-convo`, `toolpath-gemini -> toolpath-convo`, `toolpath-codex -> toolpath-convo`, `toolpath-opencode -> toolpath-convo`, `toolpath-cursor -> toolpath-convo`, `toolpath-pi -> toolpath-convo`.
+Cross-dependencies between satellite crates: `toolpath-claude -> toolpath-convo`, `toolpath-gemini -> toolpath-convo`, `toolpath-codex -> toolpath-convo`, `toolpath-opencode -> toolpath-convo`, `toolpath-cursor -> toolpath-convo`, `toolpath-pi -> toolpath-convo`, `toolpath-openclaw -> toolpath-convo`.
 
 {% for crate in crates %}
 

@@ -1533,8 +1533,6 @@ fn derive_openclaw_with_manager(
 }
 
 /// Derive a single OpenClaw session given an explicit agent + session.
-/// Used by `path share` / `path p export`.
-#[allow(dead_code)]
 pub(crate) fn derive_openclaw_session(
     agent: &str,
     session: &str,
@@ -1548,6 +1546,20 @@ pub(crate) fn derive_openclaw_session(
     let doc = Graph::from_path(toolpath_openclaw::derive::derive_path(&s, &config));
     let cache_id = make_id("openclaw", &doc_inner_id(&doc));
     Ok(DerivedDoc { cache_id, doc })
+}
+
+/// Derive an OpenClaw session by id, discovering its agent bucket by scanning
+/// all agents (used by `path share`, which has no `--agent` flag).
+pub(crate) fn derive_openclaw_session_any(session: &str) -> Result<DerivedDoc> {
+    let manager = openclaw_manager(None);
+    let agent = manager
+        .list_all_sessions()
+        .map_err(|e| anyhow::anyhow!("{}", e))?
+        .into_iter()
+        .find(|m| m.id == session)
+        .map(|m| m.agent_id)
+        .unwrap_or_else(|| toolpath_openclaw::DEFAULT_AGENT_ID.to_string());
+    derive_openclaw_session(&agent, session, None)
 }
 
 #[cfg(not(target_os = "emscripten"))]

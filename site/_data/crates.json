@@ -72,6 +72,14 @@
     "role": "Reads Pi (pi.dev) coding-agent session JSONL from `~/.pi/agent/sessions/`, implements `ConversationProvider`, and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Preserves Pi's in-file conversation tree (id/parentId) as a DAG and follows `parentSession` links across files."
   },
   {
+    "name": "toolpath-openclaw",
+    "version": "0.1.0",
+    "description": "Derive Toolpath provenance documents from OpenClaw agent-session logs",
+    "docs": "https://docs.rs/toolpath-openclaw",
+    "crate": "https://crates.io/crates/toolpath-openclaw",
+    "role": "Reads OpenClaw's multi-channel agent-session JSONL from `~/.openclaw/agents/<id>/sessions/`, implements `ConversationProvider`, and derives Toolpath `Path` documents (forward) plus a projector that incepts a `Path` back onto disk (reverse). Preserves the version-3 entry tree (id/parentId + visible-leaf pointers) as a DAG, recovers the channel/peer identity from the `sessions.json` routing key into a channel-aware `human:<channel>/<peerId>` actor, and records file changes structurally (OpenClaw stores no diffs)."
+  },
+  {
     "name": "toolpath-cursor",
     "version": "0.2.0",
     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",

@@ -15,6 +15,8 @@ e.g. `2026.6.10`) is separate from this on-disk format version.
 covers. Established by reading upstream source at
 `openclaw/openclaw @ 68c533cfb339cbb8650832cb2a4bf38dba7022fa` (package
 `2026.6.10`); **not** yet confirmed against a first-hand on-disk sample.
+Implemented by the `toolpath-openclaw` crate (forward + projector), whose
+tests exercise the shapes below against synthesized fixtures.
 
 Salient v3 facts (all detailed elsewhere in this folder):
 

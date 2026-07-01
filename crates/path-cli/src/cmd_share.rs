@@ -19,6 +19,7 @@ pub enum HarnessArg {
     Opencode,
     Cursor,
     Pi,
+    Openclaw,
 }
 
 #[derive(Args, Debug)]
@@ -74,6 +75,7 @@ pub(crate) enum Harness {
     Opencode,
     Cursor,
     Pi,
+    Openclaw,
 }
 
 impl Harness {
@@ -85,6 +87,7 @@ impl Harness {
             Harness::Opencode => "opencode",
             Harness::Cursor => "cursor",
             Harness::Pi => "pi",
+            Harness::Openclaw => "openclaw",
         }
     }
 
@@ -98,6 +101,7 @@ impl Harness {
             Harness::Opencode => "opencode",
             Harness::Cursor => "cursor  ",
             Harness::Pi => "pi      ",
+            Harness::Openclaw => "openclaw",
         }
     }
 
@@ -117,6 +121,7 @@ impl Harness {
             HarnessArg::Opencode => Harness::Opencode,
             HarnessArg::Cursor => Harness::Cursor,
             HarnessArg::Pi => Harness::Pi,
+            HarnessArg::Openclaw => Harness::Openclaw,
         }
     }
 
@@ -128,6 +133,7 @@ impl Harness {
             "opencode" => Some(Harness::Opencode),
             "cursor" => Some(Harness::Cursor),
             "pi" => Some(Harness::Pi),
+            "openclaw" => Some(Harness::Openclaw),
             _ => None,
         }
     }
@@ -159,6 +165,7 @@ pub(crate) struct HarnessBundle {
     pub(crate) opencode: Option<toolpath_opencode::OpencodeConvo>,
     pub(crate) cursor: Option<toolpath_cursor::CursorConvo>,
     pub(crate) pi: Option<toolpath_pi::PiConvo>,
+    pub(crate) openclaw: Option<toolpath_openclaw::OpenClawConvo>,
 }
 
 impl HarnessBundle {
@@ -173,6 +180,7 @@ impl HarnessBundle {
             opencode: Some(toolpath_opencode::OpencodeConvo::new()),
             cursor: Some(toolpath_cursor::CursorConvo::new()),
             pi: Some(toolpath_pi::PiConvo::new()),
+            openclaw: Some(toolpath_openclaw::OpenClawConvo::new()),
         }
     }
 }
@@ -225,6 +233,11 @@ pub(crate) fn gather_sessions(
         && let Some(mgr) = &bundle.cursor
     {
         collect_cursor(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
+    if want(Harness::Openclaw)
+        && let Some(mgr) = &bundle.openclaw
+    {
+        collect_openclaw(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
 
     rows.sort_by(|a, b| {
@@ -475,6 +488,51 @@ fn collect_opencode(
     }
 }
 
+fn collect_openclaw(
+    mgr: &toolpath_openclaw::OpenClawConvo,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<SessionRow>,
+) {
+    let metas = match mgr.list_all_sessions() {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => return,
+        Err(e) => {
+            eprintln!("warning: openclaw aggregation failed: {e}");
+            return;
+        }
+    };
+    for m in metas {
+        let cwd_path = m.cwd.as_ref().map(std::path::PathBuf::from);
+        if let Some(filter) = project_filter {
+            match &cwd_path {
+                Some(c) if paths_match(c, filter) => {}
+                _ => continue,
+            }
+        }
+        let matches_cwd = cwd_path
+            .as_ref()
+            .map(|c| paths_match(c, canonical_cwd))
+            .unwrap_or(false);
+        let last_activity = chrono::DateTime::parse_from_rfc3339(&m.timestamp)
+            .ok()
+            .map(|d| d.with_timezone(&Utc));
+        out.push(SessionRow {
+            harness: Harness::Openclaw,
+            project: None,
+            cwd: m.cwd.clone(),
+            session_id: m.id,
+            title: m
+                .first_user_message
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "(no prompt)".to_string()),
+            last_activity,
+            message_count: m.entry_count,
+            matches_cwd,
+        });
+    }
+}
+
 fn collect_cursor(
     mgr: &toolpath_cursor::CursorConvo,
     canonical_cwd: &std::path::Path,
@@ -681,6 +739,7 @@ fn harness_to_arg(h: Harness) -> HarnessArg {
         Harness::Opencode => HarnessArg::Opencode,
         Harness::Cursor => HarnessArg::Cursor,
         Harness::Pi => HarnessArg::Pi,
+        Harness::Openclaw => HarnessArg::Openclaw,
     }
 }
 
@@ -989,6 +1048,7 @@ fn derive_session(
         Harness::Codex => crate::cmd_import::derive_codex_session(session),
         Harness::Opencode => crate::cmd_import::derive_opencode_session(session, false),
         Harness::Cursor => crate::cmd_import::derive_cursor_session(session),
+        Harness::Openclaw => crate::cmd_import::derive_openclaw_session_any(session),
     }
 }
 
@@ -1240,6 +1300,33 @@ mod tests {
             paths_match(&symlink_path, &real_project),
             "paths_match must be symmetric across the symlink"
         );
+    }
+
+    #[test]
+    fn collect_openclaw_produces_cwd_matched_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(tmp.path()).unwrap();
+        let cwd = canonical.to_string_lossy().into_owned();
+        let dir = tmp.path().join("agents/main/sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("s1.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"version\":3,\"id\":\"s1\",\"timestamp\":\"2026-06-30T12:00:00Z\",\"cwd\":\"{cwd}\"}}\n\
+                 {{\"type\":\"message\",\"id\":\"e1\",\"parentId\":null,\"timestamp\":\"2026-06-30T12:00:01Z\",\"message\":{{\"role\":\"user\",\"content\":\"hello\",\"timestamp\":1}}}}\n"
+            ),
+        )
+        .unwrap();
+        let mgr = toolpath_openclaw::OpenClawConvo::with_resolver(
+            toolpath_openclaw::PathResolver::with_state_dir(tmp.path()),
+        );
+        let mut rows = Vec::new();
+        collect_openclaw(&mgr, &canonical, None, &mut rows);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].harness, Harness::Openclaw);
+        assert_eq!(rows[0].session_id, "s1");
+        assert_eq!(rows[0].title, "hello");
+        assert!(rows[0].matches_cwd, "header cwd should match canonical cwd");
     }
 
     #[test]

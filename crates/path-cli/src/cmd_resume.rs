@@ -134,6 +134,7 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<crate::cmd_share::Har
             "opencode" => return Some(Harness::Opencode),
             "cursor" => return Some(Harness::Cursor),
             "pi" => return Some(Harness::Pi),
+            "openclaw" => return Some(Harness::Openclaw),
             _ => {} // fall through to actor sniffing
         }
     }
@@ -434,6 +435,13 @@ pub(crate) fn argv_for(harness: crate::cmd_share::Harness, session_id: &str) -> 
             vec![".".into()]
         }
         Harness::Pi => vec!["--session".into(), session_id.into()],
+        // OpenClaw has no "resume composer by id" flag; the session is
+        // incepted onto disk (sessions.json routes it) and the gateway picks
+        // it up, so we just launch `openclaw`.
+        Harness::Openclaw => {
+            let _ = session_id;
+            vec![]
+        }
     }
 }
 
@@ -487,6 +495,7 @@ pub(crate) fn project_into_harness(
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
         Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
         Harness::Pi => crate::cmd_export::project_pi(path, cwd),
+        Harness::Openclaw => crate::cmd_export::project_openclaw(path, cwd),
     }
 }
 

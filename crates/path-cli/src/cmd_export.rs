@@ -79,6 +79,24 @@ pub enum ExportTarget {
         #[arg(short, long, conflicts_with = "project")]
         output: Option<PathBuf>,
     },
+    /// Project ("incept") a toolpath document into an OpenClaw session
+    Openclaw {
+        /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+        #[arg(short, long)]
+        input: String,
+
+        /// Working directory to record in the session header. With this flag,
+        /// the session is incepted into `~/.openclaw/agents/<agent>/sessions/`
+        /// (plus a `sessions.json` routing entry) so a running OpenClaw
+        /// instance can pick it up. Defaults to cwd when neither --project nor
+        /// --output is given.
+        #[arg(short, long)]
+        project: Option<PathBuf>,
+
+        /// Output JSONL to this file. Mutually exclusive with --project.
+        #[arg(short, long, conflicts_with = "project")]
+        output: Option<PathBuf>,
+    },
     /// Project a toolpath document into a Codex CLI session
     Codex {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
@@ -213,6 +231,11 @@ pub fn run(target: ExportTarget) -> Result<()> {
             project,
             output,
         } => run_pi(input, project, output),
+        ExportTarget::Openclaw {
+            input,
+            project,
+            output,
+        } => run_openclaw(input, project, output),
         ExportTarget::Codex {
             input,
             project,
@@ -373,6 +396,95 @@ pub(crate) fn project_pi(
     }
     write_into_pi_project(&session, &cwd_str)?;
     Ok(session.header.id)
+}
+
+/// Incept a Path into the real OpenClaw state dir (`~/.openclaw`), recording
+/// `cwd` in the header. Returns the session id. Used by `path resume`.
+pub(crate) fn project_openclaw(
+    path: &toolpath::v1::Path,
+    cwd: &std::path::Path,
+) -> Result<String> {
+    let (projector, session) = build_openclaw(path, &cwd.to_string_lossy())?;
+    let state_dir = toolpath_openclaw::PathResolver::new()
+        .state_dir()
+        .to_path_buf();
+    projector
+        .write_session(&session, &state_dir)
+        .map_err(|e| anyhow::anyhow!("OpenClaw inception failed: {}", e))?;
+    Ok(session.header.id)
+}
+
+/// Build an OpenClaw projector (channel/peer/agent recovered from
+/// `meta.extra["openclaw"]`) plus the projected session.
+fn build_openclaw(
+    path: &toolpath::v1::Path,
+    cwd: &str,
+) -> Result<(
+    toolpath_openclaw::project::OpenClawProjector,
+    toolpath_openclaw::OpenClawSession,
+)> {
+    use toolpath_convo::ConversationProjector;
+    let view = toolpath_convo::extract_conversation(path);
+    let mut projector =
+        toolpath_openclaw::project::OpenClawProjector::new().with_cwd(cwd.to_string());
+    if let Some(extra) = path.meta.as_ref().and_then(|m| m.extra.get("openclaw")) {
+        projector = projector.with_meta_extra(extra);
+    }
+    let session = projector
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
+    if session.header.id.is_empty() {
+        anyhow::bail!("Projected session has no id");
+    }
+    Ok((projector, session))
+}
+
+fn openclaw_session_to_jsonl(session: &toolpath_openclaw::OpenClawSession) -> Result<String> {
+    let mut out = String::new();
+    for entry in &session.entries {
+        out.push_str(&serde_json::to_string(entry)?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn run_openclaw(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (input, project, output);
+        anyhow::bail!("'path p export openclaw' requires a native environment");
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let path = load_path_doc(&input)?;
+        match (project, output) {
+            (Some(project_dir), None) => {
+                let id = project_openclaw(&path, &project_dir)?;
+                let state = toolpath_openclaw::PathResolver::new()
+                    .state_dir()
+                    .to_path_buf();
+                eprintln!("Incepted OpenClaw session {id} into {}", state.display());
+                eprintln!();
+                eprintln!("A running OpenClaw instance routes it via sessions.json.");
+            }
+            (None, Some(out_path)) => {
+                let cwd = std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| "/".to_string());
+                let (_projector, session) = build_openclaw(&path, &cwd)?;
+                let jsonl = openclaw_session_to_jsonl(&session)?;
+                std::fs::write(&out_path, &jsonl)
+                    .with_context(|| format!("write {}", out_path.display()))?;
+                eprintln!("Wrote {} bytes to {}", jsonl.len(), out_path.display());
+            }
+            (None, None) => {
+                let (_projector, session) = build_openclaw(&path, "/")?;
+                print!("{}", openclaw_session_to_jsonl(&session)?);
+            }
+            (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
+        }
+        Ok(())
+    }
 }
 
 fn run_claude(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {

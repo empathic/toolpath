@@ -56,6 +56,7 @@ crates/
   toolpath-opencode/  Derive from opencode SQLite databases
   toolpath-cursor/    Derive from Cursor (IDE) state.vscdb bubble store
   toolpath-pi/        Derive from Pi (pi.dev) agent sessions
+  toolpath-openclaw/  Derive from OpenClaw agent-session logs
   toolpath-dot/       Graphviz DOT visualization
   toolpath-md/        Markdown rendering for LLM consumption
   pathbase-client/    Progenitor-derived typed client for the Pathbase HTTP API

@@ -65,9 +65,12 @@ samples or by our own parser:
 
 - **No installed OpenClaw / no sample file.** Every claim is derived from
   **upstream source code** at the pinned commit, not from observed bytes.
-- **No `toolpath-openclaw` crate yet.** We can't corroborate with our own
-  tests. This is the same posture `opencode.md` was written in before its
-  crate existed.
+- **A `toolpath-openclaw` crate now implements this reference**
+  (`crates/toolpath-openclaw`), so the envelope, entry types, message/content
+  shapes, token-usage mapping, and the projector round-trip are corroborated
+  by its tests — but still against **synthesized** fixtures, not a captured
+  real session. Claims here remain "from source" until a real OpenClaw
+  session confirms them.
 
 Consequences for how to read these docs:
 

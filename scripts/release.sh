@@ -36,7 +36,7 @@ set -euo pipefail
 #   3. path-cli           (depends on all of the above)
 #   4. toolpath-cli       (deprecated shim that depends on path-cli)
 
-_all_crates=(toolpath pathbase-client toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-cursor toolpath-pi path-cli toolpath-cli)
+_all_crates=(toolpath pathbase-client toolpath-convo toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-opencode toolpath-cursor toolpath-pi toolpath-openclaw path-cli toolpath-cli)
 
 _execute=0
 _auto_yes=""
