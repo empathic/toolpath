@@ -128,6 +128,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let mut event_idx = 0usize;
     let mut compact_idx = 0usize;
     let mut last_step_id: Option<String> = None;
+    // The step id of the most recent *turn* (events/compactions don't update
+    // it). Used to splice intervening events/compactions into the linear
+    // parent chain so they land on the head's ancestry instead of dangling
+    // as false dead ends — without disturbing genuine branches.
+    let mut prev_turn_step: Option<String> = None;
 
     // Group ids in turn order, so a turn can tell whether it's the last of its
     // message group (message-level token accounting, below).
@@ -167,6 +172,9 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 {
                     step.step.parents.push(parent_step_id.clone());
                 }
+
+                step.step.parents =
+                    splice_onto_intervening(step.step.parents, &prev_turn_step, &last_step_id);
 
                 // Build conversation.append structural change extras
                 let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
@@ -367,7 +375,8 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 // with, so later turns chaining off it resolve correctly even
                 // when this one was renamed or dropped as a duplicate.
                 turn_to_step.insert(turn.id.clone(), final_id.clone());
-                last_step_id = Some(final_id);
+                last_step_id = Some(final_id.clone());
+                prev_turn_step = Some(final_id);
             }
 
             // Emit `view.events` as `conversation.event` steps so that
@@ -432,6 +441,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     .or_else(|| last_step_id.clone())
                     .into_iter()
                     .collect();
+                let parents = splice_onto_intervening(parents, &prev_turn_step, &last_step_id);
 
                 let mut step = Step {
                     step: StepIdentity {
@@ -454,7 +464,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                         }),
                     },
                 );
-                last_step_id = Some(push_step(&mut steps, &mut by_id, step));
+                let final_id = push_step(&mut steps, &mut by_id, step);
+                // Let a later turn spliced onto this event resolve its parent
+                // on a re-derive (its `parent_id` will be this event's step id).
+                turn_to_step.insert(final_id.clone(), final_id.clone());
+                last_step_id = Some(final_id);
             }
 
             // A context-compaction boundary projects to one
@@ -490,6 +504,10 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     .or_else(|| last_step_id.clone())
                     .into_iter()
                     .collect();
+                // Splice: if the boundary chains onto the previous turn but an
+                // event was emitted between them, chain through that event so
+                // it isn't orphaned.
+                let parents = splice_onto_intervening(parents, &prev_turn_step, &last_step_id);
 
                 let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
                 if let Some(trigger) = &c.trigger {
@@ -607,6 +625,29 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     }
 }
 
+/// Splice a step into the linear parent chain. If `parents` chains onto the
+/// immediately-preceding turn (`prev_turn_step`) — the ordinary linear case,
+/// including a root reached only after some leading events — but events or
+/// compactions were emitted since that turn (`last_step_id` differs), re-parent
+/// onto that intervening chain so those non-turn steps land on the head's
+/// ancestry instead of dangling as false dead ends. A genuine branch (parent is
+/// an *earlier* step, not the previous turn) is left untouched, so abandoned
+/// branches stay dead ends.
+fn splice_onto_intervening(
+    mut parents: Vec<String>,
+    prev_turn_step: &Option<String>,
+    last_step_id: &Option<String>,
+) -> Vec<String> {
+    let resolved = parents.first().cloned();
+    if resolved == *prev_turn_step
+        && let Some(prev) = last_step_id
+        && Some(prev) != prev_turn_step.as_ref()
+    {
+        parents = vec![prev.clone()];
+    }
+    parents
+}
+
 /// Push `step` into `steps`, resolving an id collision with an
 /// already-emitted step. A byte-identical re-emission (same id, parents,
 /// actor, timestamp, change) is dropped — keeping it would only duplicate a
@@ -640,43 +681,6 @@ fn push_step(steps: &mut Vec<Step>, by_id: &mut HashMap<String, usize>, mut step
 /// Whether two steps are the same entry — equal once serialized, so dropping
 /// one is lossless. Step doesn't implement `PartialEq`, and serializing only
 /// happens on an actual id collision (rare), so the cost is negligible.
-fn steps_content_eq(a: &Step, b: &Step) -> bool {
-    serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
-}
-
-/// Push `step` into `steps`, resolving an id collision with an already-emitted
-/// step so the path's step ids stay unique. A byte-identical re-emission (same
-/// serialized step) is dropped — keeping it would only duplicate a step that
-/// already exists — and a same-id-but-different step is re-IDed to a fresh
-/// `<id>#<n>` so the original id stays recoverable and no data is lost. Returns
-/// the id the step ended up under (the surviving id when dropped, the new id
-/// when re-IDed), which the caller records in `turn_to_step` / `last_step_id`
-/// so parent references keep pointing at a real step.
-fn push_step(steps: &mut Vec<Step>, by_id: &mut HashMap<String, usize>, mut step: Step) -> String {
-    let id = step.step.id.clone();
-    let Some(&existing) = by_id.get(&id) else {
-        by_id.insert(id.clone(), steps.len());
-        steps.push(step);
-        return id;
-    };
-    if steps_content_eq(&steps[existing], &step) {
-        return id;
-    }
-    let mut n = 2u32;
-    let mut renamed = format!("{id}#{n}");
-    while by_id.contains_key(&renamed) {
-        n += 1;
-        renamed = format!("{id}#{n}");
-    }
-    step.step.id = renamed.clone();
-    by_id.insert(renamed.clone(), steps.len());
-    steps.push(step);
-    renamed
-}
-
-/// Whether two steps are the same entry — equal once serialized, so dropping
-/// one is lossless. `Step` doesn't implement `PartialEq`, and this only runs on
-/// an actual id collision (rare), so the serialize cost is negligible.
 fn steps_content_eq(a: &Step, b: &Step) -> bool {
     serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
 }
@@ -923,96 +927,6 @@ mod tests {
             .find(|k| k.contains("://"))
             .expect("conversation artifact key present");
         step.change[key].structural.as_ref().unwrap()
-    }
-
-    #[test]
-    fn test_duplicate_id_identical_content_is_dropped() {
-        // A byte-identical re-emission of the same id collapses to one step.
-        let mut first = base_turn("dup", Role::User);
-        first.text = "same".into();
-        let mid = base_turn("mid", Role::Assistant);
-        let mut second = base_turn("dup", Role::User);
-        second.text = "same".into();
-        let view = view_with(vec![first, mid, second]);
-
-        let path = derive_path(&view, &DeriveConfig::default());
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        assert_eq!(ids, vec!["dup", "mid"], "identical re-emission is dropped");
-    }
-
-    #[test]
-    fn test_duplicate_id_different_content_is_renamed() {
-        // The same id with DIFFERENT content keeps both steps: the later one is
-        // re-IDed to `<id>#<n>` so the path stays unique and no data is lost.
-        let mut first = base_turn("dup", Role::User);
-        first.text = "original".into();
-        let mid = base_turn("mid", Role::Assistant);
-        let mut second = base_turn("dup", Role::User);
-        second.text = "replayed".into();
-        let view = view_with(vec![first, mid, second]);
-
-        let path = derive_path(&view, &DeriveConfig::default());
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        assert_eq!(ids, vec!["dup", "mid", "dup#2"]);
-        assert_eq!(
-            conv_change(&path.steps[0]).extra["text"],
-            serde_json::json!("original")
-        );
-        assert_eq!(
-            conv_change(&path.steps[2]).extra["text"],
-            serde_json::json!("replayed")
-        );
-    }
-
-    #[test]
-    fn test_renamed_duplicate_keeps_parent_references_correct() {
-        // Resolving collisions inline (as steps are emitted) — not as a
-        // post-pass — keeps parent references correct: a later turn whose
-        // parent_id matches a renamed duplicate resolves to the RENAMED step,
-        // not the first occurrence that kept the original id.
-        let mut first = base_turn("dup", Role::User);
-        first.text = "original".into();
-        let mut second = base_turn("dup", Role::User); // re-IDed to dup#2
-        second.text = "replayed".into();
-        let mut child = base_turn("child", Role::Assistant);
-        child.parent_id = Some("dup".into());
-        let view = view_with(vec![first, second, child]);
-
-        let path = derive_path(&view, &DeriveConfig::default());
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        assert_eq!(ids, vec!["dup", "dup#2", "child"]);
-        assert_eq!(
-            path.steps[2].step.parents,
-            vec!["dup#2".to_string()],
-            "child parents on the renamed later duplicate, not the first `dup`"
-        );
-    }
-
-    #[test]
-    fn test_duplicate_event_ids_are_resolved_to_unique_ids() {
-        // The blocking case: Claude Code reuses `uuid` on attachment lines, so
-        // two distinct events arrive with the same id. derive_path must still
-        // yield unique step ids (consumers key on them, e.g. a UNIQUE index).
-        let a = base_turn("t1", Role::User);
-        let mut view = view_with(vec![a]);
-        for v in ["v1", "v2"] {
-            view.events.push(crate::ConversationEvent {
-                id: "evt".into(), // same id, different content
-                timestamp: "2026-01-01T00:00:00Z".into(),
-                parent_id: None,
-                event_type: "attachment".into(),
-                data: std::collections::HashMap::from([("k".to_string(), serde_json::json!(v))]),
-            });
-        }
-
-        let path = derive_path(&view, &DeriveConfig::default());
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
-        assert_eq!(unique.len(), ids.len(), "step ids must be unique: {ids:?}");
-        assert!(
-            ids.contains(&"evt") && ids.contains(&"evt#2"),
-            "both events survive with distinct ids: {ids:?}"
-        );
     }
 
     #[test]
@@ -2033,6 +1947,82 @@ mod tests {
             path.steps[1].step.parents,
             vec!["a".to_string()],
             "unresolvable parent falls back to the previous step, not an empty (root) parent set"
+        );
+    }
+
+    fn dead_end_ids(path: &Path) -> Vec<String> {
+        toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+            .iter()
+            .map(|s| s.step.id.clone())
+            .collect()
+    }
+
+    fn snapshot_event(id: &str) -> crate::ConversationEvent {
+        crate::ConversationEvent {
+            id: id.into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: None,
+            event_type: "file-history-snapshot".into(),
+            data: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_events_and_compaction_land_on_head_ancestry() {
+        // A linear stream (Codex/opencode shape): a leading event, an
+        // interleaved event, and a compaction that only back-links to the
+        // prior turn. All must end up on the head's ancestry — none flagged as
+        // a false dead end (`query dead-ends` / `render dot` would otherwise
+        // show them as abandoned).
+        let mut a = base_turn("a", Role::User);
+        a.text = "go".into();
+        let mut b = base_turn("b", Role::Assistant);
+        b.parent_id = Some("a".into());
+        let mut c = base_turn("c", Role::Assistant);
+        c.parent_id = Some("b".into());
+        let cmp = Compaction {
+            id: "cmp".into(),
+            parent_id: Some("a".into()), // back-link only, as Codex/opencode emit
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+
+        let mut view = view_with(vec![]);
+        view.items = vec![
+            Item::Event(snapshot_event("lead-evt")),
+            Item::Turn(a),
+            Item::Event(snapshot_event("mid-evt")),
+            Item::Compaction(cmp),
+            Item::Turn(b),
+            Item::Turn(c),
+        ];
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert!(
+            dead_end_ids(&path).is_empty(),
+            "events + compaction must be on the head's ancestry, got dead ends: {:?}",
+            dead_end_ids(&path)
+        );
+    }
+
+    #[test]
+    fn test_splice_preserves_genuine_dead_end_branches() {
+        // The splice must NOT swallow real branches: an abandoned turn that
+        // forks off an earlier turn (not the previous one) stays a dead end.
+        let a = base_turn("a", Role::User);
+        let mut x = base_turn("x", Role::Assistant); // abandoned branch off a
+        x.parent_id = Some("a".into());
+        let mut b = base_turn("b", Role::Assistant); // main line off a
+        b.parent_id = Some("a".into());
+        let mut c = base_turn("c", Role::Assistant);
+        c.parent_id = Some("b".into());
+
+        let view = view_with(vec![a, x, b, c]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(
+            dead_end_ids(&path),
+            vec!["x".to_string()],
+            "the abandoned branch must remain a dead end"
         );
     }
 
