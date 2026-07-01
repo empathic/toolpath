@@ -134,6 +134,7 @@ cargo run -p path-cli -- show claude --project /path/to/project --session <sessi
 cargo run -p path-cli -- p track init --file src/main.rs --actor "human:alex"
 cargo run -p path-cli -- p validate --input doc.json
 cargo run -p path-cli -- auth login
+cargo run -p path-cli -- auth login --token <token>   # streamlined: paste a token from Pathbase, no browser round-trip
 cargo run -p path-cli -- auth status
 cargo run -p path-cli -- auth whoami
 cargo run -p path-cli -- auth logout
@@ -155,6 +156,14 @@ writes to `~/.toolpath/credentials.json` (0600, parent dir 0700) and sends as
 `Authorization: Bearer <token>` on future requests. `$TOOLPATH_CONFIG_DIR`
 overrides the credentials directory. Server URL comes from `--url`, then
 `$PATHBASE_URL`, then `https://pathbase.dev`.
+
+`path auth login --token <token>` is the streamlined alternative — no browser
+code exchange. When you're already signed in on the Pathbase site it hands you
+a ready-to-paste `path auth login --token <token>` command; the CLI validates
+that token with `GET /api/v1/users/me` (so a bad/expired token fails fast and
+never gets written), then stores the same `credentials.json` session the code
+flow produces. `--token` conflicts with `--code`. The token *is* the bearer
+credential — there's no redeem step. See `login_with_token` in `cmd_auth.rs`.
 
 The CLI redeem endpoint (`POST /api/v1/auth/cli/redeem`) is real and works
 in production but is **not listed in `schema/pathbase-openapi.json`** — the

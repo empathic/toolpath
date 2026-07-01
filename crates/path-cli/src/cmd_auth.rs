@@ -1,15 +1,15 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Subcommand;
 use std::path::Path;
 
 use crate::cmd_pathbase::{
-    StoredSession, api_logout, api_me, api_redeem, clear_session, credentials_path, load_session,
-    prompt_line, resolve_url, store_session,
+    StoredSession, User, api_logout, api_me, api_redeem, clear_session, credentials_path,
+    load_session, prompt_line, resolve_url, store_session,
 };
 
 #[derive(Subcommand, Debug)]
 pub enum AuthOp {
-    /// Log in by opening a browser to Pathbase and pasting the displayed code
+    /// Log in to Pathbase — paste a code from the browser, or a token
     Login {
         /// Pathbase server URL (defaults to $PATHBASE_URL or https://pathbase.dev)
         #[arg(long)]
@@ -18,6 +18,13 @@ pub enum AuthOp {
         /// Paste the code directly instead of prompting
         #[arg(long)]
         code: Option<String>,
+
+        /// Log in with a token straight from Pathbase, skipping the browser
+        /// code exchange. When you're already signed in on the Pathbase site
+        /// it hands you a ready-to-paste `path auth login --token <token>`
+        /// command; this validates that token and stores the session.
+        #[arg(long, conflicts_with = "code")]
+        token: Option<String>,
     },
     /// Log out and clear the stored session
     Logout,
@@ -30,17 +37,26 @@ pub enum AuthOp {
 pub fn run(op: AuthOp) -> Result<()> {
     let path = credentials_path()?;
     match op {
-        AuthOp::Login { url, code } => login(&path, url, code),
+        AuthOp::Login { url, code, token } => login(&path, url, code, token),
         AuthOp::Logout => logout(&path),
         AuthOp::Status => status(&path),
         AuthOp::Whoami => whoami(&path),
     }
 }
 
-fn login(path: &Path, url: Option<String>, code_arg: Option<String>) -> Result<()> {
+fn login(
+    path: &Path,
+    url: Option<String>,
+    code_arg: Option<String>,
+    token_arg: Option<String>,
+) -> Result<()> {
     let base_url = resolve_url(url);
-    let auth_url = format!("{base_url}/auth/cli");
 
+    if let Some(raw) = token_arg {
+        return login_with_token(path, &base_url, raw);
+    }
+
+    let auth_url = format!("{base_url}/auth/cli");
     let code = match code_arg {
         Some(c) => c,
         None => {
@@ -50,15 +66,41 @@ fn login(path: &Path, url: Option<String>, code_arg: Option<String>) -> Result<(
             println!("  2. Sign in if prompted");
             println!("  3. Copy the 8-character code shown on that page");
             println!();
+            println!("  (already signed in there? paste the one-line");
+            println!("   `path auth login --token <token>` command instead)");
+            println!();
             prompt_line("Paste code: ")?
         }
     };
 
     let (token, user) = api_redeem(&base_url, &code)?;
+    finish_login(path, &base_url, token, user)
+}
+
+/// Sign in with a token issued directly by Pathbase, no browser round-trip.
+///
+/// The token is used as-is as the bearer credential; we validate it (and
+/// resolve the account it belongs to) with a `GET /users/me` before writing
+/// it to disk, so a bad or expired token fails here instead of silently at
+/// the next upload.
+fn login_with_token(path: &Path, base_url: &str, raw: String) -> Result<()> {
+    let token = raw.trim().to_string();
+    if token.is_empty() {
+        bail!("--token was empty; paste the token from {base_url}/auth/cli");
+    }
+
+    let user = api_me(base_url, &token)
+        .with_context(|| format!("failed to sign in to {base_url} with the provided token"))?;
+    finish_login(path, base_url, token, user)
+}
+
+/// Persist the session and print the "logged in as …" confirmation. Shared
+/// by the code-exchange and token login flows.
+fn finish_login(path: &Path, base_url: &str, token: String, user: User) -> Result<()> {
     store_session(
         path,
         &StoredSession {
-            url: base_url.clone(),
+            url: base_url.to_string(),
             token,
             user: user.clone(),
         },

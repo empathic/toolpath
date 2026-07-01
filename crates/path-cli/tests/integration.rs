@@ -412,6 +412,103 @@ fn auth_login_against_unreachable_url_errors() {
         .stderr(predicate::str::contains("127.0.0.1"));
 }
 
+/// One-shot mock of `GET /api/v1/users/me`. `path auth login --token`
+/// validates the pasted token against this endpoint before storing it.
+fn spawn_me_mock(status_line: &'static str, body: String) -> (u16, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let resp = format!(
+            "{status_line}\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(resp.as_bytes());
+    });
+    (port, handle)
+}
+
+/// Minimal `User` payload — the fields the generated pathbase client
+/// requires to decode `/users/me` successfully.
+fn me_body(username: &str) -> String {
+    format!(
+        r#"{{"id":"00000000-0000-0000-0000-000000000001","username":"{username}","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}}"#
+    )
+}
+
+#[test]
+fn auth_login_help_mentions_token() {
+    cmd()
+        .args(["auth", "login", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--token"));
+}
+
+#[test]
+fn auth_login_token_conflicts_with_code() {
+    cmd()
+        .args(["auth", "login", "--token", "tok", "--code", "BCDFGHJK"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn auth_login_with_token_validates_and_stores_session() {
+    let (port, server) = spawn_me_mock("HTTP/1.1 200 OK", me_body("alice"));
+    let cfg = tempfile::tempdir().unwrap();
+    let url = format!("http://127.0.0.1:{port}");
+
+    // Token login hits /users/me, resolves the account, writes credentials.
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["auth", "login", "--token", "secret-token", "--url"])
+        .arg(&url)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Logged in to"))
+        .stdout(predicate::str::contains("alice"));
+    server.join().unwrap();
+
+    // The session is on disk — `status` reads it back with no network call.
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["auth", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alice"))
+        .stdout(predicate::str::contains(&url));
+}
+
+#[test]
+fn auth_login_with_rejected_token_errors() {
+    let (port, server) = spawn_me_mock("HTTP/1.1 401 Unauthorized", "{}".to_string());
+    let cfg = tempfile::tempdir().unwrap();
+    let url = format!("http://127.0.0.1:{port}");
+
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["auth", "login", "--token", "bad-token", "--url"])
+        .arg(&url)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to sign in"));
+    server.join().unwrap();
+
+    // A rejected token must not leave a half-written session behind.
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["auth", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Not logged in"));
+}
+
 // ── Import / export / cache ─────────────────────────────────────────
 
 #[test]

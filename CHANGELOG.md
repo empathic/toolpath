@@ -2,6 +2,26 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## `path auth login --token` — streamlined, browser-free sign-in — 2026-07-01
+
+Adds a second way to authenticate the CLI that skips the browser code
+exchange entirely. The existing flow (`path auth login` → open
+`<base>/auth/cli` → copy an 8-character code → paste it back → redeem)
+still works unchanged; `--token` is an alternative for when you're already
+signed in on the Pathbase site, which can then hand you a single
+ready-to-paste command.
+
+- **`path auth login --token <token>`** (path-cli 0.15.0). The token *is*
+  the bearer credential — there's no redeem round-trip. The CLI validates
+  it against `GET /api/v1/users/me` before writing anything, so a bad or
+  expired token fails fast and never leaves a half-written session on disk;
+  on success it stores the same `credentials.json` (0600) the code flow
+  produces. Server URL resolves as usual (`--url` → `$PATHBASE_URL` →
+  `https://pathbase.dev`).
+- `--token` **conflicts with** `--code`. The interactive prompt now also
+  points at the one-line token command for users already signed in on the
+  site.
+
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 
 Fixes token over-counting in derived documents (~3× output-token
