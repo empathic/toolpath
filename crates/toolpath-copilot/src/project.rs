@@ -127,8 +127,9 @@ impl CopilotProjector {
                 ),
                 Role::Assistant => {
                     let turn_id = assistant_turn.to_string();
+                    let message_id = message_uuid(assistant_turn);
                     assistant_turn += 1;
-                    self.push_assistant(&mut b, turn, &ts, &turn_id);
+                    self.push_assistant(&mut b, turn, &ts, &turn_id, &message_id);
                 }
                 // Unknown/other roles (e.g. pi's `tool` role) fold into a user
                 // message so the forward path reproduces them stably.
@@ -186,7 +187,14 @@ impl CopilotProjector {
         })
     }
 
-    fn push_assistant(&self, b: &mut LineBuilder, turn: &Turn, ts: &str, turn_id: &str) {
+    fn push_assistant(
+        &self,
+        b: &mut LineBuilder,
+        turn: &Turn,
+        ts: &str,
+        turn_id: &str,
+        message_id: &str,
+    ) {
         // Copilot requires `turnId` on turn-scoped events (assistant messages
         // and tool executions); stamp it on every event this turn emits.
         b.push("assistant.turn_start", ts, json!({ "turnId": turn_id }));
@@ -196,6 +204,7 @@ impl CopilotProjector {
         let mut data = Map::new();
         data.insert("content".into(), json!(turn.text));
         data.insert("turnId".into(), json!(turn_id));
+        data.insert("messageId".into(), json!(message_id));
         if let Some(m) = &turn.model {
             data.insert("model".into(), json!(m));
         }
@@ -209,9 +218,10 @@ impl CopilotProjector {
             let reqs: Vec<Value> = turn
                 .tool_uses
                 .iter()
-                .map(|tu| {
+                .enumerate()
+                .map(|(i, tu)| {
                     json!({
-                        "toolCallId": tu.id,
+                        "toolCallId": call_id(tu, turn_id, i),
                         "name": tool_name(tu),
                         "arguments": tu.input,
                     })
@@ -221,13 +231,16 @@ impl CopilotProjector {
         }
         b.push("assistant.message", ts, Value::Object(data));
 
-        // Tool execution lifecycle.
-        for tu in &turn.tool_uses {
+        // Tool execution lifecycle. `call_id` guarantees a non-empty toolCallId
+        // (Copilot rejects an empty one as missing) and is stable across the
+        // request mirror, start, and complete for the same call.
+        for (i, tu) in turn.tool_uses.iter().enumerate() {
+            let cid = call_id(tu, turn_id, i);
             b.push(
                 "tool.execution_start",
                 ts,
                 json!({
-                    "toolCallId": tu.id,
+                    "toolCallId": cid,
                     "toolName": tool_name(tu),
                     "arguments": tu.input,
                     "turnId": turn_id,
@@ -238,7 +251,7 @@ impl CopilotProjector {
                     "tool.execution_complete",
                     ts,
                     json!({
-                        "toolCallId": tu.id,
+                        "toolCallId": cid,
                         "success": !res.is_error,
                         "result": { "content": res.content },
                         "turnId": turn_id,
@@ -263,7 +276,11 @@ impl CopilotProjector {
             }
         }
 
-        b.push("assistant.turn_end", ts, json!({ "turnId": turn_id }));
+        b.push(
+            "assistant.turn_end",
+            ts,
+            json!({ "turnId": turn_id, "messageId": message_id }),
+        );
     }
 
     fn workspace(&self, view: &ConversationView) -> Option<Workspace> {
@@ -275,6 +292,17 @@ impl CopilotProjector {
             revision: base.vcs_revision.clone(),
         };
         (!ws.is_empty()).then_some(ws)
+    }
+}
+
+/// A non-empty, stable toolCallId for the `i`-th tool call of a turn. Uses the
+/// invocation's own id when set; synthesizes one otherwise (Copilot rejects an
+/// empty `toolCallId` as a missing field).
+fn call_id(tu: &ToolInvocation, turn_id: &str, i: usize) -> String {
+    if tu.id.trim().is_empty() {
+        format!("toolcall-{turn_id}-{i}")
+    } else {
+        tu.id.clone()
     }
 }
 
@@ -310,6 +338,12 @@ fn strip_file_uri(s: &str) -> String {
 /// projector output reproducible.
 fn event_uuid(n: usize) -> String {
     format!("00000000-0000-4000-8000-{:012x}", n)
+}
+
+/// A stable UUID for assistant message `n` — a distinct namespace from
+/// [`event_uuid`] so message ids and event-envelope ids never collide.
+fn message_uuid(n: usize) -> String {
+    format!("00000000-0000-4000-8001-{:012x}", n)
 }
 
 /// True when `s` is an ISO 8601 / RFC 3339 date-time WITH a timezone offset
@@ -424,6 +458,64 @@ mod tests {
                 assert!(uuid_shaped(p), "parentId not UUID-shaped: {p:?}");
             }
         }
+    }
+
+    #[test]
+    fn empty_tool_id_gets_a_synthesized_call_id() {
+        // Copilot rejects an empty `toolCallId` as a missing field; the
+        // projector must synthesize a non-empty, consistent id.
+        use serde_json::json;
+        use toolpath_convo::{ToolCategory, ToolInvocation, ToolResult};
+        let mut view = ConversationView {
+            id: "x".into(),
+            ..Default::default()
+        };
+        view.turns.push(Turn {
+            id: "a1".into(),
+            parent_id: None,
+            group_id: None,
+            role: Role::Assistant,
+            timestamp: "2026-07-01T00:00:00Z".into(),
+            text: String::new(),
+            thinking: None,
+            tool_uses: vec![ToolInvocation {
+                id: String::new(), // empty!
+                name: "bash".into(),
+                input: json!({"command": "ls"}),
+                result: Some(ToolResult {
+                    content: "out".into(),
+                    is_error: false,
+                }),
+                category: Some(ToolCategory::Shell),
+            }],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            attributed_token_usage: None,
+            environment: None,
+            delegations: Vec::new(),
+            file_mutations: Vec::new(),
+        });
+        let session = CopilotProjector::new().project(&view).unwrap();
+        // Collect toolCallId from the start + complete + the message's request.
+        let mut ids: Vec<String> = Vec::new();
+        for line in &session.lines {
+            let d = line.data.as_ref().unwrap();
+            if line.kind.starts_with("tool.execution") {
+                ids.push(d["toolCallId"].as_str().unwrap().to_string());
+            }
+            if line.kind == "assistant.message"
+                && let Some(reqs) = d.get("toolRequests").and_then(|v| v.as_array())
+            {
+                for r in reqs {
+                    ids.push(r["toolCallId"].as_str().unwrap().to_string());
+                }
+            }
+        }
+        assert!(!ids.is_empty());
+        assert!(ids.iter().all(|s| !s.is_empty()), "no empty toolCallId");
+        // start, complete, and the request mirror all share one id.
+        assert!(ids.windows(2).all(|w| w[0] == w[1]), "call id must be stable: {ids:?}");
     }
 
     #[test]

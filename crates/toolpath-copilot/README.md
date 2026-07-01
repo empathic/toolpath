@@ -62,9 +62,11 @@ content — a `raw` unified-diff perspective.
 - **Both directions.** Forward (`path p import/list/show copilot`, `path share`)
   and reverse via `CopilotProjector` (`path p export copilot`, `path resume`).
   Resume writes `~/.copilot/session-state/<id>/` + a `session-store.db`
-  `sessions` row (only ever a fresh id). **⚠️ Whether the real `copilot --resume`
-  loads a synthesized session is unverified** — the projector is validated in
-  isolation by the cross-harness conformance matrix + a round-trip test.
+  `sessions` row (only ever a fresh id). ✅ **Verified against copilotVersion
+  1.0.67**: a projected session loads and resumes in the real `copilot --resume`.
+  The loader's writer requirements (UUID ids, offset ISO timestamps, `turnId`,
+  `messageId`, …) are documented in
+  [writing-compatible.md](../../docs/agents/formats/copilot-cli/writing-compatible.md).
 - **File fidelity is best-effort.** Copilot records file edits as tool-call args
   plus separate `checkpoints/`/`rewind-snapshots/` rather than inline diffs
   (unlike Codex). This crate synthesizes a `raw` diff when the tool args contain

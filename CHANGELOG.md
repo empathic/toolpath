@@ -44,17 +44,21 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
   copilot`, `path share`) and reverse via a new `CopilotProjector`
   (`path p export copilot`, `path resume`). Resume/export write
   `~/.copilot/session-state/<id>/` + a `session-store.db` `sessions` row
-  (INSERTing only a fresh id, never touching existing sessions). **Whether the
-  real `copilot --resume` loads a synthesized session is unverified** (untestable
-  without the CLI) — the projector is validated in isolation by the
-  **cross-harness conformance matrix** (`test-fixtures/copilot/`) and a
-  round-trip test.
+  (INSERTing only a fresh id, never touching existing sessions). **✅ Verified in
+  copilot 1.0.67:** a projected session loads and resumes in the real
+  `copilot --resume`; the loader's writer contract (UUID `id`/`parentId`,
+  offset-ISO timestamps, `turnId`, `messageId`, non-empty `toolCallId`, full
+  `session.start` shape) is documented with verbatim errors in
+  `docs/agents/formats/copilot-cli/writing-compatible.md`. Also validated by the
+  cross-harness conformance matrix (`test-fixtures/copilot/`) + a round-trip test.
 - Bumps **`path-cli` to 0.15.0** (new `toolpath-copilot` dependency, the new
   subcommands, Copilot in `path share`/`path resume`, and `uuid` `v4`).
-- The Copilot **resume loader contract** is being mapped from live
-  `copilot --resume` runs — projected events now carry UUID `id`/`parentId`
-  (present, null on root) and offset-bearing ISO 8601 timestamps. Documented in
-  `docs/agents/formats/copilot-cli/writing-compatible.md`.
+- The Copilot **resume loader contract** was mapped from live `copilot --resume`
+  runs and codified in `docs/agents/formats/copilot-cli/writing-compatible.md`
+  (8 requirements, each with its verbatim rejection): UUID `id`; offset-ISO
+  `timestamp` on every event; present `parentId` (UUID/null); `session-store.db`
+  row; full `session.start` shape incl. `startTime`; `turnId` and `messageId` on
+  turn-scoped events; non-empty `toolCallId`.
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 

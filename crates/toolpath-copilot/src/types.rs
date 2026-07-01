@@ -299,7 +299,10 @@ impl ToolExecution {
             .cloned()
             .unwrap_or(Value::Null);
         Self {
-            id: str_field(p, &["id", "callId", "call_id", "toolCallId", "tool_call_id"]),
+            // Treat an empty-string id as absent so the fallback id / positional
+            // pairing kicks in (an empty toolCallId is invalid downstream).
+            id: str_field(p, &["id", "callId", "call_id", "toolCallId", "tool_call_id"])
+                .filter(|s| !s.trim().is_empty()),
             name: str_field(p, &["name", "tool", "toolName", "tool_name"]).unwrap_or_default(),
             args,
             success: p
