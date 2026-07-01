@@ -72,9 +72,15 @@ impl LineBuilder {
         let id = event_uuid(self.seq);
         let mut extra: HashMap<String, Value> = HashMap::new();
         extra.insert("id".to_string(), Value::String(id.clone()));
-        if let Some(parent) = &self.last_id {
-            extra.insert("parentId".to_string(), Value::String(parent.clone()));
-        }
+        // Copilot requires `parentId` to be *present* — a UUID string, or
+        // explicitly `null` for the root event. Omitting it is rejected.
+        extra.insert(
+            "parentId".to_string(),
+            match &self.last_id {
+                Some(parent) => Value::String(parent.clone()),
+                None => Value::Null,
+            },
+        );
         self.lines.push(EventLine {
             kind: kind.to_string(),
             timestamp: (!ts.is_empty()).then(|| ts.to_string()),

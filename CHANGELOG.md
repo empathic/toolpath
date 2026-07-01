@@ -51,6 +51,10 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
   round-trip test.
 - Bumps **`path-cli` to 0.15.0** (new `toolpath-copilot` dependency, the new
   subcommands, Copilot in `path share`/`path resume`, and `uuid` `v4`).
+- The Copilot **resume loader contract** is being mapped from live
+  `copilot --resume` runs — projected events now carry UUID `id`/`parentId`
+  (present, null on root) and offset-bearing ISO 8601 timestamps. Documented in
+  `docs/agents/formats/copilot-cli/writing-compatible.md`.
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 

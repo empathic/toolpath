@@ -16,7 +16,7 @@ rather than erroring with `Session file is corrupted`.
 |---|---|---|---|
 | 1 | Every event envelope **`id` must be a UUID string** (not `e1`, not a bare integer). | `invalid session event envelope: \`id\` must be a UUID string` | `[observed, 1.0.67]` |
 | 2 | Every event **`timestamp` must be an ISO 8601 date-time with a timezone offset** (e.g. `2026-07-01T14:31:29.298Z` or `…+00:00`). Applies to **every** event, `session.start` included. | `invalid session event envelope: \`timestamp\` must be an ISO 8601 date-time string with a timezone offset` | `[observed, 1.0.67]` |
-| 3 | `parentId` (when present) is an event id, so the same UUID rule applies. | — (not independently observed; applied defensively) | `[inferred]` |
+| 3 | Every event must **carry a `parentId` key** — a UUID string, or explicit `null` for the root (`session.start`). Omitting it is rejected; it can't just be absent. | `invalid session event envelope: \`parentId\` must be a UUID string or null` | `[observed, 1.0.67]` |
 | 4 | The session must have a row in `session-store.db`'s `sessions` table, or the resume picker / id lookup won't find it. | — (from the DB's role as the resume index) | `[inferred]` — see [session-store-db.md](session-store-db.md) |
 
 ## How `toolpath-copilot`'s projector satisfies these
@@ -26,8 +26,9 @@ rather than erroring with `Session file is corrupted`.
 
 - **UUID envelope ids (req 1, 3):** each event gets a syntactically-valid,
   per-session-unique, v4-shaped UUID (`00000000-0000-4000-8000-<counter>`);
-  `parentId` chains off the previous event's id. Deterministic — Copilot
-  validates the *shape*, not randomness.
+  `parentId` is **always emitted** — the previous event's UUID, or `null` on
+  the root `session.start`. Deterministic — Copilot validates the *shape*, not
+  randomness.
 - **Offset-bearing timestamps (req 2):** every event (including
   `session.start`) is stamped with a valid RFC 3339 timestamp. The projector
   picks a base (the first offset-bearing turn timestamp, else the view's
