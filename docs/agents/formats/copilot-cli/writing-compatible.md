@@ -19,6 +19,7 @@ rather than erroring with `Session file is corrupted`.
 | 3 | Every event must **carry a `parentId` key** — a UUID string, or explicit `null` for the root (`session.start`). Omitting it is rejected; it can't just be absent. | `invalid session event envelope: \`parentId\` must be a UUID string or null` | `[observed, 1.0.67]` |
 | 4 | The session must have a row in `session-store.db`'s `sessions` table, or the resume picker / id lookup won't find it. | — (from the DB's role as the resume index) | `[inferred]` — see [session-store-db.md](session-store-db.md) |
 | 5 | `session.start`'s `data` must include **`startTime`** (offset-bearing ISO 8601). The loader checks required top-level fields one at a time; the projector emits the full observed 1.0.67 set (`sessionId`, `version`, `producer`, `copilotVersion`, `startTime`, `contextTier`, `context`, `alreadyInUse`, `remoteSteerable`) to avoid repeat rejections. | `missing field \`startTime\`` | `[observed, 1.0.67]` |
+| 6 | Turn-scoped events (`assistant.turn_start`/`.message`/`.turn_end`, `tool.execution_start`/`_complete`) must carry a **`turnId`** — the string index of the assistant turn (`"0"`, `"1"`, …). Not present on `session.*` or `user.message`. | `missing field \`turnId\`` | `[observed, 1.0.67]` |
 
 ## How `toolpath-copilot`'s projector satisfies these
 
@@ -38,6 +39,9 @@ rather than erroring with `Session file is corrupted`.
 - **`session.start` shape (req 5):** `session_start_data` emits the full
   observed 1.0.67 top-level field set (incl. `startTime`, stamped with the same
   base timestamp as the envelope) plus a `context` block with cwd/git.
+- **`turnId` (req 6):** `push_assistant` stamps a per-assistant-turn index
+  (`"0"`, `"1"`, …) on every event it emits — turn start/message/end and each
+  tool execution. `user.message`/`session.*` don't get one.
 - **`sessions` row (req 4):** `project_copilot` writes an `INSERT OR REPLACE`
   into `session-store.db` (fresh session UUID only — never mutates existing
   sessions), plus `session-state/<id>/{events.jsonl,workspace.yaml}`.

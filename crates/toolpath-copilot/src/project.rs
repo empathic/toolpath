@@ -115,6 +115,7 @@ impl CopilotProjector {
             self.session_start_data(view, &base_ts),
         );
 
+        let mut assistant_turn: usize = 0;
         for turn in &view.turns {
             let ts = iso_or(&turn.timestamp, &base_ts);
             match &turn.role {
@@ -124,7 +125,11 @@ impl CopilotProjector {
                     &ts,
                     json!({ "role": "system", "content": turn.text }),
                 ),
-                Role::Assistant => self.push_assistant(&mut b, turn, &ts),
+                Role::Assistant => {
+                    let turn_id = assistant_turn.to_string();
+                    assistant_turn += 1;
+                    self.push_assistant(&mut b, turn, &ts, &turn_id);
+                }
                 // Unknown/other roles (e.g. pi's `tool` role) fold into a user
                 // message so the forward path reproduces them stably.
                 Role::Other(_) => b.push("user.message", &ts, json!({ "content": turn.text })),
@@ -181,13 +186,16 @@ impl CopilotProjector {
         })
     }
 
-    fn push_assistant(&self, b: &mut LineBuilder, turn: &Turn, ts: &str) {
-        b.push("assistant.turn_start", ts, json!({}));
+    fn push_assistant(&self, b: &mut LineBuilder, turn: &Turn, ts: &str, turn_id: &str) {
+        // Copilot requires `turnId` on turn-scoped events (assistant messages
+        // and tool executions); stamp it on every event this turn emits.
+        b.push("assistant.turn_start", ts, json!({ "turnId": turn_id }));
 
         // assistant.message carries text, model, reasoning, tokens, and the
         // tool-request mirror.
         let mut data = Map::new();
         data.insert("content".into(), json!(turn.text));
+        data.insert("turnId".into(), json!(turn_id));
         if let Some(m) = &turn.model {
             data.insert("model".into(), json!(m));
         }
@@ -222,6 +230,7 @@ impl CopilotProjector {
                     "toolCallId": tu.id,
                     "toolName": tool_name(tu),
                     "arguments": tu.input,
+                    "turnId": turn_id,
                 }),
             );
             if let Some(res) = &tu.result {
@@ -232,6 +241,7 @@ impl CopilotProjector {
                         "toolCallId": tu.id,
                         "success": !res.is_error,
                         "result": { "content": res.content },
+                        "turnId": turn_id,
                     }),
                 );
             }
@@ -242,18 +252,18 @@ impl CopilotProjector {
             b.push(
                 "subagent.started",
                 ts,
-                json!({ "id": d.agent_id, "prompt": d.prompt }),
+                json!({ "id": d.agent_id, "prompt": d.prompt, "turnId": turn_id }),
             );
             if let Some(result) = &d.result {
                 b.push(
                     "subagent.completed",
                     ts,
-                    json!({ "id": d.agent_id, "result": result }),
+                    json!({ "id": d.agent_id, "result": result, "turnId": turn_id }),
                 );
             }
         }
 
-        b.push("assistant.turn_end", ts, json!({}));
+        b.push("assistant.turn_end", ts, json!({ "turnId": turn_id }));
     }
 
     fn workspace(&self, view: &ConversationView) -> Option<Workspace> {
