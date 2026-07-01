@@ -97,8 +97,8 @@ mod tests {
         let dir = copilot.join("session-state").join("sess-abc");
         fs::create_dir_all(&dir).unwrap();
         let body = [
-            r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"version":"1.0.66","cwd":"/tmp/proj","model":"gpt-5-copilot"}}"#,
-            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"text":"hi there"}}"#,
+            r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"copilotVersion":"1.0.66","context":{"cwd":"/tmp/proj"}}}"#,
+            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"hi there"}}"#,
         ]
         .join("\n");
         fs::write(dir.join("events.jsonl"), body).unwrap();

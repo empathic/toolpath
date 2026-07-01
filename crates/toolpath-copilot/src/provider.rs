@@ -69,13 +69,17 @@ pub fn tool_category(name: &str) -> Option<ToolCategory> {
 
 /// Convert a parsed Copilot [`Session`] into a [`ConversationView`].
 pub fn to_view(session: &Session) -> ConversationView {
-    let default_model = session.start_model();
-    let cwd = session.cwd();
+    let start = session.start();
+    let default_model = start.as_ref().and_then(|s| s.model.clone());
 
     let mut turns: Vec<Turn> = Vec::new();
     let mut current: Option<Turn> = None;
     let mut events: Vec<ConversationEvent> = Vec::new();
     let mut total_usage: Option<TokenUsage> = None;
+    // Copilot reports per-message `outputTokens` (no session-level input count
+    // in an open session); sum them as the session output total when there's
+    // no `session.shutdown`.
+    let mut output_token_sum: u32 = 0;
     let mut seq: usize = 0;
 
     for (i, line) in session.lines.iter().enumerate() {
@@ -108,10 +112,22 @@ pub fn to_view(session: &Session) -> ConversationView {
                 current = Some(t);
             }
             CopilotEvent::AssistantMessage(m) => {
+                if let Some(ot) = m.output_tokens {
+                    output_token_sum = output_token_sum.saturating_add(ot);
+                }
                 let cur = ensure_assistant(&mut current, &mut seq, &default_model, &ts);
                 append_text(&mut cur.text, &m.text);
+                if let Some(r) = &m.reasoning {
+                    match &mut cur.thinking {
+                        Some(t) => {
+                            t.push_str("\n\n");
+                            t.push_str(r);
+                        }
+                        None => cur.thinking = Some(r.clone()),
+                    }
+                }
                 if cur.model.is_none() {
-                    cur.model = m.model.or_else(|| default_model.clone());
+                    cur.model = m.model.clone().or_else(|| default_model.clone());
                 }
             }
             CopilotEvent::AssistantTurnEnd => {
@@ -193,6 +209,18 @@ pub fn to_view(session: &Session) -> ConversationView {
     }
     flush(&mut turns, &mut current);
 
+    // Session output total from summed per-message tokens, unless a
+    // `session.shutdown` already gave us a total.
+    if total_usage.is_none() && output_token_sum > 0 {
+        total_usage = Some(TokenUsage {
+            input_tokens: None,
+            output_tokens: Some(output_token_sum),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            breakdowns: Default::default(),
+        });
+    }
+
     // Files changed, in first-touch order, deduped.
     let mut files_changed: Vec<String> = Vec::new();
     for t in &turns {
@@ -203,20 +231,33 @@ pub fn to_view(session: &Session) -> ConversationView {
         }
     }
 
-    // Base: working dir from `session.start` cwd (falling back to the
-    // workspace's git root), with git branch/revision/remote from
-    // `workspace.yaml` when available.
+    // Base: `session.start`'s `context` is primary; `workspace.yaml` is the
+    // fallback for anything it lacks.
     let ws = session.workspace.as_ref();
-    let working_dir = cwd
-        .clone()
+    let s = start.as_ref();
+    let working_dir = s
+        .and_then(|s| s.cwd.clone())
+        .or_else(|| s.and_then(|s| s.git_root.clone()))
         .or_else(|| ws.and_then(|w| w.git_root.clone()));
-    let has_vcs = ws.map(|w| !w.is_empty()).unwrap_or(false);
-    let base = if working_dir.is_some() || has_vcs {
+    let vcs_branch = s
+        .and_then(|s| s.branch.clone())
+        .or_else(|| ws.and_then(|w| w.branch.clone()));
+    let vcs_revision = s
+        .and_then(|s| s.revision.clone())
+        .or_else(|| ws.and_then(|w| w.revision.clone()));
+    let vcs_remote = s
+        .and_then(|s| s.repository.clone())
+        .or_else(|| ws.and_then(|w| w.repository.clone()));
+    let base = if working_dir.is_some()
+        || vcs_branch.is_some()
+        || vcs_revision.is_some()
+        || vcs_remote.is_some()
+    {
         Some(SessionBase {
             working_dir,
-            vcs_revision: ws.and_then(|w| w.revision.clone()),
-            vcs_branch: ws.and_then(|w| w.branch.clone()),
-            vcs_remote: ws.and_then(|w| w.repository.clone()),
+            vcs_revision,
+            vcs_branch,
+            vcs_remote,
         })
     } else {
         None
@@ -541,19 +582,21 @@ mod tests {
         }
     }
 
+    // Shaped after a real session (copilotVersion 1.0.67): nested `context`,
+    // `toolName`/`toolCallId`, `result.content`, `reasoningText`, `outputTokens`.
     fn body() -> String {
         [
-            r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"version":"1.0.66","cwd":"/tmp/proj","model":"gpt-5-copilot"}}"#,
-            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"text":"build a thing"}}"#,
+            r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"copilotVersion":"1.0.66","producer":"copilot-agent","context":{"cwd":"/tmp/proj"}}}"#,
+            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"build a thing"}}"#,
             r#"{"type":"assistant.turn_start","timestamp":"2026-06-30T10:00:02.000Z","data":{}}"#,
-            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"text":"Listing files."}}"#,
-            r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:04.000Z","data":{"id":"c1","name":"shell","args":{"command":"ls"}}}"#,
-            r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:05.000Z","data":{"id":"c1","name":"shell","args":{"command":"ls"},"success":true,"output":"a.rs"}}"#,
-            r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:06.000Z","data":{"id":"c2","name":"create_file","args":{"path":"a.rs","content":"fn main() {}\n"}}}"#,
-            r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:07.000Z","data":{"id":"c2","name":"create_file","args":{"path":"a.rs","content":"fn main() {}\n"},"success":true}}"#,
-            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:08.000Z","data":{"text":"Done."}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"Listing files.","model":"claude-haiku-4.5","reasoningText":"Let me look at the files.","outputTokens":50}}"#,
+            r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:04.000Z","data":{"toolCallId":"c1","toolName":"bash","arguments":{"command":"ls"}}}"#,
+            r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:05.000Z","data":{"toolCallId":"c1","success":true,"result":{"content":"a.rs","detailedContent":"a.rs"}}}"#,
+            r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:06.000Z","data":{"toolCallId":"c2","toolName":"create_file","arguments":{"path":"a.rs","content":"fn main() {}\n"}}}"#,
+            r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:07.000Z","data":{"toolCallId":"c2","success":true}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:08.000Z","data":{"content":"Done.","outputTokens":20}}"#,
             r#"{"type":"assistant.turn_end","timestamp":"2026-06-30T10:00:09.000Z","data":{}}"#,
-            r#"{"type":"session.shutdown","timestamp":"2026-06-30T10:00:10.000Z","data":{"modelMetrics":{"model":"gpt-5-copilot"},"usage":{"inputTokens":1200,"outputTokens":340}}}"#,
+            r#"{"type":"session.shutdown","timestamp":"2026-06-30T10:00:10.000Z","data":{"modelMetrics":{"model":"claude-haiku-4.5"},"usage":{"inputTokens":1200,"outputTokens":340}}}"#,
         ]
         .join("\n")
     }
@@ -581,10 +624,58 @@ mod tests {
         let view = to_view(&parse(&body()));
         let tools = &view.turns[1].tool_uses;
         assert_eq!(tools.len(), 2);
-        let shell = tools.iter().find(|t| t.name == "shell").unwrap();
+        let shell = tools.iter().find(|t| t.name == "bash").unwrap();
         assert_eq!(shell.category, Some(ToolCategory::Shell));
+        // Result content comes from the nested `result.content` object.
         assert_eq!(shell.result.as_ref().unwrap().content, "a.rs");
         assert!(!shell.result.as_ref().unwrap().is_error);
+    }
+
+    #[test]
+    fn assistant_reasoning_becomes_thinking() {
+        let view = to_view(&parse(&body()));
+        assert_eq!(
+            view.turns[1].thinking.as_deref(),
+            Some("Let me look at the files.")
+        );
+    }
+
+    #[test]
+    fn output_tokens_summed_when_no_shutdown() {
+        // Same as body() but without session.shutdown: total falls back to the
+        // sum of per-message outputTokens (50 + 20).
+        let body = [
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"a","outputTokens":50}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:08.000Z","data":{"content":"b","outputTokens":20}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+        ]
+        .join("\n");
+        let u = to_view(&parse(&body)).total_usage.unwrap();
+        assert_eq!(u.output_tokens, Some(70));
+        assert_eq!(u.input_tokens, None);
+    }
+
+    #[test]
+    fn session_start_context_git_is_primary_over_workspace() {
+        let body = [
+            r#"{"type":"session.start","data":{"copilotVersion":"1.0.67","context":{"cwd":"/ctx/dir","gitRoot":"/ctx/dir","repository":"acme/demo","branch":"ctx-branch","headCommit":"ctxsha"}}}"#,
+            r#"{"type":"user.message","data":{"content":"hi"}}"#,
+        ]
+        .join("\n");
+        let mut session = parse(&body);
+        // Conflicting workspace.yaml — session.start context must win.
+        session.workspace = Some(crate::types::Workspace {
+            git_root: Some("/ws/dir".into()),
+            repository: Some("other/repo".into()),
+            branch: Some("ws-branch".into()),
+            revision: Some("wssha".into()),
+        });
+        let base = to_view(&session).base.unwrap();
+        assert_eq!(base.working_dir.as_deref(), Some("/ctx/dir"));
+        assert_eq!(base.vcs_branch.as_deref(), Some("ctx-branch"));
+        assert_eq!(base.vcs_revision.as_deref(), Some("ctxsha"));
+        assert_eq!(base.vcs_remote.as_deref(), Some("acme/demo"));
     }
 
     #[test]
@@ -731,9 +822,9 @@ mod tests {
     fn tool_pairing_with_ids_still_works() {
         // Regression guard: explicit ids remain authoritative.
         let view = to_view(&parse(&body()));
-        let shell = view.turns[1].tool_uses.iter().find(|t| t.name == "shell").unwrap();
+        let shell = view.turns[1].tool_uses.iter().find(|t| t.name == "bash").unwrap();
         assert_eq!(shell.result.as_ref().unwrap().content, "a.rs");
-        // body() has two id-bearing tool calls: shell + create_file.
+        // body() has two id-bearing tool calls: bash + create_file.
         assert_eq!(view.turns[1].tool_uses.len(), 2);
     }
 }

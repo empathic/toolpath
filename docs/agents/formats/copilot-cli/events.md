@@ -4,92 +4,89 @@
 line-delimited JSON** log of everything that happened in the session. This is
 the file a forward provider parses to reconstruct the conversation.
 
-> **⚠️ This is the least-documented and most load-bearing part of the format.**
-> GitHub has **not** published an `events.jsonl` schema — feature request
-> [#3551](https://github.com/github/copilot-cli/issues/3551) literally asks them
-> to "formalize `events.jsonl` as an official hook/integration API," which
-> confirms it is currently an *undocumented internal format that can change
-> between releases.* Everything below the envelope section is `[reverse-eng]`,
-> observed at **v1.0.54**, and should be treated as a hypothesis until checked
-> against a captured session.
+> **⚠️ Undocumented internal format.** GitHub has **not** published an
+> `events.jsonl` schema — feature request
+> [#3551](https://github.com/github/copilot-cli/issues/3551) asks them to
+> "formalize `events.jsonl` as an official hook/integration API," so it can
+> change between releases. **The envelope and the core event types below are
+> now `[observed]` against a first-hand capture at `copilotVersion` 1.0.67**;
+> items still flagged `[reverse-eng]`/`[unverified]` were not exercised by that
+> session (no sub-agent / skill / hook / abort / shutdown occurred in it).
 
-## Line envelope
+## Line envelope `[observed, 1.0.67]`
 
-- **One JSON object per line.** Parsed with `JSON.parse()` per line, not as one
-  array — confirmed by issue [#2012](https://github.com/github/copilot-cli/issues/2012),
-  a bug where literal `U+2028`/`U+2029` characters embedded in a line break
-  `JSON.parse()` during `/resume`. `[reverse-eng, High]`
-- **A `type` discriminant** in a dotted namespace (`tool.execution_complete`)
-  selects the event variant. `[reverse-eng, Medium]`
-- The rest of the envelope — whether the payload is inline or nested under a
-  `data` key, whether there is a top-level `timestamp` — is **`[inferred]` /
-  `[unverified]`.** No source quoted a verbatim full line. The working
-  hypothesis (model after Codex's `{timestamp, type, payload}` envelope):
+Every line is one JSON object of the form:
 
-  ```jsonc
-  // [INFERRED — do not trust the key layout until verified against a sample]
-  {"type": "tool.execution_complete", "timestamp": "…", "data": { /* per-type */ }}
-  ```
+```jsonc
+{"type": "tool.execution_complete",
+ "id": "d4f4054e-…",           // per-event UUID
+ "parentId": "e34fb2e9-…",     // parent event UUID — events form a tree
+ "timestamp": "2026-07-01T14:…Z",
+ "data": { /* per-type payload */ }}
+```
 
-  A robust parser should therefore: discriminate on `type`; tolerate the payload
-  being either inline (sibling keys) or nested under `data`/`payload`; and keep
-  an `Unknown { type, raw }` fallback for unrecognized types (forward-compat,
-  exactly as `toolpath-codex` does with `RolloutItem::Unknown`).
+- **One JSON object per line**, parsed with `JSON.parse()` per line (not one
+  array) — corroborated by issue [#2012](https://github.com/github/copilot-cli/issues/2012)
+  (raw `U+2028`/`U+2029` breaking `/resume`).
+- **`type`** is a dotted-namespace discriminant; **`data`** holds the payload
+  (confirmed — payload is *not* inline). **`id`**/**`parentId`** form an event
+  tree (a `parentId` chain, not just sequential). `toolpath-copilot` preserves
+  `id`/`parentId` but derives turns sequentially (the tree is not yet used).
+- The reader still tolerates payload-inline / `payload`-keyed shapes and keeps
+  an `Unknown { type, raw }` fallback for unrecognized types — belt-and-suspenders
+  in case the envelope shifts in another version.
 
-## Event-type catalogue (v1.0.54)
+## Event-type catalogue
 
-`[reverse-eng, Medium]` — ~20 types, grouped by namespace. Sources: issue #3551
-(RockNoggin's enumeration) + the jonmagic write-up. Field lists are only as
-complete as those sources; absence below means "not reported," not "not present."
+Grouped by namespace. Rows tagged `[observed, 1.0.67]` were seen in a first-hand
+capture; `[reverse-eng]` rows come from issue #3551 + the jonmagic write-up and
+did not occur in that session. Field paths are relative to `data`.
 
 ### `session.*` — lifecycle and session-level state
 
-| Type | Reported fields | Notes |
+| Type | `data` fields | Notes |
 |---|---|---|
-| `session.start` | `version`, `cwd`, `model` | Session opener. The closest thing to Codex's `session_meta` — cwd + model live here. |
-| `session.task_complete` | summary text | A task/turn finished; carries a summary. |
-| `session.shutdown` | `modelMetrics` (model id), `usage.inputTokens` | Session close; carries per-session token/model metrics. **Note the camelCase payload keys** (`inputTokens`) — the one concrete hint at payload casing. |
-| `session.model_change` | (model id) | User/agent switched models mid-session. |
-| `session.mode_changed` | (mode) | Mode switch (e.g. plan vs. execute). |
-| `session.plan_changed` | (plan) | The working plan was updated. |
-| `session.compaction_start` | — | Context compaction began. |
-| `session.compaction_complete` | token counts | Context was compacted; carries before/after token counts. |
+| `session.start` | `sessionId`, `version` (int schema ver), `producer` (`"copilot-agent"`), `copilotVersion`, `startTime`, **`context`** `{cwd, gitRoot, repository, hostType, repositoryHost, branch, headCommit, baseCommit}` | `[observed]` Session opener. cwd + git live under `context`, **not** top-level; the CLI version is `copilotVersion` (top-level `version` is an int). No `model` here. |
+| `session.model_change` | `newModel` (e.g. `"auto"`) | `[observed]` Model switched (also emitted once right after start). |
+| `session.task_complete` | `summary` | `[observed]` A task finished. |
+| `session.shutdown` | `modelMetrics` (model id), `usage.inputTokens` | `[reverse-eng]` Session close. **Did not occur** in the captured session (it had an `inuse.<pid>.lock`); token totals there came per-message instead — see below. |
+| `session.mode_changed` / `session.plan_changed` / `session.compaction_start` / `session.compaction_complete` | (mode / plan / token counts) | `[reverse-eng]` Not seen in the sample. |
 
-### `user.*` and `assistant.*` — the conversation
+### `system.*`, `user.*`, `assistant.*` — the conversation
 
-| Type | Reported fields | Notes |
+| Type | `data` fields | Notes |
 |---|---|---|
-| `user.message` | (message text) | A user prompt. |
-| `assistant.turn_start` | — | Opens an assistant turn. |
-| `assistant.message` | (message text) | Assistant output. Multiple `assistant.message` events may fall between one `turn_start`/`turn_end` pair `[inferred]`. |
-| `assistant.turn_end` | — | Closes an assistant turn — the natural turn boundary and token-accounting group. |
+| `system.message` | `role: "system"`, `content` | `[observed]` The system prompt (large — ~56 KB). Recorded as a `ConversationEvent`, not a turn. |
+| `user.message` | `content`, `transformedContent`, `interactionId`, `attachments`, `parentAgentTaskId` | `[observed]` `content` is the raw prompt; `transformedContent` adds datetime/system-reminder wrapping. |
+| `assistant.turn_start` / `assistant.turn_end` | — | `[observed]` Turn boundary. |
+| `assistant.message` | `content`, `model`, **`reasoningText`** (thinking), `reasoningOpaque`, **`toolRequests`** `[{toolCallId, name, arguments, intentionSummary}]`, **`outputTokens`**, `messageId`, `turnId`, `requestId` | `[observed]` One turn can have several. `reasoningText` → `Turn.thinking`; `outputTokens` summed for the session total. `toolRequests` mirror the following `tool.execution_start` (we take the tool from the execution events to avoid double-counting). |
 
-### `tool.*` — tool / command invocations
+### `tool.*` — tool / command invocations `[observed]`
 
-| Type | Reported fields | Notes |
+| Type | `data` fields | Notes |
 |---|---|---|
-| `tool.execution_start` | tool **name**, **args** | A tool/command call begins. `name` + `args` is what a provider maps to `ToolInvocation`. |
-| `tool.execution_complete` | tool **name**, **args**, **success** | The call finished; `success` is the error flag. The *result content* (stdout, file content) is **not confirmed** to be inline — see [file-fidelity.md](file-fidelity.md). |
+| `tool.execution_start` | **`toolCallId`**, **`toolName`**, **`arguments`**, `model`, `turnId`, `shellToolInfo` | Opens a call. `toolName`/`arguments` → `ToolInvocation`. |
+| `tool.execution_complete` | **`toolCallId`**, **`success`**, **`result`** `{content, detailedContent}`, `model`, `turnId`, `toolTelemetry` | The result text is under **`result.content`** (an object — earlier versions of this doc wrongly guessed a top-level string). `success` is the error flag. |
 
-> **Correlation id is unverified.** The sources report only `name`/`args`/
-> `success` on `tool.execution_*` — **no correlation id linking a `complete`
-> back to its `start` was confirmed.** `toolpath-copilot` therefore uses an id
-> to pair when one is present (any of `id`/`callId`/`call_id`/`toolCallId`), but
-> falls back to positional pairing (the most-recent result-less invocation in
-> the open turn, preferring the same tool name) when it's absent — so an
-> id-less stream still collapses each `start`/`complete` to one invocation
-> rather than double-counting. Confirm the real correlation mechanism against a
-> sample (see [known-gaps](known-gaps-and-sourcing.md#verify-once-we-have-samples)).
+**Correlation** `[observed]`: `tool.execution_complete` links to its start via
+**`toolCallId`** (same value on both, and on the `assistant.message`'s
+`toolRequests`). `toolpath-copilot` pairs on it, and additionally falls back to
+positional pairing (most-recent result-less invocation in the open turn) if a
+future version ever omits the id — so it never double-counts.
 
-### `subagent.*`, `skill.*`, `hook.*`, `abort`
+### `subagent.*`, `skill.*`, `hook.*`, `abort` `[reverse-eng]`
 
-| Type | Reported fields | Notes |
-|---|---|---|
-| `subagent.started` | — | A sub-agent was dispatched → maps to `Turn.delegations` / `DelegatedWork`. |
-| `subagent.completed` | — | Sub-agent finished. Whether sub-agent turns are inline or in a separate file is **unverified**. |
-| `skill.invoked` | (skill name) | A skill was activated. |
-| `hook.start` / `hook.end` | — | A user hook ran → maps to `ConversationView.events`, not a turn. |
-| `abort` | — | The session/turn was aborted. |
+None of these occurred in the captured session, so their `data` shapes remain
+unverified. Handling: `subagent.started`/`completed` → `Turn.delegations`
+(`DelegatedWork`, paired by `id`); `skill.invoked` / `hook.*` / `abort` →
+`ConversationView.events`.
+
+| Type | Notes |
+|---|---|
+| `subagent.started` / `subagent.completed` | Sub-agent dispatch/finish. Whether sub-agent turns are inline or in a separate stream is **unverified**. |
+| `skill.invoked` | A skill was activated. |
+| `hook.start` / `hook.end` | A user hook ran. |
+| `abort` | The session/turn was aborted. |
 
 ### A conflicting source
 

@@ -156,19 +156,44 @@ pub enum CopilotEvent {
     Unknown { kind: String, payload: Value },
 }
 
-/// `session.start` — the closest thing to a session-meta line.
+/// `session.start` — the session-meta line.
+///
+/// Observed at `copilotVersion` 1.0.67: cwd and git context are nested under a
+/// `context` object (`{cwd, gitRoot, repository, branch, headCommit, ...}`);
+/// the CLI version is `copilotVersion` (the top-level `version` is an integer
+/// schema version, not the CLI version). Extraction falls back to top-level
+/// keys for tolerance.
 #[derive(Debug, Clone, Default)]
 pub struct SessionStart {
-    pub version: Option<String>,
+    /// CLI version (`copilotVersion`).
+    pub copilot_version: Option<String>,
+    /// Self-reported producer (e.g. `"copilot-agent"`).
+    pub producer: Option<String>,
     pub cwd: Option<String>,
+    pub git_root: Option<String>,
+    pub repository: Option<String>,
+    pub branch: Option<String>,
+    /// HEAD commit at session start (`context.headCommit`).
+    pub revision: Option<String>,
     pub model: Option<String>,
 }
 
 impl SessionStart {
     fn from_payload(p: &Value) -> Self {
+        let ctx = p.get("context").filter(|v| v.is_object());
+        // Prefer the nested `context`, fall back to top-level.
+        let cget = |keys: &[&str]| {
+            ctx.and_then(|c| str_field(c, keys))
+                .or_else(|| str_field(p, keys))
+        };
         Self {
-            version: str_field(p, &["version", "cliVersion", "cli_version"]),
-            cwd: str_field(p, &["cwd", "workingDirectory", "working_dir"]),
+            copilot_version: str_field(p, &["copilotVersion", "cliVersion", "cli_version"]),
+            producer: str_field(p, &["producer"]),
+            cwd: cget(&["cwd", "workingDirectory", "working_dir"]),
+            git_root: cget(&["gitRoot", "git_root"]),
+            repository: cget(&["repository", "repo", "remote"]),
+            branch: cget(&["branch", "gitBranch", "git_branch"]),
+            revision: cget(&["headCommit", "head_commit", "commit", "revision", "sha"]),
             model: str_field(p, &["model", "modelId", "model_id"]),
         }
     }
@@ -200,12 +225,16 @@ impl SessionShutdown {
     }
 }
 
-/// A `user.message` or `assistant.message`.
+/// A `user.message`, `assistant.message`, or `system.message`.
 #[derive(Debug, Clone, Default)]
 pub struct MessageEvent {
     pub text: String,
     pub model: Option<String>,
     pub id: Option<String>,
+    /// Chain-of-thought (`reasoningText` on assistant messages).
+    pub reasoning: Option<String>,
+    /// Output tokens attributed to this message (`outputTokens`).
+    pub output_tokens: Option<u32>,
 }
 
 impl MessageEvent {
@@ -213,7 +242,9 @@ impl MessageEvent {
         Self {
             text: payload_text(p).unwrap_or_default(),
             model: str_field(p, &["model", "modelId", "model_id"]),
-            id: str_field(p, &["id", "messageId", "message_id"]),
+            id: str_field(p, &["messageId", "message_id", "id"]),
+            reasoning: payload_text_keys(p, &["reasoningText", "reasoning", "thinking"]),
+            output_tokens: u32_field(p, &["outputTokens", "output_tokens"]),
         }
     }
 }
@@ -253,12 +284,31 @@ impl ToolExecution {
                         s == "success" || s == "ok" || s == "completed"
                     })
                 }),
-            output: payload_text_keys(
-                p,
-                &["output", "result", "stdout", "content", "aggregatedOutput", "aggregated_output"],
-            ),
+            output: tool_output(p),
         }
     }
+}
+
+/// Extract a `tool.execution_complete` result to text.
+///
+/// Observed shape: `result` is an object `{content, detailedContent}`. Tolerate
+/// a plain-string `result` and other top-level output keys too.
+fn tool_output(p: &Value) -> Option<String> {
+    match p.get("result") {
+        Some(Value::String(s)) if !s.is_empty() => return Some(s.clone()),
+        Some(r @ Value::Object(_)) => {
+            if let Some(s) =
+                payload_text_keys(r, &["content", "detailedContent", "text", "output", "stdout"])
+            {
+                return Some(s);
+            }
+        }
+        _ => {}
+    }
+    payload_text_keys(
+        p,
+        &["output", "stdout", "content", "aggregatedOutput", "aggregated_output"],
+    )
 }
 
 /// A `subagent.started` / `subagent.completed`.
@@ -307,28 +357,27 @@ impl Session {
         self.lines.iter().rev().find_map(|l| l.parsed_timestamp())
     }
 
+    /// The `session.start` payload, if present.
+    pub fn start(&self) -> Option<SessionStart> {
+        self.lines.iter().find_map(|l| match l.event() {
+            CopilotEvent::SessionStart(s) => Some(s),
+            _ => None,
+        })
+    }
+
     /// Model recorded on `session.start` (best-effort default model).
     pub fn start_model(&self) -> Option<String> {
-        self.lines.iter().find_map(|l| match l.event() {
-            CopilotEvent::SessionStart(s) => s.model,
-            _ => None,
-        })
+        self.start().and_then(|s| s.model)
     }
 
-    /// Working directory from `session.start`.
+    /// Working directory from `session.start` (`context.cwd`).
     pub fn cwd(&self) -> Option<String> {
-        self.lines.iter().find_map(|l| match l.event() {
-            CopilotEvent::SessionStart(s) => s.cwd,
-            _ => None,
-        })
+        self.start().and_then(|s| s.cwd)
     }
 
-    /// Producer version from `session.start`.
+    /// CLI version from `session.start` (`copilotVersion`).
     pub fn version(&self) -> Option<String> {
-        self.lines.iter().find_map(|l| match l.event() {
-            CopilotEvent::SessionStart(s) => s.version,
-            _ => None,
-        })
+        self.start().and_then(|s| s.copilot_version)
     }
 
     /// First non-empty user-message text (for listing UIs).
@@ -631,6 +680,58 @@ mod tests {
         assert_eq!(s.model.as_deref(), Some("gpt-5-copilot"));
         assert_eq!(s.input_tokens, Some(1200));
         assert_eq!(s.output_tokens, Some(340));
+    }
+
+    #[test]
+    fn session_start_reads_nested_context() {
+        // Real shape (copilotVersion 1.0.67): cwd/git under `context`.
+        let s = SessionStart::from_payload(&json!({
+            "copilotVersion": "1.0.67",
+            "version": 1,
+            "producer": "copilot-agent",
+            "context": {
+                "cwd": "/x/proj", "gitRoot": "/x/proj", "repository": "o/r",
+                "branch": "main", "headCommit": "deadbeef"
+            }
+        }));
+        assert_eq!(s.copilot_version.as_deref(), Some("1.0.67"));
+        assert_eq!(s.producer.as_deref(), Some("copilot-agent"));
+        assert_eq!(s.cwd.as_deref(), Some("/x/proj"));
+        assert_eq!(s.repository.as_deref(), Some("o/r"));
+        assert_eq!(s.branch.as_deref(), Some("main"));
+        assert_eq!(s.revision.as_deref(), Some("deadbeef"));
+    }
+
+    #[test]
+    fn session_start_falls_back_to_top_level_cwd() {
+        let s = SessionStart::from_payload(&json!({"cwd": "/legacy", "copilotVersion": "1.0.0"}));
+        assert_eq!(s.cwd.as_deref(), Some("/legacy"));
+    }
+
+    #[test]
+    fn tool_output_reads_result_object() {
+        // Real shape: result is {content, detailedContent}.
+        let t = ToolExecution::from_payload(&json!({
+            "toolCallId": "c1", "toolName": "bash", "success": true,
+            "result": {"content": "ok", "detailedContent": "ok\nmore"}
+        }));
+        assert_eq!(t.id.as_deref(), Some("c1"));
+        assert_eq!(t.name, "bash");
+        assert_eq!(t.output.as_deref(), Some("ok"));
+        // Legacy top-level output still works.
+        let t2 = ToolExecution::from_payload(&json!({"name": "x", "output": "plain"}));
+        assert_eq!(t2.output.as_deref(), Some("plain"));
+    }
+
+    #[test]
+    fn message_reads_reasoning_and_output_tokens() {
+        let m = MessageEvent::from_payload(&json!({
+            "content": "hi", "reasoningText": "thinking", "outputTokens": 42, "model": "claude-haiku-4.5"
+        }));
+        assert_eq!(m.text, "hi");
+        assert_eq!(m.reasoning.as_deref(), Some("thinking"));
+        assert_eq!(m.output_tokens, Some(42));
+        assert_eq!(m.model.as_deref(), Some("claude-haiku-4.5"));
     }
 
     #[test]

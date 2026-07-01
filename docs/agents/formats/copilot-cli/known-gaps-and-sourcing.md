@@ -1,43 +1,47 @@
 # Known gaps, sourcing, and the verification checklist
 
-This folder was written **without first-hand session samples** (no Copilot CLI
-install, no captured `~/.copilot/session-state/`). It is the one reference under
-`docs/agents/formats/` with zero "Observed" entries. This page consolidates what
-we are unsure of, the full source list, and the checklist to run the first time
-a real session is available.
+This folder began **without first-hand samples** and has since been partly
+verified against **one session captured at `copilotVersion` 1.0.67**. This page
+consolidates what that sample resolved, what's still open, the full source list,
+and the checklist for the next (feature-rich) capture.
 
-## Open questions (ranked by impact on a derivation)
+## Resolved by the 1.0.67 capture ✓
 
-1. **The exact `events.jsonl` line envelope.** Whether the payload is inline or
-   nested under `data`/`payload`, whether there's a top-level `timestamp`, and
-   the casing of payload keys. The only concrete casing hint is
-   `session.shutdown`'s `usage.inputTokens` (camelCase). `[unverified]` — see
-   [events.md](events.md#line-envelope).
-2. **File-change fidelity** — inline diff/content vs. checkpoint-derived. Decides
-   whether a derived `Path` gets a `raw` perspective for free or needs snapshot
-   reconstruction. `[unverified]` — see [file-fidelity.md](file-fidelity.md).
-3. **The `checkpoints/` on-disk format** — full file copies? a git object store?
-   a patch series? And whether a checkpoint maps back to an `events.jsonl`
-   position. `[unverified]`.
-4. **Per-event field completeness.** The catalogue in [events.md](events.md) is
-   only as complete as issue #3551 + the jonmagic post; many events have "fields
-   not reported." Token-accounting specifics (is `session.shutdown`'s
-   `usage.inputTokens` cumulative? does `session.compaction_complete` double-count?)
-   are unknown — apply the project's "never stamp a cumulative counter as a step
-   total" rule defensively (see CLAUDE.md token-accounting notes).
-5. **Sub-agent storage** — are `subagent.*` turns inline in the parent
-   `events.jsonl`, or in a separate file (à la Claude), or folded in (à la
-   Gemini)? Decides how `DelegatedWork.turns` is populated. `[unverified]`.
-6. **`workspace.yaml` exact field set** and whether it's always present.
-   `[reverse-eng, Medium]`.
-7. **`session-store.db` exact table/column names** (single-source paraphrase).
+- **Line envelope**: `{type, data, id, timestamp, parentId}` — payload is under
+  `data` (not inline); events form an `id`/`parentId` tree.
+- **cwd + git**: under `session.start`'s `data.context`
+  (`cwd`/`gitRoot`/`repository`/`branch`/`headCommit`), **not** top-level.
+- **CLI version**: `copilotVersion` (top-level `version` is an int schema ver).
+- **Tool correlation**: `tool.execution_start`/`complete` share **`toolCallId`**;
+  tool name is `toolName`, args `arguments`.
+- **Tool result content**: `data.result.content` (an object), *not* a top-level
+  string — this was a real bug in the first cut, now fixed.
+- **Reasoning + tokens**: `assistant.message` carries `reasoningText` (→ thinking)
+  and per-message `outputTokens` (summed for the session total).
+- **New types seen**: `system.message` (the ~56 KB system prompt) and a
+  `session.model_change` (`{newModel}`) emitted right after start.
+- **`workspace.yaml`**: flat YAML, fields observed (see
+  [session-state.md](session-state.md)); `command-history-state` is a **file**.
+
+## Still open (not exercised by that session)
+
+1. **File-change fidelity** — the sample only ran `bash`/`view` (no file writes),
+   so whether edits embed content/diffs or rely on `checkpoints/`/`rewind-snapshots/`
+   remains `[unverified]` — see [file-fidelity.md](file-fidelity.md).
+2. **`checkpoints/` + `rewind-snapshots/` on-disk format** — full copies? git
+   object store? patch series? `[unverified]`.
+3. **Token accounting completeness** — the sample had no `session.shutdown`
+   (open session); is `outputTokens` per-message final? does `shutdown`/compaction
+   double-count? Apply the "never stamp a cumulative counter" rule defensively.
+4. **Sub-agent storage** — `subagent.*` did not occur; are its turns inline or in
+   a separate stream? Decides `DelegatedWork.turns`. `[unverified]`.
+5. **`skill.invoked` / `hook.*` / `abort` `data` shapes** — not seen. `[reverse-eng]`.
+6. **`session-store.db` exact table/column names** (single-source paraphrase).
    `[reverse-eng, Medium]` — see [session-store-db.md](session-store-db.md).
-8. **Version drift.** Everything reverse-engineered is pinned to v1.0.54; GA is
-   1.0.66+. The format is explicitly internal (#3551) and may have changed.
-9. **Legacy migration trigger / version** (`history-session-state/` →
-   `session-state/`, "~v0.0.342"). `[unverified]`.
-10. **XDG support.** No evidence of `XDG_CONFIG_HOME` / `~/.config/github-copilot/`;
-    likely absent but `[unverified]`.
+7. **`parentId` tree** — the provider derives turns sequentially and doesn't yet
+   use the tree; confirm it's always linear for coding sessions.
+8. **Legacy migration** (`history-session-state/` → `session-state/`). `[unverified]`.
+9. **XDG support.** No evidence of `XDG_CONFIG_HOME`; likely absent `[unverified]`.
 
 ## Verify once we have samples
 

@@ -30,9 +30,9 @@ noted. Formats in the third column.
 | `lsp-config.json` | file | JSON | LSP servers configured at the user level. |
 | `mcp-config.json` | file | JSON | MCP servers available at the user level. |
 | `permissions-config.json` | file | JSON | Saved tool/directory permission decisions, organized by project location. |
-| `session-store.db` | file | **SQLite** | Cross-session index — checkpoint indexing and full-text search. See [session-store-db.md](session-store-db.md). |
+| `session-store.db` (+ `-shm`, `-wal`) | file | **SQLite (WAL)** | Cross-session index — checkpoint indexing and full-text search. Opened in WAL mode, so the `-shm`/`-wal` sidecars appear. See [session-store-db.md](session-store-db.md). |
 | `session-state/` | dir | — | Session history, one subdirectory per session ID. See [session-state.md](session-state.md). |
-| `command-history-state/` | dir | — | Reverse-search (Ctrl+R) command history; managed automatically, not meant to be edited. |
+| `command-history-state.json` | file | JSON | `[observed, 1.0.67]` Reverse-search (Ctrl+R) command history — a **file** (the config-dir reference calls it a directory; the real install writes `command-history-state.json`). Managed automatically. |
 | `logs/` | dir | — | Per-session log files (default target of `--log-dir`). |
 | `agents/` | dir | `*.agent.md` | Personal custom agents. |
 | `skills/` | dir | `SKILL.md` | Personal custom skills. |
@@ -41,6 +41,13 @@ noted. Formats in the third column.
 | `ide/` | dir | — | Lock files and state for IDE integrations. |
 | `mcp-oauth-config/` | dir | — | OAuth tokens for MCP servers. |
 | `mcp-secrets/` | dir | — | Secret-placeholder fallback storage for MCP. |
+
+> **`[observed, 1.0.67]`** A fresh install after one session held only
+> `config.json`, `command-history-state.json`, `session-store.db` (+ WAL
+> sidecars), and the `ide/`, `logs/`, `session-state/` directories. The
+> `settings.json` / `mcp-config.json` / `permissions-config.json` /
+> `copilot-instructions.md` / `agents/` / `skills/` entries are **created on
+> first use**, so don't assume they exist.
 
 ### What a derive crate cares about
 

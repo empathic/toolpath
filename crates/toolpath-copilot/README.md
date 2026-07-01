@@ -5,13 +5,17 @@ Derive [Toolpath](https://toolpath.net) provenance documents from
 as the npm package [`@github/copilot`](https://www.npmjs.com/package/@github/copilot)
 (command `copilot`).
 
-> ⚠️ **Preview — schema reverse-engineered.** Copilot CLI's `events.jsonl`
-> format is undocumented. This crate is built from official GitHub docs plus
-> community reverse-engineering, and was authored **without first-hand session
-> samples**. The parser is deliberately tolerant (it accepts payloads inline or
-> nested, tries multiple key spellings, and keeps unknown events), but field
-> details may be wrong until verified against a real session. See the format
-> reference and its verification checklist at
+> ⚠️ **Preview — schema partly verified.** Copilot CLI's `events.jsonl` format
+> is undocumented. This crate was first built from docs + community
+> reverse-engineering, then **verified against a first-hand session capture at
+> `copilotVersion` 1.0.67**: the line envelope, `session.start` context,
+> `tool.execution_*` (incl. `result.content`), `assistant.message`
+> (`reasoningText`/`outputTokens`), and `system.message` are confirmed.
+> Event types that didn't occur in that session (`subagent.*`, `skill.invoked`,
+> `hook.*`, `abort`, `session.shutdown`, compaction) and the `checkpoints/`
+> format remain unverified — the parser stays deliberately tolerant (payload
+> inline or nested, multiple key spellings, unknown events preserved). See the
+> format reference + verification checklist at
 > [`docs/agents/formats/copilot-cli/`](../../docs/agents/formats/copilot-cli/README.md).
 
 ## What it reads

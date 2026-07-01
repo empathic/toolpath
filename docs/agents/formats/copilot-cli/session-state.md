@@ -4,14 +4,20 @@ Each session lives in its own subdirectory of `~/.copilot/session-state/`, keyed
 by session ID `[official]`
 ([config-dir reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)):
 
+`[observed, 1.0.67]` — one session directory contained:
+
 ```
 ~/.copilot/
   session-state/
-    <session-id>/
-      events.jsonl       # the append-only event stream (source of truth)
-      workspace.yaml     # session metadata: git root, repo, branch  [reverse-eng]
-      checkpoints/       # titled snapshots for rewind                [reverse-eng]
-      …                  # "plans" and "tracked files" workspace artifacts [official, names unconfirmed]
+    <session-id>/          # <session-id> is a UUID
+      events.jsonl         # the append-only event stream (source of truth)
+      workspace.yaml       # session metadata: cwd, git root, repo, branch, name, timestamps
+      session.db           # per-session SQLite (distinct from the global session-store.db)
+      checkpoints/         # snapshot history
+      rewind-snapshots/    # file snapshots for /session rewind
+      files/               # (empty in the sample) working file artifacts
+      research/            # (empty in the sample)
+      inuse.<pid>.lock     # present while a `copilot` process holds the session
 ```
 
 > **Naming note.** One paraphrased source rendered the directory as
@@ -32,21 +38,32 @@ This is the file a forward provider reads to reconstruct the conversation.
 
 ## `workspace.yaml`
 
-`[reverse-eng, Medium]` (jonmagic write-up) — session metadata in YAML. Reported
-fields:
+`[observed, 1.0.67]` — flat YAML session metadata. The real file:
 
-| Field | Meaning |
-|---|---|
-| `git_root` | Absolute path to the repository root. |
-| `repository` | Repository identifier (owner/name or remote). |
-| `branch` | Active branch at session time. |
+```yaml
+id: <session-uuid>
+cwd: /Users/alex/Devel/empathic/toolpath
+git_root: /Users/alex/Devel/empathic/toolpath
+repository: empathic/toolpath
+host_type: github
+branch: main
+client_name: github/cli
+name: List Directory Contents        # auto-generated session name
+user_named: false
+summary_count: 0
+created_at: 2026-07-01T14:28:54.677Z
+updated_at: 2026-07-01T14:31:30.280Z
+```
 
-For a derivation this is the cleanest source of the `path.base` URI and git
-context (analogous to Codex's `session_meta.cwd` + `git`). It being YAML (not
-JSON) is the one format surprise here — a provider needs a YAML parser for it,
-or can fall back to the `session.start` event's `cwd`/`model` (see
-[events.md](events.md)) and the `sessions` row in
-[`session-store.db`](session-store-db.md) for repo/branch.
+Note there is **no commit/revision** field here — for the commit, use
+`session.start`'s `context.headCommit` (see [events.md](events.md)).
+
+`toolpath-copilot` prefers `session.start`'s `context` for `path.base` (it also
+carries `headCommit`) and uses `workspace.yaml` only as a fallback. Its parser
+is a tolerant key-scan (no YAML dependency), since this file's schema is not
+officially documented. `session.db` and the global
+[`session-store.db`](session-store-db.md) are alternative metadata sources but
+not required for derivation.
 
 ## `checkpoints/`
 

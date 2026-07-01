@@ -30,11 +30,14 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
 - Reads git context (root / repository / branch / revision) from the sibling
   `workspace.yaml` into `Path.base`, via a tolerant key-scan parser (no YAML
   dependency — the file's schema is itself reverse-engineered).
-- **Preview / schema reverse-engineered.** Copilot CLI's `events.jsonl` format
-  is undocumented and this crate was authored without first-hand session
-  samples, so the parser is deliberately tolerant (payload inline or nested,
-  multiple key spellings, unknown events preserved) and may need correction
-  once a real session is captured.
+- **Preview / schema partly verified.** Copilot CLI's `events.jsonl` format is
+  undocumented. First built from docs + reverse-engineering, then **verified
+  against a first-hand capture at `copilotVersion` 1.0.67** — which corrected
+  several guessed field locations (cwd/git under `session.start.context`, tool
+  results under `result.content`, `copilotVersion`, `reasoningText`,
+  `outputTokens`) and confirmed the envelope + core event types. Types not seen
+  in that session (`subagent.*`/`skill`/`hook`/`abort`/`shutdown`/compaction) and
+  the `checkpoints/` format remain unverified; the parser stays tolerant.
 - Adds the on-disk format reference at `docs/agents/formats/copilot-cli/`
   (folder, every claim confidence-tagged) and its verification checklist.
 - Wired into the CLI for the **forward path only**: `path p import copilot`,

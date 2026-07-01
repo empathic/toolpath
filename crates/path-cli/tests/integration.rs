@@ -435,10 +435,10 @@ fn copilot_home_fixture() -> (tempfile::TempDir, String) {
     let dir = home.path().join("session-state").join(id);
     std::fs::create_dir_all(&dir).unwrap();
     let body = [
-        r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"version":"1.0.66","cwd":"/tmp/demo","model":"gpt-5-copilot"}}"#,
-        r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"text":"hello copilot"}}"#,
+        r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"copilotVersion":"1.0.66","producer":"copilot-agent","context":{"cwd":"/tmp/demo","gitRoot":"/tmp/demo","repository":"acme/demo","branch":"main"}}}"#,
+        r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"hello copilot"}}"#,
         r#"{"type":"assistant.turn_start","data":{}}"#,
-        r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"text":"hi there"}}"#,
+        r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"hi there","model":"claude-haiku-4.5"}}"#,
         r#"{"type":"assistant.turn_end","data":{}}"#,
     ]
     .join("\n");

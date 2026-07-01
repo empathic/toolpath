@@ -1,9 +1,10 @@
 # GitHub Copilot CLI on-disk format
 
-> **Reference revision:** 2026-06-30
+> **Reference revision:** 2026-07-01
 > **Tracks:** `@github/copilot` (the standalone agentic CLI, command `copilot`)
-> **Version anchors:** public preview 2025-09-25, GA 2026-02-25, npm `1.0.66`;
-> reverse-engineered event details observed at `1.0.54`.
+> **Version anchors:** public preview 2025-09-25, GA 2026-02-25, npm `1.0.66`.
+> **First-hand sample:** one session captured at `copilotVersion` **1.0.67**
+> (the envelope + core event types are now `[observed]`).
 >
 > When you change anything in this directory, bump the revision date here.
 
@@ -23,10 +24,13 @@ rationale on each of those.
 
 ## ⚠️ Sourcing posture — read this first
 
-Unlike every other doc under `docs/agents/formats/`, this reference is **not built
-on first-hand session samples.** At the time of writing we had no Copilot CLI
-install and no captured `~/.copilot/session-state/` directory to inspect. This
-folder is compiled from:
+This reference began without first-hand samples and has since been **partly
+verified against one captured session at `copilotVersion` 1.0.67** — the line
+envelope, `session.start`/`model_change`/`task_complete`, `system.message`,
+`user.message`, `assistant.*`, and `tool.execution_*` are now `[observed]`.
+Event types that didn't occur in that session (`subagent.*`, `skill.invoked`,
+`hook.*`, `abort`, `session.shutdown`, compaction) remain `[reverse-eng]`.
+It is compiled from:
 
 - **Official GitHub documentation** — the config-directory and command
   references and the "session data" concept page. High confidence; this is the
@@ -44,17 +48,18 @@ Every non-trivial claim carries an inline tag:
 
 | Tag | Meaning | Default confidence |
 |---|---|---|
+| `[observed]` | Seen in the first-hand 1.0.67 capture. | High |
 | `[official]` | Stated in GitHub's published docs (URL given). | High |
-| `[reverse-eng]` | Observed by a community source at a named version. | Medium |
+| `[reverse-eng]` | Reported by a community source at a named version; not in our sample. | Medium |
 | `[inferred]` | Our structural reasoning; no direct source. | Low |
 | `[unverified]` | Believed but unconfirmed; flagged for sample verification. | — |
 
-This mirrors the `Observed` / `Expected` / `guess` convention the Claude Code
-docs use — the honest twist being that we have **zero "Observed" entries yet.**
-The first time anyone captures a real `events.jsonl`, this folder should be
-re-graded against it and the tags upgraded (or corrected). The
+The 1.0.67 capture upgraded much of the core format to `[observed]`; the
+remaining `[reverse-eng]`/`[unverified]` items (sub-agents, skills, hooks,
+abort, shutdown, compaction, the `checkpoints/` format) still need a session
+that exercises them. The
 [verification checklist](known-gaps-and-sourcing.md#verify-once-we-have-samples)
-is the to-do list for that pass.
+tracks what's left.
 
 ## How the docs are organized
 

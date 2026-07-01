@@ -60,13 +60,13 @@ mod tests {
 
     fn minimal_body() -> String {
         [
-            r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"version":"1.0.66","cwd":"/tmp/proj","model":"gpt-5-copilot"}}"#,
-            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"text":"build me a thing"}}"#,
+            r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"copilotVersion":"1.0.66","model":"gpt-5-copilot","context":{"cwd":"/tmp/proj"}}}"#,
+            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"build me a thing"}}"#,
             r#"{"type":"assistant.turn_start","timestamp":"2026-06-30T10:00:02.000Z","data":{}}"#,
-            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"text":"creating"}}"#,
-            r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:04.000Z","data":{"id":"c2","name":"create_file","args":{"path":"a.rs","content":"fn main() {}\n"}}}"#,
-            r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:05.000Z","data":{"id":"c2","name":"create_file","args":{"path":"a.rs","content":"fn main() {}\n"},"success":true}}"#,
-            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:06.000Z","data":{"text":"done"}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"creating"}}"#,
+            r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:04.000Z","data":{"toolCallId":"c2","toolName":"create_file","arguments":{"path":"a.rs","content":"fn main() {}\n"}}}"#,
+            r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:05.000Z","data":{"toolCallId":"c2","success":true}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:06.000Z","data":{"content":"done"}}"#,
             r#"{"type":"assistant.turn_end","timestamp":"2026-06-30T10:00:07.000Z","data":{}}"#,
         ]
         .join("\n")

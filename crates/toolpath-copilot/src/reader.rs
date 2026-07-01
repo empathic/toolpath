@@ -44,12 +44,18 @@ impl EventReader {
         if ws.is_empty() { None } else { Some(ws) }
     }
 
-    /// Parse the JSONL lines of an `events.jsonl` file.
+    /// Parse the JSONL lines of an `events.jsonl` file. Malformed-line
+    /// tolerance is controlled by `COPILOT_EVENTS_STRICT`.
     pub fn read_lines<P: AsRef<Path>>(path: P) -> Result<Vec<EventLine>> {
-        let path = path.as_ref();
+        let strict = std::env::var_os("COPILOT_EVENTS_STRICT").is_some();
+        Self::read_lines_impl(path.as_ref(), strict)
+    }
+
+    /// Parse the JSONL lines with `strict` passed explicitly (env-independent,
+    /// so tests don't race on a process-global var).
+    fn read_lines_impl(path: &Path, strict: bool) -> Result<Vec<EventLine>> {
         let file = std::fs::File::open(path)?;
         let reader = BufReader::new(file);
-        let strict = std::env::var_os("COPILOT_EVENTS_STRICT").is_some();
         let mut lines = Vec::new();
         for (idx, line) in reader.lines().enumerate() {
             let line = line?;
@@ -137,11 +143,13 @@ mod tests {
     fn strict_mode_errors_on_malformed() {
         let body = "{bad}\n";
         let (_t, dir) = session_dir("sess-2", body);
-        // Safe because tests in this crate don't run concurrently with a set
-        // var elsewhere; scope it tightly.
-        unsafe { std::env::set_var("COPILOT_EVENTS_STRICT", "1") };
-        let res = EventReader::read_session_dir(&dir);
-        unsafe { std::env::remove_var("COPILOT_EVENTS_STRICT") };
+        // Exercise strict mode directly (no process-global env mutation, which
+        // would race the concurrent non-strict test).
+        let res = EventReader::read_lines_impl(&dir.join("events.jsonl"), true);
         assert!(res.is_err());
+        // Non-strict tolerates the same file.
+        assert!(EventReader::read_lines_impl(&dir.join("events.jsonl"), false)
+            .unwrap()
+            .is_empty());
     }
 }

@@ -58,7 +58,7 @@ fn view_has_expected_turns_and_tools() {
 
     // Categories classified.
     assert_eq!(
-        tools.iter().find(|t| t.name == "shell").unwrap().category,
+        tools.iter().find(|t| t.name == "bash").unwrap().category,
         Some(ToolCategory::Shell)
     );
     assert_eq!(
