@@ -54,6 +54,11 @@ is on `$PATH` and authenticated; commit a sanitized fixture under
       the version they were seen at.
 - [ ] For each event type, record the **real field set**; fill the "not
       reported" gaps in the catalogue.
+- [ ] Determine how a `tool.execution_complete` **correlates to its
+      `tool.execution_start`** — is there an id, or only implicit ordering? The
+      provider pairs by id when present and falls back to positional pairing
+      otherwise (see [events.md](events.md)); confirm which is real and tighten
+      if an id field exists under a name we don't yet check.
 - [ ] Inspect a `tool.execution_complete` for a file edit: **is the diff/new
       content inline?** Resolve open question #2 and rewrite
       [file-fidelity.md](file-fidelity.md) accordingly.

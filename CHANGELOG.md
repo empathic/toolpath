@@ -24,7 +24,9 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
   `abort`) into `toolpath_convo::ConversationView` and hands off to the shared
   `derive_path`. Tool names are classified into the `ToolCategory` ontology;
   file writes whose args carry full content get a `raw` unified-diff
-  perspective.
+  perspective. Tool `start`/`complete` pairing uses a correlation id when
+  present and falls back to positional pairing when absent (the id field is
+  unverified), so an id-less stream doesn't double-count tool calls.
 - Reads git context (root / repository / branch / revision) from the sibling
   `workspace.yaml` into `Path.base`, via a tolerant key-scan parser (no YAML
   dependency — the file's schema is itself reverse-engineered).

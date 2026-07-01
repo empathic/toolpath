@@ -137,8 +137,13 @@ pub fn to_view(session: &Session) -> ConversationView {
                     content: te.output.clone().unwrap_or_default(),
                     is_error: te.success == Some(false),
                 };
-                if !backfill_tool_result(&mut current, &mut turns, te.id.as_deref(), result.clone())
-                {
+                if !attach_tool_result(
+                    &mut current,
+                    &mut turns,
+                    te.id.as_deref(),
+                    &te.name,
+                    result.clone(),
+                ) {
                     // No matching start seen — synthesize a carrier invocation.
                     let cur = ensure_assistant(&mut current, &mut seq, &default_model, &ts);
                     seq += 1;
@@ -305,24 +310,54 @@ fn flush(turns: &mut Vec<Turn>, current: &mut Option<Turn>) {
     }
 }
 
-/// Set the result on the tool invocation with `id`. Searches the open turn
-/// first, then previously-flushed turns (last to first). Returns whether a
-/// match was found.
-fn backfill_tool_result(
+/// Attach a `tool.execution_complete` result to its matching invocation.
+///
+/// The Copilot `events.jsonl` schema is unverified, and the reverse-engineering
+/// sources never confirmed that tool events carry a correlation id. So:
+///
+/// - **If an `id` is present** it is treated as authoritative: match it in the
+///   open turn, then in earlier turns. A present-but-unmatched id returns
+///   `false` (the caller makes a standalone carrier) rather than guessing.
+/// - **If there is no `id`** (the likely real case), pair with the most-recent
+///   result-less invocation in the *current open turn*, preferring the same
+///   tool `name`. `start`/`complete` bracket within a turn, so this matches the
+///   sequential common case without double-counting.
+///
+/// Returns whether a match was found.
+fn attach_tool_result(
     current: &mut Option<Turn>,
     turns: &mut [Turn],
     id: Option<&str>,
+    name: &str,
     result: ToolResult,
 ) -> bool {
-    let Some(id) = id else { return false };
-    if let Some(cur) = current.as_mut()
-        && let Some(inv) = cur.tool_uses.iter_mut().rev().find(|t| t.id == id)
-    {
-        inv.result = Some(result);
-        return true;
+    if let Some(id) = id {
+        if let Some(cur) = current.as_mut()
+            && let Some(inv) = cur.tool_uses.iter_mut().rev().find(|t| t.id == id)
+        {
+            inv.result = Some(result);
+            return true;
+        }
+        for t in turns.iter_mut().rev() {
+            if let Some(inv) = t.tool_uses.iter_mut().rev().find(|t| t.id == id) {
+                inv.result = Some(result);
+                return true;
+            }
+        }
+        return false;
     }
-    for t in turns.iter_mut().rev() {
-        if let Some(inv) = t.tool_uses.iter_mut().rev().find(|t| t.id == id) {
+    // No id: positional pairing within the current open turn.
+    if let Some(cur) = current.as_mut() {
+        if let Some(inv) = cur
+            .tool_uses
+            .iter_mut()
+            .rev()
+            .find(|t| t.result.is_none() && t.name == name)
+        {
+            inv.result = Some(result);
+            return true;
+        }
+        if let Some(inv) = cur.tool_uses.iter_mut().rev().find(|t| t.result.is_none()) {
             inv.result = Some(result);
             return true;
         }
@@ -654,5 +689,51 @@ mod tests {
         assert_eq!(tool_category("grep_search"), Some(ToolCategory::FileSearch));
         assert_eq!(tool_category("web_fetch"), Some(ToolCategory::Network));
         assert_eq!(tool_category("totally_unknown_xyz"), None);
+    }
+
+    #[test]
+    fn tool_pairing_without_ids_does_not_double_count() {
+        // The reverse-engineered schema may omit a correlation id on tool
+        // events; start/complete must still collapse to ONE invocation.
+        let body = [
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"tool.execution_start","data":{"name":"shell","args":{"command":"ls"}}}"#,
+            r#"{"type":"tool.execution_complete","data":{"name":"shell","args":{"command":"ls"},"success":true,"output":"a.rs"}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        let tools = &view.turns[0].tool_uses;
+        assert_eq!(tools.len(), 1, "id-less start/complete must not double-count");
+        assert_eq!(tools[0].result.as_ref().unwrap().content, "a.rs");
+    }
+
+    #[test]
+    fn file_write_without_id_has_single_mutation() {
+        let body = [
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"tool.execution_start","data":{"name":"create_file","args":{"path":"a.rs","content":"fn main() {}\n"}}}"#,
+            r#"{"type":"tool.execution_complete","data":{"name":"create_file","args":{"path":"a.rs","content":"fn main() {}\n"},"success":true}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        assert_eq!(view.turns[0].tool_uses.len(), 1);
+        assert_eq!(
+            view.turns[0].file_mutations.len(),
+            1,
+            "id-less file write must not duplicate the mutation"
+        );
+        assert_eq!(view.files_changed, vec!["a.rs".to_string()]);
+    }
+
+    #[test]
+    fn tool_pairing_with_ids_still_works() {
+        // Regression guard: explicit ids remain authoritative.
+        let view = to_view(&parse(&body()));
+        let shell = view.turns[1].tool_uses.iter().find(|t| t.name == "shell").unwrap();
+        assert_eq!(shell.result.as_ref().unwrap().content, "a.rs");
+        // body() has two id-bearing tool calls: shell + create_file.
+        assert_eq!(view.turns[1].tool_uses.len(), 2);
     }
 }

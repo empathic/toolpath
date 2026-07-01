@@ -71,6 +71,16 @@ complete as those sources; absence below means "not reported," not "not present.
 | `tool.execution_start` | tool **name**, **args** | A tool/command call begins. `name` + `args` is what a provider maps to `ToolInvocation`. |
 | `tool.execution_complete` | tool **name**, **args**, **success** | The call finished; `success` is the error flag. The *result content* (stdout, file content) is **not confirmed** to be inline — see [file-fidelity.md](file-fidelity.md). |
 
+> **Correlation id is unverified.** The sources report only `name`/`args`/
+> `success` on `tool.execution_*` — **no correlation id linking a `complete`
+> back to its `start` was confirmed.** `toolpath-copilot` therefore uses an id
+> to pair when one is present (any of `id`/`callId`/`call_id`/`toolCallId`), but
+> falls back to positional pairing (the most-recent result-less invocation in
+> the open turn, preferring the same tool name) when it's absent — so an
+> id-less stream still collapses each `start`/`complete` to one invocation
+> rather than double-counting. Confirm the real correlation mechanism against a
+> sample (see [known-gaps](known-gaps-and-sourcing.md#verify-once-we-have-samples)).
+
 ### `subagent.*`, `skill.*`, `hook.*`, `abort`
 
 | Type | Reported fields | Notes |
