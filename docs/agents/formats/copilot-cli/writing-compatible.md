@@ -18,6 +18,7 @@ rather than erroring with `Session file is corrupted`.
 | 2 | Every event **`timestamp` must be an ISO 8601 date-time with a timezone offset** (e.g. `2026-07-01T14:31:29.298Z` or `…+00:00`). Applies to **every** event, `session.start` included. | `invalid session event envelope: \`timestamp\` must be an ISO 8601 date-time string with a timezone offset` | `[observed, 1.0.67]` |
 | 3 | Every event must **carry a `parentId` key** — a UUID string, or explicit `null` for the root (`session.start`). Omitting it is rejected; it can't just be absent. | `invalid session event envelope: \`parentId\` must be a UUID string or null` | `[observed, 1.0.67]` |
 | 4 | The session must have a row in `session-store.db`'s `sessions` table, or the resume picker / id lookup won't find it. | — (from the DB's role as the resume index) | `[inferred]` — see [session-store-db.md](session-store-db.md) |
+| 5 | `session.start`'s `data` must include **`startTime`** (offset-bearing ISO 8601). The loader checks required top-level fields one at a time; the projector emits the full observed 1.0.67 set (`sessionId`, `version`, `producer`, `copilotVersion`, `startTime`, `contextTier`, `context`, `alreadyInUse`, `remoteSteerable`) to avoid repeat rejections. | `missing field \`startTime\`` | `[observed, 1.0.67]` |
 
 ## How `toolpath-copilot`'s projector satisfies these
 
@@ -34,6 +35,9 @@ rather than erroring with `Session file is corrupted`.
   picks a base (the first offset-bearing turn timestamp, else the view's
   `started_at`) and normalizes each turn's timestamp against it, so no event
   ever lacks a timezone offset.
+- **`session.start` shape (req 5):** `session_start_data` emits the full
+  observed 1.0.67 top-level field set (incl. `startTime`, stamped with the same
+  base timestamp as the envelope) plus a `context` block with cwd/git.
 - **`sessions` row (req 4):** `project_copilot` writes an `INSERT OR REPLACE`
   into `session-store.db` (fresh session UUID only — never mutates existing
   sessions), plus `session-state/<id>/{events.jsonl,workspace.yaml}`.

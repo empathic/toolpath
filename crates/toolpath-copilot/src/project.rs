@@ -109,7 +109,11 @@ impl CopilotProjector {
             .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_string());
 
         // session.start with git context from the view's base.
-        b.push("session.start", &base_ts, self.session_start_data(view));
+        b.push(
+            "session.start",
+            &base_ts,
+            self.session_start_data(view, &base_ts),
+        );
 
         for turn in &view.turns {
             let ts = iso_or(&turn.timestamp, &base_ts);
@@ -135,7 +139,7 @@ impl CopilotProjector {
         }
     }
 
-    fn session_start_data(&self, view: &ConversationView) -> Value {
+    fn session_start_data(&self, view: &ConversationView, start_time: &str) -> Value {
         let mut ctx = Map::new();
         if let Some(base) = &view.base {
             if let Some(wd) = &base.working_dir {
@@ -145,12 +149,15 @@ impl CopilotProjector {
             }
             if let Some(r) = &base.vcs_remote {
                 ctx.insert("repository".into(), json!(r));
+                ctx.insert("hostType".into(), json!("github"));
+                ctx.insert("repositoryHost".into(), json!("github.com"));
             }
             if let Some(br) = &base.vcs_branch {
                 ctx.insert("branch".into(), json!(br));
             }
             if let Some(rev) = &base.vcs_revision {
                 ctx.insert("headCommit".into(), json!(rev));
+                ctx.insert("baseCommit".into(), json!(rev));
             }
         }
         let producer = view
@@ -158,12 +165,19 @@ impl CopilotProjector {
             .as_ref()
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "copilot-agent".to_string());
+        // Mirror the observed 1.0.67 session.start top-level shape. The loader
+        // validates required fields one at a time (`startTime` was the first
+        // caught); emitting the full observed set avoids repeat rejections.
         json!({
             "sessionId": view.id,
             "version": 1,
             "producer": producer,
             "copilotVersion": self.copilot_version,
+            "startTime": start_time,
+            "contextTier": Value::Null,
             "context": Value::Object(ctx),
+            "alreadyInUse": false,
+            "remoteSteerable": false,
         })
     }
 
