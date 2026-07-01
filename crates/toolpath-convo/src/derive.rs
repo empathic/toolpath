@@ -103,7 +103,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
 
     let mut steps: Vec<Step> = Vec::with_capacity(view.turns.len());
     // Final step id → index in `steps`, for resolving id collisions as steps
-    // are emitted (see `push_step_and_dedup`).
+    // are emitted (see `push_step`).
     let mut by_id: HashMap<String, usize> = HashMap::new();
     let mut turn_to_step: HashMap<String, String> = HashMap::new();
     let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
@@ -333,7 +333,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             );
         }
 
-        let final_id = push_step_and_dedup(&mut steps, &mut by_id, step);
+        // Emit the step, resolving any id collision. Map the turn's native id
+        // to whatever id its step ended up with (renamed on collision, or the
+        // survivor when a byte-identical re-emission is dropped) so later turns
+        // chaining off it — and the event pass below — resolve correctly.
+        let final_id = push_step(&mut steps, &mut by_id, step);
         turn_to_step.insert(turn.id.clone(), final_id);
     }
 
@@ -418,7 +422,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 }),
             },
         );
-        last_step_id = Some(push_step_and_dedup(&mut steps, &mut by_id, step));
+        last_step_id = Some(push_step(&mut steps, &mut by_id, step));
     }
 
     let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
@@ -483,18 +487,14 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
 /// the id the step ended up under (the surviving id when dropped, the new id
 /// when re-IDed), which the caller records in `turn_to_step` / `last_step_id`
 /// so parent references keep pointing at a real step.
-fn push_step_and_dedup(
-    steps: &mut Vec<Step>,
-    by_id: &mut HashMap<String, usize>,
-    mut step: Step,
-) -> String {
+fn push_step(steps: &mut Vec<Step>, by_id: &mut HashMap<String, usize>, mut step: Step) -> String {
     let id = step.step.id.clone();
     let Some(&existing) = by_id.get(&id) else {
         by_id.insert(id.clone(), steps.len());
         steps.push(step);
         return id;
     };
-    if serde_value_eq(&steps[existing], &step) {
+    if steps_content_eq(&steps[existing], &step) {
         return id;
     }
     let mut n = 2u32;
@@ -512,7 +512,7 @@ fn push_step_and_dedup(
 /// Whether two steps are the same entry — equal once serialized, so dropping
 /// one is lossless. `Step` doesn't implement `PartialEq`, and this only runs on
 /// an actual id collision (rare), so the serialize cost is negligible.
-fn serde_value_eq(a: &Step, b: &Step) -> bool {
+fn steps_content_eq(a: &Step, b: &Step) -> bool {
     serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
 }
 
