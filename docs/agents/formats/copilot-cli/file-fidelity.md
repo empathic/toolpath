@@ -119,6 +119,18 @@ raw text. The native tool renders an empty-file create as one added empty line
 (`@@ -1,0 +1,1 @@` + `+`); the projector does the same, and omits
 `detailedContent` entirely for any other hunkless case.
 
+**The `assistant.message.toolRequests` mirror is what the timeline UI renders
+from** `[observed via pty capture + bundle, 1.0.68]` — not `tool.execution_start`.
+The editor-family row (title `Edit <path>`, `+N −M` counts, the colorized diff
+body) only engages when the mirror's `arguments.path` is present; a mirror still
+carrying foreign arg names (Claude's `file_path`/`old_string`) drops the call
+into the *generic* row, which markdown-renders the diff as flat text — this was
+the "no colorized diff" symptom. The projector therefore computes one
+`(name, arguments)` remap per tool call (`projected_tool`) and uses it in
+**both** the mirror and the execution events: file writes → `edit`/`create`
+(`path`/`old_str`/`new_str`/`file_text`), file reads → `view` (`path`, with
+Claude's `offset`/`limit` mapped to `view_range`).
+
 Note on the rendered `+N −M` counts: they're recomputed by the TUI from the
 diff (`q7`/`ske` in the bundle — header-prefix + hunk-regex heuristics), not
 read from `toolTelemetry`. A projected edit can legitimately show `+1` where

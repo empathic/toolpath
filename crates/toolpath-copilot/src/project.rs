@@ -215,15 +215,21 @@ impl CopilotProjector {
             insert_token_fields(&mut data, u);
         }
         if !turn.tool_uses.is_empty() {
+            // The timeline UI builds its tool row from THIS mirror (name +
+            // arguments), not from tool.execution_start — the editor row
+            // (title "Edit <path>", +N/−M counts, colorized diff body) only
+            // engages when `arguments.path` is present. So the mirror must
+            // carry the same remapped arguments as the execution events.
             let reqs: Vec<Value> = turn
                 .tool_uses
                 .iter()
                 .enumerate()
                 .map(|(i, tu)| {
+                    let (name, args) = projected_tool(tu);
                     json!({
                         "toolCallId": call_id(tu, turn_id, i),
-                        "name": tool_name(tu),
-                        "arguments": tu.input,
+                        "name": name,
+                        "arguments": args,
                     })
                 })
                 .collect();
@@ -267,13 +273,14 @@ impl CopilotProjector {
                 );
                 continue;
             }
+            let (g_name, g_args) = projected_tool(tu);
             b.push(
                 "tool.execution_start",
                 ts,
                 json!({
                     "toolCallId": cid,
-                    "toolName": tool_name(tu),
-                    "arguments": tu.input,
+                    "toolName": g_name,
+                    "arguments": g_args,
                     "turnId": turn_id,
                 }),
             );
@@ -366,6 +373,31 @@ fn tool_name(tu: &ToolInvocation) -> String {
         Some(cat) => native_name(cat, &tu.input).to_string(),
         None => tu.name.clone(),
     }
+}
+
+/// The (name, arguments) pair to emit for a tool call — Copilot's timeline UI
+/// keys its per-tool row rendering off these (e.g. `view`/`edit`/`create` rows
+/// read `arguments.path`), so foreign arg names must be remapped alongside the
+/// tool name. Used by BOTH the `assistant.message.toolRequests` mirror and
+/// `tool.execution_start`, which must agree.
+fn projected_tool(tu: &ToolInvocation) -> (String, Value) {
+    if let Some(fw) = file_write_projection(tu) {
+        return (fw.tool_name.to_string(), fw.arguments);
+    }
+    if tu.category == Some(toolpath_convo::ToolCategory::FileRead)
+        && let Some(path) = str_in(&tu.input, &["path", "file_path", "filePath", "file"])
+    {
+        let mut args = Map::new();
+        args.insert("path".into(), json!(path));
+        // Claude's Read offset/limit ≈ Copilot view's view_range.
+        let off = tu.input.get("offset").and_then(|v| v.as_i64());
+        let lim = tu.input.get("limit").and_then(|v| v.as_i64());
+        if let (Some(o), Some(l)) = (off, lim) {
+            args.insert("view_range".into(), json!([o, o + l - 1]));
+        }
+        return ("view".to_string(), Value::Object(args));
+    }
+    (tool_name(tu), tu.input.clone())
 }
 
 /// Copilot-native shape for a file-write tool call, so its diff renders. The
@@ -836,6 +868,85 @@ mod tests {
         let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"].as_str().unwrap();
         assert!(detailed.contains("create file mode"), "got: {detailed}");
         assert!(detailed.contains("--- a/dev/null") && detailed.contains("+hello"));
+    }
+
+    #[test]
+    fn tool_requests_mirror_carries_remapped_args() {
+        // Copilot's timeline UI builds tool rows from the assistant.message
+        // toolRequests mirror — the editor row (title, +N/−M, colorized diff)
+        // only engages when `arguments.path` is present. A mirror still
+        // carrying Claude's `file_path`/`old_string` renders the generic row
+        // with a flat markdown diff instead.
+        use serde_json::json;
+        use toolpath_convo::{ToolCategory, ToolInvocation, ToolResult};
+        let mk = |name: &str, cat, input| ToolInvocation {
+            id: format!("c-{name}"),
+            name: name.into(),
+            input,
+            result: Some(ToolResult {
+                content: "ok".into(),
+                is_error: false,
+            }),
+            category: Some(cat),
+        };
+        let mut view = ConversationView {
+            id: "x".into(),
+            ..Default::default()
+        };
+        view.turns.push(Turn {
+            id: "a1".into(),
+            parent_id: None,
+            group_id: None,
+            role: Role::Assistant,
+            timestamp: "2026-07-01T00:00:00Z".into(),
+            text: "t".into(),
+            thinking: None,
+            tool_uses: vec![
+                mk(
+                    "Edit",
+                    ToolCategory::FileWrite,
+                    json!({"file_path": "/p/a.md", "old_string": "x", "new_string": "y"}),
+                ),
+                mk(
+                    "Read",
+                    ToolCategory::FileRead,
+                    json!({"file_path": "/p/b.rs", "offset": 10, "limit": 5}),
+                ),
+            ],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            attributed_token_usage: None,
+            environment: None,
+            delegations: Vec::new(),
+            file_mutations: Vec::new(),
+        });
+        let session = CopilotProjector::new().project(&view).unwrap();
+        let msg = session
+            .lines
+            .iter()
+            .find(|l| l.kind == "assistant.message")
+            .unwrap();
+        let reqs = msg.data.as_ref().unwrap()["toolRequests"].as_array().unwrap();
+        // Edit mirror: copilot arg names, no Claude leftovers.
+        assert_eq!(reqs[0]["name"], "edit");
+        assert_eq!(reqs[0]["arguments"]["path"], "/p/a.md");
+        assert!(reqs[0]["arguments"].get("file_path").is_none());
+        assert_eq!(reqs[0]["arguments"]["old_str"], "x");
+        // Read mirror: view with path + view_range from offset/limit.
+        assert_eq!(reqs[1]["name"], "view");
+        assert_eq!(reqs[1]["arguments"]["path"], "/p/b.rs");
+        assert_eq!(reqs[1]["arguments"]["view_range"], json!([10, 14]));
+        // execution_start agrees with the mirror.
+        let start = session
+            .lines
+            .iter()
+            .find(|l| {
+                l.kind == "tool.execution_start"
+                    && l.data.as_ref().unwrap()["toolName"] == "view"
+            })
+            .unwrap();
+        assert_eq!(start.data.as_ref().unwrap()["arguments"]["path"], "/p/b.rs");
     }
 
     #[test]
