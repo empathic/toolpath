@@ -110,3 +110,18 @@ a stray/empty second `--- `/`+++ ` pair (which `toolpath_convo::unified_diff`
 emits, since it prepends its own `a/<path>` header on top of `similar`'s
 empty-filename one) makes Copilot fall back to flat, uncolorized text. The
 projector builds the diff with `similar` directly and sets the header once.
+
+The diff must also contain **at least one `@@` hunk** `[observed via pty
+capture, 1.0.68]`: Copilot's diff view renders parsed hunk rows and hides
+header lines, but a headers-only diff (e.g. creating an *empty* file — a
+`""→""` text diff has no hunk) makes it dump `diff --git`/`index`/mode lines as
+raw text. The native tool renders an empty-file create as one added empty line
+(`@@ -1,0 +1,1 @@` + `+`); the projector does the same, and omits
+`detailedContent` entirely for any other hunkless case.
+
+Note on the rendered `+N −M` counts: they're recomputed by the TUI from the
+diff (`q7`/`ske` in the bundle — header-prefix + hunk-regex heuristics), not
+read from `toolTelemetry`. A projected edit can legitimately show `+1` where
+the native session showed `+1 −1`: the native tool diffs actual file state
+(an "empty" file still has one line), while the projector can only diff the
+tool args (`old_str: ""` → nothing removed).

@@ -257,7 +257,10 @@ impl CopilotProjector {
                     json!({
                         "toolCallId": cid,
                         "success": success,
-                        "result": { "content": fw.content, "detailedContent": fw.detailed },
+                        "result": match &fw.detailed {
+                            Some(d) => json!({ "content": fw.content, "detailedContent": d }),
+                            None => json!({ "content": fw.content }),
+                        },
                         "toolTelemetry": fw.telemetry,
                         "turnId": turn_id,
                     }),
@@ -373,7 +376,10 @@ struct FileWrite {
     tool_name: &'static str,
     arguments: Value,
     content: String,
-    detailed: String,
+    /// `None` when the diff has no `@@` hunk — a headerless/hunkless
+    /// `detailedContent` renders as raw text in Copilot's diff view, so we
+    /// omit it entirely rather than leak headers.
+    detailed: Option<String>,
     /// `toolTelemetry` — declares the diff's file extension / language / line
     /// counts; Copilot's UI uses it to render a *colorized* diff view (without
     /// it the diff shows as flat text).
@@ -398,8 +404,8 @@ fn file_write_projection(tu: &ToolInvocation) -> Option<FileWrite> {
     if input.get("old_string").is_some() || input.get("old_str").is_some() {
         let old = str_in(input, &["old_str", "old_string", "oldString"]).unwrap_or_default();
         let new = str_in(input, &["new_str", "new_string", "newString"]).unwrap_or_default();
-        let detailed = git_diff(&path, &old, &new, false);
-        let telemetry = file_telemetry("edit", &path, &detailed);
+        let detailed = hunked(git_diff(&path, &old, &new, false));
+        let telemetry = file_telemetry("edit", &path, detailed.as_deref().unwrap_or(""));
         return Some(FileWrite {
             tool_name: "edit",
             arguments: json!({ "path": path, "old_str": old, "new_str": new }),
@@ -409,8 +415,8 @@ fn file_write_projection(tu: &ToolInvocation) -> Option<FileWrite> {
         });
     }
     let content = str_in(input, &["file_text", "content", "contents", "text", "new_str", "new_string"])?;
-    let detailed = git_diff(&path, "", &content, true);
-    let telemetry = file_telemetry("create", &path, &detailed);
+    let detailed = hunked(git_diff(&path, "", &content, true));
+    let telemetry = file_telemetry("create", &path, detailed.as_deref().unwrap_or(""));
     Some(FileWrite {
         tool_name: "create",
         arguments: json!({ "path": path, "file_text": content }),
@@ -509,7 +515,16 @@ fn git_diff(path: &str, before: &str, after: &str, create: bool) -> String {
         format!("a/{p}")
     };
     let to = format!("b/{p}");
-    let diff = similar::TextDiff::from_lines(before, after);
+    // A diff with headers but no `@@` hunk makes Copilot's diff view fall back
+    // to rendering the header lines as raw text (observed with an empty-file
+    // create: similar emits nothing for ""→""). Match the native tool, which
+    // renders an empty created file as one added empty line.
+    let after_eff = if create && after.is_empty() && before.is_empty() {
+        "\n"
+    } else {
+        after
+    };
+    let diff = similar::TextDiff::from_lines(before, after_eff);
     let body = diff
         .unified_diff()
         .context_radius(3)
@@ -520,6 +535,11 @@ fn git_diff(path: &str, before: &str, after: &str, create: bool) -> String {
     } else {
         format!("\ndiff --git a/{p} b/{p}\nindex 0000000..0000000 100644\n{body}")
     }
+}
+
+/// Keep a diff only if it actually has a hunk to render.
+fn hunked(diff: String) -> Option<String> {
+    diff.lines().any(|l| l.starts_with("@@")).then_some(diff)
 }
 
 fn insert_token_fields(data: &mut Map<String, Value>, u: &TokenUsage) {
