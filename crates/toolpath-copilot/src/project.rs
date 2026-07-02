@@ -236,6 +236,33 @@ impl CopilotProjector {
         // request mirror, start, and complete for the same call.
         for (i, tu) in turn.tool_uses.iter().enumerate() {
             let cid = call_id(tu, turn_id, i);
+            if let Some(fw) = file_write_projection(tu) {
+                // Copilot-native edit/create with a git-diff result so the
+                // change renders. Always emit the complete (the diff is the
+                // point), even when the IR carried no result.
+                let success = tu.result.as_ref().map(|r| !r.is_error).unwrap_or(true);
+                b.push(
+                    "tool.execution_start",
+                    ts,
+                    json!({
+                        "toolCallId": cid,
+                        "toolName": fw.tool_name,
+                        "arguments": fw.arguments,
+                        "turnId": turn_id,
+                    }),
+                );
+                b.push(
+                    "tool.execution_complete",
+                    ts,
+                    json!({
+                        "toolCallId": cid,
+                        "success": success,
+                        "result": { "content": fw.content, "detailedContent": fw.detailed },
+                        "turnId": turn_id,
+                    }),
+                );
+                continue;
+            }
             b.push(
                 "tool.execution_start",
                 ts,
@@ -334,6 +361,64 @@ fn tool_name(tu: &ToolInvocation) -> String {
     match tu.category {
         Some(cat) => native_name(cat, &tu.input).to_string(),
         None => tu.name.clone(),
+    }
+}
+
+/// Copilot-native shape for a file-write tool call, so its diff renders. The
+/// diff lives in `result.detailedContent` (a git-style unified diff) — that's
+/// what Copilot's UI displays. `edit` = partial replace (`old_str`/`new_str`);
+/// `create` = new file (`file_text`).
+struct FileWrite {
+    tool_name: &'static str,
+    arguments: Value,
+    content: String,
+    detailed: String,
+}
+
+fn str_in(v: &Value, keys: &[&str]) -> Option<String> {
+    for k in keys {
+        if let Some(s) = v.get(*k).and_then(|x| x.as_str()) {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
+fn file_write_projection(tu: &ToolInvocation) -> Option<FileWrite> {
+    if tu.category != Some(toolpath_convo::ToolCategory::FileWrite) {
+        return None;
+    }
+    let input = &tu.input;
+    let path = str_in(input, &["path", "file_path", "filePath", "filename", "file", "target_file"])?;
+    if input.get("old_string").is_some() || input.get("old_str").is_some() {
+        let old = str_in(input, &["old_str", "old_string", "oldString"]).unwrap_or_default();
+        let new = str_in(input, &["new_str", "new_string", "newString"]).unwrap_or_default();
+        return Some(FileWrite {
+            tool_name: "edit",
+            arguments: json!({ "path": path, "old_str": old, "new_str": new }),
+            content: format!("File {path} updated with changes."),
+            detailed: git_diff(&path, &old, &new, false),
+        });
+    }
+    let content = str_in(input, &["file_text", "content", "contents", "text", "new_str", "new_string"])?;
+    Some(FileWrite {
+        tool_name: "create",
+        arguments: json!({ "path": path, "file_text": content }),
+        content: format!("Created file {path} with {} characters", content.chars().count()),
+        detailed: git_diff(&path, "", &content, true),
+    })
+}
+
+/// A git-style unified diff matching Copilot's `result.detailedContent`. Tool
+/// args carry absolute paths; git renders them without the leading slash.
+fn git_diff(path: &str, before: &str, after: &str, create: bool) -> String {
+    let p = path.strip_prefix('/').unwrap_or(path);
+    let body = toolpath_convo::unified_diff(p, before, after);
+    if create {
+        let body = body.replacen(&format!("--- a/{p}"), "--- a/dev/null", 1);
+        format!("\ndiff --git a/{p} b/{p}\ncreate file mode 100644\nindex 0000000..0000000\n{body}\n")
+    } else {
+        format!("\ndiff --git a/{p} b/{p}\nindex 0000000..0000000 100644\n{body}\n")
     }
 }
 
@@ -540,6 +625,82 @@ mod tests {
         assert!(ids.iter().all(|s| !s.is_empty()), "no empty toolCallId");
         // start, complete, and the request mirror all share one id.
         assert!(ids.windows(2).all(|w| w[0] == w[1]), "call id must be stable: {ids:?}");
+    }
+
+    #[test]
+    fn file_edits_project_to_copilot_edit_shape_with_diff() {
+        // Copilot renders a file change from `result.detailedContent` (a
+        // git-style diff) on an `edit`/`create` tool; a Claude Edit/Write must
+        // map to that shape.
+        use serde_json::json;
+        use toolpath_convo::{ToolCategory, ToolInvocation, ToolResult};
+        fn assistant_with(tool: ToolInvocation) -> ConversationView {
+            let mut v = ConversationView {
+                id: "x".into(),
+                ..Default::default()
+            };
+            v.turns.push(Turn {
+                id: "a1".into(),
+                parent_id: None,
+                group_id: None,
+                role: Role::Assistant,
+                timestamp: "2026-07-01T00:00:00Z".into(),
+                text: String::new(),
+                thinking: None,
+                tool_uses: vec![tool],
+                model: None,
+                stop_reason: None,
+                token_usage: None,
+                attributed_token_usage: None,
+                environment: None,
+                delegations: Vec::new(),
+                file_mutations: Vec::new(),
+            });
+            v
+        }
+        let base = |id: &str, name: &str, input| ToolInvocation {
+            id: id.into(),
+            name: name.into(),
+            input,
+            result: Some(ToolResult {
+                content: "done".into(),
+                is_error: false,
+            }),
+            category: Some(ToolCategory::FileWrite),
+        };
+        let find = |lines: &[EventLine], kind: &str, kv: &str| -> serde_json::Value {
+            lines
+                .iter()
+                .find(|l| l.kind == kind && l.data.as_ref().unwrap().get("toolName").and_then(|v| v.as_str()) == Some(kv))
+                .map(|l| l.data.clone().unwrap())
+                .unwrap_or(json!(null))
+        };
+
+        // Claude Edit -> copilot `edit` with {path, old_str, new_str} + diff.
+        let edit = base(
+            "c1",
+            "Edit",
+            json!({"file_path": "/p/a.rs", "old_string": "old", "new_string": "new"}),
+        );
+        let s = CopilotProjector::new().project(&assistant_with(edit)).unwrap();
+        let start = find(&s.lines, "tool.execution_start", "edit");
+        assert_eq!(start["arguments"]["path"], "/p/a.rs");
+        assert_eq!(start["arguments"]["old_str"], "old");
+        assert_eq!(start["arguments"]["new_str"], "new");
+        let done = s.lines.iter().find(|l| l.kind == "tool.execution_complete").unwrap();
+        let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"].as_str().unwrap();
+        assert!(detailed.contains("diff --git a/p/a.rs b/p/a.rs"), "got: {detailed}");
+        assert!(detailed.contains("-old") && detailed.contains("+new"));
+
+        // Claude Write -> copilot `create` with {path, file_text} + create diff.
+        let create = base("c2", "Write", json!({"file_path": "/p/b.rs", "content": "hello"}));
+        let s = CopilotProjector::new().project(&assistant_with(create)).unwrap();
+        let start = find(&s.lines, "tool.execution_start", "create");
+        assert_eq!(start["arguments"]["file_text"], "hello");
+        let done = s.lines.iter().find(|l| l.kind == "tool.execution_complete").unwrap();
+        let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"].as_str().unwrap();
+        assert!(detailed.contains("create file mode"), "got: {detailed}");
+        assert!(detailed.contains("--- a/dev/null") && detailed.contains("+hello"));
     }
 
     #[test]

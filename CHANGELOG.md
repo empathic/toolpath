@@ -61,6 +61,10 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
   turn-scoped events; non-empty `toolCallId`; and `subagent.*` fields
   (`toolCallId`/`agentName`/`agentDisplayName`/`agentDescription`). Verified on a
   27-event session **and** a 5817-event session with sub-agents.
+- File edits now **render as diffs** in a resumed session: `FileWrite` tool calls
+  project to Copilot's native `edit`/`create` shape with a git-style unified diff
+  in `result.detailedContent` (mapping a Claude `Edit`/`Write` accordingly). See
+  `docs/agents/formats/copilot-cli/file-fidelity.md`.
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 

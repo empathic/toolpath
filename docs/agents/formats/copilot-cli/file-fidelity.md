@@ -78,3 +78,21 @@ format is itself `[unverified]` and must be reverse-engineered from a real
 These are the first things to check when `~/.copilot/session-state/` is
 available — they're repeated in the
 [verification checklist](known-gaps-and-sourcing.md#verify-once-we-have-samples).
+
+## Reverse (projection): making an edit render `[observed, 1.0.67]`
+
+For `path resume`/`path p export copilot` the *rendered diff* comes from the
+tool call's **`result.detailedContent`** — a git-style unified diff. Copilot's
+real file tools are:
+
+- **`edit`** — `arguments {path, old_str, new_str}`; `result.content` a summary
+  (`File <path> updated with changes.`) and `result.detailedContent` a
+  `diff --git a/<path> b/<path>\nindex …\n--- a/<path>\n+++ b/<path>\n@@ …`.
+- **`create`** — `arguments {path, file_text}`; the diff uses
+  `create file mode 100644` and `--- a/dev/null`.
+
+`CopilotProjector` detects `ToolCategory::FileWrite` tool calls and re-emits
+them in this shape (mapping a Claude `Edit`/`Write`'s `old_string`/`new_string`/
+`content` into `old_str`/`new_str`/`file_text` and synthesizing the git diff),
+so the change renders in the resumed session instead of showing as a bare tool
+call. Paths in the diff drop the leading `/` (git convention).

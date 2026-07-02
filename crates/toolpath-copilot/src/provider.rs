@@ -79,10 +79,13 @@ pub fn native_name(category: ToolCategory, input: &serde_json::Value) -> &'stati
         ToolCategory::Shell => "bash",
         ToolCategory::FileRead => "view",
         ToolCategory::FileWrite => {
+            // Copilot's real file tools are `edit` (partial replace) and
+            // `create` (new file), disambiguated by the presence of an
+            // old-string arg.
             if input.get("old_string").is_some() || input.get("old_str").is_some() {
-                "edit_file"
+                "edit"
             } else {
-                "create_file"
+                "create"
             }
         }
         ToolCategory::FileSearch => {
