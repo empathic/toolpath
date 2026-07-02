@@ -305,21 +305,7 @@ pub(crate) fn harness_available(
     harness: crate::cmd_share::Harness,
     path_override: Option<&std::path::Path>,
 ) -> bool {
-    use crate::cmd_share::Harness;
-    if binary_on_path(harness.name(), path_override) {
-        return true;
-    }
-    if harness == Harness::Cursor {
-        #[cfg(target_os = "macos")]
-        {
-            return binary_on_path("open", path_override);
-        }
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            return binary_on_path("xdg-open", path_override);
-        }
-    }
-    false
+    binary_on_path(harness.name(), path_override)
 }
 
 const ALL_HARNESSES: &[crate::cmd_share::Harness] = &[
@@ -926,13 +912,28 @@ mod tests {
         assert!(err.to_string().contains("`gemini` isn't on PATH"));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn cursor_available_via_open_fallback_on_macos() {
-        let td = fake_path_with(&["open"]);
-        assert!(harness_available(Harness::Cursor, Some(td.path())));
-        let picked = pick_harness(Some(HarnessArg::Cursor), None, Some(td.path()));
-        assert_eq!(picked.unwrap(), Harness::Cursor);
+    fn cursor_requires_its_cli_not_just_open() {
+        // Regression: the always-present macOS `open` must NOT make cursor
+        // look installed — it needs the real `cursor` CLI.
+        let only_open = fake_path_with(&["open"]);
+        assert!(
+            !harness_available(Harness::Cursor, Some(only_open.path())),
+            "cursor must not appear just because `open` exists"
+        );
+        assert!(
+            pick_harness(Some(HarnessArg::Cursor), None, Some(only_open.path()))
+                .unwrap_err()
+                .to_string()
+                .contains("isn't on PATH")
+        );
+
+        let with_cursor = fake_path_with(&["cursor"]);
+        assert!(harness_available(Harness::Cursor, Some(with_cursor.path())));
+        assert_eq!(
+            pick_harness(Some(HarnessArg::Cursor), None, Some(with_cursor.path())).unwrap(),
+            Harness::Cursor
+        );
     }
 
     #[test]
