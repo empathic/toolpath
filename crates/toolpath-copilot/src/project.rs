@@ -495,16 +495,30 @@ fn language_id(ext: &str) -> &'static str {
     }
 }
 
-/// A git-style unified diff matching Copilot's `result.detailedContent`. Tool
-/// args carry absolute paths; git renders them without the leading slash.
+/// A git-style unified diff matching Copilot's `result.detailedContent`.
+///
+/// Built with `similar` directly so the header appears exactly once — going
+/// through `toolpath_convo::unified_diff` double-headers it (its own `a/<path>`
+/// header plus `similar`'s empty-filename one), which Copilot can't parse into a
+/// colorized diff. Tool args carry absolute paths; git drops the leading slash.
 fn git_diff(path: &str, before: &str, after: &str, create: bool) -> String {
     let p = path.strip_prefix('/').unwrap_or(path);
-    let body = toolpath_convo::unified_diff(p, before, after);
-    if create {
-        let body = body.replacen(&format!("--- a/{p}"), "--- a/dev/null", 1);
-        format!("\ndiff --git a/{p} b/{p}\ncreate file mode 100644\nindex 0000000..0000000\n{body}\n")
+    let from = if create {
+        "a/dev/null".to_string()
     } else {
-        format!("\ndiff --git a/{p} b/{p}\nindex 0000000..0000000 100644\n{body}\n")
+        format!("a/{p}")
+    };
+    let to = format!("b/{p}");
+    let diff = similar::TextDiff::from_lines(before, after);
+    let body = diff
+        .unified_diff()
+        .context_radius(3)
+        .header(&from, &to)
+        .to_string();
+    if create {
+        format!("\ndiff --git a/{p} b/{p}\ncreate file mode 100644\nindex 0000000..0000000\n{body}")
+    } else {
+        format!("\ndiff --git a/{p} b/{p}\nindex 0000000..0000000 100644\n{body}")
     }
 }
 
@@ -777,6 +791,13 @@ mod tests {
         let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"].as_str().unwrap();
         assert!(detailed.contains("diff --git a/p/a.rs b/p/a.rs"), "got: {detailed}");
         assert!(detailed.contains("-old") && detailed.contains("+new"));
+        // Exactly one file header — no stray empty `--- `/`+++ ` lines (which
+        // break Copilot's diff parser and lose colorization).
+        assert!(
+            !detailed.contains("\n--- \n") && !detailed.contains("\n+++ \n"),
+            "duplicate/empty diff header: {detailed:?}"
+        );
+        assert_eq!(detailed.matches("\n--- a/").count(), 1, "one --- header: {detailed:?}");
         // toolTelemetry drives the colorized diff view.
         let tele = &done.data.as_ref().unwrap()["toolTelemetry"];
         assert_eq!(tele["metrics"]["linesAdded"], 1);

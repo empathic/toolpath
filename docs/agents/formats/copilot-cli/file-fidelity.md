@@ -104,3 +104,9 @@ values are *stringified* JSON; the one that matters is
 "linesRemoved": M}]` — which declares the diff's language for highlighting.
 `metrics.linesAdded`/`linesRemoved` supply the `+N −M` summary. The projector
 derives `languageId` from the path extension and the line counts from the diff.
+
+The diff must be a **well-formed unified diff with exactly one file header** —
+a stray/empty second `--- `/`+++ ` pair (which `toolpath_convo::unified_diff`
+emits, since it prepends its own `a/<path>` header on top of `similar`'s
+empty-filename one) makes Copilot fall back to flat, uncolorized text. The
+projector builds the diff with `similar` directly and sets the header once.
