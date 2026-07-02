@@ -61,6 +61,23 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
   turn-scoped events; non-empty `toolCallId`; and `subagent.*` fields
   (`toolCallId`/`agentName`/`agentDisplayName`/`agentDescription`). Verified on a
   27-event session **and** a 5817-event session with sub-agents.
+- **S-tier verification**: a real feature-elicit session (shell, create/edit/
+  view, glob+grep, errored read, real sub-agent, reasoning, per-message +
+  shutdown tokens) captured live at 1.0.68 now drives the cross-harness matrix
+  (`test-fixtures/copilot/convo.jsonl` — tokens and sub-agent included, no
+  dodges) and new crate tests (`real_fixture_roundtrip.rs`: forward invariants,
+  projection round-trip fidelity, wire-level serde value-identity). The capture
+  corrected the `session.shutdown` parser (`tokenDetails.{…}.tokenCount`;
+  model-keyed `modelMetrics`), resolved sub-agent semantics (`subagent.*` are
+  thin markers sharing the `task` tool's `toolCallId` — delegations pair by it,
+  ids preserved through projection), and upgraded file fidelity to
+  **Codex-grade** (native `edit`/`create` embed the real file-state diff in
+  `result.detailedContent`; the forward path now consumes it). Incidental
+  cross-crate fix: `toolpath-pi` now decodes a zero wire `input` as `None`
+  (same absence rule as its cache fields). Live loop committed as
+  `scripts/verify-copilot-live.sh` (isolated-home loader check + resumed-model
+  context probe — the probe answers session-specific questions correctly);
+  `scripts/capture-elicit-fixtures.sh` learned copilot.
 - File edits now **render as diffs** in a resumed session: `FileWrite` tool calls
   project to Copilot's native `edit`/`create` shape with a git-style unified diff
   in `result.detailedContent` (mapping a Claude `Edit`/`Write` accordingly). See

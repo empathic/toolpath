@@ -180,7 +180,15 @@ fn usage_to_token_usage(usage: &Usage) -> Option<TokenUsage> {
         return None;
     }
     Some(TokenUsage {
-        input_tokens: Some(usage.input as u32),
+        // Same absence rule as the cache fields: the wire can't express
+        // "unknown", so a zero written by a foreign-source projection decodes
+        // back to `None` (a real API message never has zero input tokens).
+        // Output stays as-is — it's the field pi genuinely reports.
+        input_tokens: if usage.input > 0 {
+            Some(usage.input as u32)
+        } else {
+            None
+        },
         output_tokens: Some(usage.output as u32),
         cache_read_tokens: if usage.cache_read > 0 {
             Some(usage.cache_read as u32)

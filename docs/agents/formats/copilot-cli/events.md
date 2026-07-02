@@ -8,10 +8,11 @@ the file a forward provider parses to reconstruct the conversation.
 > `events.jsonl` schema — feature request
 > [#3551](https://github.com/github/copilot-cli/issues/3551) asks them to
 > "formalize `events.jsonl` as an official hook/integration API," so it can
-> change between releases. **The envelope and the core event types below are
-> now `[observed]` against a first-hand capture at `copilotVersion` 1.0.67**;
-> items still flagged `[reverse-eng]`/`[unverified]` were not exercised by that
-> session (no sub-agent / skill / hook / abort / shutdown occurred in it).
+> change between releases. **The envelope and almost all event types below are
+> now `[observed]` against first-hand captures at `copilotVersion` 1.0.67–1.0.68**
+> (incl. a feature-elicit run with a real sub-agent and `session.shutdown`);
+> only `skill.*` / `hook.*` / `abort` / mode-plan-compaction remain
+> `[reverse-eng]`.
 
 ## Line envelope `[observed, 1.0.67]`
 
@@ -49,7 +50,7 @@ did not occur in that session. Field paths are relative to `data`.
 | `session.start` | `sessionId`, `version` (int schema ver), `producer` (`"copilot-agent"`), `copilotVersion`, `startTime`, **`context`** `{cwd, gitRoot, repository, hostType, repositoryHost, branch, headCommit, baseCommit}` | `[observed]` Session opener. cwd + git live under `context`, **not** top-level; the CLI version is `copilotVersion` (top-level `version` is an int). No `model` here. |
 | `session.model_change` | `newModel` (e.g. `"auto"`) | `[observed]` Model switched (also emitted once right after start). |
 | `session.task_complete` | `summary` | `[observed]` A task finished. |
-| `session.shutdown` | `modelMetrics` (model id), `usage.inputTokens` | `[reverse-eng]` Session close. **Did not occur** in the captured session (it had an `inuse.<pid>.lock`); token totals there came per-message instead — see below. |
+| `session.shutdown` | `shutdownType`, **`tokenDetails`** `{input,cache_read,cache_write,output: {tokenCount}}`, `modelMetrics` (**map keyed by model name** → `{requests: {count, cost}, usage}`), `totalPremiumRequests`, `totalApiDurationMs`, `sessionStartTime` (epoch ms), `eventsFileSizeBytes`, `codeChanges {linesAdded, linesRemoved, filesModified[]}` | `[observed, 1.0.68]` Session close. `tokenDetails.output.tokenCount` equals Σ per-message `outputTokens` (verified) — totals, not additive. The old reverse-eng shape (`usage.inputTokens`, `modelMetrics.model`) was wrong. |
 | `session.mode_changed` / `session.plan_changed` / `session.compaction_start` / `session.compaction_complete` | (mode / plan / token counts) | `[reverse-eng]` Not seen in the sample. |
 
 ### `system.*`, `user.*`, `assistant.*` — the conversation
@@ -93,19 +94,15 @@ variants `[bundle]`, but only `edit`/`create`/`view` were observed in sessions.
 Sessions also carry pass-through names from MCP/custom tools (`task`,
 `ToolSearch`, `Skill`, …) which render generically.
 
-### `subagent.*`, `skill.*`, `hook.*`, `abort` `[reverse-eng]`
+### `subagent.*` `[observed, 1.0.68]`, `skill.*` / `hook.*` / `abort` `[reverse-eng]`
 
-None of these occurred in the captured session, so their `data` shapes remain
-unverified. Handling: `subagent.started`/`completed` → `Turn.delegations`
-(`DelegatedWork`, paired by `id`); `skill.invoked` / `hook.*` / `abort` →
-`ConversationView.events`.
-
-| Type | Notes |
-|---|---|
-| `subagent.started` / `subagent.completed` | Sub-agent dispatch/finish. Whether sub-agent turns are inline or in a separate stream is **unverified**. |
-| `skill.invoked` | A skill was activated. |
-| `hook.start` / `hook.end` | A user hook ran. |
-| `abort` | The session/turn was aborted. |
+| Type | `data` fields | Notes |
+|---|---|---|
+| `subagent.started` | **`toolCallId`**, `agentName`, `agentDisplayName`, `agentDescription`, `model` | `[observed]` A **thin marker**: the sub-agent is dispatched via a **`task` tool call** (args `{name, agent_type, description, prompt, mode}`; result on its `tool.execution_complete`) sharing the same `toolCallId`. The marker carries the *agent-type* metadata only — no `id`/`prompt`/`result` of its own; the sub-agent's turns are **not** in the parent stream. Forward mapping: `Turn.delegations` with `agent_id = toolCallId` (pairs with the tool call). |
+| `subagent.completed` | `toolCallId`, `agentName`, `agentDisplayName`, `model` | `[observed]` Closing marker (no result payload — see the `task` tool's complete). |
+| `skill.invoked` | (skill name) | `[reverse-eng]` Not yet observed. |
+| `hook.start` / `hook.end` | — | `[reverse-eng]` Not yet observed. → `ConversationView.events`. |
+| `abort` | — | `[reverse-eng]` Not yet observed. |
 
 ### A conflicting source
 

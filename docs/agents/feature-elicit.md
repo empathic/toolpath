@@ -45,6 +45,7 @@ version uses different flags):
 |---|---|---|
 | Claude | `claude -p "<prompt>"` | `~/.claude/projects/<sanitized>/<uuid>.jsonl` |
 | Codex | `codex exec "<prompt>"` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
+| Copilot | `COPILOT_HOME=<isolated> copilot --allow-all -p "<prompt>"` | `<isolated>/session-state/<uuid>/events.jsonl` (isolated home keeps the real session list clean) |
 | Gemini | `gemini -p "<prompt>"` | `~/.gemini/tmp/<slot>/chats/session-*.json` |
 | Pi | `pi -p "<prompt>"` (varies; manual fallback documented below) | `~/.pi/agent/sessions/--<encoded-cwd>--/*.jsonl` |
 | Opencode | `opencode run "<prompt>"` then `path p export opencode` | rows in `opencode.db`, exported to JSON |

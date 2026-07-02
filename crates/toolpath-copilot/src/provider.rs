@@ -146,8 +146,8 @@ pub fn to_view(session: &Session) -> ConversationView {
                     shutdown_usage = Some(TokenUsage {
                         input_tokens: s.input_tokens,
                         output_tokens: s.output_tokens,
-                        cache_read_tokens: None,
-                        cache_write_tokens: None,
+                        cache_read_tokens: s.cache_read_tokens,
+                        cache_write_tokens: s.cache_write_tokens,
                         breakdowns: Default::default(),
                     });
                 }
@@ -203,6 +203,15 @@ pub fn to_view(session: &Session) -> ConversationView {
                 });
             }
             CopilotEvent::ToolComplete(te) => {
+                // Native edit/create completes carry the REAL file-state diff
+                // inline (`result.detailedContent`, git-style) — better
+                // fidelity than the arg-derived reconstruction from ToolStart;
+                // upgrade the matching mutation's raw perspective with it.
+                if let (Some(id), Some(det)) = (te.id.as_deref(), te.detailed.as_deref())
+                    && det.contains("@@")
+                {
+                    upgrade_mutation_diff(&mut current, &mut turns, id, det);
+                }
                 let result = ToolResult {
                     content: te.output.clone().unwrap_or_default(),
                     is_error: te.success == Some(false),
@@ -465,6 +474,34 @@ fn attach_tool_result(
         }
     }
     false
+}
+
+/// Replace the arg-derived `raw_diff` on the mutation created by tool call
+/// `id` with the native file-state diff from `result.detailedContent`.
+fn upgrade_mutation_diff(
+    current: &mut Option<Turn>,
+    turns: &mut [Turn],
+    id: &str,
+    diff: &str,
+) {
+    let hit = |t: &mut Turn| {
+        t.file_mutations
+            .iter_mut()
+            .rev()
+            .find(|m| m.tool_id.as_deref() == Some(id))
+            .map(|m| m.raw_diff = Some(diff.to_string()))
+            .is_some()
+    };
+    if let Some(cur) = current.as_mut()
+        && hit(cur)
+    {
+        return;
+    }
+    for t in turns.iter_mut().rev() {
+        if hit(t) {
+            return;
+        }
+    }
 }
 
 fn backfill_delegation_result(

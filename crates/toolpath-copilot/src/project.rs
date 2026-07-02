@@ -305,7 +305,15 @@ impl CopilotProjector {
         // Copilot requires a (non-empty) `toolCallId` on `subagent.*` too;
         // synthesize one, stable across started/completed for the delegation.
         for (i, d) in turn.delegations.iter().enumerate() {
-            let sub_call = format!("toolcall-sub-{turn_id}-{i}");
+            // The delegation's agent_id IS the correlating toolCallId on the
+            // forward path (subagent.* markers carry the `task` tool's id), so
+            // preserving it keeps the id stable across re-projection and
+            // findable after cross-harness legs. Synthesize only when absent.
+            let sub_call = if d.agent_id.trim().is_empty() {
+                format!("toolcall-sub-{turn_id}-{i}")
+            } else {
+                d.agent_id.clone()
+            };
             let agent_name = if d.agent_id.trim().is_empty() {
                 "subagent"
             } else {

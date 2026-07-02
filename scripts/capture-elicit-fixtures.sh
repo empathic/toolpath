@@ -28,7 +28,7 @@ if [[ ! -f "$PROMPT_FILE" ]]; then
 fi
 
 PROMPT="$(cat "$PROMPT_FILE")"
-ALL_HARNESSES=(claude codex gemini pi opencode)
+ALL_HARNESSES=(claude codex copilot gemini pi opencode)
 SELECTED=("${@:-${ALL_HARNESSES[@]}}")
 
 # Fresh scratch dir per harness so they can't see each other's files.
@@ -140,6 +140,35 @@ drive_codex() {
     mkdir -p "$FIXTURES_ROOT/codex"
     cp "$session" "$FIXTURES_ROOT/codex/convo.jsonl"
     echo "codex: OK → test-fixtures/codex/convo.jsonl"
+}
+
+drive_copilot() {
+    if ! command -v copilot >/dev/null; then
+        echo "copilot: SKIP (not on PATH)"; return 0
+    fi
+    local scratch="$SCRATCH_BASE/copilot"; mkdir -p "$scratch"; cd "$scratch"
+    echo "copilot: running…"
+    # Isolated COPILOT_HOME so the real ~/.copilot session list stays clean;
+    # config.json is copied over for auth. `--allow-all` skips tool prompts.
+    local home="$scratch/.copilot-home"; mkdir -p "$home"
+    cp "$HOME/.copilot/config.json" "$home/" 2>/dev/null || {
+        echo "copilot: SKIP (~/.copilot/config.json missing — authenticate first)"; return 0
+    }
+    local log="$scratch/.stderr.log"
+    if ! COPILOT_HOME="$home" copilot --allow-all -p "$PROMPT"         </dev/null >/dev/null 2> "$log"; then
+        echo "copilot: FAIL (CLI returned non-zero)"
+        dump_log "$log"
+        return 1
+    fi
+    local session
+    session="$(ls -t "$home"/session-state/*/events.jsonl 2>/dev/null | head -1)"
+    if [[ -z "$session" ]]; then
+        echo "copilot: FAIL (no events.jsonl under isolated session-state)"; return 1
+    fi
+    mkdir -p "$FIXTURES_ROOT/copilot"
+    # Stabilize scratch paths embedded in args/results.
+    sed "s|$scratch|/tmp/elicit-scratch|g; s|$home|/tmp/elicit-home|g"         "$session" > "$FIXTURES_ROOT/copilot/convo.jsonl"
+    echo "copilot: OK → test-fixtures/copilot/convo.jsonl"
 }
 
 drive_gemini() {
@@ -262,6 +291,7 @@ for h in "${SELECTED[@]}"; do
     case "$h" in
         claude)   if drive_claude;   then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
         codex)    if drive_codex;    then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
+        copilot)  if drive_copilot;  then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
         gemini)   if drive_gemini;   then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
         pi)       if drive_pi;       then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
         opencode) if drive_opencode; then ok=$((ok+1)); else fail=$((fail+1)); fi ;;

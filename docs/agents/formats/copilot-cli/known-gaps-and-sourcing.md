@@ -30,26 +30,39 @@ and the checklist for the next (feature-rich) capture.
   recomputed from the diff: [file-fidelity.md](file-fidelity.md).
 - **Native tool vocabulary** (`bash`/`view`/`edit`/`create` arg shapes):
   [events.md](events.md#native-tool-vocabulary-observed-10671068).
+- **`session.shutdown` real shape** (`tokenDetails.{…}.tokenCount`, model-keyed
+  `modelMetrics`, `codeChanges`) — observed at 1.0.68 via a feature-elicit
+  capture; the parser was corrected (the reverse-eng `usage.inputTokens` shape
+  was wrong). `tokenDetails.output` = Σ per-message `outputTokens` (verified).
+- **Sub-agent storage** — resolved: `subagent.*` are thin markers sharing the
+  `task` tool call's `toolCallId`; prompt/result live on the tool call and the
+  sub-agent's own turns are **not** in the parent stream.
+- **Real fixture** — a full feature-elicit session (shell, create/edit/view,
+  glob+grep, errored read, sub-agent, reasoning, tokens, shutdown) captured at
+  1.0.68 lives at `test-fixtures/copilot/convo.jsonl` + the crate's
+  `tests/fixtures/real-session.jsonl`, and drives the cross-harness matrix and
+  `real_fixture_roundtrip.rs` (forward invariants, projection fidelity,
+  wire-level serde losslessness).
 
-## Still open (not exercised by that session)
+## Still open
 
-1. **File-change fidelity** — the sample only ran `bash`/`view` (no file writes),
-   so whether edits embed content/diffs or rely on `checkpoints/`/`rewind-snapshots/`
-   remains `[unverified]` — see [file-fidelity.md](file-fidelity.md).
-2. **`checkpoints/` + `rewind-snapshots/` on-disk format** — full copies? git
-   object store? patch series? `[unverified]`.
-3. **Token accounting completeness** — the sample had no `session.shutdown`
-   (open session); is `outputTokens` per-message final? does `shutdown`/compaction
-   double-count? Apply the "never stamp a cumulative counter" rule defensively.
-4. **Sub-agent storage** — `subagent.*` did not occur; are its turns inline or in
-   a separate stream? Decides `DelegatedWork.turns`. `[unverified]`.
-5. **`skill.invoked` / `hook.*` / `abort` `data` shapes** — not seen. `[reverse-eng]`.
-6. **`session-store.db` exact table/column names** (single-source paraphrase).
+1. **`checkpoints/` + `rewind-snapshots/` on-disk format** — full copies? git
+   object store? patch series? `[unverified]`. (File-write fidelity itself is
+   **resolved**: native `edit`/`create` embed a git-style diff inline in
+   `result.detailedContent` — see [file-fidelity.md](file-fidelity.md) — so
+   snapshot reconstruction is only relevant for rewind, not derivation.)
+2. **Compaction token semantics** — `session.compaction_*` still unobserved;
+   apply the "never stamp a cumulative counter" rule defensively when it shows up.
+3. **Sub-agent transcript location** — the sub-agent's own turns aren't in the
+   parent `events.jsonl`; whether they land in a sibling session dir is unknown
+   (`DelegatedWork.turns` stays empty).
+4. **`skill.invoked` / `hook.*` / `abort` `data` shapes** — not seen. `[reverse-eng]`.
+5. **`session-store.db` exact table/column names** (single-source paraphrase).
    `[reverse-eng, Medium]` — see [session-store-db.md](session-store-db.md).
-7. **`parentId` tree** — the provider derives turns sequentially and doesn't yet
+6. **`parentId` tree** — the provider derives turns sequentially and doesn't yet
    use the tree; confirm it's always linear for coding sessions.
-8. **Legacy migration** (`history-session-state/` → `session-state/`). `[unverified]`.
-9. **XDG support.** No evidence of `XDG_CONFIG_HOME`; likely absent `[unverified]`.
+7. **Legacy migration** (`history-session-state/` → `session-state/`). `[unverified]`.
+8. **XDG support.** No evidence of `XDG_CONFIG_HOME`; likely absent `[unverified]`.
 
 ## Verification methodology
 
@@ -75,40 +88,22 @@ static file inspection; reuse them for future verification work:
    greppable: the diff heuristics, hunk regexes, and timeline mapping are
    all recoverable).
 
-## Verify once we have samples
+## Verification checklist
 
-Run this the first time a real `~/.copilot/session-state/<id>/` exists. Capture
-it via the feature-elicit flow (`docs/agents/feature-elicit.md`) once `copilot`
-is on `$PATH` and authenticated; commit a sanitized fixture under
-`test-fixtures/copilot/`.
+The original verify-once-we-have-samples pass is complete (envelope, event
+types, field sets, tool correlation, inline diffs, `workspace.yaml`,
+per-message + shutdown token semantics — all `[observed]`, and the fixtures +
+tests below hold the line). Remaining boxes, tied to the open questions above:
 
-- [ ] Dump a few raw `events.jsonl` lines verbatim. Confirm the **envelope**:
-      inline vs. `data`-nested payload, top-level `timestamp`, payload-key casing.
-      Update [events.md](events.md) and upgrade `[inferred]` → observed.
-- [ ] Enumerate the **actual `type` strings** present; diff against the
-      [events.md](events.md) catalogue. Note any new/renamed/missing types and
-      the version they were seen at.
-- [ ] For each event type, record the **real field set**; fill the "not
-      reported" gaps in the catalogue.
-- [ ] Determine how a `tool.execution_complete` **correlates to its
-      `tool.execution_start`** — is there an id, or only implicit ordering? The
-      provider pairs by id when present and falls back to positional pairing
-      otherwise (see [events.md](events.md)); confirm which is real and tighten
-      if an id field exists under a name we don't yet check.
-- [ ] Inspect a `tool.execution_complete` for a file edit: **is the diff/new
-      content inline?** Resolve open question #2 and rewrite
-      [file-fidelity.md](file-fidelity.md) accordingly.
-- [ ] Inspect `checkpoints/`: record the on-disk format and the
-      checkpoint→event mapping (open question #3).
-- [ ] Capture a sub-agent session; determine where `subagent.*` turns live
-      (open question #5).
-- [ ] Read `workspace.yaml` and confirm field names/presence.
+- [ ] Inspect `checkpoints/` + `rewind-snapshots/`: record the on-disk format
+      and the checkpoint→event mapping (open question #1).
+- [ ] Find where a sub-agent's own transcript lands (open question #3).
+- [ ] Capture a session exercising skills / hooks / abort / compaction and
+      record their `data` shapes (open questions #2, #4).
 - [ ] Open `session-store.db` read-only; dump the **real** schema
-      (`.schema`); correct [session-store-db.md](session-store-db.md).
-- [ ] Trace token accounting across a multi-turn session; determine whether
-      `session.shutdown` / `session.compaction_complete` counts are cumulative,
-      and document the per-step attribution rule.
-- [ ] Re-grade every confidence tag in this folder against the sample.
+      (`.schema`); correct [session-store-db.md](session-store-db.md) (#5).
+- [ ] Re-run `scripts/verify-copilot-live.sh` + refresh the elicit fixture
+      (`docs/agents/feature-elicit.md`) after upstream Copilot releases.
 
 ## Other Copilot variants (why they're out of scope here)
 

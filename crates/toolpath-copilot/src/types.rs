@@ -206,21 +206,41 @@ pub struct SessionShutdown {
     pub model: Option<String>,
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    pub cache_read_tokens: Option<u32>,
+    pub cache_write_tokens: Option<u32>,
     pub total_tokens: Option<u32>,
 }
 
 impl SessionShutdown {
     fn from_payload(p: &Value) -> Self {
-        // `usage` may be nested; `modelMetrics` carries a model id.
+        // Observed (1.0.68): token totals live under
+        // `tokenDetails.{input,cache_read,cache_write,output}.tokenCount`, and
+        // `modelMetrics` is a map KEYED BY model name
+        // (`{"claude-haiku-4.5": {requests, usage}}`). The older reverse-eng
+        // shape (`usage.inputTokens`, `modelMetrics.model`) is kept as a
+        // fallback.
+        let td = p.get("tokenDetails");
+        let td_count = |k: &str| -> Option<u32> {
+            td?.get(k)?.get("tokenCount")?.as_u64().map(|n| n as u32)
+        };
         let usage = p.get("usage").unwrap_or(p);
         let model = p
             .get("modelMetrics")
-            .and_then(|m| str_field(m, &["model", "modelId", "model_id"]))
+            .and_then(|m| {
+                // Map-keyed-by-model (observed) or `{model: "..."}` (legacy).
+                str_field(m, &["model", "modelId", "model_id"])
+                    .or_else(|| m.as_object()?.keys().next().cloned())
+            })
             .or_else(|| str_field(p, &["model"]));
         Self {
             model,
-            input_tokens: u32_field(usage, &["inputTokens", "input_tokens", "promptTokens"]),
-            output_tokens: u32_field(usage, &["outputTokens", "output_tokens", "completionTokens"]),
+            input_tokens: td_count("input")
+                .or_else(|| u32_field(usage, &["inputTokens", "input_tokens", "promptTokens"])),
+            output_tokens: td_count("output").or_else(|| {
+                u32_field(usage, &["outputTokens", "output_tokens", "completionTokens"])
+            }),
+            cache_read_tokens: td_count("cache_read"),
+            cache_write_tokens: td_count("cache_write"),
             total_tokens: u32_field(usage, &["totalTokens", "total_tokens"]),
         }
     }
@@ -287,6 +307,10 @@ pub struct ToolExecution {
     pub success: Option<bool>,
     /// Result/output text, when carried inline on `..._complete`.
     pub output: Option<String>,
+    /// `result.detailedContent` — for `edit`/`create` this is the git-style
+    /// diff of the actual file state `[observed, 1.0.67+]`, i.e. real
+    /// file-change fidelity (not an arg reconstruction).
+    pub detailed: Option<String>,
 }
 
 impl ToolExecution {
@@ -316,6 +340,12 @@ impl ToolExecution {
                     })
                 }),
             output: tool_output(p),
+            detailed: p
+                .get("result")
+                .and_then(|r| r.get("detailedContent"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string),
         }
     }
 }
@@ -353,8 +383,16 @@ pub struct Subagent {
 impl Subagent {
     fn from_payload(p: &Value) -> Self {
         Self {
-            id: str_field(p, &["id", "agentId", "agent_id", "subagentId", "subagent_id"]),
-            prompt: payload_text_keys(p, &["prompt", "instruction", "task", "input"]),
+            // Observed (1.0.68): `subagent.*` are thin markers carrying
+            // `toolCallId` (correlating to the `task` tool call that holds the
+            // prompt/result), `agentName`/`agentDisplayName`/`agentDescription`,
+            // and `model` — no `id`/`prompt`/`result` of their own. Prefer the
+            // toolCallId so the delegation pairs with its tool call.
+            id: str_field(
+                p,
+                &["toolCallId", "tool_call_id", "id", "agentId", "agent_id", "subagentId", "subagent_id"],
+            ),
+            prompt: payload_text_keys(p, &["prompt", "instruction", "input"]),
             result: payload_text_keys(p, &["result", "output", "summary"]),
         }
     }
