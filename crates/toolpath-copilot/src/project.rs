@@ -258,6 +258,7 @@ impl CopilotProjector {
                         "toolCallId": cid,
                         "success": success,
                         "result": { "content": fw.content, "detailedContent": fw.detailed },
+                        "toolTelemetry": fw.telemetry,
                         "turnId": turn_id,
                     }),
                 );
@@ -373,6 +374,10 @@ struct FileWrite {
     arguments: Value,
     content: String,
     detailed: String,
+    /// `toolTelemetry` — declares the diff's file extension / language / line
+    /// counts; Copilot's UI uses it to render a *colorized* diff view (without
+    /// it the diff shows as flat text).
+    telemetry: Value,
 }
 
 fn str_in(v: &Value, keys: &[&str]) -> Option<String> {
@@ -393,20 +398,101 @@ fn file_write_projection(tu: &ToolInvocation) -> Option<FileWrite> {
     if input.get("old_string").is_some() || input.get("old_str").is_some() {
         let old = str_in(input, &["old_str", "old_string", "oldString"]).unwrap_or_default();
         let new = str_in(input, &["new_str", "new_string", "newString"]).unwrap_or_default();
+        let detailed = git_diff(&path, &old, &new, false);
+        let telemetry = file_telemetry("edit", &path, &detailed);
         return Some(FileWrite {
             tool_name: "edit",
             arguments: json!({ "path": path, "old_str": old, "new_str": new }),
             content: format!("File {path} updated with changes."),
-            detailed: git_diff(&path, &old, &new, false),
+            detailed,
+            telemetry,
         });
     }
     let content = str_in(input, &["file_text", "content", "contents", "text", "new_str", "new_string"])?;
+    let detailed = git_diff(&path, "", &content, true);
+    let telemetry = file_telemetry("create", &path, &detailed);
     Some(FileWrite {
         tool_name: "create",
         arguments: json!({ "path": path, "file_text": content }),
         content: format!("Created file {path} with {} characters", content.chars().count()),
-        detailed: git_diff(&path, "", &content, true),
+        detailed,
+        telemetry,
     })
+}
+
+/// Build the `toolTelemetry` object Copilot's UI reads to render a colorized
+/// diff. Matches the observed 1.0.67 shape: `properties` values are
+/// *stringified* JSON, plus `metrics` and `restrictedProperties`.
+fn file_telemetry(command: &str, path: &str, diff: &str) -> Value {
+    let ext = path
+        .rsplit_once('.')
+        .filter(|(_, e)| !e.contains('/'))
+        .map(|(_, e)| format!(".{e}"))
+        .unwrap_or_default();
+    let lang = language_id(&ext);
+    let (added, removed) = diff_line_counts(diff);
+    let s = |v: Value| serde_json::to_string(&v).unwrap_or_default();
+    json!({
+        "properties": {
+            "command": command,
+            "resolvedPathAgainstCwd": "false",
+            "fileExtension": s(json!([ext])),
+            "codeBlocks": s(json!([{
+                "fileExt": ext, "languageId": lang,
+                "linesAdded": added, "linesRemoved": removed
+            }])),
+            "languageId": s(json!([lang])),
+        },
+        "metrics": { "linesAdded": added, "linesRemoved": removed },
+        "restrictedProperties": { "filePaths": s(json!([path])) },
+    })
+}
+
+/// Count added/removed lines in a unified diff (excluding the `+++`/`---` header).
+fn diff_line_counts(diff: &str) -> (usize, usize) {
+    let mut added = 0;
+    let mut removed = 0;
+    for l in diff.lines() {
+        if l.starts_with("+++") || l.starts_with("---") {
+            continue;
+        }
+        if l.starts_with('+') {
+            added += 1;
+        } else if l.starts_with('-') {
+            removed += 1;
+        }
+    }
+    (added, removed)
+}
+
+fn language_id(ext: &str) -> &'static str {
+    match ext {
+        ".rs" => "rust",
+        ".md" | ".markdown" => "markdown",
+        ".txt" => "text",
+        ".py" => "python",
+        ".js" | ".mjs" | ".cjs" => "javascript",
+        ".ts" => "typescript",
+        ".tsx" => "typescriptreact",
+        ".jsx" => "javascriptreact",
+        ".json" => "json",
+        ".jsonl" => "jsonl",
+        ".toml" => "toml",
+        ".yaml" | ".yml" => "yaml",
+        ".sh" | ".bash" => "shellscript",
+        ".go" => "go",
+        ".c" => "c",
+        ".cpp" | ".cc" | ".cxx" | ".h" | ".hpp" => "cpp",
+        ".java" => "java",
+        ".rb" => "ruby",
+        ".php" => "php",
+        ".html" | ".htm" => "html",
+        ".css" => "css",
+        ".scss" => "scss",
+        ".sql" => "sql",
+        ".xml" => "xml",
+        _ => "plaintext",
+    }
 }
 
 /// A git-style unified diff matching Copilot's `result.detailedContent`. Tool
@@ -691,6 +777,14 @@ mod tests {
         let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"].as_str().unwrap();
         assert!(detailed.contains("diff --git a/p/a.rs b/p/a.rs"), "got: {detailed}");
         assert!(detailed.contains("-old") && detailed.contains("+new"));
+        // toolTelemetry drives the colorized diff view.
+        let tele = &done.data.as_ref().unwrap()["toolTelemetry"];
+        assert_eq!(tele["metrics"]["linesAdded"], 1);
+        assert_eq!(tele["metrics"]["linesRemoved"], 1);
+        assert!(
+            tele["properties"]["codeBlocks"].as_str().unwrap().contains("\"languageId\":\"rust\""),
+            "codeBlocks: {tele:?}"
+        );
 
         // Claude Write -> copilot `create` with {path, file_text} + create diff.
         let create = base("c2", "Write", json!({"file_path": "/p/b.rs", "content": "hello"}));

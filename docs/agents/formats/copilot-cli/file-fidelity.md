@@ -96,3 +96,11 @@ them in this shape (mapping a Claude `Edit`/`Write`'s `old_string`/`new_string`/
 `content` into `old_str`/`new_str`/`file_text` and synthesizing the git diff),
 so the change renders in the resumed session instead of showing as a bare tool
 call. Paths in the diff drop the leading `/` (git convention).
+
+The complete event also needs a **`toolTelemetry`** block for Copilot to render
+a *colorized* diff (without it the diff shows as flat text). Its `properties`
+values are *stringified* JSON; the one that matters is
+`codeBlocks` — `[{"fileExt": ".rs", "languageId": "rust", "linesAdded": N,
+"linesRemoved": M}]` — which declares the diff's language for highlighting.
+`metrics.linesAdded`/`linesRemoved` supply the `+N −M` summary. The projector
+derives `languageId` from the path extension and the line counts from the diff.
