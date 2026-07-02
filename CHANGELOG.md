@@ -40,6 +40,18 @@ turn that mentions `RefCell`", "which sessions touched `cmd_resume.rs`?",
   `schema.json` (the per-field type + semantics reference for writing
   filters). A trailing `/<version>` pins a version with the same prefix
   rule as `--kind`.
+- **Streaming executor (no flag).** So the whole cache needn't sit in memory,
+  the executor *reads the filter*: it parses the jaq into its AST and, when it
+  can prove the shape decomposable, runs per document with a bounded merge —
+  element-wise filters (`.[] | …`, `map(…)`) stream one doc at a time, and
+  algebraic aggregations split into a per-file partial + combine (top-N
+  `sort_by(k) | .[:N]`, `length`/`add`/`min`/`max`). A global top-N is a subset
+  of the per-file top-Ns, so the answer is identical. Anything not provably
+  decomposable (e.g. `group_by`, `unique`) falls back to the whole-array path,
+  which is still lean (values held once, no whole-cache byte buffer). The
+  planner never changes an answer — validated by tests asserting streamed
+  output equals slurp byte-for-byte. `TOOLPATH_QUERY_EXPLAIN=1` prints the
+  chosen strategy to stderr.
 
 **Breaking** (pre-1.0): the former `path query` subcommands change.
 `ancestors` moves to `path p query ancestors`; `dead-ends` and `filter`

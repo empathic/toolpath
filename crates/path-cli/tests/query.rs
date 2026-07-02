@@ -207,6 +207,81 @@ fn kind_v2_matches_nothing() {
         .stdout(predicate::str::starts_with("0"));
 }
 
+// ── Streaming executor (no flag; must match whole-array semantics) ────
+
+/// Two docs with token-bearing steps whose maxima live in *different* files,
+/// so a correct top-N must merge across files, not pick a per-file winner.
+fn token_sandbox() -> tempfile::TempDir {
+    let doc = |id: &str, tokens: u64| {
+        format!(
+            r#"{{"graph":{{"id":"g"}},"paths":[{{"path":{{"id":"{id}","head":"s1"}},
+              "meta":{{"kind":"https://toolpath.net/kinds/agent-coding-session/v1.0.0","source":"claude"}},
+              "steps":[{{"step":{{"id":"s1","actor":"agent:x","timestamp":"2026-06-20T10:00:00Z"}},
+                "change":{{"c://{id}/s1":{{"structural":{{"type":"conversation.append","role":"assistant","text":"x","token_usage":{{"input_tokens":{tokens}}}}}}}}}}}]}}]}}"#
+        )
+    };
+    let cfg = tempfile::tempdir().unwrap();
+    seed(cfg.path(), "claude-lo", &doc("lo", 100));
+    seed(cfg.path(), "claude-hi", &doc("hi", 900));
+    seed(cfg.path(), "claude-mid", &doc("mid", 500));
+    cfg
+}
+
+#[test]
+fn top_n_merges_across_files() {
+    let cfg = token_sandbox();
+    // Global top-1 by input tokens is the `hi` doc (900), even though it lives
+    // in a different file than `lo`/`mid`. Streamed decompose must find it.
+    query(
+        cfg.path(),
+        ["map({t: .change[].structural.token_usage.input_tokens}) | sort_by(-.t) | .[0].t"],
+    )
+    .success()
+    .stdout(predicate::str::starts_with("900"));
+}
+
+#[test]
+fn scalar_reduction_sums_across_files() {
+    let cfg = token_sandbox();
+    // 3 docs, 1 step each.
+    query(cfg.path(), ["length"])
+        .success()
+        .stdout(predicate::str::starts_with("3"));
+    // Sum of input tokens across all files: 100 + 900 + 500 = 1500.
+    query(
+        cfg.path(),
+        ["[.[].change[].structural.token_usage.input_tokens] | add"],
+    )
+    .success()
+    .stdout(predicate::str::starts_with("1500"));
+}
+
+#[test]
+fn explain_env_reports_the_plan() {
+    let cfg = token_sandbox();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("TOOLPATH_QUERY_EXPLAIN", "1")
+        .args(["query", "map(.step.id) | sort_by(.) | .[:2]"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("decompose"));
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("TOOLPATH_QUERY_EXPLAIN", "1")
+        .args(["query", ".[] | select(.dead_end)"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("stream per file"));
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("TOOLPATH_QUERY_EXPLAIN", "1")
+        .args(["query", "group_by(.cache_id)"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("slurp"));
+}
+
 // ── Robustness ───────────────────────────────────────────────────────
 
 #[test]

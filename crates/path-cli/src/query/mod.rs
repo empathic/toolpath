@@ -8,8 +8,10 @@
 //! documents load and hands jaq the array.
 
 mod filter;
+mod plan;
 
 use anyhow::{Context, Result};
+use jaq_json::Val;
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path as FsPath, PathBuf};
@@ -32,15 +34,30 @@ pub struct Scope {
     pub kind: Option<String>,
 }
 
-/// Load the scoped step array, run `filter` over it, and print the result.
+/// Run `filter` over the scoped steps and print the result.
 ///
 /// `filter` is jaq source; `None` is treated as `.` (emit the array verbatim).
 /// `compact` forces single-line JSON; otherwise output is pretty-printed.
 /// `raw` prints string results without JSON quoting (like `jq -r`).
+///
+/// The filter is analyzed once into a [`plan::Plan`]; the executor then streams
+/// documents one at a time, so an element-wise or algebraic (top-N, sum, count)
+/// filter never holds the whole cache in memory. Anything the planner can't
+/// prove decomposable falls back to the whole-array path, which is still lean —
+/// the step values are held once, not re-serialized.
 pub fn run(scope: &Scope, filter: Option<&str>, compact: bool, raw: bool) -> Result<()> {
-    let elements = load_steps(scope)?;
-    let array = serde_json::Value::Array(elements);
-    filter::run(&array, filter.unwrap_or("."), compact, raw)
+    let code = filter.unwrap_or(".");
+    let plan = plan::analyze(code);
+    // Opt-in observability: `TOOLPATH_QUERY_EXPLAIN=1` reveals the execution
+    // strategy on stderr. Not a behavioral flag — purely diagnostic.
+    if std::env::var_os("TOOLPATH_QUERY_EXPLAIN").is_some() {
+        eprintln!("query plan: {}", plan.describe());
+    }
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    filter::execute(&plan, code, compact, raw, &mut out, |emit| {
+        stream_files(scope, emit)
+    })
 }
 
 /// Where a document came from, and the `cache_id` to stamp on its steps.
@@ -63,12 +80,13 @@ impl DocSource {
     }
 }
 
-/// Build the wrapped step array from every selected, scoped document.
-fn load_steps(scope: &Scope) -> Result<Vec<serde_json::Value>> {
+/// Stream each selected, scoped document to `emit` as a jaq array value,
+/// one file at a time. Only one document's `Graph` and step values are alive
+/// per iteration; the executor decides how to combine them.
+fn stream_files(scope: &Scope, emit: &mut dyn FnMut(Val) -> Result<()>) -> Result<()> {
     let kind_sel = scope.kind.as_deref().map(kinds::parse_kind_selector);
     let project = scope.project.as_deref().map(canonicalize_or_self);
 
-    let mut out = Vec::new();
     for src in select_files(scope)? {
         let graph = match read_source(&src) {
             Ok(g) => g,
@@ -77,15 +95,18 @@ fn load_steps(scope: &Scope) -> Result<Vec<serde_json::Value>> {
                 continue;
             }
         };
+        let mut steps = Vec::new();
         wrap_graph(
             &src,
             &graph,
             kind_sel.as_ref(),
             project.as_deref(),
-            &mut out,
+            &mut steps,
         );
+        drop(graph);
+        emit(filter::steps_to_val(steps)?)?;
     }
-    Ok(out)
+    Ok(())
 }
 
 /// Resolve the scope's file-selection flags to a deterministic list of

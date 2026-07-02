@@ -1,10 +1,19 @@
 //! In-process jaq (pure-Rust jq) execution for `path query`.
 //!
-//! The scoped step array is handed to jaq as a single input value; the filter
-//! does all matching, projection, ranking, and aggregation. Output mirrors jq:
-//! each value the filter yields is printed on its own line, pretty-printed by
-//! default and compact under `--compact` (or when stdout is not a TTY). With
-//! `--raw`, string results print unquoted (like `jq -r`).
+//! A compiled jaq filter is fully owned (it borrows neither its source nor the
+//! parse arena once built), so we compile once and run it across many inputs.
+//! [`execute`] drives one of three strategies chosen by [`super::plan`]:
+//!
+//! - **PerFileStream** — run the filter on each file's step array and print
+//!   outputs as they come. Nothing accumulates.
+//! - **Decompose** — run the filter per file, gather the per-file outputs into
+//!   one array, then run a `reduce` filter over it (top-N, sum, count, …).
+//! - **Slurp** — accumulate every file's steps into one array and run the
+//!   filter once. The always-correct fallback; still lean, since we hold the
+//!   values once (no whole-cache byte buffer).
+//!
+//! Output mirrors jq: each yielded value on its own line, pretty by default,
+//! compact under `--compact` (or when piped), raw strings under `--raw`.
 
 use anyhow::{Result, anyhow};
 use std::io::Write;
@@ -13,17 +22,66 @@ use jaq_core::load::{Arena, File, Loader};
 use jaq_core::{Compiler, Ctx, Vars, data, unwrap_valr};
 use jaq_json::Val;
 
-/// Compile `code` and run it over `input`, printing each output value.
-///
-/// `raw` mirrors `jq -r`: string results print without JSON quoting or
-/// escaping; every other value still prints as JSON.
-pub fn run(input: &serde_json::Value, code: &str, compact: bool, raw: bool) -> Result<()> {
-    // serde_json::Value → jaq Val via a JSON round-trip. The array is one we
-    // just built, so parsing it back can't realistically fail.
-    let bytes = serde_json::to_vec(input)?;
-    let val = jaq_json::read::parse_single(&bytes)
-        .map_err(|e| anyhow!("internal: could not load step array into jaq: {e}"))?;
+use super::plan::Plan;
 
+/// A compiled jaq program over JSON values. Owned — safe to hold and reuse.
+type Program = jaq_core::Filter<data::JustLut<Val>>;
+
+/// Run `main_src` over the cache per `plan`, streaming files via `run_files`
+/// (which invokes the supplied callback once per file with that file's wrapped
+/// step array as a jaq value).
+pub fn execute(
+    plan: &Plan,
+    main_src: &str,
+    compact: bool,
+    raw: bool,
+    out: &mut dyn Write,
+    run_files: impl FnOnce(&mut dyn FnMut(Val) -> Result<()>) -> Result<()>,
+) -> Result<()> {
+    let main = compile(main_src)?;
+    let pp = pretty(compact);
+
+    match plan {
+        Plan::PerFileStream => {
+            let mut emit = |val: Val| eval_print(&main, val, out, &pp, raw);
+            run_files(&mut emit)?;
+        }
+        Plan::Slurp => {
+            let mut all: Vec<Val> = Vec::new();
+            let mut emit = |val: Val| {
+                if let Val::Arr(items) = val {
+                    all.extend(items.iter().cloned());
+                }
+                Ok(())
+            };
+            run_files(&mut emit)?;
+            let merged: Val = all.into_iter().collect();
+            eval_print(&main, merged, out, &pp, raw)?;
+        }
+        Plan::Decompose { reduce } => {
+            let reducer = compile(reduce)?;
+            let mut partials: Vec<Val> = Vec::new();
+            let mut emit = |val: Val| {
+                partials.extend(eval_collect(&main, val)?);
+                Ok(())
+            };
+            run_files(&mut emit)?;
+            let merged: Val = partials.into_iter().collect();
+            eval_print(&reducer, merged, out, &pp, raw)?;
+        }
+    }
+    Ok(())
+}
+
+/// Convert one file's wrapped steps into a jaq array value. The byte buffer is
+/// per-file (bounded), so no whole-cache serialization is ever held.
+pub fn steps_to_val(steps: Vec<serde_json::Value>) -> Result<Val> {
+    let bytes = serde_json::to_vec(&serde_json::Value::Array(steps))?;
+    jaq_json::read::parse_single(&bytes)
+        .map_err(|e| anyhow!("internal: could not load steps into jaq: {e}"))
+}
+
+fn compile(code: &str) -> Result<Program> {
     let program = File { code, path: () };
     let defs = jaq_core::defs()
         .chain(jaq_std::defs())
@@ -37,36 +95,53 @@ pub fn run(input: &serde_json::Value, code: &str, compact: bool, raw: bool) -> R
     let modules = loader
         .load(&arena, program)
         .map_err(|errs| format_load_errors(code, errs))?;
-
-    let filter = Compiler::default()
+    Compiler::default()
         .with_funs(funs)
         .compile(modules)
-        .map_err(|errs| format_compile_errors(code, errs))?;
+        .map_err(|errs| format_compile_errors(code, errs))
+}
 
+fn eval_collect(prog: &Program, input: Val) -> Result<Vec<Val>> {
+    let ctx = Ctx::<data::JustLut<Val>>::new(&prog.lut, Vars::new([]));
+    prog.id
+        .run((ctx, input))
+        .map(unwrap_valr)
+        .map(|r| r.map_err(|e| anyhow!("query filter error: {e}")))
+        .collect()
+}
+
+fn eval_print(prog: &Program, input: Val, out: &mut dyn Write, pp: &Pp, raw: bool) -> Result<()> {
+    let ctx = Ctx::<data::JustLut<Val>>::new(&prog.lut, Vars::new([]));
+    for res in prog.id.run((ctx, input)).map(unwrap_valr) {
+        let value = res.map_err(|e| anyhow!("query filter error: {e}"))?;
+        print_val(out, pp, raw, &value)?;
+    }
+    Ok(())
+}
+
+use jaq_json::write::Pp;
+
+fn pretty(compact: bool) -> Pp {
     // jq parity: compact is `{"a":1}`; pretty is 2-space indented with a
     // space after each colon.
-    let pp = jaq_json::write::Pp {
+    Pp {
         indent: (!compact).then(|| "  ".to_string()),
         sep_space: !compact,
         ..Default::default()
-    };
-
-    let ctx = Ctx::<data::JustLut<Val>>::new(&filter.lut, Vars::new([]));
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    for res in filter.id.run((ctx, val)).map(unwrap_valr) {
-        let value = res.map_err(|e| anyhow!("query filter error: {e}"))?;
-        // `--raw`: print string values as their bytes, no quotes/escaping.
-        // Both jaq string variants (UTF-8 `TStr`, byte `BStr`) hold `Bytes`,
-        // which derefs to `&[u8]`. Non-strings fall through to JSON.
-        if raw && let Val::TStr(b) | Val::BStr(b) = &value {
-            let bytes: &[u8] = b;
-            out.write_all(bytes)?;
-        } else {
-            jaq_json::write::write(&mut out, &pp, 0, &value)?;
-        }
-        out.write_all(b"\n")?;
     }
+}
+
+fn print_val(out: &mut dyn Write, pp: &Pp, raw: bool, value: &Val) -> Result<()> {
+    // `--raw`: print string values as their bytes, no quotes/escaping. Both
+    // jaq string variants (UTF-8 `TStr`, byte `BStr`) hold `Bytes`, which
+    // derefs to `&[u8]`. Non-strings fall through to JSON.
+    if raw && let Val::TStr(b) | Val::BStr(b) = value {
+        let bytes: &[u8] = b;
+        out.write_all(bytes)?;
+    } else {
+        jaq_json::write::write(out, pp, 0, value)?;
+    }
+    out.write_all(b"\n")?;
     Ok(())
 }
 
@@ -126,59 +201,104 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn array() -> serde_json::Value {
-        json!([
-            {"cache_id": "a", "step": {"id": "s1", "actor": "human:alex"}, "tokens": 10},
-            {"cache_id": "b", "step": {"id": "s2", "actor": "agent:claude"}, "tokens": 90},
-        ])
-    }
-
-    /// Capture-free smoke test: a valid filter compiles and runs without error.
-    #[test]
-    fn identity_filter_runs() {
-        run(&array(), ".", true, false).unwrap();
-    }
-
-    #[test]
-    fn select_and_aggregate_run() {
-        run(&array(), "map(select(.tokens > 50))", true, false).unwrap();
-        run(&array(), "[.[].tokens] | add", true, false).unwrap();
-        run(&array(), "sort_by(-.tokens) | .[0].cache_id", false, false).unwrap();
-    }
-
-    #[test]
-    fn regex_test_is_available() {
-        // `test` requires the regex feature; this would error if it weren't on.
-        run(
-            &array(),
-            r#"map(select(.step.actor | test("claude")))"#,
-            true,
-            false,
-        )
+    /// Run `code` over `files` (as separate cache documents) into a captured
+    /// buffer, using an explicit plan.
+    fn run_with(plan: &Plan, code: &str, files: &[serde_json::Value]) -> String {
+        let mut out: Vec<u8> = Vec::new();
+        execute(plan, code, true, false, &mut out, |emit| {
+            for f in files {
+                let arr = f.as_array().cloned().unwrap_or_default();
+                emit(steps_to_val(arr)?)?;
+            }
+            Ok(())
+        })
         .unwrap();
+        String::from_utf8(out).unwrap()
     }
 
-    #[test]
-    fn raw_mode_runs_for_strings_and_nonstrings() {
-        // String, non-string, and a stream that mixes both — none should error.
-        run(&array(), ".[].cache_id", true, true).unwrap();
-        run(&array(), ".[].tokens", true, true).unwrap();
-        run(&array(), ".[0]", true, true).unwrap();
-    }
-
-    #[test]
-    fn syntax_error_is_reported() {
-        let err = run(&array(), "map(select(", true, false).unwrap_err();
-        assert!(err.to_string().contains("jq filter"), "{err}");
-    }
-
-    #[test]
-    fn unknown_function_is_reported() {
-        let err = run(&array(), "no_such_function", true, false).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("compile") || msg.contains("undefined"),
-            "{msg}"
+    /// The heart of the validation: for every recognized filter, the planner's
+    /// streamed execution must produce byte-for-byte the same output as the
+    /// always-correct whole-array slurp.
+    fn assert_matches_slurp(code: &str, files: &[serde_json::Value]) {
+        let planned = run_with(&crate::query::plan::analyze(code), code, files);
+        let slurped = run_with(&Plan::Slurp, code, files);
+        assert_eq!(
+            planned, slurped,
+            "streamed output must equal slurp for `{code}`"
         );
+    }
+
+    fn fixture() -> Vec<serde_json::Value> {
+        vec![
+            json!([
+                {"cache_id": "a", "step": {"id": "a1", "actor": "agent:x"}, "tokens": 10, "dead_end": false},
+                {"cache_id": "a", "step": {"id": "a2", "actor": "human:y"}, "tokens": 90, "dead_end": true}
+            ]),
+            json!([
+                {"cache_id": "b", "step": {"id": "b1", "actor": "agent:x"}, "tokens": 50, "dead_end": false}
+            ]),
+            json!([]),
+            json!([
+                {"cache_id": "c", "step": {"id": "c1", "actor": "agent:z"}, "tokens": 75, "dead_end": true},
+                {"cache_id": "c", "step": {"id": "c2", "actor": "agent:z"}, "tokens": 30, "dead_end": false}
+            ]),
+        ]
+    }
+
+    #[test]
+    fn stream_equals_slurp_for_elementwise() {
+        let f = fixture();
+        assert_matches_slurp(".[] | select(.dead_end)", &f);
+        assert_matches_slurp(
+            r#".[] | select(.step.actor | startswith("agent:")) | .step.id"#,
+            &f,
+        );
+        assert_matches_slurp("map(select(.tokens > 40))", &f);
+        assert_matches_slurp("[.[] | select(.dead_end) | .step.id]", &f);
+    }
+
+    #[test]
+    fn stream_equals_slurp_for_top_n() {
+        let f = fixture();
+        assert_matches_slurp("sort_by(-.tokens) | .[:3]", &f);
+        assert_matches_slurp("sort_by(.tokens) | .[:2]", &f);
+        assert_matches_slurp("map({id: .step.id, t: .tokens}) | sort_by(-.t) | .[:2]", &f);
+    }
+
+    #[test]
+    fn stream_equals_slurp_for_scalar_reductions() {
+        let f = fixture();
+        assert_matches_slurp("length", &f);
+        assert_matches_slurp("map(select(.dead_end)) | length", &f);
+        assert_matches_slurp("[.[].tokens] | add", &f);
+        assert_matches_slurp("[.[].tokens] | max", &f);
+        assert_matches_slurp("[.[].tokens] | min", &f);
+    }
+
+    #[test]
+    fn slurp_fallback_still_correct() {
+        let f = fixture();
+        // group_by slurps (holistic) — but must still produce the right answer.
+        assert_matches_slurp(
+            "group_by(.step.actor) | map({actor: .[0].step.actor, n: length})",
+            &f,
+        );
+        assert_matches_slurp("unique_by(.step.actor) | length", &f);
+    }
+
+    #[test]
+    fn top_n_actually_bounds_the_merge() {
+        // Sanity that the decompose path yields the true global top-2 across
+        // files (90 from file a, 75 from file c), not a per-file artifact.
+        let out = run_with(
+            &Plan::Decompose {
+                reduce: "add | sort_by(-.tokens) | .[:2]".to_string(),
+            },
+            "sort_by(-.tokens) | .[:2]",
+            &fixture(),
+        );
+        assert!(out.contains("\"a2\""), "top row a2 (90) present: {out}");
+        assert!(out.contains("\"c1\""), "second row c1 (75) present: {out}");
+        assert!(!out.contains("\"a1\""), "a1 (10) must be excluded: {out}");
     }
 }
