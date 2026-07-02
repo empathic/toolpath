@@ -78,7 +78,13 @@ COPILOT_HOME="$H" copilot --resume <projected-id> -p "reply ok"
 
 Two shapes are verified: a small 27-event session, and a **large 5817-event
 session with sub-agents** (a Pathbase graph resumed via URL — sub-agents are
-what surfaced req 9). A session exercising features neither covered (MCP tools,
+what surfaced req 9).
+
+**Loading is necessary but not sufficient**: a session can pass the loader yet
+render its tool calls generically (flat markdown diffs, no `Edit <path>` rows).
+That's a separate contract — the timeline UI dispatches on the
+`assistant.message.toolRequests` mirror and on diff well-formedness — covered
+in [file-fidelity.md](file-fidelity.md). A session exercising features neither covered (MCP tools,
 context compaction) could still surface a further required field — re-run the
 loop and add a row here if one appears. Open items:
 [known-gaps-and-sourcing.md](known-gaps-and-sourcing.md).

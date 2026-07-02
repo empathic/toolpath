@@ -2,10 +2,13 @@
 //! [`Session`] (an `events.jsonl` line stream + workspace metadata).
 //!
 //! This is the reverse of [`crate::provider::to_view`] and the basis for
-//! `path p export copilot` and `path resume`. ⚠️ **Preview**: the emitted
-//! `events.jsonl` matches the observed 1.0.67 shape, but whether the real
-//! `copilot --resume` loads a *synthesized* session is unverified — see
-//! `docs/agents/formats/copilot-cli/known-gaps-and-sourcing.md`.
+//! `path p export copilot` and `path resume`. ✅ Verified against the real CLI
+//! (loads + resumes in copilot 1.0.67/1.0.68, including a 5817-event
+//! sub-agent session; colorized edit diffs render). The loader's writer
+//! contract and the TUI's rendering contract are documented in
+//! `docs/agents/formats/copilot-cli/writing-compatible.md` and
+//! `docs/agents/formats/copilot-cli/file-fidelity.md` — keep this module in
+//! sync with those when either changes.
 
 use crate::provider::native_name;
 use crate::types::{EventLine, Session, Workspace};

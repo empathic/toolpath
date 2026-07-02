@@ -1,10 +1,14 @@
 # GitHub Copilot CLI on-disk format
 
-> **Reference revision:** 2026-07-01
+> **Reference revision:** 2026-07-02
 > **Tracks:** `@github/copilot` (the standalone agentic CLI, command `copilot`)
 > **Version anchors:** public preview 2025-09-25, GA 2026-02-25, npm `1.0.66`.
-> **First-hand sample:** one session captured at `copilotVersion` **1.0.67**
-> (the envelope + core event types are now `[observed]`).
+> **First-hand grounding:** sessions captured at `copilotVersion` **1.0.67**
+> (envelope + core event types `[observed]`); the resume **loader contract**
+> ([writing-compatible.md](writing-compatible.md)) and the TUI **rendering
+> contract** ([file-fidelity.md](file-fidelity.md)) verified against the live
+> CLI at **1.0.67–1.0.68** via pty capture (see
+> [known-gaps-and-sourcing.md](known-gaps-and-sourcing.md#verification-methodology)).
 >
 > When you change anything in this directory, bump the revision date here.
 

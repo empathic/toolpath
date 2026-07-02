@@ -59,7 +59,7 @@ did not occur in that session. Field paths are relative to `data`.
 | `system.message` | `role: "system"`, `content` | `[observed]` The system prompt (large — ~56 KB). Recorded as a `ConversationEvent`, not a turn. |
 | `user.message` | `content`, `transformedContent`, `interactionId`, `attachments`, `parentAgentTaskId` | `[observed]` `content` is the raw prompt; `transformedContent` adds datetime/system-reminder wrapping. |
 | `assistant.turn_start` / `assistant.turn_end` | — | `[observed]` Turn boundary. |
-| `assistant.message` | `content`, `model`, **`reasoningText`** (thinking), `reasoningOpaque`, **`toolRequests`** `[{toolCallId, name, arguments, intentionSummary}]`, **`outputTokens`**, `messageId`, `turnId`, `requestId` | `[observed]` One turn can have several. `reasoningText` → `Turn.thinking`; `outputTokens` summed for the session total. `toolRequests` mirror the following `tool.execution_start` (we take the tool from the execution events to avoid double-counting). |
+| `assistant.message` | `content`, `model`, **`reasoningText`** (thinking), `reasoningOpaque`, **`toolRequests`** `[{toolCallId, name, arguments, intentionSummary}]`, **`outputTokens`**, `messageId`, `turnId`, `requestId` | `[observed]` One turn can have several. `reasoningText` → `Turn.thinking`; `outputTokens` summed for the session total. `toolRequests` mirror the following `tool.execution_start` (we take the tool from the execution events to avoid double-counting) — but note: **the resumed-timeline UI builds its tool rows from this mirror, not from the execution events**, so a writer must keep the mirror's `name`/`arguments` in Copilot's native vocabulary (see [file-fidelity.md](file-fidelity.md)). |
 
 ### `tool.*` — tool / command invocations `[observed]`
 
@@ -73,6 +73,25 @@ did not occur in that session. Field paths are relative to `data`.
 `toolRequests`). `toolpath-copilot` pairs on it, and additionally falls back to
 positional pairing (most-recent result-less invocation in the open turn) if a
 future version ever omits the id — so it never double-counts.
+
+### Native tool vocabulary `[observed, 1.0.67–1.0.68]`
+
+The built-in tool names and argument shapes seen in real sessions (what a
+writer must remap foreign tool calls into — the timeline UI keys row rendering
+off these):
+
+| Tool | `arguments` | Result notes |
+|---|---|---|
+| `bash` | `{command, description?}` | stdout in `result.content`/`detailedContent`. |
+| `view` | `{path, view_range?: [start, end]}` | file/dir listing text. Row title: `<path> (lines a-b)`. |
+| `edit` | `{path, old_str, new_str}` | `result.content` = `File <path> updated with changes.`; `result.detailedContent` = git-style unified diff (see [file-fidelity.md](file-fidelity.md)). |
+| `create` | `{path, file_text}` | `result.content` = `Created file <path> with N characters`; `detailedContent` = create diff. |
+| `glob` / `grep` | `{pattern, path?}` | (grep shape `[reverse-eng]` — matches the row-title renderer). |
+
+The str_replace_editor family also accepts `str_replace`/`insert` command
+variants `[bundle]`, but only `edit`/`create`/`view` were observed in sessions.
+Sessions also carry pass-through names from MCP/custom tools (`task`,
+`ToolSearch`, `Skill`, …) which render generically.
 
 ### `subagent.*`, `skill.*`, `hook.*`, `abort` `[reverse-eng]`
 

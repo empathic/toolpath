@@ -22,6 +22,14 @@ and the checklist for the next (feature-rich) capture.
   `session.model_change` (`{newModel}`) emitted right after start.
 - **`workspace.yaml`**: flat YAML, fields observed (see
   [session-state.md](session-state.md)); `command-history-state` is a **file**.
+- **Resume loader contract** (9 requirements, verbatim rejections) — fully
+  mapped and verified live at 1.0.67–1.0.68, incl. a 5817-event sub-agent
+  session: [writing-compatible.md](writing-compatible.md).
+- **TUI rendering contract** for tool rows and diffs — the `toolRequests`
+  mirror drives row dispatch; diffs need a single header + ≥1 hunk; `+N −M`
+  recomputed from the diff: [file-fidelity.md](file-fidelity.md).
+- **Native tool vocabulary** (`bash`/`view`/`edit`/`create` arg shapes):
+  [events.md](events.md#native-tool-vocabulary-observed-10671068).
 
 ## Still open (not exercised by that session)
 
@@ -40,13 +48,32 @@ and the checklist for the next (feature-rich) capture.
    `[reverse-eng, Medium]` — see [session-store-db.md](session-store-db.md).
 7. **`parentId` tree** — the provider derives turns sequentially and doesn't yet
    use the tree; confirm it's always linear for coding sessions.
-8. **Resume loader contract** — whether the real `copilot --resume` accepts a
-   *synthesized* session is being mapped incrementally from live rejections:
-   envelope `id` must be a UUID string and every `timestamp` must be
-   offset-bearing ISO 8601 are confirmed; more requirements may surface. Live
-   list: [writing-compatible.md](writing-compatible.md).
 8. **Legacy migration** (`history-session-state/` → `session-state/`). `[unverified]`.
 9. **XDG support.** No evidence of `XDG_CONFIG_HOME`; likely absent `[unverified]`.
+
+## Verification methodology
+
+Two reproducible techniques ground this folder's `[observed]` claims beyond
+static file inspection; reuse them for future verification work:
+
+1. **Live loader loop** — project a doc into an *isolated* `COPILOT_HOME`
+   (copy `~/.copilot/config.json` for auth; create a minimal
+   `session-store.db` `sessions` table) and run
+   `copilot --resume <id> -p "reply ok"`. The loader validates one field per
+   event line, so each run either advances to the next `Session file is
+   corrupted (line N: …)` rejection or loads. This is how the
+   [writing-compatible.md](writing-compatible.md) contract was mapped.
+2. **pty TUI capture** — the interactive renderer can't be observed with
+   `-p` alone: spawn `copilot --resume` on a pseudo-tty, answer its terminal
+   queries (CPR `ESC[6n`, kitty `ESC[?u`, OSC 10/11 colors), auto-accept the
+   folder-trust prompt, send `ctrl+o` ("toggle all timeline") to expand tool
+   bodies, and diff the captured ANSI against a native session's capture.
+   This is how the rendering contract in
+   [file-fidelity.md](file-fidelity.md) was found (hunkless-diff fallback,
+   the `toolRequests`-mirror dispatch). Cross-check against the app bundle
+   (`node_modules/@github/copilot-darwin-arm64/app.js` — minified but
+   greppable: the diff heuristics, hunk regexes, and timeline mapping are
+   all recoverable).
 
 ## Verify once we have samples
 
