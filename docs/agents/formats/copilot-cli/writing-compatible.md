@@ -22,6 +22,7 @@ rather than erroring with `Session file is corrupted`.
 | 6 | Turn-scoped events (`assistant.turn_start`/`.message`/`.turn_end`, `tool.execution_start`/`_complete`) must carry a **`turnId`** — the string index of the assistant turn (`"0"`, `"1"`, …). Not present on `session.*` or `user.message`. | `missing field \`turnId\`` | `[observed, 1.0.67]` |
 | 7 | `assistant.message` and `assistant.turn_end` must carry a **`messageId`** (UUID string); `turn_end` references the message it closes. | `missing field \`messageId\`` | `[observed, 1.0.67]` |
 | 8 | `tool.execution_start`/`_complete` (and the `assistant.message.toolRequests` mirror) need a **non-empty `toolCallId`** — an *empty string* is rejected as missing. The projector synthesizes one when the IR tool id is empty, stable across the request/start/complete for a call. | `missing field \`toolCallId\`` | `[observed, 1.0.67]` |
+| 9 | `subagent.started`/`subagent.completed` must carry **`toolCallId`** (a sub-agent is dispatched via a tool call), **`agentName`**, **`agentDisplayName`**, and **`agentDescription`** (all non-empty), plus `turnId`. Discovered one field at a time from a real session with sub-agents. | `missing field \`toolCallId\`` → `\`agentName\`` → `\`agentDisplayName\`` → `\`agentDescription\`` | `[observed, 1.0.67]` |
 
 ## How `toolpath-copilot`'s projector satisfies these
 
@@ -47,6 +48,10 @@ rather than erroring with `Session file is corrupted`.
 - **`messageId` (req 7):** each assistant turn gets a stable UUID (distinct
   namespace from event ids) on its `assistant.message` and matching
   `assistant.turn_end`.
+- **Sub-agent fields (req 8/9):** every tool call (incl. the sub-agent
+  dispatch) gets a non-empty `toolCallId`; `subagent.*` also carry
+  `agentName`/`agentDisplayName` (from the delegation id) and a non-empty
+  `agentDescription`.
 - **`sessions` row (req 4):** `project_copilot` writes an `INSERT OR REPLACE`
   into `session-store.db` (fresh session UUID only — never mutates existing
   sessions), plus `session-state/<id>/{events.jsonl,workspace.yaml}`.
@@ -71,8 +76,9 @@ sqlite3 "$H/session-store.db" 'CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd T
 COPILOT_HOME="$H" copilot --resume <projected-id> -p "reply ok"
 ```
 
-**Caveat:** verified for the tested session shape (shell + file tools, single
-project). A session exercising features that shape didn't (sub-agents, MCP
-tools, compaction) could surface a further required field — re-run the loop and
-add a row here if one appears. Open items:
+Two shapes are verified: a small 27-event session, and a **large 5817-event
+session with sub-agents** (a Pathbase graph resumed via URL — sub-agents are
+what surfaced req 9). A session exercising features neither covered (MCP tools,
+context compaction) could still surface a further required field — re-run the
+loop and add a row here if one appears. Open items:
 [known-gaps-and-sourcing.md](known-gaps-and-sourcing.md).

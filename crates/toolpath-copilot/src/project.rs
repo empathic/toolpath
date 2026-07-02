@@ -260,18 +260,42 @@ impl CopilotProjector {
             }
         }
 
-        // Sub-agent delegations.
-        for d in &turn.delegations {
+        // Sub-agent delegations. A sub-agent is dispatched via a tool call, so
+        // Copilot requires a (non-empty) `toolCallId` on `subagent.*` too;
+        // synthesize one, stable across started/completed for the delegation.
+        for (i, d) in turn.delegations.iter().enumerate() {
+            let sub_call = format!("toolcall-sub-{turn_id}-{i}");
+            let agent_name = if d.agent_id.trim().is_empty() {
+                "subagent"
+            } else {
+                d.agent_id.as_str()
+            };
             b.push(
                 "subagent.started",
                 ts,
-                json!({ "id": d.agent_id, "prompt": d.prompt, "turnId": turn_id }),
+                json!({
+                    "id": d.agent_id,
+                    "agentName": agent_name,
+                    "agentDisplayName": agent_name,
+                    "agentDescription": "Delegated sub-agent task",
+                    "prompt": d.prompt,
+                    "turnId": turn_id,
+                    "toolCallId": sub_call,
+                }),
             );
             if let Some(result) = &d.result {
                 b.push(
                     "subagent.completed",
                     ts,
-                    json!({ "id": d.agent_id, "result": result, "turnId": turn_id }),
+                    json!({
+                        "id": d.agent_id,
+                        "agentName": agent_name,
+                    "agentDisplayName": agent_name,
+                    "agentDescription": "Delegated sub-agent task",
+                        "result": result,
+                        "turnId": turn_id,
+                        "toolCallId": sub_call,
+                    }),
                 );
             }
         }

@@ -55,10 +55,12 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
   subcommands, Copilot in `path share`/`path resume`, and `uuid` `v4`).
 - The Copilot **resume loader contract** was mapped from live `copilot --resume`
   runs and codified in `docs/agents/formats/copilot-cli/writing-compatible.md`
-  (8 requirements, each with its verbatim rejection): UUID `id`; offset-ISO
+  (9 requirements, each with its verbatim rejection): UUID `id`; offset-ISO
   `timestamp` on every event; present `parentId` (UUID/null); `session-store.db`
   row; full `session.start` shape incl. `startTime`; `turnId` and `messageId` on
-  turn-scoped events; non-empty `toolCallId`.
+  turn-scoped events; non-empty `toolCallId`; and `subagent.*` fields
+  (`toolCallId`/`agentName`/`agentDisplayName`/`agentDescription`). Verified on a
+  27-event session **and** a 5817-event session with sub-agents.
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 
