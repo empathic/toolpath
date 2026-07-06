@@ -85,11 +85,35 @@ pub struct KindSelector {
     major: Option<u64>,
     minor: Option<u64>,
     patch: Option<u64>,
+    /// A version segment was present but didn't parse as an integer (e.g. a
+    /// typo like `/vgarbage` or `/v1.x`). Such a selector matches nothing —
+    /// failing *closed* rather than silently widening to "any version".
+    impossible: bool,
+}
+
+/// Parse a version segment: absent → `None` (wildcard); present and numeric →
+/// `Some(n)`; present but non-numeric → `None` and flag the selector impossible.
+fn parse_seg(part: Option<&str>, impossible: &mut bool) -> Option<u64> {
+    match part {
+        None => None,
+        Some(s) => match s.parse() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                *impossible = true;
+                None
+            }
+        },
+    }
 }
 
 /// Parse a selector. Accepts a bare name (`agent-coding-session`), a
 /// name + version prefix (`agent-coding-session/v1`, `.../v1.0`,
 /// `.../v1.0.0`, with the `v` optional), or a full `meta.kind` URI.
+///
+/// A version part that's present but unparseable does **not** fail open: the
+/// selector is marked impossible and matches nothing, so a typo'd pin fails
+/// closed (and `path kind` reports "no bundled spec") rather than silently
+/// widening to every version.
 pub fn parse_kind_selector(s: &str) -> KindSelector {
     let tail = s.rsplit_once("/kinds/").map_or(s, |(_, t)| t);
     let tail = tail.trim_end_matches('/');
@@ -99,15 +123,24 @@ pub fn parse_kind_selector(s: &str) -> KindSelector {
             major: None,
             minor: None,
             patch: None,
+            impossible: false,
         },
         Some((name, ver)) => {
             let ver = ver.strip_prefix('v').unwrap_or(ver);
-            let mut it = ver.split('.');
+            let mut parts = ver.split('.');
+            let mut impossible = false;
+            let major = parse_seg(parts.next(), &mut impossible);
+            let minor = parse_seg(parts.next(), &mut impossible);
+            let patch = parse_seg(parts.next(), &mut impossible);
+            if parts.next().is_some() {
+                impossible = true; // more than major.minor.patch
+            }
             KindSelector {
                 name: name.to_string(),
-                major: it.next().and_then(|x| x.parse().ok()),
-                minor: it.next().and_then(|x| x.parse().ok()),
-                patch: it.next().and_then(|x| x.parse().ok()),
+                major,
+                minor,
+                patch,
+                impossible,
             }
         }
     }
@@ -116,7 +149,8 @@ pub fn parse_kind_selector(s: &str) -> KindSelector {
 impl KindSelector {
     /// Whether this selector matches a parsed `(name, version)`.
     pub fn matches(&self, name: &str, v: Version) -> bool {
-        self.name == name
+        !self.impossible
+            && self.name == name
             && self.major.is_none_or(|m| m == v.major)
             && self.minor.is_none_or(|m| m == v.minor)
             && self.patch.is_none_or(|p| p == v.patch)
@@ -230,5 +264,35 @@ mod tests {
     #[test]
     fn resolve_unknown_is_none() {
         assert!(resolve("no-such-kind").is_none());
+    }
+
+    #[test]
+    fn bundled_uris_match_toolpath_constants() {
+        // The hardcoded URIs must stay in lockstep with the source-of-truth
+        // constants in the `toolpath` crate.
+        let uris: Vec<&str> = BUNDLED_KINDS.iter().map(|k| k.uri).collect();
+        assert!(uris.contains(&toolpath::v1::PATH_KIND_AGENT_CODING_SESSION));
+        assert!(uris.contains(&toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_0_0));
+    }
+
+    #[test]
+    fn unparseable_version_fails_closed_not_open() {
+        // A typo'd version pin must match nothing — never silently widen to
+        // "any version". (Regression for the fail-open selector.)
+        for bad in [
+            "agent-coding-session/vgarbage",
+            "agent-coding-session/v1.x",
+            "agent-coding-session/v1.2.3.4",
+        ] {
+            let sel = parse_kind_selector(bad);
+            assert!(
+                !sel.matches("agent-coding-session", v(1, 1, 0)),
+                "`{bad}` must not match"
+            );
+            assert!(
+                resolve(bad).is_none(),
+                "`{bad}` must not resolve to a schema"
+            );
+        }
     }
 }

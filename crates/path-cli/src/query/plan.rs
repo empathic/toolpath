@@ -64,7 +64,22 @@ pub fn analyze(code: &str) -> Plan {
     let Some(segs) = pipe_segments(&term) else {
         return Plan::Slurp;
     };
-    classify(code, &segs)
+    let plan = classify(code, &segs);
+    // Safety net: a derived `reduce` is built by recovering the tail's source
+    // span, which can be unbalanced when the tail is wrapped (e.g. a
+    // parenthesized `sort_by`). If the combine doesn't itself parse, fall back
+    // to the always-correct slurp rather than emit a broken filter.
+    if let Plan::Decompose { reduce } = &plan
+        && !reparses(reduce)
+    {
+        return Plan::Slurp;
+    }
+    plan
+}
+
+/// Whether `code` parses as a jaq term.
+fn reparses(code: &str) -> bool {
+    load::parse(code, |p| p.term()).is_some()
 }
 
 /// Flatten a top-level `a | b | c` chain into `[a, b, c]`. jaq parses pipe
@@ -174,11 +189,20 @@ fn is_iterate(t: &Term<&str>) -> bool {
         && matches!(path.0[0].0, Part::Range(None, None)))
 }
 
+/// `.[:N]` where `N` is a **literal non-negative integer**. This is the only
+/// slice that decomposes: per-file `.[:N]` then merge-and-`.[:N]` is exact for
+/// a fixed nonnegative cutoff. `.[:-1]` (drop-last) and `.[:length-1]`
+/// (dynamic) do **not** — each file would truncate its own tail before the
+/// merge — so those must slurp.
 fn is_slice_upto(t: &Term<&str>) -> bool {
-    matches!(t, Term::Path(inner, path)
-        if matches!(inner.as_ref(), Term::Id)
+    if let Term::Path(inner, path) = t
+        && matches!(inner.as_ref(), Term::Id)
         && path.0.len() == 1
-        && matches!(path.0[0].0, Part::Range(None, Some(_))))
+        && let Part::Range(None, Some(bound)) = &path.0[0].0
+    {
+        return matches!(bound, Term::Num(s) if s.parse::<u64>().is_ok());
+    }
+    false
 }
 
 fn is_map(t: &Term<&str>) -> bool {
@@ -201,15 +225,17 @@ fn is_collected_iteration(t: &Term<&str>) -> bool {
 }
 
 /// If `t` is a scalar reduction we know how to combine, return the combine
-/// filter: `length`/`add` combine with `add`; `min`/`max` with themselves.
+/// filter. Only `length`/`add` qualify: both combine with `add`, and `add`
+/// absorbs the `null` that an empty per-file partition yields (`[] | add ==
+/// null`, and `null` is the additive identity in jq). `min`/`max` are *not*
+/// here on purpose — `[] | min == null`, and `null` sorts below everything, so
+/// an empty (or fully scoped-out) document would poison the global minimum.
+/// They slurp instead, which is always correct.
 fn scalar_reduce(t: &Term<&str>) -> Option<&'static str> {
     match t {
-        Term::Call(name, args) if args.is_empty() => match *name {
-            "length" | "add" => Some("add"),
-            "min" => Some("min"),
-            "max" => Some("max"),
-            _ => None,
-        },
+        Term::Call(name, args) if args.is_empty() && matches!(*name, "length" | "add") => {
+            Some("add")
+        }
         _ => None,
     }
 }

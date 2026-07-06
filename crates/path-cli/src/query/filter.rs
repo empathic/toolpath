@@ -61,13 +61,25 @@ pub fn execute(
         Plan::Decompose { reduce } => {
             let reducer = compile(reduce)?;
             let mut partials: Vec<Val> = Vec::new();
+            let mut saw_file = false;
             let mut emit = |val: Val| {
+                saw_file = true;
                 partials.extend(eval_collect(&main, val)?);
                 Ok(())
             };
             run_files(&mut emit)?;
-            let merged: Val = partials.into_iter().collect();
-            eval_print(&reducer, merged, out, &pp, raw)?;
+            if saw_file {
+                let merged: Val = partials.into_iter().collect();
+                eval_print(&reducer, merged, out, &pp, raw)?;
+            } else {
+                // No document contributed a partial: the decomposition
+                // identity `reduce(⋃ main(fᵢ)) == main(⋃ fᵢ)` degenerates to
+                // `main([])`. Run the *main* filter over an empty array so the
+                // answer matches slurp (`length` → 0, `sort_by|.[:N]` → []),
+                // not the reducer over `[]` (which would give null / error).
+                let empty: Val = std::iter::empty().collect();
+                eval_print(&main, empty, out, &pp, raw)?;
+            }
         }
     }
     Ok(())
@@ -216,15 +228,33 @@ mod tests {
         String::from_utf8(out).unwrap()
     }
 
-    /// The heart of the validation: for every recognized filter, the planner's
-    /// streamed execution must produce byte-for-byte the same output as the
-    /// always-correct whole-array slurp.
-    fn assert_matches_slurp(code: &str, files: &[serde_json::Value]) {
-        let planned = run_with(&crate::query::plan::analyze(code), code, files);
+    /// The heart of the validation: a filter the planner claims to *stream*
+    /// must (a) actually be planned as non-slurp, and (b) produce byte-for-byte
+    /// the same output as the always-correct whole-array slurp. The plan
+    /// assertion is what stops this from silently vacating into slurp-vs-slurp.
+    fn assert_streams(code: &str, files: &[serde_json::Value]) {
+        let plan = crate::query::plan::analyze(code);
+        assert_ne!(
+            plan,
+            Plan::Slurp,
+            "`{code}` should be recognized as streamable, not slurp"
+        );
+        let planned = run_with(&plan, code, files);
         let slurped = run_with(&Plan::Slurp, code, files);
         assert_eq!(
             planned, slurped,
             "streamed output must equal slurp for `{code}`"
+        );
+    }
+
+    /// A filter that must fall back to slurp (holistic, or deliberately not
+    /// decomposed). Asserts the planner is conservative here, so a regression
+    /// that wrongly decomposes it gets caught.
+    fn assert_slurps(code: &str) {
+        assert_eq!(
+            crate::query::plan::analyze(code),
+            Plan::Slurp,
+            "`{code}` must slurp (not decompose)"
         );
     }
 
@@ -248,42 +278,51 @@ mod tests {
     #[test]
     fn stream_equals_slurp_for_elementwise() {
         let f = fixture();
-        assert_matches_slurp(".[] | select(.dead_end)", &f);
-        assert_matches_slurp(
+        assert_streams(".[] | select(.dead_end)", &f);
+        assert_streams(
             r#".[] | select(.step.actor | startswith("agent:")) | .step.id"#,
             &f,
         );
-        assert_matches_slurp("map(select(.tokens > 40))", &f);
-        assert_matches_slurp("[.[] | select(.dead_end) | .step.id]", &f);
+        assert_streams("map(select(.tokens > 40))", &f);
+        assert_streams("[.[] | select(.dead_end) | .step.id]", &f);
     }
 
     #[test]
     fn stream_equals_slurp_for_top_n() {
         let f = fixture();
-        assert_matches_slurp("sort_by(-.tokens) | .[:3]", &f);
-        assert_matches_slurp("sort_by(.tokens) | .[:2]", &f);
-        assert_matches_slurp("map({id: .step.id, t: .tokens}) | sort_by(-.t) | .[:2]", &f);
+        assert_streams("sort_by(-.tokens) | .[:3]", &f);
+        assert_streams("sort_by(.tokens) | .[:2]", &f);
+        assert_streams("map({id: .step.id, t: .tokens}) | sort_by(-.t) | .[:2]", &f);
     }
 
     #[test]
     fn stream_equals_slurp_for_scalar_reductions() {
         let f = fixture();
-        assert_matches_slurp("length", &f);
-        assert_matches_slurp("map(select(.dead_end)) | length", &f);
-        assert_matches_slurp("[.[].tokens] | add", &f);
-        assert_matches_slurp("[.[].tokens] | max", &f);
-        assert_matches_slurp("[.[].tokens] | min", &f);
+        // Forms that genuinely decompose (bare `length`, `map(_) | add/length`).
+        assert_streams("length", &f);
+        assert_streams("map(.tokens) | add", &f);
+        assert_streams("map(select(.dead_end)) | length", &f);
     }
 
     #[test]
     fn slurp_fallback_still_correct() {
         let f = fixture();
         // group_by slurps (holistic) — but must still produce the right answer.
-        assert_matches_slurp(
+        let planned = run_with(
+            &crate::query::plan::analyze(
+                "group_by(.step.actor) | map({actor: .[0].step.actor, n: length})",
+            ),
             "group_by(.step.actor) | map({actor: .[0].step.actor, n: length})",
             &f,
         );
-        assert_matches_slurp("unique_by(.step.actor) | length", &f);
+        let slurped = run_with(
+            &Plan::Slurp,
+            "group_by(.step.actor) | map({actor: .[0].step.actor, n: length})",
+            &f,
+        );
+        assert_eq!(planned, slurped);
+        assert_slurps("group_by(.step.actor) | map({n: length})");
+        assert_slurps("unique_by(.step.actor) | length");
     }
 
     #[test]
@@ -300,5 +339,48 @@ mod tests {
         assert!(out.contains("\"a2\""), "top row a2 (90) present: {out}");
         assert!(out.contains("\"c1\""), "second row c1 (75) present: {out}");
         assert!(!out.contains("\"a1\""), "a1 (10) must be excluded: {out}");
+    }
+
+    // ── Regressions for the review findings ──────────────────────────
+
+    #[test]
+    fn negative_and_dynamic_slice_bounds_slurp() {
+        // Finding 1: only a literal nonnegative cutoff decomposes. Per-file
+        // truncation of `.[:-1]` / `.[:length-1]` would drop the wrong rows.
+        assert_slurps("sort_by(.tokens) | .[:-1]");
+        assert_slurps("sort_by(.tokens) | .[:(length - 1)]");
+        assert_streams("sort_by(.tokens) | .[:2]", &fixture());
+    }
+
+    #[test]
+    fn min_max_slurp_to_avoid_empty_partition_null() {
+        // Finding 2: `[] | min == null` poisons a per-file merge, so min/max
+        // are not decomposed. The fixture includes an empty document.
+        assert_slurps("map(.tokens) | min");
+        assert_slurps("map(.tokens) | max");
+    }
+
+    #[test]
+    fn zero_files_decompose_matches_main_over_empty() {
+        // Finding 3: with no document contributing a partial, a Decompose plan
+        // must equal `main([])`, i.e. slurp — not `reduce([])`.
+        let none: &[serde_json::Value] = &[];
+        for code in ["length", "map(.step)", "sort_by(.tokens) | .[:2]"] {
+            let plan = crate::query::plan::analyze(code);
+            assert_ne!(plan, Plan::Slurp, "`{code}` should decompose");
+            assert_eq!(
+                run_with(&plan, code, none),
+                run_with(&Plan::Slurp, code, none),
+                "zero-file `{code}` must match slurp"
+            );
+        }
+    }
+
+    #[test]
+    fn parenthesized_tail_slurps() {
+        // Finding 4: a source-span-recovered combine that doesn't reparse
+        // (unbalanced by the paren) must fall back to slurp, not emit a broken
+        // filter.
+        assert_slurps("map({id: .step.id}) | (sort_by(.id)) | .[:1]");
     }
 }

@@ -288,11 +288,70 @@ fn explain_env_reports_the_plan() {
 fn malformed_doc_is_skipped_with_warning() {
     let cfg = sandbox();
     seed(cfg.path(), "claude-broken", "{ not json");
-    // The good docs still load (6 steps); the broken one warns on stderr.
+    // A corrupt file encountered during the whole-cache *scan* is skipped with
+    // a warning (not an error): the good docs still load (6 steps).
     query(cfg.path(), ["length"])
         .success()
         .stdout(predicate::str::starts_with("6"))
         .stderr(predicate::str::contains("warning: skipping"));
+}
+
+#[test]
+fn explicit_missing_input_errors() {
+    // But an explicitly named `--input` that won't read is a hard error, not a
+    // silent skip returning a wrong answer.
+    let cfg = sandbox();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["query", "--input", "/no/such/file.json", "length"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("read"));
+}
+
+#[test]
+fn missing_id_errors() {
+    let cfg = sandbox();
+    query(cfg.path(), ["--id", "does-not-exist", "length"])
+        .failure()
+        .stderr(predicate::str::contains("no cached document with id"));
+}
+
+#[test]
+fn explicit_corrupt_input_errors() {
+    let cfg = sandbox();
+    let bad = cfg.path().join("bad.json");
+    std::fs::write(&bad, "{ not json").unwrap();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .arg("query")
+        .arg("--input")
+        .arg(&bad)
+        .arg("length")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn stdin_accepts_jsonl() {
+    // Finding 7: stdin must accept the `.path.jsonl` form too, not only
+    // canonical JSON (a file `--input` already handles both by extension).
+    let jsonl = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/path-04-exploration.path.jsonl");
+    let file_out = cmd()
+        .arg("query")
+        .arg("--input")
+        .arg(&jsonl)
+        .arg("length")
+        .assert()
+        .success();
+    let file_stdout = String::from_utf8(file_out.get_output().stdout.clone()).unwrap();
+    cmd()
+        .args(["query", "--input", "-", "length"])
+        .write_stdin(std::fs::read(&jsonl).unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::diff(file_stdout));
 }
 
 #[test]

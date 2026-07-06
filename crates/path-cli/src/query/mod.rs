@@ -13,7 +13,7 @@ mod plan;
 use anyhow::{Context, Result};
 use jaq_json::Val;
 use std::collections::HashSet;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path as FsPath, PathBuf};
 
 use toolpath::v1::{Graph, Path, PathOrRef, query};
@@ -53,17 +53,24 @@ pub fn run(scope: &Scope, filter: Option<&str>, compact: bool, raw: bool) -> Res
     if std::env::var_os("TOOLPATH_QUERY_EXPLAIN").is_some() {
         eprintln!("query plan: {}", plan.describe());
     }
+    // Buffer stdout: the streaming path prints one value per output, and a
+    // raw `StdoutLock` is line-buffered (a syscall per line).
     let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+    let mut out = std::io::BufWriter::new(stdout.lock());
     filter::execute(&plan, code, compact, raw, &mut out, |emit| {
         stream_files(scope, emit)
-    })
+    })?;
+    out.flush().context("flush stdout")
 }
 
 /// Where a document came from, and the `cache_id` to stamp on its steps.
 struct DocSource {
     cache_id: String,
     location: SourceLoc,
+    /// The user named this document explicitly (`--input`/`--id`), so a read
+    /// or parse failure is an error — not the skip-with-warning that's right
+    /// for a corrupt file encountered during the whole-cache scan.
+    explicit: bool,
 }
 
 enum SourceLoc {
@@ -90,6 +97,12 @@ fn stream_files(scope: &Scope, emit: &mut dyn FnMut(Val) -> Result<()>) -> Resul
     for src in select_files(scope)? {
         let graph = match read_source(&src) {
             Ok(g) => g,
+            // An explicitly named document that won't read/parse is a hard
+            // error (a typo'd `--input`, bad stdin). A corrupt file merely
+            // encountered while scanning the cache is skipped with a warning.
+            Err(e) if src.explicit => {
+                return Err(e.context(format!("read {}", src.label())));
+            }
             Err(e) => {
                 eprintln!("warning: skipping {}: {e:#}", src.label());
                 continue;
@@ -128,6 +141,11 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
             Some(scope.ids.iter().map(String::as_str).collect())
         };
         let prefix = scope.source.as_ref().map(|s| format!("{s}-"));
+        // `--id` names documents explicitly, so a corrupt one is an error, and
+        // a requested id that doesn't exist must be reported, not silently
+        // dropped. A `--source`/default scan is not explicit (skip-warn).
+        let by_id = id_set.is_some();
+        let mut seen_ids: HashSet<String> = HashSet::new();
         for entry in crate::cmd_cache::list_cached()? {
             if let Some(ids) = &id_set
                 && !ids.contains(entry.id.as_str())
@@ -139,10 +157,20 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
             {
                 continue;
             }
+            seen_ids.insert(entry.id.clone());
             sources.push(DocSource {
                 cache_id: entry.id,
                 location: SourceLoc::File(entry.path),
+                explicit: by_id,
             });
+        }
+        // Every requested `--id` must have matched a cached document.
+        for id in &scope.ids {
+            if !seen_ids.contains(id) {
+                anyhow::bail!(
+                    "no cached document with id `{id}`; run `path p cache ls` to see what's cached"
+                );
+            }
         }
     }
 
@@ -151,6 +179,7 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
             sources.push(DocSource {
                 cache_id: "stdin".to_string(),
                 location: SourceLoc::Stdin,
+                explicit: true,
             });
         } else {
             let p = PathBuf::from(inp);
@@ -162,6 +191,7 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
             sources.push(DocSource {
                 cache_id: id,
                 location: SourceLoc::File(p),
+                explicit: true,
             });
         }
     }
@@ -177,7 +207,14 @@ fn read_source(src: &DocSource) -> Result<Graph> {
             std::io::stdin()
                 .read_to_string(&mut s)
                 .context("read stdin")?;
-            Graph::from_json(&s).context("parse stdin as toolpath JSON")
+            // No filename to route on, so accept either canonical JSON or the
+            // JSONL (`.path.jsonl`) form — matching what `--input <file>` does.
+            match Graph::from_json(&s) {
+                Ok(g) => Ok(g),
+                Err(_) => {
+                    Graph::from_jsonl_str(&s).context("parse stdin as toolpath JSON or JSONL")
+                }
+            }
         }
     }
 }
@@ -287,6 +324,7 @@ mod tests {
         DocSource {
             cache_id: id.to_string(),
             location: SourceLoc::Stdin,
+            explicit: false,
         }
     }
 
