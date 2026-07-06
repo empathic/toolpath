@@ -7,7 +7,7 @@
 //! - **PerFileStream** — run the filter on each file's step array and print
 //!   outputs as they come. Nothing accumulates.
 //! - **Decompose** — run the filter per file, gather the per-file outputs into
-//!   one array, then run a `reduce` filter over it (top-N, sum, count, …).
+//!   one array, then run a `reduce` filter over it (top-N, count, …).
 //! - **Slurp** — accumulate every file's steps into one array and run the
 //!   filter once. The always-correct fallback; still lean, since we hold the
 //!   values once (no whole-cache byte buffer).
@@ -298,10 +298,29 @@ mod tests {
     #[test]
     fn stream_equals_slurp_for_scalar_reductions() {
         let f = fixture();
-        // Forms that genuinely decompose (bare `length`, `map(_) | add/length`).
         assert_streams("length", &f);
-        assert_streams("map(.tokens) | add", &f);
         assert_streams("map(select(.dead_end)) | length", &f);
+    }
+
+    #[test]
+    fn scalar_add_slurps_because_float_sums_reassociate() {
+        // Summing per-file float partials regroups the addition: with files
+        // [[1e100], [-1e100, 1]] the decomposed sum is 0.0, the true sum 1.0.
+        assert_slurps("map(.cost) | add");
+        let files = vec![
+            json!([{"cost": 1e100}]),
+            json!([{"cost": -1e100}, {"cost": 1}]),
+        ];
+        let out = run_with(&Plan::Slurp, "map(.cost) | add", &files);
+        assert_eq!(out.trim(), "1.0");
+        let broken = run_with(
+            &Plan::Decompose {
+                reduce: "add".to_string(),
+            },
+            "map(.cost) | add",
+            &files,
+        );
+        assert_eq!(broken.trim(), "0.0", "demonstrates why this must slurp");
     }
 
     #[test]
@@ -345,7 +364,7 @@ mod tests {
 
     #[test]
     fn negative_and_dynamic_slice_bounds_slurp() {
-        // Finding 1: only a literal nonnegative cutoff decomposes. Per-file
+        // Only a literal nonnegative cutoff decomposes. Per-file
         // truncation of `.[:-1]` / `.[:length-1]` would drop the wrong rows.
         assert_slurps("sort_by(.tokens) | .[:-1]");
         assert_slurps("sort_by(.tokens) | .[:(length - 1)]");
@@ -354,7 +373,7 @@ mod tests {
 
     #[test]
     fn min_max_slurp_to_avoid_empty_partition_null() {
-        // Finding 2: `[] | min == null` poisons a per-file merge, so min/max
+        // `[] | min == null` poisons a per-file merge, so min/max
         // are not decomposed. The fixture includes an empty document.
         assert_slurps("map(.tokens) | min");
         assert_slurps("map(.tokens) | max");
@@ -362,7 +381,7 @@ mod tests {
 
     #[test]
     fn zero_files_decompose_matches_main_over_empty() {
-        // Finding 3: with no document contributing a partial, a Decompose plan
+        // With no document contributing a partial, a Decompose plan
         // must equal `main([])`, i.e. slurp — not `reduce([])`.
         let none: &[serde_json::Value] = &[];
         for code in ["length", "map(.step)", "sort_by(.tokens) | .[:2]"] {
@@ -378,7 +397,7 @@ mod tests {
 
     #[test]
     fn parenthesized_tail_slurps() {
-        // Finding 4: a source-span-recovered combine that doesn't reparse
+        // A source-span-recovered combine that doesn't reparse
         // (unbalanced by the paren) must fall back to slurp, not emit a broken
         // filter.
         assert_slurps("map({id: .step.id}) | (sort_by(.id)) | .[:1]");

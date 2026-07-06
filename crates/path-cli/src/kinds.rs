@@ -32,13 +32,13 @@ pub const BUNDLED_KINDS: &[BundledKind] = &[
     BundledKind {
         name: "agent-coding-session",
         version: "v1.0.0",
-        uri: "https://toolpath.net/kinds/agent-coding-session/v1.0.0",
+        uri: toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_0_0,
         schema: include_str!("../kinds/agent-coding-session/v1.0.0/schema.json"),
     },
     BundledKind {
         name: "agent-coding-session",
         version: "v1.1.0",
-        uri: "https://toolpath.net/kinds/agent-coding-session/v1.1.0",
+        uri: toolpath::v1::PATH_KIND_AGENT_CODING_SESSION,
         schema: include_str!("../kinds/agent-coding-session/v1.1.0/schema.json"),
     },
 ];
@@ -187,8 +187,12 @@ mod tests {
     #[test]
     fn bundled_kind_uris_parse() {
         for k in BUNDLED_KINDS {
-            let (name, _) = parse_kind_uri(k.uri).expect("bundled URI parses");
+            let (name, ver) = parse_kind_uri(k.uri).expect("bundled URI parses");
             assert_eq!(name, k.name);
+            assert_eq!(
+                format!("v{}.{}.{}", ver.major, ver.minor, ver.patch),
+                k.version
+            );
         }
     }
 
@@ -264,15 +268,6 @@ mod tests {
     #[test]
     fn resolve_unknown_is_none() {
         assert!(resolve("no-such-kind").is_none());
-    }
-
-    #[test]
-    fn bundled_uris_match_toolpath_constants() {
-        // The hardcoded URIs must stay in lockstep with the source-of-truth
-        // constants in the `toolpath` crate.
-        let uris: Vec<&str> = BUNDLED_KINDS.iter().map(|k| k.uri).collect();
-        assert!(uris.contains(&toolpath::v1::PATH_KIND_AGENT_CODING_SESSION));
-        assert!(uris.contains(&toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_0_0));
     }
 
     #[test]

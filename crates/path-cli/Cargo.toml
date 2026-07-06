@@ -37,10 +37,6 @@ rand = "0.9"
 jsonschema = { version = "0.46", default-features = false }
 sha2 = "0.10"
 hex = "0.4"
-# jaq (pure-Rust jq) powers `path query`'s in-process filter. Default
-# features stay on (notably `regex`, so `test`/`match` work); trimming
-# jaq-std here is moot because jaq-json depends on jaq-std with defaults
-# and feature unification re-enables them.
 jaq-core = "3.1.0"
 jaq-std = "3.0.1"
 jaq-json = "2.0.1"

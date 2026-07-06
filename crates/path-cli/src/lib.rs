@@ -106,7 +106,7 @@ enum Commands {
     },
     /// Plumbing: lower-level operations on documents and sources
     /// (import, export, cache, list, render, merge, validate, derive,
-    /// project, incept, track)
+    /// project, incept, track, query)
     P {
         #[command(subcommand)]
         command: cmd_p::PCommand,

@@ -146,12 +146,15 @@ path
     pi        --project PATH --session ID [--base DIR]
   share       # one-shot interactive picker + Pathbase upload
   resume      # project a doc into a coding agent and exec --resume
-  query
-    ancestors --input FILE --step-id ID
-    dead-ends --input FILE
-    filter    --input FILE [--actor PREFIX] [--artifact PATH] [--after TIME] [--before TIME]
+  query       # jaq (jq) filter over cached steps
+              [FILTER] [--source NAME] [--id CACHE-ID] [--input FILE]
+              [--project PATH] [--kind SELECTOR] [-c] [-r]
+  kind        # list bundled kinds, or print a kind's schema
+              [KIND[/VERSION]]
   auth        login | status | whoami | logout [--url URL]
   p           # plumbing: lower-level building blocks
+    query
+      ancestors --input FILE --step-id ID
     list
       git       [--repo PATH] [--remote NAME] [--format pretty|json|tsv]
       github    --repo OWNER/REPO [--format ...]

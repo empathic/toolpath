@@ -35,8 +35,9 @@ pub enum Plan {
     PerFileStream,
     /// Run the filter per file, concatenate the per-file outputs into one
     /// array, then run `reduce` over that array. Covers `map(g)` (reduce =
-    /// `add`), top-N (`add | sort_by(k) | .[:N]`), and scalar reductions
-    /// (`length`/`add` → `add`, `min`/`max` → `min`/`max`).
+    /// `add`, i.e. array concatenation), top-N (`add | sort_by(k) | .[:N]`),
+    /// and `length` (reduce = `add` over exact integer counts). Scalar `add`,
+    /// `min`, and `max` deliberately do NOT decompose — see [`scalar_reduce`].
     Decompose { reduce: String },
 }
 
@@ -225,17 +226,18 @@ fn is_collected_iteration(t: &Term<&str>) -> bool {
 }
 
 /// If `t` is a scalar reduction we know how to combine, return the combine
-/// filter. Only `length`/`add` qualify: both combine with `add`, and `add`
-/// absorbs the `null` that an empty per-file partition yields (`[] | add ==
-/// null`, and `null` is the additive identity in jq). `min`/`max` are *not*
-/// here on purpose — `[] | min == null`, and `null` sorts below everything, so
-/// an empty (or fully scoped-out) document would poison the global minimum.
-/// They slurp instead, which is always correct.
+/// filter. Only `length` qualifies: per-file counts are exact integers, so
+/// summing them is associative. The others deliberately do NOT decompose:
+/// - scalar `add`: float addition is not associative, so re-associating the
+///   sum across per-file partials can change the answer (1e100 + (-1e100 + 1)
+///   is 0.0 grouped one way and 1.0 the other);
+/// - `min`/`max`: `[] | min == null` from an empty (or fully scoped-out)
+///   document, and `null` sorts below everything, poisoning the merge.
+///
+/// All three slurp instead, which is always correct.
 fn scalar_reduce(t: &Term<&str>) -> Option<&'static str> {
     match t {
-        Term::Call(name, args) if args.is_empty() && matches!(*name, "length" | "add") => {
-            Some("add")
-        }
+        Term::Call(name, args) if args.is_empty() && *name == "length" => Some("add"),
         _ => None,
     }
 }
@@ -281,8 +283,16 @@ mod tests {
     #[test]
     fn scalar_reductions() {
         assert_eq!(analyze("length"), decompose("add"));
-        assert_eq!(analyze("add"), decompose("add"));
         assert_eq!(analyze("map(select(.dead_end)) | length"), decompose("add"));
+    }
+
+    #[test]
+    fn scalar_add_slurps_because_float_sums_reassociate() {
+        // 1e100 + (-1e100 + 1) == 1.0 but (1e100 + -1e100) + 1 grouped by file
+        // is 0.0 — decomposing a scalar sum changes float answers.
+        assert_eq!(analyze("add"), Plan::Slurp);
+        assert_eq!(analyze("map(.tokens) | add"), Plan::Slurp);
+        assert_eq!(analyze("[.[].tokens] | add"), Plan::Slurp);
     }
 
     #[test]

@@ -1,11 +1,9 @@
 //! `path p query` — low-level graph traversal on a single document.
 //!
 //! The porcelain `path query` (jaq over the whole cache) covers filtering,
-//! dead-end detection, and aggregation. What stays here is the one query that
+//! dead-end detection, and aggregation. What lives here is the one query that
 //! isn't a per-step predicate: `ancestors`, which walks the parent chain from
-//! a step. (The former `dead-ends` and `filter` subcommands are now jaq forms:
-//! `path query 'map(select(.dead_end))'` and
-//! `path query 'map(select(.step.actor | startswith("agent:")))'`.)
+//! a step.
 
 use anyhow::Result;
 use clap::Subcommand;

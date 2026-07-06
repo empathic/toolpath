@@ -275,7 +275,6 @@ fn render_dot_from_stdin() {
 
 #[test]
 fn query_dead_ends() {
-    // `dead-ends` is now a jaq form over `path query`'s `dead_end` flag.
     cmd()
         .arg("query")
         .arg("--input")
@@ -288,7 +287,6 @@ fn query_dead_ends() {
 
 #[test]
 fn query_ancestors() {
-    // `ancestors` moved to the `path p query` plumbing namespace.
     cmd()
         .args(["p", "query", "ancestors"])
         .arg("--input")

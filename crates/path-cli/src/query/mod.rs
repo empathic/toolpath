@@ -50,7 +50,8 @@ pub fn run(scope: &Scope, filter: Option<&str>, compact: bool, raw: bool) -> Res
     let plan = plan::analyze(code);
     // Opt-in observability: `TOOLPATH_QUERY_EXPLAIN=1` reveals the execution
     // strategy on stderr. Not a behavioral flag — purely diagnostic.
-    if std::env::var_os("TOOLPATH_QUERY_EXPLAIN").is_some() {
+    let explain = std::env::var("TOOLPATH_QUERY_EXPLAIN");
+    if matches!(explain.as_deref(), Ok(v) if !v.is_empty() && v != "0") {
         eprintln!("query plan: {}", plan.describe());
     }
     // Buffer stdout: the streaming path prints one value per output, and a
@@ -152,12 +153,15 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
             {
                 continue;
             }
+            // The id exists in the cache — record that *before* the source
+            // filter, so `--id X --source Y` where X isn't a Y-document yields
+            // an empty intersection, not a false "no cached document" error.
+            seen_ids.insert(entry.id.clone());
             if let Some(p) = &prefix
                 && !entry.id.starts_with(p.as_str())
             {
                 continue;
             }
-            seen_ids.insert(entry.id.clone());
             sources.push(DocSource {
                 cache_id: entry.id,
                 location: SourceLoc::File(entry.path),
@@ -182,15 +186,12 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
                 explicit: true,
             });
         } else {
-            let p = PathBuf::from(inp);
-            let id = p
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(inp)
-                .to_string();
+            // The full path as given, so two inputs sharing a basename
+            // (`proj1/doc.json`, `proj2/doc.json`) keep distinct cache_ids and
+            // the identity triple (cache_id, path.id, step.id) stays unique.
             sources.push(DocSource {
-                cache_id: id,
-                location: SourceLoc::File(p),
+                cache_id: inp.clone(),
+                location: SourceLoc::File(PathBuf::from(inp)),
                 explicit: true,
             });
         }
@@ -209,11 +210,15 @@ fn read_source(src: &DocSource) -> Result<Graph> {
                 .context("read stdin")?;
             // No filename to route on, so accept either canonical JSON or the
             // JSONL (`.path.jsonl`) form — matching what `--input <file>` does.
+            // On double failure report both parse errors; hiding the JSON one
+            // would misdiagnose malformed JSON as a JSONL framing problem.
             match Graph::from_json(&s) {
                 Ok(g) => Ok(g),
-                Err(_) => {
-                    Graph::from_jsonl_str(&s).context("parse stdin as toolpath JSON or JSONL")
-                }
+                Err(json_err) => Graph::from_jsonl_str(&s).map_err(|jsonl_err| {
+                    anyhow::anyhow!(
+                        "stdin is neither toolpath JSON ({json_err}) nor JSONL ({jsonl_err})"
+                    )
+                }),
             }
         }
     }
@@ -446,7 +451,8 @@ mod tests {
         };
         let files = select_files(&scope).unwrap();
         assert_eq!(files.len(), 2);
-        assert_eq!(files[0].cache_id, "some");
+        // The full path as given: inputs sharing a basename stay distinct.
+        assert_eq!(files[0].cache_id, "/tmp/some.json");
         assert!(matches!(files[1].location, SourceLoc::Stdin));
         assert_eq!(files[1].cache_id, "stdin");
     }

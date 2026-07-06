@@ -45,9 +45,11 @@ turn that mentions `RefCell`", "which sessions touched `cmd_resume.rs`?",
   can prove the shape decomposable, runs per document with a bounded merge —
   element-wise filters (`.[] | …`, `map(…)`) stream one doc at a time, and
   algebraic aggregations split into a per-file partial + combine (top-N
-  `sort_by(k) | .[:N]`, `length`/`add`/`min`/`max`). A global top-N is a subset
-  of the per-file top-Ns, so the answer is identical. Anything not provably
-  decomposable (e.g. `group_by`, `unique`) falls back to the whole-array path,
+  `sort_by(k) | .[:N]`, `length`). A global top-N is a subset of the per-file
+  top-Ns, so the answer is identical. Anything not provably decomposable falls
+  back to the whole-array path — including scalar `add` (float sums
+  re-associate), `min`/`max` (empty partitions yield null), `group_by`, and
+  `unique` —
   which is still lean (values held once, no whole-cache byte buffer). The
   planner never changes an answer — validated by tests asserting streamed
   output equals slurp byte-for-byte. `TOOLPATH_QUERY_EXPLAIN=1` prints the

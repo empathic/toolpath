@@ -151,7 +151,7 @@ fn step_count_per_source() {
     .stdout(predicate::str::starts_with("2"));
 }
 
-// ── Dead ends (the former `dead-ends` subcommand, now a jaq form) ─────
+// ── Dead ends ────────────────────────────────────────────────────────
 
 #[test]
 fn dead_ends_as_jaq_form() {
@@ -318,6 +318,41 @@ fn missing_id_errors() {
 }
 
 #[test]
+fn id_intersected_with_source_is_empty_not_an_error() {
+    // claude-sess1 exists, so `--source git --id claude-sess1` is an empty
+    // intersection — not a false "no cached document" report.
+    let cfg = sandbox();
+    query(
+        cfg.path(),
+        ["--source", "git", "--id", "claude-sess1", "length"],
+    )
+    .success()
+    .stdout(predicate::str::starts_with("0"));
+}
+
+#[test]
+fn same_basename_inputs_keep_distinct_cache_ids() {
+    let cfg = sandbox();
+    let d1 = cfg.path().join("proj1");
+    let d2 = cfg.path().join("proj2");
+    std::fs::create_dir_all(&d1).unwrap();
+    std::fs::create_dir_all(&d2).unwrap();
+    std::fs::write(d1.join("doc.json"), CLAUDE_DOC).unwrap();
+    std::fs::write(d2.join("doc.json"), GIT_DOC).unwrap();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .arg("query")
+        .arg("--input")
+        .arg(d1.join("doc.json"))
+        .arg("--input")
+        .arg(d2.join("doc.json"))
+        .arg("[.[].cache_id] | unique | length")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("2"));
+}
+
+#[test]
 fn explicit_corrupt_input_errors() {
     let cfg = sandbox();
     let bad = cfg.path().join("bad.json");
@@ -334,7 +369,7 @@ fn explicit_corrupt_input_errors() {
 
 #[test]
 fn stdin_accepts_jsonl() {
-    // Finding 7: stdin must accept the `.path.jsonl` form too, not only
+    // Stdin must accept the `.path.jsonl` form too, not only
     // canonical JSON (a file `--input` already handles both by extension).
     let jsonl = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/path-04-exploration.path.jsonl");
