@@ -41,10 +41,11 @@ pub struct Scope {
 /// `raw` prints string results without JSON quoting (like `jq -r`).
 ///
 /// The filter is analyzed once into a [`plan::Plan`]; the executor then streams
-/// documents one at a time, so an element-wise or algebraic (top-N, sum, count)
-/// filter never holds the whole cache in memory. Anything the planner can't
-/// prove decomposable falls back to the whole-array path, which is still lean —
-/// the step values are held once, not re-serialized.
+/// documents one at a time. An element-wise `.[] | g` filter prints as it goes
+/// and holds nothing; a recognized aggregation (`map`, top-N, `length`) holds
+/// only its per-file partials — the filter's own output, not the input cache.
+/// Anything the planner can't prove decomposable falls back to the whole-array
+/// path, which is still lean — the step values are held once, not re-serialized.
 pub fn run(scope: &Scope, filter: Option<&str>, compact: bool, raw: bool) -> Result<()> {
     let code = filter.unwrap_or(".");
     let plan = plan::analyze(code);

@@ -43,8 +43,8 @@ turn that mentions `RefCell`", "which sessions touched `cmd_resume.rs`?",
 - **Streaming executor (no flag).** So the whole cache needn't sit in memory,
   the executor *reads the filter*: it parses the jaq into its AST and, when it
   can prove the shape decomposable, runs per document with a bounded merge —
-  element-wise filters (`.[] | …`, `map(…)`) stream one doc at a time, and
-  algebraic aggregations split into a per-file partial + combine (top-N
+  element-wise `.[] | …` filters stream one doc at a time, and algebraic
+  aggregations split into a per-file partial + combine (`map(…)`, top-N
   `sort_by(k) | .[:N]`, `length`). A global top-N is a subset of the per-file
   top-Ns, so the answer is identical. Anything not provably decomposable falls
   back to the whole-array path — including scalar `add` (float sums
