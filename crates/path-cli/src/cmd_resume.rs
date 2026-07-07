@@ -114,6 +114,28 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
     );
 
     let session_id = project_into_harness(path, target, &cwd)?;
+
+    // OpenClaw is "inception+": the projection above already wrote the
+    // transcript and pointed the agent's sessions.json routing key at it,
+    // and a live gateway adopts that without a restart. If one is already
+    // listening, exec'ing another `openclaw gateway` would just fail on
+    // the port bind — report the adoption and stop here instead.
+    if target == crate::cmd_share::Harness::Openclaw {
+        if openclaw_gateway_running() {
+            eprintln!(
+                "OpenClaw gateway already running at {} — incepted session {} adopted via sessions.json.",
+                openclaw_gateway_addr(),
+                session_id
+            );
+            eprintln!("Continue it from the Control UI or with: openclaw agent --message \"…\"");
+            return Ok(());
+        }
+        eprintln!(
+            "No OpenClaw gateway on {} — starting one (Docker users: scripts/openclaw-docker.sh up).",
+            openclaw_gateway_addr()
+        );
+    }
+
     let (binary, argv) = invocation_for(target, &session_id, &cwd);
     exec_harness(&binary, &argv, &cwd, exec)
 }
@@ -435,14 +457,40 @@ pub(crate) fn argv_for(harness: crate::cmd_share::Harness, session_id: &str) -> 
             vec![".".into()]
         }
         Harness::Pi => vec!["--session".into(), session_id.into()],
-        // OpenClaw has no "resume composer by id" flag; the session is
-        // incepted onto disk (sessions.json routes it) and the gateway picks
-        // it up, so we just launch `openclaw`.
+        // OpenClaw has no "resume session by id" flag. Resume is
+        // "inception+": the session was already incepted onto disk (the
+        // sessions.json routing entry points the agent's main key at it —
+        // verified live: a gateway adopts it without restart and appends
+        // follow-up turns to the same transcript). If no gateway is
+        // running, we kick one off in the foreground; the session id is
+        // routed via sessions.json, not argv.
         Harness::Openclaw => {
             let _ = session_id;
-            vec![]
+            vec!["gateway".into()]
         }
     }
+}
+
+/// Where a local OpenClaw gateway would be listening. Overridable for
+/// tests and non-default deployments via `OPENCLAW_GATEWAY_ADDR`.
+fn openclaw_gateway_addr() -> String {
+    std::env::var("OPENCLAW_GATEWAY_ADDR").unwrap_or_else(|_| "127.0.0.1:18789".to_string())
+}
+
+/// True when something is already listening on the OpenClaw gateway
+/// address. A plain TCP probe is enough — we only need to know whether
+/// exec'ing a second `openclaw gateway` would collide with a live one
+/// (which has already adopted the incepted session via sessions.json).
+pub(crate) fn openclaw_gateway_running() -> bool {
+    use std::net::ToSocketAddrs;
+    let addr = openclaw_gateway_addr();
+    let Ok(mut addrs) = addr.to_socket_addrs() else {
+        return false;
+    };
+    let Some(sa) = addrs.next() else {
+        return false;
+    };
+    std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_millis(400)).is_ok()
 }
 
 pub(crate) fn invocation_for(
@@ -645,6 +693,126 @@ mod tests {
         assert_eq!(cap.binary, "claude");
         assert_eq!(cap.args[0], "-r");
         assert_eq!(cap.cwd, std::fs::canonicalize(cwd.path()).unwrap());
+    }
+
+    /// Scope `OPENCLAW_GATEWAY_ADDR` for a test (callers hold TEST_ENV_LOCK).
+    struct ScopedGatewayAddr {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl ScopedGatewayAddr {
+        fn set(addr: &str) -> Self {
+            let prev = std::env::var_os("OPENCLAW_GATEWAY_ADDR");
+            unsafe { std::env::set_var("OPENCLAW_GATEWAY_ADDR", addr) };
+            Self { prev }
+        }
+    }
+
+    impl Drop for ScopedGatewayAddr {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var("OPENCLAW_GATEWAY_ADDR", v) },
+                None => unsafe { std::env::remove_var("OPENCLAW_GATEWAY_ADDR") },
+            }
+        }
+    }
+
+    /// An address on 127.0.0.1 that nothing is listening on: bind an
+    /// ephemeral port, note it, and drop the listener.
+    fn closed_local_addr() -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        drop(l);
+        addr
+    }
+
+    fn openclaw_resume_args(cwd: &std::path::Path, doc_file: &std::path::Path) -> ResumeArgs {
+        ResumeArgs {
+            input: doc_file.to_string_lossy().to_string(),
+            cwd: Some(cwd.to_path_buf()),
+            harness: Some(HarnessArg::Openclaw),
+            no_cache: false,
+            force: false,
+            url: None,
+        }
+    }
+
+    fn write_openclaw_resume_doc(dir: &std::path::Path) -> std::path::PathBuf {
+        let mut path = make_convo_path_for_resume("openclaw://resume-test-session");
+        path.steps[0].step.actor = "agent:openclaw".to_string();
+        let graph = toolpath::v1::Graph::from_path(path);
+        let doc_file = dir.join("doc.json");
+        std::fs::write(&doc_file, graph.to_json().unwrap()).unwrap();
+        doc_file
+    }
+
+    #[test]
+    fn invocation_for_openclaw_launches_gateway() {
+        let cwd = std::path::PathBuf::from("/tmp");
+        let (binary, argv) = invocation_for(Harness::Openclaw, "ignored-session-id", &cwd);
+        assert_eq!(binary, "openclaw");
+        assert_eq!(argv, vec!["gateway".to_string()]);
+    }
+
+    #[test]
+    fn openclaw_gateway_probe_detects_listener() {
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let live = listener.local_addr().unwrap().to_string();
+        {
+            let _addr = ScopedGatewayAddr::set(&live);
+            assert!(openclaw_gateway_running(), "listener should be detected");
+        }
+        {
+            let _addr = ScopedGatewayAddr::set(&closed_local_addr());
+            assert!(!openclaw_gateway_running(), "closed port must probe false");
+        }
+    }
+
+    #[test]
+    fn run_with_strategy_openclaw_skips_exec_when_gateway_running() {
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _home = scoped_home_for_resume();
+        let _path_guard = ScopedPathForResume::with_binaries(&["openclaw"]);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let _addr = ScopedGatewayAddr::set(&listener.local_addr().unwrap().to_string());
+
+        let cwd = tempfile::tempdir().unwrap();
+        let doc_file = write_openclaw_resume_doc(cwd.path());
+
+        let recorder = RecordingExec::default();
+        run_with_strategy(openclaw_resume_args(cwd.path(), &doc_file), &recorder).unwrap();
+
+        let cap = recorder.captured();
+        assert!(
+            cap.binary.is_empty(),
+            "exec must be skipped when a gateway is already listening (got {:?})",
+            cap.binary
+        );
+    }
+
+    #[test]
+    fn run_with_strategy_openclaw_execs_gateway_when_not_running() {
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _home = scoped_home_for_resume();
+        let _path_guard = ScopedPathForResume::with_binaries(&["openclaw"]);
+        let _addr = ScopedGatewayAddr::set(&closed_local_addr());
+
+        let cwd = tempfile::tempdir().unwrap();
+        let doc_file = write_openclaw_resume_doc(cwd.path());
+
+        let recorder = RecordingExec::default();
+        run_with_strategy(openclaw_resume_args(cwd.path(), &doc_file), &recorder).unwrap();
+
+        let cap = recorder.captured();
+        assert_eq!(cap.binary, "openclaw");
+        assert_eq!(cap.args, vec!["gateway".to_string()]);
     }
 
     use crate::cmd_share::Harness;
