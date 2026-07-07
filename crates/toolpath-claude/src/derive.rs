@@ -171,4 +171,48 @@ mod tests {
         let anc = toolpath::v1::query::ancestors(&pp.steps, &pp.path.head);
         assert_eq!(anc.len(), pp.steps.len(), "all steps on head ancestry");
     }
+
+    #[test]
+    fn derive_path_preamble_steps_carry_valid_timestamps() {
+        // A headless (`claude -p`) session caches its prompt as a headerless
+        // `last-prompt` line with no `timestamp` on the wire. The derived
+        // step must still satisfy the schema's `format: date-time` —
+        // regression test for `"timestamp": ""` on claude-preamble-* steps
+        // failing `path p validate`.
+        let mut convo = make_convo();
+        convo.preamble = vec![
+            serde_json::json!({
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": "queued while busy",
+                "timestamp": "2026-01-01T00:00:02Z",
+                "sessionId": "sess-1abc",
+            }),
+            serde_json::json!({
+                "type": "last-prompt",
+                "lastPrompt": "Fix bug",
+                "leafUuid": "u1",
+                "sessionId": "sess-1abc",
+            }),
+        ];
+
+        let path = derive_path(&convo, &DeriveConfig::default());
+
+        let last_prompt = path
+            .steps
+            .iter()
+            .find(|s| s.step.id == "claude-preamble-1")
+            .expect("last-prompt preamble step");
+        // leafUuid resolves to the referenced user entry's timestamp.
+        assert_eq!(last_prompt.step.timestamp, "2026-01-01T00:00:00Z");
+
+        for step in &path.steps {
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(&step.step.timestamp).is_ok(),
+                "step {} timestamp {:?} is not RFC 3339",
+                step.step.id,
+                step.step.timestamp
+            );
+        }
+    }
 }

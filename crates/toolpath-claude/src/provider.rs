@@ -326,9 +326,45 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
 
     // Headerless preamble lines (ai-title, last-prompt, queue-operation,
     // permission-mode, file-history-snapshot, etc.) become events so they
-    // round-trip back to JSONL.
+    // round-trip back to JSONL. Several of these (`ai-title`, `last-prompt`,
+    // `summary`) carry no `timestamp`, but each event becomes a Step whose
+    // schema requires a valid RFC 3339 instant — resolve one: the entry the
+    // line references (`leafUuid` / `messageId`), else the previous preamble
+    // line's time, else the session's first timestamped entry. Only
+    // `event.timestamp` is patched; the line itself rides verbatim in
+    // `data["raw"]`, so projecting back to JSONL is unaffected.
+    let first_entry_ts = convo
+        .entries
+        .iter()
+        .map(|e| e.timestamp.as_str())
+        .find(|ts| !ts.is_empty())
+        .map(str::to_string);
+    let mut prev_preamble_ts: Option<String> = None;
     for (idx, raw) in convo.preamble.iter().enumerate() {
-        events.push(preamble_to_event(idx, raw));
+        let mut event = preamble_to_event(idx, raw);
+        if event.timestamp.is_empty() {
+            let referenced_ts = ["leafUuid", "messageId"]
+                .into_iter()
+                .filter_map(|key| raw.get(key).and_then(|v| v.as_str()))
+                .find_map(|uuid| {
+                    convo
+                        .entries
+                        .iter()
+                        .find(|e| e.uuid == uuid)
+                        .map(|e| e.timestamp.clone())
+                        .filter(|ts| !ts.is_empty())
+                });
+            if let Some(ts) = referenced_ts
+                .or_else(|| prev_preamble_ts.clone())
+                .or_else(|| first_entry_ts.clone())
+            {
+                event.timestamp = ts;
+            }
+        }
+        if !event.timestamp.is_empty() {
+            prev_preamble_ts = Some(event.timestamp.clone());
+        }
+        events.push(event);
     }
 
     // Map from "absorbed-or-skipped entry UUID" → "the previous
@@ -461,7 +497,9 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
 /// dumps it straight back onto `convo.preamble`. We don't model the shape —
 /// a headerless line is identified by the presence of `data["raw"]`, not by
 /// an enumerated `type` list. `event_type` carries the line's `type`, purely
-/// informational.
+/// informational. Lines without a `timestamp` produce an empty one here;
+/// [`conversation_to_view`] resolves a fallback so the derived step still
+/// carries a valid instant.
 fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::ConversationEvent {
     let event_type = raw
         .get("type")
@@ -1923,5 +1961,96 @@ mod tests {
         assert_eq!(meta_b.message_count, 5);
         assert!(meta_b.predecessor.is_none());
         assert!(meta_b.successor.is_none());
+    }
+
+    // ── Preamble timestamp resolution ────────────────────────────────
+
+    /// A session whose preamble mixes timestamped and timestamp-less
+    /// headerless lines — the shape a headless (`claude -p`) run writes:
+    /// `ai-title` and `last-prompt` carry no `timestamp` on the wire.
+    fn setup_preamble_provider() -> (TempDir, ClaudeConvo) {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let lines = [
+            r#"{"type":"ai-title","aiTitle":"Fix the bug","sessionId":"session-pre"}"#,
+            r#"{"type":"queue-operation","operation":"enqueue","content":"queued","timestamp":"2024-01-01T00:00:03Z","sessionId":"session-pre"}"#,
+            r#"{"type":"last-prompt","lastPrompt":"Fix the bug","leafUuid":"uuid-2","sessionId":"session-pre"}"#,
+            r#"{"type":"last-prompt","lastPrompt":"Fix the bug","sessionId":"session-pre"}"#,
+            r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Fix the bug"}}"#,
+            r#"{"uuid":"uuid-2","type":"assistant","parentUuid":"uuid-1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Done."}}"#,
+        ];
+        fs::write(project_dir.join("session-pre.jsonl"), lines.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        (temp, ClaudeConvo::with_resolver(resolver))
+    }
+
+    #[test]
+    fn test_preamble_events_resolve_missing_timestamps() {
+        let (_temp, provider) = setup_preamble_provider();
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "session-pre")
+                .unwrap();
+
+        let ts_of = |id: &str| -> String {
+            view.events
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap_or_else(|| panic!("missing event {id}"))
+                .timestamp
+                .clone()
+        };
+
+        // ai-title has no timestamp, no reference, and no previous preamble
+        // line — falls back to the session's first timestamped entry.
+        assert_eq!(ts_of("claude-preamble-0"), "2024-01-01T00:00:00Z");
+        // queue-operation keeps its own wire timestamp.
+        assert_eq!(ts_of("claude-preamble-1"), "2024-01-01T00:00:03Z");
+        // last-prompt with a leafUuid resolves the referenced entry's
+        // timestamp (beats the previous preamble line's).
+        assert_eq!(ts_of("claude-preamble-2"), "2024-01-01T00:00:01Z");
+        // last-prompt without a reference inherits the previous preamble
+        // line's resolved timestamp.
+        assert_eq!(ts_of("claude-preamble-3"), "2024-01-01T00:00:01Z");
+
+        for event in &view.events {
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(&event.timestamp).is_ok(),
+                "event {} timestamp {:?} is not RFC 3339",
+                event.id,
+                event.timestamp
+            );
+        }
+    }
+
+    #[test]
+    fn test_preamble_timestamp_fill_does_not_leak_into_projection() {
+        use toolpath_convo::ConversationProjector;
+
+        let (_temp, provider) = setup_preamble_provider();
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "session-pre")
+                .unwrap();
+        let projected = crate::ClaudeProjector.project(&view).unwrap();
+
+        // The raw lines ride in data["raw"] untouched: projecting back must
+        // not stamp the resolved timestamp onto lines that had none.
+        assert_eq!(projected.preamble.len(), 4);
+        for raw in &projected.preamble {
+            let ty = raw.get("type").and_then(|v| v.as_str()).unwrap();
+            match ty {
+                "queue-operation" => assert_eq!(
+                    raw.get("timestamp").and_then(|v| v.as_str()),
+                    Some("2024-01-01T00:00:03Z")
+                ),
+                _ => assert!(
+                    raw.get("timestamp").is_none(),
+                    "{ty} line gained a timestamp on roundtrip: {raw}"
+                ),
+            }
+        }
     }
 }

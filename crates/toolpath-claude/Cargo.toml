@@ -1,6 +1,6 @@
 [package]
 name = "toolpath-claude"
-version = "0.12.0"
+version = "0.12.1"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -25,5 +25,6 @@ notify = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time", "fs"], optional = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }

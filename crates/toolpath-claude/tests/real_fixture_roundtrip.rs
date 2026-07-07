@@ -239,6 +239,33 @@ fn roundtrip_preserves_total_token_usage_when_present() {
     }
 }
 
+/// Every derived step must carry a schema-valid RFC 3339 timestamp.
+///
+/// The real capture includes headerless `ai-title` / `last-prompt` lines
+/// with no `timestamp` on the wire; the provider resolves one from an
+/// adjacent entry during derivation. Without that, the preamble steps
+/// carry `"timestamp": ""` and `path p validate` rejects the whole
+/// imported document (`$defs/timestamp` requires `format: date-time`).
+#[test]
+fn derived_steps_all_carry_rfc3339_timestamps() {
+    let view = load_fixture_view();
+    let path = derive_path(&view, &DeriveConfig::default());
+    assert!(
+        path.steps
+            .iter()
+            .any(|s| s.step.id.starts_with("claude-preamble-")),
+        "fixture should derive preamble steps — refresh capture"
+    );
+    for step in &path.steps {
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&step.step.timestamp).is_ok(),
+            "step {} timestamp {:?} is not RFC 3339",
+            step.step.id,
+            step.step.timestamp
+        );
+    }
+}
+
 /// Reading + re-projecting a real fixture must preserve every JSONL line.
 ///
 /// This is the bluntest possible UX-loss check: count source lines, count
