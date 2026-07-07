@@ -256,6 +256,62 @@ fn derive_git_validate_roundtrip() {
     let _ = std::fs::remove_file(&tmp_file);
 }
 
+/// Importing a session whose JSONL carries headerless preamble lines
+/// without timestamps (`last-prompt`, `ai-title` — the shape a headless
+/// `claude -p` run writes) must produce a schema-valid document. The
+/// derived claude-preamble-* steps used to carry `"timestamp": ""`,
+/// which `p validate` rejects (`$defs/timestamp` is `format: date-time`).
+#[test]
+fn import_claude_with_untimestamped_preamble_validates() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let claude_dir = temp.path().join(".claude");
+    let project_slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let project_dir = claude_dir.join("projects").join(&project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("session-pre.jsonl"),
+        format!(
+            r#"{{"type":"ai-title","aiTitle":"Say hi","sessionId":"session-pre"}}
+{{"type":"queue-operation","operation":"enqueue","content":"queued","timestamp":"2024-01-01T00:00:03Z","sessionId":"session-pre"}}
+{{"type":"last-prompt","lastPrompt":"hi","leafUuid":"u-1","sessionId":"session-pre"}}
+{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-1","parentUuid":"u-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+
+    let import_output = cmd()
+        .env("HOME", temp.path())
+        .args(["p", "import", "claude", "--session", "session-pre", "--no-cache", "--project"])
+        .arg(&project)
+        .output()
+        .unwrap();
+    assert!(
+        import_output.status.success(),
+        "import failed: {}",
+        String::from_utf8_lossy(&import_output.stderr)
+    );
+
+    let tmp_file = std::env::temp_dir().join("toolpath-integration-claude-preamble.json");
+    std::fs::write(&tmp_file, &import_output.stdout).unwrap();
+
+    cmd()
+        .args(["p", "validate"])
+        .arg("--input")
+        .arg(&tmp_file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Valid"));
+
+    let _ = std::fs::remove_file(&tmp_file);
+}
+
 // ── Render ───────────────────────────────────────────────────────────
 
 #[test]

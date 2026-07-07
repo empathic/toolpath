@@ -179,14 +179,14 @@ Tests live alongside the code (`#[cfg(test)] mod tests`), plus `path-cli` has in
 - `toolpath-convo`: 118 unit + 4 doc tests (types, enrichment, display, ConversationView -> Path derivation, message-group usage accounting, breakdowns)
 - `toolpath-git`: 33 unit + 3 doc tests (derive, branch detection, diffstat)
 - `toolpath-github`: 32 unit + 3 doc tests (mapping, DAG construction, fixtures)
-- `toolpath-claude`: 229 unit + 18 integration + 6 doc tests (path resolution, conversation reading, query, chaining, watcher, derive, metadata first-user-message, group_id grouping + once-per-message usage totals)
+- `toolpath-claude`: 232 unit + 19 integration + 6 doc tests (path resolution, conversation reading, query, chaining, watcher, derive, metadata first-user-message, group_id grouping + once-per-message usage totals, preamble timestamp fallback)
 - `toolpath-gemini`: 161 unit + 29 integration + 5 doc tests (path resolution, chat-file parsing, query, watcher, derive, provider, round-trip fidelity, thoughts-folded-into-output + reasoning breakdown round-trip)
 - `toolpath-codex`: 80 unit + 51 integration + 2 doc tests (rollout parsing, provider assembly, patch-fidelity derive, real-session fixture, source→path fidelity invariants, JSON wire-level round-trip, per-turn token deltas from cumulative counters, reasoning breakdown)
 - `toolpath-opencode`: 52 unit + 19 integration + 1 doc test (SQLite reader, JSON payload serde, provider assembly, snapshot-based derive, tool-input fallback for gitignored paths, reasoning breakdown)
 - `toolpath-cursor`: 78 unit + 8 integration round-trip + 1 real-DB sanity + 1 doc test (state.vscdb SQLite reader, bubble store + composer header parsing, content-addressed blob lookup, projector with full TOOL_TABLE coverage, JSONL transcript ingest in `examples/dump_fixture.rs`)
 - `toolpath-pi`: 133 unit + 26 integration + 5 doc tests (types, paths, error, reader, io, provider)
 - `toolpath-dot`: 30 unit + 2 doc tests (render, visual conventions, escaping)
-- `path-cli`: 294 unit + 65 integration tests (import/export/cache, track sessions, merge, validate, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, fzf-friendly TSV output, `path resume` orchestration with injectable `ExecStrategy`). For an end-to-end check against a real Pathbase deployment, run `scripts/test-pathbase-live.sh <url>` — it does an anon round-trip in a sandboxed config dir and, if you're logged into that URL, an authed pathstash round-trip too.
+- `path-cli`: 295 unit + 66 integration tests (import/export/cache, track sessions, merge, validate — including JSON Schema format assertion, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, fzf-friendly TSV output, `path resume` orchestration with injectable `ExecStrategy`). For an end-to-end check against a real Pathbase deployment, run `scripts/test-pathbase-live.sh <url>` — it does an anon round-trip in a sandboxed config dir and, if you're logged into that URL, an authed pathstash round-trip too.
 - `toolpath-cli`: 0 tests (it's a one-line `path_cli::run()` shim crate that exists only so `cargo install toolpath-cli` keeps installing the `path` binary)
 
 Validate example documents: `for f in examples/*.json; do cargo run -p path-cli -- p validate --input "$f"; done`

@@ -2,6 +2,32 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Preamble steps get real timestamps; validate enforces schema formats — 2026-07-06
+
+Claude Code writes several headerless session-log lines with no
+`timestamp` field (`last-prompt`, `ai-title`, `custom-title`; a headless
+`claude -p` run produces them every time). `toolpath-claude` stamped the
+steps derived from those lines with `"timestamp": ""`, which the schema
+forbids (`$defs/timestamp` is `format: date-time`) but `path p validate`
+silently accepted, because JSON Schema draft 2020-12 treats `format` as
+annotation-only unless the validator opts in. Both ends are fixed: the
+derivation now resolves a real timestamp, and validation now asserts the
+formats the schema declares.
+
+- **`toolpath-claude`** (0.12.1): a step derived from a timestamp-less
+  preamble line resolves its timestamp from the nearest real source — the
+  entry the line references (`leafUuid` / `messageId`), else the previous
+  preamble line, else the session's first timestamped entry. Only the
+  derived step's identity changes; the source line still rides verbatim
+  inside the step's structural change (`extra["raw"]`), so projecting back
+  to Claude JSONL is unaffected.
+- **`path-cli`** (0.15.0): `path p validate` opts into format assertion,
+  so `format: date-time` on step timestamps and `format: uri` on
+  `meta.kind` / path-ref `$ref` / signature `href` are enforced instead of
+  ignored. Documents imported with an older `toolpath-claude` may now fail
+  validation on their empty preamble timestamps; re-importing the session
+  fixes them. (`toolpath-cli` 0.15.0 tracks the bump.)
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived

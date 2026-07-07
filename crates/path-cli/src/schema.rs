@@ -40,7 +40,14 @@ fn validator() -> &'static Validator {
     VALIDATOR.get_or_init(|| {
         let schema: serde_json::Value = serde_json::from_str(SCHEMA_SOURCE)
             .expect("toolpath.schema.json embedded in binary parses as JSON");
-        jsonschema::validator_for(&schema)
+        // Draft 2020-12 treats `format` as annotation-only by default, but
+        // the schema means what it says: `$defs/timestamp` is
+        // `format: date-time` and derived documents must satisfy it (a
+        // `""` step timestamp used to sail through here and then fail on
+        // format-asserting consumers). Opt in to format assertion.
+        jsonschema::options()
+            .should_validate_formats(true)
+            .build(&schema)
             .expect("toolpath.schema.json embedded in binary is itself a valid JSON Schema")
     })
 }
@@ -54,9 +61,12 @@ fn kind_validators() -> &'static HashMap<&'static str, Validator> {
             .map(|(uri, source)| {
                 let schema: serde_json::Value = serde_json::from_str(source)
                     .unwrap_or_else(|e| panic!("bundled kind schema {uri} is not valid JSON: {e}"));
-                let v = jsonschema::validator_for(&schema).unwrap_or_else(|e| {
-                    panic!("bundled kind schema {uri} is not a valid JSON Schema: {e}")
-                });
+                let v = jsonschema::options()
+                    .should_validate_formats(true)
+                    .build(&schema)
+                    .unwrap_or_else(|e| {
+                        panic!("bundled kind schema {uri} is not a valid JSON Schema: {e}")
+                    });
                 (*uri, v)
             })
             .collect()
@@ -205,6 +215,34 @@ mod tests {
             }]
         });
         validate(&doc).expect("base may carry both ref and branch");
+    }
+
+    /// `$defs/timestamp` is `format: date-time`; format assertion is
+    /// opted in, so an empty step timestamp must fail — surfaced as a
+    /// oneOf violation at the containing path (`$defs/pathOrRef`).
+    /// Regression: `toolpath-claude` used to stamp `""` on steps derived
+    /// from timestamp-less preamble lines (`last-prompt`, `ai-title`).
+    #[test]
+    fn empty_step_timestamp_is_rejected() {
+        let doc = json!({
+            "graph": {"id": "g1"},
+            "paths": [{
+                "path": {"id": "p1", "head": "s1"},
+                "steps": [{
+                    "step": {
+                        "id": "s1",
+                        "actor": "human:alex",
+                        "timestamp": ""
+                    },
+                    "change": {"src/main.rs": {"raw": "@@ -1 +1 @@\n-a\n+b"}}
+                }]
+            }]
+        });
+        let err = validate(&doc).expect_err("empty timestamp violates format: date-time");
+        assert!(
+            err.to_string().contains("/paths/0"),
+            "error should point at the offending path: {err}"
+        );
     }
 
     /// `path.base` is optional: a Graph that wraps a single step (the shape
