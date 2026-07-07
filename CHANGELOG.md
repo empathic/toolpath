@@ -2,6 +2,21 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Extract: undo the event splice when rebuilding wire parents — 2026-07-07
+
+- **`toolpath-convo`**: `derive_path` splices events and compactions onto the
+  head's ancestry, which re-parents neighboring steps through event steps —
+  ids that don't exist on the wire (Claude's headerless preamble/snapshot
+  lines carry no `uuid`, so nothing can chain through them).
+  `extract_conversation` now resolves a turn's or compaction's parent past
+  event-derived steps back to the nearest turn/compaction ancestor, so
+  projectors write valid wire chains: a re-exported Claude session's first
+  message keeps `parentUuid: null` instead of naming a synthesized
+  `claude-preamble-N` step, and messages after a snapshot line chain onto
+  the real prior message. Events keep their spliced parents (event-to-event
+  chains are legitimate wire data), and derive re-splices on re-derive, so
+  derive → extract → derive is stable.
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived

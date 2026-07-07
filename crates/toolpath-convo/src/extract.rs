@@ -75,6 +75,10 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
     // Map from step ID → index into view.items (of a turn item), for
     // parent lookups when attaching tool invocations.
     let mut step_to_turn: HashMap<&str, usize> = HashMap::new();
+    // Map from event step ID → that step's first parent, for undoing
+    // derive's `splice_onto_intervening` when rebuilding turn/compaction
+    // parents (see `parent_past_events`).
+    let mut event_parents: HashMap<String, Option<String>> = HashMap::new();
     // Track files_changed for dedup in insertion order.
     let mut files_seen: HashSet<String> = HashSet::new();
 
@@ -148,6 +152,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     }
 
                     let mut turn = build_turn(step, &structural.extra);
+                    turn.parent_id = parent_past_events(turn.parent_id.take(), &event_parents);
                     // Attach pre-collected file mutations to the turn.
                     // `tool_id` on each mutation links back to the
                     // specific `ToolInvocation` (when set by derive).
@@ -191,6 +196,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         event_type,
                         data,
                     };
+                    event_parents.insert(step.step.id.clone(), step.step.parents.first().cloned());
                     view.items.push(Item::Event(event));
                 }
                 "conversation.compact" => {
@@ -216,7 +222,10 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         .unwrap_or_default();
                     let compaction = Compaction {
                         id: step.step.id.clone(),
-                        parent_id: step.step.parents.first().cloned(),
+                        parent_id: parent_past_events(
+                            step.step.parents.first().cloned(),
+                            &event_parents,
+                        ),
                         timestamp: step.step.timestamp.clone(),
                         trigger,
                         summary,
@@ -284,6 +293,38 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
     }
 
     view
+}
+
+/// Resolve a turn's or compaction's parent past any event-derived steps,
+/// back to the nearest turn/compaction ancestor (or `None` at the root).
+///
+/// Providers never build a view in which a turn or compaction parents on an
+/// event — the wire formats chain messages to messages (Claude even rewrites
+/// tool-result parents onto the owning assistant turn at read time). So an
+/// event step in a turn's `step.parents` can only have been put there by
+/// derive's `splice_onto_intervening`, which re-parents through events to
+/// keep them on the head's ancestry. Walking past event steps undoes that
+/// splice, recovering the source-recorded parent — otherwise projectors
+/// would write wire chains through ids that don't exist on the wire (e.g. a
+/// Claude `parentUuid` naming a synthesized `claude-preamble-0` step).
+///
+/// Events themselves keep their spliced parents: event-to-event chains are
+/// legitimate wire data (Claude chains consecutive tool-result entries), and
+/// `derive_path` re-splices on the way back in, so the round-trip is stable.
+fn parent_past_events(
+    parent: Option<String>,
+    event_parents: &HashMap<String, Option<String>>,
+) -> Option<String> {
+    let mut current = parent;
+    // Each hop moves to an earlier step in a well-formed path; the bound
+    // only guards against a malformed document with a parent cycle.
+    for _ in 0..=event_parents.len() {
+        match current.as_deref().and_then(|id| event_parents.get(id)) {
+            Some(next) => current = next.clone(),
+            None => return current,
+        }
+    }
+    current
 }
 
 fn handle_init(
@@ -1444,6 +1485,177 @@ mod tests {
         assert_eq!(rc.summary.as_deref(), Some("condensed"));
         assert_eq!(rc.pre_tokens, Some(4096));
         assert_eq!(rc.kept, vec!["a".to_string(), "a".to_string()]);
+    }
+
+    fn bare_turn(id: &str, parent_id: Option<&str>, role: Role, timestamp: &str) -> Turn {
+        Turn {
+            id: id.into(),
+            parent_id: parent_id.map(|s| s.into()),
+            role,
+            timestamp: timestamp.into(),
+            text: "text".into(),
+            thinking: None,
+            tool_uses: vec![],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+            group_id: None,
+            attributed_token_usage: None,
+        }
+    }
+
+    fn bare_event(id: &str, event_type: &str, timestamp: &str) -> ConversationEvent {
+        ConversationEvent {
+            id: id.into(),
+            timestamp: timestamp.into(),
+            parent_id: None,
+            event_type: event_type.into(),
+            data: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_turn_parent_resolves_past_spliced_event_steps() {
+        use crate::DeriveConfig;
+
+        // Wire truth: a1's parent is u1. An id-less event (e.g. a Claude
+        // file-history-snapshot line) sits between them in the stream.
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![
+                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:00Z")),
+                Item::Event(bare_event(
+                    "",
+                    "file-history-snapshot",
+                    "2026-01-01T00:00:01Z",
+                )),
+                Item::Turn(bare_turn(
+                    "a1",
+                    Some("u1"),
+                    Role::Assistant,
+                    "2026-01-01T00:00:02Z",
+                )),
+            ],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        // derive splices a1 onto the event step so the event lands on the
+        // head's ancestry...
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let a1_step = path.steps.iter().find(|s| s.step.id == "a1").unwrap();
+        assert_eq!(a1_step.step.parents, vec!["event-0001".to_string()]);
+
+        // ...and extract undoes the splice, restoring the wire parent.
+        let view = extract_conversation(&path);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns[1].id, "a1");
+        assert_eq!(turns[1].parent_id.as_deref(), Some("u1"));
+
+        // Re-derive is stable: the splice fires again onto the same DAG.
+        let again = crate::derive::derive_path(&view, &DeriveConfig::default());
+        let a1_again = again.steps.iter().find(|s| s.step.id == "a1").unwrap();
+        assert_eq!(a1_again.step.parents, vec!["event-0001".to_string()]);
+    }
+
+    #[test]
+    fn test_first_turn_parent_resolves_past_leading_events_to_root() {
+        use crate::DeriveConfig;
+
+        // Claude hoists headerless preamble lines to the front of the item
+        // stream as events; derive splices the first turn onto them. The
+        // extracted turn must come back a root — its wire parentUuid is null.
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![
+                Item::Event(bare_event(
+                    "claude-preamble-0",
+                    "ai-title",
+                    "2026-01-01T00:00:00Z",
+                )),
+                Item::Event(bare_event(
+                    "claude-preamble-1",
+                    "file-history-snapshot",
+                    "2026-01-01T00:00:01Z",
+                )),
+                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:02Z")),
+            ],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let u1_step = path.steps.iter().find(|s| s.step.id == "u1").unwrap();
+        assert_eq!(u1_step.step.parents, vec!["claude-preamble-1".to_string()]);
+
+        let view = extract_conversation(&path);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns[0].id, "u1");
+        assert_eq!(
+            turns[0].parent_id, None,
+            "walk resolves through the whole event chain"
+        );
+
+        // The events keep their spliced chain — event-to-event parents are
+        // legitimate wire data, and re-derive re-splices identically.
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert_eq!(events[1].parent_id.as_deref(), Some("claude-preamble-0"));
+    }
+
+    #[test]
+    fn test_compaction_parent_resolves_past_spliced_event_steps() {
+        use crate::DeriveConfig;
+
+        let compaction = Compaction {
+            id: "c".into(),
+            parent_id: Some("u1".into()),
+            timestamp: "2026-01-01T00:00:02Z".into(),
+            trigger: Some(CompactionTrigger::Auto),
+            summary: Some("condensed".into()),
+            pre_tokens: None,
+            kept: vec![],
+        };
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![
+                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:00Z")),
+                Item::Event(bare_event(
+                    "",
+                    "file-history-snapshot",
+                    "2026-01-01T00:00:01Z",
+                )),
+                Item::Compaction(compaction),
+                Item::Turn(bare_turn(
+                    "b",
+                    Some("c"),
+                    Role::User,
+                    "2026-01-01T00:00:03Z",
+                )),
+            ],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let c_step = path.steps.iter().find(|s| s.step.id == "c").unwrap();
+        assert_eq!(c_step.step.parents, vec!["event-0001".to_string()]);
+
+        let view = extract_conversation(&path);
+        let Some(Item::Compaction(rc)) =
+            view.items.iter().find(|i| matches!(i, Item::Compaction(_)))
+        else {
+            panic!("compaction survives the roundtrip");
+        };
+        assert_eq!(
+            rc.parent_id.as_deref(),
+            Some("u1"),
+            "compaction's logical parent is the last turn, not the spliced event"
+        );
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns[1].parent_id.as_deref(), Some("c"));
     }
 
     #[test]
