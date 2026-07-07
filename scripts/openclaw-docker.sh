@@ -106,13 +106,16 @@ _onboard() {
         return 0
     fi
     _log "running onboarding (writes the auth profile)…"
+    # --skip-health: onboarding runs before our gateway container starts, so
+    # its default gateway-reachability probe would otherwise fail; we only need
+    # it to write the config + auth profile.
     docker run --rm \
         -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}" \
         -v "${STATE_DIR}:${_state_mount}" \
         "${IMAGE}" node dist/index.js onboard \
         --non-interactive --accept-risk --mode local \
         --auth-choice apiKey --anthropic-api-key "${ANTHROPIC_API_KEY}" \
-        --gateway-bind lan \
+        --gateway-bind lan --skip-health \
         || _warn "onboarding exited nonzero — the written openclaw.json may still suffice; check '$0 logs'"
 }
 
@@ -211,13 +214,16 @@ cmd_status() {
 cmd_agent() {
     _need_docker
     [[ $# -ge 1 ]] || _die "usage: $0 agent \"<message>\""
-    _container_running || _die "gateway not running; run: $0 up"
-    [[ -n "${ANTHROPIC_API_KEY:-}" || -f "${STATE_DIR}/agents/${AGENT_ID}/agent/auth-profiles.json" ]] \
-        || _warn "no auth profile / ANTHROPIC_API_KEY — this turn will likely fail auth"
+    _container_running || _die "gateway not running; run '$0 up' with ANTHROPIC_API_KEY set"
     local _msg="$*"
     _log "running one agent turn (agent=${AGENT_ID}, model=${MODEL})…"
+    # --local forces embedded execution: the turn runs in-process and still
+    # writes the transcript to the sessions dir, avoiding the gateway auth-token
+    # handshake (which the exec'd client and the gateway don't share). The
+    # container inherits ANTHROPIC_API_KEY from `up`, so auth uses that. If this
+    # errors on auth, re-run '$0 up' with ANTHROPIC_API_KEY set.
     docker exec "${CONTAINER}" node dist/index.js agent \
-        --agent "${AGENT_ID}" --model "${MODEL}" --message "${_msg}"
+        --agent "${AGENT_ID}" --model "${MODEL}" --local --message "${_msg}"
     _log "transcript written under ${STATE_DIR}/agents/${AGENT_ID}/sessions"
 }
 
