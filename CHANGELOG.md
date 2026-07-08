@@ -2,6 +2,20 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Fix: opencode's trait path now honors the configured resolver — 2026-07-08
+
+- **`toolpath-opencode`** (0.5.1): `ConversationProvider::load_conversation`
+  called `to_view(&s)`, which builds a fresh default `PathResolver::new()`
+  instead of using the provider's own configured resolver
+  (`self.resolver()`). With any non-default opencode data directory (e.g.
+  `$XDG_DATA_HOME` overridden, or a resolver built via
+  `OpencodeConvo::with_resolver` for testing or a non-standard install),
+  the snapshot git repo was never found via the trait entrypoint, so every
+  file diff silently degraded to the structural-only tool-input fallback
+  (no `raw` perspective). Fixed by routing through
+  `to_view_with_resolver(&s, self.resolver())`. `list_conversations` and
+  `list_metadata` don't build views, so they weren't affected.
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived
