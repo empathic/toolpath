@@ -16,15 +16,18 @@
 //!     the IR derive/extract round-trip and the projector emits a
 //!     functionally equivalent `Session`.
 //!
-//! Known limitation (documented, not asserted as fully preserved): the
-//! `ConversationEvent` carrying the compaction metadata does not
-//! survive the `derive → extract` round-trip today — `derive_path` does
-//! not emit `conversation.event` steps for `view.events`, and the
-//! opencode projector does not consume `view.events`. The compaction
-//! marker is purely structural metadata (the surrounding messages
-//! carry the actual content), so for "good UX" today this is an
-//! acceptable loss; if/when we close the gap, this test gets
-//! tightened.
+//! The `ConversationEvent` carrying the compaction metadata DOES
+//! survive the `derive → extract` round-trip — `derive_path` emits a
+//! `conversation.event` step per `view.events` entry and
+//! `extract_conversation` restores it (asserted below).
+//!
+//! Known limitation (documented, not asserted): the opencode projector
+//! consumes `view.events` only for `part.snapshot` restoration; it does
+//! not re-materialize a `compaction` part into the projected `Session`.
+//! The compaction marker is purely structural metadata (the surrounding
+//! messages carry the actual content), so for "good UX" today this is
+//! an acceptable loss; if/when we close the gap, this test gets
+//! tightened further.
 
 use std::fs;
 
@@ -148,6 +151,19 @@ fn to_view_surfaces_compaction_as_event() {
             .map(|e| &e.event_type)
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn compaction_event_survives_derive_extract_roundtrip() {
+    let (_temp, session) = setup_session();
+    let view = to_view(&session);
+    let after = ir_roundtrip(&view);
+    let event = after
+        .events
+        .iter()
+        .find(|e| e.event_type == "part.compaction")
+        .expect("part.compaction event should survive derive → extract");
+    assert_eq!(event.id, "compaction-prt_a1_3");
 }
 
 #[test]

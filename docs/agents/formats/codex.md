@@ -847,13 +847,14 @@ The mapping below is what the provider actually emits. Source:
 | `session_meta.id` | `ConversationView.id`, `path.id = path-codex-<first-8>` |
 | `session_meta.cwd` | `Turn.environment.working_dir`, `path.base.uri` |
 | `session_meta.git.commit_hash` | `path.base.ref_str` |
-| `session_meta` (full) | `path.meta.extra["codex"]` (originator, cli_version, model_provider, git block, forked_from_id) |
+| `session_meta.originator` / `.cli_version` | `path.meta.extra["producer"]` (`name`, `version`) |
+| `session_meta.model_provider`, `.source`, `.forked_from_id` | dropped — no cross-harness analog; the codex projector hard-codes defaults on the return path |
 | `turn_context.model` | `Turn.model` on subsequent assistant turns |
 | `turn_context` (full) | `ConversationEvent` (round-trip preservation) |
 | `message` role `user` | `Turn { role: User }` → Step with `actor: "human:user"` |
 | `message` role `assistant` | `Turn { role: Assistant, model }` → Step with `actor: "agent:<model>"` |
 | `message` role `developer` | `Turn { role: System }` → Step with `actor: "tool:codex"` |
-| `reasoning.encrypted_content` | `Turn.extra["codex"]["reasoning_encrypted"]` (**not** `Turn.thinking` — it would render as ciphertext) |
+| `reasoning.encrypted_content` | dropped — the IR has no provider-namespaced extras field to preserve ciphertext in, so it never lands on `Turn` and does not survive a round-trip (**not** `Turn.thinking` — it would render as ciphertext) |
 | `reasoning.summary[].text` / `reasoning.content[].text` (plaintext) | `Turn.thinking` on the next assistant turn |
 | `function_call` / `function_call_output` paired by `call_id` | `Turn.tool_uses[].{input, result}` |
 | `custom_tool_call` / `_output` paired by `call_id` | same (raw `input` string preserved) |

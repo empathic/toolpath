@@ -154,8 +154,9 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
 /// absent the map stays empty and is omitted from serialization.
 ///
 /// `tool` is prompt-side (tool-result tokens billed separately) and
-/// `total` is a Gemini-side sum; neither is folded here — both remain
-/// available raw via `Turn.extra["gemini"]["tokens"]`.
+/// `total` is a Gemini-side sum; neither is folded here, and the IR
+/// has no provider-namespaced extras field to preserve them in, so
+/// both are simply dropped.
 fn tokens_to_usage(t: &Tokens) -> TokenUsage {
     let output = t.output.unwrap_or(0);
     let thoughts = t.thoughts.unwrap_or(0);

@@ -18,8 +18,9 @@ use toolpath::v1::Path;
 /// OpenAI's servers — not useful in a human-readable digest. Plaintext
 /// reasoning summaries (rare) land on `Turn.thinking` automatically
 /// and surface in the derived path without a flag. The raw ciphertext
-/// is preserved under `Turn.extra["codex"]["reasoning_encrypted"]` for
-/// round-trip fidelity but never rendered.
+/// is dropped: the IR carries no provider-namespaced extras field to
+/// preserve it in, so it never reaches `Turn` and cannot be recovered
+/// on a round-trip (see `encrypted_reasoning_does_not_land_on_thinking`).
 #[derive(Debug, Clone, Default)]
 pub struct DeriveConfig {
     /// Override `path.base.uri`. Defaults to the cwd from session_meta.

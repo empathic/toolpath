@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, DelegatedWork, Result, Role, TokenUsage,
     ToolCategory, ToolInvocation, Turn,
@@ -133,12 +133,11 @@ fn project_view(
 // ── Turn → GeminiMessage ─────────────────────────────────────────────
 
 fn turn_to_message(turn: &Turn) -> GeminiMessage {
-    // `Turn.extra` is gone; previously the Gemini projector pulled
-    // `extra["gemini"]` for structured thought meta, full tokens, and
-    // per-tool-call status. With that source removed, `build_thoughts` /
-    // `build_tokens` / `build_tool_calls` fall back to the typed IR
-    // fields (`Turn.thinking` as a string, `Turn.token_usage`, etc.).
-    let gemini_extras: Map<String, Value> = Map::new();
+    // The IR carries no provider-namespaced extras, so `build_thoughts` /
+    // `build_tokens` / `build_tool_calls` synthesize everything from the
+    // typed IR fields (`Turn.thinking` as a string, `Turn.token_usage`,
+    // `Turn.tool_uses`, etc.) rather than recovering a Gemini-native
+    // structured form.
     let msg_extras: HashMap<String, Value> = HashMap::new();
 
     GeminiMessage {
@@ -146,10 +145,10 @@ fn turn_to_message(turn: &Turn) -> GeminiMessage {
         timestamp: turn.timestamp.clone(),
         role: role_to_gemini_role(&turn.role),
         content: build_content(turn),
-        thoughts: build_thoughts(turn, &gemini_extras),
-        tokens: build_tokens(turn, &gemini_extras),
+        thoughts: build_thoughts(turn),
+        tokens: build_tokens(turn),
         model: turn.model.clone(),
-        tool_calls: build_tool_calls(turn, &gemini_extras),
+        tool_calls: build_tool_calls(turn),
         extra: msg_extras,
     }
 }
@@ -178,43 +177,14 @@ fn build_content(turn: &Turn) -> GeminiContent {
     }
 }
 
-/// Rebuild `Thought[]`.
+/// Rebuild `Thought[]` from `Turn.thinking`.
 ///
-/// Preferred source: `extra["gemini"]["thoughts_meta"]`, which carries
-/// `{subject, description, timestamp}` triples written by the forward
-/// path. Falls back to splitting `Turn.thinking` on `"\n\n"` and
-/// extracting subject/description from the `**subject**\n{description}`
-/// shape used by `flatten_thoughts`.
-fn build_thoughts(turn: &Turn, gemini_extras: &Map<String, Value>) -> Option<Vec<Thought>> {
-    if let Some(Value::Array(arr)) = gemini_extras.get("thoughts_meta") {
-        let thoughts: Vec<Thought> = arr
-            .iter()
-            .filter_map(|v| {
-                let obj = v.as_object()?;
-                Some(Thought {
-                    subject: obj
-                        .get("subject")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    description: obj
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    timestamp: obj
-                        .get("timestamp")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                })
-            })
-            .collect();
-        return if thoughts.is_empty() {
-            None
-        } else {
-            Some(thoughts)
-        };
-    }
-
-    // Fallback: parse the flattened string.
+/// The IR carries no provider-namespaced extras, so the source's
+/// original structured `{subject, description, timestamp}` triples
+/// can't be recovered; instead this splits `Turn.thinking` on `"\n\n"`
+/// and extracts subject/description from the `**subject**\n
+/// {description}` shape used by `flatten_thoughts`.
+fn build_thoughts(turn: &Turn) -> Option<Vec<Thought>> {
     let thinking = turn.thinking.as_deref()?;
     let chunks: Vec<&str> = thinking.split("\n\n").collect();
     if chunks.is_empty() {
@@ -257,16 +227,12 @@ fn split_flattened_thought(chunk: &str) -> Thought {
     }
 }
 
-/// Rebuild `Tokens`.
+/// Rebuild `Tokens` from `Turn.token_usage`.
 ///
-/// Preferred source: `extra["gemini"]["tokens"]` (the full struct).
-/// Fallback: derive a partial struct from `Turn.token_usage`.
-fn build_tokens(turn: &Turn, gemini_extras: &Map<String, Value>) -> Option<Tokens> {
-    if let Some(v) = gemini_extras.get("tokens")
-        && let Ok(t) = serde_json::from_value::<Tokens>(v.clone())
-    {
-        return Some(t);
-    }
+/// The IR carries no provider-namespaced extras, so the source's full
+/// `Tokens` struct can't be recovered verbatim; this derives a partial
+/// struct from the typed `TokenUsage` fields instead.
+fn build_tokens(turn: &Turn) -> Option<Tokens> {
     turn.token_usage.as_ref().map(tokens_from_common)
 }
 
@@ -292,45 +258,27 @@ fn tokens_from_common(u: &TokenUsage) -> Tokens {
     }
 }
 
-/// Rebuild `toolCalls[]` by zipping `Turn.tool_uses` with
-/// `extra["gemini"]["tool_call_meta"]`. Missing meta entries fall back
-/// to a minimal `ToolCall` with `status` derived from `result.is_error`.
-fn build_tool_calls(turn: &Turn, gemini_extras: &Map<String, Value>) -> Option<Vec<ToolCall>> {
+/// Rebuild `toolCalls[]` from `Turn.tool_uses`.
+///
+/// The IR carries no provider-namespaced extras, so the source's
+/// original per-call `tool_call_meta` (status/description/display_name/
+/// result_display) can't be recovered; every call gets a synthesized
+/// `ToolCall` instead, with `status` derived from `result.is_error`.
+fn build_tool_calls(turn: &Turn) -> Option<Vec<ToolCall>> {
     if turn.tool_uses.is_empty() {
         return None;
     }
 
-    let meta_by_id: HashMap<String, &Value> = gemini_extras
-        .get("tool_call_meta")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| {
-                    let id = v.get("id")?.as_str()?.to_string();
-                    Some((id, v))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
     let calls: Vec<ToolCall> = turn
         .tool_uses
         .iter()
-        .map(|tu| {
-            tool_invocation_to_tool_call(tu, meta_by_id.get(&tu.id).copied(), &turn.timestamp)
-        })
+        .map(|tu| tool_invocation_to_tool_call(tu, &turn.timestamp))
         .collect();
 
     Some(calls)
 }
 
-fn tool_invocation_to_tool_call(
-    tu: &ToolInvocation,
-    meta: Option<&Value>,
-    fallback_timestamp: &str,
-) -> ToolCall {
-    let meta_obj = meta.and_then(Value::as_object);
-
+fn tool_invocation_to_tool_call(tu: &ToolInvocation, fallback_timestamp: &str) -> ToolCall {
     // Pick the output tool name. If the source tool is already a known
     // Gemini tool (e.g. for Gemini→Path→Gemini round-trips), keep the
     // source name verbatim. Otherwise — when projecting from a foreign
@@ -348,29 +296,17 @@ fn tool_invocation_to_tool_call(
         tu.name.clone()
     };
 
-    let status = meta_obj
-        .and_then(|m| m.get("status").and_then(Value::as_str))
-        .map(str::to_string)
-        .unwrap_or_else(|| match &tu.result {
-            Some(r) if r.is_error => "error".to_string(),
-            Some(_) => "success".to_string(),
-            None => "pending".to_string(),
-        });
+    let status = match &tu.result {
+        Some(r) if r.is_error => "error".to_string(),
+        Some(_) => "success".to_string(),
+        None => "pending".to_string(),
+    };
 
-    let description = meta_obj
-        .and_then(|m| m.get("description").and_then(Value::as_str))
-        .map(str::to_string)
-        .or_else(|| synthesize_description(&name, &tu.input));
+    let description = synthesize_description(&name, &tu.input);
 
-    let display_name = meta_obj
-        .and_then(|m| m.get("display_name").and_then(Value::as_str))
-        .map(str::to_string)
-        .or_else(|| synthesize_display_name(&name, tu.category));
+    let display_name = synthesize_display_name(&name, tu.category);
 
-    let result_display = meta_obj
-        .and_then(|m| m.get("result_display"))
-        .and_then(|v| if v.is_null() { None } else { Some(v.clone()) })
-        .or_else(|| synthesize_result_display(tu.result.as_ref()));
+    let result_display = synthesize_result_display(tu.result.as_ref());
 
     let result = tu
         .result

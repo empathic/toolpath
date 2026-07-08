@@ -254,3 +254,72 @@ fn assistant_thinking_emits_reasoning_part() {
     let rb = count_reasoning(&rebuilt);
     assert!(rb >= src.min(1), "reasoning lost: src={}, rb={}", src, rb);
 }
+
+#[test]
+fn snapshot_shas_survive_full_roundtrip() {
+    // step-start/step-finish snapshot SHAs ride `view.events` as
+    // `part.snapshot` events, survive the Path round-trip as
+    // `conversation.event` steps, and get restored onto the projected
+    // step parts — so a re-imported projection can regenerate diffs.
+    let (_t, source) = setup_session();
+    let (_, rebuilt, _) = roundtrip(&source);
+
+    // First assistant message: had snap_a (step-start) and snap_b
+    // (step-finish) in the source.
+    let assistants: Vec<_> = rebuilt
+        .messages
+        .iter()
+        .filter(|m| matches!(m.data, MessageData::Assistant(_)))
+        .collect();
+    assert_eq!(assistants.len(), 2);
+
+    let step_snapshots = |m: &toolpath_opencode::types::Message| {
+        let start = m.parts.iter().find_map(|p| match &p.data {
+            PartData::StepStart(ss) => Some(ss.snapshot.clone()),
+            _ => None,
+        });
+        let finish = m.parts.iter().find_map(|p| match &p.data {
+            PartData::StepFinish(sf) => Some(sf.snapshot.clone()),
+            _ => None,
+        });
+        (start.flatten(), finish.flatten())
+    };
+
+    let (a1_start, a1_finish) = step_snapshots(assistants[0]);
+    assert_eq!(a1_start.as_deref(), Some("snap_a"));
+    assert_eq!(a1_finish.as_deref(), Some("snap_b"));
+
+    // Second assistant message had no snapshots; none must be invented.
+    let (a2_start, a2_finish) = step_snapshots(assistants[1]);
+    assert_eq!(a2_start, None);
+    assert_eq!(a2_finish, None);
+}
+
+#[test]
+fn user_model_id_survives_view_level_roundtrip() {
+    // The user message's `model.modelID` rides `Turn.model` (same
+    // convention as assistant turns). The view-level chain preserves it.
+    //
+    // Known limitation: it does NOT survive the Path layer — the shared
+    // derive attributes model via the step actor (`agent:{model}`), and
+    // user steps carry `human:user`, so `extract_conversation` cannot
+    // recover a user turn's model. Closing that would need a
+    // toolpath-convo change, out of scope here.
+    let (_t, source) = setup_session();
+    let view = to_view(&source);
+    assert_eq!(
+        view.turns[0].model.as_deref(),
+        Some("big-pickle"),
+        "forward path should lift the user model onto Turn.model"
+    );
+
+    let projector = OpencodeProjector::new()
+        .with_directory(source.directory.clone())
+        .with_project_id(source.project_id.clone())
+        .with_version(source.version.clone());
+    let rebuilt = projector.project(&view).expect("project");
+    match &rebuilt.messages[0].data {
+        MessageData::User(u) => assert_eq!(u.model.model_id, "big-pickle"),
+        _ => panic!("expected user message first"),
+    }
+}

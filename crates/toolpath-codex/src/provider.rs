@@ -14,9 +14,9 @@
 //!    see the matching `*_output` by `call_id`.
 //! 5. `event_msg.exec_command_end` enriches the already-emitted tool
 //!    invocation with the exit code / stdout / stderr.
-//! 6. `event_msg.patch_apply_end` is captured on the current turn's
-//!    `extra["codex"]["patch_changes"]` — the derive layer consumes it
-//!    for file-artifact sibling changes.
+//! 6. `event_msg.patch_apply_end` populates the current turn's
+//!    `Turn.file_mutations` — the derive layer consumes it for
+//!    file-artifact sibling changes.
 //! 7. Token accounting. `turn_context` / `task_started` open an API round
 //!    (`turn_id`); assistant turns in it share that ID as `Turn.group_id`.
 //!    `event_msg.token_count` carries the SESSION-cumulative
@@ -297,11 +297,12 @@ impl<'a> Builder<'a> {
         };
 
         // Producer (originator + cli_version) lifts onto the typed view
-        // field. `model_provider` already lives on each assistant
-        // `ActorDefinition.provider`. Codex's `source` and `forked_from_id`
-        // are wire-level fields with no cross-harness analog — the codex
-        // projector hard-codes defaults on the return path, so we let them
-        // drop on this side.
+        // field. `model_provider`, `source`, and `forked_from_id` are
+        // wire-level fields with no cross-harness analog and no typed
+        // home in the IR — the codex projector hard-codes defaults on
+        // the return path, so we let them drop on this side. (Note:
+        // `ActorDefinition.provider` is the shared derive's static
+        // `view.provider_id` ("codex"), not `session_meta.model_provider`.)
         let producer = meta.as_ref().map(|m| ProducerInfo {
             name: m.originator.clone(),
             version: Some(m.cli_version.clone()),

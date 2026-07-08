@@ -17,7 +17,7 @@
 //! Without `--harness`, an `fzf` picker shows installed harnesses
 //! with the source harness pre-selected. Source comes from
 //! `path.meta.source` (`claude-code`, `gemini-cli`, `codex`,
-//! `opencode`, `pi`) with actor-string fallback.
+//! `opencode`, `cursor`, `pi`) with actor-string fallback.
 //!
 //! ## Project directory
 //!

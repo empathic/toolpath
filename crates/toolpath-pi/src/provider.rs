@@ -1,10 +1,16 @@
 //! ConversationProvider bridge: map Pi sessions to `toolpath_convo::ConversationView`.
 //!
 //! Walks `PiSession.entries` in file order. Each `Entry::Message` becomes a
-//! `Turn`; metadata-only entries like `ModelChange` / `ThinkingLevelChange` /
-//! `Label` buffer and attach to the next message's `extra["pi"]`. `Compaction`,
-//! `BranchSummary`, `Custom`, and `CustomMessage` emit synthetic turns with
-//! appropriate roles.
+//! `Turn`; metadata-only entries — `ModelChange` / `ThinkingLevelChange` /
+//! `Label` — become `ConversationView.events` (`model_change` /
+//! `thinking_level_change` / `label`), which the shared derive emits as
+//! `conversation.event` steps and `PiProjector` re-materializes as real
+//! Pi entries, so they survive a full Path round-trip. `Compaction`,
+//! `BranchSummary`, `Custom`, and `CustomMessage` emit synthetic turns
+//! with appropriate roles (`Role::System` / `Role::Other("custom")` /
+//! etc.), but on a round-trip those turns are indistinguishable from
+//! ordinary ones — the IR has no field to mark them with, so
+//! `PiProjector` can't re-synthesize the original entry type.
 //!
 //! Tool-result correlation is a two-pass process: we record tool-call ids as
 //! assistant turns are built, then in a second pass populate matching tool
@@ -20,9 +26,9 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult,
-    Turn,
+    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
+    DelegatedWork, EnvironmentSnapshot, Role, SessionBase, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn,
 };
 
 // ── Classification helpers ───────────────────────────────────────────
@@ -226,6 +232,10 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
     //          invocation by id and populate `.result` (and any delegation
     //          result).
     let mut turns: Vec<Turn> = Vec::new();
+    // Non-turn metadata entries land here; the shared derive emits them
+    // as `conversation.event` steps so they survive Path round-trips,
+    // and `PiProjector` re-materializes them as real Pi entries.
+    let mut events: Vec<ConversationEvent> = Vec::new();
     // Map tool-call id → (turn_idx, tool_idx).
     let mut tool_call_locs: HashMap<String, (usize, usize)> = HashMap::new();
     // Map tool-call id → delegation index within the turn (if any).
@@ -237,9 +247,49 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         match entry {
             Entry::Session(_) => continue,
 
-            Entry::ModelChange { .. } | Entry::ThinkingLevelChange { .. } | Entry::Label { .. } => {
-                // Discarded — these influence rendering only and don't map onto
-                // a cross-harness IR field.
+            Entry::ModelChange {
+                base,
+                provider,
+                model_id,
+                extra,
+            } => {
+                let mut data: HashMap<String, serde_json::Value> = extra.clone();
+                data.insert("provider".to_string(), serde_json::json!(provider));
+                data.insert("modelId".to_string(), serde_json::json!(model_id));
+                events.push(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "model_change".to_string(),
+                    data,
+                });
+            }
+            Entry::ThinkingLevelChange {
+                base,
+                thinking_level,
+                extra,
+            } => {
+                let mut data: HashMap<String, serde_json::Value> = extra.clone();
+                data.insert(
+                    "thinkingLevel".to_string(),
+                    serde_json::json!(thinking_level),
+                );
+                events.push(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "thinking_level_change".to_string(),
+                    data,
+                });
+            }
+            Entry::Label { base, extra } => {
+                events.push(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "label".to_string(),
+                    data: extra.clone(),
+                });
             }
 
             Entry::Compaction { base, summary, .. } => {
@@ -553,7 +603,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         provider_id: Some("pi".to_string()),
         files_changed,
         session_ids,
-        events: vec![],
+        events,
         base,
         ..Default::default()
     }
@@ -1284,5 +1334,62 @@ mod tests {
         let v = session_to_view(&session_from(vec![cm], "/tmp/p"));
         assert_eq!(v.turns[0].role, Role::Other("custom:foo".to_string()));
         assert_eq!(v.turns[0].text, "body");
+    }
+
+    #[test]
+    fn test_model_change_becomes_event() {
+        let mc = Entry::ModelChange {
+            base: base("mc-1", Some("u1"), "2026-04-16T00:00:03Z"),
+            provider: "anthropic".into(),
+            model_id: "claude-opus-4-7".into(),
+            extra: HashMap::from([("note".to_string(), serde_json::json!("switched"))]),
+        };
+        let v = session_to_view(&session_from(
+            vec![user_text_entry("u1", None, "hi"), mc],
+            "/tmp/p",
+        ));
+        assert_eq!(v.events.len(), 1);
+        let e = &v.events[0];
+        assert_eq!(e.id, "mc-1");
+        assert_eq!(e.parent_id.as_deref(), Some("u1"));
+        assert_eq!(e.timestamp, "2026-04-16T00:00:03Z");
+        assert_eq!(e.event_type, "model_change");
+        assert_eq!(e.data.get("provider"), Some(&serde_json::json!("anthropic")));
+        assert_eq!(
+            e.data.get("modelId"),
+            Some(&serde_json::json!("claude-opus-4-7"))
+        );
+        assert_eq!(e.data.get("note"), Some(&serde_json::json!("switched")));
+    }
+
+    #[test]
+    fn test_thinking_level_change_becomes_event() {
+        let tlc = Entry::ThinkingLevelChange {
+            base: base("tlc-1", None, "2026-04-16T00:00:04Z"),
+            thinking_level: "high".into(),
+            extra: HashMap::new(),
+        };
+        let v = session_to_view(&session_from(vec![tlc], "/tmp/p"));
+        assert_eq!(v.events.len(), 1);
+        let e = &v.events[0];
+        assert_eq!(e.event_type, "thinking_level_change");
+        assert_eq!(e.data.get("thinkingLevel"), Some(&serde_json::json!("high")));
+    }
+
+    #[test]
+    fn test_label_becomes_event() {
+        let label = Entry::Label {
+            base: base("lbl-1", Some("u1"), "2026-04-16T00:00:05Z"),
+            extra: HashMap::from([("label".to_string(), serde_json::json!("checkpoint"))]),
+        };
+        let v = session_to_view(&session_from(
+            vec![user_text_entry("u1", None, "hi"), label],
+            "/tmp/p",
+        ));
+        assert_eq!(v.events.len(), 1);
+        let e = &v.events[0];
+        assert_eq!(e.id, "lbl-1");
+        assert_eq!(e.event_type, "label");
+        assert_eq!(e.data.get("label"), Some(&serde_json::json!("checkpoint")));
     }
 }

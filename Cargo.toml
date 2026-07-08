@@ -29,12 +29,12 @@ toolpath-git = { version = "0.6.0", path = "crates/toolpath-git" }
 toolpath-claude = { version = "0.12.0", path = "crates/toolpath-claude", default-features = false }
 toolpath-gemini = { version = "0.6.0", path = "crates/toolpath-gemini", default-features = false }
 toolpath-codex = { version = "0.6.0", path = "crates/toolpath-codex" }
-toolpath-opencode = { version = "0.5.0", path = "crates/toolpath-opencode" }
+toolpath-opencode = { version = "0.5.2", path = "crates/toolpath-opencode" }
 toolpath-cursor = { version = "0.2.0", path = "crates/toolpath-cursor" }
 toolpath-github = { version = "0.6.0", path = "crates/toolpath-github" }
 toolpath-dot = { version = "0.5.0", path = "crates/toolpath-dot" }
 toolpath-md = { version = "0.7.0", path = "crates/toolpath-md" }
-toolpath-pi = { version = "0.6.0", path = "crates/toolpath-pi" }
+toolpath-pi = { version = "0.6.2", path = "crates/toolpath-pi" }
 path-cli = { version = "0.14.0", path = "crates/path-cli" }
 pathbase-client = { version = "0.2.0", path = "crates/pathbase-client" }
 

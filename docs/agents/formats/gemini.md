@@ -251,9 +251,9 @@ not concatenated into the visible text.
 
 All fields are optional. `input` → `input_tokens` and `cached` →
 `cache_read_tokens` map cleanly to the common `TokenUsage` schema. The
-standalone `tool` and `total` counters are Gemini-specific and are
-preserved raw in a provider-namespaced extras bucket
-(`Turn.extra["gemini"]["tokens"]`).
+standalone `tool` and `total` counters are Gemini-specific; the IR has
+no provider-namespaced extras field to preserve them in, so they are
+dropped.
 
 #### `thoughts` is additive reasoning — folded into `output_tokens`
 
