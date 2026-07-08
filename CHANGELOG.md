@@ -72,16 +72,27 @@ documents from GitHub Copilot CLI (`@github/copilot`) sessions under
   thin markers sharing the `task` tool's `toolCallId` — delegations pair by it,
   ids preserved through projection), and upgraded file fidelity to
   **Codex-grade** (native `edit`/`create` embed the real file-state diff in
-  `result.detailedContent`; the forward path now consumes it). Incidental
-  cross-crate fix: `toolpath-pi` now decodes a zero wire `input` as `None`
-  (same absence rule as its cache fields). Live loop committed as
-  `scripts/verify-copilot-live.sh` (isolated-home loader check + resumed-model
-  context probe — the probe answers session-specific questions correctly);
-  `scripts/capture-elicit-fixtures.sh` learned copilot.
+  `result.detailedContent`; the forward path now consumes it). Live loop
+  committed as `scripts/verify-copilot-live.sh` (isolated-home loader check +
+  resumed-model context probe — the probe answers session-specific questions
+  correctly); `scripts/capture-elicit-fixtures.sh` learned copilot.
 - File edits now **render as diffs** in a resumed session: `FileWrite` tool calls
   project to Copilot's native `edit`/`create` shape with a git-style unified diff
   in `result.detailedContent` (mapping a Claude `Edit`/`Write` accordingly). See
   `docs/agents/formats/copilot-cli/file-fidelity.md`.
+- Adds the missing **`path p export copilot`** plumbing command (the projector
+  was previously reachable only via `path resume`): `--project <dir>` writes a
+  resume-ready session under `~/.copilot/session-state/<id>/`, `--output <file>`
+  or stdout emit the projected `events.jsonl`.
+- Session token total now **merges `session.shutdown` totals** even when
+  per-message `outputTokens` are present: Copilot only reports `output`
+  per-message, so the session's input + cache totals (≈222k in the real
+  fixture) live on the shutdown and were being dropped. Output comes from the
+  per-message sum; input/cache from the shutdown.
+- **`toolpath-pi` 0.6.1**: decode a zero wire `input` as `None` (the wire can't
+  express "unknown", so a zero written by a foreign-source projection must not
+  round-trip to `Some(0)` — same absence rule already applied to its cache
+  fields).
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 

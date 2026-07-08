@@ -282,14 +282,28 @@ pub fn to_view(session: &Session) -> ConversationView {
     }
 
     // Session total = field-wise sum of per-turn usage (Σ turns = session
-    // total); fall back to `session.shutdown` when no per-turn usage exists.
+    // total). Per-turn usage only carries `output` (Copilot's
+    // `assistant.message` reports only `outputTokens`), so the session's real
+    // input/cache totals live on `session.shutdown`. When both are present,
+    // take `output` from the per-message sum and fill input/cache from the
+    // shutdown — otherwise ~all of the session's input + cache tokens (222k in
+    // the real fixture) get dropped. Fall back to whichever exists alone.
     let mut summed: Option<TokenUsage> = None;
     for t in &turns {
         if let Some(u) = &t.token_usage {
             merge_turn_usage(&mut summed, Some(u.clone()));
         }
     }
-    let total_usage = summed.or(shutdown_usage);
+    let total_usage = match (summed, shutdown_usage) {
+        (Some(mut s), Some(sd)) => {
+            s.input_tokens = s.input_tokens.or(sd.input_tokens);
+            s.cache_read_tokens = s.cache_read_tokens.or(sd.cache_read_tokens);
+            s.cache_write_tokens = s.cache_write_tokens.or(sd.cache_write_tokens);
+            s.output_tokens = s.output_tokens.or(sd.output_tokens);
+            Some(s)
+        }
+        (s, sd) => s.or(sd),
+    };
 
     // Files changed, in first-touch order, deduped.
     let mut files_changed: Vec<String> = Vec::new();
@@ -796,6 +810,27 @@ mod tests {
         let u = view.total_usage.unwrap();
         assert_eq!(u.input_tokens, Some(1200));
         assert_eq!(u.output_tokens, Some(340));
+    }
+
+    #[test]
+    fn shutdown_fills_input_cache_when_per_message_output_present() {
+        // Per-message `outputTokens` sum to a session output, but the real
+        // input/cache totals only exist on `session.shutdown.tokenDetails`.
+        // The total must keep the summed output AND pick up input/cache from
+        // the shutdown (not drop them because `summed` is Some).
+        let body = [
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"a","outputTokens":50}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:08.000Z","data":{"content":"b","outputTokens":20}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+            r#"{"type":"session.shutdown","timestamp":"2026-06-30T10:00:10.000Z","data":{"tokenDetails":{"input":{"tokenCount":800},"cache_read":{"tokenCount":9000},"cache_write":{"tokenCount":1500},"output":{"tokenCount":70}}}}"#,
+        ]
+        .join("\n");
+        let u = to_view(&parse(&body)).total_usage.unwrap();
+        assert_eq!(u.output_tokens, Some(70), "output from per-message sum");
+        assert_eq!(u.input_tokens, Some(800), "input from shutdown");
+        assert_eq!(u.cache_read_tokens, Some(9000), "cache_read from shutdown");
+        assert_eq!(u.cache_write_tokens, Some(1500), "cache_write from shutdown");
     }
 
     #[test]

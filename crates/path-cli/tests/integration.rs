@@ -501,6 +501,49 @@ fn show_copilot_renders_markdown() {
 }
 
 #[test]
+fn export_help_lists_copilot() {
+    cmd()
+        .args(["p", "export", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("copilot"));
+}
+
+#[test]
+fn export_copilot_to_output_file() {
+    // import → doc → `p export copilot --output` emits an events.jsonl.
+    let (home, id) = copilot_home_fixture();
+    let tmp = tempfile::tempdir().unwrap();
+    let doc = tmp.path().join("doc.json");
+    let stdout = cmd()
+        .args(["p", "import", "copilot", "--session", &id, "--no-cache"])
+        .env("COPILOT_HOME", home.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    std::fs::write(&doc, stdout).unwrap();
+
+    let events = tmp.path().join("events.jsonl");
+    cmd()
+        .args(["p", "export", "copilot", "--input"])
+        .arg(&doc)
+        .arg("--output")
+        .arg(&events)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("events to"));
+
+    let jsonl = std::fs::read_to_string(&events).unwrap();
+    assert!(
+        jsonl.lines().next().unwrap().contains("\"session.start\""),
+        "first projected line should be session.start"
+    );
+    assert!(jsonl.contains("hello copilot"), "user prompt round-trips");
+}
+
+#[test]
 fn export_help_lists_claude_and_pathbase() {
     cmd()
         .args(["p", "export"])

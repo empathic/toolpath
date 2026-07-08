@@ -116,6 +116,25 @@ pub enum ExportTarget {
         #[arg(short, long, conflicts_with = "project")]
         output: Option<PathBuf>,
     },
+    /// Project a toolpath document into a GitHub Copilot CLI session
+    Copilot {
+        /// Input: cache id (e.g. `copilot-abc`) or path to a toolpath JSON file
+        #[arg(short, long)]
+        input: String,
+
+        /// Target project directory. With this flag, writes the session into
+        /// `~/.copilot/session-state/<id>/` (+ a `session-store.db` row) with
+        /// this directory as the session cwd, so `copilot --resume <id>` can
+        /// load it. Only ever INSERTs a fresh id — never touches existing
+        /// sessions.
+        #[arg(short, long)]
+        project: Option<PathBuf>,
+
+        /// Output the projected `events.jsonl` to this file. Mutually
+        /// exclusive with --project. With neither, prints it to stdout.
+        #[arg(short, long, conflicts_with = "project")]
+        output: Option<PathBuf>,
+    },
     /// Project a toolpath document into a Cursor (IDE) composer
     Cursor {
         /// Input: cache id (e.g. `cursor-abc`) or path to a toolpath JSON file
@@ -223,6 +242,11 @@ pub fn run(target: ExportTarget) -> Result<()> {
             project,
             output,
         } => run_opencode(input, project, output),
+        ExportTarget::Copilot {
+            input,
+            project,
+            output,
+        } => run_copilot(input, project, output),
         ExportTarget::Cursor {
             input,
             project,
@@ -338,19 +362,17 @@ pub(crate) fn project_codex(
     Ok(session.id)
 }
 
-/// Project `path` into a GitHub Copilot CLI session under `project_dir` and
-/// return the resulting (freshly-generated) session id.
+/// Build a Copilot [`Session`](toolpath_copilot::Session) from `path`, rooted
+/// at `project_dir` with a fresh session id.
 ///
-/// ⚠️ **Preview / unverified.** Writes `~/.copilot/session-state/<id>/` and a
-/// `session-store.db` `sessions` row in the shape observed at copilotVersion
-/// 1.0.67, but whether the real `copilot --resume <id>` loads a synthesized
-/// session has not been verified (no projector round-trip through the real
-/// CLI). Only ever INSERTs a new session id — never touches existing ones.
+/// **Preview / ✅ verified.** The emitted `events.jsonl` shape loads and
+/// resumes in the real `copilot --resume` (copilot 1.0.67/1.0.68); see
+/// `docs/agents/formats/copilot-cli/writing-compatible.md`.
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_copilot(
+pub(crate) fn build_copilot_session(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-) -> Result<String> {
+) -> Result<toolpath_copilot::Session> {
     use toolpath_convo::ConversationProjector;
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
@@ -363,11 +385,70 @@ pub(crate) fn project_copilot(
     let base = view.base.get_or_insert_with(Default::default);
     base.working_dir = Some(cwd_str);
 
-    let session = toolpath_copilot::CopilotProjector::new()
+    toolpath_copilot::CopilotProjector::new()
         .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))
+}
+
+/// Project `path` into a GitHub Copilot CLI session under `project_dir`
+/// (writing `~/.copilot/session-state/<id>/` + a `session-store.db` row) and
+/// return the freshly-generated session id. Only ever INSERTs a new id.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_copilot(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    let session = build_copilot_session(path, project_dir)?;
     write_into_copilot_project(&session)?;
     Ok(session.id)
+}
+
+/// `path p export copilot` — project a document into a Copilot session on
+/// disk (`--project`), to a file (`--output`), or to stdout (neither).
+fn run_copilot(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (input, project, output);
+        anyhow::bail!("'path export copilot' requires a native environment");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let path = load_path_doc(&input)?;
+        match (project, output) {
+            (Some(project_dir), None) => {
+                let id = project_copilot(&path, &project_dir)?;
+                eprintln!();
+                eprintln!("Resume with:");
+                eprintln!("  copilot --resume {id}");
+            }
+            (None, out) => {
+                // No target dir: root the session at cwd and emit events.jsonl
+                // to the file (or stdout) without touching ~/.copilot.
+                let cwd = std::env::current_dir().context("resolve current directory")?;
+                let session = build_copilot_session(&path, &cwd)?;
+                let mut jsonl = String::new();
+                for line in &session.lines {
+                    jsonl.push_str(&serde_json::to_string(line)?);
+                    jsonl.push('\n');
+                }
+                match out {
+                    Some(out_path) => {
+                        std::fs::write(&out_path, &jsonl)
+                            .with_context(|| format!("write {}", out_path.display()))?;
+                        eprintln!(
+                            "Wrote {} events to {}",
+                            session.lines.len(),
+                            out_path.display()
+                        );
+                    }
+                    None => print!("{jsonl}"),
+                }
+            }
+            (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
+        }
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "emscripten"))]

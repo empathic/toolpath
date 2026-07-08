@@ -73,7 +73,7 @@
   },
   {
     "name": "toolpath-pi",
-    "version": "0.6.0",
+    "version": "0.6.1",
     "description": "Derive Toolpath provenance documents from Pi (pi.dev) agent session logs",
     "docs": "https://docs.rs/toolpath-pi",
     "crate": "https://crates.io/crates/toolpath-pi",

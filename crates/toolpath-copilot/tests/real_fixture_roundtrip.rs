@@ -85,8 +85,10 @@ fn forward_view_matches_source_counts() {
     let with_thinking = view.turns.iter().filter(|t| t.thinking.is_some()).count();
     assert!(with_thinking >= 10, "reasoningText → thinking (got {with_thinking})");
 
-    // Token accounting: Σ per-turn == view total output (3141 in the capture),
-    // and the shutdown's tokenDetails did not double-count it.
+    // Token accounting: Σ per-turn output == session output (3141), and the
+    // session total also carries the input/cache totals from the shutdown's
+    // tokenDetails (which per-message usage doesn't report) — without the
+    // merge these ~222k tokens would be dropped.
     let sum: u32 = view
         .turns
         .iter()
@@ -94,7 +96,11 @@ fn forward_view_matches_source_counts() {
         .filter_map(|u| u.output_tokens)
         .sum();
     assert_eq!(sum, 3141);
-    assert_eq!(view.total_usage.as_ref().unwrap().output_tokens, Some(3141));
+    let total = view.total_usage.as_ref().unwrap();
+    assert_eq!(total.output_tokens, Some(3141), "output = Σ per-message");
+    assert_eq!(total.input_tokens, Some(54), "input from shutdown");
+    assert_eq!(total.cache_read_tokens, Some(198_884), "cache_read from shutdown");
+    assert_eq!(total.cache_write_tokens, Some(22_998), "cache_write from shutdown");
 
     // Git-less scratch dir: base still carries the cwd from session.start.
     assert_eq!(
