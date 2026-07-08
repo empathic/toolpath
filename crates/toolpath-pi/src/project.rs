@@ -11,6 +11,17 @@
 //! as real Pi entries with their original ids and parentIds (see the
 //! private `insert_event_entries` helper).
 //!
+//! One fidelity edge: the metadata entries' own ids/parentIds survive,
+//! but a *message* entry whose source `parentId` pointed at a metadata
+//! entry (e.g. `a1.parentID = "mc-1"`) loses that one parent edge on a
+//! Pi→View→Path→View→Pi round-trip. `derive_path` resolves a turn's
+//! parent only against other turns, not against event steps, so a turn
+//! parented to an eventified entry becomes a root and its re-emitted
+//! entry drops the `parentId`. Pi's reader is id/order-tolerant so
+//! nothing breaks; closing the gap would need `derive_path` to resolve
+//! turn parents against event step ids too (a future toolpath-convo
+//! change).
+//!
 //! Everything else Pi-specific that the forward path didn't lift into a
 //! typed `Turn` field cannot be recovered on a Pi→View→Pi round-trip:
 //! `api`/`provider`, the structured `stopReason`, bash-execution

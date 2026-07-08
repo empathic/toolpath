@@ -227,11 +227,13 @@ fn project_view(
 /// kind)]` in event order.
 ///
 /// The forward path chains a message's snapshot events (first parents to
-/// the message, subsequent ones to the previous snapshot event) so the
-/// derived Path stays linear. The Path round-trip may also re-anchor a
-/// chained event onto another event of the same message, so attribution
-/// walks parent links: an event parented to a turn belongs to that turn;
-/// an event parented to an already-attributed event inherits its turn.
+/// the message, subsequent ones to the previous snapshot event) to avoid
+/// intra-message fan-out (not to make the whole Path linear — opencode
+/// user turns are parentless roots, so the Path is already a forest). The
+/// Path round-trip may also re-anchor a chained event onto another event
+/// of the same message, so attribution walks parent links: an event
+/// parented to a turn belongs to that turn; an event parented to an
+/// already-attributed event inherits its turn.
 fn snapshots_by_turn(view: &ConversationView) -> HashMap<String, Vec<(String, String)>> {
     let turn_ids: std::collections::HashSet<&str> =
         view.turns.iter().map(|t| t.id.as_str()).collect();

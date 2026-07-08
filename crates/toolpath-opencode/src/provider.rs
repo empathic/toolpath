@@ -186,8 +186,8 @@ struct Builder<'a> {
     /// captures correctly.
     prev_snapshot_after: Option<String>,
     /// `(message id, event id)` of the most recent `part.snapshot` event,
-    /// so a message's snapshot events chain linearly (see
-    /// [`Self::push_snapshot_event`]).
+    /// so a message's snapshot events chain off each other rather than
+    /// fanning out from the message (see [`Self::push_snapshot_event`]).
     last_snapshot_event: Option<(String, String)>,
 }
 
@@ -506,10 +506,13 @@ impl<'a> Builder<'a> {
     /// emitted step parts.
     ///
     /// The first snapshot event of a message parents to the message id;
-    /// each subsequent one chains onto the previous snapshot event, so
-    /// the derived Path stays linear (no dead-end fan-out from one turn)
-    /// and the projector re-attributes chained events to their turn by
-    /// walking parent links.
+    /// each subsequent one chains onto the previous snapshot event, so a
+    /// message's snapshot events avoid intra-message fan-out (they form a
+    /// chain off the message rather than a star). This does not make the
+    /// whole Path linear — opencode user messages have no `parentID`, so
+    /// every user turn is already a root and a multi-exchange session is a
+    /// forest with dead-end steps independent of snapshots. The projector
+    /// re-attributes chained events to their turn by walking parent links.
     fn push_snapshot_event(&mut self, p: &Part, msg: &Message, sha: &str, part_kind: &str) {
         let id = format!("snapshot-{}", p.id);
         let parent = self
@@ -1220,7 +1223,9 @@ mod tests {
         // (event_type "part.snapshot") so a re-imported projection can
         // regenerate diffs. The first snapshot event of a message parents
         // to the message; subsequent ones chain onto the previous
-        // snapshot event so the derived Path stays linear.
+        // snapshot event, so a message's snapshot events avoid
+        // intra-message fan-out (the Path is a forest regardless, since
+        // opencode user turns are parentless roots).
         let (_t, mgr) = setup(BASIC_SQL);
         let view = to_view(&mgr.read_session("ses_x").unwrap());
         let snaps: Vec<(String, String, Option<String>)> = view
