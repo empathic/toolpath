@@ -6,6 +6,36 @@ use crate::reader::ConversationReader;
 use crate::types::{ChatFile, Conversation, ConversationMetadata, GeminiRole, LogEntry};
 use std::path::PathBuf;
 
+/// Resolve the display `project_path` for a session's metadata.
+///
+/// Trust order (mirrors the toolpath-claude #103 precedent — a
+/// projected/foreign session must not be able to claim an arbitrary
+/// `project_path` via its own log content):
+///
+/// 1. If `caller_project` is an absolute path, it wins verbatim — the
+///    caller (typically derived from the on-disk project identity, e.g.
+///    via `list_project_dirs`) is authoritative.
+/// 2. Otherwise fall back to the chat file's internal `directories()[0]`,
+///    then to `caller_project` verbatim (prior behavior, preserved for
+///    back-compat when nothing else resolves).
+///
+/// Note that a non-absolute `caller_project` cannot actually reach this
+/// function today: [`PathResolver::project_dir`] only resolves real
+/// project paths (an exact `projects.json` key, or the SHA-256 of the
+/// passed string — never `tmp/<arg>` verbatim), so a bare slot name fails
+/// file resolution with `ConversationNotFound` before metadata assembly.
+/// The fallback arm exists only to preserve the old behavior for that
+/// shape.
+fn resolve_display_project_path(caller_project: &str, chat: &ChatFile) -> String {
+    if std::path::Path::new(caller_project).is_absolute() {
+        return caller_project.to_string();
+    }
+    chat.directories()
+        .first()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| caller_project.to_string())
+}
+
 /// First non-empty `"user"` prompt in a chat file, used as a session "title".
 fn first_user_text(chat: &ChatFile) -> Option<String> {
     chat.messages
@@ -246,11 +276,7 @@ impl ConvoIO {
                 .iter()
                 .filter(|c| c.kind.as_deref() == Some("subagent"))
                 .count();
-            let project_root: String = main
-                .directories()
-                .first()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| project_path.to_string());
+            let project_root: String = resolve_display_project_path(project_path, &main);
             let first_user_message = first_user_text(&main);
             return Ok(ConversationMetadata {
                 session_uuid: session_id.to_string(),
@@ -287,12 +313,7 @@ impl ConvoIO {
             .filter(|(_, c)| c.kind.as_deref() == Some("subagent"))
             .count();
 
-        let project_root: String = main
-            .1
-            .directories()
-            .first()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| project_path.to_string());
+        let project_root: String = resolve_display_project_path(project_path, &main.1);
 
         let first_user_message = first_user_text(&main.1);
 
@@ -407,6 +428,43 @@ mod tests {
         assert_eq!(convo.sub_agents[0].session_id, "sub-s");
         assert_eq!(convo.sub_agents[0].summary.as_deref(), Some("found it"));
         assert_eq!(convo.project_path.as_deref(), Some("/abs/myrepo"));
+    }
+
+    #[test]
+    fn test_read_session_metadata_trusts_caller_project_over_directories() {
+        // Mirrors the toolpath-claude #103 precedent
+        // (crates/toolpath-claude/src/reader.rs test
+        // `test_read_conversation_metadata`): the chat file's internal
+        // `directories` claims a foreign path, but the caller passed an
+        // absolute `project_path` — the caller's value must win.
+        // Hash-slot layout (no projects.json): the slot dir is the
+        // SHA-256 of the caller's project path, so file resolution works
+        // without any friendly-name mapping — keeping the fixture free of
+        // anything that could imply slot resolution is under test here.
+        let temp = TempDir::new().unwrap();
+        let gemini = temp.path().join(".gemini");
+        let slot = crate::paths::project_hash("/real/project");
+        let session_dir = gemini.join("tmp").join(&slot).join("chats/session-uuid");
+        fs::create_dir_all(&session_dir).unwrap();
+        let main = r#"{
+  "sessionId":"main-s",
+  "projectHash":"h",
+  "startTime":"2026-04-17T15:00:00Z",
+  "lastUpdated":"2026-04-17T15:10:00Z",
+  "directories":["/somewhere/else"],
+  "messages":[
+    {"id":"m1","timestamp":"2026-04-17T15:00:00Z","type":"user","content":[{"text":"Hello"}]}
+  ]
+}"#;
+        fs::write(session_dir.join("main.json"), main).unwrap();
+
+        let resolver = PathResolver::new().with_gemini_dir(&gemini);
+        let io = ConvoIO::with_resolver(resolver);
+
+        let meta = io
+            .read_session_metadata("/real/project", "session-uuid")
+            .unwrap();
+        assert_eq!(meta.project_path, "/real/project");
     }
 
     #[test]

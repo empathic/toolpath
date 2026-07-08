@@ -2,6 +2,27 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-gemini 0.6.1: derive `project_path` from caller/on-disk identity, not the log's `directories` — 2026-07-08
+
+Same class of bug as #103 (`toolpath-claude` 0.11.1): `read_session_metadata`
+preferred the chat file's internal `directories()[0]` over the caller-passed
+project path, so a session projected onto this machine from elsewhere (e.g.
+`path resume` of a Pathbase upload) reported the original author's foreign
+path in `ConversationMetadata.project_path` instead of the path it actually
+lives under here.
+
+Fix: new trust order, in `crates/toolpath-gemini/src/io.rs`. (1) If the
+caller-passed `project_path` is absolute, use it verbatim — it's derived
+from the on-disk project identity by every real caller (e.g.
+`list_project_dirs`). (2) Only then fall back to the chat file's internal
+`directories()[0]`, then to the caller string verbatim (preserves prior
+behavior when nothing else resolves; a non-absolute caller string can't
+actually reach metadata assembly today, since `PathResolver::project_dir`
+never resolves a bare slot name to its own slot directory). Both
+`project_root` call sites in `read_session_metadata` (main-file and
+orphan-UUID-directory cases) now go through a shared
+`resolve_display_project_path` helper. No public API change.
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived
