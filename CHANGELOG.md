@@ -2,6 +2,27 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Claude: group token accounting must not depend on line adjacency — 2026-07-08
+
+- **`toolpath-claude`** (0.12.1): the group-usage canonicalization added in
+  0.12.0 assumed a `group_id`'s lines were contiguous, and `group_id` itself
+  was `None` whenever `message.id` was absent. Two holes:
+  - Multi-terminal writers can interleave a split message's lines
+    non-contiguously (see
+    `docs/agents/formats/claude-code/known-issues.md`, "Multi-terminal
+    writes to the same project"); an interleaved group split into two
+    contiguous runs, each contributing a full message total — double
+    counting.
+  - An id-less assistant message (no `message.id`) made every content-block
+    line its own accounting unit, with the same usage summed once per line.
+  `canonicalize_message_usage` and `sum_usage` now group `group_id`s
+  **globally** rather than by adjacency, and `group_id` falls back to the
+  entry-level `request_id` for assistant entries when `message.id` is
+  absent (Anthropic's request ID is "useful for deduping streamed
+  messages" — one assistant message per request — per
+  `docs/agents/formats/claude-code/jsonl-envelope.md`). User entries never
+  fall back to `request_id`.
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived
