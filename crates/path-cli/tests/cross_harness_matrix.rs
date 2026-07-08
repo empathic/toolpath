@@ -162,6 +162,45 @@ impl Harness for PiHarness {
     }
 }
 
+struct OpenclawHarness;
+impl Harness for OpenclawHarness {
+    fn name(&self) -> &'static str {
+        "openclaw"
+    }
+    fn roundtrip(&self, view: &ConversationView) -> ConversationView {
+        let projector = toolpath_openclaw::project::OpenClawProjector::default();
+        let session = projector.project(view).expect("openclaw project");
+        toolpath_openclaw::session_to_view(&session)
+    }
+    fn load_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("openclaw/convo.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let session = toolpath_openclaw::reader::read_session_from_file(&path)
+            .expect("openclaw fixture parse");
+        Some(toolpath_openclaw::session_to_view(&session))
+    }
+    fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
+        let projector = toolpath_openclaw::project::OpenClawProjector::default();
+        let session = projector
+            .project(view)
+            .map_err(|e| format!("project: {}", e))?;
+        let mut lines: Vec<String> = Vec::new();
+        for entry in &session.entries {
+            lines.push(serde_json::to_string(entry).map_err(|e| format!("entry: {}", e))?);
+        }
+        let tmp = tempfile::Builder::new()
+            .suffix(".jsonl")
+            .tempfile()
+            .map_err(|e| format!("tempfile: {}", e))?;
+        std::fs::write(tmp.path(), lines.join("\n")).map_err(|e| format!("write: {}", e))?;
+        toolpath_openclaw::reader::read_session_from_file(tmp.path())
+            .map_err(|e| format!("re-read: {}", e))?;
+        Ok(())
+    }
+}
+
 struct GeminiHarness;
 impl Harness for GeminiHarness {
     fn name(&self) -> &'static str {
@@ -983,6 +1022,7 @@ fn run_matrix(label: &str, sources: &[(String, ConversationView)]) {
         Box::new(ClaudeHarness),
         Box::new(CodexHarness),
         Box::new(PiHarness),
+        Box::new(OpenclawHarness),
         Box::new(GeminiHarness),
         Box::new(OpencodeHarness),
         Box::new(CursorHarness),
@@ -1033,6 +1073,7 @@ fn all_harnesses() -> Vec<Box<dyn Harness>> {
         Box::new(ClaudeHarness),
         Box::new(CodexHarness),
         Box::new(PiHarness),
+        Box::new(OpenclawHarness),
         Box::new(GeminiHarness),
         Box::new(OpencodeHarness),
         Box::new(CursorHarness),
