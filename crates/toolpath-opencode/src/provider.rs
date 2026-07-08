@@ -726,7 +726,7 @@ impl ConversationProvider for OpencodeConvo {
         let s = self
             .read_session(conversation_id)
             .map_err(|e| ConvoTraitError::Provider(e.to_string()))?;
-        Ok(to_view(&s))
+        Ok(to_view_with_resolver(&s, self.resolver()))
     }
 
     fn load_metadata(
@@ -886,6 +886,7 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn setup(body_sql: &str) -> (TempDir, OpencodeConvo) {
@@ -1151,5 +1152,99 @@ mod tests {
         assert_eq!(ids, vec!["ses_x".to_string()]);
         let v = ConversationProvider::load_conversation(&mgr, "", "ses_x").unwrap();
         assert_eq!(v.turns.len(), 2);
+    }
+
+    /// Build a bare snapshot git repo for `(project_id, worktree)` with two
+    /// commits — an empty tree ("before") and a tree containing
+    /// `main.cpp` ("after") — and return their commit SHAs. Mirrors how
+    /// opencode's real snapshot repos are laid out (see `paths.rs`).
+    fn build_snapshot_repo(
+        resolver: &PathResolver,
+        project_id: &str,
+        worktree: &std::path::Path,
+    ) -> (String, String) {
+        let gitdir = resolver.snapshot_gitdir(project_id, worktree).unwrap();
+        fs::create_dir_all(&gitdir).unwrap();
+        let repo = git2::Repository::init_bare(&gitdir).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+
+        let empty_tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let empty_tree = repo.find_tree(empty_tree_id).unwrap();
+        let snap_a = repo
+            .commit(None, &sig, &sig, "snap_a", &empty_tree, &[])
+            .unwrap();
+
+        let blob_id = repo.blob(b"int main(){}\n").unwrap();
+        let mut tb = repo.treebuilder(None).unwrap();
+        tb.insert("main.cpp", blob_id, 0o100_644).unwrap();
+        let tree_b = repo.find_tree(tb.write().unwrap()).unwrap();
+        let snap_b = repo
+            .commit(None, &sig, &sig, "snap_b", &tree_b, &[])
+            .unwrap();
+
+        (snap_a.to_string(), snap_b.to_string())
+    }
+
+    #[test]
+    fn trait_load_conversation_uses_configured_resolver_for_snapshots() {
+        let temp = TempDir::new().unwrap();
+        let data = temp.path().join(".local/share/opencode");
+        fs::create_dir_all(&data).unwrap();
+        let resolver = PathResolver::new()
+            .with_home(temp.path())
+            .with_data_dir(&data);
+
+        // BASIC_SQL's session lives at project "proj" / worktree "/tmp/proj".
+        let (snap_a, snap_b) = build_snapshot_repo(&resolver, "proj", Path::new("/tmp/proj"));
+        let sql = BASIC_SQL
+            .replace("snap_a", &snap_a)
+            .replace("snap_b", &snap_b);
+
+        let conn = Connection::open(data.join("opencode.db")).unwrap();
+        conn.execute_batch(&format!(
+            r#"
+            CREATE TABLE project (
+              id text PRIMARY KEY, worktree text NOT NULL, vcs text, name text,
+              icon_url text, icon_color text,
+              time_created integer NOT NULL, time_updated integer NOT NULL,
+              time_initialized integer, sandboxes text NOT NULL, commands text
+            );
+            CREATE TABLE session (
+              id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
+              slug text NOT NULL, directory text NOT NULL, title text NOT NULL,
+              version text NOT NULL, share_url text,
+              summary_additions integer, summary_deletions integer,
+              summary_files integer, summary_diffs text, revert text, permission text,
+              time_created integer NOT NULL, time_updated integer NOT NULL,
+              time_compacting integer, time_archived integer, workspace_id text
+            );
+            CREATE TABLE message (
+              id text PRIMARY KEY, session_id text NOT NULL,
+              time_created integer NOT NULL, time_updated integer NOT NULL,
+              data text NOT NULL
+            );
+            CREATE TABLE part (
+              id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
+              time_created integer NOT NULL, time_updated integer NOT NULL,
+              data text NOT NULL
+            );
+            {sql}
+        "#
+        ))
+        .unwrap();
+        drop(conn);
+
+        // Constructed with a resolver pointed at the temp data dir — this
+        // is the configuration the trait path must honor.
+        let convo = OpencodeConvo::with_resolver(resolver);
+
+        let view = ConversationProvider::load_conversation(&convo, "", "ses_x").unwrap();
+        assert!(
+            view.turns
+                .iter()
+                .flat_map(|t| &t.file_mutations)
+                .any(|m| m.raw_diff.is_some()),
+            "trait path must resolve snapshot diffs with the configured resolver"
+        );
     }
 }

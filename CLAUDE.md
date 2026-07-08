@@ -182,7 +182,7 @@ Tests live alongside the code (`#[cfg(test)] mod tests`), plus `path-cli` has in
 - `toolpath-claude`: 229 unit + 18 integration + 6 doc tests (path resolution, conversation reading, query, chaining, watcher, derive, metadata first-user-message, group_id grouping + once-per-message usage totals)
 - `toolpath-gemini`: 161 unit + 29 integration + 5 doc tests (path resolution, chat-file parsing, query, watcher, derive, provider, round-trip fidelity, thoughts-folded-into-output + reasoning breakdown round-trip)
 - `toolpath-codex`: 80 unit + 51 integration + 2 doc tests (rollout parsing, provider assembly, patch-fidelity derive, real-session fixture, source→path fidelity invariants, JSON wire-level round-trip, per-turn token deltas from cumulative counters, reasoning breakdown)
-- `toolpath-opencode`: 52 unit + 19 integration + 1 doc test (SQLite reader, JSON payload serde, provider assembly, snapshot-based derive, tool-input fallback for gitignored paths, reasoning breakdown)
+- `toolpath-opencode`: 53 unit + 19 integration + 1 doc test (SQLite reader, JSON payload serde, provider assembly, snapshot-based derive, tool-input fallback for gitignored paths, reasoning breakdown, trait-path resolver configuration)
 - `toolpath-cursor`: 78 unit + 8 integration round-trip + 1 real-DB sanity + 1 doc test (state.vscdb SQLite reader, bubble store + composer header parsing, content-addressed blob lookup, projector with full TOOL_TABLE coverage, JSONL transcript ingest in `examples/dump_fixture.rs`)
 - `toolpath-pi`: 133 unit + 26 integration + 5 doc tests (types, paths, error, reader, io, provider)
 - `toolpath-dot`: 30 unit + 2 doc tests (render, visual conventions, escaping)
