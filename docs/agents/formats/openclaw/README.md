@@ -1,10 +1,12 @@
 # OpenClaw on-disk format
 
-> **Reference revision:** 2026-06-30
-> **Tracks:** OpenClaw package `2026.6.10`, session format **version 3**
+> **Reference revision:** 2026-07-08
+> **Tracks:** OpenClaw package `2026.6.10`–`2026.6.11`, session format **version 3**
 > **Sourced from:** upstream code at
-> `openclaw/openclaw @ 68c533cfb339cbb8650832cb2a4bf38dba7022fa` — **no
-> first-hand on-disk sample yet** (see [Sourcing](#sourcing-and-confidence)).
+> `openclaw/openclaw @ 68c533cfb339cbb8650832cb2a4bf38dba7022fa`, now
+> corroborated by **first-hand sessions** captured from the official
+> `openclaw/openclaw` Docker image (v`2026.6.11`) via
+> `scripts/openclaw-docker.sh` (see [Sourcing](#sourcing-and-confidence)).
 >
 > When you change anything in this directory, bump the revision date here
 > and add a note to [format-changelog.md](format-changelog.md).
@@ -59,32 +61,37 @@ prefer a concrete example, start with the **walkthrough** (#10).
 
 ## Sourcing and confidence
 
-Unlike the other references in this directory (claude-code, codex, cursor,
-gemini, opencode, pi), this one is **not** backed by first-hand on-disk
-samples or by our own parser:
+Originally compiled purely from upstream source; now backed by both a
+parser and first-hand samples:
 
-- **No installed OpenClaw / no sample file.** Every claim is derived from
-  **upstream source code** at the pinned commit, not from observed bytes.
-- **A `toolpath-openclaw` crate now implements this reference**
-  (`crates/toolpath-openclaw`), so the envelope, entry types, message/content
-  shapes, token-usage mapping, and the projector round-trip are corroborated
-  by its tests — but still against **synthesized** fixtures, not a captured
-  real session. Claims here remain "from source" until a real OpenClaw
-  session confirms them.
+- **First-hand sessions observed** (2026-07-07/08): real transcripts were
+  captured from the official Docker image (v`2026.6.11`) via
+  `scripts/openclaw-docker.sh` and read back with `toolpath-openclaw`. The
+  header, entry types (`session`/`message`/`model_change`/
+  `thinking_level_change`/`custom`), roles (`user`/`assistant`/`toolResult`),
+  content blocks, `stopReason`, and the `Usage` shape (including a real
+  prompt-cache `cacheWrite`) all matched this reference exactly. Observed
+  native tool names: bare `read` / `write`. Inception was verified live: a
+  running gateway adopts a projected transcript + `sessions.json` entry
+  without restart and appends follow-up turns to the same file.
+- **The `toolpath-openclaw` crate implements this reference**
+  (`crates/toolpath-openclaw`) with tests over both synthesized fixtures and
+  the captured real sessions.
 
 Consequences for how to read these docs:
 
-- Field tables here mean "**from source**" (the producer's type), not
-  "observed in the wild." Where a serialized form could not be confirmed
-  from the code, the doc says so explicitly.
-- The transcript is touched by **two code layers** (agent-core harness
-  storage and the gateway session manager) with slightly different type
-  names for the same JSON; we use the agent-core names and flag the
-  reconciliation in
-  [known-issues.md](known-issues.md#two-code-layers-for-one-format).
+- "**Observed**" now means seen in a real captured session; "**from
+  source**" still marks claims only read from upstream code (branching
+  `leaf`/`appendMode` mechanics, `compaction`/`branch_summary` on disk,
+  `parentSession` chaining, and group-channel sessions have not yet been
+  observed in the wild).
+- The **two-code-layers question is resolved**: transcripts written by the
+  running gateway parse cleanly against the agent-core shapes documented
+  here — the two layers serialize the same JSON
+  (see [known-issues.md](known-issues.md#two-code-layers-for-one-format)).
 
-When the crate is built, re-verify against a real session, upgrade claims
-from "from source" to "observed," and record it in the changelog.
+When a new OpenClaw release changes behavior, re-verify against a fresh
+capture and record it in the changelog.
 
 ## Conventions
 

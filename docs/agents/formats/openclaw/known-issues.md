@@ -86,19 +86,23 @@ Old logs predating entry ids are migrated with synthetic `parentId` chains
 (`migrateLegacySessionEntries`, `src/trajectory/export.ts:946-989`). Ids in
 such files may be derived, not original.
 
-## Two code layers for one format
+## Two code layers for one format (resolved)
 
 The transcript is produced/consumed by both the agent-core harness storage
 (`packages/agent-core/src/harness/session/jsonl-storage.ts`, types in
-`harness/types.ts`: `SessionTreeEntry`, `MessageEntry`, `LeafEntry`, …) and
-the gateway session manager (`src/agents/sessions/session-manager.ts`,
-writer `src/config/sessions/transcript-jsonl.ts`: `SessionEntry`,
-`SessionMessageEntry`, `CompactionEntry`, `FileEntry`). These appear to be
-two views of the **same** on-disk JSONL, but they use different type names.
-This reference uses the agent-core names. **Unconfirmed:** that the two
-serialize byte-identically in every case — verify against a real file (and
-against whichever layer actually writes the user's transcript) when the
-`toolpath-openclaw` crate is built.
+`harness/types.ts`) and the gateway session manager
+(`src/agents/sessions/session-manager.ts`). **Resolved by observation
+(2026-07-07, image v2026.6.11):** transcripts written by the running
+gateway parse cleanly against the agent-core shapes documented here — the
+two layers serialize the same JSON. This reference keeps the agent-core
+names.
+
+## Transcript file mode is 0644, not 0600 (observed)
+
+We originally documented transcripts as `0600` from reading the gateway's
+append path. Observed on a real state dir: the **transcript** `.jsonl` is
+created `0644`, while `sessions.json` and the `.trajectory.jsonl` sidecar
+are `0600`. Treat transcript permissions as world-readable by default.
 
 ## Daemon profile can relocate the whole store
 

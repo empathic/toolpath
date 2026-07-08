@@ -9,6 +9,35 @@ The format self-identifies via the header `version` field
 hard-rejects anything other than `3`. The OpenClaw package version (CalVer,
 e.g. `2026.6.10`) is separate from this on-disk format version.
 
+## 2026-07-08: first-hand observation pass (image v2026.6.11)
+
+Real sessions were captured from the official `openclaw/openclaw` Docker
+image via `scripts/openclaw-docker.sh` and are committed as fixtures at
+`test-fixtures/openclaw/`. Confirmed against real bytes: the v3 header,
+entry types `session`/`message`/`model_change`/`thinking_level_change`/
+`custom`/`custom_message`, roles `user`/`assistant`/`toolResult`, content
+blocks, `stopReason`, and the full `Usage` shape (including prompt-cache
+`cacheWrite`). Newly observed facts:
+
+- **Native tool names:** `exec`, `read`, `write`, `edit`,
+  `sessions_spawn` (sub-agent dispatch), `sessions_yield`.
+- **Sub-agent routing keys:** `agent:<id>:subagent:<uuid>` appears in
+  `sessions.json` after a `sessions_spawn`, with the child transcript as a
+  sibling file.
+- **DM scope default:** `agent --to <E.164>` routes into
+  `agent:<id>:main` (the default DM scope collapses DMs into the main
+  session); a channel-scoped key requires an explicit `--session-key`.
+- **`sessions.json` entries carry ~19 fields** (`updatedAt`,
+  `sessionStartedAt`, token counters, `systemPromptReport`, …) and
+  `sessionFile` is stored **absolute**.
+- **Transcript file mode is `0644`** (docs previously said `0600`; see
+  known-issues).
+- **Inception adoption:** a running gateway adopts a transcript +
+  `sessions.json` entry written by an external tool without restart, and
+  appends follow-up turns to the same file.
+- `leaf` rows are **not** written on every append — a linear real session
+  contained none (the visible head falls back to the last entry).
+
 ## Format version 3
 
 **Status as of this reference:** the only format version this doc set

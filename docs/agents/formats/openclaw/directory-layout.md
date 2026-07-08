@@ -59,6 +59,7 @@ find sessions missing, check whether a profile is in play.
         │   └── openclaw-agent.sqlite         # per-agent DB (caches, RAG index) — NOT content
         └── sessions/                         # ← canonical transcripts live here
             ├── sessions.json                 # index: sessionKey -> { sessionId, sessionFile, … }
+            ├── skills-prompts/               # per-session skill prompt snapshots (observed)
             ├── <sessionId>.jsonl             # canonical session transcript
             ├── <sessionId>-topic-<topicId>.jsonl   # topic-scoped transcript
             ├── <ISO-ts>_<sessionId>.jsonl    # forked / rotated transcript
@@ -125,8 +126,8 @@ of the live store.
 
 | Path | Mode |
 |---|---|
-| `…/sessions/<sessionId>.jsonl` | `0600` (append opens `a+`, `0o600`; `src/config/sessions/transcript-jsonl.ts:98`) |
-| `…/sessions/sessions.json` | `0600` (atomic write; dir `0o777 & ~umask`) |
+| `…/sessions/<sessionId>.jsonl` | **`0644` observed** on real state dirs (the source's append path opens `a+` `0o600` — `src/config/sessions/transcript-jsonl.ts:98` — but the file as created by the running gateway is world-readable) |
+| `…/sessions/sessions.json` | `0600` (atomic write; dir `0o777 & ~umask`) — confirmed observed |
 | `…/sessions/<sessionId>.trajectory.jsonl` | `0600` |
 | `~/.openclaw/state/openclaw.sqlite` | dir `0700`, file `0600` |
 | `~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite` | dir `0700`, file `0600` |

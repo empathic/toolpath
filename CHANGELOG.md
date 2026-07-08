@@ -2,6 +2,21 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-openclaw 0.1.0: new provider (derive + inception) — 2026-07-08
+
+New crate `toolpath-openclaw`: reads OpenClaw's multi-channel agent-session
+JSONL (`~/.openclaw/agents/<id>/sessions/`, format v3), derives `Path`
+documents with channel-aware `human:<channel>/<peerId>` actors recovered
+from the `sessions.json` routing key, and projects/incepts a `Path` back
+onto disk (transcript + routing entry) that a **running** OpenClaw gateway
+adopts without restart — verified live. Wired through the `path` CLI
+(`p import/list/show/export openclaw`, `share`, and "inception+" `resume`
+that skips exec when a gateway is already listening). Validated against
+real sessions captured from the official Docker image (v2026.6.11),
+committed as `test-fixtures/openclaw/` and wired into the cross-harness
+matrix (all cells pass). File changes are structural only — OpenClaw
+stores no diffs.
+
 ## toolpath-convo 0.12.0: session-level `user_actor` override — 2026-06-30
 
 Adds `DeriveConfig.user_actor: Option<String>` so a provider can set a

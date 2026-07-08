@@ -48,6 +48,7 @@ version uses different flags):
 | Gemini | `gemini -p "<prompt>"` | `~/.gemini/tmp/<slot>/chats/session-*.json` |
 | Pi | `pi -p "<prompt>"` (varies; manual fallback documented below) | `~/.pi/agent/sessions/--<encoded-cwd>--/*.jsonl` |
 | Opencode | `opencode run "<prompt>"` then `path p export opencode` | rows in `opencode.db`, exported to JSON |
+| OpenClaw | `scripts/openclaw-docker.sh up` then `agent "$(cat docs/agents/feature-elicit.prompt.txt)"` | `~/.openclaw-docker/agents/main/sessions/<uuid>.jsonl` |
 
 Cursor is **not** in the automated list. The IDE has no scriptable
 chat-panel entry point, and the `cursor-agent` CLI writes its real
