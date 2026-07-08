@@ -615,9 +615,13 @@ fn canonicalize_message_usage(turns: &mut [Turn]) {
 ///
 /// Adjacency-free: a turn's usage counts only when it has no `group_id`, or
 /// when it's the **last** turn (by index) carrying its `group_id` — computed
-/// by scanning for each gid's max index, not by checking the next turn. This
-/// stays correct on non-canonicalized input (e.g. interleaved groups) as well
-/// as on canonicalized input.
+/// by scanning for each gid's max index, not by checking the next turn, so
+/// interleaved (non-contiguous) groups still count once. Note the counted
+/// value is that last turn's **own** `token_usage`: it equals the message
+/// total only when the group's usage is repeated on every line or carried on
+/// the last line (or was already canonicalized to the field-wise max).
+/// Production always runs [`canonicalize_message_usage`] first, which
+/// guarantees that precondition.
 fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
     use std::collections::HashMap;
 
