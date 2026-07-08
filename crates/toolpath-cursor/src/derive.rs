@@ -111,12 +111,14 @@ mod tests {
         let (_t, mgr) = setup();
         let session = mgr.read_session("c1").unwrap();
         let path = derive_path(&session, &DeriveConfig::default());
+        // Key is relativized against `path.base` (file:///p) to a bare
+        // RFC-compliant key.
         let file_step = path
             .steps
             .iter()
-            .find(|s| s.change.contains_key("/p/x.rs"))
-            .expect("no step carries /p/x.rs");
-        let change = &file_step.change["/p/x.rs"];
+            .find(|s| s.change.contains_key("x.rs"))
+            .expect("no step carries x.rs");
+        let change = &file_step.change["x.rs"];
         let structural = change.structural.as_ref().unwrap();
         assert_eq!(structural.change_type, "file.write");
         assert_eq!(structural.extra["operation"], "add");

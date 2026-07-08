@@ -2,6 +2,24 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Derive: relativize file change keys against `path.base` — 2026-07-08
+
+- **`toolpath-convo`** (0.11.2): `derive_path` now stores file-change
+  artifact keys base-relative, per the RFC ("bare paths are relative to
+  `path.base`"). Previously Claude emitted absolute keys
+  (`/Users/x/proj/src/main.rs`) while Codex/Cursor emitted workspace-relative
+  ones, so derived documents mixed key styles depending on the harness. When
+  the resolved `base.uri` is `file://<root>` and a file path is absolute and
+  under `<root>` (matched on a component boundary), the key is stored
+  base-relative with no leading slash; paths outside the base, already-relative
+  paths, and non-`file://` bases pass through verbatim. Applies to both
+  `file.write` change keys and the `files_changed` list in `meta.extra`. The
+  conversation self-key (`provider://id`) is never touched. On the reverse
+  path, `extract_conversation` resolves a base-relative key back to an absolute
+  path against `view.base.working_dir`, so `FileMutation.path` and
+  `files_changed` round-trip to their original absolute forms and
+  derive→extract→derive is stable.
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived

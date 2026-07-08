@@ -198,12 +198,14 @@ mod tests {
         );
         // The assistant turn's `write` tool produces a sibling `file.write`
         // entry via the tool-input fallback (no snapshot repo on disk).
+        // Key is relativized against `path.base` (file:///tmp/proj) to a
+        // bare RFC-compliant key.
         let file_step = p
             .steps
             .iter()
-            .find(|s| s.change.contains_key("/tmp/proj/main.cpp"))
+            .find(|s| s.change.contains_key("main.cpp"))
             .expect("no step carries the file artifact");
-        let change = &file_step.change["/tmp/proj/main.cpp"];
+        let change = &file_step.change["main.cpp"];
         let structural = change.structural.as_ref().unwrap();
         assert_eq!(structural.change_type, "file.write");
         assert_eq!(structural.extra["operation"], "add");

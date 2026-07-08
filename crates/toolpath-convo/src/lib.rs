@@ -118,8 +118,10 @@ pub struct SessionBase {
 /// snapshot diffs between turns).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileMutation {
-    /// File path (relative to `view.base.working_dir` if relative, or
-    /// `file://`/absolute).
+    /// File path. Absolute when the workspace root is known: `extract`
+    /// resolves base-relative change keys against `view.base.working_dir`,
+    /// and `derive` relativizes them back to bare keys under `path.base`.
+    /// May be relative when no absolute root is available.
     pub path: String,
     /// `ToolInvocation::id` of the tool call that produced this mutation,
     /// when the provider can attribute it.

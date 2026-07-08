@@ -310,16 +310,37 @@ fn patch_apply_files_all_surface_as_artifacts() {
         .flat_map(|s| s.change.keys().map(|k| k.as_str()))
         .collect();
 
+    // Change keys are relativized against `path.base` (RFC: bare keys are
+    // base-relative), so relativize each source path the same way before
+    // asserting membership.
+    let base_root: Option<String> = path
+        .path
+        .base
+        .as_ref()
+        .and_then(|b| b.uri.strip_prefix("file://"))
+        .map(|r| r.trim_end_matches('/').to_string());
+    let relativize = |p: &str| -> String {
+        match &base_root {
+            Some(root) if !root.is_empty() && p.starts_with('/') => match p.strip_prefix(root) {
+                Some(rest) if rest.starts_with('/') => rest[1..].to_string(),
+                _ => p.to_string(),
+            },
+            _ => p.to_string(),
+        }
+    };
+
     for line in &s.lines {
         if let RolloutItem::EventMsg(toolpath_codex::EventMsg::PatchApplyEnd(patch)) = line.item() {
             if !patch.success {
                 continue;
             }
             for file_path in patch.changes.keys() {
+                let expected = relativize(file_path);
                 assert!(
-                    artifact_keys.contains(file_path.as_str()),
-                    "file {} from successful patch_apply_end not found in derived artifacts",
-                    file_path
+                    artifact_keys.contains(expected.as_str()),
+                    "file {} (key {}) from successful patch_apply_end not found in derived artifacts",
+                    file_path,
+                    expected
                 );
             }
         }
