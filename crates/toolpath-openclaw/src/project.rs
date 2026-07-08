@@ -9,7 +9,7 @@
 //! `anthropic`, stop reason `stop`). Foreign tool names are remapped through
 //! [`crate::provider::native_name`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -18,7 +18,7 @@ use toolpath_convo::{
 };
 
 use crate::error::OpenClawError;
-use crate::paths::{IndexEntry, SessionsIndex, normalize_agent_id};
+use crate::paths::normalize_agent_id;
 use crate::reader::OpenClawSession;
 use crate::types::{
     AgentMessage, ContentBlock, CostBreakdown, Entry, EntryBase, KnownStopReason, MessageContent,
@@ -145,17 +145,46 @@ impl OpenClawProjector {
             _ => format!("agent:{agent_id}:main"),
         };
 
-        let mut map: BTreeMap<String, IndexEntry> = SessionsIndex::load(dir).map(|i| i.0).unwrap_or_default();
-        map.insert(
+        // Merge through raw JSON, never through our typed view: a real
+        // sessions.json carries ~19 fields per entry (and could carry shapes
+        // our IndexEntry can't parse). Deserializing the whole file into
+        // typed entries and rewriting it would silently drop or mangle every
+        // other session's routing. Read the object verbatim, replace only
+        // our key, and refuse to touch a file we can't parse at all.
+        let index_path = dir.join("sessions.json");
+        let mut root: serde_json::Map<String, Value> = if index_path.exists() {
+            let bytes = std::fs::read(&index_path)?;
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(Value::Object(map)) => map,
+                _ => {
+                    return Err(OpenClawError::other(format!(
+                        "refusing to overwrite unparseable sessions.json at {} \
+                         (fix or remove it, then retry)",
+                        index_path.display()
+                    )));
+                }
+            }
+        } else {
+            serde_json::Map::new()
+        };
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        root.insert(
             key,
-            IndexEntry {
-                session_id: Some(session_id.to_string()),
-                session_file: Some(file_name.to_string()),
-                extra: HashMap::new(),
-            },
+            json!({
+                "sessionId": session_id,
+                "sessionFile": file_name,
+                "sessionStartedAt": now_ms,
+                "updatedAt": now_ms,
+            }),
         );
-        let json = serde_json::to_vec_pretty(&map).map_err(OpenClawError::Json)?;
-        write_private(&dir.join("sessions.json"), &json)?;
+
+        let json_bytes =
+            serde_json::to_vec_pretty(&Value::Object(root)).map_err(OpenClawError::Json)?;
+        write_private(&index_path, &json_bytes)?;
         Ok(())
     }
 }
@@ -597,6 +626,68 @@ mod tests {
     }
 
     #[test]
+    fn inception_preserves_foreign_routing_entries_verbatim() {
+        let src = read_session_from_file(FsPath::new("tests/fixtures/dm_session.jsonl")).unwrap();
+        let view = session_to_view(&src);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("agents/main/sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A realistic pre-existing index: one rich entry (19-field style) and
+        // one entry whose value our typed IndexEntry can NOT parse (a bare
+        // string). Neither may be lost or altered by the upsert.
+        std::fs::write(
+            dir.join("sessions.json"),
+            r#"{
+              "agent:main:telegram:direct:99": {
+                "sessionId": "other-1", "sessionFile": "/abs/other-1.jsonl",
+                "updatedAt": 1783458808875, "totalTokens": 1234,
+                "systemPromptReport": {"nested": true}
+              },
+              "agent:main:weird": "just-a-string"
+            }"#,
+        )
+        .unwrap();
+
+        let proj = OpenClawProjector::default();
+        let session = proj.project(&view).unwrap();
+        proj.write_session(&session, tmp.path()).unwrap();
+
+        let root: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("sessions.json")).unwrap()).unwrap();
+        let obj = root.as_object().unwrap();
+        // Foreign entries survive byte-for-byte semantically.
+        assert_eq!(obj["agent:main:weird"], serde_json::json!("just-a-string"));
+        let tg = &obj["agent:main:telegram:direct:99"];
+        assert_eq!(tg["totalTokens"], 1234);
+        assert_eq!(tg["systemPromptReport"]["nested"], true);
+        // Our key was upserted alongside, with freshness timestamps.
+        let ours = &obj["agent:main:main"];
+        assert_eq!(ours["sessionId"], "sess-abc");
+        assert!(ours["updatedAt"].is_u64(), "updatedAt stamped (epoch ms)");
+        assert!(ours["sessionStartedAt"].is_u64());
+    }
+
+    #[test]
+    fn inception_refuses_to_clobber_unparseable_sessions_json() {
+        let src = read_session_from_file(FsPath::new("tests/fixtures/dm_session.jsonl")).unwrap();
+        let view = session_to_view(&src);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("agents/main/sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("sessions.json"), "{ not json at all").unwrap();
+
+        let proj = OpenClawProjector::default();
+        let session = proj.project(&view).unwrap();
+        let err = proj.write_session(&session, tmp.path());
+        assert!(err.is_err(), "must error rather than overwrite a corrupt index");
+        // The corrupt file is untouched.
+        assert_eq!(
+            std::fs::read_to_string(dir.join("sessions.json")).unwrap(),
+            "{ not json at all"
+        );
+    }
+
+    #[test]
     fn inception_writes_session_and_routing_entry() {
         let src = read_session_from_file(FsPath::new("tests/fixtures/dm_session.jsonl")).unwrap();
         let view = session_to_view(&src);
@@ -613,7 +704,8 @@ mod tests {
         );
 
         // sessions.json got a whatsapp routing entry pointing at the file.
-        let idx = SessionsIndex::load(&tmp.path().join("agents/main/sessions")).unwrap();
+        let idx =
+            crate::paths::SessionsIndex::load(&tmp.path().join("agents/main/sessions")).unwrap();
         let (key, parsed) = idx.routing_key_for("sess-abc").unwrap();
         assert!(key.contains("whatsapp"));
         assert_eq!(parsed.peer_id.as_deref(), Some("15555550123"));
