@@ -2,6 +2,31 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Preserve pi metadata entries and opencode user model + snapshot SHAs — 2026-07-08
+
+Plumbs previously-dropped provider data through the existing IR
+affordances (`ConversationView.events`, `Turn.model`) instead of merely
+documenting the loss. No IR changes; `toolpath-convo` is unchanged.
+
+- **`toolpath-pi`** (0.6.2; 0.6.1 is claimed by a sibling PR in flight):
+  `session_to_view` now routes `ModelChange` / `ThinkingLevelChange` /
+  `Label` entries into `ConversationView.events` (`model_change` /
+  `thinking_level_change` / `label`) instead of discarding them, and
+  `PiProjector` re-materializes those events as real Pi entries with
+  their original ids and parentIds — so the entries survive a full
+  pi → view → Path → view → pi round-trip. Each re-emitted entry is
+  inserted directly after its parent for sane file order.
+- **`toolpath-opencode`** (0.5.2; 0.5.1 is claimed by a sibling PR in
+  flight): user turns now carry `Turn.model` from the wire
+  `model.modelID` (same bare-modelID convention as assistant turns) and
+  the projector writes it back into the projected user message.
+  Snapshot SHAs from `step-start` / `step-finish` / `snapshot` parts
+  now also ride `ConversationView.events` as `part.snapshot` events
+  (chained per message so the derived Path stays linear), and the
+  projector restores them onto the emitted step parts — snapshot SHAs
+  survive a full Path round-trip, so a re-imported projection can
+  regenerate diffs.
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived
