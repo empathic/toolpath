@@ -315,6 +315,22 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         .get("attributed_token_usage")
         .and_then(|v| serde_json::from_value::<TokenUsage>(v.clone()).ok());
 
+    let text_signature = extra
+        .get("text_signature")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let thinking_signature = extra
+        .get("thinking_signature")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let response_model = extra
+        .get("response_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let marker = extra
+        .get("marker")
+        .and_then(|v| serde_json::from_value::<crate::ConversationMarker>(v.clone()).ok());
+
     Turn {
         id: step.step.id.clone(),
         parent_id,
@@ -322,10 +338,14 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         role,
         timestamp: step.step.timestamp.clone(),
         text,
+        text_signature,
         thinking,
+        thinking_signature,
         tool_uses,
         model,
+        response_model,
         stop_reason,
+        marker,
         token_usage,
         attributed_token_usage,
         environment,
@@ -379,12 +399,22 @@ fn build_inline_tool_uses(extra: &HashMap<String, serde_json::Value>) -> Vec<Too
             let result = obj
                 .get("result")
                 .and_then(|v| serde_json::from_value::<ToolResult>(v.clone()).ok());
+            let thought_signature = obj
+                .get("thought_signature")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let execution_mode = obj
+                .get("execution_mode")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             Some(ToolInvocation {
                 id,
                 name,
                 input,
                 result,
                 category,
+                thought_signature,
+                execution_mode,
             })
         })
         .collect()
@@ -474,6 +504,8 @@ fn build_tool_invocation(extra: &HashMap<String, serde_json::Value>) -> ToolInvo
         input,
         result,
         category,
+        thought_signature: None,
+        execution_mode: None,
     }
 }
 

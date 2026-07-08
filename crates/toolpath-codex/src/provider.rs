@@ -498,6 +498,7 @@ impl<'a> Builder<'a> {
     fn attach_tool_call(&mut self, timestamp: &str, call_id: String, name: String, input: Value) {
         let category = tool_category(&name);
         let invocation = ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: call_id.clone(),
             name,
             input,
@@ -807,6 +808,7 @@ fn message_to_turn(
     });
 
     Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
         id: msg.id.clone().unwrap_or_default(),
         parent_id: None,
         group_id: None,
@@ -835,6 +837,7 @@ fn synthetic_assistant_turn(
     model: Option<&str>,
 ) -> Turn {
     Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
         id: format!("synth-{}", timestamp),
         parent_id: None,
         group_id: None,

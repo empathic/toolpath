@@ -250,6 +250,7 @@ fn view_from_jsonl(
                 // it's the lossy view); leave `result: None` and let
                 // the projector emit a `running` status downstream.
                 ToolInvocation {
+        thought_signature: None, execution_mode: None,
                     id: format!("tool_{tool_counter:04}"),
                     // Pass the agent-side name through; the projector
                     // remaps to native via category.
@@ -265,6 +266,7 @@ fn view_from_jsonl(
             .collect();
 
         turns.push(Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: turn_id.clone(),
             parent_id: prev_id.clone(),
             group_id: None,

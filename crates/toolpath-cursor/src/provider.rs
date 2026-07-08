@@ -387,6 +387,7 @@ impl<'a> Builder<'a> {
     fn user_turn(&self, bubble: &Bubble, parent: Option<&str>) -> Turn {
         let environment = self.environment();
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: bubble.bubble_id.clone(),
             parent_id: parent.map(str::to_string),
             group_id: None,
@@ -478,6 +479,7 @@ impl<'a> Builder<'a> {
             .or_else(|| self.session.data.default_model().map(str::to_string));
 
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: bubble.bubble_id.clone(),
             parent_id: parent.map(str::to_string),
             group_id: None,
@@ -544,6 +546,7 @@ impl<'a> Builder<'a> {
             _ => None,
         };
         ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: tf.tool_call_id.clone(),
             name: tf.name.clone(),
             input,

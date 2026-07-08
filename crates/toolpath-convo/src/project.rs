@@ -155,6 +155,7 @@ mod tests {
 
     fn make_turn(id: &str, role: Role, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -337,6 +338,7 @@ mod tests {
             last_activity: None,
             events: vec![],
             turns: vec![Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                 id: "t1".into(),
                 parent_id: None,
                 group_id: None,
@@ -346,6 +348,7 @@ mod tests {
                 thinking: None,
                 tool_uses: vec![
                     ToolInvocation {
+        thought_signature: None, execution_mode: None,
                         id: "u1".into(),
                         name: "Read".into(),
                         input: serde_json::json!({"file": "src/main.rs"}),
@@ -356,6 +359,7 @@ mod tests {
                         category: None,
                     },
                     ToolInvocation {
+        thought_signature: None, execution_mode: None,
                         id: "u2".into(),
                         name: "Bash".into(),
                         input: serde_json::json!({"command": "cargo test"}),
@@ -413,6 +417,7 @@ mod tests {
             events: vec![],
             turns: vec![
                 Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: "t1".into(),
                     parent_id: None,
                     group_id: None,
@@ -436,6 +441,7 @@ mod tests {
                     file_mutations: Vec::new(),
                 },
                 Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
                     group_id: None,

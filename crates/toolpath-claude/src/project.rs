@@ -1033,6 +1033,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.to_string(),
             parent_id: None,
             group_id: None,
@@ -1053,6 +1054,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.to_string(),
             parent_id: None,
             group_id: None,
@@ -1226,6 +1228,7 @@ mod tests {
         let mut turn = assistant_turn("a1", "I'll read the file.");
         turn.thinking = Some("Hmm, need to read the file first.".to_string());
         turn.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "t1".to_string(),
             name: "Read".to_string(),
             input: serde_json::json!({"file_path": "src/main.rs"}),
@@ -1294,6 +1297,7 @@ mod tests {
     fn test_tool_results_emitted_as_separate_user_entries() {
         let mut turn = assistant_turn("a1", "Reading file.");
         turn.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "t1".to_string(),
             name: "Read".to_string(),
             input: serde_json::json!({"file_path": "src/main.rs"}),
@@ -1345,6 +1349,7 @@ mod tests {
     fn test_no_tool_result_entry_when_no_results() {
         let mut turn = assistant_turn("a1", "Reading...");
         turn.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "t1".to_string(),
             name: "Read".to_string(),
             input: serde_json::json!({}),
@@ -1446,6 +1451,7 @@ mod tests {
     fn test_assistant_no_text_only_tool_use_produces_parts() {
         let mut turn = assistant_turn("a1", "");
         turn.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "t1".to_string(),
             name: "Bash".to_string(),
             input: serde_json::json!({"command": "ls"}),
@@ -1474,6 +1480,7 @@ mod tests {
         let mut turn = assistant_turn("a1", "Reading two files.");
         turn.tool_uses = vec![
             ToolInvocation {
+        thought_signature: None, execution_mode: None,
                 id: "t1".to_string(),
                 name: "Read".to_string(),
                 input: serde_json::json!({}),
@@ -1484,6 +1491,7 @@ mod tests {
                 category: None,
             },
             ToolInvocation {
+        thought_signature: None, execution_mode: None,
                 id: "t2".to_string(),
                 name: "Read".to_string(),
                 input: serde_json::json!({}),
@@ -1550,6 +1558,7 @@ mod tests {
         let mut turn = assistant_turn("a1", "Using tools.");
         turn.tool_uses = vec![
             ToolInvocation {
+        thought_signature: None, execution_mode: None,
                 id: "t1".to_string(),
                 name: "Read".to_string(),
                 input: serde_json::json!({}),
@@ -1560,6 +1569,7 @@ mod tests {
                 category: None,
             },
             ToolInvocation {
+        thought_signature: None, execution_mode: None,
                 id: "t2".to_string(),
                 name: "Write".to_string(),
                 input: serde_json::json!({}),
@@ -1601,6 +1611,7 @@ mod tests {
             vcs_revision: None,
         });
         turn.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "t1".to_string(),
             name: "Read".to_string(),
             input: serde_json::json!({}),

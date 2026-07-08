@@ -758,6 +758,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -778,6 +779,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -852,6 +854,7 @@ mod tests {
     fn test_assistant_turn_with_tool_call_and_result() {
         let mut t = assistant_turn("a1", "I'll read it.");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "read".into(),
             input: serde_json::json!({"path": "x.rs"}),
@@ -911,6 +914,7 @@ mod tests {
         // routes it through `native_name(Shell, _)`.
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "Bash".into(),
             input: serde_json::json!({"command": "ls"}),

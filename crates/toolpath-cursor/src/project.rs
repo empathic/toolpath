@@ -922,6 +922,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -946,6 +947,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -1052,6 +1054,7 @@ mod tests {
     fn shell_tool_use_round_trips_via_native_id() {
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "Bash".into(),
             input: json!({"command": "ls"}),
@@ -1079,6 +1082,7 @@ mod tests {
     fn file_write_tool_registers_blobs_and_emits_result() {
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc2".into(),
             name: "edit_file_v2".into(),
             input: json!({"relativeWorkspacePath": "/proj/x.rs"}),
@@ -1124,6 +1128,7 @@ mod tests {
     fn errored_tool_emits_null_result_and_status_error() {
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc3".into(),
             name: "edit_file_v2".into(),
             input: json!({"relativeWorkspacePath": "/proj/x.rs"}),
@@ -1143,6 +1148,7 @@ mod tests {
     fn no_result_yet_emits_completed_status_not_running() {
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc4".into(),
             name: "read_file_v2".into(),
             input: json!({"target_file": "/proj/x.rs"}),
@@ -1227,6 +1233,7 @@ mod tests {
         use crate::types::{TOOL_TABLE, TOOL_UNSPECIFIED};
         for &(id, name) in TOOL_TABLE {
             let tu = ToolInvocation {
+        thought_signature: None, execution_mode: None,
                 id: "test".into(),
                 name: name.to_string(),
                 input: json!({}),
@@ -1258,6 +1265,7 @@ mod tests {
         ];
         for (cat, want_id, want_name) in cases {
             let tu = ToolInvocation {
+        thought_signature: None, execution_mode: None,
                 id: "test".into(),
                 name: "Foreign_Name_Not_In_Cursor".into(),
                 input: json!({}),
@@ -1273,6 +1281,7 @@ mod tests {
     #[test]
     fn foreign_name_without_category_falls_back_to_unspecified() {
         let tu = ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "test".into(),
             name: "weird_thing_v9".into(),
             input: json!({}),
@@ -1331,6 +1340,7 @@ mod tests {
     fn edit_tool_with_raw_diff_emits_content_blobs() {
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "edit_file_v2".into(),
             input: json!({"relativeWorkspacePath": "/proj/x.rs"}),
@@ -1369,6 +1379,7 @@ mod tests {
     fn edit_tool_with_full_content_prefers_blob_over_reconstruction() {
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "edit_file_v2".into(),
             input: json!({"relativeWorkspacePath": "/proj/x.rs"}),

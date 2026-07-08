@@ -89,6 +89,7 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
             let result = find_tool_result_in_parts(msg, tu.id);
             let category = tool_category(tu.name);
             ToolInvocation {
+        thought_signature: None, execution_mode: None,
                 id: tu.id.to_string(),
                 name: tu.name.to_string(),
                 input: tu.input.clone(),
@@ -121,6 +122,7 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
     let delegations = extract_delegations(&tool_uses);
 
     Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
         id: entry.uuid.clone(),
         parent_id: entry.parent_uuid.clone(),
         // The API message ID (`msg_…`). Claude Code writes one JSONL line
@@ -852,6 +854,7 @@ mod tests {
 
     fn message_turn_stub(id: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -1425,6 +1428,7 @@ mod tests {
     fn test_merge_tool_results_by_id() {
         // Verify that merge matches by tool_use_id, not position
         let mut turns = vec![Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: "t1".into(),
             parent_id: None,
             group_id: None,
@@ -1434,6 +1438,7 @@ mod tests {
             thinking: None,
             tool_uses: vec![
                 ToolInvocation {
+        thought_signature: None, execution_mode: None,
                     id: "tool-a".into(),
                     name: "Read".into(),
                     input: serde_json::json!({}),
@@ -1441,6 +1446,7 @@ mod tests {
                     category: Some(ToolCategory::FileRead),
                 },
                 ToolInvocation {
+        thought_signature: None, execution_mode: None,
                     id: "tool-b".into(),
                     name: "Write".into(),
                     input: serde_json::json!({}),

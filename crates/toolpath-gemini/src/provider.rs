@@ -112,6 +112,7 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
     });
 
     Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
         id: msg.id.clone(),
         parent_id: None,
         group_id: None,
@@ -302,6 +303,7 @@ fn tool_call_to_invocation(call: &ToolCall) -> ToolInvocation {
         })
     };
     ToolInvocation {
+        thought_signature: None, execution_mode: None,
         id: call.id.clone(),
         name: call.name.clone(),
         input: call.args.clone(),

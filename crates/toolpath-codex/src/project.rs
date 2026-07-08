@@ -699,6 +699,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -719,6 +720,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -824,6 +826,7 @@ mod tests {
     fn assistant_turn_with_function_call_and_output() {
         let mut t = assistant_turn("a1", "Let me check.");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "call_001".into(),
             name: "exec_command".into(),
             input: json!({"cmd": "pwd"}),
@@ -884,6 +887,7 @@ mod tests {
         // category routes it through `native_name(Shell, _)`.
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "call_x".into(),
             name: "Bash".into(),
             input: json!({"command": "ls"}),
@@ -911,6 +915,7 @@ mod tests {
             "*** Begin Patch\n*** Add File: hello.rs\n+fn main(){}\n*** End Patch".to_string();
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "call_p".into(),
             name: "apply_patch".into(),
             input: Value::String(patch_body.clone()),

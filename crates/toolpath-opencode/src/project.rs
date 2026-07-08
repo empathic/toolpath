@@ -752,6 +752,7 @@ mod tests {
 
     fn user_turn(text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: "u1".into(),
             parent_id: None,
             group_id: None,
@@ -772,6 +773,7 @@ mod tests {
 
     fn assistant_turn(text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -844,6 +846,7 @@ mod tests {
     fn tool_call_lands_as_tool_part() {
         let mut t = assistant_turn("");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "call_x".into(),
             name: "Bash".into(),
             input: json!({"command": "ls"}),
@@ -882,6 +885,7 @@ mod tests {
     fn errored_tool_use_produces_error_state() {
         let mut t = assistant_turn("");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "c".into(),
             name: "bash".into(),
             input: json!({"command": "false"}),
@@ -909,6 +913,7 @@ mod tests {
     fn foreign_tool_name_remaps_via_category() {
         let mut t = assistant_turn("");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "c".into(),
             name: "Edit".into(),
             input: json!({"file_path": "x.rs", "old_string": "a", "new_string": "b"}),

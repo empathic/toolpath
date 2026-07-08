@@ -162,6 +162,30 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             );
         }
 
+        if let Some(sig) = &turn.text_signature {
+            extra.insert(
+                "text_signature".to_string(),
+                serde_json::Value::String(sig.clone()),
+            );
+        }
+        if let Some(sig) = &turn.thinking_signature {
+            extra.insert(
+                "thinking_signature".to_string(),
+                serde_json::Value::String(sig.clone()),
+            );
+        }
+        if let Some(rm) = &turn.response_model {
+            extra.insert(
+                "response_model".to_string(),
+                serde_json::Value::String(rm.clone()),
+            );
+        }
+        if let Some(marker) = &turn.marker
+            && let Ok(v) = serde_json::to_value(marker)
+        {
+            extra.insert("marker".to_string(), v);
+        }
+
         if config.include_tool_uses && !turn.tool_uses.is_empty() {
             let arr: Vec<serde_json::Value> = turn
                 .tool_uses
@@ -177,6 +201,18 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                         && let Ok(v) = serde_json::to_value(result)
                     {
                         obj.as_object_mut().unwrap().insert("result".to_string(), v);
+                    }
+                    if let Some(sig) = &t.thought_signature {
+                        obj.as_object_mut().unwrap().insert(
+                            "thought_signature".to_string(),
+                            serde_json::Value::String(sig.clone()),
+                        );
+                    }
+                    if let Some(mode) = &t.execution_mode {
+                        obj.as_object_mut().unwrap().insert(
+                            "execution_mode".to_string(),
+                            serde_json::Value::String(mode.clone()),
+                        );
                     }
                     obj
                 })
@@ -684,6 +720,7 @@ mod tests {
 
     fn base_turn(id: &str, role: Role) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.to_string(),
             parent_id: None,
             group_id: None,
@@ -946,6 +983,7 @@ mod tests {
             vcs_revision: None,
         });
         assistant.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "call-1".into(),
             name: "write_file".into(),
             input: serde_json::json!({ "file_path": "a.rs", "content": "fn main() {}" }),
@@ -1016,6 +1054,7 @@ mod tests {
 
     fn fw_tool(name: &str, id: &str, input: serde_json::Value) -> ToolInvocation {
         ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: id.to_string(),
             name: name.to_string(),
             input,
@@ -1086,6 +1125,7 @@ mod tests {
     fn test_tool_use_non_filewrite_ignored() {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tu1".into(),
             name: "Read".into(),
             input: serde_json::json!({"file_path": "x.rs"}),
@@ -1280,6 +1320,7 @@ mod tests {
     fn test_tool_uses_included_when_enabled() {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tu1".into(),
             name: "Read".into(),
             input: serde_json::json!({}),
@@ -1299,6 +1340,7 @@ mod tests {
     fn test_tool_uses_omitted_when_disabled() {
         let mut turn = base_turn("t1", Role::Assistant);
         turn.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tu1".into(),
             name: "Read".into(),
             input: serde_json::json!({}),

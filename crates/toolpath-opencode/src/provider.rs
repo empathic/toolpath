@@ -284,6 +284,7 @@ impl<'a> Builder<'a> {
         });
 
         self.turns.push(Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: msg.id.clone(),
             parent_id: None,
             group_id: None,
@@ -449,6 +450,7 @@ impl<'a> Builder<'a> {
         let file_mutations = self.compute_turn_mutations(&snapshots, &tool_uses);
 
         self.turns.push(Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: msg.id.clone(),
             parent_id: if a.parent_id.is_empty() {
                 None
@@ -589,6 +591,7 @@ fn to_invocation(
     }
 
     ToolInvocation {
+        thought_signature: None, execution_mode: None,
         id: tp.call_id.clone(),
         name: tp.tool.clone(),
         input,

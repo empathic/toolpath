@@ -594,6 +594,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -614,6 +615,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -733,6 +735,7 @@ mod tests {
     fn test_tool_call_with_success_result_wraps_into_function_response() {
         let mut t = assistant_turn("a1", "Reading.");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "read_file".into(),
             input: serde_json::json!({"path": "src/main.rs"}),
@@ -763,6 +766,7 @@ mod tests {
     fn test_tool_call_with_error_result_sets_error_status() {
         let mut t = assistant_turn("a1", "");
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "run_shell_command".into(),
             input: serde_json::json!({"command": "nope"}),
@@ -845,6 +849,7 @@ mod tests {
             ..Default::default()
         });
         t.tool_uses = vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "read_file".into(),
             input: serde_json::json!({"path": "src/a.rs"}),

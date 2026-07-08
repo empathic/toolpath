@@ -233,6 +233,16 @@ pub struct ToolInvocation {
     /// crate; `None` for unrecognized tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<ToolCategory>,
+    /// Opaque provider signature tying this call to the reasoning context
+    /// that produced it (Google/Gemini-style thought signatures; OpenClaw's
+    /// `toolCall.thoughtSignature`). Required by some providers to replay
+    /// the conversation; carried verbatim, never interpreted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
+    /// Provider scheduling hint for this call (e.g. `"sequential"` /
+    /// `"parallel"`). Informational; carried verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<String>,
 }
 
 /// The result of a tool invocation.
@@ -272,8 +282,25 @@ pub struct Turn {
     /// The visible text content (already collapsed from provider-specific formats).
     pub text: String,
 
+    /// Opaque provider signature attached to the turn's visible text (e.g.
+    /// OpenClaw's `textSignature`). Carried verbatim for replay fidelity.
+    /// Granularity matches `text`: when a provider message has several text
+    /// blocks (already collapsed into one string), only the first block's
+    /// signature is carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_signature: Option<String>,
+
     /// Internal reasoning (chain-of-thought, thinking blocks).
     pub thinking: Option<String>,
+
+    /// Opaque provider signature attached to the turn's reasoning (Anthropic
+    /// thinking-block `signature`, OpenClaw's `thinkingSignature`, OpenAI
+    /// reasoning item ids). Some provider APIs reject a replayed
+    /// conversation whose thinking blocks lack their signature, so this is
+    /// load-bearing for resume/inception, not cosmetic. Granularity matches
+    /// `thinking` (collapsed): the first block's signature is carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_signature: Option<String>,
 
     /// Tool invocations in this turn.
     pub tool_uses: Vec<ToolInvocation>,
@@ -281,8 +308,23 @@ pub struct Turn {
     /// Model identifier (e.g. "claude-opus-4-6", "gpt-4o").
     pub model: Option<String>,
 
+    /// Concrete model that actually served this turn when it differs from
+    /// the requested `model` — alias/auto routing (OpenRouter `auto`,
+    /// provider-side aliases). `None` when identical or unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_model: Option<String>,
+
     /// Why the turn ended (e.g. "end_turn", "tool_use", "max_tokens").
     pub stop_reason: Option<String>,
+
+    /// Structural conversation boundary this turn represents, when it is a
+    /// compaction or branch-summary marker rather than an ordinary message.
+    /// Carries the fields providers persist on such boundaries (Claude's
+    /// `compact_boundary`, Pi/OpenClaw `compaction` / `branch_summary`
+    /// entries) so they survive a round-trip instead of being flattened
+    /// into summary text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<ConversationMarker>,
 
     /// Token usage for this turn. When this turn belongs to a `group_id`
     /// group, this is the **whole message's total**, carried on the
@@ -319,6 +361,52 @@ pub struct Turn {
     /// the entry links back to that `ToolInvocation::id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_mutations: Vec<FileMutation>,
+}
+
+/// A structural conversation boundary carried on the turn that represents
+/// it. These are cross-harness concepts: Claude marks compactions with
+/// `compact_boundary` entries, Pi and OpenClaw persist `compaction` and
+/// `branch_summary` entries with the fields below. The summary text itself
+/// stays in `Turn.text`; the marker carries the structured fields so a
+/// projector can re-emit the native entry losslessly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConversationMarker {
+    /// A context-compaction boundary: history before `first_kept_id` was
+    /// replaced by the summary in `Turn.text`.
+    Compaction {
+        /// Entry/step id of the first entry retained verbatim.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        first_kept_id: Option<String>,
+        /// Estimated context tokens before compaction.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens_before: Option<u64>,
+        /// Files the summarized span had read.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        read_files: Vec<String>,
+        /// Files the summarized span had modified.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        modified_files: Vec<String>,
+        /// True when produced by an app hook rather than the built-in
+        /// summarizer (Pi/OpenClaw `fromHook`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_hook: Option<bool>,
+    },
+    /// A summary of an abandoned branch (Pi/OpenClaw `branch_summary`).
+    BranchSummary {
+        /// Entry/step id of the abandoned branch's source leaf.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_id: Option<String>,
+        /// Files the abandoned branch had read.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        read_files: Vec<String>,
+        /// Files the abandoned branch had modified.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        modified_files: Vec<String>,
+        /// True when produced by an app hook.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_hook: Option<bool>,
+    },
 }
 
 /// A complete conversation from any provider.
@@ -575,6 +663,7 @@ mod tests {
             last_activity: None,
             turns: vec![
                 Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: "t1".into(),
                     parent_id: None,
                     group_id: None,
@@ -592,6 +681,7 @@ mod tests {
                     file_mutations: Vec::new(),
                 },
                 Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
                     group_id: None,
@@ -600,6 +690,7 @@ mod tests {
                     text: "I'll fix that for you.".into(),
                     thinking: Some("The bug is in the token validation".into()),
                     tool_uses: vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
                         id: "tool-1".into(),
                         name: "Read".into(),
                         input: serde_json::json!({"file": "src/login.rs"}),
@@ -624,6 +715,7 @@ mod tests {
                     file_mutations: Vec::new(),
                 },
                 Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: "t3".into(),
                     parent_id: Some("t2".into()),
                     group_id: None,
@@ -911,6 +1003,7 @@ mod tests {
     #[test]
     fn test_tool_category_serde() {
         let ti = ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "t1".into(),
             name: "Bash".into(),
             input: serde_json::json!({"command": "ls"}),
@@ -926,6 +1019,7 @@ mod tests {
     #[test]
     fn test_tool_category_none_skipped() {
         let ti = ToolInvocation {
+        thought_signature: None, execution_mode: None,
             id: "t1".into(),
             name: "CustomTool".into(),
             input: serde_json::json!({}),
@@ -964,6 +1058,7 @@ mod tests {
     #[test]
     fn test_turn_with_environment_and_delegations() {
         let turn = Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: "t1".into(),
             parent_id: None,
             group_id: None,

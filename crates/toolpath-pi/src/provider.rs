@@ -244,6 +244,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
 
             Entry::Compaction { base, summary, .. } => {
                 turns.push(Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -264,6 +265,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
 
             Entry::BranchSummary { base, summary, .. } => {
                 turns.push(Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -284,6 +286,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
 
             Entry::Custom { base, .. } => {
                 turns.push(Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -309,6 +312,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 ..
             } => {
                 turns.push(Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -380,6 +384,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                                     delegation_locs.insert(id.clone(), (turn_idx, deleg_idx));
                                 }
                                 tool_uses.push(ToolInvocation {
+        thought_signature: None, execution_mode: None,
                                     id: id.clone(),
                                     name: name.clone(),
                                     input: arguments.clone(),
@@ -422,6 +427,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                         text = format!("$ {}\n{}", command, out_trunc);
                         // Synthetic ToolInvocation representing the bash run itself.
                         tool_uses.push(ToolInvocation {
+        thought_signature: None, execution_mode: None,
                             id: base.id.clone(),
                             name: "bash".to_string(),
                             input: json!({ "command": command }),
@@ -449,6 +455,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 }
 
                 turns.push(Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,

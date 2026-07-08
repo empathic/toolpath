@@ -2,6 +2,33 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-convo 0.13.0: typed round-trip fidelity fields — 2026-07-08
+
+Adds typed IR homes for cross-provider replay-fidelity data that providers
+previously had to drop (no provider-namespaced extras exist on the IR by
+design): `Turn.thinking_signature` / `Turn.text_signature` (opaque
+reasoning/text replay signatures — Anthropic thinking `signature`,
+OpenClaw `thinkingSignature`/`textSignature`), `Turn.response_model`
+(concrete served model under alias/auto routing), `Turn.marker`
+(`ConversationMarker::Compaction` / `BranchSummary` with
+`first_kept_id`/`tokens_before`/file lists/`from_hook` so structural
+boundaries survive projection), and
+`ToolInvocation.thought_signature`/`execution_mode`. All optional,
+serde-defaulted, written/read by the shared `derive_path` /
+`extract_conversation` (new `conversation.append` keys are valid under the
+permissive kind v1.1.0 schema; a future kind revision will document them).
+
+`toolpath-openclaw` uses all of them: signatures, `responseId`
+(→ `Turn.group_id`, the per-response accounting id), `responseModel`,
+and compaction/branch markers now survive session → Path → session
+round-trips byte-faithfully; `totalTokens` re-emits with the observed
+`input+output+cacheRead+cacheWrite` convention. Also fixes a real
+double-counting bug found in captured data: OpenClaw's final assembled
+reply after a `sessions_yield` carries run-cumulative usage with no
+`responseId`; the provider now detects that aggregate row (exact
+field-wise sum match, native files only) and refuses to stamp it onto a
+step, keeping session totals single-counted.
+
 ## toolpath-openclaw 0.1.0: new provider (derive + inception) — 2026-07-08
 
 New crate `toolpath-openclaw`: reads OpenClaw's multi-channel agent-session

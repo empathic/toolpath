@@ -227,6 +227,7 @@ fn projector_accepts_foreign_view_shape() {
         }),
         turns: vec![
             Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                 id: "uA".into(),
                 parent_id: None,
                 group_id: None,
@@ -247,6 +248,7 @@ fn projector_accepts_foreign_view_shape() {
                 file_mutations: vec![],
             },
             Turn {
+        text_signature: None, thinking_signature: None, response_model: None, marker: None,
                 id: "aA".into(),
                 parent_id: Some("uA".into()),
                 group_id: None,
@@ -255,6 +257,7 @@ fn projector_accepts_foreign_view_shape() {
                 text: "done".into(),
                 thinking: Some("planning...".into()),
                 tool_uses: vec![ToolInvocation {
+        thought_signature: None, execution_mode: None,
                     id: "claude_edit".into(),
                     name: "Edit".into(),
                     input: json!({"file_path": "/foreign/main.rs", "old_string": "old", "new_string": "new"}),
