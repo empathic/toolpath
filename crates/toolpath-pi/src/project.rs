@@ -6,17 +6,21 @@
 //! view, `PiProjector` serializes that view back into Pi's on-disk
 //! shape (a [`SessionHeader`] plus a list of [`Entry`]).
 //!
-//! The provider-agnostic IR (`Turn`) carries no provider-namespaced
-//! extras, so a Pi→View→Pi round-trip cannot recover Pi-specific data
-//! the forward path didn't lift into a typed `Turn` field: `api`/
-//! `provider`, the structured `stopReason`, bash-execution metadata
-//! (command/exit code/etc. beyond what's folded into `Turn.text` and
-//! the synthetic `bash` tool call), `SessionHeader.parent_session`,
-//! and the synthetic-turn markers (`compaction`, `branchSummary`,
-//! `custom`, `customMessage`) — none of those are distinguishable from
-//! an ordinary turn once round-tripped, so the projector always
-//! synthesizes sensible defaults (api: "anthropic", stop_reason:
-//! "stop", etc.) instead.
+//! Pi's metadata-only entries (`ModelChange` / `ThinkingLevelChange` /
+//! `Label`) ride `ConversationView.events` and are re-materialized here
+//! as real Pi entries with their original ids and parentIds (see the
+//! private `insert_event_entries` helper).
+//!
+//! Everything else Pi-specific that the forward path didn't lift into a
+//! typed `Turn` field cannot be recovered on a Pi→View→Pi round-trip:
+//! `api`/`provider`, the structured `stopReason`, bash-execution
+//! metadata (command/exit code/etc. beyond what's folded into
+//! `Turn.text` and the synthetic `bash` tool call),
+//! `SessionHeader.parent_session`, and the synthetic-turn markers
+//! (`compaction`, `branchSummary`, `custom`, `customMessage`) — those
+//! turns are indistinguishable from ordinary ones once round-tripped,
+//! so the projector always synthesizes sensible defaults (api:
+//! "anthropic", stop_reason: "stop", etc.) instead.
 
 use std::collections::HashMap;
 
@@ -149,6 +153,14 @@ fn project_view(
         emit_turn_entries(cfg, turn, &mut entries);
     }
 
+    // Re-materialize Pi metadata entries the forward path routed into
+    // `view.events` (`model_change` / `thinking_level_change` / `label`).
+    // Original ids and parentIds are preserved, so Pi's id/parentId tree
+    // is faithful regardless of file position; for sane reading order,
+    // insert each entry right after its parent (falling back to the tail
+    // when the parent isn't in this session).
+    insert_event_entries(&mut entries, &view.events);
+
     Ok(PiSession {
         header,
         entries,
@@ -157,17 +169,109 @@ fn project_view(
     })
 }
 
+/// Map a `ConversationEvent` back to the Pi entry it was derived from.
+/// Returns `None` for event types with no Pi analog (foreign-provider
+/// events like Claude attachments), which are dropped rather than
+/// emitted as garbage entries.
+fn event_to_entry(event: &toolpath_convo::ConversationEvent) -> Option<Entry> {
+    let base = EntryBase {
+        id: event.id.clone(),
+        parent_id: event.parent_id.clone(),
+        timestamp: event.timestamp.clone(),
+    };
+    let str_field = |key: &str| -> String {
+        event
+            .data
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let extra_without = |consumed: &[&str]| -> HashMap<String, serde_json::Value> {
+        event
+            .data
+            .iter()
+            .filter(|(k, _)| !consumed.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+    match event.event_type.as_str() {
+        "model_change" => Some(Entry::ModelChange {
+            base,
+            provider: str_field("provider"),
+            model_id: str_field("modelId"),
+            extra: extra_without(&["provider", "modelId"]),
+        }),
+        "thinking_level_change" => Some(Entry::ThinkingLevelChange {
+            base,
+            thinking_level: str_field("thinkingLevel"),
+            extra: extra_without(&["thinkingLevel"]),
+        }),
+        "label" => Some(Entry::Label {
+            base,
+            extra: event.data.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// Insert re-materialized event entries into `entries`, each directly
+/// after the entry whose id matches its `parent_id`. Events whose parent
+/// isn't present (or who have none) append at the end. Siblings keep
+/// their `view.events` order: insertion skips past event entries already
+/// placed after the same parent.
+fn insert_event_entries(entries: &mut Vec<Entry>, events: &[toolpath_convo::ConversationEvent]) {
+    let entry_id = |e: &Entry| -> Option<String> {
+        match e {
+            Entry::Session(_) => None,
+            Entry::Message { base, .. }
+            | Entry::ModelChange { base, .. }
+            | Entry::ThinkingLevelChange { base, .. }
+            | Entry::Compaction { base, .. }
+            | Entry::BranchSummary { base, .. }
+            | Entry::Custom { base, .. }
+            | Entry::CustomMessage { base, .. }
+            | Entry::Label { base, .. } => Some(base.id.clone()),
+        }
+    };
+    let mut inserted_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for event in events {
+        let Some(entry) = event_to_entry(event) else {
+            continue;
+        };
+        inserted_ids.insert(event.id.clone());
+        let parent_pos = event.parent_id.as_ref().and_then(|pid| {
+            entries
+                .iter()
+                .position(|e| entry_id(e).as_deref() == Some(pid.as_str()))
+        });
+        match parent_pos {
+            Some(pos) => {
+                let mut at = pos + 1;
+                while at < entries.len()
+                    && entry_id(&entries[at]).is_some_and(|id| inserted_ids.contains(&id))
+                {
+                    at += 1;
+                }
+                entries.insert(at, entry);
+            }
+            None => entries.push(entry),
+        }
+    }
+}
+
 /// Emit the entry (or entries) corresponding to a single turn's role
 /// and content. Most turns produce a single `Entry::Message`; a turn
 /// with assistant-side tool calls that have results produces both the
 /// assistant message AND one tool-result message per result.
 ///
-/// Note: the IR has no field to distinguish a Pi-native `Entry::
-/// ModelChange`/`ThinkingLevelChange`/`Label`/`Compaction`/
-/// `BranchSummary`/`Custom`/`CustomMessage` from an ordinary turn once
-/// round-tripped through `Turn`, so those entry types are never
-/// re-synthesized here — they always fall through to the generic
-/// role-based mapping below.
+/// Metadata entries (`ModelChange`/`ThinkingLevelChange`/`Label`) never
+/// reach this function — they ride `view.events` and are re-emitted by
+/// [`insert_event_entries`]. The IR has no field to distinguish a
+/// Pi-native `Entry::Compaction`/`BranchSummary`/`Custom`/
+/// `CustomMessage` from an ordinary turn once round-tripped through
+/// `Turn`, so those entry types are never re-synthesized — they always
+/// fall through to the generic role-based mapping below.
 fn emit_turn_entries(cfg: &PiProjector, turn: &Turn, entries: &mut Vec<Entry>) {
     match &turn.role {
         Role::User => emit_user(turn, entries),
@@ -734,5 +838,143 @@ mod tests {
                 s
             );
         }
+    }
+
+    fn event(
+        id: &str,
+        parent: Option<&str>,
+        event_type: &str,
+        data: &[(&str, serde_json::Value)],
+    ) -> toolpath_convo::ConversationEvent {
+        toolpath_convo::ConversationEvent {
+            id: id.into(),
+            timestamp: "2026-04-16T10:00:03Z".into(),
+            parent_id: parent.map(String::from),
+            event_type: event_type.into(),
+            data: data.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+        }
+    }
+
+    #[test]
+    fn test_model_change_event_re_emitted_as_entry() {
+        let mut view = view_with(vec![user_turn("u1", "hi")]);
+        view.events.push(event(
+            "mc-1",
+            Some("u1"),
+            "model_change",
+            &[
+                ("provider", serde_json::json!("anthropic")),
+                ("modelId", serde_json::json!("claude-opus-4-7")),
+                ("note", serde_json::json!("switched")),
+            ],
+        ));
+        let session = PiProjector::default().project(&view).unwrap();
+        let mc = session
+            .entries
+            .iter()
+            .find_map(|e| match e {
+                Entry::ModelChange {
+                    base,
+                    provider,
+                    model_id,
+                    extra,
+                } => Some((base.clone(), provider.clone(), model_id.clone(), extra.clone())),
+                _ => None,
+            })
+            .expect("expected a ModelChange entry in projected session");
+        assert_eq!(mc.0.id, "mc-1");
+        assert_eq!(mc.0.parent_id.as_deref(), Some("u1"));
+        assert_eq!(mc.0.timestamp, "2026-04-16T10:00:03Z");
+        assert_eq!(mc.1, "anthropic");
+        assert_eq!(mc.2, "claude-opus-4-7");
+        assert_eq!(mc.3.get("note"), Some(&serde_json::json!("switched")));
+    }
+
+    #[test]
+    fn test_thinking_level_change_event_re_emitted_as_entry() {
+        let mut view = view_with(vec![user_turn("u1", "hi")]);
+        view.events.push(event(
+            "tlc-1",
+            Some("u1"),
+            "thinking_level_change",
+            &[("thinkingLevel", serde_json::json!("high"))],
+        ));
+        let session = PiProjector::default().project(&view).unwrap();
+        let found = session.entries.iter().any(|e| {
+            matches!(e, Entry::ThinkingLevelChange { base, thinking_level, .. }
+                if base.id == "tlc-1" && thinking_level == "high")
+        });
+        assert!(found, "expected a ThinkingLevelChange entry");
+    }
+
+    #[test]
+    fn test_label_event_re_emitted_as_entry() {
+        let mut view = view_with(vec![user_turn("u1", "hi")]);
+        view.events.push(event(
+            "lbl-1",
+            Some("u1"),
+            "label",
+            &[("label", serde_json::json!("checkpoint"))],
+        ));
+        let session = PiProjector::default().project(&view).unwrap();
+        let found = session.entries.iter().any(|e| {
+            matches!(e, Entry::Label { base, extra }
+                if base.id == "lbl-1" && extra.get("label") == Some(&serde_json::json!("checkpoint")))
+        });
+        assert!(found, "expected a Label entry");
+    }
+
+    #[test]
+    fn test_event_entry_inserted_after_its_parent() {
+        let mut view = view_with(vec![user_turn("u1", "hi"), assistant_turn("a1", "reply")]);
+        view.events.push(event(
+            "mc-1",
+            Some("u1"),
+            "model_change",
+            &[
+                ("provider", serde_json::json!("anthropic")),
+                ("modelId", serde_json::json!("m")),
+            ],
+        ));
+        let session = PiProjector::default().project(&view).unwrap();
+        let ids: Vec<&str> = session
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Session(_) => None,
+                Entry::Message { base, .. }
+                | Entry::ModelChange { base, .. }
+                | Entry::ThinkingLevelChange { base, .. }
+                | Entry::Compaction { base, .. }
+                | Entry::BranchSummary { base, .. }
+                | Entry::Custom { base, .. }
+                | Entry::CustomMessage { base, .. }
+                | Entry::Label { base, .. } => Some(base.id.as_str()),
+            })
+            .collect();
+        let u1 = ids.iter().position(|i| *i == "u1").unwrap();
+        let mc = ids.iter().position(|i| *i == "mc-1").unwrap();
+        let a1 = ids.iter().position(|i| *i == "a1").unwrap();
+        assert!(
+            u1 < mc && mc < a1,
+            "expected mc-1 between u1 and a1, got order {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn test_foreign_event_types_are_not_emitted() {
+        // Events from other providers (e.g. a Claude attachment) have no
+        // Pi entry analog and must not produce garbage entries.
+        let mut view = view_with(vec![user_turn("u1", "hi")]);
+        view.events.push(event(
+            "att-1",
+            Some("u1"),
+            "attachment",
+            &[("path", serde_json::json!("/tmp/x"))],
+        ));
+        let session = PiProjector::default().project(&view).unwrap();
+        // header + one user message only
+        assert_eq!(session.entries.len(), 2);
     }
 }

@@ -209,6 +209,12 @@ constraint; Pi reads any `*.jsonl` file in the project directory.
    (`text: "Compacted (summary): …"` / `"Branch summary: …"`), and the
    projector always maps `Role::System` back to a generic custom
    message — the original entry type does not survive a round-trip.
+   By contrast, the metadata-only entries `model_change` /
+   `thinking_level_change` / `label` DO survive: the forward path
+   routes them into `ConversationView.events`, the shared derive
+   emits them as `conversation.event` steps, and the projector
+   re-materializes them as real Pi entries with their original
+   `id`/`parentId`.
 3. **Inner message `timestamp` is u64 epoch milliseconds**, not an
    ISO-8601 string. The outer `EntryBase.timestamp` IS the ISO string.
    Two timestamp fields per message — keep them in sync on round-trip.
