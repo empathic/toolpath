@@ -29,7 +29,15 @@ pub const PROVIDER_ID: &str = "openclaw";
 /// Tool names are free-form; the matching is case-insensitive and lenient.
 pub fn classify_tool(name: &str) -> Option<ToolCategory> {
     let lower = name.to_lowercase();
-    if lower.contains("task") || lower.contains("agent") || lower.contains("subagent") {
+    // `sessions_spawn` is OpenClaw's sub-agent dispatch (observed in real
+    // sessions); `spawn` alone is the discriminating token. Session
+    // control-flow tools (`sessions_yield`, `sessions_send`, …) are not
+    // delegation and fall through unclassified.
+    if lower.contains("task")
+        || lower.contains("agent")
+        || lower.contains("subagent")
+        || lower.contains("spawn")
+    {
         return Some(ToolCategory::Delegation);
     }
     match lower.as_str() {
@@ -157,6 +165,12 @@ fn environment_for(session: &OpenClawSession) -> EnvironmentSnapshot {
 /// falls back to the default `human:user`).
 pub fn user_actor_for(parsed: Option<&ParsedKey>) -> Option<String> {
     let key = parsed?;
+    // Sub-agent runs (`agent:<id>:subagent:<uuid>`, observed on disk after a
+    // `sessions_spawn`) have no human peer; the "subagent" segment is a key
+    // namespace, not a messaging channel.
+    if key.channel.as_deref() == Some("subagent") {
+        return None;
+    }
     let peer = key.peer_id.as_deref()?;
     match (&key.channel, key.peer_kind.as_deref()) {
         (Some(ch), Some("group")) | (Some(ch), Some("channel")) => {
@@ -170,6 +184,7 @@ pub fn user_actor_for(parsed: Option<&ParsedKey>) -> Option<String> {
 /// The session kind implied by a routing key.
 fn session_kind(parsed: Option<&ParsedKey>) -> &'static str {
     match parsed {
+        Some(k) if k.channel.as_deref() == Some("subagent") => "spawn-child",
         Some(k) if matches!(k.peer_kind.as_deref(), Some("group") | Some("channel")) => "group",
         Some(k) if k.peer_id.is_some() => "direct",
         _ => "main",
@@ -587,6 +602,38 @@ mod tests {
         // 1200 + 1500 input, 340 + 120 output
         assert_eq!(tu.input_tokens, Some(2700));
         assert_eq!(tu.output_tokens, Some(460));
+    }
+
+    #[test]
+    fn classify_real_observed_tool_names() {
+        // Names observed in real sessions captured from the v2026.6.11 image.
+        assert_eq!(classify_tool("exec"), Some(ToolCategory::Shell));
+        assert_eq!(classify_tool("read"), Some(ToolCategory::FileRead));
+        assert_eq!(classify_tool("write"), Some(ToolCategory::FileWrite));
+        assert_eq!(classify_tool("edit"), Some(ToolCategory::FileWrite));
+        // Sub-agent spawn is OpenClaw's delegation tool.
+        assert_eq!(classify_tool("sessions_spawn"), Some(ToolCategory::Delegation));
+        // Control-flow tools are not delegation (and not misclassified).
+        assert_eq!(classify_tool("sessions_yield"), None);
+    }
+
+    #[test]
+    fn subagent_session_key_is_spawn_child_not_a_channel() {
+        // Real key shape observed on disk after a sessions_spawn delegation.
+        let key = crate::paths::parse_session_key(
+            "agent:main:subagent:e1b075db-1f72-4148-a846-bc5b9d4c2ede",
+        );
+        // A sub-agent run has no human peer: no channel actor…
+        assert_eq!(user_actor_for(Some(&key)), None);
+        // …and its session kind is spawn-child, not direct.
+        let mut s = read_session_from_file(Path::new("tests/fixtures/dm_session.jsonl")).unwrap();
+        s.session_key = Some("agent:main:subagent:e1b075db".into());
+        s.parsed_key = Some(key);
+        let extra = openclaw_meta_extra(&s);
+        assert_eq!(
+            extra.get("sessionKind").and_then(|v| v.as_str()),
+            Some("spawn-child")
+        );
     }
 
     #[test]

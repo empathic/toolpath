@@ -1,0 +1,1306 @@
+{
+  "agent:main:main": {
+    "sessionId": "907f477b-0bba-4b63-9d04-481a03f2db9e",
+    "updatedAt": 1783520102351,
+    "sessionStartedAt": 1783520061124,
+    "skillsSnapshot": {
+      "skills": [
+        {
+          "name": "browser-automation"
+        },
+        {
+          "name": "canvas"
+        },
+        {
+          "name": "clawhub"
+        },
+        {
+          "name": "diagram-maker"
+        },
+        {
+          "name": "healthcheck"
+        },
+        {
+          "name": "meme-maker",
+          "requiredEnv": []
+        },
+        {
+          "name": "node-connect"
+        },
+        {
+          "name": "node-inspect-debugger",
+          "requiredEnv": []
+        },
+        {
+          "name": "notion",
+          "primaryEnv": "NOTION_API_TOKEN",
+          "requiredEnv": []
+        },
+        {
+          "name": "python-debugpy",
+          "requiredEnv": []
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "spike"
+        },
+        {
+          "name": "taskflow"
+        },
+        {
+          "name": "taskflow-inbox-triage"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "version": 1783520060622,
+      "promptFormatVersion": 1,
+      "promptRef": {
+        "version": 1,
+        "algorithm": "sha256",
+        "hash": "e5fe28e69f48dbacedd00eaae618e2965ff91d2b87d9989e52c0446673d3ab47",
+        "bytes": 4874
+      }
+    },
+    "lastInteractionAt": 1783520102340,
+    "sessionFile": "/home/node/.openclaw/agents/main/sessions/907f477b-0bba-4b63-9d04-481a03f2db9e.jsonl",
+    "contextTokens": 1048576,
+    "modelProvider": "anthropic",
+    "model": "claude-opus-4-8",
+    "agentHarnessId": "openclaw",
+    "abortedLastRun": false,
+    "systemPromptReport": {
+      "source": "run",
+      "generatedAt": 1783520061957,
+      "sessionId": "907f477b-0bba-4b63-9d04-481a03f2db9e",
+      "sessionKey": "agent:main:main",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "workspaceDir": "/home/node/.openclaw/workspace",
+      "bootstrapMaxChars": 20000,
+      "bootstrapTotalMaxChars": 60000,
+      "bootstrapTruncation": {
+        "warningMode": "always",
+        "warningShown": false,
+        "truncatedFiles": 0,
+        "nearLimitFiles": 0,
+        "totalNearLimit": false
+      },
+      "sandbox": {
+        "mode": "off",
+        "sandboxed": false
+      },
+      "systemPrompt": {
+        "chars": 32101,
+        "hash": "c5391030f5e3a2ed081e1ec6f3dcc57b4bdbc3b5b3f7537e7f82281a3081a09b",
+        "projectContextChars": 14519,
+        "nonProjectContextChars": 17582
+      },
+      "injectedWorkspaceFiles": [
+        {
+          "name": "AGENTS.md",
+          "path": "/home/node/.openclaw/workspace/AGENTS.md",
+          "missing": false,
+          "rawChars": 8654,
+          "injectedChars": 8654,
+          "truncated": false
+        },
+        {
+          "name": "SOUL.md",
+          "path": "/home/node/.openclaw/workspace/SOUL.md",
+          "missing": false,
+          "rawChars": 1797,
+          "injectedChars": 1797,
+          "truncated": false
+        },
+        {
+          "name": "TOOLS.md",
+          "path": "/home/node/.openclaw/workspace/TOOLS.md",
+          "missing": false,
+          "rawChars": 910,
+          "injectedChars": 910,
+          "truncated": false
+        },
+        {
+          "name": "IDENTITY.md",
+          "path": "/home/node/.openclaw/workspace/IDENTITY.md",
+          "missing": false,
+          "rawChars": 693,
+          "injectedChars": 693,
+          "truncated": false
+        },
+        {
+          "name": "USER.md",
+          "path": "/home/node/.openclaw/workspace/USER.md",
+          "missing": false,
+          "rawChars": 534,
+          "injectedChars": 534,
+          "truncated": false
+        },
+        {
+          "name": "HEARTBEAT.md",
+          "path": "/home/node/.openclaw/workspace/HEARTBEAT.md",
+          "missing": false,
+          "rawChars": 243,
+          "injectedChars": 243,
+          "truncated": false
+        },
+        {
+          "name": "BOOTSTRAP.md",
+          "path": "/home/node/.openclaw/workspace/BOOTSTRAP.md",
+          "missing": false,
+          "rawChars": 1510,
+          "injectedChars": 1510,
+          "truncated": false
+        }
+      ],
+      "skills": {
+        "promptChars": 4872,
+        "hash": "c96dc0d8eeefa7f8bea8fba0ffc088a2964387e4241ca56d78badc77d514f39d",
+        "entries": [
+          {
+            "name": "browser-automation",
+            "blockChars": 371
+          },
+          {
+            "name": "canvas",
+            "blockChars": 289
+          },
+          {
+            "name": "clawhub",
+            "blockChars": 305
+          },
+          {
+            "name": "diagram-maker",
+            "blockChars": 278
+          },
+          {
+            "name": "healthcheck",
+            "blockChars": 290
+          },
+          {
+            "name": "meme-maker",
+            "blockChars": 263
+          },
+          {
+            "name": "node-connect",
+            "blockChars": 293
+          },
+          {
+            "name": "node-inspect-debugger",
+            "blockChars": 289
+          },
+          {
+            "name": "notion",
+            "blockChars": 284
+          },
+          {
+            "name": "python-debugpy",
+            "blockChars": 277
+          },
+          {
+            "name": "skill-creator",
+            "blockChars": 271
+          },
+          {
+            "name": "spike",
+            "blockChars": 263
+          },
+          {
+            "name": "taskflow",
+            "blockChars": 293
+          },
+          {
+            "name": "taskflow-inbox-triage",
+            "blockChars": 303
+          },
+          {
+            "name": "weather",
+            "blockChars": 301
+          }
+        ]
+      },
+      "tools": {
+        "listChars": 0,
+        "schemaChars": 20290,
+        "entries": [
+          {
+            "name": "read",
+            "summaryChars": 298,
+            "summaryHash": "f8a1d7cf1ecfe02b1b5865c93387e6a5891e5079117b4fe18614b6f912521727",
+            "schemaChars": 304,
+            "schemaHash": "134f19bcabe3e29d63c5cebb38f1d2556759fd08adad6bc90a4b4d3cd1fb8441",
+            "propertiesCount": 3
+          },
+          {
+            "name": "edit",
+            "summaryChars": 326,
+            "summaryHash": "c498a85576e187d069e8e8ea4f70f81bddd57829600d385ef61c4359fd634c9e",
+            "schemaChars": 834,
+            "schemaHash": "457e8bb9f800b21be76c4fd8c0e3078bf07ee9bf93ac82f39944c171bd8f6d84",
+            "propertiesCount": 2
+          },
+          {
+            "name": "write",
+            "summaryChars": 127,
+            "summaryHash": "cdb1c46027b22d1f1b923b47bfe297821d9fe589a9f9d92994961948060a4d89",
+            "schemaChars": 225,
+            "schemaHash": "e98a2484f667cf7c22d76ca103bf2022bf9113dc63fe38b899e71c328cb1e833",
+            "propertiesCount": 2
+          },
+          {
+            "name": "apply_patch",
+            "summaryChars": 132,
+            "summaryHash": "432bf38688a4f011d2b765a441ac07e1fdfa9faf2051679adee04abcd9332d93",
+            "schemaChars": 153,
+            "schemaHash": "05521268363ff4f191472c90d69ef08a503ba9acf1d2febc50b3ee68db32ab65",
+            "propertiesCount": 1
+          },
+          {
+            "name": "exec",
+            "summaryChars": 539,
+            "summaryHash": "4825198988fbfa8ebf5c2a8fbe3946da0be639b1e3b737ceaa4364195bba3f04",
+            "schemaChars": 1283,
+            "schemaHash": "2608ea36cf51376859b7204cda1bf1a2507134eb542097b9e8dbc8af617f216b",
+            "propertiesCount": 12
+          },
+          {
+            "name": "process",
+            "summaryChars": 456,
+            "summaryHash": "55297e65d460e0e1e06e7fad4cedb75ffda8fac9fa8b10aa06d6cead3c5a76ea",
+            "schemaChars": 1074,
+            "schemaHash": "a2d30a25569f409d7e8539844c89a088044535388b24031d014577b96ed27c5c",
+            "propertiesCount": 12
+          },
+          {
+            "name": "cron",
+            "summaryChars": 3820,
+            "summaryHash": "d3bc0032e9c0ba71e5983ee4d06bd4b70ea5170dcb5d85fbff1bd71f01b070f4",
+            "schemaChars": 8705,
+            "schemaHash": "830efafdf26c1cd1c32452d2baea3b8fc0c7b7b7269d9ab0a503aded48f88ab1",
+            "propertiesCount": 15
+          },
+          {
+            "name": "get_goal",
+            "summaryChars": 71,
+            "summaryHash": "58dea7906d9e17e5f89a75fea24597ee068d8a56af824370dc27f8501374d6e3",
+            "schemaChars": 33,
+            "schemaHash": "8243f0af367f188a376f2c17b5eabe872a2f7a979813e0d4e2be6d594c2aa259",
+            "propertiesCount": 0
+          },
+          {
+            "name": "create_goal",
+            "summaryChars": 155,
+            "summaryHash": "f01e3a63d673a410ba55213ce6bd3fa2b0d2279e8e780c18aa0cb5aa991b29b3",
+            "schemaChars": 267,
+            "schemaHash": "27ee794432736471bd76390e236cc7d7e98f8469a02656e7a27109041eea0f8c",
+            "propertiesCount": 2
+          },
+          {
+            "name": "update_goal",
+            "summaryChars": 212,
+            "summaryHash": "285201690e5f2456b4cdcd252ff391709b84d69538df61bad694d3c0cfc19958",
+            "schemaChars": 207,
+            "schemaHash": "c37894492eedfad02f1e7fe1488900765bfe547f3b3f34cefbab4f7f57441c2c",
+            "propertiesCount": 2
+          },
+          {
+            "name": "skill_workshop",
+            "summaryChars": 171,
+            "summaryHash": "577c1d2b8f56bf3e9dd5e00463bbce8b8bf4cf201da9b21b588dcaa3bc6ed8cf",
+            "schemaChars": 2273,
+            "schemaHash": "15481d6889a320a46728ee32304f0a2b510c0bcf77d445052c1ef2fa5dd5368b",
+            "propertiesCount": 13
+          },
+          {
+            "name": "update_plan",
+            "summaryChars": 163,
+            "summaryHash": "ea18cc44224e849c68cdf0a4839c295c1b20daf2699e2fc2be4c4e1552327455",
+            "schemaChars": 489,
+            "schemaHash": "50cb08b8a29e72637eb6720e6f5f3786783824537574f05ee9ae7a5f4ecacc4b",
+            "propertiesCount": 2
+          },
+          {
+            "name": "sessions_list",
+            "summaryChars": 135,
+            "summaryHash": "c7e411ae02e3adff5504aaee48f02d262a8abb9152558a3172aae289e3b05faf",
+            "schemaChars": 435,
+            "schemaHash": "c29c6b82c36a2d95a88c8944f129929b2621ee2af6d17b2ab101d4d7e9633d89",
+            "propertiesCount": 9
+          },
+          {
+            "name": "sessions_history",
+            "summaryChars": 117,
+            "summaryHash": "f5d45b76f11a8ac63cc45d456fb6f675f0b1a2e191feb9671924cb5830058f03",
+            "schemaChars": 162,
+            "schemaHash": "ac33b8af2252262afe479236046f5a04bc018f1fcf24d1a8bf32743f0e867598",
+            "propertiesCount": 3
+          },
+          {
+            "name": "sessions_send",
+            "summaryChars": 282,
+            "summaryHash": "061e9ef3487676bb2a4fd4c0336bd973aaab5eea0725e7443c4cb17518cd1e78",
+            "schemaChars": 275,
+            "schemaHash": "f1fbaa412fe6b6aee102234c87c5aa140f39c9086f9bae6e1e9691309a602ffb",
+            "propertiesCount": 5
+          },
+          {
+            "name": "sessions_spawn",
+            "summaryChars": 578,
+            "summaryHash": "c75061234ba01a4eb29ca223c1c63a44935e9e555ef2ca280722ba9e844db86d",
+            "schemaChars": 1151,
+            "schemaHash": "9a91c7668463da8a66386260ce2ae97e7efe3bb93b9b6f03ac85102c354457e1",
+            "propertiesCount": 15
+          },
+          {
+            "name": "sessions_yield",
+            "summaryChars": 79,
+            "summaryHash": "f3782fc41c1522657e1d3494f486a2df998fed38a6b89dcf7f6934fb41424320",
+            "schemaChars": 60,
+            "schemaHash": "b1c4c753820bc3096d85ef7a266a14c9fbe12450536db58076b75bb61d14dbbb",
+            "propertiesCount": 1
+          },
+          {
+            "name": "subagents",
+            "summaryChars": 132,
+            "summaryHash": "1c2ffd38549c0444b118d43736fc4b875ea1aaabc446bbf8bc1fc4ee9180cca4",
+            "schemaChars": 122,
+            "schemaHash": "c4a241d2c3d46ba7985abfce4d3fcd63298ce81f89d49183c8f3d584c48d0c33",
+            "propertiesCount": 2
+          },
+          {
+            "name": "session_status",
+            "summaryChars": 278,
+            "summaryHash": "71177e543dc6235bad4b1a26761995681dcec27ab58dcb4f4f8a7fc9a7b2b5aa",
+            "schemaChars": 89,
+            "schemaHash": "d2995f3d69d126e98ac93eec3c2a9fe5556925bd7979a8e4b6b5a2bf62d329dd",
+            "propertiesCount": 2
+          },
+          {
+            "name": "web_search",
+            "summaryChars": 65,
+            "summaryHash": "b38e9b3c079beaa988d3c576303660b91a55c2e72f56351da04160529173273f",
+            "schemaChars": 991,
+            "schemaHash": "3879e368875d824b14e0e683f81408824e9a2a5850fa2f8514a68caebda54d18",
+            "propertiesCount": 12
+          },
+          {
+            "name": "web_fetch",
+            "summaryChars": 93,
+            "summaryHash": "8875afbb51bd63673e5e6836ca31eeda73914a464862665cd73b346e28d28fd5",
+            "schemaChars": 317,
+            "schemaHash": "d2d8ad58a1b84d849dd16142282aff6c5606f7b0e3d08405e1b740a6a79e6bcc",
+            "propertiesCount": 3
+          },
+          {
+            "name": "image",
+            "summaryChars": 169,
+            "summaryHash": "a46820ca8952445d3663a8908bfa5d3adddff5b53d18b9d8e9eed8f9e593b494",
+            "schemaChars": 350,
+            "schemaHash": "49bb766071c935edca8c2d0df47fc2109bbffe3d4ba32d0b19fe90ec873736ce",
+            "propertiesCount": 6
+          },
+          {
+            "name": "memory_search",
+            "summaryChars": 605,
+            "summaryHash": "0f918d28864d3682ae77731f149273997c84773592a466b18c7cd0121b599a05",
+            "schemaChars": 250,
+            "schemaHash": "088cd2a3d3a47b251429ff7c56844cdedd1c45c3af0fa8bfaf7aa795766976bf",
+            "propertiesCount": 4
+          },
+          {
+            "name": "memory_get",
+            "summaryChars": 239,
+            "summaryHash": "bff1141a3da31a345c550337417efc9ace4da2909004606c727c59ca1a294495",
+            "schemaChars": 241,
+            "schemaHash": "78f5d58460a82f9104deebad2f1873a8cde05d1ce7328b3ba4da6e994653e70a",
+            "propertiesCount": 4
+          }
+        ]
+      },
+      "currentTurn": {
+        "promptChars": 2420,
+        "runtimeContextChars": 0
+      }
+    },
+    "contextBudgetStatus": {
+      "schemaVersion": 1,
+      "source": "pre-prompt-estimate",
+      "updatedAt": 1783520062019,
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "route": "fits",
+      "shouldCompact": false,
+      "estimatedPromptTokens": 10395,
+      "contextTokenBudget": 1048576,
+      "promptBudgetBeforeReserve": 1028576,
+      "reserveTokens": 20000,
+      "effectiveReserveTokens": 20000,
+      "remainingPromptBudgetTokens": 1018181,
+      "overflowTokens": 0,
+      "toolResultReducibleChars": 0,
+      "messageCount": 0,
+      "unwindowedMessageCount": 0,
+      "sessionId": "907f477b-0bba-4b63-9d04-481a03f2db9e"
+    },
+    "inputTokens": 20,
+    "outputTokens": 1468,
+    "totalTokens": 28406,
+    "totalTokensFresh": true,
+    "cacheRead": 268344,
+    "cacheWrite": 4002
+  },
+  "agent:main:subagent:e1b075db-1f72-4148-a846-bc5b9d4c2ede": {
+    "spawnDepth": 1,
+    "subagentRole": "leaf",
+    "subagentControlScope": "none",
+    "inheritedToolAllow": [
+      "read",
+      "edit",
+      "write",
+      "apply_patch",
+      "exec",
+      "process",
+      "cron",
+      "get_goal",
+      "create_goal",
+      "update_goal",
+      "skill_workshop",
+      "update_plan",
+      "sessions_list",
+      "sessions_history",
+      "sessions_send",
+      "sessions_spawn",
+      "sessions_yield",
+      "subagents",
+      "session_status",
+      "web_search",
+      "web_fetch",
+      "image",
+      "memory_search",
+      "memory_get"
+    ],
+    "thinkingLevel": "off",
+    "model": "claude-opus-4-8",
+    "modelProvider": "anthropic",
+    "sessionId": "cdff4998-f609-45e7-beeb-ecb980d44cab",
+    "updatedAt": 1783520106093,
+    "sessionStartedAt": 1783520099409,
+    "spawnedBy": "agent:main:main",
+    "spawnedWorkspaceDir": "/home/node/.openclaw/workspace",
+    "spawnedCwd": "/home/node/.openclaw/workspace",
+    "lastInteractionAt": 1783520106092,
+    "label": "wordcount",
+    "startedAt": 1783520099557,
+    "endedAt": 1783520106108,
+    "runtimeMs": 6044,
+    "status": "done",
+    "skillsSnapshot": {
+      "skills": [
+        {
+          "name": "browser-automation"
+        },
+        {
+          "name": "canvas"
+        },
+        {
+          "name": "clawhub"
+        },
+        {
+          "name": "diagram-maker"
+        },
+        {
+          "name": "healthcheck"
+        },
+        {
+          "name": "meme-maker",
+          "requiredEnv": []
+        },
+        {
+          "name": "node-connect"
+        },
+        {
+          "name": "node-inspect-debugger",
+          "requiredEnv": []
+        },
+        {
+          "name": "notion",
+          "primaryEnv": "NOTION_API_TOKEN",
+          "requiredEnv": []
+        },
+        {
+          "name": "python-debugpy",
+          "requiredEnv": []
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "spike"
+        },
+        {
+          "name": "taskflow"
+        },
+        {
+          "name": "taskflow-inbox-triage"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "version": 1783520060622,
+      "promptFormatVersion": 1,
+      "promptRef": {
+        "version": 1,
+        "algorithm": "sha256",
+        "hash": "e5fe28e69f48dbacedd00eaae618e2965ff91d2b87d9989e52c0446673d3ab47",
+        "bytes": 4874
+      }
+    },
+    "sessionFile": "/home/node/.openclaw/agents/main/sessions/cdff4998-f609-45e7-beeb-ecb980d44cab.jsonl",
+    "contextTokens": 1048576,
+    "agentHarnessId": "openclaw",
+    "abortedLastRun": false,
+    "systemPromptReport": {
+      "source": "run",
+      "generatedAt": 1783520100243,
+      "sessionId": "cdff4998-f609-45e7-beeb-ecb980d44cab",
+      "sessionKey": "agent:main:subagent:e1b075db-1f72-4148-a846-bc5b9d4c2ede",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "workspaceDir": "/home/node/.openclaw/workspace",
+      "bootstrapMaxChars": 20000,
+      "bootstrapTotalMaxChars": 60000,
+      "bootstrapTruncation": {
+        "warningMode": "always",
+        "warningShown": false,
+        "truncatedFiles": 0,
+        "nearLimitFiles": 0,
+        "totalNearLimit": false
+      },
+      "sandbox": {
+        "mode": "off",
+        "sandboxed": false
+      },
+      "systemPrompt": {
+        "chars": 22993,
+        "hash": "d0e6ef0e5445c8c6daac705f2103aae9edb865d97504ee8c717b9f15dcea75d8",
+        "projectContextChars": 12334,
+        "nonProjectContextChars": 10659
+      },
+      "injectedWorkspaceFiles": [
+        {
+          "name": "AGENTS.md",
+          "path": "/home/node/.openclaw/workspace/AGENTS.md",
+          "missing": false,
+          "rawChars": 8654,
+          "injectedChars": 8654,
+          "truncated": false
+        },
+        {
+          "name": "TOOLS.md",
+          "path": "/home/node/.openclaw/workspace/TOOLS.md",
+          "missing": false,
+          "rawChars": 910,
+          "injectedChars": 910,
+          "truncated": false
+        }
+      ],
+      "skills": {
+        "promptChars": 4872,
+        "hash": "c96dc0d8eeefa7f8bea8fba0ffc088a2964387e4241ca56d78badc77d514f39d",
+        "entries": [
+          {
+            "name": "browser-automation",
+            "blockChars": 371
+          },
+          {
+            "name": "canvas",
+            "blockChars": 289
+          },
+          {
+            "name": "clawhub",
+            "blockChars": 305
+          },
+          {
+            "name": "diagram-maker",
+            "blockChars": 278
+          },
+          {
+            "name": "healthcheck",
+            "blockChars": 290
+          },
+          {
+            "name": "meme-maker",
+            "blockChars": 263
+          },
+          {
+            "name": "node-connect",
+            "blockChars": 293
+          },
+          {
+            "name": "node-inspect-debugger",
+            "blockChars": 289
+          },
+          {
+            "name": "notion",
+            "blockChars": 284
+          },
+          {
+            "name": "python-debugpy",
+            "blockChars": 277
+          },
+          {
+            "name": "skill-creator",
+            "blockChars": 271
+          },
+          {
+            "name": "spike",
+            "blockChars": 263
+          },
+          {
+            "name": "taskflow",
+            "blockChars": 293
+          },
+          {
+            "name": "taskflow-inbox-triage",
+            "blockChars": 303
+          },
+          {
+            "name": "weather",
+            "blockChars": 301
+          }
+        ]
+      },
+      "tools": {
+        "listChars": 0,
+        "schemaChars": 9351,
+        "entries": [
+          {
+            "name": "read",
+            "summaryChars": 298,
+            "summaryHash": "f8a1d7cf1ecfe02b1b5865c93387e6a5891e5079117b4fe18614b6f912521727",
+            "schemaChars": 304,
+            "schemaHash": "134f19bcabe3e29d63c5cebb38f1d2556759fd08adad6bc90a4b4d3cd1fb8441",
+            "propertiesCount": 3
+          },
+          {
+            "name": "edit",
+            "summaryChars": 326,
+            "summaryHash": "c498a85576e187d069e8e8ea4f70f81bddd57829600d385ef61c4359fd634c9e",
+            "schemaChars": 834,
+            "schemaHash": "457e8bb9f800b21be76c4fd8c0e3078bf07ee9bf93ac82f39944c171bd8f6d84",
+            "propertiesCount": 2
+          },
+          {
+            "name": "write",
+            "summaryChars": 127,
+            "summaryHash": "cdb1c46027b22d1f1b923b47bfe297821d9fe589a9f9d92994961948060a4d89",
+            "schemaChars": 225,
+            "schemaHash": "e98a2484f667cf7c22d76ca103bf2022bf9113dc63fe38b899e71c328cb1e833",
+            "propertiesCount": 2
+          },
+          {
+            "name": "apply_patch",
+            "summaryChars": 132,
+            "summaryHash": "432bf38688a4f011d2b765a441ac07e1fdfa9faf2051679adee04abcd9332d93",
+            "schemaChars": 153,
+            "schemaHash": "05521268363ff4f191472c90d69ef08a503ba9acf1d2febc50b3ee68db32ab65",
+            "propertiesCount": 1
+          },
+          {
+            "name": "exec",
+            "summaryChars": 446,
+            "summaryHash": "369f5e5e195c647ab1e3cfad282e6d25488d4b9fe269f1157e273a546ca80295",
+            "schemaChars": 1283,
+            "schemaHash": "2608ea36cf51376859b7204cda1bf1a2507134eb542097b9e8dbc8af617f216b",
+            "propertiesCount": 12
+          },
+          {
+            "name": "process",
+            "summaryChars": 362,
+            "summaryHash": "21d78afb643a24f211fe9aa86c748f165ca82f1dc21bbaf6e3e6d6d4d4411d86",
+            "schemaChars": 1074,
+            "schemaHash": "a2d30a25569f409d7e8539844c89a088044535388b24031d014577b96ed27c5c",
+            "propertiesCount": 12
+          },
+          {
+            "name": "get_goal",
+            "summaryChars": 71,
+            "summaryHash": "58dea7906d9e17e5f89a75fea24597ee068d8a56af824370dc27f8501374d6e3",
+            "schemaChars": 33,
+            "schemaHash": "8243f0af367f188a376f2c17b5eabe872a2f7a979813e0d4e2be6d594c2aa259",
+            "propertiesCount": 0
+          },
+          {
+            "name": "create_goal",
+            "summaryChars": 155,
+            "summaryHash": "f01e3a63d673a410ba55213ce6bd3fa2b0d2279e8e780c18aa0cb5aa991b29b3",
+            "schemaChars": 267,
+            "schemaHash": "27ee794432736471bd76390e236cc7d7e98f8469a02656e7a27109041eea0f8c",
+            "propertiesCount": 2
+          },
+          {
+            "name": "update_goal",
+            "summaryChars": 212,
+            "summaryHash": "285201690e5f2456b4cdcd252ff391709b84d69538df61bad694d3c0cfc19958",
+            "schemaChars": 207,
+            "schemaHash": "c37894492eedfad02f1e7fe1488900765bfe547f3b3f34cefbab4f7f57441c2c",
+            "propertiesCount": 2
+          },
+          {
+            "name": "skill_workshop",
+            "summaryChars": 171,
+            "summaryHash": "577c1d2b8f56bf3e9dd5e00463bbce8b8bf4cf201da9b21b588dcaa3bc6ed8cf",
+            "schemaChars": 2273,
+            "schemaHash": "15481d6889a320a46728ee32304f0a2b510c0bcf77d445052c1ef2fa5dd5368b",
+            "propertiesCount": 13
+          },
+          {
+            "name": "update_plan",
+            "summaryChars": 163,
+            "summaryHash": "ea18cc44224e849c68cdf0a4839c295c1b20daf2699e2fc2be4c4e1552327455",
+            "schemaChars": 489,
+            "schemaHash": "50cb08b8a29e72637eb6720e6f5f3786783824537574f05ee9ae7a5f4ecacc4b",
+            "propertiesCount": 2
+          },
+          {
+            "name": "sessions_yield",
+            "summaryChars": 79,
+            "summaryHash": "f3782fc41c1522657e1d3494f486a2df998fed38a6b89dcf7f6934fb41424320",
+            "schemaChars": 60,
+            "schemaHash": "b1c4c753820bc3096d85ef7a266a14c9fbe12450536db58076b75bb61d14dbbb",
+            "propertiesCount": 1
+          },
+          {
+            "name": "web_search",
+            "summaryChars": 65,
+            "summaryHash": "b38e9b3c079beaa988d3c576303660b91a55c2e72f56351da04160529173273f",
+            "schemaChars": 991,
+            "schemaHash": "3879e368875d824b14e0e683f81408824e9a2a5850fa2f8514a68caebda54d18",
+            "propertiesCount": 12
+          },
+          {
+            "name": "web_fetch",
+            "summaryChars": 93,
+            "summaryHash": "8875afbb51bd63673e5e6836ca31eeda73914a464862665cd73b346e28d28fd5",
+            "schemaChars": 317,
+            "schemaHash": "d2d8ad58a1b84d849dd16142282aff6c5606f7b0e3d08405e1b740a6a79e6bcc",
+            "propertiesCount": 3
+          },
+          {
+            "name": "image",
+            "summaryChars": 169,
+            "summaryHash": "a46820ca8952445d3663a8908bfa5d3adddff5b53d18b9d8e9eed8f9e593b494",
+            "schemaChars": 350,
+            "schemaHash": "49bb766071c935edca8c2d0df47fc2109bbffe3d4ba32d0b19fe90ec873736ce",
+            "propertiesCount": 6
+          },
+          {
+            "name": "memory_search",
+            "summaryChars": 605,
+            "summaryHash": "0f918d28864d3682ae77731f149273997c84773592a466b18c7cd0121b599a05",
+            "schemaChars": 250,
+            "schemaHash": "088cd2a3d3a47b251429ff7c56844cdedd1c45c3af0fa8bfaf7aa795766976bf",
+            "propertiesCount": 4
+          },
+          {
+            "name": "memory_get",
+            "summaryChars": 239,
+            "summaryHash": "bff1141a3da31a345c550337417efc9ace4da2909004606c727c59ca1a294495",
+            "schemaChars": 241,
+            "schemaHash": "78f5d58460a82f9104deebad2f1873a8cde05d1ce7328b3ba4da6e994653e70a",
+            "propertiesCount": 4
+          }
+        ]
+      },
+      "currentTurn": {
+        "promptChars": 251,
+        "runtimeContextChars": 0
+      }
+    },
+    "contextBudgetStatus": {
+      "schemaVersion": 1,
+      "source": "pre-prompt-estimate",
+      "updatedAt": 1783520100296,
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "route": "fits",
+      "shouldCompact": false,
+      "estimatedPromptTokens": 7012,
+      "contextTokenBudget": 1048576,
+      "promptBudgetBeforeReserve": 1028576,
+      "reserveTokens": 20000,
+      "effectiveReserveTokens": 20000,
+      "remainingPromptBudgetTokens": 1021564,
+      "overflowTokens": 0,
+      "toolResultReducibleChars": 0,
+      "messageCount": 0,
+      "unwindowedMessageCount": 0,
+      "sessionId": "cdff4998-f609-45e7-beeb-ecb980d44cab"
+    },
+    "inputTokens": 4,
+    "outputTokens": 84,
+    "totalTokens": 14385,
+    "totalTokensFresh": true,
+    "cacheRead": 14304,
+    "cacheWrite": 14383
+  },
+  "agent:main:telegram:direct:15555550123": {
+    "sessionId": "02f4cce4-d744-4e62-a34c-4e99292becd2",
+    "updatedAt": 1783520172252,
+    "sessionStartedAt": 1783520166884,
+    "skillsSnapshot": {
+      "skills": [
+        {
+          "name": "browser-automation"
+        },
+        {
+          "name": "canvas"
+        },
+        {
+          "name": "clawhub"
+        },
+        {
+          "name": "diagram-maker"
+        },
+        {
+          "name": "healthcheck"
+        },
+        {
+          "name": "meme-maker",
+          "requiredEnv": []
+        },
+        {
+          "name": "node-connect"
+        },
+        {
+          "name": "node-inspect-debugger",
+          "requiredEnv": []
+        },
+        {
+          "name": "notion",
+          "primaryEnv": "NOTION_API_TOKEN",
+          "requiredEnv": []
+        },
+        {
+          "name": "python-debugpy",
+          "requiredEnv": []
+        },
+        {
+          "name": "skill-creator"
+        },
+        {
+          "name": "spike"
+        },
+        {
+          "name": "taskflow"
+        },
+        {
+          "name": "taskflow-inbox-triage"
+        },
+        {
+          "name": "weather"
+        }
+      ],
+      "version": 1783520166453,
+      "promptFormatVersion": 1,
+      "promptRef": {
+        "version": 1,
+        "algorithm": "sha256",
+        "hash": "e5fe28e69f48dbacedd00eaae618e2965ff91d2b87d9989e52c0446673d3ab47",
+        "bytes": 4874
+      }
+    },
+    "lastInteractionAt": 1783520172250,
+    "sessionFile": "/home/node/.openclaw/agents/main/sessions/02f4cce4-d744-4e62-a34c-4e99292becd2.jsonl",
+    "contextTokens": 1048576,
+    "modelProvider": "anthropic",
+    "model": "claude-opus-4-8",
+    "agentHarnessId": "openclaw",
+    "abortedLastRun": false,
+    "systemPromptReport": {
+      "source": "run",
+      "generatedAt": 1783520167610,
+      "sessionId": "02f4cce4-d744-4e62-a34c-4e99292becd2",
+      "sessionKey": "agent:main:telegram:direct:15555550123",
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "workspaceDir": "/home/node/.openclaw/workspace",
+      "bootstrapMaxChars": 20000,
+      "bootstrapTotalMaxChars": 60000,
+      "bootstrapTruncation": {
+        "warningMode": "always",
+        "warningShown": false,
+        "truncatedFiles": 0,
+        "nearLimitFiles": 0,
+        "totalNearLimit": false
+      },
+      "sandbox": {
+        "mode": "off",
+        "sandboxed": false
+      },
+      "systemPrompt": {
+        "chars": 32124,
+        "hash": "6ee2f4344cb3d4ce6803167be49a3063bd76f142d045ef01574e32ed7a52f97e",
+        "projectContextChars": 14519,
+        "nonProjectContextChars": 17605
+      },
+      "injectedWorkspaceFiles": [
+        {
+          "name": "AGENTS.md",
+          "path": "/home/node/.openclaw/workspace/AGENTS.md",
+          "missing": false,
+          "rawChars": 8654,
+          "injectedChars": 8654,
+          "truncated": false
+        },
+        {
+          "name": "SOUL.md",
+          "path": "/home/node/.openclaw/workspace/SOUL.md",
+          "missing": false,
+          "rawChars": 1797,
+          "injectedChars": 1797,
+          "truncated": false
+        },
+        {
+          "name": "TOOLS.md",
+          "path": "/home/node/.openclaw/workspace/TOOLS.md",
+          "missing": false,
+          "rawChars": 910,
+          "injectedChars": 910,
+          "truncated": false
+        },
+        {
+          "name": "IDENTITY.md",
+          "path": "/home/node/.openclaw/workspace/IDENTITY.md",
+          "missing": false,
+          "rawChars": 693,
+          "injectedChars": 693,
+          "truncated": false
+        },
+        {
+          "name": "USER.md",
+          "path": "/home/node/.openclaw/workspace/USER.md",
+          "missing": false,
+          "rawChars": 534,
+          "injectedChars": 534,
+          "truncated": false
+        },
+        {
+          "name": "HEARTBEAT.md",
+          "path": "/home/node/.openclaw/workspace/HEARTBEAT.md",
+          "missing": false,
+          "rawChars": 243,
+          "injectedChars": 243,
+          "truncated": false
+        },
+        {
+          "name": "BOOTSTRAP.md",
+          "path": "/home/node/.openclaw/workspace/BOOTSTRAP.md",
+          "missing": false,
+          "rawChars": 1510,
+          "injectedChars": 1510,
+          "truncated": false
+        }
+      ],
+      "skills": {
+        "promptChars": 4872,
+        "hash": "c96dc0d8eeefa7f8bea8fba0ffc088a2964387e4241ca56d78badc77d514f39d",
+        "entries": [
+          {
+            "name": "browser-automation",
+            "blockChars": 371
+          },
+          {
+            "name": "canvas",
+            "blockChars": 289
+          },
+          {
+            "name": "clawhub",
+            "blockChars": 305
+          },
+          {
+            "name": "diagram-maker",
+            "blockChars": 278
+          },
+          {
+            "name": "healthcheck",
+            "blockChars": 290
+          },
+          {
+            "name": "meme-maker",
+            "blockChars": 263
+          },
+          {
+            "name": "node-connect",
+            "blockChars": 293
+          },
+          {
+            "name": "node-inspect-debugger",
+            "blockChars": 289
+          },
+          {
+            "name": "notion",
+            "blockChars": 284
+          },
+          {
+            "name": "python-debugpy",
+            "blockChars": 277
+          },
+          {
+            "name": "skill-creator",
+            "blockChars": 271
+          },
+          {
+            "name": "spike",
+            "blockChars": 263
+          },
+          {
+            "name": "taskflow",
+            "blockChars": 293
+          },
+          {
+            "name": "taskflow-inbox-triage",
+            "blockChars": 303
+          },
+          {
+            "name": "weather",
+            "blockChars": 301
+          }
+        ]
+      },
+      "tools": {
+        "listChars": 0,
+        "schemaChars": 20290,
+        "entries": [
+          {
+            "name": "read",
+            "summaryChars": 298,
+            "summaryHash": "f8a1d7cf1ecfe02b1b5865c93387e6a5891e5079117b4fe18614b6f912521727",
+            "schemaChars": 304,
+            "schemaHash": "134f19bcabe3e29d63c5cebb38f1d2556759fd08adad6bc90a4b4d3cd1fb8441",
+            "propertiesCount": 3
+          },
+          {
+            "name": "edit",
+            "summaryChars": 326,
+            "summaryHash": "c498a85576e187d069e8e8ea4f70f81bddd57829600d385ef61c4359fd634c9e",
+            "schemaChars": 834,
+            "schemaHash": "457e8bb9f800b21be76c4fd8c0e3078bf07ee9bf93ac82f39944c171bd8f6d84",
+            "propertiesCount": 2
+          },
+          {
+            "name": "write",
+            "summaryChars": 127,
+            "summaryHash": "cdb1c46027b22d1f1b923b47bfe297821d9fe589a9f9d92994961948060a4d89",
+            "schemaChars": 225,
+            "schemaHash": "e98a2484f667cf7c22d76ca103bf2022bf9113dc63fe38b899e71c328cb1e833",
+            "propertiesCount": 2
+          },
+          {
+            "name": "apply_patch",
+            "summaryChars": 132,
+            "summaryHash": "432bf38688a4f011d2b765a441ac07e1fdfa9faf2051679adee04abcd9332d93",
+            "schemaChars": 153,
+            "schemaHash": "05521268363ff4f191472c90d69ef08a503ba9acf1d2febc50b3ee68db32ab65",
+            "propertiesCount": 1
+          },
+          {
+            "name": "exec",
+            "summaryChars": 539,
+            "summaryHash": "4825198988fbfa8ebf5c2a8fbe3946da0be639b1e3b737ceaa4364195bba3f04",
+            "schemaChars": 1283,
+            "schemaHash": "2608ea36cf51376859b7204cda1bf1a2507134eb542097b9e8dbc8af617f216b",
+            "propertiesCount": 12
+          },
+          {
+            "name": "process",
+            "summaryChars": 456,
+            "summaryHash": "55297e65d460e0e1e06e7fad4cedb75ffda8fac9fa8b10aa06d6cead3c5a76ea",
+            "schemaChars": 1074,
+            "schemaHash": "a2d30a25569f409d7e8539844c89a088044535388b24031d014577b96ed27c5c",
+            "propertiesCount": 12
+          },
+          {
+            "name": "cron",
+            "summaryChars": 3820,
+            "summaryHash": "d3bc0032e9c0ba71e5983ee4d06bd4b70ea5170dcb5d85fbff1bd71f01b070f4",
+            "schemaChars": 8705,
+            "schemaHash": "830efafdf26c1cd1c32452d2baea3b8fc0c7b7b7269d9ab0a503aded48f88ab1",
+            "propertiesCount": 15
+          },
+          {
+            "name": "get_goal",
+            "summaryChars": 71,
+            "summaryHash": "58dea7906d9e17e5f89a75fea24597ee068d8a56af824370dc27f8501374d6e3",
+            "schemaChars": 33,
+            "schemaHash": "8243f0af367f188a376f2c17b5eabe872a2f7a979813e0d4e2be6d594c2aa259",
+            "propertiesCount": 0
+          },
+          {
+            "name": "create_goal",
+            "summaryChars": 155,
+            "summaryHash": "f01e3a63d673a410ba55213ce6bd3fa2b0d2279e8e780c18aa0cb5aa991b29b3",
+            "schemaChars": 267,
+            "schemaHash": "27ee794432736471bd76390e236cc7d7e98f8469a02656e7a27109041eea0f8c",
+            "propertiesCount": 2
+          },
+          {
+            "name": "update_goal",
+            "summaryChars": 212,
+            "summaryHash": "285201690e5f2456b4cdcd252ff391709b84d69538df61bad694d3c0cfc19958",
+            "schemaChars": 207,
+            "schemaHash": "c37894492eedfad02f1e7fe1488900765bfe547f3b3f34cefbab4f7f57441c2c",
+            "propertiesCount": 2
+          },
+          {
+            "name": "skill_workshop",
+            "summaryChars": 171,
+            "summaryHash": "577c1d2b8f56bf3e9dd5e00463bbce8b8bf4cf201da9b21b588dcaa3bc6ed8cf",
+            "schemaChars": 2273,
+            "schemaHash": "15481d6889a320a46728ee32304f0a2b510c0bcf77d445052c1ef2fa5dd5368b",
+            "propertiesCount": 13
+          },
+          {
+            "name": "update_plan",
+            "summaryChars": 163,
+            "summaryHash": "ea18cc44224e849c68cdf0a4839c295c1b20daf2699e2fc2be4c4e1552327455",
+            "schemaChars": 489,
+            "schemaHash": "50cb08b8a29e72637eb6720e6f5f3786783824537574f05ee9ae7a5f4ecacc4b",
+            "propertiesCount": 2
+          },
+          {
+            "name": "sessions_list",
+            "summaryChars": 135,
+            "summaryHash": "c7e411ae02e3adff5504aaee48f02d262a8abb9152558a3172aae289e3b05faf",
+            "schemaChars": 435,
+            "schemaHash": "c29c6b82c36a2d95a88c8944f129929b2621ee2af6d17b2ab101d4d7e9633d89",
+            "propertiesCount": 9
+          },
+          {
+            "name": "sessions_history",
+            "summaryChars": 117,
+            "summaryHash": "f5d45b76f11a8ac63cc45d456fb6f675f0b1a2e191feb9671924cb5830058f03",
+            "schemaChars": 162,
+            "schemaHash": "ac33b8af2252262afe479236046f5a04bc018f1fcf24d1a8bf32743f0e867598",
+            "propertiesCount": 3
+          },
+          {
+            "name": "sessions_send",
+            "summaryChars": 282,
+            "summaryHash": "061e9ef3487676bb2a4fd4c0336bd973aaab5eea0725e7443c4cb17518cd1e78",
+            "schemaChars": 275,
+            "schemaHash": "f1fbaa412fe6b6aee102234c87c5aa140f39c9086f9bae6e1e9691309a602ffb",
+            "propertiesCount": 5
+          },
+          {
+            "name": "sessions_spawn",
+            "summaryChars": 578,
+            "summaryHash": "c75061234ba01a4eb29ca223c1c63a44935e9e555ef2ca280722ba9e844db86d",
+            "schemaChars": 1151,
+            "schemaHash": "9a91c7668463da8a66386260ce2ae97e7efe3bb93b9b6f03ac85102c354457e1",
+            "propertiesCount": 15
+          },
+          {
+            "name": "sessions_yield",
+            "summaryChars": 79,
+            "summaryHash": "f3782fc41c1522657e1d3494f486a2df998fed38a6b89dcf7f6934fb41424320",
+            "schemaChars": 60,
+            "schemaHash": "b1c4c753820bc3096d85ef7a266a14c9fbe12450536db58076b75bb61d14dbbb",
+            "propertiesCount": 1
+          },
+          {
+            "name": "subagents",
+            "summaryChars": 132,
+            "summaryHash": "1c2ffd38549c0444b118d43736fc4b875ea1aaabc446bbf8bc1fc4ee9180cca4",
+            "schemaChars": 122,
+            "schemaHash": "c4a241d2c3d46ba7985abfce4d3fcd63298ce81f89d49183c8f3d584c48d0c33",
+            "propertiesCount": 2
+          },
+          {
+            "name": "session_status",
+            "summaryChars": 278,
+            "summaryHash": "71177e543dc6235bad4b1a26761995681dcec27ab58dcb4f4f8a7fc9a7b2b5aa",
+            "schemaChars": 89,
+            "schemaHash": "d2995f3d69d126e98ac93eec3c2a9fe5556925bd7979a8e4b6b5a2bf62d329dd",
+            "propertiesCount": 2
+          },
+          {
+            "name": "web_search",
+            "summaryChars": 65,
+            "summaryHash": "b38e9b3c079beaa988d3c576303660b91a55c2e72f56351da04160529173273f",
+            "schemaChars": 991,
+            "schemaHash": "3879e368875d824b14e0e683f81408824e9a2a5850fa2f8514a68caebda54d18",
+            "propertiesCount": 12
+          },
+          {
+            "name": "web_fetch",
+            "summaryChars": 93,
+            "summaryHash": "8875afbb51bd63673e5e6836ca31eeda73914a464862665cd73b346e28d28fd5",
+            "schemaChars": 317,
+            "schemaHash": "d2d8ad58a1b84d849dd16142282aff6c5606f7b0e3d08405e1b740a6a79e6bcc",
+            "propertiesCount": 3
+          },
+          {
+            "name": "image",
+            "summaryChars": 169,
+            "summaryHash": "a46820ca8952445d3663a8908bfa5d3adddff5b53d18b9d8e9eed8f9e593b494",
+            "schemaChars": 350,
+            "schemaHash": "49bb766071c935edca8c2d0df47fc2109bbffe3d4ba32d0b19fe90ec873736ce",
+            "propertiesCount": 6
+          },
+          {
+            "name": "memory_search",
+            "summaryChars": 605,
+            "summaryHash": "0f918d28864d3682ae77731f149273997c84773592a466b18c7cd0121b599a05",
+            "schemaChars": 250,
+            "schemaHash": "088cd2a3d3a47b251429ff7c56844cdedd1c45c3af0fa8bfaf7aa795766976bf",
+            "propertiesCount": 4
+          },
+          {
+            "name": "memory_get",
+            "summaryChars": 239,
+            "summaryHash": "bff1141a3da31a345c550337417efc9ace4da2909004606c727c59ca1a294495",
+            "schemaChars": 241,
+            "schemaHash": "78f5d58460a82f9104deebad2f1873a8cde05d1ce7328b3ba4da6e994653e70a",
+            "propertiesCount": 4
+          }
+        ]
+      },
+      "currentTurn": {
+        "promptChars": 44,
+        "runtimeContextChars": 0
+      }
+    },
+    "contextBudgetStatus": {
+      "schemaVersion": 1,
+      "source": "pre-prompt-estimate",
+      "updatedAt": 1783520167682,
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "route": "fits",
+      "shouldCompact": false,
+      "estimatedPromptTokens": 9688,
+      "contextTokenBudget": 1048576,
+      "promptBudgetBeforeReserve": 1028576,
+      "reserveTokens": 20000,
+      "effectiveReserveTokens": 20000,
+      "remainingPromptBudgetTokens": 1018888,
+      "overflowTokens": 0,
+      "toolResultReducibleChars": 0,
+      "messageCount": 0,
+      "unwindowedMessageCount": 0,
+      "sessionId": "02f4cce4-d744-4e62-a34c-4e99292becd2"
+    },
+    "inputTokens": 2,
+    "outputTokens": 10,
+    "totalTokens": 25216,
+    "totalTokensFresh": true,
+    "cacheRead": 24402,
+    "cacheWrite": 812
+  }
+}
