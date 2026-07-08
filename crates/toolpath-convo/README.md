@@ -133,7 +133,7 @@ if let Some(id) = event.turn_id() {
 }
 ```
 
-Provider-specific metadata lives in `Turn.extra`, namespaced by provider (e.g. `turn.extra["claude"]`). This keeps the common schema clean while giving consumers opt-in access to provider internals.
+`Turn` has no provider-namespaced extras field — it's a fixed, typed schema, so provider-specific data that doesn't map onto one of its fields is dropped on the `ConversationView` projection. Non-turn provider metadata (e.g. session-init markers) is still available at the edges: `WatcherEvent::Progress { kind, data }` carries the full source payload for entries that don't map to a `Turn` at all, with the provider's own fields nested under `data["<provider>"]` by convention (e.g. `data["claude"]`).
 
 ## Provider implementations
 

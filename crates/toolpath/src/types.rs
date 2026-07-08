@@ -144,7 +144,7 @@ pub struct Base {
 /// Spec at <https://toolpath.net/kinds/agent-coding-session/v1.1.0>.
 ///
 /// v1.1.0 specifies message-level token accounting: steps derived from one
-/// provider message share a `message_id`, and the message's `token_usage`
+/// provider message share a `group_id`, and the message's `token_usage`
 /// appears on exactly one of them (the group's last step in document
 /// order), so summing usage over a path's steps yields session totals.
 pub const PATH_KIND_AGENT_CODING_SESSION: &str =

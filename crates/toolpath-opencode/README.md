@@ -19,8 +19,9 @@ git repositories.
 - **Provider**: implements
   [`toolpath_convo::ConversationProvider`](https://docs.rs/toolpath-convo),
   pairing `tool` parts by `callID`, folding `reasoning` parts onto
-  `Turn.thinking`, and capturing `step-start` / `step-finish`
-  snapshot SHAs on `Turn.extra["opencode"]` for file-artifact
+  `Turn.thinking`, and computing `Turn.file_mutations` inline from the
+  ordered `step-start` / `step-finish` / `snapshot` snapshot SHAs
+  (tree↔tree diffs against the sibling bare git repo) for file-artifact
   reconstruction.
 - **Derivation**: produces `toolpath::v1::Path` documents. When the
   matching snapshot git repo is still on disk, file changes per

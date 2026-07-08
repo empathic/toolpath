@@ -204,10 +204,11 @@ constraint; Pi reads any `*.jsonl` file in the project directory.
    only the former (or duplicating the result inline) breaks
    correlation.
 2. **`Compaction` / `BranchSummary` are first-class entry types**, not
-   roles. The forward path stashes structure markers under
-   `Turn.extra["pi"]["compaction"]` / `["branchSummary"]`; the
-   projector reads those to decide whether to emit `Entry::Compaction`
-   vs `Entry::Message`.
+   roles, but the IR has no field to mark a turn as having come from
+   one. The forward path emits them as ordinary `Role::System` turns
+   (`text: "Compacted (summary): …"` / `"Branch summary: …"`), and the
+   projector always maps `Role::System` back to a generic custom
+   message — the original entry type does not survive a round-trip.
 3. **Inner message `timestamp` is u64 epoch milliseconds**, not an
    ISO-8601 string. The outer `EntryBase.timestamp` IS the ISO string.
    Two timestamp fields per message — keep them in sync on round-trip.

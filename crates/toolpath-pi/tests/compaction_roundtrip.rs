@@ -20,11 +20,13 @@
 //!     the Pi reader.
 //!
 //! Known limitation (documented, not asserted): the compaction marker
-//! itself (with its `summary` text and `tokensBefore` metadata) lands
-//! in `Turn.extra["pi"]["compaction"]` per the format docs, but the
-//! full structural preservation through `derive → extract → project`
-//! is not asserted here. Acceptable loss for "good UX" — the real
-//! conversation content lives in the surrounding messages.
+//! itself (with its `summary` text and `tokensBefore` metadata) has no
+//! home in the provider-agnostic IR — the forward path folds it into
+//! an ordinary `Role::System` turn, and the projector can't tell it
+//! apart from any other system turn, so `Entry::Compaction` does not
+//! survive a `derive → extract → project` round-trip. Acceptable loss
+//! for "good UX" — the real conversation content lives in the
+//! surrounding messages.
 
 use std::path::{Path, PathBuf};
 

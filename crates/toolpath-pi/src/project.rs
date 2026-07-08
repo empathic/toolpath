@@ -6,21 +6,21 @@
 //! view, `PiProjector` serializes that view back into Pi's on-disk
 //! shape (a [`SessionHeader`] plus a list of [`Entry`]).
 //!
-//! The projector consumes provider-specific data the forward path
-//! stashed under `Turn.extra["pi"]` — `api`/`provider`, `stopReason`,
-//! `toolCallId`, bash-execution metadata, custom-message markers, and
-//! synthetic-turn structures (`compaction`, `branchSummary`, `custom`,
-//! `customMessage`). For `ConversationView`s from non-Pi sources, the
-//! projector synthesizes sensible defaults (api: "anthropic",
-//! stop_reason: "stop", etc.).
-//!
-//! Foreign-namespace extras (`Turn.extra["claude"]`,
-//! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
-//! Pi's format and would pollute the JSONL.
+//! The provider-agnostic IR (`Turn`) carries no provider-namespaced
+//! extras, so a Pi→View→Pi round-trip cannot recover Pi-specific data
+//! the forward path didn't lift into a typed `Turn` field: `api`/
+//! `provider`, the structured `stopReason`, bash-execution metadata
+//! (command/exit code/etc. beyond what's folded into `Turn.text` and
+//! the synthetic `bash` tool call), `SessionHeader.parent_session`,
+//! and the synthetic-turn markers (`compaction`, `branchSummary`,
+//! `custom`, `customMessage`) — none of those are distinguishable from
+//! an ordinary turn once round-tripped, so the projector always
+//! synthesizes sensible defaults (api: "anthropic", stop_reason:
+//! "stop", etc.) instead.
 
 use std::collections::HashMap;
 
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
@@ -61,11 +61,13 @@ pub struct PiProjector {
     /// pulls it from the first turn's environment (or falls back to
     /// `"/"` if absent).
     pub cwd: Option<String>,
-    /// Default `api` field for assistant turns when not present in
-    /// `Turn.extra["pi"]["api"]`. Defaults to `"anthropic"`.
+    /// Default `api` field for assistant turns — the IR has no field
+    /// to recover the source's original value from. Defaults to
+    /// `"anthropic"`.
     pub default_api: Option<String>,
-    /// Default `provider` field for assistant turns when not present
-    /// in `Turn.extra["pi"]["api"]`. Defaults to `"anthropic"`.
+    /// Default `provider` field for assistant turns — the IR has no
+    /// field to recover the source's original value from. Defaults to
+    /// `"anthropic"`.
     pub default_provider: Option<String>,
 }
 
@@ -120,15 +122,10 @@ fn project_view(
         .or_else(|| view.turns.first().map(|t| t.timestamp.clone()))
         .unwrap_or_default();
 
-    // Pi's session header optionally carries `parentSession` — the
-    // forward path stashed it on the first turn's extras. Round-trip
-    // it when present.
-    let parent_session = view
-        .turns
-        .first()
-        .and_then(|t| pi_extras(t))
-        .and_then(|pi| pi.get("parentSession").and_then(Value::as_str))
-        .map(str::to_string);
+    // Pi's session header optionally carries `parentSession`, but the
+    // IR has no field to preserve it in, so a Pi→View→Pi round-trip
+    // can't recover it.
+    let parent_session = None;
 
     let header = SessionHeader {
         version: 3,
@@ -142,30 +139,14 @@ fn project_view(
     let mut entries: Vec<Entry> = Vec::new();
     entries.push(Entry::Session(header.clone()));
 
-    // Pre-pass: collect tool_call_ids that are *already* covered by a
-    // dedicated `Role::Other("tool")` turn elsewhere in the view. For
-    // those, we must NOT synthesize an extra tool-result entry from
-    // the owning assistant's `tool_uses[i].result` — otherwise we'd
-    // emit two `toolResult` entries for the same call (which is what
-    // a Pi → View → Pi round-trip would produce, since forward path
-    // both populates `tool_uses[i].result` AND keeps the original
-    // tool-result message as a separate turn).
-    let covered: std::collections::HashSet<String> = view
-        .turns
-        .iter()
-        .filter(|t| matches!(t.role, Role::Other(ref s) if s == "tool"))
-        .filter_map(|t| {
-            pi_extras(t)
-                .and_then(|m| m.get("toolCallId"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect();
-
+    // A dedicated `Role::Other("tool")` turn elsewhere in the view (as
+    // some non-Pi providers emit) can represent the same call as an
+    // assistant's `tool_uses[i].result`; without a preserved call id to
+    // correlate them, we can no longer tell whether one covers the
+    // other, so every tool use with a result gets its own synthesized
+    // `toolResult` entry.
     for turn in &view.turns {
-        let pi = pi_extras(turn).cloned().unwrap_or_default();
-        emit_pending_meta(&mut entries, turn, &pi);
-        emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
+        emit_turn_entries(cfg, turn, &mut entries);
     }
 
     Ok(PiSession {
@@ -176,142 +157,29 @@ fn project_view(
     })
 }
 
-/// Used to return `Turn.extra["pi"]`; the IR no longer carries
-/// provider-namespaced extras. Always `None`. Callers fall back to
-/// reconstructing source-format details from typed IR fields and
-/// reasonable defaults.
-fn pi_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
-    None
-}
-
-/// Emit `ModelChange` / `ThinkingLevelChange` / `Label` entries that the
-/// forward path buffered into the next turn's `extra["pi"]`.
-fn emit_pending_meta(entries: &mut Vec<Entry>, turn: &Turn, pi: &Map<String, Value>) {
-    if let Some(mc) = pi.get("modelChange").and_then(Value::as_object) {
-        let id = mc
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{}-mc", turn.id));
-        let timestamp = mc
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| turn.timestamp.clone());
-        let provider = mc
-            .get("provider")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let model_id = mc
-            .get("modelId")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        entries.push(Entry::ModelChange {
-            base: EntryBase {
-                id,
-                parent_id: None,
-                timestamp,
-            },
-            provider,
-            model_id,
-            extra: extra_map_from(mc.get("rawExtra")),
-        });
-    }
-    if let Some(tlc) = pi.get("thinkingLevelChange").and_then(Value::as_object) {
-        let id = tlc
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{}-tlc", turn.id));
-        let timestamp = tlc
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| turn.timestamp.clone());
-        let thinking_level = tlc
-            .get("thinkingLevel")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        entries.push(Entry::ThinkingLevelChange {
-            base: EntryBase {
-                id,
-                parent_id: None,
-                timestamp,
-            },
-            thinking_level,
-            extra: extra_map_from(tlc.get("rawExtra")),
-        });
-    }
-    if let Some(labels) = pi.get("labels").and_then(Value::as_array) {
-        for (i, label) in labels.iter().enumerate() {
-            let lo = label.as_object();
-            let id = lo
-                .and_then(|m| m.get("id"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("{}-lbl-{}", turn.id, i));
-            let timestamp = lo
-                .and_then(|m| m.get("timestamp"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| turn.timestamp.clone());
-            let extra = extra_map_from(lo.and_then(|m| m.get("rawExtra")));
-            entries.push(Entry::Label {
-                base: EntryBase {
-                    id,
-                    parent_id: None,
-                    timestamp,
-                },
-                extra,
-            });
-        }
-    }
-}
-
 /// Emit the entry (or entries) corresponding to a single turn's role
 /// and content. Most turns produce a single `Entry::Message`; a turn
 /// with assistant-side tool calls that have results produces both the
 /// assistant message AND one tool-result message per result.
-fn emit_turn_entries(
-    cfg: &PiProjector,
-    turn: &Turn,
-    pi: &Map<String, Value>,
-    covered_tool_ids: &std::collections::HashSet<String>,
-    entries: &mut Vec<Entry>,
-) {
-    // Synthetic compaction / branch_summary / custom turns map to
-    // their own Entry variants rather than `Entry::Message`.
-    if let Some(comp) = pi.get("compaction").and_then(Value::as_object) {
-        emit_compaction(turn, comp, entries);
-        return;
-    }
-    if let Some(bs) = pi.get("branchSummary").and_then(Value::as_object) {
-        emit_branch_summary(turn, bs, entries);
-        return;
-    }
-    if let Some(c) = pi.get("custom").and_then(Value::as_object) {
-        emit_custom(turn, c, entries);
-        return;
-    }
-    if let Some(cm) = pi.get("customMessage").and_then(Value::as_object) {
-        emit_custom_message(turn, cm, entries);
-        return;
-    }
-
+///
+/// Note: the IR has no field to distinguish a Pi-native `Entry::
+/// ModelChange`/`ThinkingLevelChange`/`Label`/`Compaction`/
+/// `BranchSummary`/`Custom`/`CustomMessage` from an ordinary turn once
+/// round-tripped through `Turn`, so those entry types are never
+/// re-synthesized here — they always fall through to the generic
+/// role-based mapping below.
+fn emit_turn_entries(cfg: &PiProjector, turn: &Turn, entries: &mut Vec<Entry>) {
     match &turn.role {
         Role::User => emit_user(turn, entries),
-        Role::Assistant => emit_assistant(cfg, turn, pi, covered_tool_ids, entries),
+        Role::Assistant => emit_assistant(cfg, turn, entries),
         Role::System => {
             // System turns from non-Pi sources don't have a direct
             // analog; fold them into a custom-system message.
             emit_system_as_custom(turn, entries);
         }
         Role::Other(other) => match other.as_str() {
-            "tool" => emit_tool_result(turn, pi, entries),
-            "bash" => emit_bash_execution(turn, pi, entries),
+            "tool" => emit_tool_result(turn, entries),
+            "bash" => emit_bash_execution(turn, entries),
             o if o.starts_with("custom:") => {
                 let custom_type = o.strip_prefix("custom:").unwrap_or(o).to_string();
                 emit_custom_role_message(turn, &custom_type, entries);
@@ -339,13 +207,7 @@ fn emit_user(turn: &Turn, entries: &mut Vec<Entry>) {
     });
 }
 
-fn emit_assistant(
-    cfg: &PiProjector,
-    turn: &Turn,
-    pi: &Map<String, Value>,
-    covered_tool_ids: &std::collections::HashSet<String>,
-    entries: &mut Vec<Entry>,
-) {
+fn emit_assistant(cfg: &PiProjector, turn: &Turn, entries: &mut Vec<Entry>) {
     // Build the content blocks: optional thinking, then text, then
     // each tool call. Real Pi assistant turns interleave these in
     // arbitrary order, but for projection a thinking-then-text-then-
@@ -374,32 +236,21 @@ fn emit_assistant(
         });
     }
 
-    let api_obj = pi.get("api").and_then(Value::as_object);
-    let api = api_obj
-        .and_then(|m| m.get("api"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            cfg.default_api
-                .clone()
-                .unwrap_or_else(|| "anthropic".to_string())
-        });
-    let provider = api_obj
-        .and_then(|m| m.get("provider"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            cfg.default_provider
-                .clone()
-                .unwrap_or_else(|| "anthropic".to_string())
-        });
+    // The IR carries no provider-namespaced extras, so the source's
+    // original `api`/`provider`/`errorMessage` can't be recovered on a
+    // round-trip; fall back to the configured defaults.
+    let api = cfg
+        .default_api
+        .clone()
+        .unwrap_or_else(|| "anthropic".to_string());
+    let provider = cfg
+        .default_provider
+        .clone()
+        .unwrap_or_else(|| "anthropic".to_string());
     let model = turn.model.clone().unwrap_or_default();
     let usage = build_usage(turn);
-    let stop_reason = parse_stop_reason(turn.stop_reason.as_deref(), pi.get("stopReason"));
-    let error_message = pi
-        .get("errorMessage")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let stop_reason = parse_stop_reason(turn.stop_reason.as_deref());
+    let error_message = None;
     let timestamp = ts_millis(&turn.timestamp);
 
     let assistant_id = turn.id.clone();
@@ -427,17 +278,11 @@ fn emit_assistant(
 
     // Each tool invocation with a result produces a separate
     // `toolResult` entry parented to the assistant entry, mirroring
-    // how Pi separates calls from results in the JSONL stream. Skip
-    // calls that are already covered by an explicit `Role::Other(
-    // "tool")` turn elsewhere in the view (Pi → View → Pi sources
-    // have both forms; emitting both would duplicate the result).
+    // how Pi separates calls from results in the JSONL stream.
     let mut prev_id = assistant_id;
     let mut suffix = 0usize;
     for tu in &turn.tool_uses {
         let Some(result) = &tu.result else { continue };
-        if covered_tool_ids.contains(&tu.id) {
-            continue;
-        }
         suffix += 1;
         let tr_id = format!("{}-tr-{}", turn.id, suffix);
         let entry = Entry::Message {
@@ -465,19 +310,14 @@ fn emit_assistant(
     }
 }
 
-fn emit_tool_result(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<Entry>) {
-    let tool_call_id = pi
-        .get("toolCallId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let tool_name = pi
-        .get("toolName")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let is_error = pi.get("isError").and_then(Value::as_bool).unwrap_or(false);
-    let details = pi.get("details").cloned();
+fn emit_tool_result(turn: &Turn, entries: &mut Vec<Entry>) {
+    // The IR carries no provider-namespaced extras, so the original
+    // `toolCallId`/`toolName`/`isError`/`details` can't be recovered;
+    // only `turn.text` survives.
+    let tool_call_id = String::new();
+    let tool_name = String::new();
+    let is_error = false;
+    let details = None;
     let content = vec![ToolResultContent::Text {
         text: turn.text.clone(),
         extra: HashMap::new(),
@@ -497,38 +337,18 @@ fn emit_tool_result(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<Entr
     });
 }
 
-fn emit_bash_execution(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<Entry>) {
-    let command = pi
-        .get("command")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let exit_code = pi.get("exitCode").and_then(Value::as_i64);
-    let cancelled = pi
-        .get("cancelled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let truncated = pi
-        .get("truncated")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let full_output_path = pi
-        .get("fullOutputPath")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-
-    // The forward path put `$ <command>\n<truncated_output>` in
-    // turn.text; if we can recover the output, we use it. Otherwise
-    // we strip the leading `$ <command>\n` to get the output.
-    let output = if let Some(rest) = turn
-        .text
-        .strip_prefix(&format!("$ {}\n", command))
-        .map(str::to_string)
-    {
-        rest.trim_end_matches("…(truncated)").to_string()
-    } else {
-        turn.text.clone()
-    };
+fn emit_bash_execution(turn: &Turn, entries: &mut Vec<Entry>) {
+    // The IR carries no provider-namespaced extras, so the original
+    // `command`/`exitCode`/`cancelled`/`truncated`/`fullOutputPath`
+    // can't be recovered; `turn.text` (the forward path's `$
+    // <command>\n<truncated_output>` rendering) is the only surviving
+    // record, and it's used verbatim as the output.
+    let command = String::new();
+    let exit_code = None;
+    let cancelled = false;
+    let truncated = false;
+    let full_output_path = None;
+    let output = turn.text.clone();
 
     entries.push(Entry::Message {
         base: base_for(turn),
@@ -543,101 +363,6 @@ fn emit_bash_execution(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<E
             timestamp: ts_millis(&turn.timestamp),
             extra: HashMap::new(),
         },
-        extra: HashMap::new(),
-    });
-}
-
-fn emit_compaction(turn: &Turn, comp: &Map<String, Value>, entries: &mut Vec<Entry>) {
-    let summary = comp
-        .get("summary")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            // Fall back to extracting from the text the forward path
-            // wrote ("Compacted (summary): X").
-            turn.text
-                .strip_prefix("Compacted (summary): ")
-                .unwrap_or(&turn.text)
-                .to_string()
-        });
-    let first_kept_entry_id = comp
-        .get("firstKeptEntryId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let tokens_before = comp
-        .get("tokensBefore")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let details = comp.get("details").cloned();
-    let from_hook = comp.get("fromHook").and_then(Value::as_bool);
-    entries.push(Entry::Compaction {
-        base: base_for(turn),
-        summary,
-        first_kept_entry_id,
-        tokens_before,
-        details,
-        from_hook,
-        extra: HashMap::new(),
-    });
-}
-
-fn emit_branch_summary(turn: &Turn, bs: &Map<String, Value>, entries: &mut Vec<Entry>) {
-    let from_id = bs
-        .get("fromId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let summary = turn
-        .text
-        .strip_prefix("Branch summary: ")
-        .unwrap_or(&turn.text)
-        .to_string();
-    let details = bs.get("details").cloned();
-    let from_hook = bs.get("fromHook").and_then(Value::as_bool);
-    entries.push(Entry::BranchSummary {
-        base: base_for(turn),
-        from_id,
-        summary,
-        details,
-        from_hook,
-        extra: HashMap::new(),
-    });
-}
-
-fn emit_custom(turn: &Turn, c: &Map<String, Value>, entries: &mut Vec<Entry>) {
-    let custom_type = c
-        .get("customType")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| "custom".to_string());
-    let data = c
-        .get("data")
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
-    entries.push(Entry::Custom {
-        base: base_for(turn),
-        custom_type,
-        data,
-        extra: HashMap::new(),
-    });
-}
-
-fn emit_custom_message(turn: &Turn, cm: &Map<String, Value>, entries: &mut Vec<Entry>) {
-    let custom_type = cm
-        .get("customType")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| "custom".to_string());
-    let display = cm.get("display").and_then(Value::as_bool).unwrap_or(true);
-    let details = cm.get("details").cloned();
-    let content = MessageContent::Text(turn.text.clone());
-    entries.push(Entry::CustomMessage {
-        base: base_for(turn),
-        custom_type,
-        content,
-        display,
-        details,
         extra: HashMap::new(),
     });
 }
@@ -708,15 +433,11 @@ fn build_usage(turn: &Turn) -> Usage {
     }
 }
 
-/// Resolve the assistant's `stopReason`. Prefer the structured
-/// `pi.stopReason` (preserves any Pi-specific values verbatim); fall
-/// back to `Turn.stop_reason` (a string), then to `Stop`.
-fn parse_stop_reason(turn_stop: Option<&str>, pi_stop: Option<&Value>) -> StopReason {
-    if let Some(v) = pi_stop
-        && let Ok(sr) = serde_json::from_value::<StopReason>(v.clone())
-    {
-        return sr;
-    }
+/// Resolve the assistant's `stopReason` from `Turn.stop_reason` (a
+/// string), defaulting to `Stop`. The IR carries no provider-namespaced
+/// extras, so a structured Pi-specific stop reason can't be recovered
+/// verbatim on a round-trip.
+fn parse_stop_reason(turn_stop: Option<&str>) -> StopReason {
     let s = turn_stop.unwrap_or("stop");
     serde_json::from_value::<StopReason>(json!(s))
         .unwrap_or(StopReason::Known(KnownStopReason::Stop))
@@ -738,15 +459,6 @@ fn tool_native_name(tu: &ToolInvocation) -> String {
         return remap.to_string();
     }
     tu.name.clone()
-}
-
-/// Coerce a `Value` (expected to be a map) into Pi's `extra:
-/// HashMap<String, Value>` shape.
-fn extra_map_from(v: Option<&Value>) -> HashMap<String, Value> {
-    match v {
-        Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        _ => HashMap::new(),
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────
@@ -981,8 +693,8 @@ mod tests {
 
     #[test]
     fn test_assistant_default_api_provider_for_non_pi_source() {
-        // Non-pi source has no Turn.extra["pi"]["api"] — defaults
-        // should kick in.
+        // The IR has no field to carry a source's original api/provider
+        // — defaults should kick in regardless of source.
         let session = PiProjector::default()
             .project(&view_with(vec![assistant_turn("a1", "hi")]))
             .unwrap();

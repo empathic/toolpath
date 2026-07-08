@@ -232,16 +232,14 @@ fn build_user_message(
     let msg_id = mint_message_id(session_id, *counter);
     let time_created = parse_timestamp_ms(&turn.timestamp).unwrap_or(0);
 
-    let opencode_extras = opencode_extras(turn);
-    let model = opencode_extras
-        .as_ref()
-        .and_then(|m| m.get("model"))
-        .and_then(|v| serde_json::from_value::<ModelRef>(v.clone()).ok())
-        .unwrap_or_else(|| ModelRef {
-            provider_id: default_provider.to_string(),
-            model_id: default_model.to_string(),
-            variant: None,
-        });
+    // The IR carries no provider-namespaced extras, so the original
+    // opencode `model` ref can't be recovered here; fall back to the
+    // configured defaults.
+    let model = ModelRef {
+        provider_id: default_provider.to_string(),
+        model_id: default_model.to_string(),
+        variant: None,
+    };
 
     let user = UserMessage {
         time: MessageTime {
@@ -307,23 +305,13 @@ fn build_assistant_message(
     let msg_id = mint_message_id(session_id, *counter);
     let time_created = parse_timestamp_ms(&turn.timestamp).unwrap_or(0);
 
-    let extras = opencode_extras(turn);
-    let provider_id = extras
-        .as_ref()
-        .and_then(|m| m.get("providerID"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| default_provider.to_string());
+    // The IR carries no provider-namespaced extras, so `providerID` can't
+    // be recovered on a round-trip; fall back to the configured default.
+    // `turn.model` covers `modelID` when the source reported one.
+    let provider_id = default_provider.to_string();
     let model_id = turn
         .model
         .clone()
-        .or_else(|| {
-            extras
-                .as_ref()
-                .and_then(|m| m.get("modelID"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
         .unwrap_or_else(|| default_model.to_string());
 
     let tokens = turn
@@ -373,13 +361,9 @@ fn build_assistant_message(
     };
 
     let mut parts: Vec<Part> = Vec::new();
-    let snapshot = extras
-        .as_ref()
-        .and_then(|m| m.get("snapshots"))
-        .and_then(Value::as_array)
-        .and_then(|a| a.first())
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    // The IR carries no provider-namespaced extras, so opencode's
+    // `snapshots` list can't be recovered on a round-trip.
+    let snapshot: Option<String> = None;
 
     *counter += 1;
     parts.push(Part {
@@ -666,10 +650,6 @@ fn synthesize_edit_diff(input: &Value) -> Option<String> {
         out.push_str(&format!("+{}\n", line));
     }
     Some(out)
-}
-
-fn opencode_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
-    None
 }
 
 fn mint_session_id(seed: &str) -> String {

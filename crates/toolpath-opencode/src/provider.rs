@@ -16,11 +16,13 @@
 //!    - `token_usage` ← summed across all `step-finish` parts (each
 //!      is a per-step delta). Falls back to the message-level
 //!      `tokens` field if no step-finish parts exist.
-//!    - `extra["opencode"]["snapshots"]` ← ordered list of snapshot
-//!      SHAs from `step-start`/`step-finish`/`snapshot` parts, used
-//!      by the derive layer to fetch file diffs.
-//!    - `extra["opencode"]["patches"]` ← any `patch` parts (their
-//!      `{hash, files}` records).
+//!    - `file_mutations` ← computed inline from the ordered snapshot
+//!      SHAs seen across `step-start`/`step-finish`/`snapshot` parts
+//!      (tree↔tree diffs against the sibling bare git repo) plus any
+//!      `patch` parts' `{hash, files}` records feeding the seen-files
+//!      set. The IR carries no provider-namespaced extras, so none of
+//!      this is preserved verbatim for a round-trip — the projector
+//!      falls back to tool-input-derived structural changes instead.
 //! 3. Non-turn parts land in `ConversationView.events`:
 //!    `compaction`, `retry`, unknown types.
 //! 4. `subtask` parts are captured on the turn's `delegations`

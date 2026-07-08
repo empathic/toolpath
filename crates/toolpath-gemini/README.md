@@ -148,8 +148,10 @@ Per-turn `TokenUsage` includes:
 
 Gemini log entries often carry extra fields (`thoughts`, `tokens.tool`,
 `tokens.total`, `kind`, `summary`) that don't map to the common schema.
-These are forwarded into `Turn.extra["gemini"]` so trait-only consumers
-can access them without importing Gemini-specific types.
+`Turn` has no field to carry them, so `thoughts` is folded into
+`output_tokens` (recorded separately in `breakdowns["output"]["reasoning"]`
+for a lossless round-trip), and `tokens.tool`/`tokens.total`/`kind`/`summary`
+are simply dropped on the `ConversationView` projection.
 
 ## Round-trip fidelity
 
@@ -158,7 +160,7 @@ The crate exposes three progressively lossy views of a conversation:
 | Layer | Lossless? | Use it when |
 |---|---|---|
 | `ChatFile` / `Conversation` (the raw on-disk schema) | **Yes** — verified by `tests/roundtrip.rs` on live fixtures | You need to re-emit the Gemini JSON byte-equivalent (archival, editing, redaction) |
-| `ConversationView` (provider-agnostic projection) | No — Gemini-specific fields live under `Turn.extra["gemini"]` | You want to work across providers with one set of types |
+| `ConversationView` (provider-agnostic projection) | No — Gemini-specific fields (`tokens.tool`/`tokens.total`/`kind`/`summary`) have no home in the IR and are dropped | You want to work across providers with one set of types |
 | `toolpath::v1::Path` (provenance digest) | No — tool results/args are summarized; only file-write bodies are preserved as full diffs | You want a compact Toolpath document for blame, queries, rendering |
 
 **For a true round-trip** — Gemini → Toolpath → Gemini — stay at the

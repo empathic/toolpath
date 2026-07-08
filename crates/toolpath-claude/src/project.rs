@@ -309,12 +309,13 @@ fn tool_result_event_to_entry(
 
 /// Apply Claude-specific metadata from a [`Turn`] onto a [`ConversationEntry`].
 ///
-/// Populates `cwd` and `git_branch` from [`Turn::environment`], and
-/// `version`, `user_type`, `request_id` from `Turn::extra["claude"]`.
-/// Remaining keys from the `"claude"` extras are merged into the entry's
-/// own `extra` map so they serialize as top-level fields (via `#[serde(flatten)]`).
+/// Populates `cwd` and `git_branch` from [`Turn::environment`] when the
+/// entry doesn't already carry them. The IR has no field for `version`,
+/// `user_type`, `request_id`, or a per-entry catch-all, so a
+/// claude → IR → claude round-trip can't recover those — the projected
+/// entry's fields stay `None` and the harness fills in defaults at
+/// write time.
 fn apply_turn_metadata(entry: &mut ConversationEntry, turn: &Turn) {
-    // From Turn.environment
     if let Some(env) = &turn.environment {
         if entry.cwd.is_none() {
             entry.cwd = env.working_dir.clone();
@@ -323,12 +324,6 @@ fn apply_turn_metadata(entry: &mut ConversationEntry, turn: &Turn) {
             entry.git_branch = env.vcs_branch.clone();
         }
     }
-
-    // Source-format details (`version`, `user_type`, `request_id`,
-    // per-entry catch-all) used to ride through `Turn.extra["claude"]` for
-    // claude → IR → claude round-trip. The IR no longer carries
-    // provider-specific extras; the projected entry's fields stay `None`
-    // and the harness fills in defaults at write time.
 }
 
 /// Build a `ConversationEntry` for a user turn.

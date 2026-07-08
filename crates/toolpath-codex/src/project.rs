@@ -8,22 +8,18 @@
 //! line, followed by a `turn_context`, then per-turn `response_item`
 //! and `event_msg` lines).
 //!
-//! The projector consumes provider-specific data the forward path
-//! stashed under `Turn.extra["codex"]`:
-//!
-//! - `reasoning_encrypted`: opaque ciphertext blobs that round-trip
-//!   verbatim as `Reasoning::encrypted_content`
-//! - `tool_extras`: per-`call_id` extras (exec exit_codes, custom-call
-//!   statuses, patch-change manifests, etc.) preserved on the matching
-//!   `function_call_output` / `custom_tool_call_output` line
+//! The provider-agnostic IR (`Turn`) carries no provider-namespaced
+//! extras, so a Codex→View→Codex round-trip cannot recover
+//! Codex-specific data the forward path didn't lift into a typed
+//! `Turn` field: reasoning ciphertext (`Reasoning::encrypted_content`)
+//! and per-`call_id` tool extras (exec exit codes, custom-call
+//! statuses, patch-change manifests) are dropped. `Turn.thinking`
+//! (the public reasoning summary) and `ToolResult::is_error` are
+//! reconstructed from typed fields instead.
 //!
 //! For non-Codex sources, the projector synthesizes sensible defaults
 //! (originator: `"codex-toolpath"`, source: `"cli"`, model_provider:
 //! `"openai"`).
-//!
-//! Foreign-namespace extras (`Turn.extra["claude"]`,
-//! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
-//! Codex's protocol and would pollute the JSONL.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -184,9 +180,8 @@ fn project_view(
                 current_group = Some(group);
             }
         }
-        let codex = codex_extras(turn).cloned().unwrap_or_default();
         let is_final_assistant = Some(idx) == last_assistant_idx;
-        emit_turn_lines(turn, &codex, is_final_assistant, &cwd, &mut lines, &mut running);
+        emit_turn_lines(turn, is_final_assistant, &cwd, &mut lines, &mut running);
     }
 
     Ok(crate::types::Session {
@@ -260,17 +255,8 @@ fn make_turn_context_line(
     }
 }
 
-/// Used to return `Turn.extra["codex"]`; the IR no longer carries
-/// provider-namespaced extras. Always `None`. Callers fall back to
-/// reconstructing source-format details from typed IR fields and
-/// reasonable defaults.
-fn codex_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
-    None
-}
-
 fn emit_turn_lines(
     turn: &Turn,
-    codex: &Map<String, Value>,
     is_final_assistant: bool,
     session_cwd: &str,
     lines: &mut Vec<RolloutLine>,
@@ -278,9 +264,7 @@ fn emit_turn_lines(
 ) {
     match &turn.role {
         Role::User => emit_user_message(turn, lines),
-        Role::Assistant => {
-            emit_assistant(turn, codex, is_final_assistant, session_cwd, lines, running)
-        }
+        Role::Assistant => emit_assistant(turn, is_final_assistant, session_cwd, lines, running),
         Role::System => emit_developer_message(turn, lines),
         Role::Other(_) => {
             // Unknown roles don't have a clean Codex analog; emit them
@@ -348,7 +332,6 @@ fn emit_developer_message(turn: &Turn, lines: &mut Vec<RolloutLine>) {
 
 fn emit_assistant(
     turn: &Turn,
-    codex: &Map<String, Value>,
     is_final_assistant: bool,
     session_cwd: &str,
     lines: &mut Vec<RolloutLine>,
@@ -357,38 +340,13 @@ fn emit_assistant(
     // Order matches what Codex itself emits per turn:
     //   reasoning? → message → (function_call → function_call_output)*
     //
-    // For Codex→View→Codex round-trips, encrypted ciphertext lives on
-    // `Turn.extra["codex"]["reasoning_encrypted"]` and round-trips
-    // verbatim. For cross-harness sources, `Turn.thinking` is the
-    // public reasoning summary; we put it in `summary` instead of
-    // re-encrypting it.
-    let encrypted_blobs = codex
-        .get("reasoning_encrypted")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if !encrypted_blobs.is_empty() {
-        for blob in encrypted_blobs {
-            let enc = blob.as_str().map(str::to_string);
-            let r = Reasoning {
-                id: None,
-                summary: vec![],
-                content: None,
-                encrypted_content: enc,
-                extra: HashMap::new(),
-            };
-            lines.push(response_item_line(
-                &turn.timestamp,
-                "reasoning",
-                serde_json::to_value(&r).unwrap_or(Value::Null),
-            ));
-        }
-    } else if let Some(thinking) = &turn.thinking
+    // The IR carries no reasoning ciphertext, so a Codex→View→Codex
+    // round-trip can't restore `Reasoning::encrypted_content`.
+    // `Turn.thinking` is the public reasoning summary; render it as a
+    // single summary entry instead of re-encrypting it.
+    if let Some(thinking) = &turn.thinking
         && !thinking.is_empty()
     {
-        // Foreign-source: render thinking as a single summary entry.
-        // This is how Codex serializes plain reasoning summaries when
-        // it has them.
         let r = Reasoning {
             id: None,
             summary: vec![json!({"type": "summary_text", "text": thinking})],
@@ -448,14 +406,9 @@ fn emit_assistant(
         }
     }
 
-    let tool_extras = codex
-        .get("tool_extras")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
     for tu in &turn.tool_uses {
         let name = tool_native_name(tu);
-        emit_tool_call(turn, tu, &name, &tool_extras, session_cwd, lines);
+        emit_tool_call(turn, tu, &name, session_cwd, lines);
     }
 
     // Advance the session-cumulative counter by this step's contribution
@@ -499,30 +452,22 @@ fn emit_tool_call(
     turn: &Turn,
     tu: &ToolInvocation,
     name: &str,
-    tool_extras: &Map<String, Value>,
     session_cwd: &str,
     lines: &mut Vec<RolloutLine>,
 ) {
-    let extras_for_call = tool_extras
-        .get(&tu.id)
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-
     if name == "apply_patch" {
         let input_str = match &tu.input {
             Value::String(s) => s.clone(),
             other => serde_json::to_string(other).unwrap_or_default(),
         };
-        let status = extras_for_call
-            .get("status")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        // The IR carries no per-call-id status extras, so a
+        // Codex→View→Codex round-trip can't restore the original
+        // `custom_tool_call.status`.
         let call = CustomToolCall {
             name: name.to_string(),
             input: input_str,
             call_id: tu.id.clone(),
-            status,
+            status: None,
             id: None,
             extra: HashMap::new(),
         };

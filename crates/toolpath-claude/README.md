@@ -208,22 +208,25 @@ cache read, cache write) into a single aggregate.
 (deduplicated, first-touch order), derived from `FileWrite`-categorized tool inputs.
 
 **Provider-specific metadata** — Claude log entries often carry extra fields
-(e.g. `subtype`, `data`) that don't map to the common `Turn` schema. These are
-forwarded into `Turn.extra["claude"]` so trait-only consumers can access them
-without importing Claude-specific types:
+(e.g. `subtype`, `data`) that don't map to the common `Turn` schema. `Turn`
+itself has no field to carry them, so a `conversation.append` turn drops
+them; but a non-turn entry (one with no clean `Turn` mapping) surfaces its
+full payload as a `WatcherEvent::Progress` event, with the entry's catch-all
+fields nested under `data["claude"]`:
 
 ```rust,ignore
-// State inference from provider metadata
-if let Some(claude) = turn.extra.get("claude") {
-    if claude.get("subtype").and_then(|v| v.as_str()) == Some("init") {
-        // This is a session initialization entry
-    }
+// State inference from a Progress event's provider metadata
+if let WatcherEvent::Progress { data, .. } = event
+    && let Some(claude) = data.get("claude")
+    && claude.get("subtype").and_then(|v| v.as_str()) == Some("init")
+{
+    // This is a session initialization entry
 }
 ```
 
-For `WatcherEvent::Progress` events, the full entry payload is similarly
-available under `data["claude"]` — carrying fields like `data.type`,
-`data.hookName`, `data.agentId`, and `data.message`.
+The full entry payload is available under `data["claude"]` — carrying
+fields like `data.type`, `data.hookName`, `data.agentId`, and
+`data.message`.
 
 See [`toolpath-convo`](https://crates.io/crates/toolpath-convo) for the full trait and type definitions.
 

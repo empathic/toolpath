@@ -2,9 +2,13 @@
 //!
 //! Walks `PiSession.entries` in file order. Each `Entry::Message` becomes a
 //! `Turn`; metadata-only entries like `ModelChange` / `ThinkingLevelChange` /
-//! `Label` buffer and attach to the next message's `extra["pi"]`. `Compaction`,
-//! `BranchSummary`, `Custom`, and `CustomMessage` emit synthetic turns with
-//! appropriate roles.
+//! `Label` are discarded — they influence rendering only and have no
+//! cross-harness IR field to land on. `Compaction`, `BranchSummary`,
+//! `Custom`, and `CustomMessage` emit synthetic turns with appropriate
+//! roles (`Role::System` / `Role::Other("custom")` / etc.), but on a
+//! round-trip those turns are indistinguishable from ordinary ones —
+//! the IR has no provider-namespaced extras field to mark them with,
+//! so `PiProjector` can't re-synthesize the original entry type.
 //!
 //! Tool-result correlation is a two-pass process: we record tool-call ids as
 //! assistant turns are built, then in a second pass populate matching tool
