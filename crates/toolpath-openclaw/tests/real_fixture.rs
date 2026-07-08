@@ -74,9 +74,27 @@ fn real_main_session_parses_and_classifies() {
     // File changes recovered from write/edit tool inputs.
     assert!(!v.files_changed.is_empty());
 
-    // Real per-message usage sums into a session total.
+    // Real per-message usage sums into a session total — SINGLE-counted.
+    // This session's final assembled reply (post `sessions_yield`, no
+    // `responseId`) carries the run-cumulative usage: out=1468 = the exact
+    // sum of the 10 per-call outputs. Stamping it would double the session
+    // to 2936; the provider must detect and drop that aggregate row.
     let total = v.total_usage.expect("usage recorded");
-    assert!(total.output_tokens.unwrap_or(0) > 0);
+    assert_eq!(
+        total.output_tokens,
+        Some(1468),
+        "session output must be the sum of per-call rows, not doubled by the aggregate row"
+    );
+    assert_eq!(total.input_tokens, Some(20));
+
+    // responseId / responseModel from real API responses land on typed IR
+    // fields (group_id / response_model).
+    let with_rid = v
+        .turns
+        .iter()
+        .filter(|t| t.role == Role::Assistant && t.group_id.is_some())
+        .count();
+    assert_eq!(with_rid, 10, "the 10 real API responses carry responseId");
 }
 
 #[test]

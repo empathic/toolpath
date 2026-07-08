@@ -11,9 +11,9 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, FileMutation, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation,
-    ToolResult, Turn,
+    ConversationMarker, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
+    DelegatedWork, EnvironmentSnapshot, FileMutation, Role, SessionBase, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn,
 };
 
 use crate::OpenClawConvo;
@@ -150,6 +150,44 @@ fn usage_to_token_usage(usage: &Usage) -> Option<TokenUsage> {
     })
 }
 
+/// Pull a string field out of a flattened forward-compat `extra` map.
+fn extra_str(extra: &std::collections::HashMap<String, Value>, key: &str) -> Option<String> {
+    extra.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+/// The signature riding on the FIRST content block of `block_type` — the
+/// same collapsed granularity the IR uses for `text` / `thinking` bodies.
+fn first_block_signature(
+    content: &[ContentBlock],
+    block_type: &str,
+    sig_key: &str,
+) -> Option<String> {
+    content.iter().find_map(|b| {
+        let extra = match (block_type, b) {
+            ("text", ContentBlock::Text { extra, .. }) => extra,
+            ("thinking", ContentBlock::Thinking { extra, .. }) => extra,
+            _ => return None,
+        };
+        extra.get(sig_key).and_then(|v| v.as_str()).map(str::to_string)
+    })
+}
+
+/// Decode a summary entry's `details` (`{ readFiles, modifiedFiles }`).
+fn summary_detail_files(details: Option<&Value>) -> (Vec<String>, Vec<String>) {
+    let list = |key: &str| -> Vec<String> {
+        details
+            .and_then(|d| d.get(key))
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    (list("readFiles"), list("modifiedFiles"))
+}
+
 fn environment_for(session: &OpenClawSession) -> EnvironmentSnapshot {
     EnvironmentSnapshot {
         working_dir: Some(session.header.cwd.clone()),
@@ -227,6 +265,9 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
     let mut tool_call_locs: HashMap<String, (usize, usize)> = HashMap::new();
     let mut delegation_locs: HashMap<String, (usize, usize)> = HashMap::new();
     let mut tool_results: Vec<(String, String, bool)> = Vec::new();
+    // (turn index, wire usage, has responseId) per usage-bearing assistant
+    // message, for run-cumulative aggregate detection below.
+    let mut assistant_usage_rows: Vec<(usize, Usage, bool)> = Vec::new();
 
     let system_turn = |id: &str, parent: &Option<String>, ts: &str, text: String| Turn {
         id: id.to_string(),
@@ -235,10 +276,14 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
         role: Role::System,
         timestamp: ts.to_string(),
         text,
+        text_signature: None,
         thinking: None,
+        thinking_signature: None,
         tool_uses: vec![],
         model: None,
+        response_model: None,
         stop_reason: None,
+        marker: None,
         token_usage: None,
         attributed_token_usage: None,
         environment: Some(env.clone()),
@@ -258,21 +303,56 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
                 // Rendering/metadata/pointer entries: no IR turn.
             }
 
-            Entry::Compaction { base, summary, .. } => {
-                turns.push(system_turn(
-                    &base.id,
-                    &base.parent_id,
-                    &base.timestamp,
-                    format!("Compacted (summary): {summary}"),
-                ));
+            Entry::Compaction {
+                base,
+                summary,
+                first_kept_entry_id,
+                tokens_before,
+                details,
+                from_hook,
+                ..
+            } => {
+                let (read_files, modified_files) = summary_detail_files(details.as_ref());
+                turns.push(Turn {
+                    marker: Some(ConversationMarker::Compaction {
+                        first_kept_id: (!first_kept_entry_id.is_empty())
+                            .then(|| first_kept_entry_id.clone()),
+                        tokens_before: Some(*tokens_before),
+                        read_files,
+                        modified_files,
+                        from_hook: *from_hook,
+                    }),
+                    ..system_turn(
+                        &base.id,
+                        &base.parent_id,
+                        &base.timestamp,
+                        format!("Compacted (summary): {summary}"),
+                    )
+                });
             }
-            Entry::BranchSummary { base, summary, .. } => {
-                turns.push(system_turn(
-                    &base.id,
-                    &base.parent_id,
-                    &base.timestamp,
-                    format!("Branch summary: {summary}"),
-                ));
+            Entry::BranchSummary {
+                base,
+                summary,
+                from_id,
+                details,
+                from_hook,
+                ..
+            } => {
+                let (read_files, modified_files) = summary_detail_files(details.as_ref());
+                turns.push(Turn {
+                    marker: Some(ConversationMarker::BranchSummary {
+                        from_id: (!from_id.is_empty()).then(|| from_id.clone()),
+                        read_files,
+                        modified_files,
+                        from_hook: *from_hook,
+                    }),
+                    ..system_turn(
+                        &base.id,
+                        &base.parent_id,
+                        &base.timestamp,
+                        format!("Branch summary: {summary}"),
+                    )
+                });
             }
             Entry::CustomMessage {
                 base,
@@ -289,10 +369,14 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
 
             Entry::Message { base, message, .. } => {
                 let text;
+                let mut text_signature = None;
                 let mut thinking = None;
+                let mut thinking_signature = None;
                 let mut tool_uses: Vec<ToolInvocation> = Vec::new();
                 let mut file_mutations: Vec<FileMutation> = Vec::new();
                 let mut model: Option<String> = None;
+                let mut response_model: Option<String> = None;
+                let mut group_id: Option<String> = None;
                 let mut stop_reason_s: Option<String> = None;
                 let mut token_usage: Option<TokenUsage> = None;
                 let mut delegations: Vec<DelegatedWork> = Vec::new();
@@ -308,6 +392,7 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
                         model: m,
                         usage,
                         stop_reason,
+                        extra,
                         ..
                     } => {
                         role = Role::Assistant;
@@ -316,6 +401,22 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
                         model = Some(m.clone());
                         stop_reason_s = Some(stop_reason_to_string(stop_reason));
                         token_usage = usage_to_token_usage(usage);
+                        // `responseId` is the provider's per-response message id —
+                        // the same identifier class Claude carries in `group_id`
+                        // (Anthropic message.id). One OpenClaw assistant message =
+                        // one API response = one accounting unit.
+                        group_id = extra_str(extra, "responseId");
+                        response_model = extra_str(extra, "responseModel");
+                        text_signature = first_block_signature(content, "text", "textSignature");
+                        thinking_signature =
+                            first_block_signature(content, "thinking", "thinkingSignature");
+                        if token_usage.is_some() {
+                            assistant_usage_rows.push((
+                                turns.len(),
+                                usage.clone(),
+                                group_id.is_some(),
+                            ));
+                        }
 
                         let turn_idx = turns.len();
                         for block in content {
@@ -323,7 +424,7 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
                                 id,
                                 name,
                                 arguments,
-                                ..
+                                extra: block_extra,
                             } = block
                             else {
                                 continue;
@@ -363,6 +464,14 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
                                 input: arguments.clone(),
                                 result: None,
                                 category,
+                                thought_signature: block_extra
+                                    .get("thoughtSignature")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string),
+                                execution_mode: block_extra
+                                    .get("executionMode")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string),
                             });
                         }
                     }
@@ -391,6 +500,8 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
                                 is_error: !matches!(exit_code, Some(0)),
                             }),
                             category: Some(ToolCategory::Shell),
+                            thought_signature: None,
+                            execution_mode: None,
                         });
                     }
                 }
@@ -398,14 +509,18 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
                 turns.push(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
-                    group_id: None,
+                    group_id,
                     role,
                     timestamp: base.timestamp.clone(),
                     text,
+                    text_signature,
                     thinking,
+                    thinking_signature,
                     tool_uses,
                     model,
+                    response_model,
                     stop_reason: stop_reason_s,
+                    marker: None,
                     token_usage,
                     attributed_token_usage: None,
                     environment: Some(env.clone()),
@@ -413,6 +528,38 @@ pub fn session_to_view(session: &OpenClawSession) -> ConversationView {
                     file_mutations,
                 });
             }
+        }
+    }
+
+    // Run-cumulative aggregate detection. OpenClaw's final assembled reply
+    // of a multi-call run (observed after a `sessions_yield` re-context) is
+    // written WITHOUT a `responseId` and with `usage` equal to the
+    // field-wise SUM of every prior per-call usage — the run accumulator's
+    // totals, not this step's spend. Stamping it would double-count the
+    // session (the repo's token-accounting law: never stamp a cumulative
+    // counter or repeated total onto a step). Detection is deliberately
+    // conservative: only in sessions that stamp `responseId` on real API
+    // responses (native modern files), only for rows lacking one, and only
+    // on an exact four-field sum match against the accepted per-call rows.
+    let has_response_ids = assistant_usage_rows.iter().any(|(_, _, has_rid)| *has_rid);
+    if has_response_ids {
+        let mut sum = (0u64, 0u64, 0u64, 0u64);
+        let mut priors = 0usize;
+        for (turn_idx, usage, has_rid) in &assistant_usage_rows {
+            let row = (usage.input, usage.output, usage.cache_read, usage.cache_write);
+            if !*has_rid && priors > 0 && row == sum {
+                if let Some(t) = turns.get_mut(*turn_idx) {
+                    t.token_usage = None;
+                }
+                continue;
+            }
+            sum = (
+                sum.0 + row.0,
+                sum.1 + row.1,
+                sum.2 + row.2,
+                sum.3 + row.3,
+            );
+            priors += 1;
         }
     }
 

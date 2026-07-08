@@ -35,6 +35,11 @@ blocks, `stopReason`, and the full `Usage` shape (including prompt-cache
 - **Inception adoption:** a running gateway adopts a transcript +
   `sessions.json` entry written by an external tool without restart, and
   appends follow-up turns to the same file.
+- **`totalTokens` = `input + output + cacheRead + cacheWrite`** on
+  per-call rows (11/11 observed).
+- **Real API responses carry `responseId` (+ often `responseModel`)**;
+  the run's final assembled reply after a `sessions_yield` has neither and
+  carries **run-cumulative usage** (see usage.md — double-count hazard).
 - `leaf` rows are **not** written on every append — a linear real session
   contained none (the visible head falls back to the last entry).
 

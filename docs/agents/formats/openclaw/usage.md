@@ -35,11 +35,27 @@ Key properties:
 
 ### `totalTokens` / `prompt_tokens` conventions
 
-`Usage.total` is `totalTokens`. OpenClaw's notion of `prompt_tokens` is
-`input + cacheRead` (cacheWrite excluded). For toolpath, prefer summing the
-raw `input`/`output`/`cacheRead`/`cacheWrite` independently rather than
+`Usage.total` is `totalTokens`. **Observed** (11/11 per-call rows in real
+v2026.6.11 sessions): `totalTokens = input + output + cacheRead +
+cacheWrite`. OpenClaw's notion of `prompt_tokens` is `input + cacheRead`
+(cacheWrite excluded). For toolpath, prefer summing the raw
+`input`/`output`/`cacheRead`/`cacheWrite` independently rather than
 trusting a single headline number, the way `toolpath-pi` does — it stays
 correct regardless of convention drift.
+
+### The run-cumulative aggregate row (observed)
+
+One row per multi-call run violates "per-step delta": after a
+`sessions_yield` re-context, the run's **final assembled reply** is written
+as an assistant message **without a `responseId`** whose `usage` equals the
+**field-wise sum of every prior per-call usage** in the run (the runtime
+accumulator's totals). Its `totalTokens`, confusingly, repeats the previous
+row's context total rather than the sum. Summing transcript usage naively
+therefore **double-counts** such sessions. Every real API response carries
+a `responseId`; the aggregate row is the one that doesn't. A reader must
+detect this row (`toolpath-openclaw` drops its usage on an exact
+field-wise-sum match in sessions that stamp `responseId`s) — never stamp it
+onto a step.
 
 > **Do not confuse with `SessionEntry.totalTokens`.** A separate
 > `deriveSessionTotalTokens` (`src/agents/usage.ts`) produces a

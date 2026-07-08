@@ -1,10 +1,9 @@
 # Known issues and gotchas
 
-Format-level quirks, ambiguities, and things to defend against. Because we
-have **no first-hand on-disk sample** yet (see
-[README.md §Sourcing](README.md#sourcing-and-confidence)), some of these are
-"from the producer type, not confirmed against a real file" — flagged where
-so.
+Format-level quirks, ambiguities, and things to defend against. Entries
+marked **(observed)** were confirmed against real captured sessions (see
+[README.md §Sourcing](README.md#sourcing-and-confidence)); the rest are
+from the producer types and not yet seen in the wild.
 
 ## Two timestamp encodings per line
 
@@ -36,6 +35,14 @@ Assistant `usage` at or under the latest compaction boundary is **zeroed**
 on disk (`stripStaleAssistantUsageBeforeLatestCompaction`). Summing
 transcript usage without accounting for compaction boundaries undercounts
 the session total. See [usage.md](usage.md#compaction-zeroes-stale-usage).
+
+## The final reply of a multi-call run carries cumulative usage (observed)
+
+After a `sessions_yield` re-context, the run's final assembled assistant
+message has **no `responseId`** and its `usage` is the field-wise **sum of
+all prior per-call usages** — run-accumulator totals, not that step's
+spend. Naive summing double-counts the session. See
+[usage.md](usage.md#the-run-cumulative-aggregate-row-observed).
 
 ## No reasoning token count on disk
 

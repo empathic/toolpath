@@ -3,11 +3,14 @@
 //! session under `agents/<agentId>/sessions/` plus a `sessions.json` routing
 //! entry so a running OpenClaw instance can pick it up.
 //!
-//! This is the inverse of [`crate::provider::session_to_view`]. Provider-
-//! specific extras are not carried on the IR, so the projector synthesizes
-//! OpenClaw fields from typed IR fields and sensible defaults (api/provider
-//! `anthropic`, stop reason `stop`). Foreign tool names are remapped through
-//! [`crate::provider::native_name`].
+//! This is the inverse of [`crate::provider::session_to_view`]. Replay-
+//! fidelity data flows through TYPED IR fields — `Turn.thinking_signature` /
+//! `text_signature`, `Turn.group_id` (`responseId`), `Turn.response_model`,
+//! `Turn.marker` (compaction / branch-summary boundaries), and
+//! `ToolInvocation.thought_signature` / `execution_mode` — no provider-
+//! namespaced extras exist on the IR. Remaining gaps are synthesized from
+//! sensible defaults (api/provider `anthropic`, stop reason `stop`).
+//! Foreign tool names are remapped through [`crate::provider::native_name`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -288,27 +291,39 @@ fn emit_user(turn: &Turn, entries: &mut Vec<Entry>) {
 }
 
 fn emit_assistant(cfg: &OpenClawProjector, turn: &Turn, entries: &mut Vec<Entry>) {
+    let sig_extra = |key: &str, sig: &Option<String>| -> HashMap<String, Value> {
+        let mut m = HashMap::new();
+        if let Some(s) = sig {
+            m.insert(key.to_string(), Value::String(s.clone()));
+        }
+        m
+    };
+
     let mut blocks: Vec<ContentBlock> = Vec::new();
     if let Some(t) = &turn.thinking
         && !t.is_empty()
     {
         blocks.push(ContentBlock::Thinking {
             thinking: t.clone(),
-            extra: HashMap::new(),
+            extra: sig_extra("thinkingSignature", &turn.thinking_signature),
         });
     }
     if !turn.text.is_empty() {
         blocks.push(ContentBlock::Text {
             text: turn.text.clone(),
-            extra: HashMap::new(),
+            extra: sig_extra("textSignature", &turn.text_signature),
         });
     }
     for tu in &turn.tool_uses {
+        let mut extra = sig_extra("thoughtSignature", &tu.thought_signature);
+        if let Some(mode) = &tu.execution_mode {
+            extra.insert("executionMode".to_string(), Value::String(mode.clone()));
+        }
         blocks.push(ContentBlock::ToolCall {
             id: tu.id.clone(),
             name: tool_native_name(tu),
             arguments: tu.input.clone(),
-            extra: HashMap::new(),
+            extra,
         });
     }
 
@@ -321,6 +336,16 @@ fn emit_assistant(cfg: &OpenClawProjector, turn: &Turn, entries: &mut Vec<Entry>
         .clone()
         .unwrap_or_else(|| "anthropic".to_string());
 
+    // `group_id` is the per-response accounting id (OpenClaw's
+    // `responseId`); `response_model` the concrete served model.
+    let mut msg_extra: HashMap<String, Value> = HashMap::new();
+    if let Some(rid) = &turn.group_id {
+        msg_extra.insert("responseId".to_string(), Value::String(rid.clone()));
+    }
+    if let Some(rm) = &turn.response_model {
+        msg_extra.insert("responseModel".to_string(), Value::String(rm.clone()));
+    }
+
     entries.push(Entry::Message {
         base: base_for(turn),
         message: AgentMessage::Assistant {
@@ -332,7 +357,7 @@ fn emit_assistant(cfg: &OpenClawProjector, turn: &Turn, entries: &mut Vec<Entry>
             stop_reason: parse_stop_reason(turn.stop_reason.as_deref()),
             error_message: None,
             timestamp: ts_millis(&turn.timestamp),
-            extra: HashMap::new(),
+            extra: msg_extra,
         },
         extra: HashMap::new(),
     });
@@ -370,6 +395,56 @@ fn emit_assistant(cfg: &OpenClawProjector, turn: &Turn, entries: &mut Vec<Entry>
 }
 
 fn emit_system(turn: &Turn, entries: &mut Vec<Entry>) {
+    // Typed marker first (lossless); fall back to text-prefix parsing for
+    // views from sources that only carry the flattened summary text.
+    match &turn.marker {
+        Some(toolpath_convo::ConversationMarker::Compaction {
+            first_kept_id,
+            tokens_before,
+            read_files,
+            modified_files,
+            from_hook,
+        }) => {
+            let summary = turn
+                .text
+                .strip_prefix("Compacted (summary): ")
+                .unwrap_or(&turn.text)
+                .to_string();
+            entries.push(Entry::Compaction {
+                base: base_for(turn),
+                summary,
+                first_kept_entry_id: first_kept_id.clone().unwrap_or_default(),
+                tokens_before: tokens_before.unwrap_or(0),
+                details: detail_files_value(read_files, modified_files),
+                from_hook: *from_hook,
+                extra: HashMap::new(),
+            });
+            return;
+        }
+        Some(toolpath_convo::ConversationMarker::BranchSummary {
+            from_id,
+            read_files,
+            modified_files,
+            from_hook,
+        }) => {
+            let summary = turn
+                .text
+                .strip_prefix("Branch summary: ")
+                .unwrap_or(&turn.text)
+                .to_string();
+            entries.push(Entry::BranchSummary {
+                base: base_for(turn),
+                from_id: from_id.clone().unwrap_or_else(|| "root".to_string()),
+                summary,
+                details: detail_files_value(read_files, modified_files),
+                from_hook: *from_hook,
+                extra: HashMap::new(),
+            });
+            return;
+        }
+        None => {}
+    }
+
     if let Some(rest) = turn.text.strip_prefix("Compacted (summary): ") {
         entries.push(Entry::Compaction {
             base: base_for(turn),
@@ -392,6 +467,16 @@ fn emit_system(turn: &Turn, entries: &mut Vec<Entry>) {
     } else {
         emit_custom_message(turn, "system", entries);
     }
+}
+
+/// Re-encode summary `details` (`{ readFiles, modifiedFiles }`), omitting
+/// the object entirely when both lists are empty (matching native output,
+/// which omits `details` rather than writing empty arrays).
+fn detail_files_value(read_files: &[String], modified_files: &[String]) -> Option<Value> {
+    if read_files.is_empty() && modified_files.is_empty() {
+        return None;
+    }
+    Some(json!({ "readFiles": read_files, "modifiedFiles": modified_files }))
 }
 
 fn emit_bash(turn: &Turn, entries: &mut Vec<Entry>) {
@@ -461,7 +546,9 @@ fn build_usage(turn: &Turn) -> Usage {
         output,
         cache_read,
         cache_write,
-        total_tokens: input + output,
+        // Observed convention (11/11 per-call rows in real v2026.6.11
+        // sessions): totalTokens = input + output + cacheRead + cacheWrite.
+        total_tokens: input + output + cache_read + cache_write,
         cost: CostBreakdown::default(),
     }
 }
@@ -503,6 +590,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+            text_signature: None, thinking_signature: None, response_model: None, marker: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -559,6 +647,7 @@ mod tests {
             ..Default::default()
         });
         t.tool_uses = vec![ToolInvocation {
+            thought_signature: None, execution_mode: None,
             id: "tc1".into(),
             name: "Read".into(),
             input: json!({"path": "x"}),
