@@ -687,14 +687,14 @@ Minimum viable mapping, if we follow the Pi-style approach (build a
 | `session.id` | `ConversationView.id` |
 | `session.directory` + `project.worktree` | `Turn.environment.working_dir`, `path.base.uri` |
 | `project.id` (first-root-commit SHA) | `path.base.ref_str` (stable-enough) |
-| User `message` | `Turn { role: User }` |
+| User `message` | `Turn { role: User, model: modelID }` (bare modelID, same convention as assistant; `providerID` dropped) |
 | Assistant `message` | `Turn { role: Assistant, model: modelID }` |
 | `user.system` | `Turn { role: System }` or `ConversationEvent` |
 | `reasoning` part | `Turn.thinking` (plaintext — safe to render) |
 | `text` part | appended to `Turn.text` |
 | `tool` part (state: completed) | `Turn.tool_uses[] { input, result: state.output }` paired via `callID` |
 | `tool` part (state: error) | same, with `result.is_error = true`, `result.content = state.error` |
-| `step-start` / `step-finish` | attach `snapshot` SHA to the turn for file-artifact reconstruction |
+| `step-start` / `step-finish` | attach `snapshot` SHA to the turn for file-artifact reconstruction; the SHA also rides a `part.snapshot` `ConversationEvent` so the projector can restore it after a Path round-trip |
 | `patch` part | file-artifact sibling `ArtifactChange.raw` from `git diff <from> <to>` |
 | `step-finish.tokens` | `Turn.token_usage` (delta) + summed into `ConversationView.total_usage` |
 | `subtask` part | `Turn.delegations[]`, with sub-session linked via `session.parent_id` |

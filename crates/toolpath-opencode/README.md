@@ -22,7 +22,9 @@ git repositories.
   `Turn.thinking`, and computing `Turn.file_mutations` inline from the
   ordered `step-start` / `step-finish` / `snapshot` snapshot SHAs
   (tree↔tree diffs against the sibling bare git repo) for file-artifact
-  reconstruction.
+  reconstruction. Snapshot SHAs also ride `ConversationView.events` as
+  `part.snapshot` events, so the projector can restore them onto a
+  re-projected session's step parts after a full Path round-trip.
 - **Derivation**: produces `toolpath::v1::Path` documents. When the
   matching snapshot git repo is still on disk, file changes per
   turn surface as sibling artifacts with a real `git diff` as the
@@ -41,8 +43,9 @@ git repositories.
 | `text` part | appended to `Turn.text` |
 | `tool` part (state: completed) | `Turn.tool_uses[]` with `input` + `result` |
 | `tool` part (state: error) | same, `result.is_error = true` |
-| `step-start` / `step-finish` snapshot SHA | sibling file artifacts on the turn — unified diff as `raw` |
-| `compaction` / `retry` / `patch` / unknown parts | `ConversationEvent` |
+| `step-start` / `step-finish` snapshot SHA | sibling file artifacts on the turn — unified diff as `raw`; the SHA itself also rides a `part.snapshot` `ConversationEvent` for round-trip restore |
+| User `message.model.modelID` | `Turn.model` (bare modelID; `providerID` is dropped) |
+| `compaction` / `retry` / `file` / `agent` / unknown parts | `ConversationEvent` |
 
 ## Usage
 

@@ -7,7 +7,10 @@
 //! cross-part assembly:
 //!
 //! 1. For each user [`Message`], emit a [`Turn`] with `role: User`
-//!    whose `text` is the concatenation of the message's text parts.
+//!    whose `text` is the concatenation of the message's text parts and
+//!    whose `model` is the wire `model.modelID` (same bare-modelID
+//!    convention as assistant turns; the `providerID` has no IR home
+//!    and is dropped).
 //! 2. For each assistant [`Message`], emit a [`Turn`] with
 //!    `role: Assistant`:
 //!    - `text` ← concatenation of its `text` parts.
@@ -20,11 +23,13 @@
 //!      SHAs seen across `step-start`/`step-finish`/`snapshot` parts
 //!      (tree↔tree diffs against the sibling bare git repo) plus any
 //!      `patch` parts' `{hash, files}` records feeding the seen-files
-//!      set. The IR carries no provider-namespaced extras, so none of
-//!      this is preserved verbatim for a round-trip — the projector
-//!      falls back to tool-input-derived structural changes instead.
+//!      set.
 //! 3. Non-turn parts land in `ConversationView.events`:
-//!    `compaction`, `retry`, unknown types.
+//!    `compaction`, `retry`, `file`, `agent`, unknown types — and every
+//!    snapshot SHA as a `part.snapshot` event, which the projector
+//!    restores onto the emitted `step-start`/`step-finish` parts so
+//!    SHAs survive a full Path round-trip (a re-imported projection
+//!    can regenerate diffs).
 //! 4. `subtask` parts are captured on the turn's `delegations`
 //!    (empty-turn list — the sub-agent's own session lives under
 //!    its own id, linked by `session.parent_id`).
@@ -180,6 +185,10 @@ struct Builder<'a> {
     /// `before` of the next turn's snapshot pair so intermediate state
     /// captures correctly.
     prev_snapshot_after: Option<String>,
+    /// `(message id, event id)` of the most recent `part.snapshot` event,
+    /// so a message's snapshot events chain linearly (see
+    /// [`Self::push_snapshot_event`]).
+    last_snapshot_event: Option<(String, String)>,
 }
 
 impl<'a> Builder<'a> {
@@ -194,6 +203,7 @@ impl<'a> Builder<'a> {
             total_usage_set: false,
             snapshot_repo: None,
             prev_snapshot_after: None,
+            last_snapshot_event: None,
         }
     }
 
@@ -277,7 +287,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn handle_user_message(&mut self, msg: &Message, _u: &UserMessage) {
+    fn handle_user_message(&mut self, msg: &Message, u: &UserMessage) {
         let text = concat_text_parts(&msg.parts);
         let environment = Some(EnvironmentSnapshot {
             working_dir: Some(self.session.directory.to_string_lossy().to_string()),
@@ -294,7 +304,12 @@ impl<'a> Builder<'a> {
             text,
             thinking: None,
             tool_uses: Vec::new(),
-            model: None,
+            // Same convention as assistant turns: bare modelID, empty → None.
+            model: if u.model.model_id.is_empty() {
+                None
+            } else {
+                Some(u.model.model_id.clone())
+            },
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -334,17 +349,19 @@ impl<'a> Builder<'a> {
                     ));
                 }
                 PartData::StepStart(s) => {
-                    if let Some(sh) = &s.snapshot
-                        && snapshots.last().is_none_or(|l| l != sh)
-                    {
-                        snapshots.push(sh.clone());
+                    if let Some(sh) = &s.snapshot {
+                        if snapshots.last().is_none_or(|l| l != sh) {
+                            snapshots.push(sh.clone());
+                        }
+                        self.push_snapshot_event(p, msg, sh, "step-start");
                     }
                 }
                 PartData::StepFinish(sf) => {
-                    if let Some(sh) = &sf.snapshot
-                        && snapshots.last().is_none_or(|l| l != sh)
-                    {
-                        snapshots.push(sh.clone());
+                    if let Some(sh) = &sf.snapshot {
+                        if snapshots.last().is_none_or(|l| l != sh) {
+                            snapshots.push(sh.clone());
+                        }
+                        self.push_snapshot_event(p, msg, sh, "step-finish");
                     }
                     accumulate_tokens(&mut step_usage, &sf.tokens);
                     step_usage_set = true;
@@ -354,6 +371,7 @@ impl<'a> Builder<'a> {
                     if snapshots.last().is_none_or(|l| l != &s.snapshot) {
                         snapshots.push(s.snapshot.clone());
                     }
+                    self.push_snapshot_event(p, msg, &s.snapshot, "snapshot");
                 }
                 PartData::Patch(pp) => {
                     for f in &pp.files {
@@ -478,6 +496,38 @@ impl<'a> Builder<'a> {
             environment,
             delegations,
             file_mutations,
+        });
+    }
+
+    /// Record a snapshot SHA as a `part.snapshot` event. Snapshot SHAs
+    /// are how opencode reconstructs file diffs (tree↔tree against the
+    /// sibling bare git repo); riding `view.events` lets them survive
+    /// the Path round-trip so the projector can restore them onto the
+    /// emitted step parts.
+    ///
+    /// The first snapshot event of a message parents to the message id;
+    /// each subsequent one chains onto the previous snapshot event, so
+    /// the derived Path stays linear (no dead-end fan-out from one turn)
+    /// and the projector re-attributes chained events to their turn by
+    /// walking parent links.
+    fn push_snapshot_event(&mut self, p: &Part, msg: &Message, sha: &str, part_kind: &str) {
+        let id = format!("snapshot-{}", p.id);
+        let parent = self
+            .last_snapshot_event
+            .take()
+            .filter(|(m, _)| m == &msg.id)
+            .map(|(_, prev)| prev)
+            .unwrap_or_else(|| msg.id.clone());
+        self.last_snapshot_event = Some((msg.id.clone(), id.clone()));
+        self.events.push(ConversationEvent {
+            id,
+            timestamp: millis_to_iso(p.time_created),
+            parent_id: Some(parent),
+            event_type: "part.snapshot".into(),
+            data: HashMap::from([
+                ("snapshot".to_string(), Value::String(sha.to_string())),
+                ("part".to_string(), Value::String(part_kind.to_string())),
+            ]),
         });
     }
 
@@ -1153,5 +1203,60 @@ mod tests {
         assert_eq!(ids, vec!["ses_x".to_string()]);
         let v = ConversationProvider::load_conversation(&mgr, "", "ses_x").unwrap();
         assert_eq!(v.turns.len(), 2);
+    }
+
+    #[test]
+    fn user_turn_carries_model_id() {
+        // The user message wire carries `model.modelID`; mirror the
+        // assistant convention: bare modelID on `Turn.model`, empty → None.
+        let (_t, mgr) = setup(BASIC_SQL);
+        let view = to_view(&mgr.read_session("ses_x").unwrap());
+        assert_eq!(view.turns[0].model.as_deref(), Some("big-pickle"));
+    }
+
+    #[test]
+    fn snapshot_shas_become_events() {
+        // step-start / step-finish / snapshot SHAs ride `view.events`
+        // (event_type "part.snapshot") so a re-imported projection can
+        // regenerate diffs. The first snapshot event of a message parents
+        // to the message; subsequent ones chain onto the previous
+        // snapshot event so the derived Path stays linear.
+        let (_t, mgr) = setup(BASIC_SQL);
+        let view = to_view(&mgr.read_session("ses_x").unwrap());
+        let snaps: Vec<(String, String, Option<String>)> = view
+            .events
+            .iter()
+            .filter(|e| e.event_type == "part.snapshot")
+            .map(|e| {
+                (
+                    e.data
+                        .get("snapshot")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    e.data
+                        .get("part")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    e.parent_id.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            snaps,
+            vec![
+                (
+                    "snap_a".to_string(),
+                    "step-start".to_string(),
+                    Some("m2".to_string())
+                ),
+                (
+                    "snap_b".to_string(),
+                    "step-finish".to_string(),
+                    Some("snapshot-p2".to_string())
+                ),
+            ]
+        );
     }
 }

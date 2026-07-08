@@ -159,6 +159,8 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
+    let snaps_by_turn = snapshots_by_turn(view);
+
     for turn in &view.turns {
         match turn.role {
             Role::User => {
@@ -186,6 +188,7 @@ fn project_view(
                     &agent,
                     &default_provider,
                     &default_model,
+                    snaps_by_turn.get(&turn.id).map(Vec::as_slice),
                 );
                 prev_msg_id = Some(msg.id.clone());
                 messages.push(msg);
@@ -220,6 +223,53 @@ fn project_view(
     })
 }
 
+/// Group `part.snapshot` events by owning turn: `turn id → [(sha, part
+/// kind)]` in event order.
+///
+/// The forward path chains a message's snapshot events (first parents to
+/// the message, subsequent ones to the previous snapshot event) so the
+/// derived Path stays linear. The Path round-trip may also re-anchor a
+/// chained event onto another event of the same message, so attribution
+/// walks parent links: an event parented to a turn belongs to that turn;
+/// an event parented to an already-attributed event inherits its turn.
+fn snapshots_by_turn(view: &ConversationView) -> HashMap<String, Vec<(String, String)>> {
+    let turn_ids: std::collections::HashSet<&str> =
+        view.turns.iter().map(|t| t.id.as_str()).collect();
+    let mut event_turn: HashMap<&str, String> = HashMap::new();
+    let mut by_turn: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for event in &view.events {
+        let attributed: Option<String> = event.parent_id.as_deref().and_then(|pid| {
+            if turn_ids.contains(pid) {
+                Some(pid.to_string())
+            } else {
+                event_turn.get(pid).cloned()
+            }
+        });
+        if let Some(turn_id) = &attributed {
+            event_turn.insert(event.id.as_str(), turn_id.clone());
+        }
+        if event.event_type != "part.snapshot" {
+            continue;
+        }
+        if let (Some(turn_id), Some(sha)) = (
+            attributed,
+            event.data.get("snapshot").and_then(|v| v.as_str()),
+        ) {
+            let kind = event
+                .data
+                .get("part")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            by_turn
+                .entry(turn_id)
+                .or_default()
+                .push((sha.to_string(), kind));
+        }
+    }
+    by_turn
+}
+
 fn build_user_message(
     turn: &Turn,
     session_id: &str,
@@ -232,12 +282,15 @@ fn build_user_message(
     let msg_id = mint_message_id(session_id, *counter);
     let time_created = parse_timestamp_ms(&turn.timestamp).unwrap_or(0);
 
-    // The IR carries no provider-namespaced extras, so the original
-    // opencode `model` ref can't be recovered here; fall back to the
-    // configured defaults.
+    // Mirror the assistant convention: the wire `model.modelID` rides
+    // `Turn.model` (bare modelID). The providerID has no IR home, so it
+    // falls back to the configured default.
     let model = ModelRef {
         provider_id: default_provider.to_string(),
-        model_id: default_model.to_string(),
+        model_id: turn
+            .model
+            .clone()
+            .unwrap_or_else(|| default_model.to_string()),
         variant: None,
     };
 
@@ -300,6 +353,7 @@ fn build_assistant_message(
     agent: &str,
     default_provider: &str,
     default_model: &str,
+    snapshots: Option<&[(String, String)]>,
 ) -> Message {
     *counter += 1;
     let msg_id = mint_message_id(session_id, *counter);
@@ -361,9 +415,22 @@ fn build_assistant_message(
     };
 
     let mut parts: Vec<Part> = Vec::new();
-    // The IR carries no provider-namespaced extras, so opencode's
-    // `snapshots` list can't be recovered on a round-trip.
-    let snapshot: Option<String> = None;
+    // Snapshot SHAs ride `view.events` as `part.snapshot` events (see
+    // `snapshots_by_turn`); restore the step-start SHA onto the opening
+    // StepStart and the step-finish SHA onto the closing StepFinish,
+    // falling back to first/last when part kinds weren't recorded.
+    let snapshot_start: Option<String> = snapshots.and_then(|s| {
+        s.iter()
+            .find(|(_, kind)| kind == "step-start")
+            .or_else(|| s.first())
+            .map(|(sha, _)| sha.clone())
+    });
+    let snapshot_finish: Option<String> = snapshots.and_then(|s| {
+        s.iter()
+            .rfind(|(_, kind)| kind == "step-finish")
+            .or_else(|| s.last())
+            .map(|(sha, _)| sha.clone())
+    });
 
     *counter += 1;
     parts.push(Part {
@@ -373,7 +440,7 @@ fn build_assistant_message(
         time_created,
         time_updated: time_created,
         data: PartData::StepStart(StepStartPart {
-            snapshot: snapshot.clone(),
+            snapshot: snapshot_start,
             extra: HashMap::new(),
         }),
     });
@@ -447,7 +514,7 @@ fn build_assistant_message(
                 .stop_reason
                 .clone()
                 .unwrap_or_else(|| "stop".to_string()),
-            snapshot,
+            snapshot: snapshot_finish,
             cost: 0.0,
             tokens,
             extra: HashMap::new(),
@@ -932,6 +999,94 @@ mod tests {
         match &s.messages[1].data {
             MessageData::Assistant(a) => assert_eq!(a.parent_id, user_id),
             _ => panic!("expected assistant"),
+        }
+    }
+
+    #[test]
+    fn user_message_model_id_comes_from_turn_model() {
+        let mut turn = user_turn("hello");
+        turn.model = Some("big-pickle".into());
+        let s = OpencodeProjector::default()
+            .project(&view_with(vec![turn]))
+            .unwrap();
+        match &s.messages[0].data {
+            MessageData::User(u) => assert_eq!(u.model.model_id, "big-pickle"),
+            _ => panic!("expected user"),
+        }
+    }
+
+    #[test]
+    fn user_message_model_id_falls_back_to_default_when_turn_has_none() {
+        let s = OpencodeProjector::default()
+            .project(&view_with(vec![user_turn("hello")]))
+            .unwrap();
+        match &s.messages[0].data {
+            MessageData::User(u) => assert_eq!(u.model.model_id, DEFAULT_MODEL_ID),
+            _ => panic!("expected user"),
+        }
+    }
+
+    fn snapshot_event(
+        id: &str,
+        parent: &str,
+        sha: &str,
+        part_kind: &str,
+    ) -> toolpath_convo::ConversationEvent {
+        toolpath_convo::ConversationEvent {
+            id: id.into(),
+            timestamp: "2026-04-21T12:00:02.000Z".into(),
+            parent_id: Some(parent.into()),
+            event_type: "part.snapshot".into(),
+            data: [
+                ("snapshot".to_string(), json!(sha)),
+                ("part".to_string(), json!(part_kind)),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn snapshot_events_restore_step_start_and_finish_snapshots() {
+        let mut view = view_with(vec![user_turn("hi"), assistant_turn("ok")]);
+        view.events.push(snapshot_event("snapshot-p2", "a1", "snap_a", "step-start"));
+        // Chained: parent is the previous snapshot event, not the turn.
+        view.events
+            .push(snapshot_event("snapshot-p7", "snapshot-p2", "snap_b", "step-finish"));
+        let s = OpencodeProjector::default().project(&view).unwrap();
+        let assistant = &s.messages[1];
+        let start = assistant
+            .parts
+            .iter()
+            .find_map(|p| match &p.data {
+                PartData::StepStart(ss) => Some(ss.snapshot.clone()),
+                _ => None,
+            })
+            .expect("step-start part");
+        let finish = assistant
+            .parts
+            .iter()
+            .find_map(|p| match &p.data {
+                PartData::StepFinish(sf) => Some(sf.snapshot.clone()),
+                _ => None,
+            })
+            .expect("step-finish part");
+        assert_eq!(start.as_deref(), Some("snap_a"));
+        assert_eq!(finish.as_deref(), Some("snap_b"));
+    }
+
+    #[test]
+    fn without_snapshot_events_step_parts_have_no_snapshot() {
+        let s = OpencodeProjector::default()
+            .project(&view_with(vec![assistant_turn("ok")]))
+            .unwrap();
+        let assistant = &s.messages[0];
+        for p in &assistant.parts {
+            match &p.data {
+                PartData::StepStart(ss) => assert!(ss.snapshot.is_none()),
+                PartData::StepFinish(sf) => assert!(sf.snapshot.is_none()),
+                _ => {}
+            }
         }
     }
 }
