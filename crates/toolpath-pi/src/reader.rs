@@ -220,10 +220,12 @@ pub fn read_session_from_file(path: &Path) -> Result<PiSession> {
                         continue;
                     }
                     Err(_) => {
-                        return Err(PiError::invalid_session_file(
-                            path.to_path_buf(),
-                            format!("line {line_no}: {parse_err}"),
-                        ));
+                        eprintln!(
+                            "warning: skipping unparseable line at {}:{} (truncated write?): {parse_err}",
+                            path.display(),
+                            line_no
+                        );
+                        continue;
                     }
                 }
             }
@@ -836,6 +838,53 @@ mod tests {
         assert_eq!(count, 2);
         let ids: Vec<&str> = s.message_entries().map(|(b, _)| b.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn truncated_final_line_is_skipped_with_warning() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.jsonl");
+        // valid header + one valid entry + a truncated JSON fragment
+        let content = format!(
+            "{}\n{}\n{{\"type\":\"mess",
+            header_line("sess-1"),
+            msg_line("a", None, "2026-04-16T00:00:01Z", "hi")
+        );
+        fs::write(&path, content).unwrap();
+        let session = read_session_from_file(&path).unwrap();
+        // Header + 1 message; truncated line skipped
+        assert_eq!(session.entries.len(), 2);
+    }
+
+    #[test]
+    fn garbage_mid_file_line_is_skipped_and_later_entries_survive() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                &header_line("sess-1"),
+                "not json at all",
+                &msg_line("a", None, "2026-04-16T00:00:01Z", "hi"),
+            ],
+        );
+        let session = read_session_from_file(&path).unwrap();
+        // Header + 1 message; garbage line skipped
+        assert_eq!(session.entries.len(), 2);
+    }
+
+    #[test]
+    fn malformed_header_still_hard_fails() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.jsonl");
+        // first non-empty line is invalid JSON -> Err (unchanged behavior)
+        fs::write(&path, "not json at all").unwrap();
+        let err = read_session_from_file(&path).unwrap_err();
+        // Should be an InvalidSessionFile or MalformedHeader error
+        assert!(matches!(
+            err,
+            PiError::InvalidSessionFile { .. } | PiError::MalformedHeader(_)
+        ));
     }
 }
 

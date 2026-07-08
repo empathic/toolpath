@@ -2,6 +2,14 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Pi: skip unparseable lines instead of failing the read — 2026-07-08
+
+- **`toolpath-pi`** (0.6.1): Crashed or truncated Pi session files now load
+  gracefully. Previously, a truncated final line (invalid JSON) would fail
+  the entire session read; now unparseable lines are skipped with a warning
+  (matching `toolpath-codex`'s documented safe-reader policy). Header parsing
+  remains a hard error — a session without a parseable header has no identity.
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived
