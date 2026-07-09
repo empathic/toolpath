@@ -224,7 +224,7 @@ The Tauri 2 desktop GUI lives in the private [pathbase](https://github.com/empat
 
 ## Versioning and release checklist
 
-When changing a crate's public API (new types, new trait impls, new public methods, new dependencies), bump its version. Use semver: patch for bug fixes, minor for additive changes, major for breaking changes. Pre-1.0 crates treat minor as "potentially breaking."
+When changing a crate's public API (new types, new trait impls, new public methods, new dependencies), bump its version. For pre-1.0 library crates, cargo treats the **z** position of `0.y.z` as the compatible slot: bug fixes *and additive changes* bump patch (`0.6.0` → `0.6.1`, so `^0.6` consumers like pathbase-app pick them up for free); bump minor only for potentially-breaking changes. `path-cli` is the app, not a library — it bumps minor per feature.
 
 **Every version bump must update all of the following:**
 
