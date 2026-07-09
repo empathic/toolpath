@@ -149,9 +149,10 @@ impl Harness {
     }
 }
 
-/// One row in the unified session picker.
+/// One artifact surfaced by a provider — today always an agent session.
+/// Rows feed both the unified `share` picker and `p cache sync`.
 #[derive(Debug, Clone)]
-pub(crate) struct SessionRow {
+pub(crate) struct ArtifactRow {
     pub(crate) harness: Harness,
     /// Project path for keyed providers; `None` for codex/opencode.
     pub(crate) project: Option<String>,
@@ -207,7 +208,7 @@ pub(crate) fn gather_sessions(
     cwd: &std::path::Path,
     harness_filter: Option<Harness>,
     project_filter: Option<&std::path::Path>,
-) -> Vec<SessionRow> {
+) -> Vec<ArtifactRow> {
     let mut rows = Vec::new();
     let canonical_cwd = canonicalize_or_self(cwd);
     let canonical_project = project_filter.map(canonicalize_or_self);
@@ -270,7 +271,7 @@ fn collect_claude(
     mgr: &toolpath_claude::ClaudeConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
         Ok(ps) if !ps.is_empty() => ps,
@@ -297,7 +298,7 @@ fn collect_claude(
         };
         let matches_cwd = paths_match(project_path, canonical_cwd);
         for m in metas {
-            out.push(SessionRow {
+            out.push(ArtifactRow {
                 harness: Harness::Claude,
                 project: Some(m.project_path),
                 cwd: None,
@@ -317,7 +318,7 @@ fn collect_gemini(
     mgr: &toolpath_gemini::GeminiConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
         Ok(ps) if !ps.is_empty() => ps,
@@ -344,7 +345,7 @@ fn collect_gemini(
         };
         let matches_cwd = paths_match(project_path, canonical_cwd);
         for m in metas {
-            out.push(SessionRow {
+            out.push(ArtifactRow {
                 harness: Harness::Gemini,
                 project: Some(m.project_path),
                 cwd: None,
@@ -364,7 +365,7 @@ fn collect_pi(
     mgr: &toolpath_pi::PiConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
         Ok(ps) if !ps.is_empty() => ps,
@@ -395,7 +396,7 @@ fn collect_pi(
             let last_activity = chrono::DateTime::parse_from_rfc3339(&m.timestamp)
                 .ok()
                 .map(|d| d.with_timezone(&Utc));
-            out.push(SessionRow {
+            out.push(ArtifactRow {
                 harness: Harness::Pi,
                 project: Some(project.clone()),
                 cwd: None,
@@ -415,7 +416,7 @@ fn collect_codex(
     mgr: &toolpath_codex::CodexConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.list_sessions() {
         Ok(m) if !m.is_empty() => m,
@@ -442,7 +443,7 @@ fn collect_codex(
             .as_deref()
             .map(|p| paths_match(p, canonical_cwd))
             .unwrap_or(false);
-        out.push(SessionRow {
+        out.push(ArtifactRow {
             harness: Harness::Codex,
             project: None,
             cwd: cwd_str,
@@ -504,7 +505,7 @@ fn collect_opencode(
     mgr: &toolpath_opencode::OpencodeConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.io().list_session_metadata(None) {
         Ok(m) if !m.is_empty() => m,
@@ -528,7 +529,7 @@ fn collect_opencode(
             (_, false) => m.title.clone(),
             _ => "(no prompt)".to_string(),
         };
-        out.push(SessionRow {
+        out.push(ArtifactRow {
             harness: Harness::Opencode,
             project: None,
             cwd: Some(cwd_str),
@@ -545,7 +546,7 @@ fn collect_cursor(
     mgr: &toolpath_cursor::CursorConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.io().list_session_metadata() {
         Ok(m) if !m.is_empty() => m,
@@ -577,7 +578,7 @@ fn collect_cursor(
             (_, Some(n)) if !n.is_empty() => n.clone(),
             _ => "(no prompt)".to_string(),
         };
-        out.push(SessionRow {
+        out.push(ArtifactRow {
             harness: Harness::Cursor,
             project: None,
             cwd: Some(cwd_str),
@@ -1012,7 +1013,7 @@ fn share_explicit(
 /// The display column is space-padded rather than tab-separated so the
 /// columns line up consistently across pickers — terminal tab stops
 /// produce ugly variable gaps in both fzf and skim.
-fn format_picker_row(row: &SessionRow) -> String {
+fn format_picker_row(row: &ArtifactRow) -> String {
     let key = row
         .project
         .clone()
@@ -1336,7 +1337,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn paths_match_canonicalizes_through_symlink() {
-        // `paths_match` is the function that produces `SessionRow.matches_cwd`
+        // `paths_match` is the function that produces `ArtifactRow.matches_cwd`
         // (collect_* all delegate to it). Without canonicalization, a user who
         // navigated to a project via a symlink would see their cwd-row sink
         // in the picker because the symlink path string ≠ the project path
@@ -1377,7 +1378,7 @@ mod tests {
 
     #[test]
     fn parse_picker_row_roundtrips_keyed() {
-        let row = SessionRow {
+        let row = ArtifactRow {
             harness: Harness::Claude,
             project: Some("/tmp/proj".to_string()),
             cwd: None,
@@ -1399,7 +1400,7 @@ mod tests {
 
     #[test]
     fn parse_picker_row_roundtrips_session_keyed() {
-        let row = SessionRow {
+        let row = ArtifactRow {
             harness: Harness::Codex,
             project: None,
             cwd: Some("/work/proj".to_string()),
@@ -1419,7 +1420,7 @@ mod tests {
 
     #[test]
     fn parse_picker_row_carries_title_with_unicode() {
-        let row = SessionRow {
+        let row = ArtifactRow {
             harness: Harness::Gemini,
             project: Some("/work/proj".to_string()),
             cwd: None,

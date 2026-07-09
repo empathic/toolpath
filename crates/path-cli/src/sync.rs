@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use crate::cmd_cache::write_cached;
 use crate::cmd_import::DerivedDoc;
-use crate::cmd_share::{Harness, HarnessArg, HarnessBundle, SessionRow, gather_sessions};
+use crate::cmd_share::{ArtifactRow, Harness, HarnessArg, HarnessBundle, gather_sessions};
 use crate::config::config_dir;
 
 const MANIFEST_FILE: &str = "sync.json";
@@ -116,7 +116,7 @@ pub(crate) fn sync_bundle(
 /// (disk, permissions) abort.
 fn sync_rows(
     bundle: &HarnessBundle,
-    rows: &[SessionRow],
+    rows: &[ArtifactRow],
     records: &mut BTreeMap<String, SyncRecord>,
 ) -> Result<SyncOutcome> {
     let mut outcome = SyncOutcome::default();
@@ -167,7 +167,7 @@ fn sync_rows(
 
 /// Derive one session through the same manager the row was enumerated
 /// from, so listing and derivation always agree on provider roots.
-fn derive_row(bundle: &HarnessBundle, row: &SessionRow) -> Result<DerivedDoc> {
+fn derive_row(bundle: &HarnessBundle, row: &ArtifactRow) -> Result<DerivedDoc> {
     use crate::cmd_import as imp;
     let project = || {
         row.project
@@ -485,7 +485,7 @@ mod tests {
             let bundle = claude_bundle(home);
             let cwd = std::env::current_dir().unwrap();
             let mut rows = gather_sessions(&bundle, &cwd, Some(Harness::Claude), None);
-            rows.push(SessionRow {
+            rows.push(ArtifactRow {
                 harness: Harness::Claude,
                 project: Some("/test/project".to_string()),
                 cwd: None,
@@ -510,7 +510,7 @@ mod tests {
     #[test]
     fn derive_row_errors_when_provider_missing() {
         let bundle = HarnessBundle::default();
-        let row = SessionRow {
+        let row = ArtifactRow {
             harness: Harness::Claude,
             project: Some("/test/project".to_string()),
             cwd: None,
