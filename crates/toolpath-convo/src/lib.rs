@@ -118,10 +118,17 @@ pub struct SessionBase {
 /// snapshot diffs between turns).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileMutation {
-    /// File path. Absolute when the workspace root is known: `extract`
-    /// resolves base-relative change keys against `view.base.working_dir`,
-    /// and `derive` relativizes them back to bare keys under `path.base`.
-    /// May be relative when no absolute root is available.
+    /// The file this mutation targets, in the provider's original
+    /// coordinate space: absolute when the session's workspace root is
+    /// known (the common case), otherwise workspace-relative.
+    ///
+    /// Contract: this value is stable across a `derive` → `extract`
+    /// round-trip. On the serialized `Path` the change is keyed relative
+    /// to `path.base` (bare paths per the RFC), but that key
+    /// representation is internal to `derive`/`extract` — every IR
+    /// consumer reads the same path here regardless of how the document
+    /// was serialized. Resolve a relative value against
+    /// `EnvironmentSnapshot::working_dir` or the path's base.
     pub path: String,
     /// `ToolInvocation::id` of the tool call that produced this mutation,
     /// when the provider can attribute it.
