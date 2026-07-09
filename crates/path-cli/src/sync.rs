@@ -143,12 +143,6 @@ mod engine {
         /// Fingerprint: source file size at sync time.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub(crate) size: Option<u64>,
-        /// Message count as of the last derivation. Informational only
-        /// — never part of change detection — and recorded only for
-        /// harness artifact types (non-session kinds have no message
-        /// notion).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub(crate) message_count: Option<usize>,
         pub(crate) synced_at: DateTime<Utc>,
     }
 
@@ -255,7 +249,6 @@ mod engine {
                             // next run instead of going unnoticed.
                             modified: stub.modified,
                             size: stub.size,
-                            message_count: stub.artifact_type.harness().and(derived.message_count),
                             synced_at: Utc::now(),
                         },
                     );
@@ -398,10 +391,9 @@ mod engine {
         }
     }
 
-    /// Gemini main files carry their session id *inside* the JSON, so
-    /// enumeration still goes through the metadata listing; the
-    /// fingerprint is a stat of the listed file all the same. A
-    /// peek-level listing in `toolpath-gemini` would drop the parse.
+    /// Session entries via a bounded identity peek (`toolpath-gemini`
+    /// reads at most the first 4 KiB of a main file); the fingerprint
+    /// stats the main file (or the orphan sub-agent directory).
     fn stubs_gemini(mgr: &toolpath_gemini::GeminiConvo, out: &mut Vec<ArtifactStub>) {
         let projects = match mgr.list_projects() {
             Ok(ps) => ps,
@@ -412,19 +404,19 @@ mod engine {
             }
         };
         for project in projects {
-            let metas = match mgr.list_conversation_metadata(&project) {
-                Ok(m) => m,
+            let entries = match mgr.resolver().list_session_entries(&project) {
+                Ok(entries) => entries,
                 Err(e) => {
                     eprintln!("warning: gemini project {project} failed: {e}");
                     continue;
                 }
             };
-            for m in metas {
-                let (modified, size) = stat_stamp(&m.file_path);
+            for entry in entries {
+                let (modified, size) = stat_stamp(&entry.path);
                 out.push(ArtifactStub {
                     artifact_type: ArtifactType::Gemini,
-                    id: m.session_uuid,
-                    path: Some(m.project_path),
+                    id: entry.session_uuid.unwrap_or(entry.id),
+                    path: Some(project.clone()),
                     modified,
                     size,
                 });
@@ -708,7 +700,6 @@ mod engine {
                         cache_id: "claude-p1".to_string(),
                         modified: Some("2024-01-02T00:00:01.123456789Z".parse().unwrap()),
                         size: Some(4096),
-                        message_count: Some(2),
                         synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
                     },
                 );
@@ -778,11 +769,6 @@ mod engine {
                 assert_eq!(rec.path.as_deref(), Some("/test/project"));
                 assert!(rec.modified.is_some());
                 assert!(rec.size.is_some());
-                assert_eq!(
-                    rec.message_count,
-                    Some(2),
-                    "harness records carry the message count from the derive"
-                );
                 assert!(
                     crate::cmd_cache::cache_path(&rec.cache_id)
                         .unwrap()

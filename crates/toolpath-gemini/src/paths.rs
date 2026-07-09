@@ -18,6 +18,20 @@ const TMP_DIR: &str = "tmp";
 const CHATS_SUBDIR: &str = "chats";
 const LOGS_FILE: &str = "logs.json";
 
+/// One session surfaced by [`PathResolver::list_session_entries`].
+#[derive(Debug, Clone)]
+pub struct SessionEntry {
+    /// Listing key, exactly as [`PathResolver::list_sessions`] returns
+    /// it: main-file stem or orphan sub-agent directory name.
+    pub id: String,
+    /// Inner `sessionId` UUID peeked from a main file (the directory
+    /// name itself for orphan dirs); `None` when the peek failed.
+    pub session_uuid: Option<String>,
+    /// The main chat file, or the orphan sub-agent directory — stat
+    /// this for change detection.
+    pub path: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub struct PathResolver {
     home_dir: Option<PathBuf>,
@@ -194,6 +208,19 @@ impl PathResolver {
     /// sub-agent bucket and is **not** surfaced as a separate session —
     /// it gets merged into the main session by `read_session`.
     pub fn list_sessions(&self, project_path: &str) -> Result<Vec<String>> {
+        Ok(self
+            .list_session_entries(project_path)?
+            .into_iter()
+            .map(|e| e.id)
+            .collect())
+    }
+
+    /// Like [`Self::list_sessions`], but each session comes with the
+    /// backing main file (or orphan sub-agent directory) and the inner
+    /// `sessionId` when one could be peeked — enough for stat-level
+    /// change detection without parsing chat bodies. The peek is
+    /// bounded; see [`peek_session_id`].
+    pub fn list_session_entries(&self, project_path: &str) -> Result<Vec<SessionEntry>> {
         let chats = match self.chats_dir(project_path) {
             Ok(p) => p,
             Err(_) => return Ok(Vec::new()),
@@ -202,9 +229,9 @@ impl PathResolver {
             return Ok(Vec::new());
         }
 
-        let mut main_stems: Vec<String> = Vec::new();
+        let mut mains: Vec<SessionEntry> = Vec::new();
         let mut main_session_uuids: std::collections::HashSet<String> = Default::default();
-        let mut dir_uuids: Vec<String> = Vec::new();
+        let mut dirs: Vec<SessionEntry> = Vec::new();
 
         for entry in fs::read_dir(&chats)?.flatten() {
             let ft = match entry.file_type() {
@@ -220,24 +247,33 @@ impl PathResolver {
                     Some(s) => s.to_string(),
                     None => continue,
                 };
-                main_stems.push(stem);
-                if let Some(uuid) = peek_session_id(&path) {
-                    main_session_uuids.insert(uuid);
+                let session_uuid = peek_session_id(&path);
+                if let Some(uuid) = &session_uuid {
+                    main_session_uuids.insert(uuid.clone());
                 }
+                mains.push(SessionEntry {
+                    id: stem,
+                    session_uuid,
+                    path,
+                });
             } else if ft.is_dir()
                 && let Some(name) = entry.file_name().to_str()
             {
-                dir_uuids.push(name.to_string());
+                dirs.push(SessionEntry {
+                    id: name.to_string(),
+                    session_uuid: Some(name.to_string()),
+                    path,
+                });
             }
         }
 
-        let mut out = main_stems;
-        for uuid in dir_uuids {
-            if !main_session_uuids.contains(&uuid) {
-                out.push(uuid);
+        let mut out = mains;
+        for dir in dirs {
+            if !main_session_uuids.contains(&dir.id) {
+                out.push(dir);
             }
         }
-        out.sort();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(out)
     }
 
@@ -351,10 +387,27 @@ struct ProjectsFile {
     projects: HashMap<String, String>,
 }
 
-/// Read just the top-level `sessionId` field from a chat JSON file
-/// without materialising the whole document. Used by `list_sessions` to
-/// correlate main files with sibling sub-agent UUID directories.
+/// Byte budget for [`peek_session_id`]'s prefix read. Chat files put
+/// their identity fields first, so this is plenty in practice.
+const PEEK_BYTES: usize = 4096;
+
+/// Read just the top-level `sessionId` field from a chat JSON file.
+/// Bounded: scans the first [`PEEK_BYTES`] of the file and falls back
+/// to a full parse only when the field isn't in the prefix. Used by
+/// `list_session_entries` to correlate main files with sibling
+/// sub-agent UUID directories.
 fn peek_session_id(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let file = fs::File::open(path).ok()?;
+    let mut prefix = Vec::with_capacity(PEEK_BYTES);
+    file.take(PEEK_BYTES as u64).read_to_end(&mut prefix).ok()?;
+    let whole_file = prefix.len() < PEEK_BYTES;
+    if let Some(id) = prefix_session_id(&prefix) {
+        return Some(id);
+    }
+    if whole_file {
+        return None;
+    }
     #[derive(Deserialize)]
     struct Peek {
         #[serde(rename = "sessionId")]
@@ -363,6 +416,31 @@ fn peek_session_id(path: &std::path::Path) -> Option<String> {
     let bytes = fs::read(path).ok()?;
     let peek: Peek = serde_json::from_slice(&bytes).ok()?;
     peek.session_id.filter(|s| !s.is_empty())
+}
+
+/// Extract `"sessionId": "…"` from a JSON prefix, trusting it only when
+/// it appears before any `"messages"` key — message bodies are the one
+/// place user-controlled text could fake the key.
+fn prefix_session_id(prefix: &[u8]) -> Option<String> {
+    let text = match std::str::from_utf8(prefix) {
+        Ok(t) => t,
+        // The cut can land mid-codepoint; scan the valid part.
+        Err(e) => std::str::from_utf8(&prefix[..e.valid_up_to()]).ok()?,
+    };
+    let key_at = text.find("\"sessionId\"")?;
+    if let Some(messages_at) = text.find("\"messages\"")
+        && messages_at < key_at
+    {
+        return None;
+    }
+    let rest = text[key_at + "\"sessionId\"".len()..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let value = &rest[..rest.find('"')?];
+    if value.is_empty() || value.contains('\\') {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 /// Canonical `projectHash`: SHA-256 hex of the absolute project path.
@@ -792,5 +870,71 @@ mod tests {
         assert!(sessions.contains(&"orphan-uuid-zzz".to_string()));
         assert!(!sessions.contains(&"sess-uuid-full".to_string()));
         assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn peek_session_id_reads_id_from_prefix_of_large_file() {
+        let (_temp, resolver) = setup();
+        let chats = resolver.chats_dir("/proj").unwrap();
+        fs::create_dir_all(&chats).unwrap();
+        let pad = "x".repeat(16 * 1024);
+        let body = format!(
+            r#"{{"sessionId":"aaaa-bbbb","projectHash":"h","messages":[{{"content":"{pad}"}}]}}"#
+        );
+        let path = chats.join("session-2026-01-01T00-00-aaaa.json");
+        fs::write(&path, body).unwrap();
+        assert_eq!(peek_session_id(&path).as_deref(), Some("aaaa-bbbb"));
+    }
+
+    #[test]
+    fn peek_session_id_falls_back_when_identity_comes_late() {
+        let (_temp, resolver) = setup();
+        let chats = resolver.chats_dir("/proj").unwrap();
+        fs::create_dir_all(&chats).unwrap();
+        let pad = "x".repeat(16 * 1024);
+        let body = format!(r#"{{"messages":[{{"content":"{pad}"}}],"sessionId":"late-id"}}"#);
+        let path = chats.join("session-2026-01-01T00-00-late.json");
+        fs::write(&path, body).unwrap();
+        assert_eq!(peek_session_id(&path).as_deref(), Some("late-id"));
+    }
+
+    #[test]
+    fn prefix_session_id_rejects_keys_after_messages() {
+        assert_eq!(
+            prefix_session_id(br#"{"sessionId":"abc","messages":[]}"#).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            prefix_session_id(br#"{"messages":[],"sessionId":"abc"}"#),
+            None,
+            "a sessionId after the messages key must not be trusted from the prefix"
+        );
+        assert_eq!(prefix_session_id(br#"{"sessionId":""}"#), None);
+    }
+
+    #[test]
+    fn list_session_entries_pairs_ids_with_backing_paths() {
+        let (_temp, resolver) = setup();
+        let chats = resolver.chats_dir("/proj").unwrap();
+        fs::create_dir_all(&chats).unwrap();
+        let main = chats.join("session-2026-01-01T00-00-aaaa.json");
+        fs::write(&main, r#"{"sessionId":"uuid-a","messages":[]}"#).unwrap();
+        // uuid-a's sub-agent bucket is claimed by the main file; uuid-b
+        // is an orphan and must surface as its own session.
+        fs::create_dir_all(chats.join("uuid-a")).unwrap();
+        fs::create_dir_all(chats.join("uuid-b")).unwrap();
+
+        let entries = resolver.list_session_entries("/proj").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, "session-2026-01-01T00-00-aaaa");
+        assert_eq!(entries[0].session_uuid.as_deref(), Some("uuid-a"));
+        assert_eq!(entries[0].path, main);
+        assert_eq!(entries[1].id, "uuid-b");
+        assert_eq!(entries[1].session_uuid.as_deref(), Some("uuid-b"));
+        assert_eq!(entries[1].path, chats.join("uuid-b"));
+
+        // The plain listing keeps returning the same ids.
+        let ids = resolver.list_sessions("/proj").unwrap();
+        assert_eq!(ids, vec!["session-2026-01-01T00-00-aaaa", "uuid-b"]);
     }
 }

@@ -41,7 +41,7 @@
   },
   {
     "name": "toolpath-gemini",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "description": "Derive from Gemini CLI conversation logs",
     "docs": "https://docs.rs/toolpath-gemini",
     "crate": "https://crates.io/crates/toolpath-gemini",

@@ -16,13 +16,11 @@ users no longer have to `p import` each session by hand.
     derivation goes through the same provider managers, so listing and
     derivation always agree on provider roots.
   - The sync manifest at `~/.toolpath/sync.json` maps artifact type →
-    artifact id → `{path?, cache_id, modified?, size?, message_count?,
-    synced_at}`. Change detection is stat-level — source mtime + size
+    artifact id → `{path?, cache_id, modified?, size?, synced_at}`. Change detection is stat-level — source mtime + size
     for the file-backed providers, the DB row's updated-at for
     opencode/cursor — so deciding "nothing changed" reads no session
-    bodies and a no-op sync is milliseconds. `message_count` is
-    recorded at derive time for harness types as information, never
-    compared. The manifest is written atomically (temp file + rename,
+    bodies and a no-op sync is milliseconds. The manifest is written
+    atomically (temp file + rename,
     `0600`) and checkpointed after each type, so an interrupted first
     run keeps the types it finished.
   - `ArtifactType` (in `sync.rs`) is the general enum naming artifact
@@ -40,6 +38,13 @@ users no longer have to `p import` each session by hand.
     On a default run, harnesses with no sessions stay silent; explicit
     types always report. Derivation failures warn and tally as `failed`
     without aborting the run.
+- **`toolpath-gemini`** (0.7.0): new `PathResolver::list_session_entries`
+  returns each session's listing id, inner `sessionId`, and backing
+  file/dir path, and `peek_session_id` is now bounded — it scans the
+  first 4 KiB of a main chat file (identity fields lead the JSON) and
+  falls back to a full parse only when they don't. `list_sessions`
+  delegates to it unchanged. This is what lets `p cache sync` fingerprint
+  gemini sessions without reading chat bodies.
 - **`toolpath-cli`** (0.16.0): version bump only (tracks `path-cli`).
 
 ## Derive: resolve duplicate step ids — 2026-07-01

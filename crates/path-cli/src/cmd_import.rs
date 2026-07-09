@@ -202,10 +202,6 @@ pub fn run(args: ImportArgs, pretty: bool) -> Result<()> {
 pub(crate) struct DerivedDoc {
     pub(crate) cache_id: String,
     pub(crate) doc: Graph,
-    /// Message count from the source read, recorded in the sync
-    /// manifest. `None` for non-session sources (git, github,
-    /// pathbase) and for bulk wraps that no longer hold the source.
-    pub(crate) message_count: Option<usize>,
 }
 
 fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Result<()> {
@@ -329,11 +325,7 @@ fn derive_git(
         let repo_tag = short_path_hash(&canonical.to_string_lossy());
         let inner = doc_inner_id(&doc);
         let cache_id = make_id("git", &format!("{repo_tag}-{inner}"));
-        Ok(vec![DerivedDoc {
-            cache_id,
-            doc,
-            message_count: None,
-        }])
+        Ok(vec![DerivedDoc { cache_id, doc }])
     }
 }
 
@@ -395,11 +387,7 @@ fn derive_github(
         let path = toolpath_github::derive_pull_request(&owner, &repo_name, pr_number, &config)?;
         let doc = Graph::from_path(path);
         let cache_id = make_id("github", &format!("{owner}_{repo_name}-{pr_number}"));
-        Ok(vec![DerivedDoc {
-            cache_id,
-            doc,
-            message_count: None,
-        }])
+        Ok(vec![DerivedDoc { cache_id, doc }])
     }
 }
 
@@ -527,7 +515,6 @@ pub(crate) fn derive_claude_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        message_count: Some(convo.entries.len()),
     })
 }
 
@@ -539,7 +526,6 @@ fn wrap_paths(t: ArtifactType, paths: Vec<toolpath::v1::Path>) -> Result<Vec<Der
             DerivedDoc {
                 cache_id,
                 doc: Graph::from_path(p),
-                message_count: None,
             }
         })
         .collect())
@@ -775,7 +761,6 @@ pub(crate) fn derive_gemini_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        message_count: Some(convo.messages().len()),
     })
 }
 
@@ -961,7 +946,6 @@ pub(crate) fn derive_codex_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        message_count: Some(s.lines.len()),
     })
 }
 
@@ -1251,7 +1235,6 @@ pub(crate) fn derive_opencode_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        message_count: Some(s.messages.len()),
     })
 }
 
@@ -1416,7 +1399,6 @@ pub(crate) fn derive_cursor_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        message_count: Some(s.bubbles.len()),
     })
 }
 
@@ -1523,11 +1505,7 @@ fn derive_pi_with_manager(
             }
             let doc = toolpath_pi::derive::derive_graph(&sessions, None, &config);
             let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-            return Ok(vec![DerivedDoc {
-                cache_id,
-                doc,
-                message_count: None,
-            }]);
+            return Ok(vec![DerivedDoc { cache_id, doc }]);
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -1543,11 +1521,7 @@ fn derive_pi_with_manager(
                         })?;
                     let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                     let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-                    return Ok(vec![DerivedDoc {
-                        cache_id,
-                        doc,
-                        message_count: None,
-                    }]);
+                    return Ok(vec![DerivedDoc { cache_id, doc }]);
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -1558,11 +1532,7 @@ fn derive_pi_with_manager(
                     .ok_or_else(|| anyhow::anyhow!("No Pi sessions found for project: {}", p))?;
                 let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                 let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-                return Ok(vec![DerivedDoc {
-                    cache_id,
-                    doc,
-                    message_count: None,
-                }]);
+                return Ok(vec![DerivedDoc { cache_id, doc }]);
             }
         }
         (None, _, _) => {
@@ -1590,11 +1560,7 @@ fn derive_pi_with_manager(
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
         let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-        docs.push(DerivedDoc {
-            cache_id,
-            doc,
-            message_count: None,
-        });
+        docs.push(DerivedDoc { cache_id, doc });
     }
     Ok(docs)
 }
@@ -1626,11 +1592,7 @@ pub(crate) fn derive_pi_session_with(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
     let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-    Ok(DerivedDoc {
-        cache_id,
-        doc,
-        message_count: Some(session.entries.len()),
-    })
+    Ok(DerivedDoc { cache_id, doc })
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -1806,11 +1768,7 @@ pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Res
     let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{id}"));
     let doc = Graph::from_json(&body)
         .map_err(|e| anyhow::anyhow!("server returned a non-toolpath document: {e}"))?;
-    Ok(DerivedDoc {
-        cache_id,
-        doc,
-        message_count: None,
-    })
+    Ok(DerivedDoc { cache_id, doc })
 }
 
 fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<DerivedDoc>> {
