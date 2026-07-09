@@ -122,6 +122,11 @@ mod engine {
         /// sync time.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub(crate) last_activity: Option<DateTime<Utc>>,
+        /// Fingerprint: message count at sync time. Recorded only for
+        /// harness artifact types (agent sessions); non-session
+        /// artifact kinds have no message notion and stay `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub(crate) message_count: Option<usize>,
         pub(crate) synced_at: DateTime<Utc>,
     }
 
@@ -206,10 +211,14 @@ mod engine {
     ) -> Result<SyncOutcome> {
         let mut outcome = SyncOutcome::default();
         for row in rows {
+            // Message counts only make sense for harness types; strip
+            // them for anything else so the record stays general.
+            let message_count = row.artifact_type.harness().and(row.message_count);
             let existing = records.get(&row.session_id);
             let is_new = existing.is_none();
             if let Some(rec) = existing
                 && rec.last_activity == row.last_activity
+                && rec.message_count == message_count
             {
                 outcome.unchanged += 1;
                 continue;
@@ -226,6 +235,7 @@ mod engine {
                             path: row.path.clone(),
                             cache_id: derived.cache_id,
                             last_activity: row.last_activity,
+                            message_count,
                             synced_at: Utc::now(),
                         },
                     );
@@ -425,6 +435,7 @@ mod engine {
                 session_id: session_id.to_string(),
                 title: String::new(),
                 last_activity: None,
+                message_count: None,
                 matches_cwd: false,
             }
         }
@@ -441,6 +452,7 @@ mod engine {
                         path: Some("/test/project".to_string()),
                         cache_id: "claude-p1".to_string(),
                         last_activity: Some("2024-01-02T00:00:01Z".parse().unwrap()),
+                        message_count: Some(2),
                         synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
                     },
                 );
@@ -495,6 +507,11 @@ mod engine {
                 let rec = records.get("sess-aaa").unwrap();
                 assert_eq!(rec.path.as_deref(), Some("/test/project"));
                 assert!(rec.last_activity.is_some());
+                assert_eq!(
+                    rec.message_count,
+                    Some(2),
+                    "harness records must carry the message count"
+                );
                 assert!(
                     crate::cmd_cache::cache_path(&rec.cache_id)
                         .unwrap()

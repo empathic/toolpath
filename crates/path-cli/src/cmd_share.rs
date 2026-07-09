@@ -132,6 +132,9 @@ pub(crate) struct ArtifactRow {
     pub(crate) session_id: String,
     pub(crate) title: String,
     pub(crate) last_activity: Option<DateTime<Utc>>,
+    /// Message count — populated only for harness artifact types
+    /// (agent sessions); `None` for future non-session artifact kinds.
+    pub(crate) message_count: Option<usize>,
     pub(crate) matches_cwd: bool,
 }
 
@@ -272,6 +275,7 @@ fn collect_claude(
                     .first_user_message
                     .unwrap_or_else(|| "(no prompt)".to_string()),
                 last_activity: m.last_activity,
+                message_count: Some(m.message_count),
                 matches_cwd,
             });
         }
@@ -318,6 +322,7 @@ fn collect_gemini(
                     .first_user_message
                     .unwrap_or_else(|| "(no prompt)".to_string()),
                 last_activity: m.last_activity,
+                message_count: Some(m.message_count),
                 matches_cwd,
             });
         }
@@ -377,6 +382,7 @@ fn collect_pi(
                     .first_user_message
                     .unwrap_or_else(|| "(no prompt)".to_string()),
                 last_activity,
+                message_count: Some(m.entry_count),
                 matches_cwd,
             });
         }
@@ -423,6 +429,7 @@ fn collect_codex(
                 .first_user_message
                 .unwrap_or_else(|| "(no prompt)".to_string()),
             last_activity: m.last_activity,
+            message_count: Some(m.line_count),
             matches_cwd,
         });
     }
@@ -506,6 +513,7 @@ fn collect_opencode(
             session_id: m.id,
             title,
             last_activity: m.last_activity,
+            message_count: Some(m.message_count),
             matches_cwd,
         });
     }
@@ -554,6 +562,7 @@ fn collect_cursor(
             session_id: m.id,
             title,
             last_activity: m.last_activity,
+            message_count: Some(m.message_count),
             matches_cwd,
         });
     }
@@ -980,7 +989,9 @@ fn format_picker_row(row: &ArtifactRow) -> String {
     let display = render_row(
         Some(&leading),
         row.last_activity,
-        "",
+        &row.message_count
+            .map(|c| count(c, "msgs"))
+            .unwrap_or_default(),
         Some(&project_short(&key)),
         &row.title,
     );
@@ -1012,7 +1023,7 @@ fn parse_picker_row(line: &str) -> Option<(ArtifactType, String, String, String)
     Some((h, key, session, title))
 }
 
-use crate::fuzzy::{clean_for_picker_display, project_short, render_row, tab_safe};
+use crate::fuzzy::{clean_for_picker_display, count, project_short, render_row, tab_safe};
 
 fn derive_session(
     harness: ArtifactType,
@@ -1286,6 +1297,7 @@ mod tests {
             session_id: "sess-abc".to_string(),
             title: "Hello\tworld".to_string(),
             last_activity: None,
+            message_count: None,
             matches_cwd: true,
         };
         let line = format_picker_row(&row);
@@ -1307,6 +1319,7 @@ mod tests {
             session_id: "0190abcd".to_string(),
             title: "(no prompt)".to_string(),
             last_activity: None,
+            message_count: None,
             matches_cwd: false,
         };
         let line = format_picker_row(&row);
@@ -1326,6 +1339,7 @@ mod tests {
             session_id: "11111111-2222-3333-4444-555555555555".to_string(),
             title: "Add the share command — finally".to_string(),
             last_activity: None,
+            message_count: None,
             matches_cwd: true,
         };
         let line = format_picker_row(&row);
