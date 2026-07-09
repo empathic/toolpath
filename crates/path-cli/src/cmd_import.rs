@@ -160,7 +160,7 @@ pub enum ImportSource {
         #[arg(short, long)]
         session: Option<String>,
 
-        /// Process all sessions in the project (emits a Graph)
+        /// Process all sessions in the project
         #[arg(long)]
         all: bool,
 
@@ -432,11 +432,6 @@ fn derive_claude_with_manager(
     session: Option<String>,
     all: bool,
 ) -> Result<Vec<DerivedDoc>> {
-    let make_config = |p: &str| toolpath_claude::derive::DeriveConfig {
-        project_path: Some(p.to_string()),
-        include_thinking: false,
-    };
-
     // Interactive picker fires only when no explicit `--session` (and not
     // `--all`); the same flow handles single- and multi-select. If fzf isn't
     // available, we fall back to most-recent for explicit-project, or print
@@ -444,14 +439,14 @@ fn derive_claude_with_manager(
     let pairs: Vec<(String, String)> = match (project, session, all) {
         (Some(p), Some(s), _) => vec![(p, s)],
         (Some(p), None, true) => {
-            let convos = manager
-                .read_all_conversations(&p)
+            let heads = manager
+                .list_conversations(&p)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            let cfg = make_config(&p);
-            return wrap_paths(
-                ArtifactType::Claude,
-                toolpath_claude::derive::derive_project(&convos, &cfg),
-            );
+            let mut docs = Vec::with_capacity(heads.len());
+            for head in &heads {
+                docs.push(derive_claude_session_with(manager, &p, head)?);
+            }
+            return Ok(docs);
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -465,11 +460,11 @@ fn derive_claude_with_manager(
                         .ok_or_else(|| {
                             anyhow::anyhow!("No conversations found for project: {}", p)
                         })?;
-                    let cfg = make_config(&p);
-                    return wrap_paths(
-                        ArtifactType::Claude,
-                        vec![toolpath_claude::derive::derive_path(&convo, &cfg)],
-                    );
+                    return Ok(vec![derive_claude_session_with(
+                        manager,
+                        &p,
+                        &convo.session_id,
+                    )?]);
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -478,11 +473,11 @@ fn derive_claude_with_manager(
                     .most_recent_conversation(&p)
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No conversations found for project: {}", p))?;
-                let cfg = make_config(&p);
-                return wrap_paths(
-                    ArtifactType::Claude,
-                    vec![toolpath_claude::derive::derive_path(&convo, &cfg)],
-                );
+                return Ok(vec![derive_claude_session_with(
+                    manager,
+                    &p,
+                    &convo.session_id,
+                )?]);
             }
         }
         (None, _, _) => {
@@ -554,20 +549,6 @@ pub(crate) fn derive_claude_session_with(
             size,
         }),
     })
-}
-
-fn wrap_paths(t: ArtifactType, paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
-    Ok(paths
-        .into_iter()
-        .map(|p| {
-            let cache_id = make_id(t.name(), &p.path.id);
-            DerivedDoc {
-                cache_id,
-                doc: Graph::from_path(p),
-                provenance: None,
-            }
-        })
-        .collect())
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -689,22 +670,22 @@ fn derive_gemini_with_manager(
     all: bool,
     include_thinking: bool,
 ) -> Result<Vec<DerivedDoc>> {
-    let make_config = |p: &str| toolpath_gemini::derive::DeriveConfig {
-        project_path: Some(p.to_string()),
-        include_thinking,
-    };
-
     let pairs: Vec<(String, String)> = match (project, session, all) {
         (Some(p), Some(s), _) => vec![(p, s)],
         (Some(p), None, true) => {
-            let convos = manager
-                .read_all_conversations(&p)
+            let ids = manager
+                .list_conversations(&p)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            let cfg = make_config(&p);
-            return wrap_paths(
-                ArtifactType::Gemini,
-                toolpath_gemini::derive::derive_project(&convos, &cfg),
-            );
+            let mut docs = Vec::with_capacity(ids.len());
+            for id in &ids {
+                docs.push(derive_gemini_session_with(
+                    manager,
+                    &p,
+                    id,
+                    include_thinking,
+                )?);
+            }
+            return Ok(docs);
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -718,11 +699,12 @@ fn derive_gemini_with_manager(
                         .ok_or_else(|| {
                             anyhow::anyhow!("No conversations found for project: {}", p)
                         })?;
-                    let cfg = make_config(&p);
-                    return wrap_paths(
-                        ArtifactType::Gemini,
-                        vec![toolpath_gemini::derive::derive_path(&convo, &cfg)],
-                    );
+                    return Ok(vec![derive_gemini_session_with(
+                        manager,
+                        &p,
+                        &convo.session_uuid,
+                        include_thinking,
+                    )?]);
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -731,11 +713,12 @@ fn derive_gemini_with_manager(
                     .most_recent_conversation(&p)
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No conversations found for project: {}", p))?;
-                let cfg = make_config(&p);
-                return wrap_paths(
-                    ArtifactType::Gemini,
-                    vec![toolpath_gemini::derive::derive_path(&convo, &cfg)],
-                );
+                return Ok(vec![derive_gemini_session_with(
+                    manager,
+                    &p,
+                    &convo.session_uuid,
+                    include_thinking,
+                )?]);
             }
         }
         (None, _, _) => {
@@ -929,21 +912,28 @@ fn pick_gemini_global(
 
 fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
     let manager = toolpath_codex::CodexConvo::new();
-    let config = toolpath_codex::derive::DeriveConfig { project_path: None };
 
     let session_ids: Vec<String> = match (session, all) {
         (Some(s), _) => vec![s],
         (None, true) => {
-            let sessions = manager
-                .read_all_sessions()
+            let files = manager
+                .io()
+                .list_rollout_files()
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            if sessions.is_empty() {
+            if files.is_empty() {
                 anyhow::bail!("No Codex sessions found in ~/.codex/sessions");
             }
-            return wrap_paths(
-                ArtifactType::Codex,
-                toolpath_codex::derive::derive_project(&sessions, &config),
-            );
+            let mut docs = Vec::with_capacity(files.len());
+            for file in &files {
+                let Some(stem) = file.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                docs.push(derive_codex_session_with(
+                    &manager,
+                    codex_artifact_id(stem),
+                )?);
+            }
+            return Ok(docs);
         }
         (None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -957,10 +947,7 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
                             .ok_or_else(|| {
                                 anyhow::anyhow!("No Codex sessions found in ~/.codex/sessions")
                             })?;
-                        return wrap_paths(
-                            ArtifactType::Codex,
-                            vec![toolpath_codex::derive::derive_path(&s, &config)],
-                        );
+                        return Ok(vec![derive_codex_session_with(&manager, &s.id)?]);
                     }
                 }
             }
@@ -972,10 +959,7 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
                     .ok_or_else(|| {
                         anyhow::anyhow!("No Codex sessions found in ~/.codex/sessions")
                     })?;
-                return wrap_paths(
-                    ArtifactType::Codex,
-                    vec![toolpath_codex::derive::derive_path(&s, &config)],
-                );
+                return Ok(vec![derive_codex_session_with(&manager, &s.id)?]);
             }
         }
     };
@@ -1219,10 +1203,6 @@ fn derive_opencode(
     #[cfg(not(target_os = "emscripten"))]
     {
         let manager = toolpath_opencode::OpencodeConvo::new();
-        let config = toolpath_opencode::derive::DeriveConfig {
-            no_snapshot_diffs,
-            ..Default::default()
-        };
         let derive_one = |sid: &str| derive_opencode_session_with(&manager, sid, no_snapshot_diffs);
 
         let session_ids: Vec<String> = match (session, all) {
@@ -1248,14 +1228,7 @@ fn derive_opencode(
                         .most_recent_session()
                         .map_err(|e| anyhow::anyhow!("{}", e))?
                         .ok_or_else(|| anyhow::anyhow!("No opencode sessions found"))?;
-                    return wrap_paths(
-                        ArtifactType::Opencode,
-                        vec![toolpath_opencode::derive::derive_path_with_resolver(
-                            &s,
-                            &config,
-                            manager.resolver(),
-                        )],
-                    );
+                    return Ok(vec![derive_one(&s.id)?]);
                 }
             },
         };
@@ -1582,24 +1555,20 @@ fn derive_pi_with_manager(
     session: Option<String>,
     all: bool,
 ) -> Result<Vec<DerivedDoc>> {
-    let config = toolpath_pi::DeriveConfig::default();
-
     let pairs: Vec<(String, String)> = match (project, session, all) {
         (Some(p), Some(s), _) => vec![(p, s)],
         (Some(p), None, true) => {
-            let sessions = manager
-                .read_all_sessions(&p)
+            let metas = manager
+                .list_sessions(&p)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            if sessions.is_empty() {
+            if metas.is_empty() {
                 anyhow::bail!("No Pi sessions found for project: {}", p);
             }
-            let doc = toolpath_pi::derive::derive_graph(&sessions, None, &config);
-            let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-            return Ok(vec![DerivedDoc {
-                cache_id,
-                doc,
-                provenance: None,
-            }]);
+            let mut docs = Vec::with_capacity(metas.len());
+            for m in &metas {
+                docs.push(derive_pi_session_with(manager, &p, &m.id)?);
+            }
+            return Ok(docs);
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -1613,13 +1582,11 @@ fn derive_pi_with_manager(
                         .ok_or_else(|| {
                             anyhow::anyhow!("No Pi sessions found for project: {}", p)
                         })?;
-                    let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
-                    let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-                    return Ok(vec![DerivedDoc {
-                        cache_id,
-                        doc,
-                        provenance: None,
-                    }]);
+                    return Ok(vec![derive_pi_session_with(
+                        manager,
+                        &p,
+                        &session.header.id,
+                    )?]);
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -1628,13 +1595,11 @@ fn derive_pi_with_manager(
                     .most_recent_session(&p)
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No Pi sessions found for project: {}", p))?;
-                let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
-                let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-                return Ok(vec![DerivedDoc {
-                    cache_id,
-                    doc,
-                    provenance: None,
-                }]);
+                return Ok(vec![derive_pi_session_with(
+                    manager,
+                    &p,
+                    &session.header.id,
+                )?]);
             }
         }
         (None, _, _) => {

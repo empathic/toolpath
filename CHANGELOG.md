@@ -46,6 +46,12 @@ users no longer have to `p import` each session by hand.
     but never re-derived by sync, since repos aren't discoverable.
     Github and pathbase stay out of the manifest — remote services,
     not artifact sources.
+  - Every import flow loops the per-session derive helpers — explicit
+    `--session`, picker multi-select, `--all`, and the most-recent
+    fallbacks — so everything entering the cache is recorded.
+    **Breaking**: `p import pi --all` now emits one Path document per
+    session, consistent with every other provider (it previously
+    produced a single combined Graph).
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the

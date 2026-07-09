@@ -788,6 +788,48 @@ fn import_records_manifest_so_sync_skips() {
 }
 
 #[test]
+fn bulk_import_records_every_session() {
+    let (home, session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+    // A second session alongside the fixture's, so --all has a batch.
+    std::fs::write(
+        session_file.parent().unwrap().join("deadbeef-second.jsonl"),
+        format!(
+            r#"{{"type":"user","uuid":"u-9","timestamp":"2024-02-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"second"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "import", "claude", "--all", "--project"])
+        .arg(&project)
+        .assert()
+        .success();
+
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cfg.path().join("sync.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        manifest["claude"].as_object().unwrap().len(),
+        2,
+        "--all must record every session it writes"
+    );
+
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "sync", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("0 new, 0 updated, 2 unchanged"));
+}
+
+#[test]
 fn git_import_lands_in_manifest_and_sync_leaves_it_alone() {
     let (dir, branch) = git_fixture();
     let cfg = tempfile::tempdir().unwrap();
