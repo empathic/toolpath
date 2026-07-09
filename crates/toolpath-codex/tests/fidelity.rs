@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use toolpath_codex::provider::to_view;
 use toolpath_codex::{ResponseItem, RolloutItem, RolloutReader, derive};
-use toolpath_convo::Role;
+use toolpath_convo::{DeriveConfig, Role, extract_conversation};
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample-codex-python.jsonl")
@@ -345,4 +345,77 @@ fn patch_apply_files_all_surface_as_artifacts() {
             }
         }
     }
+}
+
+/// Extends `patch_apply_files_all_surface_as_artifacts` with the two
+/// invariants that test doesn't cover: (a) a path that DID get
+/// relativized must not ALSO leave its absolute form as a key
+/// (no absolute-under-base leak), and (b) extracting the derived path
+/// and re-deriving from it reproduces the identical `file.write` key
+/// set (idempotency).
+#[test]
+fn patch_apply_file_write_keys_no_leak_and_stable_on_re_derive() {
+    let s = session();
+    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
+
+    let base_root: Option<String> = path
+        .path
+        .base
+        .as_ref()
+        .and_then(|b| b.uri.strip_prefix("file://"))
+        .map(|r| r.trim_end_matches('/').to_string());
+
+    let file_write_keys = |p: &toolpath::v1::Path| -> HashSet<String> {
+        p.steps
+            .iter()
+            .flat_map(|s| s.change.iter())
+            .filter(|(_, ch)| {
+                ch.structural
+                    .as_ref()
+                    .is_some_and(|sc| sc.change_type == "file.write")
+            })
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+    let keys1 = file_write_keys(&path);
+
+    let mut checked_any = false;
+    for line in &s.lines {
+        if let RolloutItem::EventMsg(toolpath_codex::EventMsg::PatchApplyEnd(patch)) = line.item() {
+            if !patch.success {
+                continue;
+            }
+            for file_path in patch.changes.keys() {
+                checked_any = true;
+                let under_base = base_root.as_deref().is_some_and(|root| {
+                    std::path::Path::new(file_path)
+                        .strip_prefix(root)
+                        .is_ok_and(|rest| rest != std::path::Path::new(""))
+                });
+                if under_base {
+                    assert!(
+                        !keys1.contains(file_path.as_str()),
+                        "absolute-under-base leak: {file_path:?} should have been relativized but its absolute form is still a key"
+                    );
+                } else {
+                    assert!(
+                        keys1.contains(file_path.as_str()),
+                        "expected {file_path:?} to remain an absolute key outside the base"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        checked_any,
+        "fixture must exercise at least one patch_apply_end file for this test to be meaningful"
+    );
+
+    let view2 = extract_conversation(&path);
+    let path2 = toolpath_convo::derive_path(&view2, &DeriveConfig::default());
+    assert_eq!(
+        keys1,
+        file_write_keys(&path2),
+        "re-derive must reproduce the identical file.write key set"
+    );
 }
