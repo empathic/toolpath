@@ -33,6 +33,8 @@ mod query;
 mod schema;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
+#[cfg(not(target_os = "emscripten"))]
+mod sync;
 mod term;
 
 use anyhow::Result;

@@ -79,6 +79,16 @@ pub(crate) enum Harness {
 }
 
 impl Harness {
+    /// Every harness, in presentation order.
+    pub(crate) const ALL: [Harness; 6] = [
+        Harness::Claude,
+        Harness::Gemini,
+        Harness::Codex,
+        Harness::Opencode,
+        Harness::Cursor,
+        Harness::Pi,
+    ];
+
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Harness::Claude => "claude",

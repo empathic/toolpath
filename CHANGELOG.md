@@ -2,6 +2,37 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## `path p cache sync` — incremental session ingestion — 2026-07-09
+
+Adds `path p cache sync [types…]`, the first step toward a cache that fills
+itself: it enumerates sessions across the installed agent harnesses and
+derives into the cache only what is new or changed since the last sync, so
+users no longer have to `p import` each session by hand.
+
+- **`path-cli`** (0.16.0):
+  - `path p cache sync [claude|gemini|codex|opencode|cursor|pi]…` syncs the
+    named artifact types; with no arguments it syncs every harness.
+    Enumeration reuses the `path share` aggregation, and per-session
+    derivation goes through the same provider managers, so listing and
+    derivation always agree on provider roots.
+  - The sync manifest at `~/.toolpath/sync.json` maps artifact type →
+    session id → `{project?, cache_id, last_activity?, message_count,
+    synced_at}`. A session is re-derived when its `last_activity` or
+    `message_count` differs from the record; otherwise it is skipped.
+    The manifest is written atomically (temp file + rename, `0600`) and
+    checkpointed after each type, so an interrupted first run keeps the
+    types it finished.
+  - Sync owns refresh semantics: it overwrites cache entries it
+    re-derives (no `--force` needed), while manual `p import` keeps its
+    error-on-hit default. Sessions deleted upstream keep both their cache
+    document and their manifest record — the cache is an archive, not a
+    mirror.
+  - Per-type summary on stderr (`claude   3 new, 1 updated, 240 unchanged`).
+    On a default run, harnesses with no sessions stay silent; explicit
+    types always report. Derivation failures warn and tally as `failed`
+    without aborting the run.
+- **`toolpath-cli`** (0.16.0): version bump only (tracks `path-cli`).
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived

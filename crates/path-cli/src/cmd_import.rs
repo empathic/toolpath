@@ -484,7 +484,17 @@ fn derive_claude_with_manager(
 /// Used by `cmd_share` after its picker has resolved the pair; mirrors the
 /// `(Some(p), Some(s), _)` arm in [`derive_claude_with_manager`].
 pub(crate) fn derive_claude_session(project: &str, session: &str) -> Result<DerivedDoc> {
-    let manager = toolpath_claude::ClaudeConvo::new();
+    derive_claude_session_with(&toolpath_claude::ClaudeConvo::new(), project, session)
+}
+
+/// [`derive_claude_session`] against a caller-supplied manager, so sync
+/// derives from the same roots it enumerated (and tests can inject a
+/// fixture resolver).
+pub(crate) fn derive_claude_session_with(
+    manager: &toolpath_claude::ClaudeConvo,
+    project: &str,
+    session: &str,
+) -> Result<DerivedDoc> {
     let cfg = toolpath_claude::derive::DeriveConfig {
         project_path: Some(project.to_string()),
         include_thinking: false,
@@ -709,7 +719,21 @@ pub(crate) fn derive_gemini_session(
     session: &str,
     include_thinking: bool,
 ) -> Result<DerivedDoc> {
-    let manager = toolpath_gemini::GeminiConvo::new();
+    derive_gemini_session_with(
+        &toolpath_gemini::GeminiConvo::new(),
+        project,
+        session,
+        include_thinking,
+    )
+}
+
+/// [`derive_gemini_session`] against a caller-supplied manager.
+pub(crate) fn derive_gemini_session_with(
+    manager: &toolpath_gemini::GeminiConvo,
+    project: &str,
+    session: &str,
+    include_thinking: bool,
+) -> Result<DerivedDoc> {
     let cfg = toolpath_gemini::derive::DeriveConfig {
         project_path: Some(project.to_string()),
         include_thinking,
@@ -896,7 +920,14 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
 
 /// Derive a single Codex session given an explicit session id.
 pub(crate) fn derive_codex_session(session: &str) -> Result<DerivedDoc> {
-    let manager = toolpath_codex::CodexConvo::new();
+    derive_codex_session_with(&toolpath_codex::CodexConvo::new(), session)
+}
+
+/// [`derive_codex_session`] against a caller-supplied manager.
+pub(crate) fn derive_codex_session_with(
+    manager: &toolpath_codex::CodexConvo,
+    session: &str,
+) -> Result<DerivedDoc> {
     let config = toolpath_codex::derive::DeriveConfig { project_path: None };
     let s = manager
         .read_session(session)
@@ -1180,7 +1211,20 @@ pub(crate) fn derive_opencode_session(
     session: &str,
     no_snapshot_diffs: bool,
 ) -> Result<DerivedDoc> {
-    let manager = toolpath_opencode::OpencodeConvo::new();
+    derive_opencode_session_with(
+        &toolpath_opencode::OpencodeConvo::new(),
+        session,
+        no_snapshot_diffs,
+    )
+}
+
+/// [`derive_opencode_session`] against a caller-supplied manager.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn derive_opencode_session_with(
+    manager: &toolpath_opencode::OpencodeConvo,
+    session: &str,
+    no_snapshot_diffs: bool,
+) -> Result<DerivedDoc> {
     let config = toolpath_opencode::derive::DeriveConfig {
         no_snapshot_diffs,
         ..Default::default()
@@ -1353,7 +1397,15 @@ fn derive_cursor(
 /// Derive a single cursor composer given an explicit composer id.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn derive_cursor_session(session: &str) -> Result<DerivedDoc> {
-    let manager = toolpath_cursor::CursorConvo::new();
+    derive_cursor_session_with(&toolpath_cursor::CursorConvo::new(), session)
+}
+
+/// [`derive_cursor_session`] against a caller-supplied manager.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn derive_cursor_session_with(
+    manager: &toolpath_cursor::CursorConvo,
+    session: &str,
+) -> Result<DerivedDoc> {
     let s = manager
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -1554,6 +1606,15 @@ pub(crate) fn derive_pi_session(
     } else {
         toolpath_pi::PiConvo::new()
     };
+    derive_pi_session_with(&manager, project, session)
+}
+
+/// [`derive_pi_session`] against a caller-supplied manager.
+pub(crate) fn derive_pi_session_with(
+    manager: &toolpath_pi::PiConvo,
+    project: &str,
+    session: &str,
+) -> Result<DerivedDoc> {
     let config = toolpath_pi::DeriveConfig::default();
     let session = manager
         .read_session(project, session)

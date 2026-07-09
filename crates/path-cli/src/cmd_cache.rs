@@ -23,12 +23,22 @@ pub enum CacheOp {
         /// Cache id (filename without `.json`)
         id: String,
     },
+    /// Ingest agent sessions into the cache, deriving only what is new
+    /// or changed since the last sync (tracked in `$CONFIG_DIR/sync.json`)
+    #[cfg(not(target_os = "emscripten"))]
+    Sync {
+        /// Artifact types to sync (default: every agent harness)
+        #[arg(value_enum)]
+        types: Vec<crate::cmd_share::HarnessArg>,
+    },
 }
 
 pub fn run(op: CacheOp) -> Result<()> {
     match op {
         CacheOp::Ls => run_ls(),
         CacheOp::Rm { id } => run_rm(&id),
+        #[cfg(not(target_os = "emscripten"))]
+        CacheOp::Sync { types } => crate::sync::run(types),
     }
 }
 
