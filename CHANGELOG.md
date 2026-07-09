@@ -38,7 +38,7 @@ users no longer have to `p import` each session by hand.
     On a default run, harnesses with no sessions stay silent; explicit
     types always report. Derivation failures warn and tally as `failed`
     without aborting the run.
-- **`toolpath-gemini`** (0.7.0): new `PathResolver::list_session_entries`
+- **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the
   first 4 KiB of a main chat file (identity fields lead the JSON) and
