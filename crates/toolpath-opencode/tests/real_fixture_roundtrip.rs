@@ -394,10 +394,8 @@ fn ground_truth_paths(view: &ConversationView) -> Vec<&str> {
 /// component stripping rather than by calling `toolpath_convo`'s own
 /// (private) `relativize_key`, so this exercises its output rather than
 /// re-asserting its internals.
-#[test]
-fn file_write_keys_relativized_with_no_leak_and_stable_on_re_derive() {
-    let view = load_fixture_view();
-    let path = derive_path(&view, &DeriveConfig::default());
+fn assert_file_write_keys_match_base(view: &ConversationView) {
+    let path = derive_path(view, &DeriveConfig::default());
     let base_root: Option<String> = path
         .path
         .base
@@ -405,7 +403,7 @@ fn file_write_keys_relativized_with_no_leak_and_stable_on_re_derive() {
         .and_then(|b| b.uri.strip_prefix("file://"))
         .map(|s| s.trim_end_matches('/').to_string());
 
-    let ground_truth = ground_truth_paths(&view);
+    let ground_truth = ground_truth_paths(view);
     assert!(
         !ground_truth.is_empty(),
         "fixture must exercise at least one file write for this test to be meaningful"
@@ -425,6 +423,11 @@ fn file_write_keys_relativized_with_no_leak_and_stable_on_re_derive() {
     };
     let derived_keys = file_write_keys(&path);
 
+    // Track that the under-base branch -- the exact case #124 relativizes --
+    // actually fires at least once, so a fixture (or a regression) with no
+    // absolute-under-base path can't let this test silently no-op the
+    // invariant it exists to guard.
+    let mut saw_under_base = false;
     for gt in &ground_truth {
         let under_base = base_root.as_deref().is_some_and(|root| {
             std::path::Path::new(gt)
@@ -432,6 +435,7 @@ fn file_write_keys_relativized_with_no_leak_and_stable_on_re_derive() {
                 .is_ok_and(|rest| rest != std::path::Path::new(""))
         });
         if under_base {
+            saw_under_base = true;
             let root = base_root.as_deref().unwrap();
             let expected_relative = gt.strip_prefix(root).unwrap().trim_start_matches('/');
             assert!(
@@ -449,6 +453,10 @@ fn file_write_keys_relativized_with_no_leak_and_stable_on_re_derive() {
             );
         }
     }
+    assert!(
+        saw_under_base,
+        "test must exercise at least one absolute-under-base key -- the invariant #124 changed"
+    );
 
     let view2 = extract_conversation(&path);
     let path2 = derive_path(&view2, &DeriveConfig::default());
@@ -457,4 +465,12 @@ fn file_write_keys_relativized_with_no_leak_and_stable_on_re_derive() {
         file_write_keys(&path2),
         "re-derive must reproduce the identical file.write key set"
     );
+}
+
+#[test]
+fn file_write_keys_relativized_with_no_leak_and_stable_on_re_derive() {
+    // opencode's real fixture records absolute tool-input paths under the
+    // session's recorded working_dir, so the under-base branch fires on
+    // the real data with no synthetic injection needed.
+    assert_file_write_keys_match_base(&load_fixture_view());
 }

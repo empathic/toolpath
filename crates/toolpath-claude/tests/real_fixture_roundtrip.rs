@@ -284,6 +284,11 @@ fn assert_file_write_keys_match_base(view: &ConversationView) {
     };
     let derived_keys = file_write_keys(&path);
 
+    // Track that the under-base branch -- the exact case #124 relativizes --
+    // actually fires at least once, so a fixture (or a regression) with no
+    // absolute-under-base path can't let this test silently no-op the
+    // invariant it exists to guard.
+    let mut saw_under_base = false;
     for gt in &ground_truth {
         let under_base = base_root.as_deref().is_some_and(|root| {
             std::path::Path::new(gt)
@@ -291,6 +296,7 @@ fn assert_file_write_keys_match_base(view: &ConversationView) {
                 .is_ok_and(|rest| rest != std::path::Path::new(""))
         });
         if under_base {
+            saw_under_base = true;
             let root = base_root.as_deref().unwrap();
             let expected_relative = gt.strip_prefix(root).unwrap().trim_start_matches('/');
             assert!(
@@ -308,6 +314,10 @@ fn assert_file_write_keys_match_base(view: &ConversationView) {
             );
         }
     }
+    assert!(
+        saw_under_base,
+        "test must exercise at least one absolute-under-base key -- the invariant #124 changed"
+    );
 
     let view2 = extract_conversation(&path);
     let path2 = derive_path(&view2, &DeriveConfig::default());

@@ -11,12 +11,12 @@
 //! the source carried a real one. The old tests only asserted counts
 //! and totals, so the drop went undetected.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
 use toolpath_codex::provider::to_view;
 use toolpath_codex::{ResponseItem, RolloutItem, RolloutReader, derive};
-use toolpath_convo::{DeriveConfig, Role, extract_conversation};
+use toolpath_convo::{ConversationView, DeriveConfig, Role, derive_path, extract_conversation};
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample-codex-python.jsonl")
@@ -347,25 +347,39 @@ fn patch_apply_files_all_surface_as_artifacts() {
     }
 }
 
-/// Extends `patch_apply_files_all_surface_as_artifacts` with the two
-/// invariants that test doesn't cover: (a) a path that DID get
-/// relativized must not ALSO leave its absolute form as a key
-/// (no absolute-under-base leak), and (b) extracting the derived path
-/// and re-deriving from it reproduces the identical `file.write` key
-/// set (idempotency).
-#[test]
-fn patch_apply_file_write_keys_no_leak_and_stable_on_re_derive() {
-    let s = session();
-    let path = derive::derive_path(&s, &derive::DeriveConfig::default());
-
+/// Ground-truth invariant for #124 (relativized file-change keys) run
+/// against a real recorded session: derive `view`, then for every
+/// pre-derive `FileMutation::path` (Codex populates these from
+/// `patch_apply_end` events) assert (a) it produced a relativized key
+/// iff it actually sat under `path.base` on a path-component boundary --
+/// no absolute-under-base leak, and no wrongly-relativized outside-base
+/// key -- and (b) extracting and re-deriving reproduces the identical
+/// `file.write` key set (idempotency).
+///
+/// "Under base" is independently recomputed here via `std::path::Path`
+/// component stripping rather than by calling `toolpath_convo`'s own
+/// (private) `relativize_key`, so this exercises its output rather than
+/// re-asserting its internals.
+fn assert_file_write_keys_match_base(view: &ConversationView) {
+    let path = derive_path(view, &DeriveConfig::default());
     let base_root: Option<String> = path
         .path
         .base
         .as_ref()
         .and_then(|b| b.uri.strip_prefix("file://"))
-        .map(|r| r.trim_end_matches('/').to_string());
+        .map(|s| s.trim_end_matches('/').to_string());
 
-    let file_write_keys = |p: &toolpath::v1::Path| -> HashSet<String> {
+    let ground_truth: Vec<&str> = view
+        .turns
+        .iter()
+        .flat_map(|t| t.file_mutations.iter().map(|fm| fm.path.as_str()))
+        .collect();
+    assert!(
+        !ground_truth.is_empty(),
+        "fixture must exercise at least one file mutation for this test to be meaningful"
+    );
+
+    let file_write_keys = |p: &toolpath::v1::Path| -> BTreeSet<String> {
         p.steps
             .iter()
             .flat_map(|s| s.change.iter())
@@ -377,45 +391,60 @@ fn patch_apply_file_write_keys_no_leak_and_stable_on_re_derive() {
             .map(|(k, _)| k.clone())
             .collect()
     };
-    let keys1 = file_write_keys(&path);
+    let derived_keys = file_write_keys(&path);
 
-    let mut checked_any = false;
-    for line in &s.lines {
-        if let RolloutItem::EventMsg(toolpath_codex::EventMsg::PatchApplyEnd(patch)) = line.item() {
-            if !patch.success {
-                continue;
-            }
-            for file_path in patch.changes.keys() {
-                checked_any = true;
-                let under_base = base_root.as_deref().is_some_and(|root| {
-                    std::path::Path::new(file_path)
-                        .strip_prefix(root)
-                        .is_ok_and(|rest| rest != std::path::Path::new(""))
-                });
-                if under_base {
-                    assert!(
-                        !keys1.contains(file_path.as_str()),
-                        "absolute-under-base leak: {file_path:?} should have been relativized but its absolute form is still a key"
-                    );
-                } else {
-                    assert!(
-                        keys1.contains(file_path.as_str()),
-                        "expected {file_path:?} to remain an absolute key outside the base"
-                    );
-                }
-            }
+    // Track that the under-base branch -- the exact case #124 relativizes --
+    // actually fires at least once, so a fixture (or a regression) with no
+    // absolute-under-base path can't let this test silently no-op the
+    // invariant it exists to guard.
+    let mut saw_under_base = false;
+    for gt in &ground_truth {
+        let under_base = base_root.as_deref().is_some_and(|root| {
+            std::path::Path::new(gt)
+                .strip_prefix(root)
+                .is_ok_and(|rest| rest != std::path::Path::new(""))
+        });
+        if under_base {
+            saw_under_base = true;
+            let root = base_root.as_deref().unwrap();
+            let expected_relative = gt.strip_prefix(root).unwrap().trim_start_matches('/');
+            assert!(
+                derived_keys.contains(expected_relative),
+                "expected relativized key {expected_relative:?} for {gt:?} under base {root:?}, got {derived_keys:?}"
+            );
+            assert!(
+                !derived_keys.contains(*gt),
+                "absolute-under-base leak: {gt:?} should have been relativized but the absolute form is still a key"
+            );
+        } else {
+            assert!(
+                derived_keys.contains(*gt),
+                "expected {gt:?} to remain an absolute (or opaque) key outside the base, got {derived_keys:?}"
+            );
         }
     }
     assert!(
-        checked_any,
-        "fixture must exercise at least one patch_apply_end file for this test to be meaningful"
+        saw_under_base,
+        "test must exercise at least one absolute-under-base key -- the invariant #124 changed"
     );
 
     let view2 = extract_conversation(&path);
-    let path2 = toolpath_convo::derive_path(&view2, &DeriveConfig::default());
+    let path2 = derive_path(&view2, &DeriveConfig::default());
     assert_eq!(
-        keys1,
+        derived_keys,
         file_write_keys(&path2),
         "re-derive must reproduce the identical file.write key set"
     );
+}
+
+/// Extends `patch_apply_files_all_surface_as_artifacts` with the two
+/// invariants that test doesn't cover: no absolute-under-base leak, and
+/// extract -> re-derive idempotency of the `file.write` key set. Codex's
+/// real fixture records absolute patch paths under the session's recorded
+/// cwd, so the under-base branch fires on the real data with no synthetic
+/// injection needed.
+#[test]
+fn patch_apply_file_write_keys_no_leak_and_stable_on_re_derive() {
+    let view = to_view(&session());
+    assert_file_write_keys_match_base(&view);
 }
