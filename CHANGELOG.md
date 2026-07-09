@@ -19,6 +19,15 @@ All notable changes to the Toolpath workspace are documented here.
   path against `view.base.working_dir`, so `FileMutation.path` and
   `files_changed` round-trip to their original absolute forms and
   derive→extract→derive is stable.
+- Test-only follow-up (no version bump): added a `derive`→JSON→`extract`→
+  re-`derive` property table covering nine relativization scenarios (nested,
+  exact-root, outside-base, trailing-slash base, deep nesting, unicode paths,
+  no-base absolute/relative, prefix-not-boundary), `relativize_key`/
+  `resolve_key` edge-case units, a backward-compat characterization pinning
+  pre-relativization absolute-keyed documents, and key-stability coverage
+  (no absolute-under-base leak, re-derive idempotency) across all six
+  conversation providers (claude, gemini, pi, codex, opencode, cursor) plus
+  `path p validate`/`p merge` characterization of mixed-key-era documents.
 
 ## Derive: resolve duplicate step ids — 2026-07-01
 

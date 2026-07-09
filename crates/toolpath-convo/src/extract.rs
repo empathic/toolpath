@@ -657,6 +657,21 @@ mod tests {
     }
 
     #[test]
+    fn resolve_key_passes_through_any_uri_scheme_unchanged() {
+        // Any key containing "://" is an artifact URI (conversation or
+        // otherwise), never a bare relative path -- it must never be
+        // joined onto the working dir, regardless of scheme.
+        assert_eq!(
+            resolve_key("https://example.com/x", Some("/proj")),
+            "https://example.com/x"
+        );
+        assert_eq!(
+            resolve_key("claude-code://sess", Some("/proj")),
+            "claude-code://sess"
+        );
+    }
+
+    #[test]
     fn test_empty_path() {
         let path = make_path(vec![]);
         let view = extract_conversation(&path);
@@ -1388,5 +1403,57 @@ mod tests {
         assert_eq!(view.events.len(), 1);
         assert_eq!(view.turns[0].text, "hello");
         assert_eq!(view.events[0].event_type, "system");
+    }
+
+    // ── Backward compatibility ─────────────────────────────────────────
+
+    #[test]
+    fn backward_compat_absolute_key_document_extracts_unchanged() {
+        // Characterizes the read side of a document written by a producer
+        // that predates key relativization (pre-#124): file-change keys
+        // were the verbatim absolute path, not a base-relative bare key.
+        // `resolve_key` passes any key starting with '/' straight through,
+        // so a document shared before this change must keep reading back
+        // identically -- this pins that behavior against regression.
+        let json = r#"{
+            "path": {
+                "id": "p1",
+                "base": {"uri": "file:///old/proj"},
+                "head": "s1"
+            },
+            "steps": [
+                {
+                    "step": {
+                        "id": "s1",
+                        "actor": "human:user",
+                        "timestamp": "2026-01-01T00:00:00Z"
+                    },
+                    "change": {
+                        "legacy://sess1": {
+                            "structural": {
+                                "type": "conversation.append",
+                                "role": "user",
+                                "text": "hi"
+                            }
+                        },
+                        "/old/proj/src/legacy.rs": {
+                            "raw": "--- a/src/legacy.rs\n+++ b/src/legacy.rs\n",
+                            "structural": {
+                                "type": "file.write",
+                                "operation": "update"
+                            }
+                        }
+                    }
+                }
+            ]
+        }"#;
+        let path: Path = serde_json::from_str(json).expect("valid pre-relativization document");
+
+        let view = extract_conversation(&path);
+        assert_eq!(view.turns.len(), 1);
+        assert_eq!(
+            view.turns[0].file_mutations[0].path, "/old/proj/src/legacy.rs",
+            "an absolute key from a pre-relativization document must resolve unchanged"
+        );
     }
 }
