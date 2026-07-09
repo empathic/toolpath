@@ -591,7 +591,9 @@ pub(crate) fn relativize_key(path: &str, base_uri: Option<&str>) -> String {
 }
 
 fn extract_file_path(tool: &ToolInvocation) -> Option<String> {
-    for field in &["file_path", "path", "filename", "file"] {
+    // snake_case first so existing inputs resolve unchanged; camelCase
+    // siblings (`filePath`, `fileName`) cover conventions like opencode's.
+    for field in &["file_path", "filePath", "path", "filename", "fileName", "file"] {
         if let Some(v) = tool.input.get(*field)
             && let Some(s) = v.as_str()
         {
@@ -1249,6 +1251,27 @@ mod tests {
         let view = view_with(vec![turn]);
         let path = derive_path(&view, &DeriveConfig::default());
         assert!(path.steps[0].change.contains_key("c.rs"));
+    }
+
+    #[test]
+    fn test_tool_use_filewrite_with_camelcase_file_path_field() {
+        // camelCase `filePath` is opencode's tool-input convention; a
+        // provider that leaves file-mutation synthesis to the shared
+        // derive would otherwise drop the artifact entirely.
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.tool_uses = vec![fw_tool("write", "tu1", serde_json::json!({"filePath": "d.rs"}))];
+        let view = view_with(vec![turn]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert!(path.steps[0].change.contains_key("d.rs"));
+    }
+
+    #[test]
+    fn test_tool_use_filewrite_with_camelcase_file_name_field() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.tool_uses = vec![fw_tool("W", "tu1", serde_json::json!({"fileName": "e.rs"}))];
+        let view = view_with(vec![turn]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert!(path.steps[0].change.contains_key("e.rs"));
     }
 
     #[test]
