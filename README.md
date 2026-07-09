@@ -98,6 +98,10 @@ path p import opencode
 # List what's in the cache
 path p cache ls
 
+# Ingest new/changed agent sessions into the cache (all harnesses, or named ones)
+path p cache sync
+path p cache sync claude codex
+
 # Export a cached document back into a Claude Code session
 path p export claude --input claude-<session-id> --project /path/to/resume
 

@@ -77,6 +77,16 @@ pub(crate) enum Harness {
 }
 
 impl Harness {
+    /// Every harness, in presentation order.
+    pub(crate) const ALL: [Harness; 6] = [
+        Harness::Claude,
+        Harness::Gemini,
+        Harness::Codex,
+        Harness::Opencode,
+        Harness::Cursor,
+        Harness::Pi,
+    ];
+
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Harness::Claude => "claude",
@@ -836,10 +846,7 @@ fn harness_status_pi(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> 
     }
 }
 
-fn harness_status_cursor(
-    bundle: &HarnessBundle,
-    home: Option<&std::path::Path>,
-) -> HarnessStatus {
+fn harness_status_cursor(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
     let Some(mgr) = &bundle.cursor else {
         return HarnessStatus::unresolved();
     };

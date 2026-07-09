@@ -542,6 +542,108 @@ fn cache_ls_after_import_lists_entry() {
         .stdout(predicate::str::contains("git-"));
 }
 
+/// A `$HOME` with one Claude session. Returns (home-tempdir, session file).
+fn claude_home_fixture() -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    // toolpath-claude maps '/', '_', and '.' to '-' when sanitizing project
+    // paths into directory slugs — mirror that here so the fixture lands
+    // where the resolver looks for it.
+    let project_slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let project_dir = temp.path().join(".claude/projects").join(&project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let session_file = project_dir.join("session-abc.jsonl");
+    std::fs::write(
+        &session_file,
+        format!(
+            r#"{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+    (temp, session_file)
+}
+
+#[test]
+fn cache_sync_ingests_reskips_and_updates() {
+    let (home, session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let sync = || {
+        let mut c = cmd();
+        c.env("HOME", home.path())
+            .env("TOOLPATH_CONFIG_DIR", cfg.path())
+            .args(["p", "cache", "sync", "claude"]);
+        c
+    };
+
+    // First run derives the session into the cache and records it.
+    sync()
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("1 new, 0 updated, 0 unchanged"));
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cfg.path().join("sync.json")).unwrap())
+            .unwrap();
+    let record = &manifest["claude"]["session-abc"];
+    let cache_id = record["cache_id"].as_str().unwrap();
+    assert!(
+        cfg.path()
+            .join(format!("documents/{cache_id}.json"))
+            .exists()
+    );
+
+    // Nothing changed: the second run derives nothing.
+    sync()
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("0 new, 0 updated, 1 unchanged"));
+
+    // The session grows a turn; the third run re-derives it.
+    let mut body = std::fs::read_to_string(&session_file).unwrap();
+    body.push_str(
+        r#"{"type":"user","uuid":"u-2","timestamp":"2024-01-01T00:05:00Z","cwd":"/x","message":{"role":"user","content":"more"}}"#,
+    );
+    body.push('\n');
+    std::fs::write(&session_file, body).unwrap();
+    sync()
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("0 new, 1 updated, 0 unchanged"));
+}
+
+#[test]
+fn cache_sync_default_run_with_no_sessions_reports_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("HOME", home.path())
+        // opencode resolves through $XDG_DATA_HOME before $HOME — drop it
+        // so the sandboxed run can't see the developer's real database.
+        .env_remove("XDG_DATA_HOME")
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "sync"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("nothing to sync"));
+    assert!(!cfg.path().join("sync.json").exists());
+}
+
+#[test]
+fn cache_sync_rejects_unknown_type() {
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "sync", "frobnicate"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value"));
+}
+
 #[test]
 fn export_pathbase_repo_flag_requires_login() {
     // `export pathbase` without --repo falls through to the anonymous
