@@ -2,6 +2,18 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Derive: recognize camelCase file-path tool fields — 2026-07-09
+
+- **`toolpath-convo`** (0.11.3): the shared `derive_path` file-path
+  extractor now probes the camelCase siblings `filePath` and `fileName`
+  in addition to `file_path`/`filename`/`path`/`file`. Providers that
+  leave file-mutation synthesis to the shared derive (rather than
+  pre-building `Turn.file_mutations`) previously dropped a `FileWrite`
+  tool's artifact when its input used the camelCase convention (e.g.
+  opencode's `filePath`). snake_case is probed first, so existing inputs
+  resolve unchanged. Additive; no effect on already-derived documents.
+  Follow-up to the change-key relativization work (0.11.2).
+
 ## Derive: relativize file change keys against `path.base` — 2026-07-08
 
 - **`toolpath-convo`** (0.11.2): `derive_path` now stores file-change

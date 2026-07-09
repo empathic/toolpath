@@ -9,7 +9,7 @@
   },
   {
     "name": "toolpath-convo",
-    "version": "0.11.2",
+    "version": "0.11.3",
     "description": "Provider-agnostic conversation types, traits, and Toolpath-Path derivation",
     "docs": "https://docs.rs/toolpath-convo",
     "crate": "https://crates.io/crates/toolpath-convo",
