@@ -1405,9 +1405,9 @@ fn build_cursor_session(
         // Reuse the existing id when present, otherwise pre-create a
         // workspaceStorage entry so Cursor adopts ours on next open.
         let resolver = PathResolver::new();
-        if let Ok(ensured) = resolver.ensure_workspace_storage_entry(&canonical, |path| {
-            stable_workspace_id_for(path)
-        }) {
+        if let Ok(ensured) =
+            resolver.ensure_workspace_storage_entry(&canonical, stable_workspace_id_for)
+        {
             projector = projector.with_workspace_id(ensured.id);
             if ensured.created {
                 eprintln!(
@@ -1535,13 +1535,8 @@ fn cursor_open_hints(workspace: &std::path::Path) -> Vec<String> {
     }
 }
 
-
 #[cfg(not(target_os = "emscripten"))]
-fn upsert_cursor_kv(
-    tx: &rusqlite::Transaction<'_>,
-    key: &str,
-    value: &str,
-) -> Result<()> {
+fn upsert_cursor_kv(tx: &rusqlite::Transaction<'_>, key: &str, value: &str) -> Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
         rusqlite::params![key, value],
