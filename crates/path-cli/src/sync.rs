@@ -15,9 +15,11 @@
 /// The kind of artifact an operation ranges over. One enum, used
 /// everywhere a command names artifact sources (`p cache sync` types,
 /// `share`/`resume` `--harness`, import cache-id prefixes); `name()`
-/// doubles as the manifest key and cache-id prefix. Today every
-/// variant is an agent-session provider; other artifact kinds (git,
-/// github, …) join here when sync learns to ingest them.
+/// doubles as the manifest key and cache-id prefix. Git artifacts are
+/// recorded in the manifest when imported but are not *discoverable* —
+/// there is no machine-wide registry of repos to enumerate — so sync
+/// never re-derives them. Github and pathbase are absent on purpose:
+/// they are remote services, not local artifact sources.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, clap::ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum ArtifactType {
@@ -27,17 +29,19 @@ pub enum ArtifactType {
     Opencode,
     Cursor,
     Pi,
+    Git,
 }
 
 impl ArtifactType {
     /// Every artifact type, in presentation order.
-    pub(crate) const ALL: [ArtifactType; 6] = [
+    pub(crate) const ALL: [ArtifactType; 7] = [
         ArtifactType::Claude,
         ArtifactType::Gemini,
         ArtifactType::Codex,
         ArtifactType::Opencode,
         ArtifactType::Cursor,
         ArtifactType::Pi,
+        ArtifactType::Git,
     ];
 
     pub(crate) fn name(&self) -> &'static str {
@@ -48,6 +52,7 @@ impl ArtifactType {
             ArtifactType::Opencode => "opencode",
             ArtifactType::Cursor => "cursor",
             ArtifactType::Pi => "pi",
+            ArtifactType::Git => "git",
         }
     }
 
@@ -61,6 +66,7 @@ impl ArtifactType {
             ArtifactType::Opencode => "opencode",
             ArtifactType::Cursor => "cursor  ",
             ArtifactType::Pi => "pi      ",
+            ArtifactType::Git => "git     ",
         }
     }
 
@@ -72,7 +78,7 @@ impl ArtifactType {
     pub(crate) fn path_keyed(&self) -> bool {
         matches!(
             self,
-            ArtifactType::Claude | ArtifactType::Gemini | ArtifactType::Pi
+            ArtifactType::Claude | ArtifactType::Gemini | ArtifactType::Pi | ArtifactType::Git
         )
     }
 
@@ -84,9 +90,54 @@ impl ArtifactType {
             "opencode" => Some(ArtifactType::Opencode),
             "cursor" => Some(ArtifactType::Cursor),
             "pi" => Some(ArtifactType::Pi),
+            "git" => Some(ArtifactType::Git),
             _ => None,
         }
     }
+}
+
+/// An artifact's identity plus the stat-level fingerprint of its
+/// source. Sync enumerates these for change detection (producing one
+/// never parses session bodies), and `p import`/`share` fill one as
+/// the provenance of each derived document so the write can be
+/// recorded in the manifest.
+#[derive(Debug, Clone)]
+pub(crate) struct ArtifactStub {
+    pub(crate) artifact_type: ArtifactType,
+    pub(crate) id: String,
+    /// Filesystem path the artifact is keyed under, for path-keyed
+    /// providers (the project directory; the repo for git).
+    pub(crate) path: Option<String>,
+    /// Source mtime (file providers) or updated-at (DB providers).
+    pub(crate) modified: Option<chrono::DateTime<chrono::Utc>>,
+    /// Source file size; `None` for DB-backed providers.
+    pub(crate) size: Option<u64>,
+}
+
+/// (mtime, size) of a file, both `None` when the stat fails.
+pub(crate) fn stat_stamp(
+    path: &std::path::Path,
+) -> (Option<chrono::DateTime<chrono::Utc>>, Option<u64>) {
+    match std::fs::metadata(path) {
+        Ok(md) => (
+            md.modified()
+                .ok()
+                .map(chrono::DateTime::<chrono::Utc>::from),
+            Some(md.len()),
+        ),
+        Err(_) => (None, None),
+    }
+}
+
+/// The trailing UUID of a codex rollout filename stem
+/// (`rollout-<timestamp>-<uuid>`), or the whole stem when it doesn't end
+/// in one. Codex's `read_session` resolves either form.
+pub(crate) fn codex_artifact_id(stem: &str) -> &str {
+    stem.len()
+        .checked_sub(36)
+        .and_then(|at| stem.get(at..))
+        .filter(|tail| tail.bytes().filter(|&b| b == b'-').count() == 4)
+        .unwrap_or(stem)
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -98,9 +149,9 @@ mod engine {
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
-    use super::ArtifactType;
+    use super::{ArtifactStub, ArtifactType, codex_artifact_id, stat_stamp};
     use crate::cmd_cache::write_cached;
     use crate::cmd_import::DerivedDoc;
     use crate::cmd_share::{
@@ -110,22 +161,6 @@ mod engine {
     use crate::config::config_dir;
 
     const MANIFEST_FILE: &str = "sync.json";
-
-    /// A cheaply-enumerated artifact: identity plus the stat-level
-    /// fingerprint used for change detection. Producing one never
-    /// parses session bodies.
-    #[derive(Debug, Clone)]
-    pub(crate) struct ArtifactStub {
-        pub(crate) artifact_type: ArtifactType,
-        pub(crate) id: String,
-        /// Filesystem path the artifact is keyed under, for path-keyed
-        /// providers (the project directory).
-        pub(crate) path: Option<String>,
-        /// Source mtime (file providers) or updated-at (DB providers).
-        pub(crate) modified: Option<DateTime<Utc>>,
-        /// Source file size; `None` for DB-backed providers.
-        pub(crate) size: Option<u64>,
-    }
 
     /// What the manifest remembers about one synced artifact.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -293,6 +328,9 @@ mod engine {
                 imp::derive_opencode_session_with(mgr(&bundle.opencode)?, &stub.id, false)
             }
             ArtifactType::Cursor => imp::derive_cursor_session_with(mgr(&bundle.cursor)?, &stub.id),
+            ArtifactType::Git => Err(anyhow!(
+                "git artifacts are recorded by `p import`, not re-derived by sync"
+            )),
         }
     }
 
@@ -302,17 +340,6 @@ mod engine {
     }
 
     // ── stat-level enumeration ─────────────────────────────────────────
-
-    /// (mtime, size) of a file, both `None` when the stat fails.
-    fn stat_stamp(path: &Path) -> (Option<DateTime<Utc>>, Option<u64>) {
-        match std::fs::metadata(path) {
-            Ok(md) => (
-                md.modified().ok().map(DateTime::<Utc>::from),
-                Some(md.len()),
-            ),
-            Err(_) => (None, None),
-        }
-    }
 
     /// Enumerate one type's artifacts with stat-level fingerprints.
     /// Providers that aren't installed produce no stubs; other listing
@@ -350,6 +377,9 @@ mod engine {
                     stubs_pi(mgr, &mut out);
                 }
             }
+            // Recorded via `p import`, never discovered: there is no
+            // machine-wide registry of repos to walk.
+            ArtifactType::Git => {}
         }
         out
     }
@@ -440,13 +470,7 @@ mod engine {
             let Some(stem) = file.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            let id = stem
-                .len()
-                .checked_sub(36)
-                .and_then(|at| stem.get(at..))
-                .filter(|tail| tail.bytes().filter(|&b| b == b'-').count() == 4)
-                .unwrap_or(stem)
-                .to_string();
+            let id = codex_artifact_id(stem).to_string();
             let (modified, size) = stat_stamp(&file);
             out.push(ArtifactStub {
                 artifact_type: ArtifactType::Codex,
@@ -576,6 +600,26 @@ mod engine {
         s
     }
 
+    /// Record an externally-derived cache write (`p import`, `share`) in
+    /// the manifest, so sync doesn't re-derive what was just written.
+    pub(crate) fn record_stub(stub: &ArtifactStub, cache_id: &str) -> Result<()> {
+        let mut manifest = load_manifest()?;
+        manifest
+            .entry(stub.artifact_type.name().to_string())
+            .or_default()
+            .insert(
+                stub.id.clone(),
+                SyncRecord {
+                    path: stub.path.clone(),
+                    cache_id: cache_id.to_string(),
+                    modified: stub.modified,
+                    size: stub.size,
+                    synced_at: Utc::now(),
+                },
+            );
+        save_manifest(&manifest)
+    }
+
     // ── manifest IO ────────────────────────────────────────────────────
 
     fn manifest_path() -> Result<PathBuf> {
@@ -625,6 +669,7 @@ mod engine {
     mod tests {
         use super::*;
         use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
+        use std::path::Path;
 
         /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
         /// `f` receives the tempdir root for building provider fixtures.
@@ -875,6 +920,40 @@ mod engine {
         }
 
         #[test]
+        fn recorded_import_is_unchanged_to_the_next_sync() {
+            with_cfg(|home| {
+                write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+                let bundle = claude_bundle(home);
+
+                // What `p import` does: derive with provenance, write the
+                // cache, record the stub.
+                let derived = crate::cmd_import::derive_claude_session_with(
+                    bundle.claude.as_ref().unwrap(),
+                    "/test/project",
+                    "sess-aaa",
+                )
+                .unwrap();
+                let stub = derived.provenance.as_ref().unwrap();
+                assert_eq!(stub.id, "sess-aaa");
+                assert!(stub.modified.is_some() && stub.size.is_some());
+                crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
+                record_stub(stub, &derived.cache_id).unwrap();
+
+                // The import's stamp must match sync's own enumeration.
+                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude]).unwrap()[0];
+                assert_eq!(
+                    (
+                        outcome.new,
+                        outcome.updated,
+                        outcome.unchanged,
+                        outcome.failed
+                    ),
+                    (0, 0, 1, 0)
+                );
+            });
+        }
+
+        #[test]
         fn derive_stub_errors_when_provider_missing() {
             let bundle = HarnessBundle::default();
             let stub = make_stub(ArtifactType::Claude, "sess");
@@ -960,6 +1039,7 @@ mod type_tests {
         assert!(!ArtifactType::Codex.path_keyed());
         assert!(!ArtifactType::Opencode.path_keyed());
         assert!(!ArtifactType::Cursor.path_keyed());
+        assert!(ArtifactType::Git.path_keyed());
     }
 
     #[test]

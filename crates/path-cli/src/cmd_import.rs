@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use toolpath::v1::Graph;
 
 use crate::cmd_cache::{make_id, write_cached};
-use crate::sync::ArtifactType;
+use crate::sync::{ArtifactStub, ArtifactType, codex_artifact_id, stat_stamp};
 
 #[derive(Subcommand, Debug)]
 pub enum ImportSource {
@@ -202,6 +202,12 @@ pub fn run(args: ImportArgs, pretty: bool) -> Result<()> {
 pub(crate) struct DerivedDoc {
     pub(crate) cache_id: String,
     pub(crate) doc: Graph,
+    /// Identity + source stamp for the sync manifest, captured *before*
+    /// the source was read (so a write racing the derive re-syncs next
+    /// run). `None` for sources the manifest doesn't track (github,
+    /// pathbase) and for bulk `--all` derives that no longer know
+    /// per-artifact sources.
+    pub(crate) provenance: Option<ArtifactStub>,
 }
 
 fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Result<()> {
@@ -219,6 +225,12 @@ fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Resul
         } else {
             let path = write_cached(&d.cache_id, &d.doc, force)?;
             println!("{}", path.display());
+            #[cfg(not(target_os = "emscripten"))]
+            if let Some(stub) = &d.provenance
+                && let Err(e) = crate::sync::record_stub(stub, &d.cache_id)
+            {
+                eprintln!("warning: sync manifest not updated: {e}");
+            }
             let summary = doc_summary(&d.doc);
             eprintln!("Imported {} → {}", summary, d.cache_id);
         }
@@ -324,8 +336,18 @@ fn derive_git(
         let canonical = std::fs::canonicalize(&repo_path).unwrap_or(repo_path.clone());
         let repo_tag = short_path_hash(&canonical.to_string_lossy());
         let inner = doc_inner_id(&doc);
-        let cache_id = make_id("git", &format!("{repo_tag}-{inner}"));
-        Ok(vec![DerivedDoc { cache_id, doc }])
+        let cache_id = make_id(ArtifactType::Git.name(), &format!("{repo_tag}-{inner}"));
+        Ok(vec![DerivedDoc {
+            cache_id,
+            doc,
+            provenance: Some(ArtifactStub {
+                artifact_type: ArtifactType::Git,
+                id: format!("{repo_tag}-{inner}"),
+                path: Some(canonical.to_string_lossy().into_owned()),
+                modified: None,
+                size: None,
+            }),
+        }])
     }
 }
 
@@ -387,7 +409,11 @@ fn derive_github(
         let path = toolpath_github::derive_pull_request(&owner, &repo_name, pr_number, &config)?;
         let doc = Graph::from_path(path);
         let cache_id = make_id("github", &format!("{owner}_{repo_name}-{pr_number}"));
-        Ok(vec![DerivedDoc { cache_id, doc }])
+        Ok(vec![DerivedDoc {
+            cache_id,
+            doc,
+            provenance: None,
+        }])
     }
 }
 
@@ -477,15 +503,15 @@ fn derive_claude_with_manager(
         }
     };
 
-    let mut paths: Vec<toolpath::v1::Path> = Vec::with_capacity(pairs.len());
+    let mut docs = Vec::with_capacity(pairs.len());
     for (project_path, session_id) in &pairs {
-        let convo = manager
-            .read_conversation(project_path, session_id)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let cfg = make_config(project_path);
-        paths.push(toolpath_claude::derive::derive_path(&convo, &cfg));
+        docs.push(derive_claude_session_with(
+            manager,
+            project_path,
+            session_id,
+        )?);
     }
-    wrap_paths(ArtifactType::Claude, paths)
+    Ok(docs)
 }
 
 /// Derive a single Claude conversation given an explicit project + session.
@@ -503,6 +529,11 @@ pub(crate) fn derive_claude_session_with(
     project: &str,
     session: &str,
 ) -> Result<DerivedDoc> {
+    let (modified, size) = manager
+        .resolver()
+        .conversation_file(project, session)
+        .map(|p| stat_stamp(&p))
+        .unwrap_or((None, None));
     let cfg = toolpath_claude::derive::DeriveConfig {
         project_path: Some(project.to_string()),
         include_thinking: false,
@@ -515,6 +546,13 @@ pub(crate) fn derive_claude_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
+        provenance: Some(ArtifactStub {
+            artifact_type: ArtifactType::Claude,
+            id: session.to_string(),
+            path: Some(project.to_string()),
+            modified,
+            size,
+        }),
     })
 }
 
@@ -526,6 +564,7 @@ fn wrap_paths(t: ArtifactType, paths: Vec<toolpath::v1::Path>) -> Result<Vec<Der
             DerivedDoc {
                 cache_id,
                 doc: Graph::from_path(p),
+                provenance: None,
             }
         })
         .collect())
@@ -717,15 +756,16 @@ fn derive_gemini_with_manager(
         }
     };
 
-    let mut paths: Vec<toolpath::v1::Path> = Vec::with_capacity(pairs.len());
+    let mut docs = Vec::with_capacity(pairs.len());
     for (project_path, session_uuid) in &pairs {
-        let convo = manager
-            .read_conversation(project_path, session_uuid)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let cfg = make_config(project_path);
-        paths.push(toolpath_gemini::derive::derive_path(&convo, &cfg));
+        docs.push(derive_gemini_session_with(
+            manager,
+            project_path,
+            session_uuid,
+            include_thinking,
+        )?);
     }
-    wrap_paths(ArtifactType::Gemini, paths)
+    Ok(docs)
 }
 
 /// Derive a single Gemini conversation given an explicit project + session.
@@ -749,6 +789,22 @@ pub(crate) fn derive_gemini_session_with(
     session: &str,
     include_thinking: bool,
 ) -> Result<DerivedDoc> {
+    let entry = manager
+        .resolver()
+        .list_session_entries(project)
+        .ok()
+        .and_then(|entries| {
+            entries
+                .into_iter()
+                .find(|e| e.id == session || e.session_uuid.as_deref() == Some(session))
+        });
+    let (artifact_id, (modified, size)) = match &entry {
+        Some(e) => (
+            e.session_uuid.clone().unwrap_or_else(|| e.id.clone()),
+            stat_stamp(&e.path),
+        ),
+        None => (session.to_string(), (None, None)),
+    };
     let cfg = toolpath_gemini::derive::DeriveConfig {
         project_path: Some(project.to_string()),
         include_thinking,
@@ -761,6 +817,13 @@ pub(crate) fn derive_gemini_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
+        provenance: Some(ArtifactStub {
+            artifact_type: ArtifactType::Gemini,
+            id: artifact_id,
+            path: Some(project.to_string()),
+            modified,
+            size,
+        }),
     })
 }
 
@@ -917,14 +980,11 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
         }
     };
 
-    let mut paths: Vec<toolpath::v1::Path> = Vec::with_capacity(session_ids.len());
+    let mut docs = Vec::with_capacity(session_ids.len());
     for sid in &session_ids {
-        let s = manager
-            .read_session(sid)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        paths.push(toolpath_codex::derive::derive_path(&s, &config));
+        docs.push(derive_codex_session_with(&manager, sid)?);
     }
-    wrap_paths(ArtifactType::Codex, paths)
+    Ok(docs)
 }
 
 /// Derive a single Codex session given an explicit session id.
@@ -937,6 +997,14 @@ pub(crate) fn derive_codex_session_with(
     manager: &toolpath_codex::CodexConvo,
     session: &str,
 ) -> Result<DerivedDoc> {
+    let file = manager.resolver().find_rollout_file(session).ok();
+    let (modified, size) = file.as_deref().map(stat_stamp).unwrap_or((None, None));
+    let artifact_id = file
+        .as_deref()
+        .and_then(|f| f.file_stem())
+        .and_then(|stem| stem.to_str())
+        .map(|stem| codex_artifact_id(stem).to_string())
+        .unwrap_or_else(|| session.to_string());
     let config = toolpath_codex::derive::DeriveConfig { project_path: None };
     let s = manager
         .read_session(session)
@@ -946,6 +1014,13 @@ pub(crate) fn derive_codex_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
+        provenance: Some(ArtifactStub {
+            artifact_type: ArtifactType::Codex,
+            id: artifact_id,
+            path: None,
+            modified,
+            size,
+        }),
     })
 }
 
@@ -1148,16 +1223,7 @@ fn derive_opencode(
             no_snapshot_diffs,
             ..Default::default()
         };
-        let derive_one = |sid: &str| -> Result<toolpath::v1::Path> {
-            let s = manager
-                .read_session(sid)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-            Ok(toolpath_opencode::derive::derive_path_with_resolver(
-                &s,
-                &config,
-                manager.resolver(),
-            ))
-        };
+        let derive_one = |sid: &str| derive_opencode_session_with(&manager, sid, no_snapshot_diffs);
 
         let session_ids: Vec<String> = match (session, all) {
             (Some(s), _) => vec![s],
@@ -1173,7 +1239,7 @@ fn derive_opencode(
                 for m in &metas {
                     out.push(derive_one(&m.id)?);
                 }
-                return wrap_paths(ArtifactType::Opencode, out);
+                return Ok(out);
             }
             (None, false) => match pick_opencode(&manager, project.as_deref())? {
                 Some(picks) => picks,
@@ -1194,11 +1260,11 @@ fn derive_opencode(
             },
         };
 
-        let mut paths: Vec<toolpath::v1::Path> = Vec::with_capacity(session_ids.len());
+        let mut docs = Vec::with_capacity(session_ids.len());
         for sid in &session_ids {
-            paths.push(derive_one(sid)?);
+            docs.push(derive_one(sid)?);
         }
-        wrap_paths(ArtifactType::Opencode, paths)
+        Ok(docs)
     }
 }
 
@@ -1222,6 +1288,12 @@ pub(crate) fn derive_opencode_session_with(
     session: &str,
     no_snapshot_diffs: bool,
 ) -> Result<DerivedDoc> {
+    let modified = manager
+        .io()
+        .list_sessions(None)
+        .ok()
+        .and_then(|sessions| sessions.into_iter().find(|s| s.id == session))
+        .and_then(|s| s.last_activity());
     let config = toolpath_opencode::derive::DeriveConfig {
         no_snapshot_diffs,
         ..Default::default()
@@ -1235,6 +1307,13 @@ pub(crate) fn derive_opencode_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
+        provenance: Some(ArtifactStub {
+            artifact_type: ArtifactType::Opencode,
+            id: session.to_string(),
+            path: None,
+            modified,
+            size: None,
+        }),
     })
 }
 
@@ -1309,13 +1388,7 @@ fn derive_cursor(
     #[cfg(not(target_os = "emscripten"))]
     {
         let manager = toolpath_cursor::CursorConvo::new();
-        let derive_one = |sid: &str| -> Result<toolpath::v1::Path> {
-            let s = manager
-                .read_session(sid)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-            let cfg = toolpath_cursor::DeriveConfig::default();
-            Ok(toolpath_cursor::derive_path(&s, &cfg))
-        };
+        let derive_one = |sid: &str| derive_cursor_session_with(&manager, sid);
 
         let workspace_filter = project
             .as_deref()
@@ -1346,7 +1419,7 @@ fn derive_cursor(
                 for m in &filtered {
                     out.push(derive_one(&m.id)?);
                 }
-                return wrap_paths(ArtifactType::Cursor, out);
+                return Ok(out);
             }
             (None, false) => match pick_cursor(&manager, workspace_filter.as_deref())? {
                 Some(picks) => picks,
@@ -1365,16 +1438,16 @@ fn derive_cursor(
                                 .unwrap_or_else(chrono::DateTime::<chrono::Utc>::default)
                         })
                         .ok_or_else(|| anyhow::anyhow!("No Cursor composers found"))?;
-                    return wrap_paths(ArtifactType::Cursor, vec![derive_one(&pick.id)?]);
+                    return Ok(vec![derive_one(&pick.id)?]);
                 }
             },
         };
 
-        let mut paths: Vec<toolpath::v1::Path> = Vec::with_capacity(session_ids.len());
+        let mut docs = Vec::with_capacity(session_ids.len());
         for sid in &session_ids {
-            paths.push(derive_one(sid)?);
+            docs.push(derive_one(sid)?);
         }
-        wrap_paths(ArtifactType::Cursor, paths)
+        Ok(docs)
     }
 }
 
@@ -1390,6 +1463,16 @@ pub(crate) fn derive_cursor_session_with(
     manager: &toolpath_cursor::CursorConvo,
     session: &str,
 ) -> Result<DerivedDoc> {
+    let modified = manager
+        .io()
+        .read_composer_headers()
+        .ok()
+        .and_then(|h| {
+            h.all_composers
+                .into_iter()
+                .find(|c| c.composer_id == session)
+        })
+        .and_then(|c| c.last_updated_at_utc());
     let s = manager
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -1399,6 +1482,13 @@ pub(crate) fn derive_cursor_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
+        provenance: Some(ArtifactStub {
+            artifact_type: ArtifactType::Cursor,
+            id: session.to_string(),
+            path: None,
+            modified,
+            size: None,
+        }),
     })
 }
 
@@ -1505,7 +1595,11 @@ fn derive_pi_with_manager(
             }
             let doc = toolpath_pi::derive::derive_graph(&sessions, None, &config);
             let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-            return Ok(vec![DerivedDoc { cache_id, doc }]);
+            return Ok(vec![DerivedDoc {
+                cache_id,
+                doc,
+                provenance: None,
+            }]);
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -1521,7 +1615,11 @@ fn derive_pi_with_manager(
                         })?;
                     let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                     let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-                    return Ok(vec![DerivedDoc { cache_id, doc }]);
+                    return Ok(vec![DerivedDoc {
+                        cache_id,
+                        doc,
+                        provenance: None,
+                    }]);
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -1532,7 +1630,11 @@ fn derive_pi_with_manager(
                     .ok_or_else(|| anyhow::anyhow!("No Pi sessions found for project: {}", p))?;
                 let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                 let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-                return Ok(vec![DerivedDoc { cache_id, doc }]);
+                return Ok(vec![DerivedDoc {
+                    cache_id,
+                    doc,
+                    provenance: None,
+                }]);
             }
         }
         (None, _, _) => {
@@ -1555,12 +1657,7 @@ fn derive_pi_with_manager(
 
     let mut docs: Vec<DerivedDoc> = Vec::with_capacity(pairs.len());
     for (project_path, session_id) in &pairs {
-        let session = manager
-            .read_session(project_path, session_id)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
-        let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-        docs.push(DerivedDoc { cache_id, doc });
+        docs.push(derive_pi_session_with(manager, project_path, session_id)?);
     }
     Ok(docs)
 }
@@ -1586,13 +1683,36 @@ pub(crate) fn derive_pi_session_with(
     project: &str,
     session: &str,
 ) -> Result<DerivedDoc> {
+    let file = toolpath_pi::reader::list_session_files(manager.resolver(), project)
+        .ok()
+        .and_then(|files| {
+            files.into_iter().find(|f| {
+                toolpath_pi::reader::peek_header(f).is_ok_and(|h| h.id == session)
+                    || f.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .and_then(|stem| stem.split_once('_'))
+                        .is_some_and(|(_, rest)| rest == session)
+            })
+        });
+    let (modified, size) = file.as_deref().map(stat_stamp).unwrap_or((None, None));
+    let artifact_id = session.to_string();
     let config = toolpath_pi::DeriveConfig::default();
     let session = manager
         .read_session(project, session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
     let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
-    Ok(DerivedDoc { cache_id, doc })
+    Ok(DerivedDoc {
+        cache_id,
+        doc,
+        provenance: Some(ArtifactStub {
+            artifact_type: ArtifactType::Pi,
+            id: artifact_id,
+            path: Some(project.to_string()),
+            modified,
+            size,
+        }),
+    })
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -1768,7 +1888,11 @@ pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Res
     let cache_id = make_id("pathbase", &format!("{owner}-{repo}-{id}"));
     let doc = Graph::from_json(&body)
         .map_err(|e| anyhow::anyhow!("server returned a non-toolpath document: {e}"))?;
-    Ok(DerivedDoc { cache_id, doc })
+    Ok(DerivedDoc {
+        cache_id,
+        doc,
+        provenance: None,
+    })
 }
 
 fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<DerivedDoc>> {

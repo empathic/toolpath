@@ -750,6 +750,118 @@ fn cache_sync_default_run_with_no_sessions_reports_nothing() {
 }
 
 #[test]
+fn import_records_manifest_so_sync_skips() {
+    let (home, _session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "p",
+            "import",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .assert()
+        .success();
+
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cfg.path().join("sync.json")).unwrap())
+            .unwrap();
+    let record = &manifest["claude"]["session-abc"];
+    assert!(record["modified"].is_string(), "import must stamp mtime");
+    assert!(record["size"].is_u64(), "import must stamp size");
+
+    // Sync sees the import's record and derives nothing.
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "sync", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("0 new, 0 updated, 1 unchanged"));
+}
+
+#[test]
+fn git_import_lands_in_manifest_and_sync_leaves_it_alone() {
+    let (dir, branch) = git_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "import", "git", "--branch"])
+        .arg(&branch)
+        .arg("--repo")
+        .arg(dir.path())
+        .assert()
+        .success();
+
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cfg.path().join("sync.json")).unwrap())
+            .unwrap();
+    let git_records = manifest["git"].as_object().unwrap();
+    assert_eq!(git_records.len(), 1);
+    let record = git_records.values().next().unwrap();
+    assert!(
+        record["path"].is_string(),
+        "git records carry the repo path"
+    );
+
+    // Git artifacts are recorded, not discovered: sync reports zeros
+    // and must not fail or re-derive.
+    let home = tempfile::tempdir().unwrap();
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "sync", "git"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("0 new, 0 updated, 0 unchanged"));
+}
+
+#[test]
+fn share_records_manifest_so_sync_skips() {
+    let (port, server, _temp, project, home) = share_anon_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+
+    cmd()
+        .env("HOME", &home)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--anon", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .assert()
+        .success();
+    server.join().unwrap();
+
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cfg.path().join("sync.json")).unwrap())
+            .unwrap();
+    assert!(manifest["claude"]["session-abc"]["modified"].is_string());
+
+    cmd()
+        .env("HOME", &home)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "sync", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("0 new, 0 updated, 1 unchanged"));
+}
+
+#[test]
 fn cache_sync_rejects_unknown_type() {
     let cfg = tempfile::tempdir().unwrap();
     cmd()

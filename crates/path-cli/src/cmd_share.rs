@@ -72,6 +72,7 @@ impl ArtifactType {
             ArtifactType::Opencode => Some(Harness::Opencode),
             ArtifactType::Cursor => Some(Harness::Cursor),
             ArtifactType::Pi => Some(Harness::Pi),
+            ArtifactType::Git => None,
         }
     }
 }
@@ -943,6 +944,11 @@ fn share_explicit(
         // overwrite so cache and upload agree (use `--no-cache` to skip
         // the cache write entirely).
         let path = crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        if let Some(stub) = &derived.provenance
+            && let Err(e) = crate::sync::record_stub(stub, &derived.cache_id)
+        {
+            eprintln!("warning: sync manifest not updated: {e}");
+        }
         eprintln!(
             "Cached {} session → {} ({})",
             harness.name(),
@@ -1036,6 +1042,9 @@ fn derive_session(
         ArtifactType::Codex => crate::cmd_import::derive_codex_session(session),
         ArtifactType::Opencode => crate::cmd_import::derive_opencode_session(session, false),
         ArtifactType::Cursor => crate::cmd_import::derive_cursor_session(session),
+        ArtifactType::Git => {
+            anyhow::bail!("share only handles agent sessions; git artifacts go through `p import`")
+        }
     }
 }
 

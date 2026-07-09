@@ -38,6 +38,14 @@ users no longer have to `p import` each session by hand.
     On a default run, harnesses with no sessions stay silent; explicit
     types always report. Derivation failures warn and tally as `failed`
     without aborting the run.
+  - `p import` and `share` record what they write: session derives carry
+    a provenance stub (source stamped before the read), and the cache
+    write upserts the manifest — so sync never re-derives an artifact
+    that import or share just produced. `ArtifactType` gains `Git`:
+    git imports are recorded (repo path + `<repo-tag>-<graph-id>` id)
+    but never re-derived by sync, since repos aren't discoverable.
+    Github and pathbase stay out of the manifest — remote services,
+    not artifact sources.
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the
