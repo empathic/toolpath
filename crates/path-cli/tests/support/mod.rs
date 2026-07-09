@@ -11,7 +11,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use path_cli::cmd_resume::{HarnessArg, ResumeArgs};
+use path_cli::cmd_resume::ResumeArgs;
+use path_cli::sync::ArtifactType;
 
 /// Process-wide lock for tests that mutate `$HOME`, `$PATH`, or
 /// `$TOOLPATH_CONFIG_DIR`. Integration tests under `tests/resume.rs`
@@ -178,7 +179,7 @@ pub fn write_path_to_temp(dir: &Path, path: toolpath::v1::Path) -> PathBuf {
 }
 
 /// Construct `ResumeArgs` for a file-input + explicit-harness test.
-pub fn args_explicit(input: PathBuf, cwd: &Path, harness: HarnessArg) -> ResumeArgs {
+pub fn args_explicit(input: PathBuf, cwd: &Path, harness: ArtifactType) -> ResumeArgs {
     ResumeArgs {
         input: input.to_string_lossy().to_string(),
         cwd: Some(cwd.to_path_buf()),

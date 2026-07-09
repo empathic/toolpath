@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use toolpath::v1::Graph;
 
 use crate::cmd_cache::{make_id, write_cached};
+use crate::sync::ArtifactType;
 
 #[derive(Subcommand, Debug)]
 pub enum ImportSource {
@@ -421,7 +422,10 @@ fn derive_claude_with_manager(
                 .read_all_conversations(&p)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = make_config(&p);
-            return wrap_paths_claude(toolpath_claude::derive::derive_project(&convos, &cfg));
+            return wrap_paths(
+                ArtifactType::Claude,
+                toolpath_claude::derive::derive_project(&convos, &cfg),
+            );
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -436,9 +440,10 @@ fn derive_claude_with_manager(
                             anyhow::anyhow!("No conversations found for project: {}", p)
                         })?;
                     let cfg = make_config(&p);
-                    return wrap_paths_claude(vec![toolpath_claude::derive::derive_path(
-                        &convo, &cfg,
-                    )]);
+                    return wrap_paths(
+                        ArtifactType::Claude,
+                        vec![toolpath_claude::derive::derive_path(&convo, &cfg)],
+                    );
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -448,7 +453,10 @@ fn derive_claude_with_manager(
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No conversations found for project: {}", p))?;
                 let cfg = make_config(&p);
-                return wrap_paths_claude(vec![toolpath_claude::derive::derive_path(&convo, &cfg)]);
+                return wrap_paths(
+                    ArtifactType::Claude,
+                    vec![toolpath_claude::derive::derive_path(&convo, &cfg)],
+                );
             }
         }
         (None, _, _) => {
@@ -477,7 +485,7 @@ fn derive_claude_with_manager(
         let cfg = make_config(project_path);
         paths.push(toolpath_claude::derive::derive_path(&convo, &cfg));
     }
-    wrap_paths_claude(paths)
+    wrap_paths(ArtifactType::Claude, paths)
 }
 
 /// Derive a single Claude conversation given an explicit project + session.
@@ -503,18 +511,18 @@ pub(crate) fn derive_claude_session_with(
         .read_conversation(project, session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let path = toolpath_claude::derive::derive_path(&convo, &cfg);
-    let cache_id = make_id("claude", &path.path.id);
+    let cache_id = make_id(ArtifactType::Claude.name(), &path.path.id);
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
     })
 }
 
-fn wrap_paths_claude(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
+fn wrap_paths(t: ArtifactType, paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
     Ok(paths
         .into_iter()
         .map(|p| {
-            let cache_id = make_id("claude", &p.path.id);
+            let cache_id = make_id(t.name(), &p.path.id);
             DerivedDoc {
                 cache_id,
                 doc: Graph::from_path(p),
@@ -654,7 +662,10 @@ fn derive_gemini_with_manager(
                 .read_all_conversations(&p)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = make_config(&p);
-            return wrap_paths_gemini(toolpath_gemini::derive::derive_project(&convos, &cfg));
+            return wrap_paths(
+                ArtifactType::Gemini,
+                toolpath_gemini::derive::derive_project(&convos, &cfg),
+            );
         }
         (Some(p), None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -669,9 +680,10 @@ fn derive_gemini_with_manager(
                             anyhow::anyhow!("No conversations found for project: {}", p)
                         })?;
                     let cfg = make_config(&p);
-                    return wrap_paths_gemini(vec![toolpath_gemini::derive::derive_path(
-                        &convo, &cfg,
-                    )]);
+                    return wrap_paths(
+                        ArtifactType::Gemini,
+                        vec![toolpath_gemini::derive::derive_path(&convo, &cfg)],
+                    );
                 }
             }
             #[cfg(target_os = "emscripten")]
@@ -681,7 +693,10 @@ fn derive_gemini_with_manager(
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No conversations found for project: {}", p))?;
                 let cfg = make_config(&p);
-                return wrap_paths_gemini(vec![toolpath_gemini::derive::derive_path(&convo, &cfg)]);
+                return wrap_paths(
+                    ArtifactType::Gemini,
+                    vec![toolpath_gemini::derive::derive_path(&convo, &cfg)],
+                );
             }
         }
         (None, _, _) => {
@@ -710,7 +725,7 @@ fn derive_gemini_with_manager(
         let cfg = make_config(project_path);
         paths.push(toolpath_gemini::derive::derive_path(&convo, &cfg));
     }
-    wrap_paths_gemini(paths)
+    wrap_paths(ArtifactType::Gemini, paths)
 }
 
 /// Derive a single Gemini conversation given an explicit project + session.
@@ -742,24 +757,11 @@ pub(crate) fn derive_gemini_session_with(
         .read_conversation(project, session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let path = toolpath_gemini::derive::derive_path(&convo, &cfg);
-    let cache_id = make_id("gemini", &path.path.id);
+    let cache_id = make_id(ArtifactType::Gemini.name(), &path.path.id);
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
     })
-}
-
-fn wrap_paths_gemini(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
-    Ok(paths
-        .into_iter()
-        .map(|p| {
-            let cache_id = make_id("gemini", &p.path.id);
-            DerivedDoc {
-                cache_id,
-                doc: Graph::from_path(p),
-            }
-        })
-        .collect())
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -875,7 +877,10 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
             if sessions.is_empty() {
                 anyhow::bail!("No Codex sessions found in ~/.codex/sessions");
             }
-            return wrap_paths_codex(toolpath_codex::derive::derive_project(&sessions, &config));
+            return wrap_paths(
+                ArtifactType::Codex,
+                toolpath_codex::derive::derive_project(&sessions, &config),
+            );
         }
         (None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -889,9 +894,10 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
                             .ok_or_else(|| {
                                 anyhow::anyhow!("No Codex sessions found in ~/.codex/sessions")
                             })?;
-                        return wrap_paths_codex(vec![toolpath_codex::derive::derive_path(
-                            &s, &config,
-                        )]);
+                        return wrap_paths(
+                            ArtifactType::Codex,
+                            vec![toolpath_codex::derive::derive_path(&s, &config)],
+                        );
                     }
                 }
             }
@@ -903,7 +909,10 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
                     .ok_or_else(|| {
                         anyhow::anyhow!("No Codex sessions found in ~/.codex/sessions")
                     })?;
-                return wrap_paths_codex(vec![toolpath_codex::derive::derive_path(&s, &config)]);
+                return wrap_paths(
+                    ArtifactType::Codex,
+                    vec![toolpath_codex::derive::derive_path(&s, &config)],
+                );
             }
         }
     };
@@ -915,7 +924,7 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         paths.push(toolpath_codex::derive::derive_path(&s, &config));
     }
-    wrap_paths_codex(paths)
+    wrap_paths(ArtifactType::Codex, paths)
 }
 
 /// Derive a single Codex session given an explicit session id.
@@ -933,24 +942,11 @@ pub(crate) fn derive_codex_session_with(
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let path = toolpath_codex::derive::derive_path(&s, &config);
-    let cache_id = make_id("codex", &path.path.id);
+    let cache_id = make_id(ArtifactType::Codex.name(), &path.path.id);
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
     })
-}
-
-fn wrap_paths_codex(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
-    Ok(paths
-        .into_iter()
-        .map(|p| {
-            let cache_id = make_id("codex", &p.path.id);
-            DerivedDoc {
-                cache_id,
-                doc: Graph::from_path(p),
-            }
-        })
-        .collect())
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -1177,7 +1173,7 @@ fn derive_opencode(
                 for m in &metas {
                     out.push(derive_one(&m.id)?);
                 }
-                return wrap_paths_opencode(out);
+                return wrap_paths(ArtifactType::Opencode, out);
             }
             (None, false) => match pick_opencode(&manager, project.as_deref())? {
                 Some(picks) => picks,
@@ -1186,13 +1182,14 @@ fn derive_opencode(
                         .most_recent_session()
                         .map_err(|e| anyhow::anyhow!("{}", e))?
                         .ok_or_else(|| anyhow::anyhow!("No opencode sessions found"))?;
-                    return wrap_paths_opencode(vec![
-                        toolpath_opencode::derive::derive_path_with_resolver(
+                    return wrap_paths(
+                        ArtifactType::Opencode,
+                        vec![toolpath_opencode::derive::derive_path_with_resolver(
                             &s,
                             &config,
                             manager.resolver(),
-                        ),
-                    ]);
+                        )],
+                    );
                 }
             },
         };
@@ -1201,7 +1198,7 @@ fn derive_opencode(
         for sid in &session_ids {
             paths.push(derive_one(sid)?);
         }
-        wrap_paths_opencode(paths)
+        wrap_paths(ArtifactType::Opencode, paths)
     }
 }
 
@@ -1234,24 +1231,11 @@ pub(crate) fn derive_opencode_session_with(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let path =
         toolpath_opencode::derive::derive_path_with_resolver(&s, &config, manager.resolver());
-    let cache_id = make_id("opencode", &path.path.id);
+    let cache_id = make_id(ArtifactType::Opencode.name(), &path.path.id);
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
     })
-}
-
-fn wrap_paths_opencode(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
-    Ok(paths
-        .into_iter()
-        .map(|p| {
-            let cache_id = make_id("opencode", &p.path.id);
-            DerivedDoc {
-                cache_id,
-                doc: Graph::from_path(p),
-            }
-        })
-        .collect())
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -1362,7 +1346,7 @@ fn derive_cursor(
                 for m in &filtered {
                     out.push(derive_one(&m.id)?);
                 }
-                return wrap_paths_cursor(out);
+                return wrap_paths(ArtifactType::Cursor, out);
             }
             (None, false) => match pick_cursor(&manager, workspace_filter.as_deref())? {
                 Some(picks) => picks,
@@ -1381,7 +1365,7 @@ fn derive_cursor(
                                 .unwrap_or_else(chrono::DateTime::<chrono::Utc>::default)
                         })
                         .ok_or_else(|| anyhow::anyhow!("No Cursor composers found"))?;
-                    return wrap_paths_cursor(vec![derive_one(&pick.id)?]);
+                    return wrap_paths(ArtifactType::Cursor, vec![derive_one(&pick.id)?]);
                 }
             },
         };
@@ -1390,7 +1374,7 @@ fn derive_cursor(
         for sid in &session_ids {
             paths.push(derive_one(sid)?);
         }
-        wrap_paths_cursor(paths)
+        wrap_paths(ArtifactType::Cursor, paths)
     }
 }
 
@@ -1411,24 +1395,11 @@ pub(crate) fn derive_cursor_session_with(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let cfg = toolpath_cursor::DeriveConfig::default();
     let path = toolpath_cursor::derive_path(&s, &cfg);
-    let cache_id = make_id("cursor", &path.path.id);
+    let cache_id = make_id(ArtifactType::Cursor.name(), &path.path.id);
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
     })
-}
-
-fn wrap_paths_cursor(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
-    Ok(paths
-        .into_iter()
-        .map(|p| {
-            let cache_id = make_id("cursor", &p.path.id);
-            DerivedDoc {
-                cache_id,
-                doc: Graph::from_path(p),
-            }
-        })
-        .collect())
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -1533,7 +1504,7 @@ fn derive_pi_with_manager(
                 anyhow::bail!("No Pi sessions found for project: {}", p);
             }
             let doc = toolpath_pi::derive::derive_graph(&sessions, None, &config);
-            let cache_id = make_id("pi", &doc_inner_id(&doc));
+            let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
             return Ok(vec![DerivedDoc { cache_id, doc }]);
         }
         (Some(p), None, false) => {
@@ -1549,7 +1520,7 @@ fn derive_pi_with_manager(
                             anyhow::anyhow!("No Pi sessions found for project: {}", p)
                         })?;
                     let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
-                    let cache_id = make_id("pi", &doc_inner_id(&doc));
+                    let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
                     return Ok(vec![DerivedDoc { cache_id, doc }]);
                 }
             }
@@ -1560,7 +1531,7 @@ fn derive_pi_with_manager(
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No Pi sessions found for project: {}", p))?;
                 let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
-                let cache_id = make_id("pi", &doc_inner_id(&doc));
+                let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
                 return Ok(vec![DerivedDoc { cache_id, doc }]);
             }
         }
@@ -1588,7 +1559,7 @@ fn derive_pi_with_manager(
             .read_session(project_path, session_id)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
-        let cache_id = make_id("pi", &doc_inner_id(&doc));
+        let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
         docs.push(DerivedDoc { cache_id, doc });
     }
     Ok(docs)
@@ -1620,7 +1591,7 @@ pub(crate) fn derive_pi_session_with(
         .read_session(project, session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
-    let cache_id = make_id("pi", &doc_inner_id(&doc));
+    let cache_id = make_id(ArtifactType::Pi.name(), &doc_inner_id(&doc));
     Ok(DerivedDoc { cache_id, doc })
 }
 

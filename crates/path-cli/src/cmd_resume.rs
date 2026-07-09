@@ -44,10 +44,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
-/// Re-exported so external callers (integration tests, future consumers)
-/// can construct [`ResumeArgs`] without depending on the `cmd_share`
-/// module directly.
-pub use crate::cmd_share::HarnessArg;
+use crate::sync::ArtifactType;
 
 #[derive(Args, Debug)]
 pub struct ResumeArgs {
@@ -65,7 +62,7 @@ pub struct ResumeArgs {
 
     /// Pin the resume target. Skips the interactive picker.
     #[arg(long, value_enum)]
-    pub harness: Option<HarnessArg>,
+    pub harness: Option<ArtifactType>,
 
     /// Skip the cache entirely when fetching from Pathbase: don't read
     /// an existing entry, don't write the fetched body. Useful for
@@ -123,40 +120,38 @@ use toolpath::v1::{Graph, Path as TPath, PathOrRef};
 /// Read a path's source harness from `meta.source` (set by
 /// `toolpath-convo::derive_path` to the provider id), falling back to
 /// actor-string sniffing across the path's steps.
-pub(crate) fn infer_source_harness(path: &TPath) -> Option<crate::cmd_share::Harness> {
-    use crate::cmd_share::Harness;
+pub(crate) fn infer_source_harness(path: &TPath) -> Option<ArtifactType> {
     let meta_source = path.meta.as_ref().and_then(|m| m.source.as_deref());
     if let Some(source) = meta_source {
         match source {
-            "claude-code" => return Some(Harness::Claude),
-            "gemini-cli" => return Some(Harness::Gemini),
-            "codex" => return Some(Harness::Codex),
-            "copilot" => return Some(Harness::Copilot),
-            "opencode" => return Some(Harness::Opencode),
-            "cursor" => return Some(Harness::Cursor),
-            "pi" => return Some(Harness::Pi),
+            "claude-code" => return Some(ArtifactType::Claude),
+            "gemini-cli" => return Some(ArtifactType::Gemini),
+            "codex" => return Some(ArtifactType::Codex),
+            "opencode" => return Some(ArtifactType::Opencode),
+            "cursor" => return Some(ArtifactType::Cursor),
+            "pi" => return Some(ArtifactType::Pi),
             _ => {} // fall through to actor sniffing
         }
     }
     for step in &path.steps {
         let actor = &step.step.actor;
         if actor.starts_with("agent:claude-code") {
-            return Some(Harness::Claude);
+            return Some(ArtifactType::Claude);
         }
         if actor.starts_with("agent:gemini-cli") || actor.starts_with("agent:gemini") {
-            return Some(Harness::Gemini);
+            return Some(ArtifactType::Gemini);
         }
         if actor.starts_with("agent:codex") {
-            return Some(Harness::Codex);
+            return Some(ArtifactType::Codex);
         }
         if actor.starts_with("agent:opencode") {
-            return Some(Harness::Opencode);
+            return Some(ArtifactType::Opencode);
         }
         if actor.starts_with("agent:cursor") {
-            return Some(Harness::Cursor);
+            return Some(ArtifactType::Cursor);
         }
         if actor.starts_with("agent:pi") {
-            return Some(Harness::Pi);
+            return Some(ArtifactType::Pi);
         }
     }
     None
@@ -197,9 +192,7 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
 /// Resolve the user-supplied `<input>` argument into a parsed `Graph`
 /// plus the source harness inferred from its single inline path (if
 /// any). See spec § "Input resolution" for the order.
-pub(crate) fn resolve_input(
-    args: &ResumeArgs,
-) -> Result<(Graph, Option<crate::cmd_share::Harness>)> {
+pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<ArtifactType>)> {
     let raw = args.input.as_str();
 
     enum Shape<'a> {
@@ -303,14 +296,13 @@ pub(crate) fn binary_on_path(name: &str, path_override: Option<&std::path::Path>
 /// (macOS) / `xdg-open` (Linux) always work. Treat cursor as available
 /// when either path is open.
 pub(crate) fn harness_available(
-    harness: crate::cmd_share::Harness,
+    harness: ArtifactType,
     path_override: Option<&std::path::Path>,
 ) -> bool {
-    use crate::cmd_share::Harness;
     if binary_on_path(harness.name(), path_override) {
         return true;
     }
-    if harness == Harness::Cursor {
+    if harness == ArtifactType::Cursor {
         #[cfg(target_os = "macos")]
         {
             return binary_on_path("open", path_override);
@@ -323,14 +315,13 @@ pub(crate) fn harness_available(
     false
 }
 
-const ALL_HARNESSES: &[crate::cmd_share::Harness] = &[
-    crate::cmd_share::Harness::Claude,
-    crate::cmd_share::Harness::Gemini,
-    crate::cmd_share::Harness::Codex,
-    crate::cmd_share::Harness::Copilot,
-    crate::cmd_share::Harness::Opencode,
-    crate::cmd_share::Harness::Cursor,
-    crate::cmd_share::Harness::Pi,
+const ALL_HARNESSES: &[ArtifactType] = &[
+    ArtifactType::Claude,
+    ArtifactType::Gemini,
+    ArtifactType::Codex,
+    ArtifactType::Opencode,
+    ArtifactType::Cursor,
+    ArtifactType::Pi,
 ];
 
 /// Decide which harness to resume in.
@@ -341,14 +332,11 @@ const ALL_HARNESSES: &[crate::cmd_share::Harness] = &[
 ///
 /// `path_override` is `None` in production; tests pass `Some(dir)` to fake `$PATH`.
 pub(crate) fn pick_harness(
-    arg: Option<HarnessArg>,
-    source: Option<crate::cmd_share::Harness>,
+    arg: Option<ArtifactType>,
+    source: Option<ArtifactType>,
     path_override: Option<&std::path::Path>,
-) -> Result<crate::cmd_share::Harness> {
-    use crate::cmd_share::Harness;
-
-    if let Some(a) = arg {
-        let h = Harness::from_arg(a);
+) -> Result<ArtifactType> {
+    if let Some(h) = arg {
         if !harness_available(h, path_override) {
             anyhow::bail!(
                 "harness `{}` isn't on PATH; install it or pick another with `--harness`",
@@ -358,7 +346,7 @@ pub(crate) fn pick_harness(
         return Ok(h);
     }
 
-    let installed: Vec<Harness> = ALL_HARNESSES
+    let installed: Vec<ArtifactType> = ALL_HARNESSES
         .iter()
         .copied()
         .filter(|h| harness_available(*h, path_override))
@@ -374,9 +362,9 @@ pub(crate) fn pick_harness(
 }
 
 fn interactive_pick(
-    installed: &[crate::cmd_share::Harness],
-    source: Option<crate::cmd_share::Harness>,
-) -> Result<crate::cmd_share::Harness> {
+    installed: &[ArtifactType],
+    source: Option<ArtifactType>,
+) -> Result<ArtifactType> {
     if !crate::fuzzy::available() {
         let hint = if crate::fuzzy::embedded_picker_available() {
             "rerun in a terminal"
@@ -421,32 +409,29 @@ fn interactive_pick(
 
 /// Static map from harness to resume-argv shape. Lives here because
 /// it's a per-harness CLI convention, not a projection concern.
-pub(crate) fn argv_for(harness: crate::cmd_share::Harness, session_id: &str) -> Vec<String> {
-    use crate::cmd_share::Harness;
+pub(crate) fn argv_for(harness: ArtifactType, session_id: &str) -> Vec<String> {
     match harness {
-        Harness::Claude => vec!["-r".into(), session_id.into()],
-        Harness::Gemini => vec!["--resume".into(), session_id.into()],
-        Harness::Codex => vec!["resume".into(), session_id.into()],
-        Harness::Copilot => vec!["--resume".into(), session_id.into()],
-        Harness::Opencode => vec!["--session".into(), session_id.into()],
+        ArtifactType::Claude => vec!["-r".into(), session_id.into()],
+        ArtifactType::Gemini => vec!["--resume".into(), session_id.into()],
+        ArtifactType::Codex => vec!["resume".into(), session_id.into()],
+        ArtifactType::Opencode => vec!["--session".into(), session_id.into()],
         // Cursor.app has no "open composer by id" flag — we exec the
         // workspace path so Cursor opens on that folder; the projected
         // composer appears at the top of the chat list.
-        Harness::Cursor => {
+        ArtifactType::Cursor => {
             let _ = session_id;
             vec![".".into()]
         }
-        Harness::Pi => vec!["--session".into(), session_id.into()],
+        ArtifactType::Pi => vec!["--session".into(), session_id.into()],
     }
 }
 
 pub(crate) fn invocation_for(
-    harness: crate::cmd_share::Harness,
+    harness: ArtifactType,
     session_id: &str,
     cwd: &std::path::Path,
 ) -> (String, Vec<String>) {
-    use crate::cmd_share::Harness;
-    if harness == Harness::Cursor {
+    if harness == ArtifactType::Cursor {
         return cursor_invocation(cwd);
     }
     (harness.name().to_string(), argv_for(harness, session_id))
@@ -479,18 +464,16 @@ fn cursor_invocation(cwd: &std::path::Path) -> (String, Vec<String>) {
 /// returning the projected session id.
 pub(crate) fn project_into_harness(
     path: &TPath,
-    harness: crate::cmd_share::Harness,
+    harness: ArtifactType,
     cwd: &std::path::Path,
 ) -> Result<String> {
-    use crate::cmd_share::Harness;
     match harness {
-        Harness::Claude => crate::cmd_export::project_claude(path, cwd),
-        Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
-        Harness::Codex => crate::cmd_export::project_codex(path, cwd),
-        Harness::Copilot => crate::cmd_export::project_copilot(path, cwd),
-        Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
-        Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
-        Harness::Pi => crate::cmd_export::project_pi(path, cwd),
+        ArtifactType::Claude => crate::cmd_export::project_claude(path, cwd),
+        ArtifactType::Gemini => crate::cmd_export::project_gemini(path, cwd),
+        ArtifactType::Codex => crate::cmd_export::project_codex(path, cwd),
+        ArtifactType::Opencode => crate::cmd_export::project_opencode(path, cwd),
+        ArtifactType::Cursor => crate::cmd_export::project_cursor(path, cwd),
+        ArtifactType::Pi => crate::cmd_export::project_pi(path, cwd),
     }
 }
 
@@ -627,7 +610,7 @@ mod tests {
         let args = ResumeArgs {
             input: doc_file.to_string_lossy().to_string(),
             cwd: Some(cwd.path().to_path_buf()),
-            harness: Some(HarnessArg::Claude),
+            harness: Some(ArtifactType::Claude),
             no_cache: false,
             force: false,
             url: None,
@@ -642,7 +625,6 @@ mod tests {
         assert_eq!(cap.cwd, std::fs::canonicalize(cwd.path()).unwrap());
     }
 
-    use crate::cmd_share::Harness;
     use toolpath::v1::{Graph, PathMeta, PathOrRef};
 
     fn make_step_with_actor(id: &str, actor: &str) -> toolpath::v1::Step {
@@ -672,7 +654,7 @@ mod tests {
             source: Some("claude-code".to_string()),
             ..Default::default()
         });
-        assert_eq!(infer_source_harness(&path), Some(Harness::Claude));
+        assert_eq!(infer_source_harness(&path), Some(ArtifactType::Claude));
     }
 
     #[test]
@@ -682,25 +664,25 @@ mod tests {
             source: Some("something-bespoke".to_string()),
             ..Default::default()
         });
-        assert_eq!(infer_source_harness(&path), Some(Harness::Gemini));
+        assert_eq!(infer_source_harness(&path), Some(ArtifactType::Gemini));
     }
 
     #[test]
     fn infer_source_harness_actor_sniff_codex() {
         let path = make_path_with_actor("agent:codex");
-        assert_eq!(infer_source_harness(&path), Some(Harness::Codex));
+        assert_eq!(infer_source_harness(&path), Some(ArtifactType::Codex));
     }
 
     #[test]
     fn infer_source_harness_actor_sniff_opencode() {
         let path = make_path_with_actor("agent:opencode");
-        assert_eq!(infer_source_harness(&path), Some(Harness::Opencode));
+        assert_eq!(infer_source_harness(&path), Some(ArtifactType::Opencode));
     }
 
     #[test]
     fn infer_source_harness_actor_sniff_pi() {
         let path = make_path_with_actor("agent:pi");
-        assert_eq!(infer_source_harness(&path), Some(Harness::Pi));
+        assert_eq!(infer_source_harness(&path), Some(ArtifactType::Pi));
     }
 
     #[test]
@@ -771,7 +753,7 @@ mod tests {
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
-        assert_eq!(harness, Some(Harness::Claude));
+        assert_eq!(harness, Some(ArtifactType::Claude));
     }
 
     #[test]
@@ -805,7 +787,7 @@ mod tests {
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
-        assert_eq!(harness, Some(Harness::Codex));
+        assert_eq!(harness, Some(ArtifactType::Codex));
     }
 
     #[test]
@@ -876,7 +858,7 @@ mod tests {
 
         let (g, harness) = result.expect("resolve_input should reuse cache without refetching");
         let _ = ensure_path_with_agent(&g).unwrap();
-        assert_eq!(harness, Some(Harness::Codex));
+        assert_eq!(harness, Some(ArtifactType::Codex));
     }
 
     #[test]
@@ -923,10 +905,10 @@ mod tests {
     #[test]
     fn pick_harness_explicit_arg_validates_path() {
         let td = fake_path_with(&["claude"]);
-        let result = pick_harness(Some(HarnessArg::Claude), None, Some(td.path()));
-        assert_eq!(result.unwrap(), Harness::Claude);
+        let result = pick_harness(Some(ArtifactType::Claude), None, Some(td.path()));
+        assert_eq!(result.unwrap(), ArtifactType::Claude);
 
-        let err = pick_harness(Some(HarnessArg::Gemini), None, Some(td.path())).unwrap_err();
+        let err = pick_harness(Some(ArtifactType::Gemini), None, Some(td.path())).unwrap_err();
         assert!(err.to_string().contains("`gemini` isn't on PATH"));
     }
 
@@ -934,21 +916,21 @@ mod tests {
     #[test]
     fn cursor_available_via_open_fallback_on_macos() {
         let td = fake_path_with(&["open"]);
-        assert!(harness_available(Harness::Cursor, Some(td.path())));
-        let picked = pick_harness(Some(HarnessArg::Cursor), None, Some(td.path()));
-        assert_eq!(picked.unwrap(), Harness::Cursor);
+        assert!(harness_available(ArtifactType::Cursor, Some(td.path())));
+        let picked = pick_harness(Some(ArtifactType::Cursor), None, Some(td.path()));
+        assert_eq!(picked.unwrap(), ArtifactType::Cursor);
     }
 
     #[test]
     fn cursor_unavailable_when_no_launcher_at_all() {
         let td = fake_path_with(&["claude"]);
-        assert!(!harness_available(Harness::Cursor, Some(td.path())));
+        assert!(!harness_available(ArtifactType::Cursor, Some(td.path())));
     }
 
     #[test]
     fn cursor_invocation_includes_workspace_path() {
         let cwd = std::path::PathBuf::from("/tmp/some-workspace");
-        let (binary, argv) = invocation_for(Harness::Cursor, "ignored-session-id", &cwd);
+        let (binary, argv) = invocation_for(ArtifactType::Cursor, "ignored-session-id", &cwd);
         assert!(
             argv.iter().any(|a| a == "/tmp/some-workspace"),
             "workspace path must appear in argv; got {argv:?}",
@@ -962,7 +944,7 @@ mod tests {
     #[test]
     fn pick_harness_zero_installed_errors() {
         let td = fake_path_with(&[]);
-        let err = pick_harness(None, Some(Harness::Claude), Some(td.path())).unwrap_err();
+        let err = pick_harness(None, Some(ArtifactType::Claude), Some(td.path())).unwrap_err();
         assert!(
             err.to_string().contains("no installed harnesses")
                 || err.to_string().contains("no harnesses on PATH"),
@@ -974,23 +956,23 @@ mod tests {
     #[test]
     fn argv_for_returns_harness_specific_shape() {
         assert_eq!(
-            argv_for(Harness::Claude, "abc"),
+            argv_for(ArtifactType::Claude, "abc"),
             vec!["-r".to_string(), "abc".to_string()]
         );
         assert_eq!(
-            argv_for(Harness::Gemini, "abc"),
+            argv_for(ArtifactType::Gemini, "abc"),
             vec!["--resume".to_string(), "abc".to_string()]
         );
         assert_eq!(
-            argv_for(Harness::Codex, "abc"),
+            argv_for(ArtifactType::Codex, "abc"),
             vec!["resume".to_string(), "abc".to_string()]
         );
         assert_eq!(
-            argv_for(Harness::Opencode, "abc"),
+            argv_for(ArtifactType::Opencode, "abc"),
             vec!["--session".to_string(), "abc".to_string()]
         );
         assert_eq!(
-            argv_for(Harness::Pi, "abc"),
+            argv_for(ArtifactType::Pi, "abc"),
             vec!["--session".to_string(), "abc".to_string()]
         );
     }
@@ -1004,7 +986,7 @@ mod tests {
         let cwd = tempfile::tempdir().unwrap();
         let path = make_convo_path_for_resume("claude-code://resume-test-session");
 
-        let session_id = project_into_harness(&path, Harness::Claude, cwd.path()).unwrap();
+        let session_id = project_into_harness(&path, ArtifactType::Claude, cwd.path()).unwrap();
         assert!(!session_id.is_empty());
     }
 

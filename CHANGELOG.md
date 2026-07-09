@@ -16,12 +16,15 @@ users no longer have to `p import` each session by hand.
     derivation goes through the same provider managers, so listing and
     derivation always agree on provider roots.
   - The sync manifest at `~/.toolpath/sync.json` maps artifact type →
-    session id → `{project?, cache_id, last_activity?, message_count,
-    synced_at}`. A session is re-derived when its `last_activity` or
-    `message_count` differs from the record; otherwise it is skipped.
-    The manifest is written atomically (temp file + rename, `0600`) and
-    checkpointed after each type, so an interrupted first run keeps the
-    types it finished.
+    artifact id → `{path?, cache_id, last_activity?, synced_at}`. An
+    artifact is re-derived when its `last_activity` differs from the
+    record; otherwise it is skipped. The manifest is written atomically
+    (temp file + rename, `0600`) and checkpointed after each type, so an
+    interrupted first run keeps the types it finished.
+  - `ArtifactType` (in `sync.rs`) is the single enum naming artifact
+    sources, used everywhere the CLI names them: `p cache sync` types,
+    `share`/`resume` `--harness`, and import cache-id prefixes. It
+    replaces the former `Harness`/`HarnessArg` pair.
   - Sync owns refresh semantics: it overwrites cache entries it
     re-derives (no `--force` needed), while manual `p import` keeps its
     error-on-hit default. Sessions deleted upstream keep both their cache

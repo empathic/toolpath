@@ -29,7 +29,7 @@ pub enum CacheOp {
     Sync {
         /// Artifact types to sync (default: every agent harness)
         #[arg(value_enum)]
-        types: Vec<crate::cmd_share::HarnessArg>,
+        types: Vec<crate::sync::ArtifactType>,
     },
 }
 
