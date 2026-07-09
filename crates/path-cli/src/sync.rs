@@ -3,15 +3,14 @@
 //! artifact sources the CLI operates over.
 //!
 //! Sync enumerates artifacts across the requested types (today all six
-//! are agent-session providers, using the same aggregation `path share`
-//! uses), compares each against the sync manifest at
-//! `$CONFIG_DIR/sync.json`, and derives + caches only what is new or
-//! changed. The manifest maps artifact type → artifact id → the
-//! `last_activity` fingerprint recorded at last sync, so an unchanged
-//! artifact costs a metadata read instead of a re-derivation, and
-//! running sync twice in a row is a no-op. Artifacts deleted upstream
-//! keep both their cache document and their manifest record — the
-//! cache is an archive, not a mirror.
+//! are agent-session providers), compares each against the sync
+//! manifest at `$CONFIG_DIR/sync.json`, and derives + caches only what
+//! is new or changed. Change detection is stat-level: the fingerprint
+//! is the source file's mtime + size (or the database row's updated-at
+//! for the SQLite-backed providers), so deciding "nothing changed"
+//! never reads session bodies. Artifacts deleted upstream keep both
+//! their cache document and their manifest record — the cache is an
+//! archive, not a mirror.
 
 /// The kind of artifact an operation ranges over. One enum, used
 /// everywhere a command names artifact sources (`p cache sync` types,
@@ -99,15 +98,34 @@ mod engine {
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::ArtifactType;
     use crate::cmd_cache::write_cached;
     use crate::cmd_import::DerivedDoc;
-    use crate::cmd_share::{ArtifactRow, HarnessBundle, gather_artifacts};
+    use crate::cmd_share::{
+        HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_cursor,
+        is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
+    };
     use crate::config::config_dir;
 
     const MANIFEST_FILE: &str = "sync.json";
+
+    /// A cheaply-enumerated artifact: identity plus the stat-level
+    /// fingerprint used for change detection. Producing one never
+    /// parses session bodies.
+    #[derive(Debug, Clone)]
+    pub(crate) struct ArtifactStub {
+        pub(crate) artifact_type: ArtifactType,
+        pub(crate) id: String,
+        /// Filesystem path the artifact is keyed under, for path-keyed
+        /// providers (the project directory).
+        pub(crate) path: Option<String>,
+        /// Source mtime (file providers) or updated-at (DB providers).
+        pub(crate) modified: Option<DateTime<Utc>>,
+        /// Source file size; `None` for DB-backed providers.
+        pub(crate) size: Option<u64>,
+    }
 
     /// What the manifest remembers about one synced artifact.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,13 +136,17 @@ mod engine {
         pub(crate) path: Option<String>,
         /// Cache entry the derived document was written to.
         pub(crate) cache_id: String,
-        /// Fingerprint: the artifact's last activity as reported at
-        /// sync time.
+        /// Fingerprint: source mtime (file providers) or updated-at
+        /// (DB providers) at sync time.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub(crate) last_activity: Option<DateTime<Utc>>,
-        /// Fingerprint: message count at sync time. Recorded only for
-        /// harness artifact types (agent sessions); non-session
-        /// artifact kinds have no message notion and stay `None`.
+        pub(crate) modified: Option<DateTime<Utc>>,
+        /// Fingerprint: source file size at sync time.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub(crate) size: Option<u64>,
+        /// Message count as of the last derivation. Informational only
+        /// — never part of change detection — and recorded only for
+        /// harness artifact types (non-session kinds have no message
+        /// notion).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub(crate) message_count: Option<usize>,
         pub(crate) synced_at: DateTime<Utc>,
@@ -181,17 +203,14 @@ mod engine {
         types: &[ArtifactType],
     ) -> Result<Vec<(ArtifactType, SyncOutcome)>> {
         let mut manifest = load_manifest()?;
-        // Only ranking depends on cwd and sync ignores row order, so any
-        // directory works here.
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let mut out = Vec::with_capacity(types.len());
         for &artifact_type in types {
-            let rows = gather_artifacts(bundle, &cwd, Some(artifact_type), None);
+            let stubs = enumerate_stubs(bundle, artifact_type);
             let mut records = manifest
                 .get(artifact_type.name())
                 .cloned()
                 .unwrap_or_default();
-            let outcome = sync_rows(bundle, &rows, &mut records)?;
+            let outcome = sync_stubs(bundle, &stubs, &mut records)?;
             if !records.is_empty() {
                 manifest.insert(artifact_type.name().to_string(), records);
                 save_manifest(&manifest)?;
@@ -201,41 +220,42 @@ mod engine {
         Ok(out)
     }
 
-    /// Sync one type's rows against its manifest records. Derivation
+    /// Sync one type's stubs against its manifest records. Derivation
     /// failures are warned and tallied, not fatal; cache-write failures
     /// (disk, permissions) abort.
-    fn sync_rows(
+    fn sync_stubs(
         bundle: &HarnessBundle,
-        rows: &[ArtifactRow],
+        stubs: &[ArtifactStub],
         records: &mut BTreeMap<String, SyncRecord>,
     ) -> Result<SyncOutcome> {
         let mut outcome = SyncOutcome::default();
-        for row in rows {
-            // Message counts only make sense for harness types; strip
-            // them for anything else so the record stays general.
-            let message_count = row.artifact_type.harness().and(row.message_count);
-            let existing = records.get(&row.session_id);
+        for stub in stubs {
+            let existing = records.get(&stub.id);
             let is_new = existing.is_none();
             if let Some(rec) = existing
-                && rec.last_activity == row.last_activity
-                && rec.message_count == message_count
+                && rec.modified == stub.modified
+                && rec.size == stub.size
             {
                 outcome.unchanged += 1;
                 continue;
             }
-            match derive_row(bundle, row) {
+            match derive_stub(bundle, stub) {
                 Ok(derived) => {
                     // force: sync owns refresh semantics — a re-sync or a
                     // prior manual `p import` of the same session must not
                     // error on the existing cache entry.
                     write_cached(&derived.cache_id, &derived.doc, true)?;
                     records.insert(
-                        row.session_id.clone(),
+                        stub.id.clone(),
                         SyncRecord {
-                            path: row.path.clone(),
+                            path: stub.path.clone(),
                             cache_id: derived.cache_id,
-                            last_activity: row.last_activity,
-                            message_count,
+                            // The stamp was taken before the derive read the
+                            // source, so a write racing the derive re-syncs
+                            // next run instead of going unnoticed.
+                            modified: stub.modified,
+                            size: stub.size,
+                            message_count: stub.artifact_type.harness().and(derived.message_count),
                             synced_at: Utc::now(),
                         },
                     );
@@ -248,8 +268,8 @@ mod engine {
                 Err(e) => {
                     eprintln!(
                         "warning: sync {}: {}: {e}",
-                        row.artifact_type.name(),
-                        row.session_id
+                        stub.artifact_type.name(),
+                        stub.id
                     );
                     outcome.failed += 1;
                 }
@@ -258,44 +278,283 @@ mod engine {
         Ok(outcome)
     }
 
-    /// Derive one artifact through the same manager the row was
-    /// enumerated from, so listing and derivation always agree on
-    /// provider roots.
-    fn derive_row(bundle: &HarnessBundle, row: &ArtifactRow) -> Result<DerivedDoc> {
+    /// Derive one artifact through the same manager it was enumerated
+    /// from, so listing and derivation always agree on provider roots.
+    fn derive_stub(bundle: &HarnessBundle, stub: &ArtifactStub) -> Result<DerivedDoc> {
         use crate::cmd_import as imp;
         let path = || {
-            row.path
+            stub.path
                 .as_deref()
-                .ok_or_else(|| anyhow!("artifact {} has no path", row.session_id))
+                .ok_or_else(|| anyhow!("artifact {} has no path", stub.id))
         };
-        match row.artifact_type {
+        match stub.artifact_type {
             ArtifactType::Claude => {
-                imp::derive_claude_session_with(mgr(&bundle.claude)?, path()?, &row.session_id)
+                imp::derive_claude_session_with(mgr(&bundle.claude)?, path()?, &stub.id)
             }
-            ArtifactType::Gemini => imp::derive_gemini_session_with(
-                mgr(&bundle.gemini)?,
-                path()?,
-                &row.session_id,
-                false,
-            ),
-            ArtifactType::Pi => {
-                imp::derive_pi_session_with(mgr(&bundle.pi)?, path()?, &row.session_id)
+            ArtifactType::Gemini => {
+                imp::derive_gemini_session_with(mgr(&bundle.gemini)?, path()?, &stub.id, false)
             }
-            ArtifactType::Codex => {
-                imp::derive_codex_session_with(mgr(&bundle.codex)?, &row.session_id)
-            }
+            ArtifactType::Pi => imp::derive_pi_session_with(mgr(&bundle.pi)?, path()?, &stub.id),
+            ArtifactType::Codex => imp::derive_codex_session_with(mgr(&bundle.codex)?, &stub.id),
             ArtifactType::Opencode => {
-                imp::derive_opencode_session_with(mgr(&bundle.opencode)?, &row.session_id, false)
+                imp::derive_opencode_session_with(mgr(&bundle.opencode)?, &stub.id, false)
             }
-            ArtifactType::Cursor => {
-                imp::derive_cursor_session_with(mgr(&bundle.cursor)?, &row.session_id)
-            }
+            ArtifactType::Cursor => imp::derive_cursor_session_with(mgr(&bundle.cursor)?, &stub.id),
         }
     }
 
     fn mgr<T>(slot: &Option<T>) -> Result<&T> {
         slot.as_ref()
             .ok_or_else(|| anyhow!("provider not available"))
+    }
+
+    // ── stat-level enumeration ─────────────────────────────────────────
+
+    /// (mtime, size) of a file, both `None` when the stat fails.
+    fn stat_stamp(path: &Path) -> (Option<DateTime<Utc>>, Option<u64>) {
+        match std::fs::metadata(path) {
+            Ok(md) => (
+                md.modified().ok().map(DateTime::<Utc>::from),
+                Some(md.len()),
+            ),
+            Err(_) => (None, None),
+        }
+    }
+
+    /// Enumerate one type's artifacts with stat-level fingerprints.
+    /// Providers that aren't installed produce no stubs; other listing
+    /// errors warn and skip so one broken provider can't block the rest.
+    fn enumerate_stubs(bundle: &HarnessBundle, t: ArtifactType) -> Vec<ArtifactStub> {
+        let mut out = Vec::new();
+        match t {
+            ArtifactType::Claude => {
+                if let Some(mgr) = &bundle.claude {
+                    stubs_claude(mgr, &mut out);
+                }
+            }
+            ArtifactType::Gemini => {
+                if let Some(mgr) = &bundle.gemini {
+                    stubs_gemini(mgr, &mut out);
+                }
+            }
+            ArtifactType::Codex => {
+                if let Some(mgr) = &bundle.codex {
+                    stubs_codex(mgr, &mut out);
+                }
+            }
+            ArtifactType::Opencode => {
+                if let Some(mgr) = &bundle.opencode {
+                    stubs_opencode(mgr, &mut out);
+                }
+            }
+            ArtifactType::Cursor => {
+                if let Some(mgr) = &bundle.cursor {
+                    stubs_cursor(mgr, &mut out);
+                }
+            }
+            ArtifactType::Pi => {
+                if let Some(mgr) = &bundle.pi {
+                    stubs_pi(mgr, &mut out);
+                }
+            }
+        }
+        out
+    }
+
+    /// Chain heads via `list_conversations` (bounded first-lines peek
+    /// per file, no full parse); fingerprint stats the head segment —
+    /// appends land there, and a rotation surfaces as a new head id.
+    fn stubs_claude(mgr: &toolpath_claude::ClaudeConvo, out: &mut Vec<ArtifactStub>) {
+        let projects = match mgr.list_projects() {
+            Ok(ps) => ps,
+            Err(e) if is_not_found_claude(&e) => return,
+            Err(e) => {
+                eprintln!("warning: claude enumeration failed: {e}");
+                return;
+            }
+        };
+        for project in projects {
+            let heads = match mgr.list_conversations(&project) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("warning: claude project {project} failed: {e}");
+                    continue;
+                }
+            };
+            for head in heads {
+                let (modified, size) = mgr
+                    .resolver()
+                    .conversation_file(&project, &head)
+                    .map(|p| stat_stamp(&p))
+                    .unwrap_or((None, None));
+                out.push(ArtifactStub {
+                    artifact_type: ArtifactType::Claude,
+                    id: head,
+                    path: Some(project.clone()),
+                    modified,
+                    size,
+                });
+            }
+        }
+    }
+
+    /// Gemini main files carry their session id *inside* the JSON, so
+    /// enumeration still goes through the metadata listing; the
+    /// fingerprint is a stat of the listed file all the same. A
+    /// peek-level listing in `toolpath-gemini` would drop the parse.
+    fn stubs_gemini(mgr: &toolpath_gemini::GeminiConvo, out: &mut Vec<ArtifactStub>) {
+        let projects = match mgr.list_projects() {
+            Ok(ps) => ps,
+            Err(e) if is_not_found_gemini(&e) => return,
+            Err(e) => {
+                eprintln!("warning: gemini enumeration failed: {e}");
+                return;
+            }
+        };
+        for project in projects {
+            let metas = match mgr.list_conversation_metadata(&project) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("warning: gemini project {project} failed: {e}");
+                    continue;
+                }
+            };
+            for m in metas {
+                let (modified, size) = stat_stamp(&m.file_path);
+                out.push(ArtifactStub {
+                    artifact_type: ArtifactType::Gemini,
+                    id: m.session_uuid,
+                    path: Some(m.project_path),
+                    modified,
+                    size,
+                });
+            }
+        }
+    }
+
+    /// Rollout files, stat-only. The artifact id is the trailing UUID of
+    /// the filename stem (`rollout-<timestamp>-<uuid>`); `read_session`
+    /// accepts either the UUID or the full stem, so the fallback is safe.
+    fn stubs_codex(mgr: &toolpath_codex::CodexConvo, out: &mut Vec<ArtifactStub>) {
+        let files = match mgr.io().list_rollout_files() {
+            Ok(f) => f,
+            Err(e) if is_not_found_codex(&e) => return,
+            Err(e) => {
+                eprintln!("warning: codex enumeration failed: {e}");
+                return;
+            }
+        };
+        for file in files {
+            let Some(stem) = file.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let id = stem
+                .len()
+                .checked_sub(36)
+                .and_then(|at| stem.get(at..))
+                .filter(|tail| tail.bytes().filter(|&b| b == b'-').count() == 4)
+                .unwrap_or(stem)
+                .to_string();
+            let (modified, size) = stat_stamp(&file);
+            out.push(ArtifactStub {
+                artifact_type: ArtifactType::Codex,
+                id,
+                path: None,
+                modified,
+                size,
+            });
+        }
+    }
+
+    /// One header-only `SELECT` — `time_updated` is the fingerprint; no
+    /// message bodies are loaded.
+    fn stubs_opencode(mgr: &toolpath_opencode::OpencodeConvo, out: &mut Vec<ArtifactStub>) {
+        let sessions = match mgr.io().list_sessions(None) {
+            Ok(s) => s,
+            Err(e) if is_not_found_opencode(&e) => return,
+            Err(e) => {
+                eprintln!("warning: opencode enumeration failed: {e}");
+                return;
+            }
+        };
+        for s in sessions {
+            out.push(ArtifactStub {
+                artifact_type: ArtifactType::Opencode,
+                modified: s.last_activity(),
+                id: s.id,
+                path: None,
+                size: None,
+            });
+        }
+    }
+
+    /// Composer headers (one `SELECT` plus a per-composer bubble-count
+    /// check) — `lastUpdatedAt` is the fingerprint. Bubble-less drafts
+    /// are skipped; unlike `share`, composers without a workspace are
+    /// included, since sync doesn't need to rank them by project.
+    fn stubs_cursor(mgr: &toolpath_cursor::CursorConvo, out: &mut Vec<ArtifactStub>) {
+        let listings = match mgr.io().list_composers() {
+            Ok(l) => l,
+            Err(e) if is_not_found_cursor(&e) => return,
+            Err(e) => {
+                eprintln!("warning: cursor enumeration failed: {e}");
+                return;
+            }
+        };
+        for l in listings.into_iter().filter(|l| l.has_bubbles) {
+            out.push(ArtifactStub {
+                artifact_type: ArtifactType::Cursor,
+                modified: l.head.last_updated_at_utc(),
+                id: l.head.composer_id,
+                path: None,
+                size: None,
+            });
+        }
+    }
+
+    /// Session files stat-only; the id comes from a one-line header
+    /// peek, falling back to the filename stem's `<timestamp>_<id>`
+    /// shape — the same resolution `read_session` accepts.
+    fn stubs_pi(mgr: &toolpath_pi::PiConvo, out: &mut Vec<ArtifactStub>) {
+        let projects = match mgr.list_projects() {
+            Ok(ps) => ps,
+            Err(e) if is_not_found_pi(&e) => return,
+            Err(e) => {
+                eprintln!("warning: pi enumeration failed: {e}");
+                return;
+            }
+        };
+        for project in projects {
+            let files = match toolpath_pi::reader::list_session_files(mgr.resolver(), &project) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("warning: pi project {project} failed: {e}");
+                    continue;
+                }
+            };
+            for file in files {
+                let header_id = toolpath_pi::reader::peek_header(&file)
+                    .ok()
+                    .map(|h| h.id)
+                    .filter(|id| !id.is_empty());
+                let stem_id = file
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.split_once('_'))
+                    .map(|(_, rest)| rest.to_string());
+                let Some(id) = header_id.or(stem_id) else {
+                    continue;
+                };
+                let (modified, size) = stat_stamp(&file);
+                out.push(ArtifactStub {
+                    artifact_type: ArtifactType::Pi,
+                    id,
+                    path: Some(project.clone()),
+                    modified,
+                    size,
+                });
+            }
+        }
     }
 
     /// One stderr line per artifact type. Types the user didn't name
@@ -374,7 +633,6 @@ mod engine {
     mod tests {
         use super::*;
         use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
-        use std::path::Path;
 
         /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
         /// `f` receives the tempdir root for building provider fixtures.
@@ -427,16 +685,13 @@ mod engine {
             doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
         }
 
-        fn make_row(artifact_type: ArtifactType, session_id: &str) -> ArtifactRow {
-            ArtifactRow {
+        fn make_stub(artifact_type: ArtifactType, id: &str) -> ArtifactStub {
+            ArtifactStub {
                 artifact_type,
+                id: id.to_string(),
                 path: Some("/test/project".to_string()),
-                cwd: None,
-                session_id: session_id.to_string(),
-                title: String::new(),
-                last_activity: None,
-                message_count: None,
-                matches_cwd: false,
+                modified: None,
+                size: None,
             }
         }
 
@@ -451,7 +706,8 @@ mod engine {
                     SyncRecord {
                         path: Some("/test/project".to_string()),
                         cache_id: "claude-p1".to_string(),
-                        last_activity: Some("2024-01-02T00:00:01Z".parse().unwrap()),
+                        modified: Some("2024-01-02T00:00:01.123456789Z".parse().unwrap()),
+                        size: Some(4096),
                         message_count: Some(2),
                         synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
                     },
@@ -487,6 +743,20 @@ mod engine {
         }
 
         #[test]
+        fn enumerate_stubs_stats_claude_sessions() {
+            with_cfg(|home| {
+                write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+                let bundle = claude_bundle(home);
+                let stubs = enumerate_stubs(&bundle, ArtifactType::Claude);
+                assert_eq!(stubs.len(), 1);
+                assert_eq!(stubs[0].id, "sess-aaa");
+                assert_eq!(stubs[0].path.as_deref(), Some("/test/project"));
+                assert!(stubs[0].modified.is_some(), "file mtime must be stamped");
+                assert!(stubs[0].size.unwrap() > 0, "file size must be stamped");
+            });
+        }
+
+        #[test]
         fn first_sync_ingests_then_second_is_unchanged() {
             with_cfg(|home| {
                 write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
@@ -506,11 +776,12 @@ mod engine {
                 assert_eq!(records.len(), 2);
                 let rec = records.get("sess-aaa").unwrap();
                 assert_eq!(rec.path.as_deref(), Some("/test/project"));
-                assert!(rec.last_activity.is_some());
+                assert!(rec.modified.is_some());
+                assert!(rec.size.is_some());
                 assert_eq!(
                     rec.message_count,
                     Some(2),
-                    "harness records must carry the message count"
+                    "harness records carry the message count from the derive"
                 );
                 assert!(
                     crate::cmd_cache::cache_path(&rec.cache_id)
@@ -540,7 +811,8 @@ mod engine {
                     .clone();
                 let steps_before = cached_step_count(&cache_id);
 
-                // Session continues: a later user turn lands in the file.
+                // Session continues: a later user turn lands in the file,
+                // changing its size (and mtime).
                 let file = home.join(".claude/projects/-test-project/sess-aaa.jsonl");
                 let mut body = std::fs::read_to_string(&file).unwrap();
                 body.push_str(
@@ -602,12 +874,11 @@ mod engine {
             with_cfg(|home| {
                 write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
                 let bundle = claude_bundle(home);
-                let cwd = std::env::current_dir().unwrap();
-                let mut rows = gather_artifacts(&bundle, &cwd, Some(ArtifactType::Claude), None);
-                rows.push(make_row(ArtifactType::Claude, "does-not-exist"));
+                let mut stubs = enumerate_stubs(&bundle, ArtifactType::Claude);
+                stubs.push(make_stub(ArtifactType::Claude, "does-not-exist"));
 
                 let mut records = BTreeMap::new();
-                let outcome = sync_rows(&bundle, &rows, &mut records).unwrap();
+                let outcome = sync_stubs(&bundle, &stubs, &mut records).unwrap();
                 assert_eq!((outcome.new, outcome.failed), (1, 1));
                 assert!(records.contains_key("sess-aaa"));
                 assert!(
@@ -618,11 +889,11 @@ mod engine {
         }
 
         #[test]
-        fn derive_row_errors_when_provider_missing() {
+        fn derive_stub_errors_when_provider_missing() {
             let bundle = HarnessBundle::default();
-            let row = make_row(ArtifactType::Claude, "sess");
-            let Err(err) = derive_row(&bundle, &row) else {
-                panic!("derive_row must fail without a claude manager");
+            let stub = make_stub(ArtifactType::Claude, "sess");
+            let Err(err) = derive_stub(&bundle, &stub) else {
+                panic!("derive_stub must fail without a claude manager");
             };
             assert!(err.to_string().contains("provider not available"));
         }

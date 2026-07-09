@@ -568,41 +568,34 @@ fn collect_cursor(
     }
 }
 
-fn is_not_found_claude(err: &toolpath_claude::ConvoError) -> bool {
+pub(crate) fn is_not_found_claude(err: &toolpath_claude::ConvoError) -> bool {
     use toolpath_claude::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::ClaudeDirectoryNotFound(_))
 }
 
-fn is_not_found_gemini(err: &toolpath_gemini::ConvoError) -> bool {
+pub(crate) fn is_not_found_gemini(err: &toolpath_gemini::ConvoError) -> bool {
     use toolpath_gemini::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::GeminiDirectoryNotFound(_))
 }
 
-fn is_not_found_pi(err: &toolpath_pi::PiError) -> bool {
+pub(crate) fn is_not_found_pi(err: &toolpath_pi::PiError) -> bool {
     use toolpath_pi::PiError;
     matches!(err, PiError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, PiError::ProjectNotFound(_))
 }
 
-fn is_not_found_codex(err: &toolpath_codex::ConvoError) -> bool {
+pub(crate) fn is_not_found_codex(err: &toolpath_codex::ConvoError) -> bool {
     use toolpath_codex::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::CodexDirectoryNotFound(_))
 }
 
-fn is_not_found_copilot(err: &toolpath_copilot::ConvoError) -> bool {
-    use toolpath_copilot::ConvoError;
-    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
-        || matches!(err, ConvoError::CopilotDirectoryNotFound(_))
-}
-
-fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
+pub(crate) fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
     use toolpath_opencode::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, ConvoError::NoHomeDirectory)
@@ -610,7 +603,7 @@ fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
         || matches!(err, ConvoError::DatabaseNotFound(_))
 }
 
-fn is_not_found_cursor(err: &toolpath_cursor::CursorError) -> bool {
+pub(crate) fn is_not_found_cursor(err: &toolpath_cursor::CursorError) -> bool {
     use toolpath_cursor::CursorError;
     matches!(err, CursorError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, CursorError::NoHomeDirectory)
