@@ -8,8 +8,8 @@
 
 #![cfg(not(target_os = "emscripten"))]
 
+use path_cli::cmd_resume::Harness;
 use path_cli::cmd_resume::{RecordingExec, ResumeArgs, run_with_strategy};
-use path_cli::sync::ArtifactType;
 
 mod support;
 use support::*;
@@ -28,7 +28,7 @@ fn file_input_explicit_claude_projects_and_records_exec() {
 
     let recorder = RecordingExec::default();
     run_with_strategy(
-        args_explicit(doc_file, cwd.path(), ArtifactType::Claude),
+        args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
     )
     .unwrap();
@@ -62,7 +62,7 @@ fn file_input_explicit_gemini_projects_and_records_exec() {
 
     let recorder = RecordingExec::default();
     run_with_strategy(
-        args_explicit(doc_file, cwd.path(), ArtifactType::Gemini),
+        args_explicit(doc_file, cwd.path(), Harness::Gemini),
         &recorder,
     )
     .unwrap();
@@ -90,7 +90,7 @@ fn file_input_explicit_codex_projects_and_records_exec() {
 
     let recorder = RecordingExec::default();
     run_with_strategy(
-        args_explicit(doc_file, cwd.path(), ArtifactType::Codex),
+        args_explicit(doc_file, cwd.path(), Harness::Codex),
         &recorder,
     )
     .unwrap();
@@ -192,7 +192,7 @@ fn file_input_explicit_opencode_projects_and_records_exec() {
 
     let recorder = RecordingExec::default();
     run_with_strategy(
-        args_explicit(doc_file, cwd.path(), ArtifactType::Opencode),
+        args_explicit(doc_file, cwd.path(), Harness::Opencode),
         &recorder,
     )
     .unwrap();
@@ -220,11 +220,7 @@ fn file_input_explicit_pi_projects_and_records_exec() {
     let doc_file = write_path_to_temp(cwd.path(), path);
 
     let recorder = RecordingExec::default();
-    run_with_strategy(
-        args_explicit(doc_file, cwd.path(), ArtifactType::Pi),
-        &recorder,
-    )
-    .unwrap();
+    run_with_strategy(args_explicit(doc_file, cwd.path(), Harness::Pi), &recorder).unwrap();
 
     let cap = recorder.captured();
     assert_eq!(cap.binary, "pi");
@@ -265,7 +261,7 @@ fn cache_id_input_loads_and_projects() {
     let resume_args = ResumeArgs {
         input: cache_id.to_string(),
         cwd: Some(cwd.path().to_path_buf()),
-        harness: Some(ArtifactType::Claude),
+        harness: Some(Harness::Claude),
         no_cache: false,
         force: false,
         url: None,
@@ -305,7 +301,7 @@ fn multi_path_graph_returns_clear_error() {
 
     let recorder = RecordingExec::default();
     let err = run_with_strategy(
-        args_explicit(doc_file, cwd.path(), ArtifactType::Claude),
+        args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
     )
     .unwrap_err();
@@ -327,7 +323,7 @@ fn agentless_path_returns_clear_error() {
 
     let recorder = RecordingExec::default();
     let err = run_with_strategy(
-        args_explicit(doc_file, cwd.path(), ArtifactType::Claude),
+        args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
     )
     .unwrap_err();
@@ -346,7 +342,7 @@ fn explicit_harness_not_on_path_errors() {
 
     let recorder = RecordingExec::default();
     let err = run_with_strategy(
-        args_explicit(doc_file, cwd.path(), ArtifactType::Claude),
+        args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
     )
     .unwrap_err();

@@ -11,6 +11,71 @@ use std::path::PathBuf;
 use crate::cmd_export::RepoSpec;
 use crate::sync::ArtifactType;
 
+/// An installed agent harness — a runtime sessions can be shared from
+/// and resumed into. Deliberately parallel to [`ArtifactType`]: every
+/// harness maps onto an artifact type, but not every artifact type is
+/// a harness once non-session kinds (git, github) join `ArtifactType`
+/// — you can't resume into a git repo. Harness-facing surfaces
+/// (`share`/`resume` `--harness`) take this type so non-harness values
+/// stay unrepresentable.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, clap::ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum Harness {
+    Claude,
+    Gemini,
+    Codex,
+    Opencode,
+    Cursor,
+    Pi,
+}
+
+impl Harness {
+    /// Every harness, in presentation order.
+    pub(crate) const ALL: [Harness; 6] = [
+        Harness::Claude,
+        Harness::Gemini,
+        Harness::Codex,
+        Harness::Opencode,
+        Harness::Cursor,
+        Harness::Pi,
+    ];
+
+    /// The artifact type this harness's sessions ingest as.
+    pub(crate) fn artifact_type(&self) -> ArtifactType {
+        match self {
+            Harness::Claude => ArtifactType::Claude,
+            Harness::Gemini => ArtifactType::Gemini,
+            Harness::Codex => ArtifactType::Codex,
+            Harness::Opencode => ArtifactType::Opencode,
+            Harness::Cursor => ArtifactType::Cursor,
+            Harness::Pi => ArtifactType::Pi,
+        }
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        self.artifact_type().name()
+    }
+
+    pub(crate) fn symbol(&self) -> &'static str {
+        self.artifact_type().symbol()
+    }
+}
+
+impl ArtifactType {
+    /// The harness this artifact type's sessions come from — `None`
+    /// for artifact types that aren't agent harnesses (none yet).
+    pub(crate) fn harness(&self) -> Option<Harness> {
+        match self {
+            ArtifactType::Claude => Some(Harness::Claude),
+            ArtifactType::Gemini => Some(Harness::Gemini),
+            ArtifactType::Codex => Some(Harness::Codex),
+            ArtifactType::Opencode => Some(Harness::Opencode),
+            ArtifactType::Cursor => Some(Harness::Cursor),
+            ArtifactType::Pi => Some(Harness::Pi),
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct ShareArgs {
     /// Pathbase server URL (defaults to the stored session's server)
@@ -38,7 +103,7 @@ pub struct ShareArgs {
     /// Narrow the picker to one harness, or skip the picker entirely
     /// when used with --session.
     #[arg(long, value_enum)]
-    pub harness: Option<ArtifactType>,
+    pub harness: Option<Harness>,
 
     /// Skip the picker. Requires --harness; requires --project for
     /// claude/gemini/pi.
@@ -545,7 +610,7 @@ fn is_not_found_cursor(err: &toolpath_cursor::CursorError) -> bool {
 }
 
 pub fn run(args: ShareArgs) -> Result<()> {
-    let harness = args.harness;
+    let harness = args.harness.map(|h| h.artifact_type());
 
     if args.session.is_some() && harness.is_none() {
         anyhow::bail!("--session requires --harness");
@@ -634,7 +699,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
         repo: args.repo.clone(),
         name: args.name.clone(),
         public: args.public,
-        harness: Some(h),
+        harness: h.harness(),
         session: None, // unused by share_explicit
         project: if h.path_keyed() {
             Some(PathBuf::from(&key))
