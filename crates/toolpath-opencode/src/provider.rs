@@ -604,7 +604,10 @@ fn accumulate_tokens(total: &mut TokenUsage, step: &Tokens) {
     // where reasoning is already inside `output`. Fold it into output_tokens
     // so the IR's `output` means "all generated tokens" consistently and the
     // session total isn't under-counted.
-    add_u32(&mut total.output_tokens, (step.output + step.reasoning) as u32);
+    add_u32(
+        &mut total.output_tokens,
+        (step.output + step.reasoning) as u32,
+    );
     add_u32(&mut total.cache_read_tokens, step.cache.read as u32);
     add_u32(&mut total.cache_write_tokens, step.cache.write as u32);
     // Memoize the reasoning slice we just folded into output. It's
@@ -1007,7 +1010,10 @@ mod tests {
         // The reasoning slice (5) is also memoized under
         // breakdowns["output"]["reasoning"] — it's the SAME number folded
         // into output, so Σ(inner) = 5 ≤ output (25).
-        assert_eq!(u.breakdowns.get("output").and_then(|m| m.get("reasoning")), Some(&5u32));
+        assert_eq!(
+            u.breakdowns.get("output").and_then(|m| m.get("reasoning")),
+            Some(&5u32)
+        );
 
         let total = view.total_usage.as_ref().unwrap();
         assert_eq!(total.input_tokens, Some(100));
@@ -1055,7 +1061,10 @@ mod tests {
         let u = view.turns[0].token_usage.as_ref().unwrap();
         // output total: (20+5) + (4+7) = 36; reasoning slice: 5+7 = 12.
         assert_eq!(u.output_tokens, Some(36));
-        assert_eq!(u.breakdowns.get("output").and_then(|m| m.get("reasoning")), Some(&12u32));
+        assert_eq!(
+            u.breakdowns.get("output").and_then(|m| m.get("reasoning")),
+            Some(&12u32)
+        );
     }
 
     #[test]

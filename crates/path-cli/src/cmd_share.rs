@@ -917,10 +917,7 @@ fn harness_status_pi(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> 
     }
 }
 
-fn harness_status_cursor(
-    bundle: &HarnessBundle,
-    home: Option<&std::path::Path>,
-) -> HarnessStatus {
+fn harness_status_cursor(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
     let Some(mgr) = &bundle.cursor else {
         return HarnessStatus::unresolved();
     };
@@ -1274,7 +1271,8 @@ mod tests {
         let start = format!(
             r#"{{"type":"session.start","timestamp":"2026-07-01T00:00:00Z","data":{{"copilotVersion":"1.0.67","context":{{"cwd":"{cwd}"}}}}}}"#
         );
-        let user = r#"{"type":"user.message","timestamp":"2026-07-01T00:00:01Z","data":{"content":"hi"}}"#;
+        let user =
+            r#"{"type":"user.message","timestamp":"2026-07-01T00:00:01Z","data":{"content":"hi"}}"#;
         std::fs::write(dir.join("events.jsonl"), format!("{start}\n{user}\n")).unwrap();
     }
 

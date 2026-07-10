@@ -35,14 +35,26 @@ pub fn tool_category(name: &str) -> Option<ToolCategory> {
         "read" | "read_file" | "readfile" | "view" | "view_file" | "cat" | "open" | "get_file" => {
             return Some(ToolCategory::FileRead);
         }
-        "write" | "write_file" | "writefile" | "create" | "create_file" | "edit" | "edit_file"
-        | "apply_patch" | "patch" | "str_replace" | "str_replace_editor" | "replace"
-        | "replace_string_in_file" | "insert" | "delete_file" => {
+        "write"
+        | "write_file"
+        | "writefile"
+        | "create"
+        | "create_file"
+        | "edit"
+        | "edit_file"
+        | "apply_patch"
+        | "patch"
+        | "str_replace"
+        | "str_replace_editor"
+        | "replace"
+        | "replace_string_in_file"
+        | "insert"
+        | "delete_file" => {
             return Some(ToolCategory::FileWrite);
         }
-        "glob" | "list" | "list_dir" | "list_directory" | "ls" | "find" | "find_files"
-        | "grep" | "search" | "ripgrep" | "rg" | "file_search" | "grep_search"
-        | "semantic_search" | "codebase_search" => return Some(ToolCategory::FileSearch),
+        "glob" | "list" | "list_dir" | "list_directory" | "ls" | "find" | "find_files" | "grep"
+        | "search" | "ripgrep" | "rg" | "file_search" | "grep_search" | "semantic_search"
+        | "codebase_search" => return Some(ToolCategory::FileSearch),
         "fetch" | "web_fetch" | "fetch_url" | "web_search" | "search_web" | "browser"
         | "open_url" | "http" => return Some(ToolCategory::Network),
         "subagent" | "delegate" | "spawn_agent" | "task" | "agent" | "dispatch_agent" => {
@@ -55,7 +67,10 @@ pub fn tool_category(name: &str) -> Option<ToolCategory> {
         Some(ToolCategory::Shell)
     } else if n.contains("search") || n.contains("grep") || n.contains("glob") {
         Some(ToolCategory::FileSearch)
-    } else if n.contains("write") || n.contains("edit") || n.contains("patch") || n.contains("replace")
+    } else if n.contains("write")
+        || n.contains("edit")
+        || n.contains("patch")
+        || n.contains("replace")
     {
         Some(ToolCategory::FileWrite)
     } else if n.contains("read") || n.contains("view") || n.contains("file") {
@@ -492,12 +507,7 @@ fn attach_tool_result(
 
 /// Replace the arg-derived `raw_diff` on the mutation created by tool call
 /// `id` with the native file-state diff from `result.detailedContent`.
-fn upgrade_mutation_diff(
-    current: &mut Option<Turn>,
-    turns: &mut [Turn],
-    id: &str,
-    diff: &str,
-) {
+fn upgrade_mutation_diff(current: &mut Option<Turn>, turns: &mut [Turn], id: &str, diff: &str) {
     let hit = |t: &mut Turn| {
         t.file_mutations
             .iter_mut()
@@ -573,12 +583,34 @@ fn file_mutation_for(tool_id: &str, name: &str, args: &Value) -> Option<FileMuta
     if tool_category(name) != Some(ToolCategory::FileWrite) {
         return None;
     }
-    let path = str_arg(args, &["path", "file_path", "filePath", "filename", "file", "target_file"])?;
+    let path = str_arg(
+        args,
+        &[
+            "path",
+            "file_path",
+            "filePath",
+            "filename",
+            "file",
+            "target_file",
+        ],
+    )?;
 
     let n = name.to_ascii_lowercase();
     let is_delete = n.contains("delete");
     let looks_add = n.contains("create") || n.contains("add") || n.contains("new");
-    let content = str_arg(args, &["content", "contents", "new_content", "text", "file_text", "new_str", "newstring", "newString"]);
+    let content = str_arg(
+        args,
+        &[
+            "content",
+            "contents",
+            "new_content",
+            "text",
+            "file_text",
+            "new_str",
+            "newstring",
+            "newString",
+        ],
+    );
     let old = str_arg(args, &["old_string", "old_str", "oldstring", "oldString"]);
 
     let operation = if is_delete {
@@ -728,7 +760,10 @@ mod tests {
     #[test]
     fn assistant_turn_chains_to_user() {
         let view = to_view(&parse(&body()));
-        assert_eq!(view.turns[1].parent_id.as_deref(), Some(view.turns[0].id.as_str()));
+        assert_eq!(
+            view.turns[1].parent_id.as_deref(),
+            Some(view.turns[0].id.as_str())
+        );
     }
 
     #[test]
@@ -830,14 +865,21 @@ mod tests {
         assert_eq!(u.output_tokens, Some(70), "output from per-message sum");
         assert_eq!(u.input_tokens, Some(800), "input from shutdown");
         assert_eq!(u.cache_read_tokens, Some(9000), "cache_read from shutdown");
-        assert_eq!(u.cache_write_tokens, Some(1500), "cache_write from shutdown");
+        assert_eq!(
+            u.cache_write_tokens,
+            Some(1500),
+            "cache_write from shutdown"
+        );
     }
 
     #[test]
     fn view_metadata_populated() {
         let view = to_view(&parse(&body()));
         assert_eq!(view.provider_id.as_deref(), Some("copilot"));
-        assert_eq!(view.base.as_ref().unwrap().working_dir.as_deref(), Some("/tmp/proj"));
+        assert_eq!(
+            view.base.as_ref().unwrap().working_dir.as_deref(),
+            Some("/tmp/proj")
+        );
         let p = view.producer.as_ref().unwrap();
         assert_eq!(p.name, "copilot-cli");
         assert_eq!(p.version.as_deref(), Some("1.0.66"));
@@ -928,7 +970,11 @@ mod tests {
         .join("\n");
         let view = to_view(&parse(&body));
         let tools = &view.turns[0].tool_uses;
-        assert_eq!(tools.len(), 1, "id-less start/complete must not double-count");
+        assert_eq!(
+            tools.len(),
+            1,
+            "id-less start/complete must not double-count"
+        );
         assert_eq!(tools[0].result.as_ref().unwrap().content, "a.rs");
     }
 
@@ -955,7 +1001,11 @@ mod tests {
     fn tool_pairing_with_ids_still_works() {
         // Regression guard: explicit ids remain authoritative.
         let view = to_view(&parse(&body()));
-        let shell = view.turns[1].tool_uses.iter().find(|t| t.name == "bash").unwrap();
+        let shell = view.turns[1]
+            .tool_uses
+            .iter()
+            .find(|t| t.name == "bash")
+            .unwrap();
         assert_eq!(shell.result.as_ref().unwrap().content, "a.rs");
         // body() has two id-bearing tool calls: bash + create_file.
         assert_eq!(view.turns[1].tool_uses.len(), 2);

@@ -139,7 +139,8 @@ impl Harness for CopilotHarness {
         if !path.exists() {
             return None;
         }
-        let lines = toolpath_copilot::EventReader::read_lines(&path).expect("copilot fixture parse");
+        let lines =
+            toolpath_copilot::EventReader::read_lines(&path).expect("copilot fixture parse");
         let session = toolpath_copilot::Session {
             id: "fixture".to_string(),
             dir_path: path.clone(),

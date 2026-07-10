@@ -39,7 +39,7 @@
         function () {
           legacyCopy(text);
           flashCopied(btn);
-        }
+        },
       );
     } else {
       legacyCopy(text);

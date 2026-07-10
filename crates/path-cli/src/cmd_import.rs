@@ -979,7 +979,9 @@ fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>>
             if sessions.is_empty() {
                 anyhow::bail!("No Copilot sessions found in ~/.copilot/session-state");
             }
-            return wrap_paths_copilot(toolpath_copilot::derive::derive_project(&sessions, &config));
+            return wrap_paths_copilot(toolpath_copilot::derive::derive_project(
+                &sessions, &config,
+            ));
         }
         (None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -991,7 +993,9 @@ fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>>
                             .most_recent_session()
                             .map_err(|e| anyhow::anyhow!("{}", e))?
                             .ok_or_else(|| {
-                                anyhow::anyhow!("No Copilot sessions found in ~/.copilot/session-state")
+                                anyhow::anyhow!(
+                                    "No Copilot sessions found in ~/.copilot/session-state"
+                                )
                             })?;
                         return wrap_paths_copilot(vec![toolpath_copilot::derive::derive_path(
                             &s, &config,
@@ -1007,7 +1011,9 @@ fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>>
                     .ok_or_else(|| {
                         anyhow::anyhow!("No Copilot sessions found in ~/.copilot/session-state")
                     })?;
-                return wrap_paths_copilot(vec![toolpath_copilot::derive::derive_path(&s, &config)]);
+                return wrap_paths_copilot(vec![toolpath_copilot::derive::derive_path(
+                    &s, &config,
+                )]);
             }
         }
     };
@@ -1283,16 +1289,15 @@ fn derive_cursor(
             Ok(toolpath_cursor::derive_path(&s, &cfg))
         };
 
-        let workspace_filter = project.as_deref().map(|p| {
-            std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p))
-        });
+        let workspace_filter = project
+            .as_deref()
+            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p)));
         let workspace_match = |m: &toolpath_cursor::CursorSessionMetadata| -> bool {
             match (&workspace_filter, &m.workspace_path) {
                 (None, _) => true,
                 (Some(_), None) => false,
                 (Some(want), Some(have)) => {
-                    let canonical =
-                        std::fs::canonicalize(have).unwrap_or_else(|_| have.clone());
+                    let canonical = std::fs::canonicalize(have).unwrap_or_else(|_| have.clone());
                     &canonical == want
                 }
             }

@@ -116,8 +116,7 @@ impl ConversationReader {
                 }
 
                 if !entry.timestamp.is_empty()
-                    && let Ok(timestamp) =
-                        entry.timestamp.parse::<chrono::DateTime<chrono::Utc>>()
+                    && let Ok(timestamp) = entry.timestamp.parse::<chrono::DateTime<chrono::Utc>>()
                 {
                     if started_at.is_none() || Some(timestamp) < started_at {
                         started_at = Some(timestamp);

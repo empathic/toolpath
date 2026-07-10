@@ -110,12 +110,14 @@ impl DbReader {
                 }
             })?;
         match raw {
-            Some(s) => serde_json::from_str(&s)
-                .map(Some)
-                .map_err(|e| CursorError::MalformedPayload {
-                    what: format!("composerData:{composer_id}"),
-                    detail: e.to_string(),
-                }),
+            Some(s) => {
+                serde_json::from_str(&s)
+                    .map(Some)
+                    .map_err(|e| CursorError::MalformedPayload {
+                        what: format!("composerData:{composer_id}"),
+                        detail: e.to_string(),
+                    })
+            }
             None => Ok(None),
         }
     }
@@ -143,9 +145,7 @@ impl DbReader {
             Some(s) => match serde_json::from_str::<Bubble>(&s) {
                 Ok(b) => Ok(Some(b)),
                 Err(e) => {
-                    eprintln!(
-                        "Warning: bubble {composer_id}:{bubble_id} malformed: {e}; skipping"
-                    );
+                    eprintln!("Warning: bubble {composer_id}:{bubble_id} malformed: {e}; skipping");
                     Ok(None)
                 }
             },
@@ -260,7 +260,9 @@ impl DbReader {
         // Load content blobs referenced by tool results.
         let mut content_blobs = std::collections::HashMap::new();
         for b in &bubbles {
-            let Some(tf) = &b.tool_former_data else { continue };
+            let Some(tf) = &b.tool_former_data else {
+                continue;
+            };
             let Ok(Some(result)) = tf.parse_result() else {
                 continue;
             };
@@ -409,7 +411,8 @@ pub(crate) mod tests {
 
     #[test]
     fn malformed_composer_data_surfaces_error() {
-        let setup = r#"INSERT INTO cursorDiskKV (key, value) VALUES ('composerData:bad', '{not json}');"#;
+        let setup =
+            r#"INSERT INTO cursorDiskKV (key, value) VALUES ('composerData:bad', '{not json}');"#;
         let f = fixture_db(setup);
         let r = DbReader::open(f.path()).unwrap();
         let err = r.read_composer_data("bad").unwrap_err();

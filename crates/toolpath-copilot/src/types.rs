@@ -85,7 +85,12 @@ impl EventLine {
         if self.extra.is_empty() {
             Value::Null
         } else {
-            Value::Object(self.extra.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            Value::Object(
+                self.extra
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            )
         }
     }
 
@@ -111,9 +116,7 @@ impl EventLine {
             EV_ASSISTANT_TURN_START => CopilotEvent::AssistantTurnStart,
             EV_ASSISTANT_MESSAGE => CopilotEvent::AssistantMessage(MessageEvent::from_payload(&p)),
             EV_ASSISTANT_TURN_END => CopilotEvent::AssistantTurnEnd,
-            EV_TOOL_EXECUTION_START => {
-                CopilotEvent::ToolStart(ToolExecution::from_payload(&p))
-            }
+            EV_TOOL_EXECUTION_START => CopilotEvent::ToolStart(ToolExecution::from_payload(&p)),
             EV_TOOL_EXECUTION_COMPLETE => {
                 CopilotEvent::ToolComplete(ToolExecution::from_payload(&p))
             }
@@ -142,7 +145,10 @@ pub enum CopilotEvent {
     SessionShutdown(SessionShutdown),
     CompactionComplete(Value),
     /// Any other `session.*` event we don't specifically model.
-    SessionOther { kind: String, payload: Value },
+    SessionOther {
+        kind: String,
+        payload: Value,
+    },
     UserMessage(MessageEvent),
     AssistantTurnStart,
     AssistantMessage(MessageEvent),
@@ -152,9 +158,15 @@ pub enum CopilotEvent {
     SubagentStarted(Subagent),
     SubagentCompleted(Subagent),
     SkillInvoked(Value),
-    Hook { kind: String, payload: Value },
+    Hook {
+        kind: String,
+        payload: Value,
+    },
     Abort(Value),
-    Unknown { kind: String, payload: Value },
+    Unknown {
+        kind: String,
+        payload: Value,
+    },
 }
 
 /// `session.start` — the session-meta line.
@@ -220,9 +232,8 @@ impl SessionShutdown {
         // shape (`usage.inputTokens`, `modelMetrics.model`) is kept as a
         // fallback.
         let td = p.get("tokenDetails");
-        let td_count = |k: &str| -> Option<u32> {
-            td?.get(k)?.get("tokenCount")?.as_u64().map(|n| n as u32)
-        };
+        let td_count =
+            |k: &str| -> Option<u32> { td?.get(k)?.get("tokenCount")?.as_u64().map(|n| n as u32) };
         let usage = p.get("usage").unwrap_or(p);
         let model = p
             .get("modelMetrics")
@@ -237,7 +248,10 @@ impl SessionShutdown {
             input_tokens: td_count("input")
                 .or_else(|| u32_field(usage, &["inputTokens", "input_tokens", "promptTokens"])),
             output_tokens: td_count("output").or_else(|| {
-                u32_field(usage, &["outputTokens", "output_tokens", "completionTokens"])
+                u32_field(
+                    usage,
+                    &["outputTokens", "output_tokens", "completionTokens"],
+                )
             }),
             cache_read_tokens: td_count("cache_read"),
             cache_write_tokens: td_count("cache_write"),
@@ -325,20 +339,20 @@ impl ToolExecution {
         Self {
             // Treat an empty-string id as absent so the fallback id / positional
             // pairing kicks in (an empty toolCallId is invalid downstream).
-            id: str_field(p, &["id", "callId", "call_id", "toolCallId", "tool_call_id"])
-                .filter(|s| !s.trim().is_empty()),
+            id: str_field(
+                p,
+                &["id", "callId", "call_id", "toolCallId", "tool_call_id"],
+            )
+            .filter(|s| !s.trim().is_empty()),
             name: str_field(p, &["name", "tool", "toolName", "tool_name"]).unwrap_or_default(),
             args,
-            success: p
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .or_else(|| {
-                    // `status: "success"` / `"error"` is a plausible alternative.
-                    str_field(p, &["status"]).map(|s| {
-                        let s = s.to_ascii_lowercase();
-                        s == "success" || s == "ok" || s == "completed"
-                    })
-                }),
+            success: p.get("success").and_then(|v| v.as_bool()).or_else(|| {
+                // `status: "success"` / `"error"` is a plausible alternative.
+                str_field(p, &["status"]).map(|s| {
+                    let s = s.to_ascii_lowercase();
+                    s == "success" || s == "ok" || s == "completed"
+                })
+            }),
             output: tool_output(p),
             detailed: p
                 .get("result")
@@ -358,9 +372,10 @@ fn tool_output(p: &Value) -> Option<String> {
     match p.get("result") {
         Some(Value::String(s)) if !s.is_empty() => return Some(s.clone()),
         Some(r @ Value::Object(_)) => {
-            if let Some(s) =
-                payload_text_keys(r, &["content", "detailedContent", "text", "output", "stdout"])
-            {
+            if let Some(s) = payload_text_keys(
+                r,
+                &["content", "detailedContent", "text", "output", "stdout"],
+            ) {
                 return Some(s);
             }
         }
@@ -368,7 +383,13 @@ fn tool_output(p: &Value) -> Option<String> {
     }
     payload_text_keys(
         p,
-        &["output", "stdout", "content", "aggregatedOutput", "aggregated_output"],
+        &[
+            "output",
+            "stdout",
+            "content",
+            "aggregatedOutput",
+            "aggregated_output",
+        ],
     )
 }
 
@@ -390,7 +411,15 @@ impl Subagent {
             // toolCallId so the delegation pairs with its tool call.
             id: str_field(
                 p,
-                &["toolCallId", "tool_call_id", "id", "agentId", "agent_id", "subagentId", "subagent_id"],
+                &[
+                    "toolCallId",
+                    "tool_call_id",
+                    "id",
+                    "agentId",
+                    "agent_id",
+                    "subagentId",
+                    "subagent_id",
+                ],
             ),
             prompt: payload_text_keys(p, &["prompt", "instruction", "input"]),
             result: payload_text_keys(p, &["result", "output", "summary"]),
@@ -495,8 +524,14 @@ impl Workspace {
 /// unquoting the value, and taking the first non-empty match per field.
 pub fn parse_workspace(content: &str) -> Workspace {
     const ROOT_KEYS: &[&str] = &["git_root", "gitroot", "root", "worktree", "workspace_root"];
-    const REPO_KEYS: &[&str] =
-        &["repository", "repo", "remote", "origin", "repository_url", "remote_url"];
+    const REPO_KEYS: &[&str] = &[
+        "repository",
+        "repo",
+        "remote",
+        "origin",
+        "repository_url",
+        "remote_url",
+    ];
     const BRANCH_KEYS: &[&str] = &["branch", "git_branch", "current_branch"];
     const REV_KEYS: &[&str] = &["revision", "commit", "commit_hash", "sha", "head"];
 
@@ -509,7 +544,10 @@ pub fn parse_workspace(content: &str) -> Workspace {
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
-        let key = key.trim().trim_matches(|c| c == '"' || c == '\'').to_ascii_lowercase();
+        let key = key
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_ascii_lowercase();
         let value = unquote(value.trim());
         if value.is_empty() {
             continue; // block header like `git:` — no scalar to take

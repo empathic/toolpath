@@ -123,7 +123,11 @@ impl PathResolver {
         // Unique prefix match.
         let matches: Vec<&PathBuf> = all
             .iter()
-            .filter(|p| dir_name(p).map(|n| n.starts_with(session_id)).unwrap_or(false))
+            .filter(|p| {
+                dir_name(p)
+                    .map(|n| n.starts_with(session_id))
+                    .unwrap_or(false)
+            })
             .collect();
         match matches.len() {
             0 => Err(ConvoError::SessionNotFound(session_id.to_string())),
@@ -148,7 +152,8 @@ fn collect_session_dirs(root: &Path, out: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) && path.join(EVENTS_FILE).is_file()
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+            && path.join(EVENTS_FILE).is_file()
         {
             out.push(path);
         }
@@ -202,7 +207,11 @@ mod tests {
     #[test]
     fn session_state_dir_under_copilot_dir() {
         let (_t, r) = setup();
-        assert!(r.session_state_dir().unwrap().ends_with(".copilot/session-state"));
+        assert!(
+            r.session_state_dir()
+                .unwrap()
+                .ends_with(".copilot/session-state")
+        );
     }
 
     #[test]

@@ -98,8 +98,14 @@ mod tests {
             .get("producer")
             .and_then(|v| v.as_object())
             .expect("meta.extra.producer object");
-        assert_eq!(producer.get("name").and_then(|v| v.as_str()), Some("copilot-cli"));
-        assert_eq!(producer.get("version").and_then(|v| v.as_str()), Some("1.0.66"));
+        assert_eq!(
+            producer.get("name").and_then(|v| v.as_str()),
+            Some("copilot-cli")
+        );
+        assert_eq!(
+            producer.get("version").and_then(|v| v.as_str()),
+            Some("1.0.66")
+        );
     }
 
     #[test]

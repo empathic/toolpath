@@ -27,7 +27,11 @@ pub struct ComposerHead {
     pub subtitle: Option<String>,
     #[serde(rename = "createdAt", default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
-    #[serde(rename = "lastUpdatedAt", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "lastUpdatedAt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_updated_at: Option<i64>,
     #[serde(
         rename = "conversationCheckpointLastUpdatedAt",
@@ -35,7 +39,11 @@ pub struct ComposerHead {
         skip_serializing_if = "Option::is_none"
     )]
     pub conversation_checkpoint_last_updated_at: Option<i64>,
-    #[serde(rename = "unifiedMode", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "unifiedMode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub unified_mode: Option<String>,
     #[serde(rename = "forceMode", default, skip_serializing_if = "Option::is_none")]
     pub force_mode: Option<String>,
@@ -45,17 +53,37 @@ pub struct ComposerHead {
     pub is_draft: bool,
     #[serde(rename = "hasUnreadMessages", default)]
     pub has_unread_messages: bool,
-    #[serde(rename = "totalLinesAdded", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "totalLinesAdded",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub total_lines_added: Option<i64>,
-    #[serde(rename = "totalLinesRemoved", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "totalLinesRemoved",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub total_lines_removed: Option<i64>,
-    #[serde(rename = "filesChangedCount", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "filesChangedCount",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub files_changed_count: Option<i64>,
-    #[serde(rename = "contextUsagePercent", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "contextUsagePercent",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub context_usage_percent: Option<f64>,
     #[serde(rename = "numSubComposers", default)]
     pub num_sub_composers: u32,
-    #[serde(rename = "workspaceIdentifier", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "workspaceIdentifier",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub workspace_identifier: Option<WorkspaceIdentifier>,
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, Value>,
@@ -118,29 +146,57 @@ pub struct ComposerData {
     pub subtitle: Option<String>,
     #[serde(rename = "createdAt", default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
-    #[serde(rename = "lastUpdatedAt", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "lastUpdatedAt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_updated_at: Option<i64>,
     #[serde(rename = "isAgentic", default)]
     pub is_agentic: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    #[serde(rename = "unifiedMode", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "unifiedMode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub unified_mode: Option<String>,
     #[serde(rename = "forceMode", default, skip_serializing_if = "Option::is_none")]
     pub force_mode: Option<String>,
-    #[serde(rename = "agentBackend", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "agentBackend",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub agent_backend: Option<String>,
-    #[serde(rename = "modelConfig", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "modelConfig",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub model_config: Option<ModelConfig>,
     /// May contain more entries than there are `bubbleId:` rows on disk;
     /// don't use for iteration order.
     #[serde(rename = "fullConversationHeadersOnly", default)]
     pub full_conversation_headers_only: Vec<BubbleHeader>,
-    #[serde(rename = "subComposerIds", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "subComposerIds",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub sub_composer_ids: Vec<String>,
-    #[serde(rename = "subagentComposerIds", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "subagentComposerIds",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub subagent_composer_ids: Vec<String>,
-    #[serde(rename = "latestChatGenerationUUID", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "latestChatGenerationUUID",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub latest_chat_generation_uuid: Option<String>,
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, Value>,
@@ -171,7 +227,11 @@ pub struct ModelConfig {
     pub model_name: Option<String>,
     #[serde(rename = "maxMode", default)]
     pub max_mode: bool,
-    #[serde(rename = "selectedModels", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "selectedModels",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub selected_models: Vec<SelectedModel>,
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, Value>,
@@ -196,7 +256,11 @@ pub struct BubbleHeader {
     pub kind: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grouping: Option<BubbleGrouping>,
-    #[serde(rename = "contentHeightHint", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "contentHeightHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub content_height_hint: Option<u32>,
 }
 
@@ -206,11 +270,23 @@ pub struct BubbleGrouping {
     pub is_renderable: bool,
     #[serde(rename = "hasText", default, skip_serializing_if = "Option::is_none")]
     pub has_text: Option<bool>,
-    #[serde(rename = "hasThinking", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "hasThinking",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub has_thinking: Option<bool>,
-    #[serde(rename = "thinkingDurationMs", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "thinkingDurationMs",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub thinking_duration_ms: Option<u64>,
-    #[serde(rename = "capabilityType", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "capabilityType",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub capability_type: Option<u32>,
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, Value>,
@@ -234,23 +310,47 @@ pub struct Bubble {
     #[serde(rename = "richText", default, skip_serializing_if = "Option::is_none")]
     pub rich_text: Option<String>,
     /// `15` = tool, `30` = thinking, `null` = text.
-    #[serde(rename = "capabilityType", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "capabilityType",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub capability_type: Option<u32>,
-    #[serde(rename = "conversationState", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "conversationState",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub conversation_state: Option<String>,
-    #[serde(rename = "unifiedMode", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "unifiedMode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub unified_mode: Option<u32>,
     #[serde(rename = "isAgentic", default)]
     pub is_agentic: bool,
     #[serde(rename = "requestId", default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
-    #[serde(rename = "checkpointId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "checkpointId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub checkpoint_id: Option<String>,
-    #[serde(rename = "tokenCount", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "tokenCount",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub token_count: Option<TokenCount>,
     #[serde(rename = "modelInfo", default, skip_serializing_if = "Option::is_none")]
     pub model_info: Option<ModelInfo>,
-    #[serde(rename = "toolFormerData", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "toolFormerData",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tool_former_data: Option<ToolFormerData>,
     /// Must serialize as `[]` when empty — Cursor's renderer calls
     /// `Object.entries(undefined)` on the thinking-blocks indexer.
@@ -266,10 +366,7 @@ pub struct Bubble {
 
 impl Bubble {
     pub fn created_at_utc(&self) -> Option<DateTime<Utc>> {
-        self.created_at
-            .as_ref()?
-            .parse::<DateTime<Utc>>()
-            .ok()
+        self.created_at.as_ref()?.parse::<DateTime<Utc>>().ok()
     }
 
     pub fn is_user(&self) -> bool {
@@ -297,9 +394,17 @@ pub const CAPABILITY_THINKING: u32 = 30;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TokenCount {
-    #[serde(rename = "inputTokens", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "inputTokens",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub input_tokens: Option<u64>,
-    #[serde(rename = "outputTokens", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "outputTokens",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub output_tokens: Option<u64>,
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, Value>,
@@ -330,7 +435,11 @@ pub struct ToolFormerData {
     pub tool: u32,
     #[serde(rename = "toolIndex", default, skip_serializing_if = "Option::is_none")]
     pub tool_index: Option<u32>,
-    #[serde(rename = "modelCallId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "modelCallId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub model_call_id: Option<String>,
     #[serde(rename = "toolCallId")]
     pub tool_call_id: String,
@@ -343,7 +452,11 @@ pub struct ToolFormerData {
     pub params: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
-    #[serde(rename = "additionalData", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "additionalData",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub additional_data: Option<Value>,
 }
 
@@ -583,7 +696,10 @@ mod tests {
         assert_eq!(cd.unified_mode.as_deref(), Some("agent"));
         assert_eq!(cd.default_model(), Some("default"));
         assert_eq!(cd.full_conversation_headers_only.len(), 1);
-        assert_eq!(cd.extra.get("futureField"), Some(&Value::String("kept".into())));
+        assert_eq!(
+            cd.extra.get("futureField"),
+            Some(&Value::String("kept".into()))
+        );
     }
 
     #[test]

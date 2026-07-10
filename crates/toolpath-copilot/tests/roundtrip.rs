@@ -20,7 +20,10 @@ fn setup() -> (TempDir, CopilotConvo, String) {
     let id = "demo-019dabc6-session";
     let dir = copilot.join("session-state").join(id);
     fs::create_dir_all(&dir).unwrap();
-    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample-session.jsonl");
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/sample-session.jsonl"
+    );
     fs::copy(fixture, dir.join("events.jsonl")).unwrap();
     let resolver = PathResolver::new().with_copilot_dir(&copilot);
     (temp, CopilotConvo::with_resolver(resolver), id.to_string())
@@ -54,7 +57,11 @@ fn view_has_expected_turns_and_tools() {
     assert_eq!(view.turns[1].role, Role::Assistant);
 
     let tools = &view.turns[1].tool_uses;
-    assert_eq!(tools.len(), 5, "shell, create_file, 2x read_file, grep_search");
+    assert_eq!(
+        tools.len(),
+        5,
+        "shell, create_file, 2x read_file, grep_search"
+    );
 
     // Categories classified.
     assert_eq!(
@@ -62,11 +69,19 @@ fn view_has_expected_turns_and_tools() {
         Some(ToolCategory::Shell)
     );
     assert_eq!(
-        tools.iter().find(|t| t.name == "create_file").unwrap().category,
+        tools
+            .iter()
+            .find(|t| t.name == "create_file")
+            .unwrap()
+            .category,
         Some(ToolCategory::FileWrite)
     );
     assert_eq!(
-        tools.iter().find(|t| t.name == "grep_search").unwrap().category,
+        tools
+            .iter()
+            .find(|t| t.name == "grep_search")
+            .unwrap()
+            .category,
         Some(ToolCategory::FileSearch)
     );
 
@@ -76,7 +91,14 @@ fn view_has_expected_turns_and_tools() {
         .filter(|t| t.name == "read_file")
         .find(|t| t.result.as_ref().map(|r| r.is_error).unwrap_or(false))
         .expect("an errored read_file");
-    assert!(errored.result.as_ref().unwrap().content.contains("no such file"));
+    assert!(
+        errored
+            .result
+            .as_ref()
+            .unwrap()
+            .content
+            .contains("no such file")
+    );
 }
 
 #[test]
@@ -92,7 +114,11 @@ fn view_has_delegation_skill_and_usage() {
 
     // Skill + session.task_complete land as non-turn events.
     assert!(view.events.iter().any(|e| e.event_type == "skill.invoked"));
-    assert!(view.events.iter().any(|e| e.event_type == "session.task_complete"));
+    assert!(
+        view.events
+            .iter()
+            .any(|e| e.event_type == "session.task_complete")
+    );
 
     // Session output total = sum of per-message outputTokens (120+90+60),
     // no per-message input in an open session (no session.shutdown).
@@ -125,7 +151,10 @@ fn derives_a_valid_single_path_graph() {
         .expect("a step carries the file artifact");
     let change = &file_step.change["src/main.rs"];
     assert!(change.raw.as_ref().unwrap().contains("+fn main() {"));
-    assert_eq!(change.structural.as_ref().unwrap().change_type, "file.write");
+    assert_eq!(
+        change.structural.as_ref().unwrap().change_type,
+        "file.write"
+    );
 
     // Round-trips through JSON as a single-path graph with every step on the
     // head's ancestry.

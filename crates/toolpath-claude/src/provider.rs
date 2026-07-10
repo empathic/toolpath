@@ -881,7 +881,10 @@ mod tests {
         canonicalize_message_usage(&mut turns);
 
         assert!(turns[0].token_usage.is_none(), "total only on final turn");
-        assert_eq!(turns[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
+        assert_eq!(
+            turns[1].token_usage.as_ref().unwrap().output_tokens,
+            Some(164)
+        );
         assert_eq!(turns[1].token_usage.as_ref().unwrap().input_tokens, Some(6));
         for t in &turns {
             assert!(
@@ -919,7 +922,10 @@ mod tests {
 
         assert!(turns[0].token_usage.is_none());
         assert!(turns[1].token_usage.is_none());
-        assert_eq!(turns[2].token_usage.as_ref().unwrap().output_tokens, Some(997));
+        assert_eq!(
+            turns[2].token_usage.as_ref().unwrap().output_tokens,
+            Some(997)
+        );
         for t in &turns {
             assert!(t.attributed_token_usage.is_none());
         }

@@ -148,8 +148,10 @@ mod tests {
         let res = EventReader::read_lines_impl(&dir.join("events.jsonl"), true);
         assert!(res.is_err());
         // Non-strict tolerates the same file.
-        assert!(EventReader::read_lines_impl(&dir.join("events.jsonl"), false)
-            .unwrap()
-            .is_empty());
+        assert!(
+            EventReader::read_lines_impl(&dir.join("events.jsonl"), false)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

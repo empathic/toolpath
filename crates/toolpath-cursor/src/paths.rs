@@ -108,7 +108,10 @@ impl PathResolver {
 
     /// Path to the agent-transcripts folder for a project slug.
     pub fn project_transcripts_dir(&self, slug: &str) -> Result<PathBuf> {
-        Ok(self.projects_dir()?.join(slug).join(AGENT_TRANSCRIPTS_SUBDIR))
+        Ok(self
+            .projects_dir()?
+            .join(slug)
+            .join(AGENT_TRANSCRIPTS_SUBDIR))
     }
 
     /// Path to the JSONL transcript file for a composer in a project.
@@ -189,13 +192,10 @@ impl PathResolver {
             let Some(path_part) = folder_uri.strip_prefix("file://") else {
                 continue;
             };
-            let recorded = std::fs::canonicalize(path_part)
-                .unwrap_or_else(|_| PathBuf::from(path_part));
+            let recorded =
+                std::fs::canonicalize(path_part).unwrap_or_else(|_| PathBuf::from(path_part));
             if recorded == target {
-                let id = entry
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned();
+                let id = entry.file_name().to_string_lossy().into_owned();
                 return Ok(Some(id));
             }
         }
@@ -220,10 +220,7 @@ impl PathResolver {
         synthesize_id: impl FnOnce(&Path) -> String,
     ) -> Result<EnsuredWorkspaceId> {
         if let Some(id) = self.find_workspace_id(folder)? {
-            return Ok(EnsuredWorkspaceId {
-                id,
-                created: false,
-            });
+            return Ok(EnsuredWorkspaceId { id, created: false });
         }
         let id = synthesize_id(folder);
         let dir = self.workspace_storage_dir()?.join(&id);

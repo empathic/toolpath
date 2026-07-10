@@ -84,12 +84,17 @@ fn rebuilt_session_preserves_bubble_role_sequence() {
     let source = load_source();
     let (_, rebuilt, _) = roundtrip(&source);
 
-    let kinds_of = |s: &CursorSession| -> Vec<u8> {
-        s.bubbles.iter().map(|b| b.kind).collect()
-    };
+    let kinds_of = |s: &CursorSession| -> Vec<u8> { s.bubbles.iter().map(|b| b.kind).collect() };
     let want = kinds_of(&source);
     assert_eq!(kinds_of(&rebuilt), want);
-    assert_eq!(want, vec![BUBBLE_TYPE_USER, BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_ASSISTANT]);
+    assert_eq!(
+        want,
+        vec![
+            BUBBLE_TYPE_USER,
+            BUBBLE_TYPE_ASSISTANT,
+            BUBBLE_TYPE_ASSISTANT
+        ]
+    );
 }
 
 #[test]
@@ -137,7 +142,9 @@ fn rebuilt_session_round_trips_file_content_via_blob_store() {
 
     // Empty before content uses Cursor's canonical SHA-256 sentinel.
     let before_id = result["beforeContentId"].as_str().unwrap();
-    assert!(before_id.ends_with("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+    assert!(
+        before_id.ends_with("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    );
 }
 
 #[test]
@@ -178,10 +185,7 @@ fn rebuilt_session_re_lifts_to_equivalent_view() {
 fn rebuilt_session_workspace_path_preserved() {
     let source = load_source();
     let (_, rebuilt, _) = roundtrip(&source);
-    assert_eq!(
-        rebuilt.workspace_path().unwrap().to_string_lossy(),
-        "/proj"
-    );
+    assert_eq!(rebuilt.workspace_path().unwrap().to_string_lossy(), "/proj");
 }
 
 #[test]

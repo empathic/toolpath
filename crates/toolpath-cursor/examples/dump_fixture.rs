@@ -81,7 +81,9 @@ fn capture_from_db(
     let chosen_id = composer_override.unwrap_or_else(|| {
         let mut chosen: Option<(String, usize)> = None;
         for id in &ids {
-            let Ok(s) = mgr.read_session(id) else { continue };
+            let Ok(s) = mgr.read_session(id) else {
+                continue;
+            };
             let n = s.bubbles.len();
             eprintln!("  {} → {} bubbles", id, n);
             if chosen.as_ref().is_none_or(|(_, prev)| n > *prev) {
@@ -126,8 +128,12 @@ fn capture_from_db(
 fn referenced_blob_hashes(session: &CursorSession) -> std::collections::HashSet<String> {
     let mut needed = std::collections::HashSet::new();
     for b in &session.bubbles {
-        let Some(tf) = &b.tool_former_data else { continue };
-        let Ok(Some(result)) = tf.parse_result() else { continue };
+        let Some(tf) = &b.tool_former_data else {
+            continue;
+        };
+        let Ok(Some(result)) = tf.parse_result() else {
+            continue;
+        };
         for field in ["beforeContentId", "afterContentId"] {
             if let Some(raw) = result.get(field).and_then(|v| v.as_str())
                 && let Some(hash) = raw.strip_prefix(CONTENT_PREFIX)
@@ -142,8 +148,7 @@ fn referenced_blob_hashes(session: &CursorSession) -> std::collections::HashSet<
 // ── Mode 2: from a cursor-agent CLI JSONL transcript ──────────────────
 
 fn capture_from_jsonl(path: &str) -> CursorSession {
-    let content = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let composer_id = composer_id_from_jsonl_path(path);
     let workspace = workspace_from_jsonl_path(path);
     let view = view_from_jsonl(&content, &composer_id, &workspace);
@@ -271,11 +276,7 @@ fn view_from_jsonl(
             role,
             // Synthesize plausible monotonic timestamps; the
             // transcript carries no real ones.
-            timestamp: format!(
-                "2026-06-01T{:02}:{:02}:00Z",
-                line_no / 60,
-                line_no % 60
-            ),
+            timestamp: format!("2026-06-01T{:02}:{:02}:00Z", line_no / 60, line_no % 60),
             text,
             thinking: None,
             tool_uses,
@@ -298,9 +299,7 @@ fn view_from_jsonl(
             version: Some("cursor-agent".into()),
         }),
         base: Some(SessionBase {
-            working_dir: workspace
-                .as_ref()
-                .map(|w| w.to_string_lossy().into_owned()),
+            working_dir: workspace.as_ref().map(|w| w.to_string_lossy().into_owned()),
             vcs_branch: None,
             vcs_revision: None,
             vcs_remote: None,

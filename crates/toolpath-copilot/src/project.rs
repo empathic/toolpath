@@ -443,7 +443,17 @@ fn file_write_projection(tu: &ToolInvocation) -> Option<FileWrite> {
         return None;
     }
     let input = &tu.input;
-    let path = str_in(input, &["path", "file_path", "filePath", "filename", "file", "target_file"])?;
+    let path = str_in(
+        input,
+        &[
+            "path",
+            "file_path",
+            "filePath",
+            "filename",
+            "file",
+            "target_file",
+        ],
+    )?;
     if input.get("old_string").is_some() || input.get("old_str").is_some() {
         let old = str_in(input, &["old_str", "old_string", "oldString"]).unwrap_or_default();
         let new = str_in(input, &["new_str", "new_string", "newString"]).unwrap_or_default();
@@ -457,13 +467,26 @@ fn file_write_projection(tu: &ToolInvocation) -> Option<FileWrite> {
             telemetry,
         });
     }
-    let content = str_in(input, &["file_text", "content", "contents", "text", "new_str", "new_string"])?;
+    let content = str_in(
+        input,
+        &[
+            "file_text",
+            "content",
+            "contents",
+            "text",
+            "new_str",
+            "new_string",
+        ],
+    )?;
     let detailed = hunked(git_diff(&path, "", &content, true));
     let telemetry = file_telemetry("create", &path, detailed.as_deref().unwrap_or(""));
     Some(FileWrite {
         tool_name: "create",
         arguments: json!({ "path": path, "file_text": content }),
-        content: format!("Created file {path} with {} characters", content.chars().count()),
+        content: format!(
+            "Created file {path} with {} characters",
+            content.chars().count()
+        ),
         detailed,
         telemetry,
     })
@@ -787,7 +810,10 @@ mod tests {
         assert!(!ids.is_empty());
         assert!(ids.iter().all(|s| !s.is_empty()), "no empty toolCallId");
         // start, complete, and the request mirror all share one id.
-        assert!(ids.windows(2).all(|w| w[0] == w[1]), "call id must be stable: {ids:?}");
+        assert!(
+            ids.windows(2).all(|w| w[0] == w[1]),
+            "call id must be stable: {ids:?}"
+        );
     }
 
     #[test]
@@ -834,7 +860,15 @@ mod tests {
         let find = |lines: &[EventLine], kind: &str, kv: &str| -> serde_json::Value {
             lines
                 .iter()
-                .find(|l| l.kind == kind && l.data.as_ref().unwrap().get("toolName").and_then(|v| v.as_str()) == Some(kv))
+                .find(|l| {
+                    l.kind == kind
+                        && l.data
+                            .as_ref()
+                            .unwrap()
+                            .get("toolName")
+                            .and_then(|v| v.as_str())
+                            == Some(kv)
+                })
                 .map(|l| l.data.clone().unwrap())
                 .unwrap_or(json!(null))
         };
@@ -845,14 +879,25 @@ mod tests {
             "Edit",
             json!({"file_path": "/p/a.rs", "old_string": "old", "new_string": "new"}),
         );
-        let s = CopilotProjector::new().project(&assistant_with(edit)).unwrap();
+        let s = CopilotProjector::new()
+            .project(&assistant_with(edit))
+            .unwrap();
         let start = find(&s.lines, "tool.execution_start", "edit");
         assert_eq!(start["arguments"]["path"], "/p/a.rs");
         assert_eq!(start["arguments"]["old_str"], "old");
         assert_eq!(start["arguments"]["new_str"], "new");
-        let done = s.lines.iter().find(|l| l.kind == "tool.execution_complete").unwrap();
-        let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"].as_str().unwrap();
-        assert!(detailed.contains("diff --git a/p/a.rs b/p/a.rs"), "got: {detailed}");
+        let done = s
+            .lines
+            .iter()
+            .find(|l| l.kind == "tool.execution_complete")
+            .unwrap();
+        let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"]
+            .as_str()
+            .unwrap();
+        assert!(
+            detailed.contains("diff --git a/p/a.rs b/p/a.rs"),
+            "got: {detailed}"
+        );
         assert!(detailed.contains("-old") && detailed.contains("+new"));
         // Exactly one file header — no stray empty `--- `/`+++ ` lines (which
         // break Copilot's diff parser and lose colorization).
@@ -860,23 +905,42 @@ mod tests {
             !detailed.contains("\n--- \n") && !detailed.contains("\n+++ \n"),
             "duplicate/empty diff header: {detailed:?}"
         );
-        assert_eq!(detailed.matches("\n--- a/").count(), 1, "one --- header: {detailed:?}");
+        assert_eq!(
+            detailed.matches("\n--- a/").count(),
+            1,
+            "one --- header: {detailed:?}"
+        );
         // toolTelemetry drives the colorized diff view.
         let tele = &done.data.as_ref().unwrap()["toolTelemetry"];
         assert_eq!(tele["metrics"]["linesAdded"], 1);
         assert_eq!(tele["metrics"]["linesRemoved"], 1);
         assert!(
-            tele["properties"]["codeBlocks"].as_str().unwrap().contains("\"languageId\":\"rust\""),
+            tele["properties"]["codeBlocks"]
+                .as_str()
+                .unwrap()
+                .contains("\"languageId\":\"rust\""),
             "codeBlocks: {tele:?}"
         );
 
         // Claude Write -> copilot `create` with {path, file_text} + create diff.
-        let create = base("c2", "Write", json!({"file_path": "/p/b.rs", "content": "hello"}));
-        let s = CopilotProjector::new().project(&assistant_with(create)).unwrap();
+        let create = base(
+            "c2",
+            "Write",
+            json!({"file_path": "/p/b.rs", "content": "hello"}),
+        );
+        let s = CopilotProjector::new()
+            .project(&assistant_with(create))
+            .unwrap();
         let start = find(&s.lines, "tool.execution_start", "create");
         assert_eq!(start["arguments"]["file_text"], "hello");
-        let done = s.lines.iter().find(|l| l.kind == "tool.execution_complete").unwrap();
-        let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"].as_str().unwrap();
+        let done = s
+            .lines
+            .iter()
+            .find(|l| l.kind == "tool.execution_complete")
+            .unwrap();
+        let detailed = done.data.as_ref().unwrap()["result"]["detailedContent"]
+            .as_str()
+            .unwrap();
         assert!(detailed.contains("create file mode"), "got: {detailed}");
         assert!(detailed.contains("--- a/dev/null") && detailed.contains("+hello"));
     }
@@ -938,7 +1002,9 @@ mod tests {
             .iter()
             .find(|l| l.kind == "assistant.message")
             .unwrap();
-        let reqs = msg.data.as_ref().unwrap()["toolRequests"].as_array().unwrap();
+        let reqs = msg.data.as_ref().unwrap()["toolRequests"]
+            .as_array()
+            .unwrap();
         // Edit mirror: copilot arg names, no Claude leftovers.
         assert_eq!(reqs[0]["name"], "edit");
         assert_eq!(reqs[0]["arguments"]["path"], "/p/a.md");
@@ -953,8 +1019,7 @@ mod tests {
             .lines
             .iter()
             .find(|l| {
-                l.kind == "tool.execution_start"
-                    && l.data.as_ref().unwrap()["toolName"] == "view"
+                l.kind == "tool.execution_start" && l.data.as_ref().unwrap()["toolName"] == "view"
             })
             .unwrap();
         assert_eq!(start.data.as_ref().unwrap()["arguments"]["path"], "/p/b.rs");

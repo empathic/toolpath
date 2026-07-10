@@ -35,22 +35,22 @@ Its `structural` object always carries:
 
 It may also carry any of the following, present only when the turn has them:
 
-| Field         | Type   | Meaning                                                       |
-| ------------- | ------ | ------------------------------------------------------------- |
-| `thinking`    | string | the model's reasoning text                                    |
-| `group_id`  | string | groups the steps derived from one source accounting unit (see below) |
-| `tool_uses`   | array  | tools the agent invoked (shape below)                         |
-| `token_usage` | object | the group's token counts (shape and rule below)      |
-| `attributed_token_usage` | object | this step's own attributed spend, when known (see below) |
-| `stop_reason` | string | why the model stopped (`end_turn`, `tool_use`, …)             |
-| `delegations` | array  | sub-agent work spawned from this turn (shape below)           |
-| `environment` | object | working environment at this turn (shape below)                |
+| Field                    | Type   | Meaning                                                              |
+| ------------------------ | ------ | -------------------------------------------------------------------- |
+| `thinking`               | string | the model's reasoning text                                           |
+| `group_id`               | string | groups the steps derived from one source accounting unit (see below) |
+| `tool_uses`              | array  | tools the agent invoked (shape below)                                |
+| `token_usage`            | object | the group's token counts (shape and rule below)                      |
+| `attributed_token_usage` | object | this step's own attributed spend, when known (see below)             |
+| `stop_reason`            | string | why the model stopped (`end_turn`, `tool_use`, …)                    |
+| `delegations`            | array  | sub-agent work spawned from this turn (shape below)                  |
+| `environment`            | object | working environment at this turn (shape below)                       |
 
 The model identifier is not on the change. It lives in `step.actor` (`agent:<model>`) and `meta.actors`. There is no provider-specific blob: every field the derivation captures is one of those listed above.
 
 ### `group_id`
 
-The provider's identifier for the **source accounting unit** these steps were derived from — Claude Code's `message.id` (`msg_…`) for one split message, Codex's round `turn_id` for one round (which may itself contain several messages). It is a **grouping key, not a step identifier**: when a producer derives several steps from one accounting unit (Claude Code writes one JSONL line per content block; a Codex round emits a commentary turn plus a final turn), every sibling step carries the same `group_id`. A step without a `group_id` is its own group of one. The stored value is the provider's verbatim id; only its *meaning* (which unit it names) is provider-specific.
+The provider's identifier for the **source accounting unit** these steps were derived from — Claude Code's `message.id` (`msg_…`) for one split message, Codex's round `turn_id` for one round (which may itself contain several messages). It is a **grouping key, not a step identifier**: when a producer derives several steps from one accounting unit (Claude Code writes one JSONL line per content block; a Codex round emits a commentary turn plus a final turn), every sibling step carries the same `group_id`. A step without a `group_id` is its own group of one. The stored value is the provider's verbatim id; only its _meaning_ (which unit it names) is provider-specific.
 
 ### Group accounting
 
@@ -66,11 +66,11 @@ Consequence: **summing `token_usage` over a v1.1.0 path's steps yields the sessi
 
 ### Per-step attribution: `attributed_token_usage`
 
-Some sources expose, per step, the spend attributable to that step alone — distinct from the group total. Where a producer has it, the step carries an **`attributed_token_usage`** object (same shape as [`token_usage`](#token_usage)) holding *this step's own share*. It is **optional and orthogonal to `token_usage`**: whether a number is a group total or a step share is structural — the key it sits under — never positional. This is the rule that lets per-step accounting be added by any producer at any time without a new kind version.
+Some sources expose, per step, the spend attributable to that step alone — distinct from the group total. Where a producer has it, the step carries an **`attributed_token_usage`** object (same shape as [`token_usage`](#token_usage)) holding _this step's own share_. It is **optional and orthogonal to `token_usage`**: whether a number is a group total or a step share is structural — the key it sits under — never positional. This is the rule that lets per-step accounting be added by any producer at any time without a new kind version.
 
 How it relates to the group total:
 
-- Within a `group_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is *computed* by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay verbatim source observations and source inconsistencies stay visible.
+- Within a `group_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is _computed_ by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay verbatim source observations and source inconsistencies stay visible.
 - For a group where the source attributes everything (e.g. Codex, where each step is a separate API call and the per-call delta is reported directly), the remainder is zero and `Σ attributed_token_usage == token_usage`.
 - A group with no per-step data carries no `attributed_token_usage` at all — only the group total. Producers must not fabricate a split.
 
@@ -94,17 +94,17 @@ Each element is an object:
 
 ### `token_usage`
 
-| Field                | Type            | Notes                           |
-| -------------------- | --------------- | ------------------------------- |
-| `input_tokens`       | integer \| null | always present                  |
-| `output_tokens`      | integer \| null | always present                  |
-| `cache_read_tokens`  | integer         | only when the source records it |
-| `cache_write_tokens` | integer         | only when the source records it |
+| Field                | Type            | Notes                                             |
+| -------------------- | --------------- | ------------------------------------------------- |
+| `input_tokens`       | integer \| null | always present                                    |
+| `output_tokens`      | integer \| null | always present                                    |
+| `cache_read_tokens`  | integer         | only when the source records it                   |
+| `cache_write_tokens` | integer         | only when the source records it                   |
 | `breakdowns`         | object          | only when the source itemizes a class (see below) |
 
 Values follow the [group accounting](#group-accounting) rule above.
 
-`breakdowns` is an **optional, informational** decomposition of a top-level class into named sub-classes. It is keyed by the class being broken down (e.g. `"output"`); each value is a map of sub-class → tokens (e.g. `{ "output": { "reasoning": 450 } }`). Breakdowns are **never summed into any total** — the parent class already counts these tokens; a breakdown only says *how* that class divides. Invariant: **`Σ(inner) ≤` the parent class's value**. The field is omitted entirely when empty. The same shape and rule apply on `attributed_token_usage`. Among current producers, Gemini, OpenCode, and Codex record `output → { reasoning }` (their reasoning/thoughts tokens are part of `output_tokens`); Claude records none (its JSONL `usage` does not itemize thinking tokens).
+`breakdowns` is an **optional, informational** decomposition of a top-level class into named sub-classes. It is keyed by the class being broken down (e.g. `"output"`); each value is a map of sub-class → tokens (e.g. `{ "output": { "reasoning": 450 } }`). Breakdowns are **never summed into any total** — the parent class already counts these tokens; a breakdown only says _how_ that class divides. Invariant: **`Σ(inner) ≤` the parent class's value**. The field is omitted entirely when empty. The same shape and rule apply on `attributed_token_usage`. Among current producers, Gemini, OpenCode, and Codex record `output → { reasoning }` (their reasoning/thoughts tokens are part of `output_tokens`); Claude records none (its JSONL `usage` does not itemize thinking tokens).
 
 ### `environment`
 
@@ -144,14 +144,14 @@ Entries that aren't turns (attachments, preamble lines, snapshots, hook results)
 
 ## Path metadata
 
-| Field                | Meaning                                                                          |
-| -------------------- | -------------------------------------------------------------------------------- |
-| `meta.kind`          | this URI                                                                         |
+| Field                | Meaning                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| `meta.kind`          | this URI                                                                                   |
 | `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, `cursor`, or `pi` |
-| `meta.title`         | session title                                                                    |
-| `meta.actors`        | the actor definitions the steps reference                                        |
-| `meta.files_changed` | file paths touched across the session                                            |
-| `meta.vcs_remote`    | repository URL, when known                                                       |
-| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session |
+| `meta.title`         | session title                                                                              |
+| `meta.actors`        | the actor definitions the steps reference                                                  |
+| `meta.files_changed` | file paths touched across the session                                                      |
+| `meta.vcs_remote`    | repository URL, when known                                                                 |
+| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session           |
 
 `files_changed`, `vcs_remote`, and `producer` sit directly under `meta` (they ride `PathMeta`'s flattened `extra`), not under a nested `meta.extra`.

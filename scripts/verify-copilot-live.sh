@@ -24,7 +24,7 @@ _repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 _path_bin="${PATH_BIN:-${_repo_root}/target/debug/path}"
 [ -x "${_path_bin}" ] || { echo "path binary not found at ${_path_bin} — cargo build -p path-cli" >&2; exit 1; }
 command -v copilot >/dev/null || { echo "copilot CLI not on PATH" >&2; exit 1; }
-[ -f "${HOME}/.copilot/config.json" ] || { echo "~/.copilot/config.json missing — run copilot once to authenticate" >&2; exit 1; }
+[ -f "${HOME}/.copilot/config.json" ] || { echo "${HOME}/.copilot/config.json missing — run copilot once to authenticate" >&2; exit 1; }
 
 _work="$(mktemp -d -t copilot-verify)"
 trap 'rm -rf "${_work}"' EXIT
@@ -39,7 +39,7 @@ chmod +x "${_work}/bin/copilot"
 echo "── projecting ${_input} into isolated COPILOT_HOME…"
 TOOLPATH_CONFIG_DIR="${_work}/cfg" COPILOT_HOME="${_work}/home" PATH="${_work}/bin:${PATH}" \
   "${_path_bin}" resume "${_input}" --harness copilot -C "${_work}/cwd" >/dev/null
-_sid="$(ls "${_work}/home/session-state" | head -1)"
+_sid="$(basename "$(find "${_work}/home/session-state" -mindepth 1 -maxdepth 1 | head -1)")"
 echo "   projected session: ${_sid}"
 
 echo "── loader check (copilot --resume)…"

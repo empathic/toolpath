@@ -13,7 +13,10 @@ use toolpath_convo::{ConversationProjector, Role, ToolCategory};
 use toolpath_copilot::{CopilotProjector, EventReader, Session, to_view};
 
 fn real_session() -> Session {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/real-session.jsonl");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/real-session.jsonl"
+    );
     let lines = EventReader::read_lines(path).expect("parse real fixture");
     Session {
         id: "7a80f0ee-real".to_string(),
@@ -34,13 +37,20 @@ fn forward_view_matches_source_counts() {
     // turn_start/turn_end (11 in the source).
     let users: Vec<_> = view.turns.iter().filter(|t| t.role == Role::User).collect();
     assert_eq!(users.len(), 1, "one elicit user prompt");
-    let assistants = view.turns.iter().filter(|t| t.role == Role::Assistant).count();
+    let assistants = view
+        .turns
+        .iter()
+        .filter(|t| t.role == Role::Assistant)
+        .count();
     assert_eq!(assistants, 11, "one turn per turn_start/turn_end pair");
 
     // 11 tool calls, all with results, categories per the native vocabulary.
     let tools: Vec<_> = view.turns.iter().flat_map(|t| &t.tool_uses).collect();
     assert_eq!(tools.len(), 11);
-    assert!(tools.iter().all(|t| t.result.is_some()), "every call has its result");
+    assert!(
+        tools.iter().all(|t| t.result.is_some()),
+        "every call has its result"
+    );
     let by_cat = |c: ToolCategory| tools.iter().filter(|t| t.category == Some(c)).count();
     assert_eq!(by_cat(ToolCategory::FileRead), 4); // view ×4
     assert_eq!(by_cat(ToolCategory::FileWrite), 3); // create ×2 + edit ×1
@@ -83,7 +93,10 @@ fn forward_view_matches_source_counts() {
 
     // Reasoning captured on every assistant turn that had reasoningText.
     let with_thinking = view.turns.iter().filter(|t| t.thinking.is_some()).count();
-    assert!(with_thinking >= 10, "reasoningText → thinking (got {with_thinking})");
+    assert!(
+        with_thinking >= 10,
+        "reasoningText → thinking (got {with_thinking})"
+    );
 
     // Token accounting: Σ per-turn output == session output (3141), and the
     // session total also carries the input/cache totals from the shutdown's
@@ -99,8 +112,16 @@ fn forward_view_matches_source_counts() {
     let total = view.total_usage.as_ref().unwrap();
     assert_eq!(total.output_tokens, Some(3141), "output = Σ per-message");
     assert_eq!(total.input_tokens, Some(54), "input from shutdown");
-    assert_eq!(total.cache_read_tokens, Some(198_884), "cache_read from shutdown");
-    assert_eq!(total.cache_write_tokens, Some(22_998), "cache_write from shutdown");
+    assert_eq!(
+        total.cache_read_tokens,
+        Some(198_884),
+        "cache_read from shutdown"
+    );
+    assert_eq!(
+        total.cache_write_tokens,
+        Some(22_998),
+        "cache_write from shutdown"
+    );
 
     // Git-less scratch dir: base still carries the cwd from session.start.
     assert_eq!(
@@ -199,7 +220,10 @@ fn projection_roundtrip_preserves_fidelity() {
 
 #[test]
 fn wire_serde_roundtrip_is_lossless() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/real-session.jsonl");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/real-session.jsonl"
+    );
     let raw = std::fs::read_to_string(path).unwrap();
     for (i, line) in raw.lines().enumerate() {
         if line.trim().is_empty() {

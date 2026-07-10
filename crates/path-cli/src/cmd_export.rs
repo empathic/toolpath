@@ -470,8 +470,11 @@ fn write_into_copilot_project(session: &toolpath_copilot::Session) -> Result<()>
         .with_context(|| format!("write {}", events_path.display()))?;
 
     // workspace.yaml
-    std::fs::write(sess_dir.join("workspace.yaml"), copilot_workspace_yaml(session))
-        .with_context(|| "write workspace.yaml")?;
+    std::fs::write(
+        sess_dir.join("workspace.yaml"),
+        copilot_workspace_yaml(session),
+    )
+    .with_context(|| "write workspace.yaml")?;
 
     // session-store.db `sessions` row — the resume picker reads this index.
     let db_path = resolver
@@ -499,7 +502,10 @@ fn write_into_copilot_project(session: &toolpath_copilot::Session) -> Result<()>
     eprintln!();
     eprintln!("⚠️  Preview: resume into Copilot CLI is unverified — the synthesized");
     eprintln!("    session may not load in `copilot --resume`.");
-    eprintln!("Loadable via:  path p import copilot --session {}", session.id);
+    eprintln!(
+        "Loadable via:  path p import copilot --session {}",
+        session.id
+    );
     eprintln!("Resume with:   copilot --resume {}", session.id);
     Ok(())
 }
@@ -1633,9 +1639,9 @@ fn build_cursor_session(
         // Reuse the existing id when present, otherwise pre-create a
         // workspaceStorage entry so Cursor adopts ours on next open.
         let resolver = PathResolver::new();
-        if let Ok(ensured) = resolver.ensure_workspace_storage_entry(&canonical, |path| {
-            stable_workspace_id_for(path)
-        }) {
+        if let Ok(ensured) =
+            resolver.ensure_workspace_storage_entry(&canonical, stable_workspace_id_for)
+        {
             projector = projector.with_workspace_id(ensured.id);
             if ensured.created {
                 eprintln!(
@@ -1763,13 +1769,8 @@ fn cursor_open_hints(workspace: &std::path::Path) -> Vec<String> {
     }
 }
 
-
 #[cfg(not(target_os = "emscripten"))]
-fn upsert_cursor_kv(
-    tx: &rusqlite::Transaction<'_>,
-    key: &str,
-    value: &str,
-) -> Result<()> {
+fn upsert_cursor_kv(tx: &rusqlite::Transaction<'_>, key: &str, value: &str) -> Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
         rusqlite::params![key, value],
