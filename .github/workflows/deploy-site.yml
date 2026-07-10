@@ -6,31 +6,7 @@ on:
   pull_request:
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: rustup show # installs toolchain from rust-toolchain.toml
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: site/pnpm-lock.yaml
-
-      - name: Install site deps (pinned prettier)
-        run: cd site && pnpm install
-
-      - name: Format + shellcheck gates
-        run: scripts/quality_gates.sh format shellcheck
-
-  test:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,14 +24,21 @@ jobs:
           key: cargo-test-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-test-
 
-      - name: Test
-        run: cargo test --workspace
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
-      - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+
+      - name: Quality gates # same gates as `just ci`
+        run: scripts/quality_gates.sh --verbose
 
   deploy:
-    needs: test
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       contents: read

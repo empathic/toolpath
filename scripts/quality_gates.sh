@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# The gate_* functions are invoked indirectly via "gate_${_name}", which
+# older shellcheck flags as SC2317 (unreachable) and newer as SC2329 (unused).
+# shellcheck disable=SC2317
 #
 # Run quality gates for the repository.
 #
