@@ -57,6 +57,10 @@ pub struct QueryArgs {
     /// reading text/diff content. Composes with `-c`.
     #[arg(short = 'r', long)]
     raw: bool,
+
+    /// Skip the automatic cache sync that runs before the query.
+    #[arg(long)]
+    no_sync: bool,
 }
 
 const WRAPPER_HELP: &str = "\
@@ -89,6 +93,11 @@ Examples:
   path query -r '.[0].change[].structural.text'     # read a turn's text, unescaped";
 
 pub fn run(args: QueryArgs, pretty: bool) -> Result<()> {
+    #[cfg(not(target_os = "emscripten"))]
+    if !args.no_sync {
+        sync_query_scope(&args);
+    }
+
     let scope = Scope {
         source: args.source,
         ids: args.ids,
@@ -102,4 +111,123 @@ pub fn run(args: QueryArgs, pretty: bool) -> Result<()> {
     let compact = args.compact || (!pretty && !std::io::stdout().is_terminal());
 
     crate::query::run(&scope, &args.filter, compact, args.raw)
+}
+
+/// Freshen the slice of the cache this query will read, before reading
+/// it. Quiet unless something was actually ingested; a sync failure
+/// degrades to querying the cache as-is.
+#[cfg(not(target_os = "emscripten"))]
+fn sync_query_scope(args: &QueryArgs) {
+    let types = sync_types_for(args.source.as_deref(), &args.ids, &args.input);
+    if types.is_empty() {
+        return;
+    }
+    let bundle = crate::cmd_share::HarnessBundle::from_environment();
+    match crate::sync::sync_bundle(&bundle, &types) {
+        Ok(outcomes) => {
+            for (t, o) in outcomes {
+                if o.new + o.updated + o.failed > 0 {
+                    let failed = if o.failed > 0 {
+                        format!(", {} failed", o.failed)
+                    } else {
+                        String::new()
+                    };
+                    eprintln!(
+                        "synced {}: {} new, {} updated{failed}",
+                        t.name(),
+                        o.new,
+                        o.updated
+                    );
+                }
+            }
+        }
+        Err(e) => eprintln!("warning: cache sync skipped: {e}"),
+    }
+}
+
+/// Which artifact types the query's scope flags reach. `--input`-only
+/// invocations never touch the cache; `--source` narrows to one type
+/// (non-syncable sources like `pathbase` map to nothing); `--id`s
+/// narrow to their prefixes; a bare cache-wide query syncs everything.
+#[cfg(not(target_os = "emscripten"))]
+fn sync_types_for(
+    source: Option<&str>,
+    ids: &[String],
+    inputs: &[String],
+) -> Vec<crate::sync::ArtifactType> {
+    use crate::sync::ArtifactType;
+    let scans_cache = source.is_some() || !ids.is_empty() || inputs.is_empty();
+    if !scans_cache {
+        return Vec::new();
+    }
+    if let Some(source) = source {
+        return ArtifactType::parse(source).into_iter().collect();
+    }
+    if !ids.is_empty() {
+        return ArtifactType::ALL
+            .into_iter()
+            .filter(|t| {
+                ids.iter().any(|id| {
+                    id.strip_prefix(t.name())
+                        .is_some_and(|rest| rest.starts_with('-'))
+                })
+            })
+            .collect();
+    }
+    ArtifactType::ALL.to_vec()
+}
+
+#[cfg(all(test, not(target_os = "emscripten")))]
+mod tests {
+    use super::sync_types_for;
+    use crate::sync::ArtifactType;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn input_only_queries_sync_nothing() {
+        assert!(sync_types_for(None, &[], &s(&["doc.json"])).is_empty());
+    }
+
+    #[test]
+    fn source_flag_narrows_to_one_type() {
+        assert_eq!(
+            sync_types_for(Some("claude"), &[], &[]),
+            vec![ArtifactType::Claude]
+        );
+        assert!(
+            sync_types_for(Some("pathbase"), &[], &[]).is_empty(),
+            "non-syncable sources sync nothing"
+        );
+    }
+
+    #[test]
+    fn ids_narrow_to_their_prefixes() {
+        let types = sync_types_for(
+            None,
+            &s(&["claude-abc", "codex-def", "pathbase-x-y-z"]),
+            &[],
+        );
+        assert_eq!(types, vec![ArtifactType::Claude, ArtifactType::Codex]);
+        // `cursor-…` must not match on the `c` of another type or vice versa.
+        assert_eq!(
+            sync_types_for(None, &s(&["cursor-abc"]), &[]),
+            vec![ArtifactType::Cursor]
+        );
+    }
+
+    #[test]
+    fn bare_cache_query_syncs_everything() {
+        assert_eq!(sync_types_for(None, &[], &[]), ArtifactType::ALL.to_vec());
+    }
+
+    #[test]
+    fn source_beats_ids_and_inputs_do_not_disable_cache_scan() {
+        assert_eq!(
+            sync_types_for(Some("git"), &s(&["claude-abc"]), &s(&["doc.json"])),
+            vec![ArtifactType::Git]
+        );
+    }
 }

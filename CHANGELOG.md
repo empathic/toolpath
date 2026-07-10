@@ -52,6 +52,15 @@ users no longer have to `p import` each session by hand.
     **Breaking**: `p import pi --all` now emits one Path document per
     session, consistent with every other provider (it previously
     produced a single combined Graph).
+  - `path query` now syncs before it reads, scoped to the query's own
+    flags: `--source claude` syncs only claude, `--id` prefixes narrow
+    likewise, a bare cache-wide query syncs every type, and
+    `--input`-only queries never touch the cache. Output is quiet
+    unless something was actually ingested (`synced claude: 3 new, 1
+    updated`), a sync failure degrades to querying the cache as-is,
+    and `--no-sync` opts out. This is the piece that makes the cache
+    an implementation detail: a new user can run `path query` with no
+    setup and get their sessions.
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the

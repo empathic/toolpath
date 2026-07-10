@@ -10,7 +10,14 @@ use predicates::prelude::*;
 use std::path::Path;
 
 fn cmd() -> Command {
-    Command::cargo_bin("path").unwrap()
+    // `path query` auto-syncs the cache from the installed harnesses;
+    // pin $HOME to a shared empty sandbox so tests exercise that path
+    // without ingesting the developer's real sessions.
+    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let home = HOME.get_or_init(|| tempfile::tempdir().unwrap());
+    let mut c = Command::cargo_bin("path").unwrap();
+    c.env("HOME", home.path()).env_remove("XDG_DATA_HOME");
+    c
 }
 
 /// Write `json` into `<cfg>/documents/<id>.json`, creating the dir.
@@ -503,4 +510,93 @@ fn kind_unknown_errors() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Bundled kinds"));
+}
+
+// ── auto-sync on invocation ──────────────────────────────────────────
+
+/// A `$HOME` with one real Claude session for exercising query's
+/// implicit sync (distinct from the shared empty sandbox in `cmd()`).
+fn claude_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let dir = home.path().join(".claude/projects").join(slug);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("feedbeef-query.jsonl"),
+        format!(
+            r#"{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+    home
+}
+
+fn fixture_query<'a>(
+    home: &tempfile::TempDir,
+    cfg: &Path,
+    args: impl IntoIterator<Item = &'a str>,
+) -> assert_cmd::assert::Assert {
+    Command::cargo_bin("path")
+        .unwrap()
+        .env("HOME", home.path())
+        .env_remove("XDG_DATA_HOME")
+        .env("TOOLPATH_CONFIG_DIR", cfg)
+        .arg("query")
+        .args(args)
+        .assert()
+}
+
+#[test]
+fn query_syncs_its_scope_before_reading() {
+    let home = claude_home();
+    let cfg = tempfile::tempdir().unwrap();
+    // Empty cache; the query ingests the session and reads it in one go.
+    fixture_query(&home, cfg.path(), ["--source", "claude", "length > 0"])
+        .success()
+        .stdout(predicate::str::contains("true"))
+        .stderr(predicate::str::contains("synced claude: 1 new"));
+    assert!(cfg.path().join("sync.json").exists());
+
+    // Second run: nothing changed, so the sync is silent.
+    fixture_query(&home, cfg.path(), ["--source", "claude", "length > 0"])
+        .success()
+        .stdout(predicate::str::contains("true"))
+        .stderr(predicate::str::contains("synced").not());
+}
+
+#[test]
+fn query_no_sync_reads_the_cache_as_is() {
+    let home = claude_home();
+    let cfg = tempfile::tempdir().unwrap();
+    fixture_query(&home, cfg.path(), ["--no-sync", "length"])
+        .success()
+        .stdout(predicate::str::contains("0"));
+    assert!(!cfg.path().join("sync.json").exists());
+}
+
+#[test]
+fn input_only_query_never_touches_the_cache() {
+    let home = claude_home();
+    let cfg = tempfile::tempdir().unwrap();
+    let doc = cfg.path().join("doc.json");
+    std::fs::write(&doc, CLAUDE_DOC).unwrap();
+    Command::cargo_bin("path")
+        .unwrap()
+        .env("HOME", home.path())
+        .env_remove("XDG_DATA_HOME")
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["query", "--input"])
+        .arg(&doc)
+        .arg("length > 0")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("true"));
+    assert!(!cfg.path().join("sync.json").exists());
 }
