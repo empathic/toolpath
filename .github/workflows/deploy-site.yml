@@ -6,6 +6,30 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup show # installs toolchain from rust-toolchain.toml
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+
+      - name: Install site deps (pinned prettier)
+        run: cd site && pnpm install
+
+      - name: Format + shellcheck gates
+        run: scripts/quality_gates.sh format shellcheck
+
   test:
     runs-on: ubuntu-latest
     steps:

@@ -9,7 +9,8 @@
   },
   "devDependencies": {
     "@11ty/eleventy": "^3.0.0",
-    "markdown-it-anchor": "^9.2.0"
+    "markdown-it-anchor": "^9.2.0",
+    "prettier": "3.9.5"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",
