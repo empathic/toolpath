@@ -61,6 +61,23 @@ users no longer have to `p import` each session by hand.
     and `--no-sync` opts out. This is the piece that makes the cache
     an implementation detail: a new user can run `path query` with no
     setup and get their sessions.
+  - The manifest is now an artifact *index*, not just a cache inventory:
+    `cache_id` on a record is optional, and a record without one means
+    "known, not materialized". `p cache rm` downgrades records instead
+    of orphaning them (the next sync re-materializes the doc — this
+    also fixes rm'd docs previously staying gone until the source
+    changed), and sync verifies doc existence before skipping, so
+    out-of-band deletions self-heal too.
+  - `--parent-dir <dir>` / `-d` on `p cache sync` and `path query`
+    restricts ingestion (and the query's reads) to artifacts under a
+    directory. Stat gate first, always: unchanged+cached artifacts skip
+    before any scope check; only artifacts that would cost a derive get
+    the constraint, with a one-line peek for codex (whose cwd lives
+    inside the rollout) memoized into the manifest so it happens at
+    most once per artifact. Claude project matching happens in slug
+    space (its dir slugs are lossy), and claude derives now source
+    `path.base` from the session's recorded cwd instead of the lossy
+    slug string.
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the

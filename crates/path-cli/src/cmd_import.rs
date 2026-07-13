@@ -529,8 +529,11 @@ pub(crate) fn derive_claude_session_with(
         .conversation_file(project, session)
         .map(|p| stat_stamp(&p))
         .unwrap_or((None, None));
+    // The caller's project string often comes from claude's lossy dir
+    // slugs ('/', '_', '.' all collapsed); leaving it out of the derive
+    // lets path.base come from the session's own recorded cwd instead.
     let cfg = toolpath_claude::derive::DeriveConfig {
-        project_path: Some(project.to_string()),
+        project_path: None,
         include_thinking: false,
     };
     let convo = manager

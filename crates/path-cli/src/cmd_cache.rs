@@ -30,6 +30,12 @@ pub enum CacheOp {
         /// Artifact types to sync (default: every agent harness)
         #[arg(value_enum)]
         types: Vec<crate::sync::ArtifactType>,
+
+        /// Only ingest artifacts living under this directory (subtree
+        /// match). Out-of-scope artifacts are noted in the manifest but
+        /// not derived.
+        #[arg(long, short = 'd')]
+        parent_dir: Option<PathBuf>,
     },
 }
 
@@ -38,7 +44,7 @@ pub fn run(op: CacheOp) -> Result<()> {
         CacheOp::Ls => run_ls(),
         CacheOp::Rm { id } => run_rm(&id),
         #[cfg(not(target_os = "emscripten"))]
-        CacheOp::Sync { types } => crate::sync::run(types),
+        CacheOp::Sync { types, parent_dir } => crate::sync::run(types, parent_dir),
     }
 }
 
@@ -56,6 +62,12 @@ fn run_ls() -> Result<()> {
 
 fn run_rm(id: &str) -> Result<()> {
     remove_cached(id)?;
+    // The artifact is still real — downgrade its manifest record to
+    // "known, not cached" so the next sync can re-materialize it.
+    #[cfg(not(target_os = "emscripten"))]
+    if let Err(e) = crate::sync::evict_cache_id(id) {
+        eprintln!("warning: sync manifest not updated: {e}");
+    }
     eprintln!("Removed {id}");
     Ok(())
 }

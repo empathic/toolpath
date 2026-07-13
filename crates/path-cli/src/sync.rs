@@ -70,7 +70,7 @@ impl ArtifactType {
         }
     }
 
-    /// True when the underlying provider keys artifacts by a filesystem
+    /// True when the parent_dirlying provider keys artifacts by a filesystem
     /// path (the project directory). claude/gemini/pi: true.
     /// codex/opencode/cursor: false (sessions store cwd per-row, not as
     /// a directory key — cursor stores it as
@@ -105,7 +105,7 @@ impl ArtifactType {
 pub(crate) struct ArtifactStub {
     pub(crate) artifact_type: ArtifactType,
     pub(crate) id: String,
-    /// Filesystem path the artifact is keyed under, for path-keyed
+    /// Filesystem path the artifact is keyed parent_dir, for path-keyed
     /// providers (the project directory; the repo for git).
     pub(crate) path: Option<String>,
     /// Source mtime (file providers) or updated-at (DB providers).
@@ -149,7 +149,7 @@ mod engine {
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::{ArtifactStub, ArtifactType, codex_artifact_id, stat_stamp};
     use crate::cmd_cache::write_cached;
@@ -162,15 +162,21 @@ mod engine {
 
     const MANIFEST_FILE: &str = "sync.json";
 
-    /// What the manifest remembers about one synced artifact.
+    /// What the manifest remembers about one known artifact. A record
+    /// with a `cache_id` is materialized in the cache; one without is
+    /// merely known — seen during an out-of-scope sync, or evicted by
+    /// `p cache rm`.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub(crate) struct SyncRecord {
-        /// Filesystem path the artifact is keyed under, for path-keyed
-        /// providers (claude/gemini/pi: the project directory).
+        /// Filesystem path the artifact is keyed parent_dir: the project
+        /// directory for path-keyed providers, the recorded cwd /
+        /// workspace for the others (when known).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub(crate) path: Option<String>,
-        /// Cache entry the derived document was written to.
-        pub(crate) cache_id: String,
+        /// Cache entry the derived document was written to; `None`
+        /// when the artifact is known but not cached.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub(crate) cache_id: Option<String>,
         /// Fingerprint: source mtime (file providers) or updated-at
         /// (DB providers) at sync time.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,19 +199,21 @@ mod engine {
         pub(crate) updated: usize,
         pub(crate) unchanged: usize,
         pub(crate) failed: usize,
+        /// Artifacts needing work that a `--parent-dir` constraint excluded.
+        pub(crate) out_of_scope: usize,
     }
 
     impl SyncOutcome {
         fn total(&self) -> usize {
-            self.new + self.updated + self.unchanged + self.failed
+            self.new + self.updated + self.unchanged + self.failed + self.out_of_scope
         }
     }
 
-    pub(crate) fn run(types: Vec<ArtifactType>) -> Result<()> {
+    pub(crate) fn run(types: Vec<ArtifactType>, parent_dir: Option<PathBuf>) -> Result<()> {
         let explicit = !types.is_empty();
         let types = resolve_types(&types);
         let bundle = HarnessBundle::from_environment();
-        let outcomes = sync_bundle(&bundle, &types)?;
+        let outcomes = sync_bundle(&bundle, &types, parent_dir.as_deref())?;
         eprint!("{}", render_summary(&outcomes, explicit));
         Ok(())
     }
@@ -230,16 +238,17 @@ mod engine {
     pub(crate) fn sync_bundle(
         bundle: &HarnessBundle,
         types: &[ArtifactType],
+        parent_dir: Option<&Path>,
     ) -> Result<Vec<(ArtifactType, SyncOutcome)>> {
         let mut manifest = load_manifest()?;
         let mut out = Vec::with_capacity(types.len());
         for &artifact_type in types {
-            let stubs = enumerate_stubs(bundle, artifact_type);
+            let stubs = enumerate_stubs(bundle, artifact_type, parent_dir);
             let mut records = manifest
                 .get(artifact_type.name())
                 .cloned()
                 .unwrap_or_default();
-            let outcome = sync_stubs(bundle, &stubs, &mut records)?;
+            let outcome = sync_stubs(bundle, &stubs, &mut records, parent_dir)?;
             if !records.is_empty() {
                 manifest.insert(artifact_type.name().to_string(), records);
                 save_manifest(&manifest)?;
@@ -256,17 +265,57 @@ mod engine {
         bundle: &HarnessBundle,
         stubs: &[ArtifactStub],
         records: &mut BTreeMap<String, SyncRecord>,
+        parent_dir: Option<&Path>,
     ) -> Result<SyncOutcome> {
         let mut outcome = SyncOutcome::default();
         for stub in stubs {
             let existing = records.get(&stub.id);
             let is_new = existing.is_none();
+            // Stat gate first, always: a materialized, unchanged artifact
+            // needs nothing — no read, no scope check.
             if let Some(rec) = existing
                 && rec.modified == stub.modified
                 && rec.size == stub.size
+                && let Some(cache_id) = &rec.cache_id
+                && crate::cmd_cache::cache_path(cache_id).is_ok_and(|p| p.exists())
             {
                 outcome.unchanged += 1;
                 continue;
+            }
+            // Scope gate: only artifacts that would cost a derive get the
+            // constraint check (with a bounded peek for codex, memoized in
+            // the record so it happens at most once per artifact).
+            if let Some(parent_dir) = parent_dir {
+                let dir = stub
+                    .path
+                    .clone()
+                    .or_else(|| existing.and_then(|r| r.path.clone()))
+                    .or_else(|| peek_stub_dir(bundle, stub));
+                let in_scope = dir.as_deref().is_some_and(|d| match stub.artifact_type {
+                    // Claude paths came from lossy dir slugs; compare in
+                    // slug space like the enumeration pruning does.
+                    ArtifactType::Claude => claude_project_in_scope(d, parent_dir),
+                    _ => dir_in_scope(d, parent_dir),
+                });
+                if !in_scope {
+                    outcome.out_of_scope += 1;
+                    // Remember what we learned — but never touch the stamp
+                    // of a materialized record, or its staleness would be
+                    // masked from the next in-scope sync.
+                    if existing.is_none_or(|r| r.cache_id.is_none()) {
+                        records.insert(
+                            stub.id.clone(),
+                            SyncRecord {
+                                path: dir,
+                                cache_id: None,
+                                modified: stub.modified,
+                                size: stub.size,
+                                synced_at: Utc::now(),
+                            },
+                        );
+                    }
+                    continue;
+                }
             }
             match derive_stub(bundle, stub) {
                 Ok(derived) => {
@@ -278,7 +327,7 @@ mod engine {
                         stub.id.clone(),
                         SyncRecord {
                             path: stub.path.clone(),
-                            cache_id: derived.cache_id,
+                            cache_id: Some(derived.cache_id),
                             // The stamp was taken before the derive read the
                             // source, so a write racing the derive re-syncs
                             // next run instead of going unnoticed.
@@ -339,22 +388,77 @@ mod engine {
             .ok_or_else(|| anyhow!("provider not available"))
     }
 
+    fn canonicalize_or_self(p: &Path) -> PathBuf {
+        std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    }
+
+    /// Subtree check for a real filesystem path. Canonicalizes both
+    /// sides, but also accepts the raw parent so a not-yet-resolvable
+    /// constraint (or an unresolvable dir) still matches literally.
+    fn dir_in_scope(dir: &str, parent_dir: &Path) -> bool {
+        let d = canonicalize_or_self(Path::new(dir));
+        d.starts_with(canonicalize_or_self(parent_dir)) || d.starts_with(parent_dir)
+    }
+
+    /// Claude's project-dir slugs are lossy — '/', '_', and '.' all
+    /// became '-', and un-sanitizing only restores '/'. Comparing real
+    /// paths therefore misfilters any project containing '.' or '_';
+    /// compare in slug space instead, where '/' boundaries are '-'.
+    fn claude_project_in_scope(project: &str, parent_dir: &Path) -> bool {
+        fn slug(s: &str) -> String {
+            s.replace(['/', '_', '.'], "-")
+        }
+        let p = slug(project);
+        [
+            slug(&parent_dir.to_string_lossy()),
+            slug(&canonicalize_or_self(parent_dir).to_string_lossy()),
+        ]
+        .iter()
+        .any(|parent| p == *parent || p.starts_with(&format!("{parent}-")))
+    }
+
+    /// Where a stub's artifact lives, for providers whose cheap listing
+    /// doesn't carry it. Codex is the only case: the rollout's first
+    /// line is `session_meta` with the session cwd — one bounded read,
+    /// and the result is memoized into the manifest record afterwards.
+    fn peek_stub_dir(bundle: &HarnessBundle, stub: &ArtifactStub) -> Option<String> {
+        if stub.artifact_type != ArtifactType::Codex {
+            return None;
+        }
+        let file = bundle
+            .codex
+            .as_ref()?
+            .resolver()
+            .find_rollout_file(&stub.id)
+            .ok()?;
+        use std::io::{BufRead, BufReader};
+        let f = std::fs::File::open(file).ok()?;
+        let mut line = String::new();
+        BufReader::new(f).read_line(&mut line).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+        Some(v.get("payload")?.get("cwd")?.as_str()?.to_string())
+    }
+
     // ── stat-level enumeration ─────────────────────────────────────────
 
     /// Enumerate one type's artifacts with stat-level fingerprints.
     /// Providers that aren't installed produce no stubs; other listing
     /// errors warn and skip so one broken provider can't block the rest.
-    fn enumerate_stubs(bundle: &HarnessBundle, t: ArtifactType) -> Vec<ArtifactStub> {
+    fn enumerate_stubs(
+        bundle: &HarnessBundle,
+        t: ArtifactType,
+        parent_dir: Option<&Path>,
+    ) -> Vec<ArtifactStub> {
         let mut out = Vec::new();
         match t {
             ArtifactType::Claude => {
                 if let Some(mgr) = &bundle.claude {
-                    stubs_claude(mgr, &mut out);
+                    stubs_claude(mgr, parent_dir, &mut out);
                 }
             }
             ArtifactType::Gemini => {
                 if let Some(mgr) = &bundle.gemini {
-                    stubs_gemini(mgr, &mut out);
+                    stubs_gemini(mgr, parent_dir, &mut out);
                 }
             }
             ArtifactType::Codex => {
@@ -374,7 +478,7 @@ mod engine {
             }
             ArtifactType::Pi => {
                 if let Some(mgr) = &bundle.pi {
-                    stubs_pi(mgr, &mut out);
+                    stubs_pi(mgr, parent_dir, &mut out);
                 }
             }
             // Recorded via `p import`, never discovered: there is no
@@ -387,7 +491,11 @@ mod engine {
     /// Chain heads via `list_conversations` (bounded first-lines peek
     /// per file, no full parse); fingerprint stats the head segment —
     /// appends land there, and a rotation surfaces as a new head id.
-    fn stubs_claude(mgr: &toolpath_claude::ClaudeConvo, out: &mut Vec<ArtifactStub>) {
+    fn stubs_claude(
+        mgr: &toolpath_claude::ClaudeConvo,
+        parent_dir: Option<&Path>,
+        out: &mut Vec<ArtifactStub>,
+    ) {
         let projects = match mgr.list_projects() {
             Ok(ps) => ps,
             Err(e) if is_not_found_claude(&e) => return,
@@ -397,6 +505,11 @@ mod engine {
             }
         };
         for project in projects {
+            if let Some(parent_dir) = parent_dir
+                && !claude_project_in_scope(&project, parent_dir)
+            {
+                continue;
+            }
             let heads = match mgr.list_conversations(&project) {
                 Ok(h) => h,
                 Err(e) => {
@@ -424,7 +537,11 @@ mod engine {
     /// Session entries via a bounded identity peek (`toolpath-gemini`
     /// reads at most the first 4 KiB of a main file); the fingerprint
     /// stats the main file (or the orphan sub-agent directory).
-    fn stubs_gemini(mgr: &toolpath_gemini::GeminiConvo, out: &mut Vec<ArtifactStub>) {
+    fn stubs_gemini(
+        mgr: &toolpath_gemini::GeminiConvo,
+        parent_dir: Option<&Path>,
+        out: &mut Vec<ArtifactStub>,
+    ) {
         let projects = match mgr.list_projects() {
             Ok(ps) => ps,
             Err(e) if is_not_found_gemini(&e) => return,
@@ -434,6 +551,11 @@ mod engine {
             }
         };
         for project in projects {
+            if let Some(parent_dir) = parent_dir
+                && !dir_in_scope(&project, parent_dir)
+            {
+                continue;
+            }
             let entries = match mgr.resolver().list_session_entries(&project) {
                 Ok(entries) => entries,
                 Err(e) => {
@@ -497,8 +619,8 @@ mod engine {
             out.push(ArtifactStub {
                 artifact_type: ArtifactType::Opencode,
                 modified: s.last_activity(),
+                path: Some(s.directory.to_string_lossy().into_owned()),
                 id: s.id,
-                path: None,
                 size: None,
             });
         }
@@ -521,8 +643,11 @@ mod engine {
             out.push(ArtifactStub {
                 artifact_type: ArtifactType::Cursor,
                 modified: l.head.last_updated_at_utc(),
+                path: l
+                    .head
+                    .workspace_path()
+                    .map(|p| p.to_string_lossy().into_owned()),
                 id: l.head.composer_id,
-                path: None,
                 size: None,
             });
         }
@@ -531,7 +656,11 @@ mod engine {
     /// Session files stat-only; the id comes from a one-line header
     /// peek, falling back to the filename stem's `<timestamp>_<id>`
     /// shape — the same resolution `read_session` accepts.
-    fn stubs_pi(mgr: &toolpath_pi::PiConvo, out: &mut Vec<ArtifactStub>) {
+    fn stubs_pi(
+        mgr: &toolpath_pi::PiConvo,
+        parent_dir: Option<&Path>,
+        out: &mut Vec<ArtifactStub>,
+    ) {
         let projects = match mgr.list_projects() {
             Ok(ps) => ps,
             Err(e) if is_not_found_pi(&e) => return,
@@ -541,6 +670,11 @@ mod engine {
             }
         };
         for project in projects {
+            if let Some(parent_dir) = parent_dir
+                && !dir_in_scope(&project, parent_dir)
+            {
+                continue;
+            }
             let files = match toolpath_pi::reader::list_session_files(mgr.resolver(), &project) {
                 Ok(f) => f,
                 Err(e) => {
@@ -592,6 +726,9 @@ mod engine {
             if o.failed > 0 {
                 s.push_str(&format!(", {} failed", o.failed));
             }
+            if o.out_of_scope > 0 {
+                s.push_str(&format!(", {} out of scope", o.out_of_scope));
+            }
             s.push('\n');
         }
         if s.is_empty() {
@@ -611,13 +748,34 @@ mod engine {
                 stub.id.clone(),
                 SyncRecord {
                     path: stub.path.clone(),
-                    cache_id: cache_id.to_string(),
+                    cache_id: Some(cache_id.to_string()),
                     modified: stub.modified,
                     size: stub.size,
                     synced_at: Utc::now(),
                 },
             );
         save_manifest(&manifest)
+    }
+
+    /// `p cache rm` eviction: the doc is gone, so any record pointing
+    /// at it downgrades to known-but-uncached (the artifact itself is
+    /// still real; the next in-scope sync re-materializes it).
+    pub(crate) fn evict_cache_id(cache_id: &str) -> Result<()> {
+        let mut manifest = load_manifest()?;
+        let mut changed = false;
+        for records in manifest.values_mut() {
+            for rec in records.values_mut() {
+                if rec.cache_id.as_deref() == Some(cache_id) {
+                    rec.cache_id = None;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            save_manifest(&manifest)
+        } else {
+            Ok(())
+        }
     }
 
     // ── manifest IO ────────────────────────────────────────────────────
@@ -742,7 +900,7 @@ mod engine {
                     "sess-1".to_string(),
                     SyncRecord {
                         path: Some("/test/project".to_string()),
-                        cache_id: "claude-p1".to_string(),
+                        cache_id: Some("claude-p1".to_string()),
                         modified: Some("2024-01-02T00:00:01.123456789Z".parse().unwrap()),
                         size: Some(4096),
                         synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
@@ -783,7 +941,7 @@ mod engine {
             with_cfg(|home| {
                 write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
                 let bundle = claude_bundle(home);
-                let stubs = enumerate_stubs(&bundle, ArtifactType::Claude);
+                let stubs = enumerate_stubs(&bundle, ArtifactType::Claude, None);
                 assert_eq!(stubs.len(), 1);
                 assert_eq!(stubs[0].id, "sess-aaa");
                 assert_eq!(stubs[0].path.as_deref(), Some("/test/project"));
@@ -799,7 +957,7 @@ mod engine {
                 write_claude_session(home, "-test-project", "sess-bbb", "Fix a bug");
                 let bundle = claude_bundle(home);
 
-                let outcomes = sync_bundle(&bundle, &[ArtifactType::Claude]).unwrap();
+                let outcomes = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
                 assert_eq!(outcomes.len(), 1);
                 let (_, first) = outcomes[0];
                 assert_eq!(
@@ -814,15 +972,16 @@ mod engine {
                 assert_eq!(rec.path.as_deref(), Some("/test/project"));
                 assert!(rec.modified.is_some());
                 assert!(rec.size.is_some());
+                let cache_id = rec
+                    .cache_id
+                    .as_deref()
+                    .expect("synced record is materialized");
                 assert!(
-                    crate::cmd_cache::cache_path(&rec.cache_id)
-                        .unwrap()
-                        .exists(),
-                    "cache doc must exist for {}",
-                    rec.cache_id
+                    crate::cmd_cache::cache_path(cache_id).unwrap().exists(),
+                    "cache doc must exist for {cache_id}"
                 );
 
-                let (_, second) = sync_bundle(&bundle, &[ArtifactType::Claude]).unwrap()[0];
+                let (_, second) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
                 assert_eq!(
                     (second.new, second.updated, second.unchanged, second.failed),
                     (0, 0, 2, 0)
@@ -835,11 +994,12 @@ mod engine {
             with_cfg(|home| {
                 write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
                 let bundle = claude_bundle(home);
-                sync_bundle(&bundle, &[ArtifactType::Claude]).unwrap();
+                sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
 
                 let cache_id = load_manifest().unwrap()["claude"]["sess-aaa"]
                     .cache_id
-                    .clone();
+                    .clone()
+                    .expect("synced record is materialized");
                 let steps_before = cached_step_count(&cache_id);
 
                 // Session continues: a later user turn lands in the file,
@@ -852,7 +1012,7 @@ mod engine {
                 body.push('\n');
                 std::fs::write(&file, body).unwrap();
 
-                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude]).unwrap()[0];
+                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
                 assert_eq!(
                     (
                         outcome.new,
@@ -875,7 +1035,7 @@ mod engine {
                 write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
                 let bundle = claude_bundle(home);
 
-                let outcomes = sync_bundle(&bundle, &[ArtifactType::Codex]).unwrap();
+                let outcomes = sync_bundle(&bundle, &[ArtifactType::Codex], None).unwrap();
                 assert_eq!(outcomes[0].1, SyncOutcome::default());
                 assert!(
                     load_manifest().unwrap().is_empty(),
@@ -889,13 +1049,13 @@ mod engine {
             with_cfg(|home| {
                 write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
                 let bundle = claude_bundle(home);
-                sync_bundle(&bundle, &[ArtifactType::Claude]).unwrap();
+                sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
 
                 // Losing the manifest (or a prior manual `p import`) leaves a
                 // cache entry sync doesn't know about; re-syncing must
                 // overwrite it, not die on the exists-check.
                 std::fs::remove_file(manifest_path().unwrap()).unwrap();
-                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude]).unwrap()[0];
+                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
                 assert_eq!((outcome.new, outcome.failed), (1, 0));
             });
         }
@@ -905,11 +1065,11 @@ mod engine {
             with_cfg(|home| {
                 write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
                 let bundle = claude_bundle(home);
-                let mut stubs = enumerate_stubs(&bundle, ArtifactType::Claude);
+                let mut stubs = enumerate_stubs(&bundle, ArtifactType::Claude, None);
                 stubs.push(make_stub(ArtifactType::Claude, "does-not-exist"));
 
                 let mut records = BTreeMap::new();
-                let outcome = sync_stubs(&bundle, &stubs, &mut records).unwrap();
+                let outcome = sync_stubs(&bundle, &stubs, &mut records, None).unwrap();
                 assert_eq!((outcome.new, outcome.failed), (1, 1));
                 assert!(records.contains_key("sess-aaa"));
                 assert!(
@@ -940,7 +1100,7 @@ mod engine {
                 record_stub(stub, &derived.cache_id).unwrap();
 
                 // The import's stamp must match sync's own enumeration.
-                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude]).unwrap()[0];
+                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
                 assert_eq!(
                     (
                         outcome.new,
@@ -950,6 +1110,140 @@ mod engine {
                     ),
                     (0, 0, 1, 0)
                 );
+            });
+        }
+
+        #[test]
+        fn parent_dir_scopes_path_keyed_enumeration() {
+            with_cfg(|home| {
+                write_claude_session(home, "-scope-alpha", "aaaa1111-x", "In alpha");
+                write_claude_session(home, "-scope-beta", "bbbb2222-x", "In beta");
+                let bundle = claude_bundle(home);
+
+                let (_, scoped) = sync_bundle(
+                    &bundle,
+                    &[ArtifactType::Claude],
+                    Some(Path::new("/scope/alpha")),
+                )
+                .unwrap()[0];
+                assert_eq!((scoped.new, scoped.out_of_scope), (1, 0));
+                let manifest = load_manifest().unwrap();
+                assert!(
+                    !manifest["claude"].contains_key("bbbb2222-x"),
+                    "pruned projects must not be enumerated or recorded"
+                );
+
+                // Unscoped sync picks up the rest.
+                let (_, full) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
+                assert_eq!((full.new, full.unchanged), (1, 1));
+            });
+        }
+
+        fn codex_bundle(home: &Path, cwd: &str) -> HarnessBundle {
+            let codex_dir = home.join(".codex");
+            let dir = codex_dir.join("sessions/2026/05/07");
+            std::fs::create_dir_all(&dir).unwrap();
+            let meta = format!(
+                r#"{{"timestamp":"2026-05-07T00:00:00Z","type":"session_meta","payload":{{"id":"00000000-0000-0000-0000-0000000000aa","timestamp":"2026-05-07T00:00:00Z","cwd":"{cwd}","originator":"codex-tui","cli_version":"test","source":"cli","model_provider":"openai"}}}}"#
+            );
+            let user = r#"{"timestamp":"2026-05-07T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#;
+            std::fs::write(
+                dir.join("rollout-2026-05-07T00-00-00-00000000-0000-0000-0000-0000000000aa.jsonl"),
+                format!("{meta}\n{user}\n"),
+            )
+            .unwrap();
+            let resolver = toolpath_codex::PathResolver::new().with_codex_dir(&codex_dir);
+            HarnessBundle {
+                codex: Some(toolpath_codex::CodexConvo::with_resolver(resolver)),
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn out_of_scope_codex_peek_is_memoized_then_scope_match_derives() {
+            with_cfg(|home| {
+                let bundle = codex_bundle(home, "/work/proj");
+
+                // cwd lives outside the constraint: one bounded peek, a
+                // known-but-uncached record, no derive.
+                let (_, out) = sync_bundle(
+                    &bundle,
+                    &[ArtifactType::Codex],
+                    Some(Path::new("/elsewhere")),
+                )
+                .unwrap()[0];
+                assert_eq!((out.new, out.out_of_scope), (0, 1));
+                let rec = load_manifest().unwrap()["codex"]["00000000-0000-0000-0000-0000000000aa"]
+                    .clone();
+                assert_eq!(
+                    rec.path.as_deref(),
+                    Some("/work/proj"),
+                    "peeked cwd memoized"
+                );
+                assert!(rec.cache_id.is_none(), "known, not materialized");
+
+                // Matching constraint: the memoized record answers the scope
+                // question and the artifact derives.
+                let (_, hit) = sync_bundle(
+                    &bundle,
+                    &[ArtifactType::Codex],
+                    Some(Path::new("/work/proj")),
+                )
+                .unwrap()[0];
+                assert_eq!((hit.new, hit.updated, hit.out_of_scope), (0, 1, 0));
+                let rec = load_manifest().unwrap()["codex"]["00000000-0000-0000-0000-0000000000aa"]
+                    .clone();
+                assert!(rec.cache_id.is_some(), "materialized now");
+            });
+        }
+
+        #[test]
+        fn evicted_cache_entry_rematerializes_on_next_sync() {
+            with_cfg(|home| {
+                write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+                let bundle = claude_bundle(home);
+                sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
+                let cache_id = load_manifest().unwrap()["claude"]["sess-aaa"]
+                    .cache_id
+                    .clone()
+                    .unwrap();
+
+                // `p cache rm`: doc removed, record downgraded to known.
+                crate::cmd_cache::remove_cached(&cache_id).unwrap();
+                evict_cache_id(&cache_id).unwrap();
+                assert!(
+                    load_manifest().unwrap()["claude"]["sess-aaa"]
+                        .cache_id
+                        .is_none()
+                );
+
+                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
+                assert_eq!((outcome.new, outcome.updated), (0, 1));
+                assert!(
+                    crate::cmd_cache::cache_path(&cache_id).unwrap().exists(),
+                    "evicted artifact re-materializes"
+                );
+            });
+        }
+
+        #[test]
+        fn manually_deleted_doc_is_restored_even_with_stale_record() {
+            with_cfg(|home| {
+                write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+                let bundle = claude_bundle(home);
+                sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
+                let cache_id = load_manifest().unwrap()["claude"]["sess-aaa"]
+                    .cache_id
+                    .clone()
+                    .unwrap();
+
+                // Doc deleted behind the CLI's back: the record still claims
+                // materialization, but sync verifies the doc exists.
+                let doc = crate::cmd_cache::cache_path(&cache_id).unwrap();
+                std::fs::remove_file(&doc).unwrap();
+                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
+                assert_eq!((outcome.new, outcome.updated), (0, 1));
+                assert!(doc.exists());
             });
         }
 
@@ -986,6 +1280,7 @@ mod engine {
                         updated: 1,
                         unchanged: 3,
                         failed: 0,
+                        out_of_scope: 0,
                     },
                 ),
                 (ArtifactType::Cursor, SyncOutcome::default()),
@@ -1007,6 +1302,7 @@ mod engine {
                     updated: 0,
                     unchanged: 1,
                     failed: 2,
+                    out_of_scope: 0,
                 },
             )];
             let s = render_summary(&outcomes, false);

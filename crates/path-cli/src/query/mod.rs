@@ -30,6 +30,9 @@ pub struct Scope {
     pub inputs: Vec<String>,
     /// `--project`: keep only paths whose `base` resolves to this directory.
     pub project: Option<PathBuf>,
+    /// `--parent-dir`: keep only paths whose `base` lives under this
+    /// directory (subtree match).
+    pub parent_dir: Option<PathBuf>,
     /// `--kind`: keep only paths whose `meta.kind` matches this selector.
     pub kind: Option<String>,
 }
@@ -94,6 +97,7 @@ impl DocSource {
 fn stream_files(scope: &Scope, emit: &mut dyn FnMut(Val) -> Result<()>) -> Result<()> {
     let kind_sel = scope.kind.as_deref().map(kinds::parse_kind_selector);
     let project = scope.project.as_deref().map(canonicalize_or_self);
+    let parent_dir = scope.parent_dir.as_deref().map(canonicalize_or_self);
 
     for src in select_files(scope)? {
         let graph = match read_source(&src) {
@@ -115,6 +119,7 @@ fn stream_files(scope: &Scope, emit: &mut dyn FnMut(Val) -> Result<()>) -> Resul
             &graph,
             kind_sel.as_ref(),
             project.as_deref(),
+            parent_dir.as_deref(),
             &mut steps,
         );
         drop(graph);
@@ -231,6 +236,7 @@ fn wrap_graph(
     graph: &Graph,
     kind_sel: Option<&KindSelector>,
     project: Option<&FsPath>,
+    parent_dir: Option<&FsPath>,
     out: &mut Vec<serde_json::Value>,
 ) {
     for entry in &graph.paths {
@@ -246,6 +252,11 @@ fn wrap_graph(
         }
         if let Some(proj) = project
             && !path_matches_project(path, proj)
+        {
+            continue;
+        }
+        if let Some(dir) = parent_dir
+            && !path_matches_parent_dir(path, dir)
         {
             continue;
         }
@@ -307,13 +318,17 @@ fn path_context(path: &Path) -> serde_json::Value {
 /// Whether a path's `base` resolves to `project` (a canonicalized directory).
 /// Only `file://` bases can match; VCS bases (`github:…`) never do.
 fn path_matches_project(path: &Path, project: &FsPath) -> bool {
-    let Some(base) = &path.path.base else {
-        return false;
-    };
-    let Some(fs) = base.uri.strip_prefix("file://") else {
-        return false;
-    };
-    canonicalize_or_self(FsPath::new(fs)) == project
+    base_fs_path(path).is_some_and(|p| p == project)
+}
+
+fn path_matches_parent_dir(path: &Path, parent_dir: &FsPath) -> bool {
+    base_fs_path(path).is_some_and(|p| p.starts_with(parent_dir))
+}
+
+fn base_fs_path(path: &Path) -> Option<PathBuf> {
+    let base = path.path.base.as_ref()?;
+    let fs = base.uri.strip_prefix("file://")?;
+    Some(canonicalize_or_self(FsPath::new(fs)))
 }
 
 fn canonicalize_or_self(p: &FsPath) -> PathBuf {
@@ -406,12 +421,12 @@ mod tests {
         let graph = Graph::from_path(forked_path());
         let mut out = Vec::new();
         let sel = kinds::parse_kind_selector("agent-coding-session/v1.1.0");
-        wrap_graph(&doc_src("g"), &graph, Some(&sel), None, &mut out);
+        wrap_graph(&doc_src("g"), &graph, Some(&sel), None, None, &mut out);
         assert_eq!(out.len(), 4, "matching kind keeps all steps");
 
         out.clear();
         let miss = kinds::parse_kind_selector("agent-coding-session/v2");
-        wrap_graph(&doc_src("g"), &graph, Some(&miss), None, &mut out);
+        wrap_graph(&doc_src("g"), &graph, Some(&miss), None, None, &mut out);
         assert!(out.is_empty(), "non-matching kind drops the whole path");
     }
 
@@ -447,6 +462,7 @@ mod tests {
             ids: vec![],
             inputs: vec!["/tmp/some.json".to_string(), "-".to_string()],
             project: None,
+            parent_dir: None,
             kind: None,
         };
         let files = select_files(&scope).unwrap();
