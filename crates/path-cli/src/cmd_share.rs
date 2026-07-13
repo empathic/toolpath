@@ -123,6 +123,11 @@ pub struct ShareArgs {
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Keep thinking blocks in the uploaded document (stripped by
+    /// default; the local cache always keeps them)
+    #[arg(long)]
+    pub include_thinking: bool,
 }
 
 /// One artifact surfaced by a provider — today always an agent session.
@@ -726,6 +731,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
             None
         },
         no_cache: args.no_cache,
+        include_thinking: args.include_thinking,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
@@ -956,7 +962,11 @@ fn share_explicit(
             crate::sync::fresh_cache_id(&HarnessBundle::from_environment(), harness, session)
     {
         let doc_path = crate::cmd_cache::cache_path(&cache_id)?;
-        let body = std::fs::read_to_string(&doc_path)?;
+        let mut graph = crate::io::read_document_auto(&doc_path)?;
+        if !args.include_thinking {
+            crate::cmd_export::strip_thinking(&mut graph);
+        }
+        let body = graph.to_json()?;
         eprintln!(
             "Cache is current for {} session {cache_id}; uploading without re-deriving",
             harness.name()
@@ -997,7 +1007,11 @@ fn share_explicit(
         );
     }
 
-    let body = derived.doc.to_json()?;
+    let mut doc = derived.doc;
+    if !args.include_thinking {
+        crate::cmd_export::strip_thinking(&mut doc);
+    }
+    let body = doc.to_json()?;
     let upload = crate::cmd_export::PathbaseUploadArgs {
         url: args.url.clone(),
         anon: args.anon,
@@ -1074,7 +1088,7 @@ fn derive_session(
             crate::cmd_import::derive_claude_session(project.expect("path_keyed"), session)
         }
         ArtifactType::Gemini => {
-            crate::cmd_import::derive_gemini_session(project.expect("path_keyed"), session, false)
+            crate::cmd_import::derive_gemini_session(project.expect("path_keyed"), session)
         }
         ArtifactType::Copilot => crate::cmd_import::derive_copilot_session(session),
         ArtifactType::Pi => {

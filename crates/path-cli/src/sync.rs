@@ -74,7 +74,7 @@ impl ArtifactType {
         }
     }
 
-    /// True when the parent_dirlying provider keys artifacts by a filesystem
+    /// True when the underlying provider keys artifacts by a filesystem
     /// path (the project directory). claude/gemini/pi: true.
     /// codex/opencode/cursor: false (sessions store cwd per-row, not as
     /// a directory key — cursor stores it as
@@ -110,7 +110,7 @@ impl ArtifactType {
 pub(crate) struct ArtifactStub {
     pub(crate) artifact_type: ArtifactType,
     pub(crate) id: String,
-    /// Filesystem path the artifact is keyed parent_dir, for path-keyed
+    /// Filesystem path the artifact is keyed under, for path-keyed
     /// providers (the project directory; the repo for git).
     pub(crate) path: Option<String>,
     /// Source mtime (file providers) or updated-at (DB providers).
@@ -173,7 +173,7 @@ mod engine {
     /// `p cache rm`.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub(crate) struct SyncRecord {
-        /// Filesystem path the artifact is keyed parent_dir: the project
+        /// Filesystem path the artifact is keyed under: the project
         /// directory for path-keyed providers, the recorded cwd /
         /// workspace for the others (when known).
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -297,9 +297,11 @@ mod engine {
                     .or_else(|| existing.and_then(|r| r.path.clone()))
                     .or_else(|| peek_stub_dir(bundle, stub));
                 let in_scope = dir.as_deref().is_some_and(|d| match stub.artifact_type {
-                    // Claude paths came from lossy dir slugs; compare in
-                    // slug space like the enumeration pruning does.
+                    // Claude and pi paths came from lossy dir encodings;
+                    // compare in their encoded spaces, like the
+                    // enumeration pruning does.
                     ArtifactType::Claude => claude_project_in_scope(d, parent_dir),
+                    ArtifactType::Pi => pi_project_in_scope(d, parent_dir),
                     _ => dir_in_scope(d, parent_dir),
                 });
                 if !in_scope {
@@ -322,6 +324,12 @@ mod engine {
                     continue;
                 }
             }
+            // A stub without a path must not erase one a previous pass
+            // peeked and memoized (codex/copilot cwd).
+            let memoized_path = stub
+                .path
+                .clone()
+                .or_else(|| records.get(&stub.id).and_then(|r| r.path.clone()));
             match derive_stub(bundle, stub) {
                 Ok(derived) => {
                     // force: sync owns refresh semantics — a re-sync or a
@@ -331,7 +339,7 @@ mod engine {
                     records.insert(
                         stub.id.clone(),
                         SyncRecord {
-                            path: stub.path.clone(),
+                            path: memoized_path,
                             cache_id: Some(derived.cache_id),
                             // The stamp was taken before the derive read the
                             // source, so a write racing the derive re-syncs
@@ -374,7 +382,7 @@ mod engine {
                 imp::derive_claude_session_with(mgr(&bundle.claude)?, path()?, &stub.id)
             }
             ArtifactType::Gemini => {
-                imp::derive_gemini_session_with(mgr(&bundle.gemini)?, path()?, &stub.id, false)
+                imp::derive_gemini_session_with(mgr(&bundle.gemini)?, path()?, &stub.id)
             }
             ArtifactType::Pi => imp::derive_pi_session_with(mgr(&bundle.pi)?, path()?, &stub.id),
             ArtifactType::Codex => imp::derive_codex_session_with(mgr(&bundle.codex)?, &stub.id),
@@ -406,6 +414,23 @@ mod engine {
     fn dir_in_scope(dir: &str, parent_dir: &Path) -> bool {
         let d = canonicalize_or_self(Path::new(dir));
         d.starts_with(canonicalize_or_self(parent_dir)) || d.starts_with(parent_dir)
+    }
+
+    /// Pi's session-dir names encode '/' as '-', and decoding restores
+    /// every '-' to '/', so a decoded project string is wrong for any
+    /// real path containing a hyphen. Compare in the encoded space,
+    /// where '/' boundaries are '-'.
+    fn pi_project_in_scope(project: &str, parent_dir: &Path) -> bool {
+        fn enc(s: &str) -> String {
+            s.replace('/', "-")
+        }
+        let p = enc(project);
+        [
+            enc(&parent_dir.to_string_lossy()),
+            enc(&canonicalize_or_self(parent_dir).to_string_lossy()),
+        ]
+        .iter()
+        .any(|parent| p == *parent || p.starts_with(&format!("{parent}-")))
     }
 
     /// Claude's project-dir slugs are lossy — '/', '_', and '.' all
@@ -447,19 +472,32 @@ mod engine {
         };
         use std::io::{BufRead, BufReader};
         let f = std::fs::File::open(file).ok()?;
-        let mut line = String::new();
-        BufReader::new(f).read_line(&mut line).ok()?;
-        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
         match stub.artifact_type {
-            // Codex: `session_meta` payload carries cwd directly.
-            ArtifactType::Codex => Some(v.get("payload")?.get("cwd")?.as_str()?.to_string()),
-            // Copilot: `session.start` carries it under `context`, with
-            // some key-name variance across CLI versions.
-            ArtifactType::Copilot => ["data", "payload"].iter().find_map(|env| {
-                let ctx = v.get(env)?.get("context")?;
-                ["cwd", "workingDirectory", "working_dir"]
-                    .iter()
-                    .find_map(|k| Some(ctx.get(k)?.as_str()?.to_string()))
+            // Codex: the first line is `session_meta`; its payload
+            // carries cwd directly.
+            ArtifactType::Codex => {
+                let mut line = String::new();
+                BufReader::new(f).read_line(&mut line).ok()?;
+                let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+                Some(v.get("payload")?.get("cwd")?.as_str()?.to_string())
+            }
+            // Copilot: `session.start` is usually first but the format
+            // tolerates it appearing later, and older CLIs store cwd at
+            // the top of the payload instead of under `context` — scan a
+            // bounded number of lines and accept both shapes, mirroring
+            // toolpath-copilot's own tolerance.
+            ArtifactType::Copilot => BufReader::new(f).lines().take(10).find_map(|line| {
+                let v: serde_json::Value = serde_json::from_str(&line.ok()?).ok()?;
+                ["data", "payload"].iter().find_map(|env| {
+                    let payload = v.get(env)?;
+                    [payload.get("context").unwrap_or(payload), payload]
+                        .iter()
+                        .find_map(|scope| {
+                            ["cwd", "workingDirectory", "working_dir"]
+                                .iter()
+                                .find_map(|k| Some(scope.get(k)?.as_str()?.to_string()))
+                        })
+                })
             }),
             _ => None,
         }
@@ -736,7 +774,7 @@ mod engine {
         };
         for project in projects {
             if let Some(parent_dir) = parent_dir
-                && !dir_in_scope(&project, parent_dir)
+                && !pi_project_in_scope(&project, parent_dir)
             {
                 continue;
             }
@@ -820,6 +858,27 @@ mod engine {
                 },
             );
         save_manifest(&manifest)
+    }
+
+    /// Whether the manifest already records exactly this artifact state
+    /// under exactly this cache entry, with the doc present — i.e. a
+    /// write would reproduce what's already there.
+    pub(crate) fn record_is_current(stub: &ArtifactStub, cache_id: &str) -> bool {
+        let Ok(manifest) = load_manifest() else {
+            return false;
+        };
+        manifest
+            .get(stub.artifact_type.name())
+            .and_then(|records| records.get(&stub.id))
+            .is_some_and(|rec| {
+                rec.cache_id.as_deref() == Some(cache_id)
+                    // None stamps mean freshness is unknowable (git); only
+                    // a real, matching stamp can vouch for the cache entry.
+                    && (rec.modified.is_some() || rec.size.is_some())
+                    && rec.modified == stub.modified
+                    && rec.size == stub.size
+                    && crate::cmd_cache::cache_path(cache_id).is_ok_and(|p| p.exists())
+            })
     }
 
     /// The cache entry for an artifact, when the manifest says it is
@@ -1280,6 +1339,11 @@ mod engine {
                 let rec = load_manifest().unwrap()["codex"]["00000000-0000-0000-0000-0000000000aa"]
                     .clone();
                 assert!(rec.cache_id.is_some(), "materialized now");
+                assert_eq!(
+                    rec.path.as_deref(),
+                    Some("/work/proj"),
+                    "deriving must not clobber the memoized peeked cwd"
+                );
             });
         }
 
@@ -1405,6 +1469,60 @@ mod engine {
                 crate::cmd_cache::remove_cached(&cache_id).unwrap();
                 evict_cache_id(&cache_id).unwrap();
                 assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_none());
+            });
+        }
+
+        #[test]
+        fn pi_scope_matching_survives_hyphenated_paths() {
+            // decode_project turns the dir-encoded '-' back into '/', so a
+            // real path /Users/b/my-repo arrives as /Users/b/my/repo; the
+            // comparator must match it against the real constraint anyway.
+            assert!(pi_project_in_scope(
+                "/Users/b/my/repo",
+                Path::new("/Users/b/my-repo")
+            ));
+            assert!(pi_project_in_scope(
+                "/Users/b/my/repo/sub",
+                Path::new("/Users/b/my-repo")
+            ));
+            assert!(!pi_project_in_scope(
+                "/Users/b/other",
+                Path::new("/Users/b/my-repo")
+            ));
+        }
+
+        #[test]
+        fn copilot_peek_accepts_top_level_cwd() {
+            with_cfg(|home| {
+                // Older CLIs store cwd at the payload top level, no
+                // `context` object — the peek must still find it.
+                let copilot_dir = home.join(".copilot");
+                let dir = copilot_dir.join("session-state").join("sess-legacy");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join("events.jsonl"),
+                    concat!(
+                        r#"{"type":"session.start","data":{"cwd":"/work/proj"}}"#,
+                        "\n",
+                        r#"{"type":"user.message","data":{"content":"hi"}}"#,
+                        "\n"
+                    ),
+                )
+                .unwrap();
+                let resolver = toolpath_copilot::PathResolver::new().with_copilot_dir(&copilot_dir);
+                let bundle = HarnessBundle {
+                    copilot: Some(toolpath_copilot::CopilotConvo::with_resolver(resolver)),
+                    ..Default::default()
+                };
+                let (_, out) = sync_bundle(
+                    &bundle,
+                    &[ArtifactType::Copilot],
+                    Some(Path::new("/elsewhere")),
+                )
+                .unwrap()[0];
+                assert_eq!(out.out_of_scope, 1);
+                let rec = load_manifest().unwrap()["copilot"]["sess-legacy"].clone();
+                assert_eq!(rec.path.as_deref(), Some("/work/proj"));
             });
         }
 

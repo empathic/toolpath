@@ -401,13 +401,12 @@ fn peek_session_id(path: &std::path::Path) -> Option<String> {
     let file = fs::File::open(path).ok()?;
     let mut prefix = Vec::with_capacity(PEEK_BYTES);
     file.take(PEEK_BYTES as u64).read_to_end(&mut prefix).ok()?;
-    let whole_file = prefix.len() < PEEK_BYTES;
     if let Some(id) = prefix_session_id(&prefix) {
         return Some(id);
     }
-    if whole_file {
-        return None;
-    }
+    // The prefix scan can *decline* (identity after `messages`) as well
+    // as miss, so always fall back to the full parse — for files that
+    // fit in the prefix this re-reads a few KiB, which is noise.
     #[derive(Deserialize)]
     struct Peek {
         #[serde(rename = "sessionId")]
@@ -896,6 +895,18 @@ mod tests {
         let path = chats.join("session-2026-01-01T00-00-late.json");
         fs::write(&path, body).unwrap();
         assert_eq!(peek_session_id(&path).as_deref(), Some("late-id"));
+    }
+
+    #[test]
+    fn peek_session_id_small_file_with_late_identity_still_resolves() {
+        let (_temp, resolver) = setup();
+        let chats = resolver.chats_dir("/proj").unwrap();
+        fs::create_dir_all(&chats).unwrap();
+        // Fits inside the prefix, but the prefix scan must decline
+        // (identity after `messages`) and the serde fallback must win.
+        let path = chats.join("session-2026-01-01T00-00-tiny.json");
+        fs::write(&path, r#"{"messages":[],"sessionId":"tiny-id"}"#).unwrap();
+        assert_eq!(peek_session_id(&path).as_deref(), Some("tiny-id"));
     }
 
     #[test]

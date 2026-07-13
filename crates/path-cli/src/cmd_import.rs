@@ -90,10 +90,6 @@ pub enum ImportSource {
         /// Process all sessions in the project
         #[arg(long)]
         all: bool,
-
-        /// Include thinking blocks in conversation.append text
-        #[arg(long)]
-        include_thinking: bool,
     },
     /// Import from Codex CLI rollout files
     Codex {
@@ -223,6 +219,21 @@ fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Resul
             };
             println!("{}", json);
         } else {
+            // The implicit sync in `path query` fills the cache under
+            // these same ids; re-importing an artifact whose record is
+            // still fresh is a no-op, not an exists-error.
+            #[cfg(not(target_os = "emscripten"))]
+            if !force
+                && let Some(stub) = &d.provenance
+                && crate::sync::record_is_current(stub, &d.cache_id)
+            {
+                println!("{}", crate::cmd_cache::cache_path(&d.cache_id)?.display());
+                eprintln!(
+                    "{} is already up to date (pass --force to re-derive)",
+                    d.cache_id
+                );
+                continue;
+            }
             let path = write_cached(&d.cache_id, &d.doc, force)?;
             println!("{}", path.display());
             #[cfg(not(target_os = "emscripten"))]
@@ -271,8 +282,7 @@ fn derive(source: ImportSource) -> Result<Vec<DerivedDoc>> {
             project,
             session,
             all,
-            include_thinking,
-        } => derive_gemini(project, session, all, include_thinking),
+        } => derive_gemini(project, session, all),
         ImportSource::Codex { session, all } => derive_codex(session, all),
         ImportSource::Copilot { session, all } => derive_copilot(session, all),
         ImportSource::Opencode {
@@ -444,7 +454,10 @@ fn derive_claude_with_manager(
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let mut docs = Vec::with_capacity(heads.len());
             for head in &heads {
-                docs.push(derive_claude_session_with(manager, &p, head)?);
+                match derive_claude_session_with(manager, &p, head) {
+                    Ok(doc) => docs.push(doc),
+                    Err(e) => eprintln!("Warning: skipping session {head}: {e}"),
+                }
             }
             return Ok(docs);
         }
@@ -532,14 +545,25 @@ pub(crate) fn derive_claude_session_with(
     // The caller's project string often comes from claude's lossy dir
     // slugs ('/', '_', '.' all collapsed); leaving it out of the derive
     // lets path.base come from the session's own recorded cwd instead.
+    // The cache is the archive: always derive maximally (thinking
+    // included) — egress surfaces strip on their way out.
     let cfg = toolpath_claude::derive::DeriveConfig {
         project_path: None,
-        include_thinking: false,
+        include_thinking: true,
     };
     let convo = manager
         .read_conversation(project, session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let path = toolpath_claude::derive::derive_path(&convo, &cfg);
+    let mut path = toolpath_claude::derive::derive_path(&convo, &cfg);
+    // Sessions whose entries carry no cwd would otherwise derive with no
+    // base at all — fall back to the caller's project for those.
+    if path.path.base.is_none() && project.starts_with('/') {
+        path.path.base = Some(toolpath::v1::Base {
+            uri: format!("file://{project}"),
+            ref_str: None,
+            branch: None,
+        });
+    }
     let cache_id = make_id(ArtifactType::Claude.name(), &path.path.id);
     Ok(DerivedDoc {
         cache_id,
@@ -660,10 +684,9 @@ fn derive_gemini(
     project: Option<String>,
     session: Option<String>,
     all: bool,
-    include_thinking: bool,
 ) -> Result<Vec<DerivedDoc>> {
     let manager = toolpath_gemini::GeminiConvo::new();
-    derive_gemini_with_manager(&manager, project, session, all, include_thinking)
+    derive_gemini_with_manager(&manager, project, session, all)
 }
 
 fn derive_gemini_with_manager(
@@ -671,7 +694,6 @@ fn derive_gemini_with_manager(
     project: Option<String>,
     session: Option<String>,
     all: bool,
-    include_thinking: bool,
 ) -> Result<Vec<DerivedDoc>> {
     let pairs: Vec<(String, String)> = match (project, session, all) {
         (Some(p), Some(s), _) => vec![(p, s)],
@@ -681,12 +703,10 @@ fn derive_gemini_with_manager(
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let mut docs = Vec::with_capacity(ids.len());
             for id in &ids {
-                docs.push(derive_gemini_session_with(
-                    manager,
-                    &p,
-                    id,
-                    include_thinking,
-                )?);
+                match derive_gemini_session_with(manager, &p, id) {
+                    Ok(doc) => docs.push(doc),
+                    Err(e) => eprintln!("Warning: skipping session {id}: {e}"),
+                }
             }
             return Ok(docs);
         }
@@ -706,7 +726,6 @@ fn derive_gemini_with_manager(
                         manager,
                         &p,
                         &convo.session_uuid,
-                        include_thinking,
                     )?]);
                 }
             }
@@ -720,7 +739,6 @@ fn derive_gemini_with_manager(
                     manager,
                     &p,
                     &convo.session_uuid,
-                    include_thinking,
                 )?]);
             }
         }
@@ -748,24 +766,14 @@ fn derive_gemini_with_manager(
             manager,
             project_path,
             session_uuid,
-            include_thinking,
         )?);
     }
     Ok(docs)
 }
 
 /// Derive a single Gemini conversation given an explicit project + session.
-pub(crate) fn derive_gemini_session(
-    project: &str,
-    session: &str,
-    include_thinking: bool,
-) -> Result<DerivedDoc> {
-    derive_gemini_session_with(
-        &toolpath_gemini::GeminiConvo::new(),
-        project,
-        session,
-        include_thinking,
-    )
+pub(crate) fn derive_gemini_session(project: &str, session: &str) -> Result<DerivedDoc> {
+    derive_gemini_session_with(&toolpath_gemini::GeminiConvo::new(), project, session)
 }
 
 /// [`derive_gemini_session`] against a caller-supplied manager.
@@ -773,7 +781,6 @@ pub(crate) fn derive_gemini_session_with(
     manager: &toolpath_gemini::GeminiConvo,
     project: &str,
     session: &str,
-    include_thinking: bool,
 ) -> Result<DerivedDoc> {
     let entry = manager
         .resolver()
@@ -791,9 +798,11 @@ pub(crate) fn derive_gemini_session_with(
         ),
         None => (session.to_string(), (None, None)),
     };
+    // Maximal ingest: thinking is always derived into the cache; egress
+    // surfaces strip it on the way out.
     let cfg = toolpath_gemini::derive::DeriveConfig {
         project_path: Some(project.to_string()),
-        include_thinking,
+        include_thinking: true,
     };
     let convo = manager
         .read_conversation(project, session)
@@ -931,10 +940,11 @@ fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
                 let Some(stem) = file.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                docs.push(derive_codex_session_with(
-                    &manager,
-                    codex_artifact_id(stem),
-                )?);
+                let id = codex_artifact_id(stem);
+                match derive_codex_session_with(&manager, id) {
+                    Ok(doc) => docs.push(doc),
+                    Err(e) => eprintln!("Warning: skipping session {id}: {e}"),
+                }
             }
             return Ok(docs);
         }
@@ -1067,7 +1077,14 @@ fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>>
             if metas.is_empty() {
                 anyhow::bail!("No Copilot sessions found in ~/.copilot/session-state");
             }
-            metas.into_iter().map(|m| m.id).collect()
+            let mut docs = Vec::with_capacity(metas.len());
+            for m in &metas {
+                match derive_copilot_session_with(&manager, &m.id) {
+                    Ok(doc) => docs.push(doc),
+                    Err(e) => eprintln!("Warning: skipping session {}: {e}", m.id),
+                }
+            }
+            return Ok(docs);
         }
         (None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -1565,7 +1582,10 @@ fn derive_pi_with_manager(
             }
             let mut docs = Vec::with_capacity(metas.len());
             for m in &metas {
-                docs.push(derive_pi_session_with(manager, &p, &m.id)?);
+                match derive_pi_session_with(manager, &p, &m.id) {
+                    Ok(doc) => docs.push(doc),
+                    Err(e) => eprintln!("Warning: skipping session {}: {e}", m.id),
+                }
             }
             return Ok(docs);
         }

@@ -36,7 +36,7 @@ toolpath-cursor = { version = "0.2.0", path = "crates/toolpath-cursor" }
 toolpath-github = { version = "0.6.0", path = "crates/toolpath-github" }
 toolpath-dot = { version = "0.5.0", path = "crates/toolpath-dot" }
 toolpath-md = { version = "0.7.0", path = "crates/toolpath-md" }
-toolpath-pi = { version = "0.6.0", path = "crates/toolpath-pi" }
+toolpath-pi = { version = "0.6.1", path = "crates/toolpath-pi" }
 path-cli = { version = "0.16.0", path = "crates/path-cli" }
 pathbase-client = { version = "0.2.0", path = "crates/pathbase-client" }
 

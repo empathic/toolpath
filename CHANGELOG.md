@@ -87,6 +87,24 @@ users no longer have to `p import` each session by hand.
     unchanged since its last sync (manifest stamp matches a fresh stat
     and the doc exists) — re-deriving would reproduce the same bytes.
     A grown session steps around the fast path and derives as before.
+  - **Maximal ingest, strip at egress**: the cache always holds the
+    fullest derivation — thinking blocks are ingested for claude and
+    gemini unconditionally (**breaking**: `p import gemini` loses its
+    `--include-thinking` flag), and the privacy decision moves to where
+    it belongs: `share` and `p export pathbase` strip thinking from
+    uploads by default, with `--include-thinking` there to opt in. The
+    local cache and `resume` fidelity keep everything.
+  - Review fixes: `p import <provider> --all` warns-and-skips unreadable
+    sessions again instead of aborting the batch; importing an artifact
+    the implicit query-sync already cached is a friendly no-op instead
+    of an exists-error; pi project scoping compares in its dir-encoded
+    space so hyphenated paths match `--parent-dir`; the copilot cwd
+    peek tolerates `session.start` anywhere in the first lines and
+    top-level cwd keys; a derive no longer clobbers the memoized peeked
+    cwd; claude sessions with no recorded cwd fall back to the caller's
+    `--project` for `path.base`; a small-file gemini peek that declines
+    in the prefix now still runs the full-parse fallback; and a
+    rebase-dropped `toolpath-pi` workspace pin is back at 0.6.1.
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the

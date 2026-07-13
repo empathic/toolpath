@@ -983,6 +983,97 @@ fn share_uploads_cached_doc_when_source_unchanged() {
 }
 
 #[test]
+fn import_ingests_thinking_maximally() {
+    let (home, session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+    // Append an assistant turn with a thinking block.
+    let mut body = std::fs::read_to_string(&session_file).unwrap();
+    body.push_str(
+        r#"{"type":"assistant","uuid":"a-2","timestamp":"2024-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"secret reasoning"},{"type":"text","text":"done"}]}}"#,
+    );
+    body.push('\n');
+    std::fs::write(&session_file, body).unwrap();
+
+    let out = cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "p",
+            "import",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let doc_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let doc = std::fs::read_to_string(&doc_path).unwrap();
+    assert!(
+        doc.contains("secret reasoning"),
+        "the cache holds the maximal derivation, thinking included"
+    );
+}
+
+#[test]
+fn import_after_query_sync_is_a_noop_not_an_error() {
+    let (home, _session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+
+    // A bare query auto-syncs the session into the cache…
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["query", "--source", "claude", "length"])
+        .assert()
+        .success();
+
+    // …and the documented explicit import must not die on the exists-check.
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "p",
+            "import",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already up to date"));
+}
+
+#[cfg(unix)]
+#[test]
+fn bulk_import_skips_unreadable_sessions() {
+    use std::os::unix::fs::PermissionsExt;
+    let (home, session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+    // A second session that cannot be read.
+    let bad = session_file.parent().unwrap().join("deadbeef-bad.jsonl");
+    std::fs::write(&bad, "x").unwrap();
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "import", "claude", "--all", "--project"])
+        .arg(&project)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Warning: skipping session"))
+        .stderr(predicate::str::contains("Imported"));
+}
+
+#[test]
 fn cache_sync_rejects_unknown_type() {
     let cfg = tempfile::tempdir().unwrap();
     cmd()
