@@ -928,6 +928,61 @@ fn cache_sync_parent_dir_limits_ingestion() {
 }
 
 #[test]
+fn share_uploads_cached_doc_when_source_unchanged() {
+    let (home, session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+    let share = |port: u16| {
+        let mut c = cmd();
+        c.env("HOME", home.path())
+            .env("TOOLPATH_CONFIG_DIR", cfg.path())
+            .args([
+                "share",
+                "--harness",
+                "claude",
+                "--session",
+                "session-abc",
+                "--project",
+            ])
+            .arg(&project)
+            .args(["--anon", "--url"])
+            .arg(format!("http://127.0.0.1:{port}"));
+        c
+    };
+
+    // First share derives + records.
+    let (port, server) = one_shot_anon_server();
+    share(port)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("uploading without re-deriving").not());
+    server.join().unwrap();
+
+    // Unchanged source: the second share must not re-derive.
+    let (port, server) = one_shot_anon_server();
+    share(port)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("uploading without re-deriving"));
+    server.join().unwrap();
+
+    // The session grows: the fast path steps aside and share re-derives.
+    let mut body = std::fs::read_to_string(&session_file).unwrap();
+    body.push_str(
+        r#"{"type":"user","uuid":"u-2","timestamp":"2024-01-01T00:05:00Z","cwd":"/x","message":{"role":"user","content":"more"}}"#,
+    );
+    body.push('\n');
+    std::fs::write(&session_file, body).unwrap();
+    let (port, server) = one_shot_anon_server();
+    share(port)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("uploading without re-deriving").not())
+        .stderr(predicate::str::contains("Cached claude session"));
+    server.join().unwrap();
+}
+
+#[test]
 fn cache_sync_rejects_unknown_type() {
     let cfg = tempfile::tempdir().unwrap();
     cmd()

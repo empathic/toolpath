@@ -948,6 +948,30 @@ fn share_explicit(
         (false, _) => None,
     };
 
+    // Fast path: when the manifest shows this exact source state is
+    // already in the cache, upload the cached doc instead of re-deriving
+    // — a derive would reproduce it byte-for-byte anyway.
+    if !args.no_cache
+        && let Some(cache_id) =
+            crate::sync::fresh_cache_id(&HarnessBundle::from_environment(), harness, session)
+    {
+        let doc_path = crate::cmd_cache::cache_path(&cache_id)?;
+        let body = std::fs::read_to_string(&doc_path)?;
+        eprintln!(
+            "Cache is current for {} session {cache_id}; uploading without re-deriving",
+            harness.name()
+        );
+        let summary = format!("{} session {}", harness.name(), cache_id);
+        let upload = crate::cmd_export::PathbaseUploadArgs {
+            url: args.url.clone(),
+            anon: args.anon,
+            repo: args.repo.clone(),
+            name: args.name.clone(),
+            public: args.public,
+        };
+        return crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary);
+    }
+
     let derived = derive_session(harness, project.as_deref(), session)?;
     let summary = format!("{} session {}", harness.name(), derived.cache_id);
 

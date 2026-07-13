@@ -83,6 +83,10 @@ users no longer have to `p import` each session by hand.
     `session-state/<id>/events.jsonl`, cwd peeked from `session.start`
     and memoized for `--parent-dir`), per-session import loops with
     provenance, and `path query --source copilot` auto-sync.
+  - `share` uploads straight from the cache when the picked session is
+    unchanged since its last sync (manifest stamp matches a fresh stat
+    and the doc exists) — re-deriving would reproduce the same bytes.
+    A grown session steps around the fast path and derives as before.
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the

@@ -822,6 +822,27 @@ mod engine {
         save_manifest(&manifest)
     }
 
+    /// The cache entry for an artifact, when the manifest says it is
+    /// materialized and a fresh stat shows its source unchanged since —
+    /// i.e. re-deriving would reproduce the cached doc byte-for-byte.
+    /// Used by `share` to upload straight from the cache.
+    pub(crate) fn fresh_cache_id(
+        bundle: &HarnessBundle,
+        artifact_type: ArtifactType,
+        id: &str,
+    ) -> Option<String> {
+        let stub = enumerate_stubs(bundle, artifact_type, None)
+            .into_iter()
+            .find(|s| s.id == id)?;
+        let manifest = load_manifest().ok()?;
+        let rec = manifest.get(artifact_type.name())?.get(id)?;
+        let cache_id = rec.cache_id.clone()?;
+        (rec.modified == stub.modified
+            && rec.size == stub.size
+            && crate::cmd_cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
+        .then_some(cache_id)
+    }
+
     /// `p cache rm` eviction: the doc is gone, so any record pointing
     /// at it downgrades to known-but-uncached (the artifact itself is
     /// still real; the next in-scope sync re-materializes it).
@@ -1352,6 +1373,38 @@ mod engine {
                 let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
                 assert_eq!((outcome.new, outcome.updated), (0, 1));
                 assert!(doc.exists());
+            });
+        }
+
+        #[test]
+        fn fresh_cache_id_tracks_source_and_eviction() {
+            with_cfg(|home| {
+                write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+                let bundle = claude_bundle(home);
+
+                // Nothing synced yet: no fresh copy.
+                assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_none());
+
+                sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
+                let cache_id = fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa")
+                    .expect("synced artifact is fresh");
+
+                // Source grows: stale until re-synced.
+                let file = home.join(".claude/projects/-test-project/sess-aaa.jsonl");
+                let mut body = std::fs::read_to_string(&file).unwrap();
+                body.push_str(
+                    r#"{"type":"user","uuid":"u-2","timestamp":"2024-01-02T00:05:00Z","cwd":"/test/project","message":{"role":"user","content":"more"}}"#,
+                );
+                body.push('\n');
+                std::fs::write(&file, body).unwrap();
+                assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_none());
+                sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
+                assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_some());
+
+                // Evicted: known but not materialized, so not fresh.
+                crate::cmd_cache::remove_cached(&cache_id).unwrap();
+                evict_cache_id(&cache_id).unwrap();
+                assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_none());
             });
         }
 
