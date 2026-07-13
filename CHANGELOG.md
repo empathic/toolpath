@@ -78,6 +78,11 @@ users no longer have to `p import` each session by hand.
     space (its dir slugs are lossy), and claude derives now source
     `path.base` from the session's recorded cwd instead of the lossy
     slug string.
+  - Copilot participates in sync like every other harness: an
+    `ArtifactType::Copilot` (stat-only enumeration over
+    `session-state/<id>/events.jsonl`, cwd peeked from `session.start`
+    and memoized for `--parent-dir`), per-session import loops with
+    provenance, and `path query --source copilot` auto-sync.
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the

@@ -1057,20 +1057,17 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
 
 fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
     let manager = toolpath_copilot::CopilotConvo::new();
-    let config = toolpath_copilot::derive::DeriveConfig { project_path: None };
 
     let session_ids: Vec<String> = match (session, all) {
         (Some(s), _) => vec![s],
         (None, true) => {
-            let sessions = manager
-                .read_all_sessions()
+            let metas = manager
+                .list_sessions()
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
-            if sessions.is_empty() {
+            if metas.is_empty() {
                 anyhow::bail!("No Copilot sessions found in ~/.copilot/session-state");
             }
-            return wrap_paths_copilot(toolpath_copilot::derive::derive_project(
-                &sessions, &config,
-            ));
+            metas.into_iter().map(|m| m.id).collect()
         }
         (None, false) => {
             #[cfg(not(target_os = "emscripten"))]
@@ -1086,9 +1083,7 @@ fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>>
                                     "No Copilot sessions found in ~/.copilot/session-state"
                                 )
                             })?;
-                        return wrap_paths_copilot(vec![toolpath_copilot::derive::derive_path(
-                            &s, &config,
-                        )]);
+                        return Ok(vec![derive_copilot_session_with(&manager, &s.id)?]);
                     }
                 }
             }
@@ -1100,49 +1095,50 @@ fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>>
                     .ok_or_else(|| {
                         anyhow::anyhow!("No Copilot sessions found in ~/.copilot/session-state")
                     })?;
-                return wrap_paths_copilot(vec![toolpath_copilot::derive::derive_path(
-                    &s, &config,
-                )]);
+                return Ok(vec![derive_copilot_session_with(&manager, &s.id)?]);
             }
         }
     };
 
-    let mut paths: Vec<toolpath::v1::Path> = Vec::with_capacity(session_ids.len());
+    let mut docs = Vec::with_capacity(session_ids.len());
     for sid in &session_ids {
-        let s = manager
-            .read_session(sid)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        paths.push(toolpath_copilot::derive::derive_path(&s, &config));
+        docs.push(derive_copilot_session_with(&manager, sid)?);
     }
-    wrap_paths_copilot(paths)
+    Ok(docs)
 }
 
 /// Derive a single Copilot session given an explicit session id.
 pub(crate) fn derive_copilot_session(session: &str) -> Result<DerivedDoc> {
-    let manager = toolpath_copilot::CopilotConvo::new();
+    derive_copilot_session_with(&toolpath_copilot::CopilotConvo::new(), session)
+}
+
+/// [`derive_copilot_session`] against a caller-supplied manager.
+pub(crate) fn derive_copilot_session_with(
+    manager: &toolpath_copilot::CopilotConvo,
+    session: &str,
+) -> Result<DerivedDoc> {
+    let (modified, size) = manager
+        .resolver()
+        .events_file(session)
+        .map(|p| stat_stamp(&p))
+        .unwrap_or((None, None));
     let config = toolpath_copilot::derive::DeriveConfig { project_path: None };
     let s = manager
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let path = toolpath_copilot::derive::derive_path(&s, &config);
-    let cache_id = make_id("copilot", &path.path.id);
+    let cache_id = make_id(ArtifactType::Copilot.name(), &path.path.id);
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
+        provenance: Some(ArtifactStub {
+            artifact_type: ArtifactType::Copilot,
+            id: session.to_string(),
+            path: None,
+            modified,
+            size,
+        }),
     })
-}
-
-fn wrap_paths_copilot(paths: Vec<toolpath::v1::Path>) -> Result<Vec<DerivedDoc>> {
-    Ok(paths
-        .into_iter()
-        .map(|p| {
-            let cache_id = make_id("copilot", &p.path.id);
-            DerivedDoc {
-                cache_id,
-                doc: Graph::from_path(p),
-            }
-        })
-        .collect())
 }
 
 #[cfg(not(target_os = "emscripten"))]

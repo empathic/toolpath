@@ -29,18 +29,20 @@ pub enum ArtifactType {
     Opencode,
     Cursor,
     Pi,
+    Copilot,
     Git,
 }
 
 impl ArtifactType {
     /// Every artifact type, in presentation order.
-    pub(crate) const ALL: [ArtifactType; 7] = [
+    pub(crate) const ALL: [ArtifactType; 8] = [
         ArtifactType::Claude,
         ArtifactType::Gemini,
         ArtifactType::Codex,
         ArtifactType::Opencode,
         ArtifactType::Cursor,
         ArtifactType::Pi,
+        ArtifactType::Copilot,
         ArtifactType::Git,
     ];
 
@@ -52,6 +54,7 @@ impl ArtifactType {
             ArtifactType::Opencode => "opencode",
             ArtifactType::Cursor => "cursor",
             ArtifactType::Pi => "pi",
+            ArtifactType::Copilot => "copilot",
             ArtifactType::Git => "git",
         }
     }
@@ -66,6 +69,7 @@ impl ArtifactType {
             ArtifactType::Opencode => "opencode",
             ArtifactType::Cursor => "cursor  ",
             ArtifactType::Pi => "pi      ",
+            ArtifactType::Copilot => "copilot ",
             ArtifactType::Git => "git     ",
         }
     }
@@ -90,6 +94,7 @@ impl ArtifactType {
             "opencode" => Some(ArtifactType::Opencode),
             "cursor" => Some(ArtifactType::Cursor),
             "pi" => Some(ArtifactType::Pi),
+            "copilot" => Some(ArtifactType::Copilot),
             "git" => Some(ArtifactType::Git),
             _ => None,
         }
@@ -377,6 +382,9 @@ mod engine {
                 imp::derive_opencode_session_with(mgr(&bundle.opencode)?, &stub.id, false)
             }
             ArtifactType::Cursor => imp::derive_cursor_session_with(mgr(&bundle.cursor)?, &stub.id),
+            ArtifactType::Copilot => {
+                imp::derive_copilot_session_with(mgr(&bundle.copilot)?, &stub.id)
+            }
             ArtifactType::Git => Err(anyhow!(
                 "git artifacts are recorded by `p import`, not re-derived by sync"
             )),
@@ -422,21 +430,39 @@ mod engine {
     /// line is `session_meta` with the session cwd — one bounded read,
     /// and the result is memoized into the manifest record afterwards.
     fn peek_stub_dir(bundle: &HarnessBundle, stub: &ArtifactStub) -> Option<String> {
-        if stub.artifact_type != ArtifactType::Codex {
-            return None;
-        }
-        let file = bundle
-            .codex
-            .as_ref()?
-            .resolver()
-            .find_rollout_file(&stub.id)
-            .ok()?;
+        let file = match stub.artifact_type {
+            ArtifactType::Codex => bundle
+                .codex
+                .as_ref()?
+                .resolver()
+                .find_rollout_file(&stub.id)
+                .ok()?,
+            ArtifactType::Copilot => bundle
+                .copilot
+                .as_ref()?
+                .resolver()
+                .events_file(&stub.id)
+                .ok()?,
+            _ => return None,
+        };
         use std::io::{BufRead, BufReader};
         let f = std::fs::File::open(file).ok()?;
         let mut line = String::new();
         BufReader::new(f).read_line(&mut line).ok()?;
         let v: serde_json::Value = serde_json::from_str(&line).ok()?;
-        Some(v.get("payload")?.get("cwd")?.as_str()?.to_string())
+        match stub.artifact_type {
+            // Codex: `session_meta` payload carries cwd directly.
+            ArtifactType::Codex => Some(v.get("payload")?.get("cwd")?.as_str()?.to_string()),
+            // Copilot: `session.start` carries it under `context`, with
+            // some key-name variance across CLI versions.
+            ArtifactType::Copilot => ["data", "payload"].iter().find_map(|env| {
+                let ctx = v.get(env)?.get("context")?;
+                ["cwd", "workingDirectory", "working_dir"]
+                    .iter()
+                    .find_map(|k| Some(ctx.get(k)?.as_str()?.to_string()))
+            }),
+            _ => None,
+        }
     }
 
     // ── stat-level enumeration ─────────────────────────────────────────
@@ -479,6 +505,11 @@ mod engine {
             ArtifactType::Pi => {
                 if let Some(mgr) = &bundle.pi {
                     stubs_pi(mgr, parent_dir, &mut out);
+                }
+            }
+            ArtifactType::Copilot => {
+                if let Some(mgr) = &bundle.copilot {
+                    stubs_copilot(mgr, &mut out);
                 }
             }
             // Recorded via `p import`, never discovered: there is no
@@ -569,6 +600,40 @@ mod engine {
                     artifact_type: ArtifactType::Gemini,
                     id: entry.session_uuid.unwrap_or(entry.id),
                     path: Some(project.clone()),
+                    modified,
+                    size,
+                });
+            }
+        }
+    }
+
+    /// Session-state directories, stat-only: each session is a
+    /// `<id>/events.jsonl` under `session-state/` (or its legacy
+    /// sibling); the directory name is the id and the events file is
+    /// the fingerprint target.
+    fn stubs_copilot(mgr: &toolpath_copilot::CopilotConvo, out: &mut Vec<ArtifactStub>) {
+        let mut seen = std::collections::HashSet::new();
+        let dirs = [
+            mgr.resolver().session_state_dir(),
+            mgr.resolver().legacy_session_state_dir(),
+        ];
+        for dir in dirs.into_iter().flatten() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Some(id) = entry.file_name().to_str().map(String::from) else {
+                    continue;
+                };
+                let events = entry.path().join("events.jsonl");
+                if !events.exists() || !seen.insert(id.clone()) {
+                    continue;
+                }
+                let (modified, size) = stat_stamp(&events);
+                out.push(ArtifactStub {
+                    artifact_type: ArtifactType::Copilot,
+                    id,
+                    path: None,
                     modified,
                     size,
                 });
@@ -1194,6 +1259,49 @@ mod engine {
                 let rec = load_manifest().unwrap()["codex"]["00000000-0000-0000-0000-0000000000aa"]
                     .clone();
                 assert!(rec.cache_id.is_some(), "materialized now");
+            });
+        }
+
+        fn copilot_bundle(home: &Path, id: &str, cwd: &str) -> HarnessBundle {
+            let copilot_dir = home.join(".copilot");
+            let dir = copilot_dir.join("session-state").join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            let start = format!(
+                r#"{{"type":"session.start","timestamp":"2026-07-01T00:00:00Z","data":{{"copilotVersion":"1.0.67","context":{{"cwd":"{cwd}"}}}}}}"#
+            );
+            let user = r#"{"type":"user.message","timestamp":"2026-07-01T00:00:01Z","data":{"content":"hi"}}"#;
+            std::fs::write(dir.join("events.jsonl"), format!("{start}\n{user}\n")).unwrap();
+            let resolver = toolpath_copilot::PathResolver::new().with_copilot_dir(&copilot_dir);
+            HarnessBundle {
+                copilot: Some(toolpath_copilot::CopilotConvo::with_resolver(resolver)),
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn copilot_syncs_and_scopes_via_memoized_peek() {
+            with_cfg(|home| {
+                let bundle = copilot_bundle(home, "sess-cp", "/work/proj");
+
+                // Out-of-scope first: one peek, a known record with the cwd.
+                let (_, out) = sync_bundle(
+                    &bundle,
+                    &[ArtifactType::Copilot],
+                    Some(Path::new("/elsewhere")),
+                )
+                .unwrap()[0];
+                assert_eq!((out.new, out.out_of_scope), (0, 1));
+                let rec = load_manifest().unwrap()["copilot"]["sess-cp"].clone();
+                assert_eq!(rec.path.as_deref(), Some("/work/proj"));
+                assert!(rec.cache_id.is_none());
+
+                // In scope: derives; then a plain re-sync is a no-op.
+                let (_, hit) =
+                    sync_bundle(&bundle, &[ArtifactType::Copilot], Some(Path::new("/work")))
+                        .unwrap()[0];
+                assert_eq!((hit.updated, hit.out_of_scope), (1, 0));
+                let (_, again) = sync_bundle(&bundle, &[ArtifactType::Copilot], None).unwrap()[0];
+                assert_eq!(again.unchanged, 1);
             });
         }
 

@@ -118,7 +118,7 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
 
     let recorder = RecordingExec::default();
     run_with_strategy(
-        args_explicit(doc_file, cwd.path(), HarnessArg::Copilot),
+        args_explicit(doc_file, cwd.path(), Harness::Copilot),
         &recorder,
     )
     .unwrap();

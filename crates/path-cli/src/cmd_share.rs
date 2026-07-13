@@ -27,17 +27,19 @@ pub enum Harness {
     Opencode,
     Cursor,
     Pi,
+    Copilot,
 }
 
 impl Harness {
     /// Every harness, in presentation order.
-    pub(crate) const ALL: [Harness; 6] = [
+    pub(crate) const ALL: [Harness; 7] = [
         Harness::Claude,
         Harness::Gemini,
         Harness::Codex,
         Harness::Opencode,
         Harness::Cursor,
         Harness::Pi,
+        Harness::Copilot,
     ];
 
     /// The artifact type this harness's sessions ingest as.
@@ -49,6 +51,7 @@ impl Harness {
             Harness::Opencode => ArtifactType::Opencode,
             Harness::Cursor => ArtifactType::Cursor,
             Harness::Pi => ArtifactType::Pi,
+            Harness::Copilot => ArtifactType::Copilot,
         }
     }
 
@@ -72,6 +75,7 @@ impl ArtifactType {
             ArtifactType::Opencode => Some(Harness::Opencode),
             ArtifactType::Cursor => Some(Harness::Cursor),
             ArtifactType::Pi => Some(Harness::Pi),
+            ArtifactType::Copilot => Some(Harness::Copilot),
             ArtifactType::Git => None,
         }
     }
@@ -208,6 +212,11 @@ pub(crate) fn gather_artifacts(
         && let Some(mgr) = &bundle.codex
     {
         collect_codex(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
+    if want(ArtifactType::Copilot)
+        && let Some(mgr) = &bundle.copilot
+    {
+        collect_copilot(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
     if want(ArtifactType::Opencode)
         && let Some(mgr) = &bundle.opencode
@@ -440,7 +449,7 @@ fn collect_copilot(
     mgr: &toolpath_copilot::CopilotConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.list_sessions() {
         Ok(m) if !m.is_empty() => m,
@@ -464,16 +473,16 @@ fn collect_copilot(
             .as_deref()
             .map(|p| paths_match(p, canonical_cwd))
             .unwrap_or(false);
-        out.push(SessionRow {
-            harness: Harness::Copilot,
-            project: None,
+        out.push(ArtifactRow {
+            artifact_type: ArtifactType::Copilot,
+            path: None,
             cwd: m.cwd,
             session_id: m.id,
             title: m
                 .first_user_message
                 .unwrap_or_else(|| "(no prompt)".to_string()),
             last_activity: m.last_activity,
-            message_count: m.line_count,
+            message_count: Some(m.line_count),
             matches_cwd,
         });
     }
@@ -594,6 +603,13 @@ pub(crate) fn is_not_found_codex(err: &toolpath_codex::ConvoError) -> bool {
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::CodexDirectoryNotFound(_))
+}
+
+pub(crate) fn is_not_found_copilot(err: &toolpath_copilot::ConvoError) -> bool {
+    use toolpath_copilot::ConvoError;
+    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, ConvoError::NoHomeDirectory)
+        || matches!(err, ConvoError::CopilotDirectoryNotFound(_))
 }
 
 pub(crate) fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
@@ -1036,6 +1052,7 @@ fn derive_session(
         ArtifactType::Gemini => {
             crate::cmd_import::derive_gemini_session(project.expect("path_keyed"), session, false)
         }
+        ArtifactType::Copilot => crate::cmd_import::derive_copilot_session(session),
         ArtifactType::Pi => {
             crate::cmd_import::derive_pi_session(project.expect("path_keyed"), session, None)
         }
@@ -1206,9 +1223,9 @@ mod tests {
         let temp = TempDir::new().unwrap();
         write_copilot_session(&temp.path().join(".copilot"), "sess-aa", "/work/proj");
         let bundle = copilot_only_bundle(temp.path());
-        let rows = gather_sessions(&bundle, Path::new("/work/proj"), None, None);
+        let rows = gather_artifacts(&bundle, Path::new("/work/proj"), None, None);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].harness, Harness::Copilot);
+        assert_eq!(rows[0].artifact_type, ArtifactType::Copilot);
         assert_eq!(rows[0].cwd.as_deref(), Some("/work/proj"));
         assert!(rows[0].matches_cwd);
     }
@@ -1219,7 +1236,12 @@ mod tests {
         write_copilot_session(&temp.path().join(".copilot"), "sess-aa", "/work/proj");
         let bundle = copilot_only_bundle(temp.path());
         // Filtering to a different harness drops the copilot row.
-        let rows = gather_sessions(&bundle, Path::new("/work/proj"), Some(Harness::Codex), None);
+        let rows = gather_artifacts(
+            &bundle,
+            Path::new("/work/proj"),
+            Some(ArtifactType::Codex),
+            None,
+        );
         assert!(rows.is_empty());
     }
 

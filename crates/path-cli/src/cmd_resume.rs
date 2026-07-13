@@ -130,6 +130,7 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
             "claude-code" => return Some(Harness::Claude),
             "gemini-cli" => return Some(Harness::Gemini),
             "codex" => return Some(Harness::Codex),
+            "copilot" => return Some(Harness::Copilot),
             "opencode" => return Some(Harness::Opencode),
             "cursor" => return Some(Harness::Cursor),
             "pi" => return Some(Harness::Pi),
@@ -146,6 +147,9 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
         }
         if actor.starts_with("agent:codex") {
             return Some(Harness::Codex);
+        }
+        if actor.starts_with("agent:copilot") {
+            return Some(Harness::Copilot);
         }
         if actor.starts_with("agent:opencode") {
             return Some(Harness::Opencode);
@@ -402,6 +406,7 @@ pub(crate) fn argv_for(harness: Harness, session_id: &str) -> Vec<String> {
         Harness::Claude => vec!["-r".into(), session_id.into()],
         Harness::Gemini => vec!["--resume".into(), session_id.into()],
         Harness::Codex => vec!["resume".into(), session_id.into()],
+        Harness::Copilot => vec!["--resume".into(), session_id.into()],
         Harness::Opencode => vec!["--session".into(), session_id.into()],
         // Cursor.app has no "open composer by id" flag — we exec the
         // workspace path so Cursor opens on that folder; the projected
@@ -459,6 +464,7 @@ pub(crate) fn project_into_harness(
         Harness::Claude => crate::cmd_export::project_claude(path, cwd),
         Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
         Harness::Codex => crate::cmd_export::project_codex(path, cwd),
+        Harness::Copilot => crate::cmd_export::project_copilot(path, cwd),
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
         Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
         Harness::Pi => crate::cmd_export::project_pi(path, cwd),
