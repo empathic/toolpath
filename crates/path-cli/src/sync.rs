@@ -87,17 +87,7 @@ impl ArtifactType {
     }
 
     pub(crate) fn parse(s: &str) -> Option<Self> {
-        match s {
-            "claude" => Some(ArtifactType::Claude),
-            "gemini" => Some(ArtifactType::Gemini),
-            "codex" => Some(ArtifactType::Codex),
-            "opencode" => Some(ArtifactType::Opencode),
-            "cursor" => Some(ArtifactType::Cursor),
-            "pi" => Some(ArtifactType::Pi),
-            "copilot" => Some(ArtifactType::Copilot),
-            "git" => Some(ArtifactType::Git),
-            _ => None,
-        }
+        <Self as clap::ValueEnum>::from_str(s, false).ok()
     }
 }
 
@@ -239,46 +229,58 @@ mod engine {
 
     /// Sync the given artifact types from `bundle` into the cache. The
     /// manifest is checkpointed after each type so an interrupted first
-    /// run doesn't forget the types it already finished.
+    /// run doesn't forget the types it already finished. Reads come
+    /// from a point-in-time snapshot; each checkpoint merges only the
+    /// records this run wrote, under the manifest lock, so concurrent
+    /// invocations (query auto-syncs, imports) union their records
+    /// instead of clobbering each other.
     pub(crate) fn sync_bundle(
         bundle: &HarnessBundle,
         types: &[ArtifactType],
         parent_dir: Option<&Path>,
     ) -> Result<Vec<(ArtifactType, SyncOutcome)>> {
-        let mut manifest = load_manifest()?;
+        let manifest = load_manifest()?;
         let mut out = Vec::with_capacity(types.len());
         for &artifact_type in types {
             let stubs = enumerate_stubs(bundle, artifact_type, parent_dir);
-            let mut records = manifest
+            let records = manifest
                 .get(artifact_type.name())
                 .cloned()
                 .unwrap_or_default();
-            let outcome = sync_stubs(bundle, &stubs, &mut records, parent_dir)?;
-            if !records.is_empty() {
-                manifest.insert(artifact_type.name().to_string(), records);
-                save_manifest(&manifest)?;
+            let (outcome, writes) = sync_stubs(bundle, &stubs, &records, parent_dir)?;
+            if !writes.is_empty() {
+                update_manifest(|m| {
+                    m.entry(artifact_type.name().to_string())
+                        .or_default()
+                        .extend(writes);
+                })?;
             }
             out.push((artifact_type, outcome));
         }
         Ok(out)
     }
 
-    /// Sync one type's stubs against its manifest records. Derivation
-    /// failures are warned and tallied, not fatal; cache-write failures
-    /// (disk, permissions) abort.
+    /// Sync one type's stubs against a snapshot of its manifest records,
+    /// returning the records this run wrote (for a locked merge by the
+    /// caller). Derivation failures are warned and tallied, not fatal;
+    /// cache-write failures (disk, permissions) abort.
     fn sync_stubs(
         bundle: &HarnessBundle,
         stubs: &[ArtifactStub],
-        records: &mut BTreeMap<String, SyncRecord>,
+        records: &BTreeMap<String, SyncRecord>,
         parent_dir: Option<&Path>,
-    ) -> Result<SyncOutcome> {
+    ) -> Result<(SyncOutcome, BTreeMap<String, SyncRecord>)> {
         let mut outcome = SyncOutcome::default();
+        let mut writes: BTreeMap<String, SyncRecord> = BTreeMap::new();
         for stub in stubs {
             let existing = records.get(&stub.id);
             let is_new = existing.is_none();
             // Stat gate first, always: a materialized, unchanged artifact
-            // needs nothing — no read, no scope check.
+            // needs nothing — no read, no scope check. All-`None` stamps
+            // mean freshness is unknowable; only a real stamp can vouch
+            // (mirrors `record_is_current`).
             if let Some(rec) = existing
+                && (rec.modified.is_some() || rec.size.is_some())
                 && rec.modified == stub.modified
                 && rec.size == stub.size
                 && let Some(cache_id) = &rec.cache_id
@@ -310,7 +312,7 @@ mod engine {
                     // of a materialized record, or its staleness would be
                     // masked from the next in-scope sync.
                     if existing.is_none_or(|r| r.cache_id.is_none()) {
-                        records.insert(
+                        writes.insert(
                             stub.id.clone(),
                             SyncRecord {
                                 path: dir,
@@ -329,14 +331,14 @@ mod engine {
             let memoized_path = stub
                 .path
                 .clone()
-                .or_else(|| records.get(&stub.id).and_then(|r| r.path.clone()));
+                .or_else(|| existing.and_then(|r| r.path.clone()));
             match derive_stub(bundle, stub) {
                 Ok(derived) => {
                     // force: sync owns refresh semantics — a re-sync or a
                     // prior manual `p import` of the same session must not
                     // error on the existing cache entry.
                     write_cached(&derived.cache_id, &derived.doc, true)?;
-                    records.insert(
+                    writes.insert(
                         stub.id.clone(),
                         SyncRecord {
                             path: memoized_path,
@@ -365,7 +367,7 @@ mod engine {
                 }
             }
         }
-        Ok(outcome)
+        Ok((outcome, writes))
     }
 
     /// Derive one artifact through the same manager it was enumerated
@@ -843,21 +845,21 @@ mod engine {
     /// Record an externally-derived cache write (`p import`, `share`) in
     /// the manifest, so sync doesn't re-derive what was just written.
     pub(crate) fn record_stub(stub: &ArtifactStub, cache_id: &str) -> Result<()> {
-        let mut manifest = load_manifest()?;
-        manifest
-            .entry(stub.artifact_type.name().to_string())
-            .or_default()
-            .insert(
-                stub.id.clone(),
-                SyncRecord {
-                    path: stub.path.clone(),
-                    cache_id: Some(cache_id.to_string()),
-                    modified: stub.modified,
-                    size: stub.size,
-                    synced_at: Utc::now(),
-                },
-            );
-        save_manifest(&manifest)
+        update_manifest(|manifest| {
+            manifest
+                .entry(stub.artifact_type.name().to_string())
+                .or_default()
+                .insert(
+                    stub.id.clone(),
+                    SyncRecord {
+                        path: stub.path.clone(),
+                        cache_id: Some(cache_id.to_string()),
+                        modified: stub.modified,
+                        size: stub.size,
+                        synced_at: Utc::now(),
+                    },
+                );
+        })
     }
 
     /// Whether the manifest already records exactly this artifact state
@@ -884,49 +886,153 @@ mod engine {
     /// The cache entry for an artifact, when the manifest says it is
     /// materialized and a fresh stat shows its source unchanged since —
     /// i.e. re-deriving would reproduce the cached doc byte-for-byte.
-    /// Used by `share` to upload straight from the cache.
+    /// Used by `share` to upload straight from the cache. The stat
+    /// targets one artifact directly — no enumeration of its siblings.
     pub(crate) fn fresh_cache_id(
         bundle: &HarnessBundle,
         artifact_type: ArtifactType,
+        project: Option<&str>,
         id: &str,
     ) -> Option<String> {
-        let stub = enumerate_stubs(bundle, artifact_type, None)
-            .into_iter()
-            .find(|s| s.id == id)?;
         let manifest = load_manifest().ok()?;
         let rec = manifest.get(artifact_type.name())?.get(id)?;
         let cache_id = rec.cache_id.clone()?;
-        (rec.modified == stub.modified
-            && rec.size == stub.size
+        let (modified, size) = stamp_one(bundle, artifact_type, project, id)?;
+        // None stamps mean freshness is unknowable; only a real,
+        // matching stamp can vouch for the cache entry.
+        ((rec.modified.is_some() || rec.size.is_some())
+            && rec.modified == modified
+            && rec.size == size
             && crate::cmd_cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
         .then_some(cache_id)
+    }
+
+    /// Stat-level fingerprint for a single artifact, resolved directly.
+    /// Uses the same stat targets as `enumerate_stubs` and the
+    /// `derive_*_session_with` provenance stamps, so the result compares
+    /// against manifest records. `project` is required for the
+    /// path-keyed providers (claude/gemini/pi).
+    fn stamp_one(
+        bundle: &HarnessBundle,
+        artifact_type: ArtifactType,
+        project: Option<&str>,
+        id: &str,
+    ) -> Option<(Option<DateTime<Utc>>, Option<u64>)> {
+        match artifact_type {
+            ArtifactType::Claude => {
+                let file = bundle
+                    .claude
+                    .as_ref()?
+                    .resolver()
+                    .conversation_file(project?, id)
+                    .ok()?;
+                Some(stat_stamp(&file))
+            }
+            ArtifactType::Gemini => {
+                let entries = bundle
+                    .gemini
+                    .as_ref()?
+                    .resolver()
+                    .list_session_entries(project?)
+                    .ok()?;
+                let entry = entries
+                    .into_iter()
+                    .find(|e| e.id == id || e.session_uuid.as_deref() == Some(id))?;
+                Some(stat_stamp(&entry.path))
+            }
+            ArtifactType::Pi => {
+                let mgr = bundle.pi.as_ref()?;
+                let files =
+                    toolpath_pi::reader::list_session_files(mgr.resolver(), project?).ok()?;
+                let file = files.into_iter().find(|f| {
+                    toolpath_pi::reader::peek_header(f).is_ok_and(|h| h.id == id)
+                        || f.file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .and_then(|stem| stem.split_once('_'))
+                            .is_some_and(|(_, rest)| rest == id)
+                })?;
+                Some(stat_stamp(&file))
+            }
+            ArtifactType::Codex => {
+                let file = bundle
+                    .codex
+                    .as_ref()?
+                    .resolver()
+                    .find_rollout_file(id)
+                    .ok()?;
+                Some(stat_stamp(&file))
+            }
+            ArtifactType::Copilot => {
+                let file = bundle.copilot.as_ref()?.resolver().events_file(id).ok()?;
+                Some(stat_stamp(&file))
+            }
+            ArtifactType::Opencode => {
+                let sessions = bundle.opencode.as_ref()?.io().list_sessions(None).ok()?;
+                let session = sessions.into_iter().find(|s| s.id == id)?;
+                Some((session.last_activity(), None))
+            }
+            ArtifactType::Cursor => {
+                let headers = bundle.cursor.as_ref()?.io().read_composer_headers().ok()?;
+                let composer = headers
+                    .all_composers
+                    .into_iter()
+                    .find(|c| c.composer_id == id)?;
+                Some((composer.last_updated_at_utc(), None))
+            }
+            ArtifactType::Git => None,
+        }
     }
 
     /// `p cache rm` eviction: the doc is gone, so any record pointing
     /// at it downgrades to known-but-uncached (the artifact itself is
     /// still real; the next in-scope sync re-materializes it).
     pub(crate) fn evict_cache_id(cache_id: &str) -> Result<()> {
-        let mut manifest = load_manifest()?;
-        let mut changed = false;
-        for records in manifest.values_mut() {
-            for rec in records.values_mut() {
-                if rec.cache_id.as_deref() == Some(cache_id) {
-                    rec.cache_id = None;
-                    changed = true;
+        update_manifest(|manifest| {
+            for records in manifest.values_mut() {
+                for rec in records.values_mut() {
+                    if rec.cache_id.as_deref() == Some(cache_id) {
+                        rec.cache_id = None;
+                    }
                 }
             }
-        }
-        if changed {
-            save_manifest(&manifest)
-        } else {
-            Ok(())
-        }
+        })
     }
 
     // ── manifest IO ────────────────────────────────────────────────────
 
     fn manifest_path() -> Result<PathBuf> {
         Ok(config_dir()?.join(MANIFEST_FILE))
+    }
+
+    /// Take the exclusive advisory lock serializing manifest writers
+    /// across processes (query auto-syncs and imports can run
+    /// concurrently). A sibling lock file — never renamed, unlike the
+    /// manifest itself — held until the returned handle drops.
+    fn lock_manifest() -> Result<std::fs::File> {
+        let path = manifest_path()?;
+        let dir = path.parent().expect("manifest path has a parent");
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let lock_path = dir.join(format!("{MANIFEST_FILE}.lock"));
+        let file = std::fs::File::create(&lock_path)
+            .with_context(|| format!("create {}", lock_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600));
+        }
+        file.lock()
+            .with_context(|| format!("lock {}", lock_path.display()))?;
+        Ok(file)
+    }
+
+    /// One locked read-modify-write cycle against the manifest. Every
+    /// writer goes through here, so concurrent invocations merge their
+    /// records instead of clobbering each other's.
+    fn update_manifest(mutate: impl FnOnce(&mut Manifest)) -> Result<()> {
+        let _lock = lock_manifest()?;
+        let mut manifest = load_manifest()?;
+        mutate(&mut manifest);
+        save_manifest(&manifest)
     }
 
     pub(crate) fn load_manifest() -> Result<Manifest> {
@@ -1213,14 +1319,34 @@ mod engine {
                 let mut stubs = enumerate_stubs(&bundle, ArtifactType::Claude, None);
                 stubs.push(make_stub(ArtifactType::Claude, "does-not-exist"));
 
-                let mut records = BTreeMap::new();
-                let outcome = sync_stubs(&bundle, &stubs, &mut records, None).unwrap();
+                let (outcome, writes) =
+                    sync_stubs(&bundle, &stubs, &BTreeMap::new(), None).unwrap();
                 assert_eq!((outcome.new, outcome.failed), (1, 1));
-                assert!(records.contains_key("sess-aaa"));
+                assert!(writes.contains_key("sess-aaa"));
                 assert!(
-                    !records.contains_key("does-not-exist"),
+                    !writes.contains_key("does-not-exist"),
                     "failed artifacts must not be recorded as synced"
                 );
+            });
+        }
+
+        #[test]
+        fn all_none_stamps_never_read_as_unchanged() {
+            with_cfg(|home| {
+                write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+                let bundle = claude_bundle(home);
+                sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
+
+                // A record whose stamps are all None (stat failed when it
+                // was written) must not match a stub whose stat also
+                // failed — unknowable freshness re-derives.
+                let mut records = load_manifest().unwrap()["claude"].clone();
+                let rec = records.get_mut("sess-aaa").unwrap();
+                rec.modified = None;
+                rec.size = None;
+                let stub = make_stub(ArtifactType::Claude, "sess-aaa");
+                let (outcome, _) = sync_stubs(&bundle, &[stub], &records, None).unwrap();
+                assert_eq!((outcome.updated, outcome.unchanged), (1, 0));
             });
         }
 
@@ -1447,11 +1573,24 @@ mod engine {
                 let bundle = claude_bundle(home);
 
                 // Nothing synced yet: no fresh copy.
-                assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_none());
+                assert!(
+                    fresh_cache_id(
+                        &bundle,
+                        ArtifactType::Claude,
+                        Some("/test/project"),
+                        "sess-aaa"
+                    )
+                    .is_none()
+                );
 
                 sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
-                let cache_id = fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa")
-                    .expect("synced artifact is fresh");
+                let cache_id = fresh_cache_id(
+                    &bundle,
+                    ArtifactType::Claude,
+                    Some("/test/project"),
+                    "sess-aaa",
+                )
+                .expect("synced artifact is fresh");
 
                 // Source grows: stale until re-synced.
                 let file = home.join(".claude/projects/-test-project/sess-aaa.jsonl");
@@ -1461,14 +1600,38 @@ mod engine {
                 );
                 body.push('\n');
                 std::fs::write(&file, body).unwrap();
-                assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_none());
+                assert!(
+                    fresh_cache_id(
+                        &bundle,
+                        ArtifactType::Claude,
+                        Some("/test/project"),
+                        "sess-aaa"
+                    )
+                    .is_none()
+                );
                 sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
-                assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_some());
+                assert!(
+                    fresh_cache_id(
+                        &bundle,
+                        ArtifactType::Claude,
+                        Some("/test/project"),
+                        "sess-aaa"
+                    )
+                    .is_some()
+                );
 
                 // Evicted: known but not materialized, so not fresh.
                 crate::cmd_cache::remove_cached(&cache_id).unwrap();
                 evict_cache_id(&cache_id).unwrap();
-                assert!(fresh_cache_id(&bundle, ArtifactType::Claude, "sess-aaa").is_none());
+                assert!(
+                    fresh_cache_id(
+                        &bundle,
+                        ArtifactType::Claude,
+                        Some("/test/project"),
+                        "sess-aaa"
+                    )
+                    .is_none()
+                );
             });
         }
 

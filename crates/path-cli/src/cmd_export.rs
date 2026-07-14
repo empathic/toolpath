@@ -1874,7 +1874,36 @@ pub(crate) fn strip_thinking(graph: &mut toolpath::v1::Graph) {
             for change in step.change.values_mut() {
                 if let Some(structural) = &mut change.structural {
                     structural.extra.remove("thinking");
+                    // `delegations` embeds full sub-agent turns (gemini
+                    // folds sub-agent files in), each with its own
+                    // `thinking` — reasoning must not ride out inside them.
+                    if let Some(delegations) = structural.extra.get_mut("delegations") {
+                        strip_delegation_thinking(delegations);
+                    }
                 }
+            }
+        }
+    }
+}
+
+/// Remove `thinking` from every turn of a serialized `Vec<DelegatedWork>`,
+/// recursing into the turns' own nested delegations.
+#[cfg(not(target_os = "emscripten"))]
+fn strip_delegation_thinking(delegations: &mut serde_json::Value) {
+    let Some(list) = delegations.as_array_mut() else {
+        return;
+    };
+    for delegation in list {
+        let Some(turns) = delegation.get_mut("turns").and_then(|t| t.as_array_mut()) else {
+            continue;
+        };
+        for turn in turns {
+            let Some(obj) = turn.as_object_mut() else {
+                continue;
+            };
+            obj.remove("thinking");
+            if let Some(nested) = obj.get_mut("delegations") {
+                strip_delegation_thinking(nested);
             }
         }
     }
@@ -2106,6 +2135,79 @@ mod tests {
         let json = graph.to_json().unwrap();
         assert!(!json.contains("secret reasoning"));
         assert!(json.contains("hello"), "non-thinking extras survive");
+    }
+
+    #[test]
+    fn strip_thinking_scrubs_delegation_turns_recursively() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "delegations".to_string(),
+            serde_json::json!([{
+                "agent_id": "sub-1",
+                "prompt": "investigate",
+                "turns": [{
+                    "id": "t1",
+                    "role": "assistant",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "text": "visible sub-agent text",
+                    "thinking": "sub-agent reasoning",
+                    "delegations": [{
+                        "agent_id": "sub-2",
+                        "prompt": "deeper",
+                        "turns": [{
+                            "id": "t2",
+                            "role": "assistant",
+                            "timestamp": "2026-01-01T00:00:01Z",
+                            "text": "nested text",
+                            "thinking": "nested reasoning"
+                        }]
+                    }]
+                }],
+                "result": "sub-agent result"
+            }]),
+        );
+        let step = Step {
+            step: StepIdentity {
+                id: "s1".into(),
+                parents: vec![],
+                actor: "agent:gemini-cli".into(),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+            },
+            change: HashMap::from([(
+                "conversation://x".to_string(),
+                ArtifactChange {
+                    raw: None,
+                    structural: Some(StructuralChange {
+                        change_type: "conversation.append".into(),
+                        extra,
+                    }),
+                },
+            )]),
+            meta: None,
+        };
+        let path = toolpath::v1::Path {
+            path: PathIdentity {
+                id: "p1".into(),
+                base: None,
+                head: "s1".into(),
+                graph_ref: None,
+            },
+            steps: vec![step],
+            meta: None,
+        };
+        let mut graph = toolpath::v1::Graph::from_path(path);
+
+        strip_thinking(&mut graph);
+
+        let json = graph.to_json().unwrap();
+        assert!(!json.contains("sub-agent reasoning"));
+        assert!(!json.contains("nested reasoning"));
+        assert!(json.contains("visible sub-agent text"));
+        assert!(json.contains("nested text"));
+        assert!(
+            json.contains("sub-agent result"),
+            "delegation results survive"
+        );
     }
 
     fn make_path_doc() -> toolpath::v1::Graph {

@@ -105,6 +105,18 @@ users no longer have to `p import` each session by hand.
     `--project` for `path.base`; a small-file gemini peek that declines
     in the prefix now still runs the full-parse fallback; and a
     rebase-dropped `toolpath-pi` workspace pin is back at 0.6.1.
+  - PR review round 2: thinking-stripping now also scrubs sub-agent
+    turns embedded in `delegations` (gemini folds sub-agent chat files
+    into them, each turn with its own `thinking`), recursing into
+    nested delegations; manifest writers are serialized by an advisory
+    lock (`sync.json.lock`) and every write is a locked read-merge-save
+    — sync checkpoints merge only the records the run wrote — so
+    concurrent invocations (query auto-syncs, imports) union their
+    records instead of clobbering each other; an all-`None` stamp can
+    no longer vouch for a record in sync's unchanged gate (mirrors
+    `record_is_current` — unknowable freshness re-derives); the `share`
+    fast path stats its one artifact directly instead of enumerating
+    the whole artifact type.
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the

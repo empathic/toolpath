@@ -958,8 +958,12 @@ fn share_explicit(
     // already in the cache, upload the cached doc instead of re-deriving
     // — a derive would reproduce it byte-for-byte anyway.
     if !args.no_cache
-        && let Some(cache_id) =
-            crate::sync::fresh_cache_id(&HarnessBundle::from_environment(), harness, session)
+        && let Some(cache_id) = crate::sync::fresh_cache_id(
+            &HarnessBundle::from_environment(),
+            harness,
+            project.as_deref(),
+            session,
+        )
     {
         let doc_path = crate::cmd_cache::cache_path(&cache_id)?;
         let mut graph = crate::io::read_document_auto(&doc_path)?;
