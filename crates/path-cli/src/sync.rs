@@ -263,13 +263,14 @@ mod engine {
         out
     }
 
-    /// Sync the given artifact types from `bundle` into the cache. The
-    /// manifest is checkpointed after each type so an interrupted first
-    /// run doesn't forget the types it already finished. Reads come
-    /// from a point-in-time snapshot; each checkpoint merges only the
-    /// records this run wrote, under the manifest lock, so concurrent
-    /// invocations (query auto-syncs, imports) union their records
-    /// instead of clobbering each other.
+    /// Sync the given artifact types from `bundle` into the cache,
+    /// newest artifacts first. The manifest is checkpointed every few
+    /// writes (see [`CHECKPOINT_EVERY`]), so an interrupted run keeps
+    /// nearly everything it derived. Reads come from a point-in-time
+    /// snapshot; each checkpoint merges only the records this run
+    /// wrote, under the manifest lock, so concurrent invocations
+    /// (query auto-syncs, imports) union their records instead of
+    /// clobbering each other.
     pub(crate) fn sync_bundle(
         bundle: &HarnessBundle,
         types: &[ArtifactType],
@@ -283,48 +284,105 @@ mod engine {
                 .get(artifact_type.name())
                 .cloned()
                 .unwrap_or_default();
-            let (outcome, writes) = sync_stubs(bundle, &stubs, &records, parent_dir)?;
-            if !writes.is_empty() {
-                update_manifest(|m| {
-                    m.entry(artifact_type.name().to_string())
-                        .or_default()
-                        .extend(writes);
-                })?;
-            }
+            let outcome = sync_stubs(bundle, &stubs, &records, parent_dir)?;
             out.push((artifact_type, outcome));
         }
         Ok(out)
     }
 
+    /// How many manifest writes accumulate before a mid-run checkpoint.
+    /// Small enough that an interrupted first sync loses at most a few
+    /// records (the cache docs themselves survive either way); large
+    /// enough that manifest serialization stays noise against the
+    /// derives it punctuates.
+    const CHECKPOINT_EVERY: usize = 10;
+
+    /// The stat gate: a materialized record whose real stamps match the
+    /// stub needs nothing — no read, no scope check. All-`None` stamps
+    /// mean freshness is unknowable; only a real stamp can vouch
+    /// (mirrors `record_is_current`).
+    fn is_unchanged(rec: Option<&SyncRecord>, stub: &ArtifactStub) -> bool {
+        rec.is_some_and(|rec| {
+            (rec.modified.is_some() || rec.size.is_some())
+                && rec.modified == stub.modified
+                && rec.size == stub.size
+                && rec
+                    .cache_id
+                    .as_deref()
+                    .is_some_and(|id| crate::cmd_cache::cache_path(id).is_ok_and(|p| p.exists()))
+        })
+    }
+
+    /// Stubs newest-first (unstamped last), so an interrupted run has
+    /// spent its time on the sessions the user most likely wants.
+    fn newest_first(stubs: &[ArtifactStub]) -> Vec<&ArtifactStub> {
+        let mut order: Vec<&ArtifactStub> = stubs.iter().collect();
+        order.sort_by(|a, b| b.modified.cmp(&a.modified));
+        order
+    }
+
+    /// Merge staged records into the manifest under the lock and clear
+    /// the stage.
+    fn flush_writes(
+        pending: &mut BTreeMap<&'static str, BTreeMap<String, SyncRecord>>,
+    ) -> Result<()> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let batch = std::mem::take(pending);
+        update_manifest(move |manifest| {
+            for (name, records) in batch {
+                manifest
+                    .entry(name.to_string())
+                    .or_default()
+                    .extend(records);
+            }
+        })
+    }
+
     /// Sync one type's stubs against a snapshot of its manifest records,
-    /// returning the records this run wrote (for a locked merge by the
-    /// caller). Derivation failures are warned and tallied, not fatal;
-    /// cache-write failures (disk, permissions) abort.
+    /// newest first. Records are checkpointed to the manifest every
+    /// [`CHECKPOINT_EVERY`] writes (and once more at the end), so an
+    /// interrupted run keeps nearly everything it derived. Derivation
+    /// failures are warned and tallied, not fatal; cache-write failures
+    /// (disk, permissions) abort.
     fn sync_stubs(
         bundle: &HarnessBundle,
         stubs: &[ArtifactStub],
         records: &BTreeMap<String, SyncRecord>,
         parent_dir: Option<&Path>,
-    ) -> Result<(SyncOutcome, BTreeMap<String, SyncRecord>)> {
+    ) -> Result<SyncOutcome> {
         let mut outcome = SyncOutcome::default();
-        let mut writes: BTreeMap<String, SyncRecord> = BTreeMap::new();
-        for stub in stubs {
-            let existing = records.get(&stub.id);
-            let is_new = existing.is_none();
-            // Stat gate first, always: a materialized, unchanged artifact
-            // needs nothing — no read, no scope check. All-`None` stamps
-            // mean freshness is unknowable; only a real stamp can vouch
-            // (mirrors `record_is_current`).
-            if let Some(rec) = existing
-                && (rec.modified.is_some() || rec.size.is_some())
-                && rec.modified == stub.modified
-                && rec.size == stub.size
-                && let Some(cache_id) = &rec.cache_id
-                && crate::cmd_cache::cache_path(cache_id).is_ok_and(|p| p.exists())
-            {
+        // Evaluate the stat gate once per stub: the pass feeds both the
+        // progress denominator and the loop's skip decision.
+        let order: Vec<(&ArtifactStub, bool)> = newest_first(stubs)
+            .into_iter()
+            .map(|stub| (stub, is_unchanged(records.get(&stub.id), stub)))
+            .collect();
+        let pending_total = order.iter().filter(|(_, unchanged)| !unchanged).count();
+        let mut progress = Progress::start(
+            stubs
+                .first()
+                .map(|s| s.artifact_type.symbol())
+                .unwrap_or(""),
+            pending_total,
+        );
+        let mut writes: BTreeMap<&'static str, BTreeMap<String, SyncRecord>> = BTreeMap::new();
+        let mut unflushed = 0usize;
+        for (stub, unchanged) in order {
+            if unchanged {
                 outcome.unchanged += 1;
                 continue;
             }
+            let existing = records.get(&stub.id);
+            let is_new = existing.is_none();
+            let stage = |writes: &mut BTreeMap<&'static str, BTreeMap<String, SyncRecord>>,
+                         record: SyncRecord| {
+                writes
+                    .entry(stub.artifact_type.name())
+                    .or_default()
+                    .insert(stub.id.clone(), record);
+            };
             // Scope gate: only artifacts that would cost a derive get the
             // constraint check (with a bounded peek for codex, memoized in
             // the record so it happens at most once per artifact).
@@ -348,8 +406,8 @@ mod engine {
                     // of a materialized record, or its staleness would be
                     // masked from the next in-scope sync.
                     if existing.is_none_or(|r| r.cache_id.is_none()) {
-                        writes.insert(
-                            stub.id.clone(),
+                        stage(
+                            &mut writes,
                             SyncRecord {
                                 path: dir,
                                 cache_id: None,
@@ -358,6 +416,12 @@ mod engine {
                                 synced_at: Utc::now(),
                             },
                         );
+                        unflushed += 1;
+                    }
+                    progress.tick();
+                    if unflushed >= CHECKPOINT_EVERY {
+                        flush_writes(&mut writes)?;
+                        unflushed = 0;
                     }
                     continue;
                 }
@@ -374,8 +438,8 @@ mod engine {
                     // prior manual `p import` of the same session must not
                     // error on the existing cache entry.
                     write_cached(&derived.cache_id, &derived.doc, true)?;
-                    writes.insert(
-                        stub.id.clone(),
+                    stage(
+                        &mut writes,
                         SyncRecord {
                             path: memoized_path,
                             cache_id: Some(derived.cache_id),
@@ -387,6 +451,7 @@ mod engine {
                             synced_at: Utc::now(),
                         },
                     );
+                    unflushed += 1;
                     if is_new {
                         outcome.new += 1;
                     } else {
@@ -394,6 +459,7 @@ mod engine {
                     }
                 }
                 Err(e) => {
+                    progress.interrupt();
                     eprintln!(
                         "warning: sync {}: {}: {e}",
                         stub.artifact_type.name(),
@@ -402,8 +468,70 @@ mod engine {
                     outcome.failed += 1;
                 }
             }
+            progress.tick();
+            if unflushed >= CHECKPOINT_EVERY {
+                flush_writes(&mut writes)?;
+                unflushed = 0;
+            }
         }
-        Ok((outcome, writes))
+        flush_writes(&mut writes)?;
+        progress.interrupt();
+        Ok(outcome)
+    }
+
+    /// Live sync progress on stderr: a `\r`-updating `<type> done/total`
+    /// line on a terminal, a plain line every 25 items otherwise. Only
+    /// artifacts needing work count toward the total — a no-op sync
+    /// draws nothing.
+    struct Progress {
+        label: &'static str,
+        total: usize,
+        done: usize,
+        tty: bool,
+    }
+
+    impl Progress {
+        fn start(label: &'static str, total: usize) -> Self {
+            use std::io::IsTerminal;
+            let progress = Self {
+                label,
+                total,
+                done: 0,
+                tty: std::io::stderr().is_terminal(),
+            };
+            progress.draw();
+            progress
+        }
+
+        fn line(&self) -> String {
+            format!("{} {}/{}", self.label, self.done, self.total)
+        }
+
+        fn draw(&self) {
+            if self.total > 0 && self.tty {
+                eprint!("\r{}", self.line());
+            }
+        }
+
+        fn tick(&mut self) {
+            if self.total == 0 {
+                return;
+            }
+            self.done += 1;
+            if self.tty {
+                self.draw();
+            } else if self.done.is_multiple_of(25) {
+                eprintln!("{}", self.line());
+            }
+        }
+
+        /// Clear the live line so a warning or summary prints clean;
+        /// the next `tick` redraws in full.
+        fn interrupt(&self) {
+            if self.total > 0 && self.tty {
+                eprint!("\r\x1b[2K");
+            }
+        }
     }
 
     /// Derive one artifact through the same manager it was enumerated
@@ -1349,12 +1477,12 @@ mod engine {
                 let mut stubs = enumerate_stubs(&bundle, ArtifactType::Claude, None);
                 stubs.push(make_stub(ArtifactType::Claude, "does-not-exist"));
 
-                let (outcome, writes) =
-                    sync_stubs(&bundle, &stubs, &BTreeMap::new(), None).unwrap();
+                let outcome = sync_stubs(&bundle, &stubs, &BTreeMap::new(), None).unwrap();
                 assert_eq!((outcome.new, outcome.failed), (1, 1));
-                assert!(writes.contains_key("sess-aaa"));
+                let records = &load_manifest().unwrap()["claude"];
+                assert!(records.contains_key("sess-aaa"));
                 assert!(
-                    !writes.contains_key("does-not-exist"),
+                    !records.contains_key("does-not-exist"),
                     "failed artifacts must not be recorded as synced"
                 );
             });
@@ -1423,7 +1551,7 @@ mod engine {
                 rec.modified = None;
                 rec.size = None;
                 let stub = make_stub(ArtifactType::Claude, "sess-aaa");
-                let (outcome, _) = sync_stubs(&bundle, &[stub], &records, None).unwrap();
+                let outcome = sync_stubs(&bundle, &[stub], &records, None).unwrap();
                 assert_eq!((outcome.updated, outcome.unchanged), (1, 0));
             });
         }
@@ -1775,6 +1903,32 @@ mod engine {
                 panic!("derive_stub must fail without a claude manager");
             };
             assert!(err.to_string().contains("provider not available"));
+        }
+
+        #[test]
+        fn newest_first_orders_by_mtime_with_unstamped_last() {
+            let mut old = make_stub(ArtifactType::Claude, "old");
+            old.modified = Some("2026-01-01T00:00:00Z".parse().unwrap());
+            let mut new = make_stub(ArtifactType::Claude, "new");
+            new.modified = Some("2026-07-01T00:00:00Z".parse().unwrap());
+            let unstamped = make_stub(ArtifactType::Claude, "unstamped");
+
+            let stubs = vec![old, unstamped, new];
+            let ids: Vec<&str> = newest_first(&stubs).iter().map(|s| s.id.as_str()).collect();
+            assert_eq!(ids, vec!["new", "old", "unstamped"]);
+        }
+
+        #[test]
+        fn progress_line_counts_only_pending_work() {
+            let mut progress = Progress {
+                label: "claude  ",
+                total: 3,
+                done: 0,
+                tty: false,
+            };
+            progress.tick();
+            progress.tick();
+            assert_eq!(progress.line(), "claude   2/3");
         }
 
         #[test]

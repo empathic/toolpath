@@ -21,8 +21,12 @@ users no longer have to `p import` each session by hand.
     opencode/cursor — so deciding "nothing changed" reads no session
     bodies and a no-op sync is milliseconds. The manifest is written
     atomically (temp file + rename,
-    `0600`) and checkpointed after each type, so an interrupted first
-    run keeps the types it finished.
+    `0600`) and checkpointed every 10 writes with derives running
+    newest-first, so an interrupted first run keeps nearly everything
+    it derived — and spent its time on the sessions that matter most.
+    Pending work reports progress on stderr (live `<type> done/total`
+    on a TTY, a plain line every 25 items otherwise; no-op syncs stay
+    silent).
   - `ArtifactType` (in `sync.rs`) is the general enum naming artifact
     sources: `p cache sync` types, the manifest keys, and import
     cache-id prefixes all use it (it absorbs the former `HarnessArg`).
