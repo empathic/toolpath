@@ -340,13 +340,14 @@ impl ClaudeConvo {
     /// Resolves the full session chain containing `session_id`, returned
     /// in chronological order (oldest segment first).
     ///
-    /// For single-segment sessions, returns `[session_id]`.
-    #[allow(dead_code)]
-    pub(crate) fn session_chain(
-        &self,
-        project_path: &str,
-        session_id: &str,
-    ) -> Result<Vec<String>> {
+    /// For single-segment sessions, returns `[session_id]`. This is the
+    /// set of files [`Self::read_conversation`] would merge — appends
+    /// land in the *last* segment while the chain keeps the first
+    /// segment's id, so anything fingerprinting a conversation must
+    /// stat every segment, not the head file alone. Uses the same
+    /// cached chain index as the other chain surfaces; after a
+    /// [`Self::list_conversations`] call it costs no extra IO.
+    pub fn session_chain(&self, project_path: &str, session_id: &str) -> Result<Vec<String>> {
         self.chain_for(project_path, session_id)
     }
 

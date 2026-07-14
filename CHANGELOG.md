@@ -117,6 +117,19 @@ users no longer have to `p import` each session by hand.
     `record_is_current` — unknowable freshness re-derives); the `share`
     fast path stats its one artifact directly instead of enumerating
     the whole artifact type.
+  - Claude fingerprints cover the whole session chain. Claude Code
+    rotates to a new JSONL file on continuation (plan-mode exit,
+    resume, fork) while `list_conversations` keys the chain by its
+    *oldest* segment — appends land in the newest file, so statting
+    the head file froze the fingerprint at the first rotation and sync
+    never saw later turns. All three stamp sites (enumeration, import
+    provenance, the `share` fast path) now share `claude_chain_stamp`:
+    max mtime across the chain's segments plus the sum of their sizes
+    — exactly the files `read_conversation` merges, so the fingerprint
+    and the derived doc move in lockstep however rotation behavior
+    shifts across Claude Code versions. Import also normalizes its
+    manifest key to the chain head, so importing a successor-segment
+    id records the artifact sync will look for.
 - **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
   returns each session's listing id, inner `sessionId`, and backing
   file/dir path, and `peek_session_id` is now bounded — it scans the
@@ -124,6 +137,12 @@ users no longer have to `p import` each session by hand.
   falls back to a full parse only when they don't. `list_sessions`
   delegates to it unchanged. This is what lets `p cache sync` fingerprint
   gemini sessions without reading chat bodies.
+- **`toolpath-claude`** (0.12.1): `ClaudeConvo::session_chain` is now
+  public — it resolves the full session chain for a session id (oldest
+  segment first), which is what lets `p cache sync` fingerprint a
+  conversation across rotations without reading bodies. It rides the
+  same cached chain index as `list_conversations`, so calling it after
+  a listing costs no extra IO.
 - **`toolpath-cli`** (0.16.0): version bump only (tracks `path-cli`).
 
 ## Derive: resolve duplicate step ids — 2026-07-01

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use toolpath::v1::Graph;
 
 use crate::cmd_cache::{make_id, write_cached};
-use crate::sync::{ArtifactStub, ArtifactType, codex_artifact_id, stat_stamp};
+use crate::sync::{ArtifactStub, ArtifactType, claude_chain_stamp, codex_artifact_id, stat_stamp};
 
 #[derive(Subcommand, Debug)]
 pub enum ImportSource {
@@ -537,11 +537,16 @@ pub(crate) fn derive_claude_session_with(
     project: &str,
     session: &str,
 ) -> Result<DerivedDoc> {
-    let (modified, size) = manager
-        .resolver()
-        .conversation_file(project, session)
-        .map(|p| stat_stamp(&p))
-        .unwrap_or((None, None));
+    // Fingerprint the whole session chain, and key the manifest record
+    // by the chain head (the rotation-stable id sync enumerates), so a
+    // caller passing a successor-segment id still records the artifact
+    // sync will look for.
+    let (modified, size) = claude_chain_stamp(manager, project, session);
+    let artifact_id = manager
+        .session_chain(project, session)
+        .ok()
+        .and_then(|chain| chain.into_iter().next())
+        .unwrap_or_else(|| session.to_string());
     // The caller's project string often comes from claude's lossy dir
     // slugs ('/', '_', '.' all collapsed); leaving it out of the derive
     // lets path.base come from the session's own recorded cwd instead.
@@ -570,7 +575,7 @@ pub(crate) fn derive_claude_session_with(
         doc: Graph::from_path(path),
         provenance: Some(ArtifactStub {
             artifact_type: ArtifactType::Claude,
-            id: session.to_string(),
+            id: artifact_id,
             path: Some(project.to_string()),
             modified,
             size,

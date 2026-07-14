@@ -124,6 +124,42 @@ pub(crate) fn stat_stamp(
     }
 }
 
+/// Stat-level fingerprint of a whole claude session chain: max mtime
+/// across the chain's segment files plus the sum of their sizes. Claude
+/// Code rotates to a new file on continuation (plan-mode exit, resume,
+/// fork) while the chain keeps the *first* segment's id — appends land
+/// in the newest segment, so statting the head file alone would freeze
+/// the fingerprint at the first rotation and sync would never see the
+/// later turns. The chain here is exactly the set of files
+/// `read_conversation` merges, so the fingerprint and the derived doc
+/// move in lockstep. The chain index is already built (and cached) by
+/// the `list_conversations` call every caller makes first.
+pub(crate) fn claude_chain_stamp(
+    mgr: &toolpath_claude::ClaudeConvo,
+    project: &str,
+    session: &str,
+) -> (Option<chrono::DateTime<chrono::Utc>>, Option<u64>) {
+    let segments = match mgr.session_chain(project, session) {
+        Ok(segments) if !segments.is_empty() => segments,
+        _ => vec![session.to_string()],
+    };
+    let mut modified: Option<chrono::DateTime<chrono::Utc>> = None;
+    let mut size: Option<u64> = None;
+    for segment in &segments {
+        let Ok(file) = mgr.resolver().conversation_file(project, segment) else {
+            continue;
+        };
+        let (m, s) = stat_stamp(&file);
+        if let Some(m) = m {
+            modified = Some(modified.map_or(m, |cur| cur.max(m)));
+        }
+        if let Some(s) = s {
+            size = Some(size.unwrap_or(0) + s);
+        }
+    }
+    (modified, size)
+}
+
 /// The trailing UUID of a codex rollout filename stem
 /// (`rollout-<timestamp>-<uuid>`), or the whole stem when it doesn't end
 /// in one. Codex's `read_session` resolves either form.
@@ -560,8 +596,10 @@ mod engine {
     }
 
     /// Chain heads via `list_conversations` (bounded first-lines peek
-    /// per file, no full parse); fingerprint stats the head segment —
-    /// appends land there, and a rotation surfaces as a new head id.
+    /// per file, no full parse). The head is the chain's *oldest*
+    /// segment and its id is rotation-stable; the fingerprint covers
+    /// the whole chain (see `claude_chain_stamp`) because appends land
+    /// in the newest segment, not the head file.
     fn stubs_claude(
         mgr: &toolpath_claude::ClaudeConvo,
         parent_dir: Option<&Path>,
@@ -589,11 +627,7 @@ mod engine {
                 }
             };
             for head in heads {
-                let (modified, size) = mgr
-                    .resolver()
-                    .conversation_file(&project, &head)
-                    .map(|p| stat_stamp(&p))
-                    .unwrap_or((None, None));
+                let (modified, size) = super::claude_chain_stamp(mgr, &project, &head);
                 out.push(ArtifactStub {
                     artifact_type: ArtifactType::Claude,
                     id: head,
@@ -919,15 +953,11 @@ mod engine {
         id: &str,
     ) -> Option<(Option<DateTime<Utc>>, Option<u64>)> {
         match artifact_type {
-            ArtifactType::Claude => {
-                let file = bundle
-                    .claude
-                    .as_ref()?
-                    .resolver()
-                    .conversation_file(project?, id)
-                    .ok()?;
-                Some(stat_stamp(&file))
-            }
+            ArtifactType::Claude => Some(super::claude_chain_stamp(
+                bundle.claude.as_ref()?,
+                project?,
+                id,
+            )),
             ArtifactType::Gemini => {
                 let entries = bundle
                     .gemini
@@ -1327,6 +1357,54 @@ mod engine {
                     !writes.contains_key("does-not-exist"),
                     "failed artifacts must not be recorded as synced"
                 );
+            });
+        }
+
+        #[test]
+        fn rotated_session_resyncs_under_its_head_id() {
+            with_cfg(|home| {
+                write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+                let bundle = claude_bundle(home);
+                sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap();
+                let cache_id = load_manifest().unwrap()["claude"]["sess-aaa"]
+                    .cache_id
+                    .clone()
+                    .unwrap();
+                let steps_before = cached_step_count(&cache_id);
+
+                // The session rotates: a successor file whose first entry
+                // carries the predecessor's sessionId (the bridge).
+                // Appends land here; sess-aaa.jsonl never changes again.
+                std::fs::write(
+                    home.join(".claude/projects/-test-project/sess-bbb.jsonl"),
+                    concat!(
+                        r#"{"type":"user","uuid":"u-b0","timestamp":"2024-01-02T01:00:00Z","sessionId":"sess-aaa","cwd":"/test/project","message":{"role":"user","content":"bridge"}}"#,
+                        "\n",
+                        r#"{"type":"user","uuid":"u-b1","timestamp":"2024-01-02T01:00:01Z","sessionId":"sess-bbb","cwd":"/test/project","message":{"role":"user","content":"after rotation"}}"#,
+                        "\n",
+                    ),
+                )
+                .unwrap();
+
+                let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
+                assert_eq!(
+                    (outcome.new, outcome.updated, outcome.unchanged),
+                    (0, 1, 0),
+                    "the chain must re-sync under its head id, not read as unchanged"
+                );
+                let manifest = load_manifest().unwrap();
+                assert!(
+                    !manifest["claude"].contains_key("sess-bbb"),
+                    "successor segments are not separate artifacts"
+                );
+                assert!(
+                    cached_step_count(&cache_id) > steps_before,
+                    "post-rotation turns must reach the cached doc"
+                );
+
+                // And the grown chain settles: a third sync is a no-op.
+                let (_, again) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
+                assert_eq!((again.updated, again.unchanged), (0, 1));
             });
         }
 
