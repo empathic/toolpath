@@ -219,7 +219,8 @@ impl PathResolver {
     /// backing main file (or orphan sub-agent directory) and the inner
     /// `sessionId` when one could be peeked — enough for stat-level
     /// change detection without parsing chat bodies. The peek is
-    /// bounded; see [`peek_session_id`].
+    /// bounded (see `peek_session_id`): it scans a fixed-size prefix
+    /// and falls back to a full parse only when identity isn't there.
     pub fn list_session_entries(&self, project_path: &str) -> Result<Vec<SessionEntry>> {
         let chats = match self.chats_dir(project_path) {
             Ok(p) => p,
