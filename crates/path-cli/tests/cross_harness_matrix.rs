@@ -196,6 +196,12 @@ impl Harness for CopilotHarness {
             .map_err(|e| format!("re-read: {}", e))?;
         Ok(())
     }
+    /// Copilot's `events.jsonl` has no verified compaction encoding (the
+    /// event type is unobserved at 1.0.68), so the projector drops
+    /// `Item::Compaction` — same policy as gemini/cursor.
+    fn roundtrips_compaction(&self) -> bool {
+        false
+    }
 }
 
 struct PiHarness;
@@ -628,8 +634,9 @@ mod invariants {
         for (i, (a, b)) in original.compactions().zip(result.compactions()).enumerate() {
             let (sa, sb) = (summary(a), summary(b));
             if sa != sb {
-                let clip =
-                    |s: &Option<String>| s.as_deref().map(|t| t.chars().take(80).collect::<String>());
+                let clip = |s: &Option<String>| {
+                    s.as_deref().map(|t| t.chars().take(80).collect::<String>())
+                };
                 failures.push(format!(
                     "compaction {i} summary diverged:\n      first:  {:?}\n      second: {:?}",
                     clip(&sa),

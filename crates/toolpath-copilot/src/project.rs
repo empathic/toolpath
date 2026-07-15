@@ -103,8 +103,7 @@ impl CopilotProjector {
         // date-time WITH a timezone offset. Pick a base (first valid turn ts, or
         // the view's start) and normalize each event's timestamp against it.
         let base_ts = view
-            .turns
-            .iter()
+            .turns()
             .map(|t| t.timestamp.as_str())
             .find(|s| is_iso_offset(s))
             .map(str::to_string)
@@ -118,8 +117,12 @@ impl CopilotProjector {
             self.session_start_data(view, &base_ts),
         );
 
+        // Only turns project to Copilot's wire format: foreign `Item::Event`s
+        // and `Item::Compaction`s have no verified `events.jsonl` encoding
+        // (compaction is an unobserved event type there), so they are dropped —
+        // same policy as the Gemini and Cursor projectors.
         let mut assistant_turn: usize = 0;
-        for turn in &view.turns {
+        for turn in view.turns() {
             let ts = iso_or(&turn.timestamp, &base_ts);
             match &turn.role {
                 Role::User => b.push("user.message", &ts, json!({ "content": turn.text })),
@@ -690,20 +693,21 @@ mod tests {
         let view2 = to_view(&projected);
 
         // Turns, roles, text.
-        assert_eq!(view1.turns.len(), view2.turns.len());
-        assert_eq!(view2.turns[0].role, Role::User);
-        assert_eq!(view2.turns[0].text, "build it");
-        assert_eq!(view2.turns[1].role, Role::Assistant);
-        assert_eq!(view2.turns[1].text, "listing");
+        let turns2: Vec<_> = view2.turns().collect();
+        assert_eq!(view1.turns().count(), turns2.len());
+        assert_eq!(turns2[0].role, Role::User);
+        assert_eq!(turns2[0].text, "build it");
+        assert_eq!(turns2[1].role, Role::Assistant);
+        assert_eq!(turns2[1].text, "listing");
         // Thinking + model + per-turn tokens survive.
-        assert_eq!(view2.turns[1].thinking.as_deref(), Some("think"));
-        assert_eq!(view2.turns[1].model.as_deref(), Some("claude-haiku-4.5"));
+        assert_eq!(turns2[1].thinking.as_deref(), Some("think"));
+        assert_eq!(turns2[1].model.as_deref(), Some("claude-haiku-4.5"));
         assert_eq!(
-            view2.turns[1].token_usage.as_ref().unwrap().output_tokens,
+            turns2[1].token_usage.as_ref().unwrap().output_tokens,
             Some(42)
         );
         // Tool call + result.
-        let tu = &view2.turns[1].tool_uses[0];
+        let tu = &turns2[1].tool_uses[0];
         assert_eq!(tu.id, "c1");
         assert_eq!(tu.name, "bash");
         assert_eq!(tu.result.as_ref().unwrap().content, "a.rs");
@@ -765,7 +769,7 @@ mod tests {
             id: "x".into(),
             ..Default::default()
         };
-        view.turns.push(Turn {
+        view.items.push(toolpath_convo::Item::Turn(Turn {
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -790,7 +794,7 @@ mod tests {
             environment: None,
             delegations: Vec::new(),
             file_mutations: Vec::new(),
-        });
+        }));
         let session = CopilotProjector::new().project(&view).unwrap();
         // Collect toolCallId from the start + complete + the message's request.
         let mut ids: Vec<String> = Vec::new();
@@ -828,7 +832,7 @@ mod tests {
                 id: "x".into(),
                 ..Default::default()
             };
-            v.turns.push(Turn {
+            v.items.push(toolpath_convo::Item::Turn(Turn {
                 id: "a1".into(),
                 parent_id: None,
                 group_id: None,
@@ -844,7 +848,7 @@ mod tests {
                 environment: None,
                 delegations: Vec::new(),
                 file_mutations: Vec::new(),
-            });
+            }));
             v
         }
         let base = |id: &str, name: &str, input| ToolInvocation {
@@ -968,7 +972,7 @@ mod tests {
             id: "x".into(),
             ..Default::default()
         };
-        view.turns.push(Turn {
+        view.items.push(toolpath_convo::Item::Turn(Turn {
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -995,7 +999,7 @@ mod tests {
             environment: None,
             delegations: Vec::new(),
             file_mutations: Vec::new(),
-        });
+        }));
         let session = CopilotProjector::new().project(&view).unwrap();
         let msg = session
             .lines
@@ -1035,7 +1039,7 @@ mod tests {
             provider_id: Some("codex".into()),
             ..Default::default()
         };
-        view.turns.push(Turn {
+        view.items.push(toolpath_convo::Item::Turn(Turn {
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -1060,9 +1064,9 @@ mod tests {
             environment: None,
             delegations: Vec::new(),
             file_mutations: Vec::new(),
-        });
+        }));
         let projected = CopilotProjector::new().project(&view).unwrap();
         let back = to_view(&projected);
-        assert_eq!(back.turns[0].tool_uses[0].name, "bash");
+        assert_eq!(back.turns().next().unwrap().tool_uses[0].name, "bash");
     }
 }

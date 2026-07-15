@@ -11,7 +11,7 @@ use crate::types::{CopilotEvent, Session};
 use serde_json::Value;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationEvent, ConversationView, DelegatedWork, FileMutation, ProducerInfo, Role,
+    ConversationEvent, ConversationView, DelegatedWork, FileMutation, Item, ProducerInfo, Role,
     SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
@@ -141,7 +141,10 @@ pub fn to_view(session: &Session) -> ConversationView {
 
     let mut turns: Vec<Turn> = Vec::new();
     let mut current: Option<Turn> = None;
-    let mut events: Vec<ConversationEvent> = Vec::new();
+    // Each event is tagged with how many turns precede it in the stream
+    // (flushed turns plus a content-bearing in-progress turn), so the final
+    // `items` assembly can restore the real turn/event interleaving.
+    let mut events: Vec<(usize, ConversationEvent)> = Vec::new();
     // Copilot reports per-message tokens (`outputTokens`, and — on a projected
     // session — `inputTokens`/cache). We set them per-turn and sum for the
     // session total; `session.shutdown` (when present) is the fallback total.
@@ -268,20 +271,40 @@ pub fn to_view(session: &Session) -> ConversationView {
                 backfill_delegation_result(&mut current, &mut turns, s.id.as_deref(), s.result);
             }
             CopilotEvent::SkillInvoked(p) => {
-                events.push(make_event(i, "skill.invoked", &ts, p));
+                events.push((
+                    turn_watermark(&turns, &current),
+                    make_event(i, "skill.invoked", &ts, p),
+                ));
             }
             CopilotEvent::Hook { kind, payload } => {
-                events.push(make_event(i, &kind, &ts, payload));
+                events.push((
+                    turn_watermark(&turns, &current),
+                    make_event(i, &kind, &ts, payload),
+                ));
             }
-            CopilotEvent::Abort(p) => events.push(make_event(i, "abort", &ts, p)),
+            CopilotEvent::Abort(p) => {
+                events.push((
+                    turn_watermark(&turns, &current),
+                    make_event(i, "abort", &ts, p),
+                ));
+            }
             CopilotEvent::CompactionComplete(p) => {
-                events.push(make_event(i, "session.compaction_complete", &ts, p));
+                events.push((
+                    turn_watermark(&turns, &current),
+                    make_event(i, "session.compaction_complete", &ts, p),
+                ));
             }
             CopilotEvent::SessionOther { kind, payload } => {
-                events.push(make_event(i, &kind, &ts, payload));
+                events.push((
+                    turn_watermark(&turns, &current),
+                    make_event(i, &kind, &ts, payload),
+                ));
             }
             CopilotEvent::Unknown { kind, payload } => {
-                events.push(make_event(i, &kind, &ts, payload));
+                events.push((
+                    turn_watermark(&turns, &current),
+                    make_event(i, &kind, &ts, payload),
+                ));
             }
         }
     }
@@ -362,16 +385,27 @@ pub fn to_view(session: &Session) -> ConversationView {
         None
     };
 
+    // Merge turns and events into the ordered `items` stream, restoring the
+    // real interleaving from each event's turn watermark.
+    let mut items: Vec<Item> = Vec::new();
+    let mut ev = events.into_iter().peekable();
+    for (i, t) in turns.into_iter().enumerate() {
+        while ev.peek().is_some_and(|(w, _)| *w <= i) {
+            items.push(Item::Event(ev.next().unwrap().1));
+        }
+        items.push(Item::Turn(t));
+    }
+    items.extend(ev.map(|(_, e)| Item::Event(e)));
+
     ConversationView {
         id: session.id.clone(),
         started_at: session.started_at(),
         last_activity: session.last_activity(),
-        turns,
+        items,
         total_usage,
         provider_id: Some(PROVIDER_ID.to_string()),
         files_changed,
         session_ids: Vec::new(),
-        events,
         base,
         producer: Some(ProducerInfo {
             name: PRODUCER_NAME.to_string(),
@@ -448,6 +482,13 @@ fn flush(turns: &mut Vec<Turn>, current: &mut Option<Turn>) {
     {
         push_linked(turns, t);
     }
+}
+
+/// How many turns precede an event created now: the flushed turns, plus the
+/// in-progress turn when it already has content (it started before the event,
+/// so it sorts ahead of it in the `items` stream).
+fn turn_watermark(turns: &[Turn], current: &Option<Turn>) -> usize {
+    turns.len() + current.as_ref().is_some_and(turn_has_content) as usize
 }
 
 /// Attach a `tool.execution_complete` result to its matching invocation.
@@ -748,28 +789,28 @@ mod tests {
     #[test]
     fn builds_user_and_assistant_turns() {
         let view = to_view(&parse(&body()));
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "build a thing");
-        assert_eq!(view.turns[1].role, Role::Assistant);
+        assert_eq!(view.turns().count(), 2);
+        assert_eq!(view.turns().next().unwrap().role, Role::User);
+        assert_eq!(view.turns().next().unwrap().text, "build a thing");
+        assert_eq!(view.turns().nth(1).unwrap().role, Role::Assistant);
         // Two assistant messages collapsed into one turn.
-        assert!(view.turns[1].text.contains("Listing files."));
-        assert!(view.turns[1].text.contains("Done."));
+        assert!(view.turns().nth(1).unwrap().text.contains("Listing files."));
+        assert!(view.turns().nth(1).unwrap().text.contains("Done."));
     }
 
     #[test]
     fn assistant_turn_chains_to_user() {
         let view = to_view(&parse(&body()));
         assert_eq!(
-            view.turns[1].parent_id.as_deref(),
-            Some(view.turns[0].id.as_str())
+            view.turns().nth(1).unwrap().parent_id.as_deref(),
+            Some(view.turns().next().unwrap().id.as_str())
         );
     }
 
     #[test]
     fn tool_calls_paired_with_results() {
         let view = to_view(&parse(&body()));
-        let tools = &view.turns[1].tool_uses;
+        let tools = &view.turns().nth(1).unwrap().tool_uses;
         assert_eq!(tools.len(), 2);
         let shell = tools.iter().find(|t| t.name == "bash").unwrap();
         assert_eq!(shell.category, Some(ToolCategory::Shell));
@@ -782,7 +823,7 @@ mod tests {
     fn assistant_reasoning_becomes_thinking() {
         let view = to_view(&parse(&body()));
         assert_eq!(
-            view.turns[1].thinking.as_deref(),
+            view.turns().nth(1).unwrap().thinking.as_deref(),
             Some("Let me look at the files.")
         );
     }
@@ -828,7 +869,10 @@ mod tests {
     #[test]
     fn file_write_produces_mutation_with_raw_diff() {
         let view = to_view(&parse(&body()));
-        let fm = view.turns[1]
+        let fm = view
+            .turns()
+            .nth(1)
+            .unwrap()
             .file_mutations
             .iter()
             .find(|f| f.path == "a.rs")
@@ -928,7 +972,7 @@ mod tests {
         ]
         .join("\n");
         let view = to_view(&parse(&body));
-        let d = &view.turns[0].delegations[0];
+        let d = &view.turns().next().unwrap().delegations[0];
         assert_eq!(d.agent_id, "sub-1");
         assert_eq!(d.prompt, "do research");
         assert_eq!(d.result.as_deref(), Some("found it"));
@@ -942,9 +986,9 @@ mod tests {
         ]
         .join("\n");
         let view = to_view(&parse(&body));
-        assert_eq!(view.events.len(), 2);
-        assert_eq!(view.events[0].event_type, "hook.start");
-        assert_eq!(view.events[1].event_type, "skill.invoked");
+        assert_eq!(view.events().count(), 2);
+        assert_eq!(view.events().next().unwrap().event_type, "hook.start");
+        assert_eq!(view.events().nth(1).unwrap().event_type, "skill.invoked");
     }
 
     #[test]
@@ -969,7 +1013,7 @@ mod tests {
         ]
         .join("\n");
         let view = to_view(&parse(&body));
-        let tools = &view.turns[0].tool_uses;
+        let tools = &view.turns().next().unwrap().tool_uses;
         assert_eq!(
             tools.len(),
             1,
@@ -988,9 +1032,9 @@ mod tests {
         ]
         .join("\n");
         let view = to_view(&parse(&body));
-        assert_eq!(view.turns[0].tool_uses.len(), 1);
+        assert_eq!(view.turns().next().unwrap().tool_uses.len(), 1);
         assert_eq!(
-            view.turns[0].file_mutations.len(),
+            view.turns().next().unwrap().file_mutations.len(),
             1,
             "id-less file write must not duplicate the mutation"
         );
@@ -1001,13 +1045,16 @@ mod tests {
     fn tool_pairing_with_ids_still_works() {
         // Regression guard: explicit ids remain authoritative.
         let view = to_view(&parse(&body()));
-        let shell = view.turns[1]
+        let shell = view
+            .turns()
+            .nth(1)
+            .unwrap()
             .tool_uses
             .iter()
             .find(|t| t.name == "bash")
             .unwrap();
         assert_eq!(shell.result.as_ref().unwrap().content, "a.rs");
         // body() has two id-bearing tool calls: bash + create_file.
-        assert_eq!(view.turns[1].tool_uses.len(), 2);
+        assert_eq!(view.turns().nth(1).unwrap().tool_uses.len(), 2);
     }
 }

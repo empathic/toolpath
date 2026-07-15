@@ -35,17 +35,13 @@ fn forward_view_matches_source_counts() {
 
     // 1 user prompt (the elicit task list); assistant turns collapse per
     // turn_start/turn_end (11 in the source).
-    let users: Vec<_> = view.turns.iter().filter(|t| t.role == Role::User).collect();
+    let users: Vec<_> = view.turns().filter(|t| t.role == Role::User).collect();
     assert_eq!(users.len(), 1, "one elicit user prompt");
-    let assistants = view
-        .turns
-        .iter()
-        .filter(|t| t.role == Role::Assistant)
-        .count();
+    let assistants = view.turns().filter(|t| t.role == Role::Assistant).count();
     assert_eq!(assistants, 11, "one turn per turn_start/turn_end pair");
 
     // 11 tool calls, all with results, categories per the native vocabulary.
-    let tools: Vec<_> = view.turns.iter().flat_map(|t| &t.tool_uses).collect();
+    let tools: Vec<_> = view.turns().flat_map(|t| &t.tool_uses).collect();
     assert_eq!(tools.len(), 11);
     assert!(
         tools.iter().all(|t| t.result.is_some()),
@@ -66,7 +62,7 @@ fn forward_view_matches_source_counts() {
     assert_eq!(errored, 1);
 
     // The sub-agent marker paired with the task tool call by toolCallId.
-    let delegations: Vec<_> = view.turns.iter().flat_map(|t| &t.delegations).collect();
+    let delegations: Vec<_> = view.turns().flat_map(|t| &t.delegations).collect();
     assert_eq!(delegations.len(), 1);
     let task = tools.iter().find(|t| t.name == "task").unwrap();
     assert_eq!(
@@ -77,7 +73,7 @@ fn forward_view_matches_source_counts() {
     // File mutations carry the NATIVE file-state diff (upgraded from the
     // complete's result.detailedContent — Codex-grade fidelity), attributed
     // to their tool call.
-    let muts: Vec<_> = view.turns.iter().flat_map(|t| &t.file_mutations).collect();
+    let muts: Vec<_> = view.turns().flat_map(|t| &t.file_mutations).collect();
     assert_eq!(muts.len(), 3, "create ×2 + edit ×1");
     assert!(muts.iter().all(|m| m.tool_id.is_some()));
     let edit_mut = muts
@@ -92,7 +88,7 @@ fn forward_view_matches_source_counts() {
     );
 
     // Reasoning captured on every assistant turn that had reasoningText.
-    let with_thinking = view.turns.iter().filter(|t| t.thinking.is_some()).count();
+    let with_thinking = view.turns().filter(|t| t.thinking.is_some()).count();
     assert!(
         with_thinking >= 10,
         "reasoningText → thinking (got {with_thinking})"
@@ -103,8 +99,7 @@ fn forward_view_matches_source_counts() {
     // tokenDetails (which per-message usage doesn't report) — without the
     // merge these ~222k tokens would be dropped.
     let sum: u32 = view
-        .turns
-        .iter()
+        .turns()
         .filter_map(|t| t.token_usage.as_ref())
         .filter_map(|u| u.output_tokens)
         .sum();
@@ -167,8 +162,8 @@ fn projection_roundtrip_preserves_fidelity() {
     let v2 = to_view(&reparsed);
 
     // Turn structure.
-    assert_eq!(v1.turns.len(), v2.turns.len(), "turn count");
-    for (a, b) in v1.turns.iter().zip(v2.turns.iter()) {
+    assert_eq!(v1.turns().count(), v2.turns().count(), "turn count");
+    for (a, b) in v1.turns().zip(v2.turns()) {
         assert_eq!(a.role, b.role);
         let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(norm(&a.text), norm(&b.text), "turn text");
@@ -197,14 +192,12 @@ fn projection_roundtrip_preserves_fidelity() {
     );
     // Delegation ids stay findable (as delegation or tool call).
     let ids = |v: &toolpath_convo::ConversationView| -> BTreeSet<String> {
-        v.turns
-            .iter()
+        v.turns()
             .flat_map(|t| t.delegations.iter().map(|d| d.agent_id.clone()))
             .collect()
     };
     let tool_ids = |v: &toolpath_convo::ConversationView| -> BTreeSet<String> {
-        v.turns
-            .iter()
+        v.turns()
             .flat_map(|t| t.tool_uses.iter().map(|tu| tu.id.clone()))
             .collect()
     };
