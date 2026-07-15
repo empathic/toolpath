@@ -158,6 +158,61 @@ are gone in favor of jaq forms — `path query 'map(select(.dead_end))'` and
 `path query 'map(select(.step.actor | startswith("agent:")))'`. `path-cli`
 0.14.0 → 0.15.0; adds the `jaq-core`/`jaq-std`/`jaq-json` dependencies.
 
+## Conversation items IR + compaction provenance — 2026-06-22
+
+`ConversationView` now exposes a single ordered `items` stream (the new
+`Item` enum) in place of the separate `turns`/`events` lists, giving every
+provider one timeline to populate and every consumer one timeline to walk.
+On top of that, compaction is now first-class provenance: when an agent
+summarizes and drops earlier context, we record what was kept and why
+instead of silently losing the boundary.
+
+- **`toolpath-convo`** (BREAKING): `ConversationView.turns`/`events` are
+  unified into `ConversationView.items: Vec<Item>`, with `turns()`,
+  `events()`, and `compactions()` accessors for walking the stream. New
+  public types `Compaction` and `CompactionTrigger` model a
+  context-compaction boundary — `kept` is the set of prior turn ids that
+  survived, and `trigger` records what caused it. `derive_path` resolves
+  step-id collisions as it emits steps — a byte-identical re-emission is
+  dropped, a same-id-but-different step is re-IDed to `<id>#<n>` — so it
+  is infallible (returns `Path`, not `Result`) and the result is always
+  collision-free. The per-provider `derive::derive_path` / `derive_project`
+  (and pi's `derive_graph`) wrappers are likewise infallible now; only the
+  disk-reading entry points (e.g. pi's `derive_project`) still return
+  `Result`.
+- **New step type**: `conversation.compact` records a compaction event as
+  a Step in the derived `Path`.
+- **Per-provider compaction population**: `toolpath-claude`,
+  `toolpath-codex`, `toolpath-opencode`, and `toolpath-pi` emit
+  `Compaction` items from their on-disk compaction signals.
+  `toolpath-gemini` and `toolpath-cursor` participate in the items IR but
+  persist no compaction: Gemini records none, and Cursor's `/summarize`
+  writes only a boundary marker (the summary and kept set live server-side
+  and are unrecoverable from local data), so the marker is skipped on read.
+- **`agent-coding-session` kind → v1.2.0**: the kind constant is now
+  `https://toolpath.net/kinds/agent-coding-session/v1.2.0`, extending
+  v1.1.0 (token usage) with the `conversation.compact` step type. The
+  v1.2.0 schema is bundled in both `toolpath` and `path-cli` alongside the
+  retained v1.0.0/v1.1.0 schemas; producers (the shared
+  `toolpath_convo::derive_path` and every provider built on it) emit the
+  new URI.
+- **Token-usage idempotency fixes** (surfaced by the cross-harness
+  round-trip matrix once compaction fixtures were added): message totals
+  are canonicalized per `group_id` across the whole turn sequence rather
+  than per consecutive run, so a group interrupted by an intervening turn
+  no longer double-counts on re-read (`toolpath-claude`); consecutive
+  same-id Gemini lines (one split message) now share a `group_id` so their
+  repeated `tokens` snapshot is counted once (`toolpath-gemini`); and
+  Codex's cumulative `token_count` advances by a group's total once, on the
+  group's last turn (`toolpath-codex`).
+
+Crates bumped: `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
+`toolpath-claude` 0.13.0, `toolpath-codex` 0.7.0, `toolpath-gemini`
+0.7.0, `toolpath-opencode` 0.6.0, `toolpath-pi` 0.7.0,
+`toolpath-cursor` 0.3.0, `path-cli` 0.15.0, `toolpath-cli` 0.15.0.
+Unchanged: `toolpath-git`, `toolpath-github`, `toolpath-dot`,
+`toolpath-md`, `pathbase-client`.
+
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 
 Fixes token over-counting in derived documents (~3× output-token

@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn resolve_picks_newest_for_bare_name() {
         let k = resolve("agent-coding-session").expect("bundled");
-        assert_eq!(k.version, "v1.1.0");
+        assert_eq!(k.version, "v1.2.0");
     }
 
     #[test]

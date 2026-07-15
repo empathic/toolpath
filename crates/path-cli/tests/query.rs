@@ -471,7 +471,8 @@ fn kind_lists_bundled_kinds() {
         .assert()
         .success()
         .stdout(predicate::str::contains("agent-coding-session"))
-        .stdout(predicate::str::contains("v1.1.0"));
+        .stdout(predicate::str::contains("v1.1.0"))
+        .stdout(predicate::str::contains("v1.2.0"));
 }
 
 #[test]
@@ -481,7 +482,7 @@ fn kind_prints_newest_schema() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "kinds/agent-coding-session/v1.1.0/schema.json",
+            "kinds/agent-coding-session/v1.2.0/schema.json",
         ));
 }
 

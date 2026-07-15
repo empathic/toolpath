@@ -222,7 +222,7 @@ mod tests {
         validate(&doc).expect("base is optional on path identity");
     }
 
-    const ACS_KIND: &str = "https://toolpath.net/kinds/agent-coding-session/v1.1.0";
+    const ACS_KIND: &str = "https://toolpath.net/kinds/agent-coding-session/v1.2.0";
 
     fn acs_graph(append: serde_json::Value) -> serde_json::Value {
         json!({
@@ -294,8 +294,7 @@ mod tests {
             .join("../../test-fixtures/claude/convo.jsonl");
         let convo = toolpath_claude::ConversationReader::read_conversation(&fixture)
             .expect("read claude fixture");
-        let path =
-            toolpath_claude::derive::derive_path(&convo, &Default::default());
+        let path = toolpath_claude::derive::derive_path(&convo, &Default::default());
         assert_eq!(
             path.meta.as_ref().and_then(|m| m.kind.as_deref()),
             Some(ACS_KIND),

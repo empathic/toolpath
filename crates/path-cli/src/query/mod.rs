@@ -405,7 +405,7 @@ mod tests {
     fn wrap_graph_filters_by_kind() {
         let graph = Graph::from_path(forked_path());
         let mut out = Vec::new();
-        let sel = kinds::parse_kind_selector("agent-coding-session/v1.1.0");
+        let sel = kinds::parse_kind_selector("agent-coding-session/v1.2.0");
         wrap_graph(&doc_src("g"), &graph, Some(&sel), None, &mut out);
         assert_eq!(out.len(), 4, "matching kind keeps all steps");
 
