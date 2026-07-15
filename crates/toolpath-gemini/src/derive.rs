@@ -20,10 +20,7 @@ pub struct DeriveConfig {
 }
 
 /// Derive a single Toolpath [`Path`] from a Gemini conversation.
-pub fn derive_path(
-    conversation: &Conversation,
-    config: &DeriveConfig,
-) -> Path {
+pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
     let view = to_view(conversation);
     let prefix: String = view.id.chars().take(8).collect();
     let base_uri = config.project_path.as_ref().map(|p| {
@@ -43,10 +40,7 @@ pub fn derive_path(
 }
 
 /// Derive Toolpath Paths from multiple conversations.
-pub fn derive_project(
-    conversations: &[Conversation],
-    config: &DeriveConfig,
-) -> Vec<Path> {
+pub fn derive_project(conversations: &[Conversation], config: &DeriveConfig) -> Vec<Path> {
     conversations
         .iter()
         .map(|c| derive_path(c, config))

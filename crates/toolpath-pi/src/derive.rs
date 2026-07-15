@@ -134,8 +134,7 @@ mod tests {
     #[test]
     fn test_derive_graph_single_session() {
         let s = make_session("sess-alpha");
-        let g =
-            derive_graph(std::slice::from_ref(&s), None, &DeriveConfig::default());
+        let g = derive_graph(std::slice::from_ref(&s), None, &DeriveConfig::default());
         assert_eq!(g.paths.len(), 1);
         assert!(matches!(&g.paths[0], PathOrRef::Path(_)));
     }

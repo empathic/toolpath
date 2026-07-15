@@ -269,8 +269,7 @@ fn re_emission_is_stripped_and_kept_round_trips() {
     let after_c = only_compaction(&after);
     assert_eq!(after_c.kept, c.kept, "kept diverged after projection");
 
-    let path2 =
-        derive_path(&after, &DeriveConfig::default());
+    let path2 = derive_path(&after, &DeriveConfig::default());
     let mut ids2 = HashSet::new();
     for step in &path2.steps {
         assert!(

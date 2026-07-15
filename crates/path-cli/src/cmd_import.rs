@@ -448,9 +448,7 @@ fn derive_claude_with_manager(
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No conversations found for project: {}", p))?;
                 let cfg = make_config(&p);
-                return wrap_paths_claude(vec![toolpath_claude::derive::derive_path(
-                    &convo, &cfg,
-                )]);
+                return wrap_paths_claude(vec![toolpath_claude::derive::derive_path(&convo, &cfg)]);
             }
         }
         (None, _, _) => {
@@ -673,9 +671,7 @@ fn derive_gemini_with_manager(
                     .map_err(|e| anyhow::anyhow!("{}", e))?
                     .ok_or_else(|| anyhow::anyhow!("No conversations found for project: {}", p))?;
                 let cfg = make_config(&p);
-                return wrap_paths_gemini(vec![toolpath_gemini::derive::derive_path(
-                    &convo, &cfg,
-                )]);
+                return wrap_paths_gemini(vec![toolpath_gemini::derive::derive_path(&convo, &cfg)]);
             }
         }
         (None, _, _) => {
@@ -1500,8 +1496,7 @@ fn derive_pi_with_manager(
                         .ok_or_else(|| {
                             anyhow::anyhow!("No Pi sessions found for project: {}", p)
                         })?;
-                    let doc =
-                        Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
+                    let doc = Graph::from_path(toolpath_pi::derive::derive_path(&session, &config));
                     let cache_id = make_id("pi", &doc_inner_id(&doc));
                     return Ok(vec![DerivedDoc { cache_id, doc }]);
                 }

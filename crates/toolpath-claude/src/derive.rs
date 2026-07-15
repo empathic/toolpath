@@ -22,10 +22,7 @@ pub struct DeriveConfig {
 }
 
 /// Derive a Toolpath [`Path`] from a Claude [`Conversation`].
-pub fn derive_path(
-    conversation: &Conversation,
-    config: &DeriveConfig,
-) -> Path {
+pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
     let view = to_view(conversation);
     let prefix: String = conversation.session_id.chars().take(8).collect();
     let base_uri = config.project_path.as_ref().map(|p| {
@@ -45,10 +42,7 @@ pub fn derive_path(
 }
 
 /// Derive Toolpath Paths from multiple conversations in a project.
-pub fn derive_project(
-    conversations: &[Conversation],
-    config: &DeriveConfig,
-) -> Vec<Path> {
+pub fn derive_project(conversations: &[Conversation], config: &DeriveConfig) -> Vec<Path> {
     conversations
         .iter()
         .map(|c| derive_path(c, config))

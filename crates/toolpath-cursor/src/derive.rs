@@ -45,10 +45,7 @@ pub fn derive_path(session: &CursorSession, config: &DeriveConfig) -> Path {
 }
 
 /// Derive a `Path` from each of several Cursor sessions.
-pub fn derive_project(
-    sessions: &[CursorSession],
-    config: &DeriveConfig,
-) -> Vec<Path> {
+pub fn derive_project(sessions: &[CursorSession], config: &DeriveConfig) -> Vec<Path> {
     sessions.iter().map(|s| derive_path(s, config)).collect()
 }
 

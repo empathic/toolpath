@@ -54,10 +54,7 @@ pub fn derive_path_with_resolver(
 }
 
 /// Derive a `Path` from multiple sessions.
-pub fn derive_project(
-    sessions: &[Session],
-    config: &DeriveConfig,
-) -> Vec<Path> {
+pub fn derive_project(sessions: &[Session], config: &DeriveConfig) -> Vec<Path> {
     sessions.iter().map(|s| derive_path(s, config)).collect()
 }
 

@@ -46,10 +46,7 @@ pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
 }
 
 /// Derive a [`Path`] from multiple sessions. Used for bulk exports.
-pub fn derive_project(
-    sessions: &[Session],
-    config: &DeriveConfig,
-) -> Vec<Path> {
+pub fn derive_project(sessions: &[Session], config: &DeriveConfig) -> Vec<Path> {
     sessions.iter().map(|s| derive_path(s, config)).collect()
 }
 
@@ -176,8 +173,7 @@ mod tests {
     fn derive_project_per_session() {
         let (_t, mgr, id) = fixture_session(&minimal_body());
         let s1 = mgr.read_session(&id).unwrap();
-        let paths =
-            derive_project(std::slice::from_ref(&s1), &DeriveConfig::default());
+        let paths = derive_project(std::slice::from_ref(&s1), &DeriveConfig::default());
         assert_eq!(paths.len(), 1);
     }
 }
