@@ -71,6 +71,11 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
         view.producer = Some(p);
     }
 
+    // Workspace root recovered from `path.base`, used to resolve
+    // base-relative file-change keys back to absolute paths (inverting
+    // `derive_path`'s relativization). Only an absolute root resolves.
+    let working_dir: Option<String> = view.base.as_ref().and_then(|b| b.working_dir.clone());
+
     // Map from step ID → index into view.turns, for parent lookups.
     let mut step_to_turn: HashMap<&str, usize> = HashMap::new();
     // Track files_changed for dedup in insertion order.
@@ -89,7 +94,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                 continue;
             }
             let fm = FileMutation {
-                path: key.clone(),
+                path: resolve_key(key, working_dir.as_deref()),
                 tool_id: s
                     .extra
                     .get("tool_id")
@@ -198,9 +203,11 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     let category = parse_category(structural.extra.get("category"));
                     if category == Some(ToolCategory::FileWrite)
                         && !artifact_key.starts_with("agent://")
-                        && files_seen.insert(artifact_key.clone())
                     {
-                        view.files_changed.push(artifact_key.clone());
+                        let resolved = resolve_key(artifact_key, working_dir.as_deref());
+                        if files_seen.insert(resolved.clone()) {
+                            view.files_changed.push(resolved);
+                        }
                     }
 
                     // Attach to parent turn.
@@ -530,6 +537,20 @@ fn role_from_actor(actor: &str) -> Role {
     }
 }
 
+/// Resolve a base-relative artifact key back to an absolute path using
+/// the view's working dir, inverting `derive_path`'s relativization.
+pub(crate) fn resolve_key(key: &str, working_dir: Option<&str>) -> String {
+    if key.starts_with('/') || key.contains("://") {
+        return key.to_string();
+    }
+    match working_dir {
+        Some(wd) if wd.starts_with('/') => {
+            format!("{}/{}", wd.trim_end_matches('/'), key)
+        }
+        _ => key.to_string(),
+    }
+}
+
 fn add_opt(a: Option<u32>, b: Option<u32>) -> Option<u32> {
     match (a, b) {
         (Some(x), Some(y)) => Some(x + y),
@@ -622,6 +643,32 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect()
+    }
+
+    #[test]
+    fn resolve_key_joins_relative_keys_with_base() {
+        assert_eq!(resolve_key("src/main.rs", Some("/a/b")), "/a/b/src/main.rs");
+        assert_eq!(resolve_key("/abs/x.rs", Some("/a/b")), "/abs/x.rs");
+        assert_eq!(
+            resolve_key("claude-code://sess", Some("/a/b")),
+            "claude-code://sess"
+        );
+        assert_eq!(resolve_key("src/main.rs", None), "src/main.rs");
+    }
+
+    #[test]
+    fn resolve_key_passes_through_any_uri_scheme_unchanged() {
+        // Any key containing "://" is an artifact URI (conversation or
+        // otherwise), never a bare relative path -- it must never be
+        // joined onto the working dir, regardless of scheme.
+        assert_eq!(
+            resolve_key("https://example.com/x", Some("/proj")),
+            "https://example.com/x"
+        );
+        assert_eq!(
+            resolve_key("claude-code://sess", Some("/proj")),
+            "claude-code://sess"
+        );
     }
 
     #[test]
@@ -1356,5 +1403,57 @@ mod tests {
         assert_eq!(view.events.len(), 1);
         assert_eq!(view.turns[0].text, "hello");
         assert_eq!(view.events[0].event_type, "system");
+    }
+
+    // ── Backward compatibility ─────────────────────────────────────────
+
+    #[test]
+    fn backward_compat_absolute_key_document_extracts_unchanged() {
+        // Characterizes the read side of a document written by a producer
+        // that predates key relativization (pre-#124): file-change keys
+        // were the verbatim absolute path, not a base-relative bare key.
+        // `resolve_key` passes any key starting with '/' straight through,
+        // so a document shared before this change must keep reading back
+        // identically -- this pins that behavior against regression.
+        let json = r#"{
+            "path": {
+                "id": "p1",
+                "base": {"uri": "file:///old/proj"},
+                "head": "s1"
+            },
+            "steps": [
+                {
+                    "step": {
+                        "id": "s1",
+                        "actor": "human:user",
+                        "timestamp": "2026-01-01T00:00:00Z"
+                    },
+                    "change": {
+                        "legacy://sess1": {
+                            "structural": {
+                                "type": "conversation.append",
+                                "role": "user",
+                                "text": "hi"
+                            }
+                        },
+                        "/old/proj/src/legacy.rs": {
+                            "raw": "--- a/src/legacy.rs\n+++ b/src/legacy.rs\n",
+                            "structural": {
+                                "type": "file.write",
+                                "operation": "update"
+                            }
+                        }
+                    }
+                }
+            ]
+        }"#;
+        let path: Path = serde_json::from_str(json).expect("valid pre-relativization document");
+
+        let view = extract_conversation(&path);
+        assert_eq!(view.turns.len(), 1);
+        assert_eq!(
+            view.turns[0].file_mutations[0].path, "/old/proj/src/legacy.rs",
+            "an absolute key from a pre-relativization document must resolve unchanged"
+        );
     }
 }

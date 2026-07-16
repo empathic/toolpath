@@ -118,8 +118,9 @@ pub struct SessionBase {
 /// snapshot diffs between turns).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileMutation {
-    /// File path (relative to `view.base.working_dir` if relative, or
-    /// `file://`/absolute).
+    /// The file this mutation targets: absolute when the session's
+    /// workspace root is known (the common case), otherwise relative to
+    /// it — resolve a relative value against `EnvironmentSnapshot::working_dir`.
     pub path: String,
     /// `ToolInvocation::id` of the tool call that produced this mutation,
     /// when the provider can attribute it.

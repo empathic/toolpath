@@ -236,3 +236,154 @@ fn projector_output_is_re_parseable_by_reader() {
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
 }
+
+/// Pi never populates `Turn::file_mutations` (its provider always leaves it
+/// `Vec::new()` -- see `crates/toolpath-pi/src/provider.rs`); every file
+/// write instead falls through `derive_path`'s `FileWrite`-category
+/// `tool_uses` fallback, which pulls the path out of the tool's raw JSON
+/// `input` (`file_path`/`path`/`filename`/`file`, first match wins -- the
+/// same field priority as `derive.rs`'s private `extract_file_path`,
+/// reimplemented here since ground truth for this provider lives in
+/// `tool_uses`, not `file_mutations`).
+fn ground_truth_paths(view: &ConversationView) -> Vec<String> {
+    view.turns
+        .iter()
+        .flat_map(|t| {
+            t.tool_uses.iter().filter_map(|tool| {
+                if tool.category != Some(toolpath_convo::ToolCategory::FileWrite) {
+                    return None;
+                }
+                ["file_path", "path", "filename", "file"].iter().find_map(|field| {
+                    tool.input
+                        .get(*field)
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+            })
+        })
+        .collect()
+}
+
+/// Ground-truth invariant for #124 (relativized file-change keys) run
+/// against a real recorded session: derive `view`, then for every
+/// pre-derive file-write path assert (a) it produced a relativized key
+/// iff it actually sat under `path.base` on a path-component boundary --
+/// no absolute-under-base leak, and no wrongly-relativized outside-base
+/// key -- and (b) extracting and re-deriving reproduces the identical
+/// `file.write` key set (idempotency).
+///
+/// "Under base" is independently recomputed here via `std::path::Path`
+/// component stripping rather than by calling `toolpath_convo`'s own
+/// (private) `relativize_key`, so this exercises its output rather than
+/// re-asserting its internals.
+fn assert_file_write_keys_match_base(view: &ConversationView) {
+    let path = derive_path(view, &DeriveConfig::default());
+    let base_root: Option<String> = path
+        .path
+        .base
+        .as_ref()
+        .and_then(|b| b.uri.strip_prefix("file://"))
+        .map(|s| s.trim_end_matches('/').to_string());
+
+    let ground_truth = ground_truth_paths(view);
+    assert!(
+        !ground_truth.is_empty(),
+        "fixture must exercise at least one file write for this test to be meaningful"
+    );
+
+    let file_write_keys = |p: &toolpath::v1::Path| -> BTreeSet<String> {
+        p.steps
+            .iter()
+            .flat_map(|s| s.change.iter())
+            .filter(|(_, ch)| {
+                ch.structural
+                    .as_ref()
+                    .is_some_and(|s| s.change_type == "file.write")
+            })
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+    let derived_keys = file_write_keys(&path);
+
+    // Track that the under-base branch -- the exact case #124 relativizes --
+    // actually fires at least once, so a fixture (or a regression) with no
+    // absolute-under-base path can't let this test silently no-op the
+    // invariant it exists to guard.
+    let mut saw_under_base = false;
+    for gt in &ground_truth {
+        let under_base = base_root.as_deref().is_some_and(|root| {
+            std::path::Path::new(gt)
+                .strip_prefix(root)
+                .is_ok_and(|rest| rest != std::path::Path::new(""))
+        });
+        if under_base {
+            saw_under_base = true;
+            let root = base_root.as_deref().unwrap();
+            let expected_relative = gt.strip_prefix(root).unwrap().trim_start_matches('/');
+            assert!(
+                derived_keys.contains(expected_relative),
+                "expected relativized key {expected_relative:?} for {gt:?} under base {root:?}, got {derived_keys:?}"
+            );
+            assert!(
+                !derived_keys.contains(gt.as_str()),
+                "absolute-under-base leak: {gt:?} should have been relativized but the absolute form is still a key"
+            );
+        } else {
+            assert!(
+                derived_keys.contains(gt.as_str()),
+                "expected {gt:?} to remain an absolute (or opaque) key outside the base, got {derived_keys:?}"
+            );
+        }
+    }
+    assert!(
+        saw_under_base,
+        "test must exercise at least one absolute-under-base key -- the invariant #124 changed"
+    );
+
+    let view2 = extract_conversation(&path);
+    let path2 = derive_path(&view2, &DeriveConfig::default());
+    assert_eq!(
+        derived_keys,
+        file_write_keys(&path2),
+        "re-derive must reproduce the identical file.write key set"
+    );
+}
+
+#[test]
+fn file_write_keys_relativized_with_no_leak_and_stable_on_re_derive() {
+    // The captured fixture's tool-call file paths are already
+    // provider-relative strings (e.g. "notes.md", "count.sh") --
+    // `extract_file_path` returns them verbatim, with no cwd-join -- so
+    // there's no absolute path in this session to relativize, and the
+    // no-leak invariant would hold trivially without exercising real
+    // stripping. Inject one synthetic absolute `FileWrite` tool call under
+    // the fixture's own recorded working_dir to genuinely exercise
+    // stripping against a real base, alongside the fixture's own
+    // (already-relative, therefore untouched) tool calls.
+    let mut view = load_fixture_view();
+    let base_dir = view
+        .base
+        .as_ref()
+        .and_then(|b| b.working_dir.clone())
+        .expect("fixture records a working_dir");
+    let turn = view
+        .turns
+        .iter_mut()
+        .find(|t| {
+            t.tool_uses
+                .iter()
+                .any(|tool| tool.category == Some(toolpath_convo::ToolCategory::FileWrite))
+        })
+        .expect("fixture has at least one FileWrite tool call");
+    turn.tool_uses.push(toolpath_convo::ToolInvocation {
+        id: "synthetic-tool-call".to_string(),
+        name: "write".to_string(),
+        input: serde_json::json!({
+            "path": format!("{}/synthetic-nested/synth.rs", base_dir.trim_end_matches('/')),
+        }),
+        result: None,
+        category: Some(toolpath_convo::ToolCategory::FileWrite),
+    });
+
+    assert_file_write_keys_match_base(&view);
+}

@@ -99,6 +99,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 })
         });
 
+    // Base URI used to relativize absolute file-change keys against
+    // `path.base` (RFC: bare artifact keys are base-relative). Only a
+    // `file://<root>` base triggers stripping; other schemes pass through.
+    let base_file_uri = base.as_ref().map(|b| b.uri.clone());
+
     let conv_artifact_key = format!("{}://{}", provider, view.id);
 
     let mut steps: Vec<Step> = Vec::with_capacity(view.turns.len());
@@ -295,7 +300,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 );
             }
             step.change.insert(
-                fm.path.clone(),
+                relativize_key(&fm.path, base_file_uri.as_deref()),
                 ArtifactChange {
                     raw: fm.raw_diff.clone(),
                     structural: Some(StructuralChange {
@@ -322,7 +327,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 serde_json::Value::String(tool.id.clone()),
             );
             step.change.insert(
-                path,
+                relativize_key(&path, base_file_uri.as_deref()),
                 ArtifactChange {
                     raw,
                     structural: Some(StructuralChange {
@@ -440,10 +445,15 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         meta.actors = Some(actors);
     }
 
-    if !view.files_changed.is_empty()
-        && let Ok(v) = serde_json::to_value(&view.files_changed)
-    {
-        meta.extra.insert("files_changed".to_string(), v);
+    if !view.files_changed.is_empty() {
+        let relativized: Vec<String> = view
+            .files_changed
+            .iter()
+            .map(|f| relativize_key(f, base_file_uri.as_deref()))
+            .collect();
+        if let Ok(v) = serde_json::to_value(&relativized) {
+            meta.extra.insert("files_changed".to_string(), v);
+        }
     }
 
     // Carry `vcs_remote` (not representable on `Base`) under meta.extra.
@@ -560,6 +570,24 @@ fn record_actor(
         }
     };
     actors.insert(actor.to_string(), def);
+}
+
+/// Strip a `file://` base prefix from an absolute path, yielding a
+/// base-relative artifact key (the RFC keys bare paths relative to
+/// `path.base`). Paths outside the base, already-relative paths, and
+/// non-file bases pass through verbatim.
+pub(crate) fn relativize_key(path: &str, base_uri: Option<&str>) -> String {
+    let Some(root) = base_uri.and_then(|u| u.strip_prefix("file://")) else {
+        return path.to_string();
+    };
+    let root = root.trim_end_matches('/');
+    if root.is_empty() || !path.starts_with('/') {
+        return path.to_string();
+    }
+    match path.strip_prefix(root) {
+        Some(rest) if rest.starts_with('/') => rest[1..].to_string(),
+        _ => path.to_string(),
+    }
 }
 
 fn extract_file_path(tool: &ToolInvocation) -> Option<String> {
@@ -842,6 +870,53 @@ mod tests {
         assert!(
             ids.contains(&"evt") && ids.contains(&"evt#2"),
             "both events survive with distinct ids: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn relativize_key_strips_file_base_on_component_boundary() {
+        assert_eq!(
+            relativize_key("/a/b/src/main.rs", Some("file:///a/b")),
+            "src/main.rs"
+        );
+        assert_eq!(relativize_key("/a/bc/x.rs", Some("file:///a/b")), "/a/bc/x.rs"); // not under base
+        assert_eq!(relativize_key("src/main.rs", Some("file:///a/b")), "src/main.rs"); // already relative
+        assert_eq!(relativize_key("/a/b/x.rs", None), "/a/b/x.rs");
+        assert_eq!(
+            relativize_key("/a/b/x.rs", Some("https://example.com")),
+            "/a/b/x.rs"
+        );
+    }
+
+    #[test]
+    fn relativize_key_edge_cases() {
+        // Path exactly equal to the base root: `strip_prefix` yields an
+        // empty remainder, which does NOT start with '/', so this
+        // deliberately falls through to the passthrough branch rather than
+        // producing a bare empty-string key.
+        assert_eq!(relativize_key("/proj", Some("file:///proj")), "/proj");
+
+        // A trailing slash on the base URI is normalized away before
+        // stripping, so it doesn't change the relativized result.
+        assert_eq!(relativize_key("/proj/a.rs", Some("file:///proj/")), "a.rs");
+
+        // `file:///` (root filesystem as base) trims to an empty root,
+        // which is explicitly rejected (`root.is_empty()` guard) rather
+        // than stripping every leading '/' off every key.
+        assert_eq!(relativize_key("/proj/a.rs", Some("file:///")), "/proj/a.rs");
+
+        // Component matching is byte-exact / case-sensitive: differing case
+        // is a different path, not a prefix match.
+        assert_eq!(
+            relativize_key("/Proj/a.rs", Some("file:///proj")),
+            "/Proj/a.rs"
+        );
+
+        // Sibling directory sharing a string prefix but not a path
+        // component boundary must not be treated as "under base".
+        assert_eq!(
+            relativize_key("/projext/a.rs", Some("file:///proj")),
+            "/projext/a.rs"
         );
     }
 
@@ -1675,6 +1750,211 @@ mod tests {
         assert_eq!(
             path.meta.unwrap().title.as_deref(),
             Some("pi session: abcdef01")
+        );
+    }
+
+    #[test]
+    fn file_change_keys_relativized_against_base_and_round_trip() {
+        // A turn whose base is /proj with two file mutations: one under the
+        // base (relativized to a bare key) and one outside (kept absolute).
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.model = Some("m".into());
+        turn.environment = Some(EnvironmentSnapshot {
+            working_dir: Some("/proj".into()),
+            ..Default::default()
+        });
+        turn.file_mutations = vec![
+            crate::FileMutation {
+                path: "/proj/src/lib.rs".into(),
+                tool_id: None,
+                operation: Some("update".into()),
+                raw_diff: None,
+                before: None,
+                after: Some("pub fn f() {}".into()),
+                rename_to: None,
+            },
+            crate::FileMutation {
+                path: "/elsewhere/x.rs".into(),
+                tool_id: None,
+                operation: Some("update".into()),
+                raw_diff: None,
+                before: None,
+                after: Some("fn g() {}".into()),
+                rename_to: None,
+            },
+        ];
+        let mut view = view_with(vec![turn]);
+        view.files_changed = vec!["/proj/src/lib.rs".into(), "/elsewhere/x.rs".into()];
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        // Under-base key is relative; outside-base key stays absolute.
+        assert!(path.steps[0].change.contains_key("src/lib.rs"));
+        assert!(path.steps[0].change.contains_key("/elsewhere/x.rs"));
+        assert!(!path.steps[0].change.contains_key("/proj/src/lib.rs"));
+
+        // meta.extra["files_changed"] is relativized the same way.
+        assert_eq!(
+            path.meta.as_ref().unwrap().extra["files_changed"],
+            serde_json::json!(["src/lib.rs", "/elsewhere/x.rs"])
+        );
+
+        // extract resolves the keys back to the absolute originals.
+        let view2 = crate::extract::extract_conversation(&path);
+        let mut paths: Vec<String> = view2.turns[0]
+            .file_mutations
+            .iter()
+            .map(|fm| fm.path.clone())
+            .collect();
+        paths.sort();
+        assert_eq!(paths, vec!["/elsewhere/x.rs", "/proj/src/lib.rs"]);
+    }
+
+    /// Derive a view with one file mutation, round-trip it through the
+    /// canonical single-path `Graph` JSON envelope, extract it back, and
+    /// re-derive. Asserts:
+    ///   1. round-trip identity: `FileMutation.path` recovered by
+    ///      `extract_conversation` equals the original `file_path` (the
+    ///      contract documented on `FileMutation::path`), and
+    ///   2. idempotency: re-deriving from the extracted view produces the
+    ///      identical set of `file.write` change keys as the first derive.
+    ///
+    /// Returns the single non-conversation change key so callers can also
+    /// pin its exact serialized form.
+    fn check(working_dir: Option<&str>, file_path: &str) -> String {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.model = Some("m".into());
+        turn.file_mutations = vec![crate::FileMutation {
+            path: file_path.to_string(),
+            operation: Some("update".into()),
+            raw_diff: Some("<diff>".into()),
+            ..Default::default()
+        }];
+        let mut view = view_with(vec![turn]);
+        if let Some(wd) = working_dir {
+            view.base = Some(crate::SessionBase {
+                working_dir: Some(wd.to_string()),
+                ..Default::default()
+            });
+        }
+
+        let path1 = derive_path(&view, &DeriveConfig::default());
+        let file_write_keys = |p: &Path| -> std::collections::BTreeSet<String> {
+            p.steps[0]
+                .change
+                .iter()
+                .filter(|(_, ch)| {
+                    ch.structural
+                        .as_ref()
+                        .is_some_and(|s| s.change_type == "file.write")
+                })
+                .map(|(k, _)| k.clone())
+                .collect()
+        };
+        let keys1 = file_write_keys(&path1);
+        assert_eq!(
+            keys1.len(),
+            1,
+            "expected exactly one file.write change for working_dir={working_dir:?} file_path={file_path:?}, got {keys1:?}"
+        );
+        let key = keys1.iter().next().unwrap().clone();
+
+        // Round-trip through the canonical single-path Graph JSON envelope
+        // (there is no bare-`Path` document root per RFC.md's "Document
+        // Root" section -- Graph is the sole JSON root type).
+        let graph = toolpath::v1::Graph::from_path(path1.clone());
+        let json = serde_json::to_string(&graph).unwrap();
+        let graph2: toolpath::v1::Graph = serde_json::from_str(&json).unwrap();
+        let path_back = graph2
+            .into_single_path()
+            .expect("single inline path survives the JSON round-trip");
+
+        let view2 = crate::extract::extract_conversation(&path_back);
+        let recovered = &view2.turns[0].file_mutations[0].path;
+        assert_eq!(
+            recovered, file_path,
+            "round-trip identity failed for working_dir={working_dir:?} file_path={file_path:?}"
+        );
+
+        // Idempotency: deriving again from the already-round-tripped view
+        // must yield the identical file.write key set -- derive/extract is
+        // a fixed point once a document has already been relativized.
+        let path2 = derive_path(&view2, &DeriveConfig::default());
+        let keys2 = file_write_keys(&path2);
+        assert_eq!(
+            keys1, keys2,
+            "re-derive key set changed for working_dir={working_dir:?} file_path={file_path:?}"
+        );
+
+        key
+    }
+
+    #[test]
+    fn file_mutation_key_relativization_round_trips_across_scenarios() {
+        // 1. Under base, nested path -> relativized to a bare key.
+        assert_eq!(check(Some("/proj"), "/proj/src/main.rs"), "src/main.rs");
+        // 2. Path exactly equal to the base root documents the no-strip
+        //    edge case (see `relativize_key_edge_cases`).
+        assert_eq!(check(Some("/proj"), "/proj"), "/proj");
+        // 3. Outside the base entirely -> stays absolute.
+        assert_eq!(check(Some("/proj"), "/elsewhere/x.rs"), "/elsewhere/x.rs");
+        // 4. Trailing slash on the base working_dir is normalized away.
+        assert_eq!(check(Some("/proj/"), "/proj/src/x.rs"), "src/x.rs");
+        // 5. Deep nesting relativizes the whole sub-path.
+        assert_eq!(check(Some("/proj"), "/proj/a/b/c/d.rs"), "a/b/c/d.rs");
+        // 6. Spaces and non-ASCII path components survive relativization.
+        assert_eq!(
+            check(Some("/proj"), "/proj/té st/naïve.rs"),
+            "té st/naïve.rs"
+        );
+        // 7. No base recorded at all -> absolute path passes through.
+        assert_eq!(check(None, "/abs/x.rs"), "/abs/x.rs");
+        // 8. No base, and the path is already relative.
+        assert_eq!(check(None, "src/x.rs"), "src/x.rs");
+        // 9. Sibling directory sharing a string prefix with the base, but
+        //    not a path-component boundary, must not be stripped.
+        assert_eq!(check(Some("/proj"), "/projext/x.rs"), "/projext/x.rs");
+    }
+
+    #[test]
+    fn files_changed_relativized_consistently_with_change_keys_and_round_trips() {
+        // meta.extra["files_changed"] must be relativized identically to
+        // the sibling file.write change key for the same path, and that
+        // relativized value must survive a JSON round-trip unchanged.
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.model = Some("m".into());
+        turn.file_mutations = vec![crate::FileMutation {
+            path: "/proj/src/lib.rs".into(),
+            operation: Some("update".into()),
+            raw_diff: Some("<diff>".into()),
+            ..Default::default()
+        }];
+        let mut view = view_with(vec![turn]);
+        view.base = Some(crate::SessionBase {
+            working_dir: Some("/proj".into()),
+            ..Default::default()
+        });
+        view.files_changed = vec!["/proj/src/lib.rs".into()];
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let change_key = path.steps[0]
+            .change
+            .keys()
+            .find(|k| !k.contains("://"))
+            .cloned()
+            .expect("file.write change key present");
+        assert_eq!(change_key, "src/lib.rs");
+        assert_eq!(
+            path.meta.as_ref().unwrap().extra["files_changed"],
+            serde_json::json!([change_key]),
+            "files_changed must relativize identically to the file.write change key"
+        );
+
+        let json = serde_json::to_string(&path).unwrap();
+        let back: Path = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.meta.unwrap().extra["files_changed"],
+            serde_json::json!(["src/lib.rs"]),
+            "relativized files_changed survives a JSON round-trip"
         );
     }
 
