@@ -2,6 +2,71 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Compaction kept contract: anchor-based + executable round-trip invariants — 2026-07-16
+
+The `Compaction` kept contract is now anchor-based. The IR carries
+`kept_from` — the id of the oldest prior turn surviving verbatim into the
+post-compaction window — and the surviving set is *defined* as the
+contiguous parent-chain run from that anchor up to the boundary, computed
+by the new shared `toolpath_convo::expand_kept`. The wire `kept` array
+(on the `conversation.compact` structural change) keeps its shape (turn-id
+strings) but tightens its meaning: always a contiguous run, oldest first,
+whose first element is the anchor. Native detail richer than the run rides
+a new provider-namespaced structural `extra` — e.g. Claude's possibly
+non-contiguous `preservedMessages` set as
+`extra["claude"]["preserved_uuids"]` — preserved across derive ↔ extract
+and ignored by non-native projectors.
+
+- **`toolpath-convo`**: `Compaction.kept` (id list) → `kept_from` (anchor)
+  + `extra` (provider passthrough); shared `expand_kept`. Steps whose
+  `parents` were rewired by derive-splicing now stamp `source_parent`
+  (string|null — the pre-splice source parent) on their
+  `conversation.append`/`conversation.compact` structural change, so
+  `extract_conversation` restores the original linkage exactly instead of
+  guessing it back from the event chain.
+- **`toolpath-convo`**: new `testing` module with the round-trip contract
+  as executable checks — `check_view_invariants` (e.g. a `kept_from`
+  anchor must resolve to a non-empty run on the boundary's ancestry) and
+  `assert_fixpoint` (derive → extract → derive is stable) — plus a
+  proptest suite driving randomized views through them.
+- **`toolpath-claude`**: projection follows Claude's wire convention of
+  chaining the first post-boundary entry through the synthetic summary
+  (boundary ← summary ← first-post-entry) — IR parents pointing at the
+  boundary are redirected to the emitted summary. Reads recover the
+  boundary anchor from the preserved set (`kept_anchor` walks the
+  boundary's parent chain through `preserved_uuids`; a native set that
+  doesn't form a contiguous tail is wholesale at view granularity, with
+  the full set still in `extra`). Claude→Claude round-trips write
+  `preservedMessages.uuids` verbatim from the passthrough; foreign
+  sources fall back to `expand_kept`.
+- **`toolpath-pi`**: Pi's `firstKeptEntryId` can name a non-turn entry
+  (`model_change`, folded tool result); it now resolves to the first turn
+  at-or-after the anchor instead of dangling, and projection passes the
+  next turn's id so a projected anchor always names an entry that exists.
+- **`toolpath-opencode`**: projected message timestamps are forced
+  strictly increasing (`monotonize_times`) — the reader orders by
+  `time_created`, so a boundary stamped later than the message after it
+  would move on re-read.
+- **`toolpath-codex`**: projection guards mixed groups — when a group's
+  members carry per-step attributions (which already advance the
+  cumulative counter by the full group total), the group-final's bare
+  `token_usage` no longer advances it again, so a re-read doesn't
+  attribute double the real spend.
+- **`toolpath-md`**: transcript rendering matched only the newest
+  `agent-coding-session` kind URI, silently downgrading v1.0.0/v1.1.0
+  documents to the generic DAG layout; it now matches all three.
+
+Crates bumped: `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
+`toolpath-claude` 0.13.0, `toolpath-gemini` 0.7.0, `toolpath-codex`
+0.7.0, `toolpath-opencode` 0.6.0, `toolpath-cursor` 0.3.0, `toolpath-pi`
+0.7.0, `toolpath-git` 0.7.0, `toolpath-github` 0.7.0, `toolpath-dot`
+0.6.0, `toolpath-md` 0.8.0, `path-cli` 0.16.0, `toolpath-cli` 0.16.0.
+The four dependents of `toolpath` alone (`git`/`github`/`dot`/`md`) bump
+because their published versions declare `toolpath` ^0.7.0, which would
+resolve a second `toolpath` next to 0.8.0 in a registry build; `path-cli`
+and `toolpath-cli` skip to 0.16.0 because 0.15.0 is already published
+with different content.
+
 ## Extract: undo the event splice when rebuilding wire parents — 2026-07-07
 
 - **`toolpath-convo`**: `derive_path` splices events and compactions onto the
@@ -192,7 +257,7 @@ instead of silently losing the boundary.
 - **`agent-coding-session` kind → v1.2.0**: the kind constant is now
   `https://toolpath.net/kinds/agent-coding-session/v1.2.0`, extending
   v1.1.0 (token usage) with the `conversation.compact` step type. The
-  v1.2.0 schema is bundled in both `toolpath` and `path-cli` alongside the
+  v1.2.0 schema joins `path-cli`'s `BUNDLED_KINDS` alongside the
   retained v1.0.0/v1.1.0 schemas; producers (the shared
   `toolpath_convo::derive_path` and every provider built on it) emit the
   new URI.
@@ -209,9 +274,12 @@ instead of silently losing the boundary.
 Crates bumped: `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
 `toolpath-claude` 0.13.0, `toolpath-codex` 0.7.0, `toolpath-gemini`
 0.7.0, `toolpath-opencode` 0.6.0, `toolpath-pi` 0.7.0,
-`toolpath-cursor` 0.3.0, `path-cli` 0.15.0, `toolpath-cli` 0.15.0.
-Unchanged: `toolpath-git`, `toolpath-github`, `toolpath-dot`,
-`toolpath-md`, `pathbase-client`.
+`toolpath-cursor` 0.3.0, `path-cli` 0.16.0, `toolpath-cli` 0.16.0
+(0.15.0 was published from main with different content, so this
+branch's CLI changes land as 0.16.0). Unchanged here — but bumped
+by the compaction-contract section above: `toolpath-git`,
+`toolpath-github`, `toolpath-dot`, `toolpath-md`. Unchanged:
+`pathbase-client`.
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 
