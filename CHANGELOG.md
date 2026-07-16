@@ -2,6 +2,14 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Resume: cursor picker requires the `cursor` CLI — 2026-07-02
+
+- **`path-cli`**: `path resume`'s harness picker no longer lists **cursor**
+  unless the `cursor` CLI is actually on `PATH`. `harness_available` previously
+  counted the always-present macOS `open` (the `open -a Cursor` fallback), so
+  cursor showed up even when Cursor wasn't installed. Now every harness gates
+  purely on its own binary being on `PATH`.
+
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived
