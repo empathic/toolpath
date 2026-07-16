@@ -9,8 +9,7 @@
 //! is the source file's mtime + size (or the database row's updated-at
 //! for the SQLite-backed providers), so deciding "nothing changed"
 //! never reads session bodies. Artifacts deleted upstream keep both
-//! their cache document and their manifest record — the cache is an
-//! archive, not a mirror.
+//! their cache document and their manifest record.
 
 /// The kind of artifact an operation ranges over. One enum, used
 /// everywhere a command names artifact sources (`p cache sync` types,

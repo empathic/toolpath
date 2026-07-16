@@ -36,8 +36,7 @@ users no longer have to `p import` each session by hand.
   - Sync owns refresh semantics: it overwrites cache entries it
     re-derives (no `--force` needed), while manual `p import` keeps its
     error-on-hit default. Sessions deleted upstream keep both their cache
-    document and their manifest record — the cache is an archive, not a
-    mirror.
+    document and their manifest record.
   - Per-type summary on stderr (`claude   3 new, 1 updated, 240 unchanged`).
     On a default run, harnesses with no sessions stay silent; explicit
     types always report. Derivation failures warn and tally as `failed`
