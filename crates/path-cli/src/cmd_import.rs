@@ -551,7 +551,7 @@ pub(crate) fn derive_claude_session_with(
     // slugs ('/', '_', '.' all collapsed); leaving it out of the derive
     // lets path.base come from the session's own recorded cwd instead.
     // The cache is the archive: always derive maximally (thinking
-    // included) — egress surfaces strip on their way out.
+    // included).
     let cfg = toolpath_claude::derive::DeriveConfig {
         project_path: None,
         include_thinking: true,
@@ -803,8 +803,7 @@ pub(crate) fn derive_gemini_session_with(
         ),
         None => (session.to_string(), (None, None)),
     };
-    // Maximal ingest: thinking is always derived into the cache; egress
-    // surfaces strip it on the way out.
+    // Maximal ingest: thinking is always derived into the cache.
     let cfg = toolpath_gemini::derive::DeriveConfig {
         project_path: Some(project.to_string()),
         include_thinking: true,
