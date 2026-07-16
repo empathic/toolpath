@@ -172,7 +172,7 @@ path
       git       --repo PATH --branch NAME[:START] [--base COMMIT] [--remote NAME] [--title TEXT]
       github    --repo OWNER/REPO --pr NUMBER [--no-ci] [--no-comments]
       claude    [--project PATH] [--session ID] [--all]
-      gemini    [--project PATH] [--session UUID] [--all] [--include-thinking]
+      gemini    [--project PATH] [--session UUID] [--all]
       codex     [--session UUID|STEM] [--all]
       opencode  [--session ID] [--all] [--project ID] [--no-snapshot-diffs]
       pi        [--project PATH] [--session ID] [--all] [--base DIR]

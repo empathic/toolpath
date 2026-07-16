@@ -192,10 +192,6 @@ pub enum ExportTarget {
         /// Mark the uploaded graph public (default: unlisted, addressable only by UUID)
         #[arg(long)]
         public: bool,
-
-        /// Keep thinking blocks in the uploaded document (stripped by default)
-        #[arg(long)]
-        include_thinking: bool,
     },
 }
 
@@ -263,7 +259,6 @@ pub fn run(target: ExportTarget) -> Result<()> {
             repo,
             name,
             public,
-            include_thinking,
         } => run_pathbase(PathbaseExportArgs {
             input,
             url,
@@ -271,7 +266,6 @@ pub fn run(target: ExportTarget) -> Result<()> {
             repo,
             name,
             public,
-            include_thinking,
         }),
     }
 }
@@ -284,7 +278,6 @@ struct PathbaseExportArgs {
     repo: Option<RepoSpec>,
     name: Option<String>,
     public: bool,
-    include_thinking: bool,
 }
 
 /// Pathbase upload knobs that don't depend on where the body came from.
@@ -1859,56 +1852,6 @@ fn write_cursor_to_stdout(session: &toolpath_cursor::CursorSession) -> Result<()
 
 // ── Pathbase ──────────────────────────────────────────────────────────
 
-/// Remove thinking text from every step's structural extras — the
-/// egress inverse of the maximal ingest (the cache always derives with
-/// thinking included; documents leaving the machine drop it unless the
-/// caller opts in).
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn strip_thinking(graph: &mut toolpath::v1::Graph) {
-    use toolpath::v1::PathOrRef;
-    for entry in &mut graph.paths {
-        let PathOrRef::Path(path) = entry else {
-            continue;
-        };
-        for step in &mut path.steps {
-            for change in step.change.values_mut() {
-                if let Some(structural) = &mut change.structural {
-                    structural.extra.remove("thinking");
-                    // `delegations` embeds full sub-agent turns (gemini
-                    // folds sub-agent files in), each with its own
-                    // `thinking` — reasoning must not ride out inside them.
-                    if let Some(delegations) = structural.extra.get_mut("delegations") {
-                        strip_delegation_thinking(delegations);
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Remove `thinking` from every turn of a serialized `Vec<DelegatedWork>`,
-/// recursing into the turns' own nested delegations.
-#[cfg(not(target_os = "emscripten"))]
-fn strip_delegation_thinking(delegations: &mut serde_json::Value) {
-    let Some(list) = delegations.as_array_mut() else {
-        return;
-    };
-    for delegation in list {
-        let Some(turns) = delegation.get_mut("turns").and_then(|t| t.as_array_mut()) else {
-            continue;
-        };
-        for turn in turns {
-            let Some(obj) = turn.as_object_mut() else {
-                continue;
-            };
-            obj.remove("thinking");
-            if let Some(nested) = obj.get_mut("delegations") {
-                strip_delegation_thinking(nested);
-            }
-        }
-    }
-}
-
 fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
@@ -1921,11 +1864,8 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         use crate::cmd_pathbase::preflight_auth;
 
         let file = cache_ref(&args.input)?;
-        let mut graph = crate::io::read_document_auto(&file)?;
-        if !args.include_thinking {
-            strip_thinking(&mut graph);
-        }
-        let body = graph.to_json()?;
+        let body = std::fs::read_to_string(&file)
+            .with_context(|| format!("Failed to read {}", file.display()))?;
         let upload = PathbaseUploadArgs {
             url: args.url,
             anon: args.anon,
@@ -2090,125 +2030,6 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use toolpath::v1::{ArtifactChange, PathIdentity, Step, StepIdentity, StructuralChange};
-
-    #[test]
-    fn strip_thinking_removes_only_thinking_extras() {
-        let mut extra = HashMap::new();
-        extra.insert("text".to_string(), serde_json::json!("hello"));
-        extra.insert(
-            "thinking".to_string(),
-            serde_json::json!("secret reasoning"),
-        );
-        let step = Step {
-            step: StepIdentity {
-                id: "s1".into(),
-                parents: vec![],
-                actor: "agent:claude-code".into(),
-                timestamp: "2026-01-01T00:00:00Z".into(),
-            },
-            change: HashMap::from([(
-                "conversation://x".to_string(),
-                ArtifactChange {
-                    raw: None,
-                    structural: Some(StructuralChange {
-                        change_type: "conversation.append".into(),
-                        extra,
-                    }),
-                },
-            )]),
-            meta: None,
-        };
-        let path = toolpath::v1::Path {
-            path: PathIdentity {
-                id: "p1".into(),
-                base: None,
-                head: "s1".into(),
-                graph_ref: None,
-            },
-            steps: vec![step],
-            meta: None,
-        };
-        let mut graph = toolpath::v1::Graph::from_path(path);
-
-        strip_thinking(&mut graph);
-
-        let json = graph.to_json().unwrap();
-        assert!(!json.contains("secret reasoning"));
-        assert!(json.contains("hello"), "non-thinking extras survive");
-    }
-
-    #[test]
-    fn strip_thinking_scrubs_delegation_turns_recursively() {
-        let mut extra = HashMap::new();
-        extra.insert(
-            "delegations".to_string(),
-            serde_json::json!([{
-                "agent_id": "sub-1",
-                "prompt": "investigate",
-                "turns": [{
-                    "id": "t1",
-                    "role": "assistant",
-                    "timestamp": "2026-01-01T00:00:00Z",
-                    "text": "visible sub-agent text",
-                    "thinking": "sub-agent reasoning",
-                    "delegations": [{
-                        "agent_id": "sub-2",
-                        "prompt": "deeper",
-                        "turns": [{
-                            "id": "t2",
-                            "role": "assistant",
-                            "timestamp": "2026-01-01T00:00:01Z",
-                            "text": "nested text",
-                            "thinking": "nested reasoning"
-                        }]
-                    }]
-                }],
-                "result": "sub-agent result"
-            }]),
-        );
-        let step = Step {
-            step: StepIdentity {
-                id: "s1".into(),
-                parents: vec![],
-                actor: "agent:gemini-cli".into(),
-                timestamp: "2026-01-01T00:00:00Z".into(),
-            },
-            change: HashMap::from([(
-                "conversation://x".to_string(),
-                ArtifactChange {
-                    raw: None,
-                    structural: Some(StructuralChange {
-                        change_type: "conversation.append".into(),
-                        extra,
-                    }),
-                },
-            )]),
-            meta: None,
-        };
-        let path = toolpath::v1::Path {
-            path: PathIdentity {
-                id: "p1".into(),
-                base: None,
-                head: "s1".into(),
-                graph_ref: None,
-            },
-            steps: vec![step],
-            meta: None,
-        };
-        let mut graph = toolpath::v1::Graph::from_path(path);
-
-        strip_thinking(&mut graph);
-
-        let json = graph.to_json().unwrap();
-        assert!(!json.contains("sub-agent reasoning"));
-        assert!(!json.contains("nested reasoning"));
-        assert!(json.contains("visible sub-agent text"));
-        assert!(json.contains("nested text"));
-        assert!(
-            json.contains("sub-agent result"),
-            "delegation results survive"
-        );
-    }
 
     fn make_path_doc() -> toolpath::v1::Graph {
         let artifact_key = "agent://claude/test-session";
@@ -3038,7 +2859,6 @@ mod tests {
             std::env::set_var(crate::config::CONFIG_DIR_ENV, temp.path());
         }
         let err = run_pathbase(PathbaseExportArgs {
-            include_thinking: false,
             input: input_path.to_string_lossy().to_string(),
             url: Some("http://127.0.0.1:1".to_string()),
             anon: false,

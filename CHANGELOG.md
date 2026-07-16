@@ -91,13 +91,11 @@ users no longer have to `p import` each session by hand.
     unchanged since its last sync (manifest stamp matches a fresh stat
     and the doc exists) — re-deriving would reproduce the same bytes.
     A grown session steps around the fast path and derives as before.
-  - **Maximal ingest, strip at egress**: the cache always holds the
-    fullest derivation — thinking blocks are ingested for claude and
-    gemini unconditionally (**breaking**: `p import gemini` loses its
-    `--include-thinking` flag), and the privacy decision moves to where
-    it belongs: `share` and `p export pathbase` strip thinking from
-    uploads by default, with `--include-thinking` there to opt in. The
-    local cache and `resume` fidelity keep everything.
+  - **Maximal ingest**: the cache always holds the fullest derivation —
+    thinking blocks are ingested for claude and gemini unconditionally
+    (**breaking**: `p import gemini` loses its `--include-thinking`
+    flag). Uploads, the local cache, and `resume` all carry the full
+    derivation; partial ingest is gone rather than moved.
   - Review fixes: `p import <provider> --all` warns-and-skips unreadable
     sessions again instead of aborting the batch; importing an artifact
     the implicit query-sync already cached is a friendly no-op instead
@@ -109,10 +107,7 @@ users no longer have to `p import` each session by hand.
     `--project` for `path.base`; a small-file gemini peek that declines
     in the prefix now still runs the full-parse fallback; and a
     rebase-dropped `toolpath-pi` workspace pin is back at 0.6.1.
-  - PR review round 2: thinking-stripping now also scrubs sub-agent
-    turns embedded in `delegations` (gemini folds sub-agent chat files
-    into them, each turn with its own `thinking`), recursing into
-    nested delegations; manifest writers are serialized by an advisory
+  - PR review round 2: manifest writers are serialized by an advisory
     lock (`sync.json.lock`) and every write is a locked read-merge-save
     — sync checkpoints merge only the records the run wrote — so
     concurrent invocations (query auto-syncs, imports) union their
