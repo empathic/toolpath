@@ -115,6 +115,16 @@ users no longer have to `p import` each session by hand.
     `record_is_current` — unknowable freshness re-derives); the `share`
     fast path stats its one artifact directly instead of enumerating
     the whole artifact type.
+  - PR review round 3: the provider-specific halves of sync now live
+    behind a per-provider
+    `ArtifactSource` trait (`sync/sources.rs`: enumerate / stamp /
+    derive / peek-dir / scope-match, one impl per provider) with the
+    engine (`sync/engine.rs`) never matching on artifact type — so a
+    provider change is a change to that provider's source, not to the
+    engine. `ArtifactStub` is renamed `ArtifactRef`, and thinking is no
+    longer stripped at egress: uploads carry the same full derivation
+    as the cache and `resume` (`--include-thinking` on `share` /
+    `p export pathbase` is gone).
   - Claude fingerprints cover the whole session chain. Claude Code
     rotates to a new JSONL file on continuation (plan-mode exit,
     resume, fork) while `list_conversations` keys the chain by its

@@ -990,7 +990,7 @@ fn share_explicit(
         // the cache write entirely).
         let path = crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, true)?;
         if let Some(stub) = &derived.provenance
-            && let Err(e) = crate::sync::record_stub(stub, &derived.cache_id)
+            && let Err(e) = crate::sync::record_artifact(stub, &derived.cache_id)
         {
             eprintln!("warning: sync manifest not updated: {e}");
         }

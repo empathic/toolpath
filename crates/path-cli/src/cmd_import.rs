@@ -238,7 +238,7 @@ fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Resul
             println!("{}", path.display());
             #[cfg(not(target_os = "emscripten"))]
             if let Some(stub) = &d.provenance
-                && let Err(e) = crate::sync::record_stub(stub, &d.cache_id)
+                && let Err(e) = crate::sync::record_artifact(stub, &d.cache_id)
             {
                 eprintln!("warning: sync manifest not updated: {e}");
             }

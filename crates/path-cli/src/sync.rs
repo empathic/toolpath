@@ -176,6 +176,9 @@ pub(crate) use engine::*;
 #[cfg(not(target_os = "emscripten"))]
 mod engine;
 
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) mod sources;
+
 #[cfg(test)]
 mod type_tests {
     use super::ArtifactType;

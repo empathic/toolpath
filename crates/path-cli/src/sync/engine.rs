@@ -8,13 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::{ArtifactRef, ArtifactType, codex_artifact_id, stat_stamp};
+use super::sources::{self, ArtifactSource};
+use super::{ArtifactRef, ArtifactType};
 use crate::cmd_cache::write_cached;
-use crate::cmd_import::DerivedDoc;
-use crate::cmd_share::{
-    HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_cursor,
-    is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
-};
+use crate::cmd_share::HarnessBundle;
 use crate::config::config_dir;
 
 const MANIFEST_FILE: &str = "sync.json";
@@ -105,12 +102,19 @@ pub(crate) fn sync_bundle(
     let manifest = load_manifest()?;
     let mut out = Vec::with_capacity(types.len());
     for &artifact_type in types {
-        let stubs = enumerate_stubs(bundle, artifact_type, parent_dir);
+        // Types with no source in this bundle — an uninstalled
+        // provider, or git, which is recorded but never discovered —
+        // sync as a no-op.
+        let Some(source) = sources::source_for(bundle, artifact_type) else {
+            out.push((artifact_type, SyncOutcome::default()));
+            continue;
+        };
+        let artifacts = source.enumerate(parent_dir);
         let records = manifest
             .get(artifact_type.name())
             .cloned()
             .unwrap_or_default();
-        let outcome = sync_stubs(bundle, &stubs, &records, parent_dir)?;
+        let outcome = sync_artifacts(source.as_ref(), &artifacts, &records, parent_dir)?;
         out.push((artifact_type, outcome));
     }
     Ok(out)
@@ -124,14 +128,14 @@ pub(crate) fn sync_bundle(
 const CHECKPOINT_EVERY: usize = 10;
 
 /// The stat gate: a materialized record whose real stamps match the
-/// stub needs nothing — no read, no scope check. All-`None` stamps
+/// artifact needs nothing — no read, no scope check. All-`None` stamps
 /// mean freshness is unknowable; only a real stamp can vouch
 /// (mirrors `record_is_current`).
-fn is_unchanged(rec: Option<&SyncRecord>, stub: &ArtifactRef) -> bool {
+fn is_unchanged(rec: Option<&SyncRecord>, artifact: &ArtifactRef) -> bool {
     rec.is_some_and(|rec| {
         (rec.modified.is_some() || rec.size.is_some())
-            && rec.modified == stub.modified
-            && rec.size == stub.size
+            && rec.modified == artifact.modified
+            && rec.size == artifact.size
             && rec
                 .cache_id
                 .as_deref()
@@ -139,10 +143,10 @@ fn is_unchanged(rec: Option<&SyncRecord>, stub: &ArtifactRef) -> bool {
     })
 }
 
-/// Stubs newest-first (unstamped last), so an interrupted run has
+/// Artifacts newest-first (unstamped last), so an interrupted run has
 /// spent its time on the sessions the user most likely wants.
-fn newest_first(stubs: &[ArtifactRef]) -> Vec<&ArtifactRef> {
-    let mut order: Vec<&ArtifactRef> = stubs.iter().collect();
+fn newest_first(artifacts: &[ArtifactRef]) -> Vec<&ArtifactRef> {
+    let mut order: Vec<&ArtifactRef> = artifacts.iter().collect();
     order.sort_by(|a, b| b.modified.cmp(&a.modified));
     order
 }
@@ -164,66 +168,63 @@ fn flush_writes(pending: &mut BTreeMap<&'static str, BTreeMap<String, SyncRecord
     })
 }
 
-/// Sync one type's stubs against a snapshot of its manifest records,
-/// newest first. Records are checkpointed to the manifest every
+/// Sync one source's artifacts against a snapshot of its manifest
+/// records, newest first. Records are checkpointed to the manifest every
 /// [`CHECKPOINT_EVERY`] writes (and once more at the end), so an
 /// interrupted run keeps nearly everything it derived. Derivation
 /// failures are warned and tallied, not fatal; cache-write failures
 /// (disk, permissions) abort.
-fn sync_stubs(
-    bundle: &HarnessBundle,
-    stubs: &[ArtifactRef],
+fn sync_artifacts(
+    source: &dyn ArtifactSource,
+    artifacts: &[ArtifactRef],
     records: &BTreeMap<String, SyncRecord>,
     parent_dir: Option<&Path>,
 ) -> Result<SyncOutcome> {
     let mut outcome = SyncOutcome::default();
-    // Evaluate the stat gate once per stub: the pass feeds both the
+    // Evaluate the stat gate once per artifact: the pass feeds both the
     // progress denominator and the loop's skip decision.
-    let order: Vec<(&ArtifactRef, bool)> = newest_first(stubs)
+    let order: Vec<(&ArtifactRef, bool)> = newest_first(artifacts)
         .into_iter()
-        .map(|stub| (stub, is_unchanged(records.get(&stub.id), stub)))
+        .map(|artifact| (artifact, is_unchanged(records.get(&artifact.id), artifact)))
         .collect();
     let pending_total = order.iter().filter(|(_, unchanged)| !unchanged).count();
     let mut progress = Progress::start(
-        stubs
+        artifacts
             .first()
-            .map(|s| s.artifact_type.symbol())
+            .map(|a| a.artifact_type.symbol())
             .unwrap_or(""),
         pending_total,
     );
     let mut writes: BTreeMap<&'static str, BTreeMap<String, SyncRecord>> = BTreeMap::new();
     let mut unflushed = 0usize;
-    for (stub, unchanged) in order {
+    for (artifact, unchanged) in order {
         if unchanged {
             outcome.unchanged += 1;
             continue;
         }
-        let existing = records.get(&stub.id);
+        let existing = records.get(&artifact.id);
         let is_new = existing.is_none();
         let stage = |writes: &mut BTreeMap<&'static str, BTreeMap<String, SyncRecord>>,
                      record: SyncRecord| {
             writes
-                .entry(stub.artifact_type.name())
+                .entry(artifact.artifact_type.name())
                 .or_default()
-                .insert(stub.id.clone(), record);
+                .insert(artifact.id.clone(), record);
         };
         // Scope gate: only artifacts that would cost a derive get the
-        // constraint check (with a bounded peek for codex, memoized in
-        // the record so it happens at most once per artifact).
+        // constraint check (with a bounded peek for codex/copilot,
+        // memoized in the record so it happens at most once per
+        // artifact). The source compares in its own key space —
+        // claude and pi keys are lossy dir encodings.
         if let Some(parent_dir) = parent_dir {
-            let dir = stub
+            let dir = artifact
                 .path
                 .clone()
                 .or_else(|| existing.and_then(|r| r.path.clone()))
-                .or_else(|| peek_stub_dir(bundle, stub));
-            let in_scope = dir.as_deref().is_some_and(|d| match stub.artifact_type {
-                // Claude and pi paths came from lossy dir encodings;
-                // compare in their encoded spaces, like the
-                // enumeration pruning does.
-                ArtifactType::Claude => claude_project_in_scope(d, parent_dir),
-                ArtifactType::Pi => pi_project_in_scope(d, parent_dir),
-                _ => dir_in_scope(d, parent_dir),
-            });
+                .or_else(|| source.peek_dir(&artifact.id));
+            let in_scope = dir
+                .as_deref()
+                .is_some_and(|d| source.in_scope(d, parent_dir));
             if !in_scope {
                 outcome.out_of_scope += 1;
                 // Remember what we learned — but never touch the stamp
@@ -235,8 +236,8 @@ fn sync_stubs(
                         SyncRecord {
                             path: dir,
                             cache_id: None,
-                            modified: stub.modified,
-                            size: stub.size,
+                            modified: artifact.modified,
+                            size: artifact.size,
                             synced_at: Utc::now(),
                         },
                     );
@@ -250,13 +251,13 @@ fn sync_stubs(
                 continue;
             }
         }
-        // A stub without a path must not erase one a previous pass
-        // peeked and memoized (codex/copilot cwd).
-        let memoized_path = stub
+        // An artifact without a path must not erase one a previous
+        // pass peeked and memoized (codex/copilot cwd).
+        let memoized_path = artifact
             .path
             .clone()
             .or_else(|| existing.and_then(|r| r.path.clone()));
-        match derive_stub(bundle, stub) {
+        match source.derive(artifact) {
             Ok(derived) => {
                 // force: sync owns refresh semantics — a re-sync or a
                 // prior manual `p import` of the same session must not
@@ -270,8 +271,8 @@ fn sync_stubs(
                         // The stamp was taken before the derive read the
                         // source, so a write racing the derive re-syncs
                         // next run instead of going unnoticed.
-                        modified: stub.modified,
-                        size: stub.size,
+                        modified: artifact.modified,
+                        size: artifact.size,
                         synced_at: Utc::now(),
                     },
                 );
@@ -286,8 +287,8 @@ fn sync_stubs(
                 progress.interrupt();
                 eprintln!(
                     "warning: sync {}: {}: {e}",
-                    stub.artifact_type.name(),
-                    stub.id
+                    artifact.artifact_type.name(),
+                    artifact.id
                 );
                 outcome.failed += 1;
             }
@@ -358,440 +359,6 @@ impl Progress {
     }
 }
 
-/// Derive one artifact through the same manager it was enumerated
-/// from, so listing and derivation always agree on provider roots.
-fn derive_stub(bundle: &HarnessBundle, stub: &ArtifactRef) -> Result<DerivedDoc> {
-    use crate::cmd_import as imp;
-    let path = || {
-        stub.path
-            .as_deref()
-            .ok_or_else(|| anyhow!("artifact {} has no path", stub.id))
-    };
-    match stub.artifact_type {
-        ArtifactType::Claude => {
-            imp::derive_claude_session_with(mgr(&bundle.claude)?, path()?, &stub.id)
-        }
-        ArtifactType::Gemini => {
-            imp::derive_gemini_session_with(mgr(&bundle.gemini)?, path()?, &stub.id)
-        }
-        ArtifactType::Pi => imp::derive_pi_session_with(mgr(&bundle.pi)?, path()?, &stub.id),
-        ArtifactType::Codex => imp::derive_codex_session_with(mgr(&bundle.codex)?, &stub.id),
-        ArtifactType::Opencode => {
-            imp::derive_opencode_session_with(mgr(&bundle.opencode)?, &stub.id, false)
-        }
-        ArtifactType::Cursor => imp::derive_cursor_session_with(mgr(&bundle.cursor)?, &stub.id),
-        ArtifactType::Copilot => imp::derive_copilot_session_with(mgr(&bundle.copilot)?, &stub.id),
-        ArtifactType::Git => Err(anyhow!(
-            "git artifacts are recorded by `p import`, not re-derived by sync"
-        )),
-    }
-}
-
-fn mgr<T>(slot: &Option<T>) -> Result<&T> {
-    slot.as_ref()
-        .ok_or_else(|| anyhow!("provider not available"))
-}
-
-fn canonicalize_or_self(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
-/// Subtree check for a real filesystem path. Canonicalizes both
-/// sides, but also accepts the raw parent so a not-yet-resolvable
-/// constraint (or an unresolvable dir) still matches literally.
-fn dir_in_scope(dir: &str, parent_dir: &Path) -> bool {
-    let d = canonicalize_or_self(Path::new(dir));
-    d.starts_with(canonicalize_or_self(parent_dir)) || d.starts_with(parent_dir)
-}
-
-/// Pi's session-dir names encode '/' as '-', and decoding restores
-/// every '-' to '/', so a decoded project string is wrong for any
-/// real path containing a hyphen. Compare in the encoded space,
-/// where '/' boundaries are '-'.
-fn pi_project_in_scope(project: &str, parent_dir: &Path) -> bool {
-    fn enc(s: &str) -> String {
-        s.replace('/', "-")
-    }
-    let p = enc(project);
-    [
-        enc(&parent_dir.to_string_lossy()),
-        enc(&canonicalize_or_self(parent_dir).to_string_lossy()),
-    ]
-    .iter()
-    .any(|parent| p == *parent || p.starts_with(&format!("{parent}-")))
-}
-
-/// Claude's project-dir slugs are lossy — '/', '_', and '.' all
-/// became '-', and un-sanitizing only restores '/'. Comparing real
-/// paths therefore misfilters any project containing '.' or '_';
-/// compare in slug space instead, where '/' boundaries are '-'.
-fn claude_project_in_scope(project: &str, parent_dir: &Path) -> bool {
-    fn slug(s: &str) -> String {
-        s.replace(['/', '_', '.'], "-")
-    }
-    let p = slug(project);
-    [
-        slug(&parent_dir.to_string_lossy()),
-        slug(&canonicalize_or_self(parent_dir).to_string_lossy()),
-    ]
-    .iter()
-    .any(|parent| p == *parent || p.starts_with(&format!("{parent}-")))
-}
-
-/// Where a stub's artifact lives, for providers whose cheap listing
-/// doesn't carry it. Codex is the only case: the rollout's first
-/// line is `session_meta` with the session cwd — one bounded read,
-/// and the result is memoized into the manifest record afterwards.
-fn peek_stub_dir(bundle: &HarnessBundle, stub: &ArtifactRef) -> Option<String> {
-    let file = match stub.artifact_type {
-        ArtifactType::Codex => bundle
-            .codex
-            .as_ref()?
-            .resolver()
-            .find_rollout_file(&stub.id)
-            .ok()?,
-        ArtifactType::Copilot => bundle
-            .copilot
-            .as_ref()?
-            .resolver()
-            .events_file(&stub.id)
-            .ok()?,
-        _ => return None,
-    };
-    use std::io::{BufRead, BufReader};
-    let f = std::fs::File::open(file).ok()?;
-    match stub.artifact_type {
-        // Codex: the first line is `session_meta`; its payload
-        // carries cwd directly.
-        ArtifactType::Codex => {
-            let mut line = String::new();
-            BufReader::new(f).read_line(&mut line).ok()?;
-            let v: serde_json::Value = serde_json::from_str(&line).ok()?;
-            Some(v.get("payload")?.get("cwd")?.as_str()?.to_string())
-        }
-        // Copilot: `session.start` is usually first but the format
-        // tolerates it appearing later, and older CLIs store cwd at
-        // the top of the payload instead of under `context` — scan a
-        // bounded number of lines and accept both shapes, mirroring
-        // toolpath-copilot's own tolerance.
-        ArtifactType::Copilot => BufReader::new(f).lines().take(10).find_map(|line| {
-            let v: serde_json::Value = serde_json::from_str(&line.ok()?).ok()?;
-            ["data", "payload"].iter().find_map(|env| {
-                let payload = v.get(env)?;
-                [payload.get("context").unwrap_or(payload), payload]
-                    .iter()
-                    .find_map(|scope| {
-                        ["cwd", "workingDirectory", "working_dir"]
-                            .iter()
-                            .find_map(|k| Some(scope.get(k)?.as_str()?.to_string()))
-                    })
-            })
-        }),
-        _ => None,
-    }
-}
-
-// ── stat-level enumeration ─────────────────────────────────────────
-
-/// Enumerate one type's artifacts with stat-level fingerprints.
-/// Providers that aren't installed produce no stubs; other listing
-/// errors warn and skip so one broken provider can't block the rest.
-fn enumerate_stubs(
-    bundle: &HarnessBundle,
-    t: ArtifactType,
-    parent_dir: Option<&Path>,
-) -> Vec<ArtifactRef> {
-    let mut out = Vec::new();
-    match t {
-        ArtifactType::Claude => {
-            if let Some(mgr) = &bundle.claude {
-                stubs_claude(mgr, parent_dir, &mut out);
-            }
-        }
-        ArtifactType::Gemini => {
-            if let Some(mgr) = &bundle.gemini {
-                stubs_gemini(mgr, parent_dir, &mut out);
-            }
-        }
-        ArtifactType::Codex => {
-            if let Some(mgr) = &bundle.codex {
-                stubs_codex(mgr, &mut out);
-            }
-        }
-        ArtifactType::Opencode => {
-            if let Some(mgr) = &bundle.opencode {
-                stubs_opencode(mgr, &mut out);
-            }
-        }
-        ArtifactType::Cursor => {
-            if let Some(mgr) = &bundle.cursor {
-                stubs_cursor(mgr, &mut out);
-            }
-        }
-        ArtifactType::Pi => {
-            if let Some(mgr) = &bundle.pi {
-                stubs_pi(mgr, parent_dir, &mut out);
-            }
-        }
-        ArtifactType::Copilot => {
-            if let Some(mgr) = &bundle.copilot {
-                stubs_copilot(mgr, &mut out);
-            }
-        }
-        // Recorded via `p import`, never discovered: there is no
-        // machine-wide registry of repos to walk.
-        ArtifactType::Git => {}
-    }
-    out
-}
-
-/// Chain heads via `list_conversations` (bounded first-lines peek
-/// per file, no full parse). The head is the chain's *oldest*
-/// segment and its id is rotation-stable; the fingerprint covers
-/// the whole chain (see `claude_chain_stamp`) because appends land
-/// in the newest segment, not the head file.
-fn stubs_claude(
-    mgr: &toolpath_claude::ClaudeConvo,
-    parent_dir: Option<&Path>,
-    out: &mut Vec<ArtifactRef>,
-) {
-    let projects = match mgr.list_projects() {
-        Ok(ps) => ps,
-        Err(e) if is_not_found_claude(&e) => return,
-        Err(e) => {
-            eprintln!("warning: claude enumeration failed: {e}");
-            return;
-        }
-    };
-    for project in projects {
-        if let Some(parent_dir) = parent_dir
-            && !claude_project_in_scope(&project, parent_dir)
-        {
-            continue;
-        }
-        let heads = match mgr.list_conversations(&project) {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("warning: claude project {project} failed: {e}");
-                continue;
-            }
-        };
-        for head in heads {
-            let (modified, size) = super::claude_chain_stamp(mgr, &project, &head);
-            out.push(ArtifactRef {
-                artifact_type: ArtifactType::Claude,
-                id: head,
-                path: Some(project.clone()),
-                modified,
-                size,
-            });
-        }
-    }
-}
-
-/// Session entries via a bounded identity peek (`toolpath-gemini`
-/// reads at most the first 4 KiB of a main file); the fingerprint
-/// stats the main file (or the orphan sub-agent directory).
-fn stubs_gemini(
-    mgr: &toolpath_gemini::GeminiConvo,
-    parent_dir: Option<&Path>,
-    out: &mut Vec<ArtifactRef>,
-) {
-    let projects = match mgr.list_projects() {
-        Ok(ps) => ps,
-        Err(e) if is_not_found_gemini(&e) => return,
-        Err(e) => {
-            eprintln!("warning: gemini enumeration failed: {e}");
-            return;
-        }
-    };
-    for project in projects {
-        if let Some(parent_dir) = parent_dir
-            && !dir_in_scope(&project, parent_dir)
-        {
-            continue;
-        }
-        let entries = match mgr.resolver().list_session_entries(&project) {
-            Ok(entries) => entries,
-            Err(e) => {
-                eprintln!("warning: gemini project {project} failed: {e}");
-                continue;
-            }
-        };
-        for entry in entries {
-            let (modified, size) = stat_stamp(&entry.path);
-            out.push(ArtifactRef {
-                artifact_type: ArtifactType::Gemini,
-                id: entry.session_uuid.unwrap_or(entry.id),
-                path: Some(project.clone()),
-                modified,
-                size,
-            });
-        }
-    }
-}
-
-/// Session-state directories, stat-only: each session is a
-/// `<id>/events.jsonl` under `session-state/` (or its legacy
-/// sibling); the directory name is the id and the events file is
-/// the fingerprint target.
-fn stubs_copilot(mgr: &toolpath_copilot::CopilotConvo, out: &mut Vec<ArtifactRef>) {
-    let mut seen = std::collections::HashSet::new();
-    let dirs = [
-        mgr.resolver().session_state_dir(),
-        mgr.resolver().legacy_session_state_dir(),
-    ];
-    for dir in dirs.into_iter().flatten() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Some(id) = entry.file_name().to_str().map(String::from) else {
-                continue;
-            };
-            let events = entry.path().join("events.jsonl");
-            if !events.exists() || !seen.insert(id.clone()) {
-                continue;
-            }
-            let (modified, size) = stat_stamp(&events);
-            out.push(ArtifactRef {
-                artifact_type: ArtifactType::Copilot,
-                id,
-                path: None,
-                modified,
-                size,
-            });
-        }
-    }
-}
-
-/// Rollout files, stat-only. The artifact id is the trailing UUID of
-/// the filename stem (`rollout-<timestamp>-<uuid>`); `read_session`
-/// accepts either the UUID or the full stem, so the fallback is safe.
-fn stubs_codex(mgr: &toolpath_codex::CodexConvo, out: &mut Vec<ArtifactRef>) {
-    let files = match mgr.io().list_rollout_files() {
-        Ok(f) => f,
-        Err(e) if is_not_found_codex(&e) => return,
-        Err(e) => {
-            eprintln!("warning: codex enumeration failed: {e}");
-            return;
-        }
-    };
-    for file in files {
-        let Some(stem) = file.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        let id = codex_artifact_id(stem).to_string();
-        let (modified, size) = stat_stamp(&file);
-        out.push(ArtifactRef {
-            artifact_type: ArtifactType::Codex,
-            id,
-            path: None,
-            modified,
-            size,
-        });
-    }
-}
-
-/// One header-only `SELECT` — `time_updated` is the fingerprint; no
-/// message bodies are loaded.
-fn stubs_opencode(mgr: &toolpath_opencode::OpencodeConvo, out: &mut Vec<ArtifactRef>) {
-    let sessions = match mgr.io().list_sessions(None) {
-        Ok(s) => s,
-        Err(e) if is_not_found_opencode(&e) => return,
-        Err(e) => {
-            eprintln!("warning: opencode enumeration failed: {e}");
-            return;
-        }
-    };
-    for s in sessions {
-        out.push(ArtifactRef {
-            artifact_type: ArtifactType::Opencode,
-            modified: s.last_activity(),
-            path: Some(s.directory.to_string_lossy().into_owned()),
-            id: s.id,
-            size: None,
-        });
-    }
-}
-
-/// Composer headers (one `SELECT` plus a per-composer bubble-count
-/// check) — `lastUpdatedAt` is the fingerprint. Bubble-less drafts
-/// are skipped; unlike `share`, composers without a workspace are
-/// included, since sync doesn't need to rank them by project.
-fn stubs_cursor(mgr: &toolpath_cursor::CursorConvo, out: &mut Vec<ArtifactRef>) {
-    let listings = match mgr.io().list_composers() {
-        Ok(l) => l,
-        Err(e) if is_not_found_cursor(&e) => return,
-        Err(e) => {
-            eprintln!("warning: cursor enumeration failed: {e}");
-            return;
-        }
-    };
-    for l in listings.into_iter().filter(|l| l.has_bubbles) {
-        out.push(ArtifactRef {
-            artifact_type: ArtifactType::Cursor,
-            modified: l.head.last_updated_at_utc(),
-            path: l
-                .head
-                .workspace_path()
-                .map(|p| p.to_string_lossy().into_owned()),
-            id: l.head.composer_id,
-            size: None,
-        });
-    }
-}
-
-/// Session files stat-only; the id comes from a one-line header
-/// peek, falling back to the filename stem's `<timestamp>_<id>`
-/// shape — the same resolution `read_session` accepts.
-fn stubs_pi(mgr: &toolpath_pi::PiConvo, parent_dir: Option<&Path>, out: &mut Vec<ArtifactRef>) {
-    let projects = match mgr.list_projects() {
-        Ok(ps) => ps,
-        Err(e) if is_not_found_pi(&e) => return,
-        Err(e) => {
-            eprintln!("warning: pi enumeration failed: {e}");
-            return;
-        }
-    };
-    for project in projects {
-        if let Some(parent_dir) = parent_dir
-            && !pi_project_in_scope(&project, parent_dir)
-        {
-            continue;
-        }
-        let files = match toolpath_pi::reader::list_session_files(mgr.resolver(), &project) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("warning: pi project {project} failed: {e}");
-                continue;
-            }
-        };
-        for file in files {
-            let header_id = toolpath_pi::reader::peek_header(&file)
-                .ok()
-                .map(|h| h.id)
-                .filter(|id| !id.is_empty());
-            let stem_id = file
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .and_then(|s| s.split_once('_'))
-                .map(|(_, rest)| rest.to_string());
-            let Some(id) = header_id.or(stem_id) else {
-                continue;
-            };
-            let (modified, size) = stat_stamp(&file);
-            out.push(ArtifactRef {
-                artifact_type: ArtifactType::Pi,
-                id,
-                path: Some(project.clone()),
-                modified,
-                size,
-            });
-        }
-    }
-}
-
 /// One stderr line per artifact type. Types the user didn't name
 /// are shown only when they had artifacts, so a default run doesn't
 /// list every uninstalled provider.
@@ -824,18 +391,18 @@ fn render_summary(outcomes: &[(ArtifactType, SyncOutcome)], explicit: bool) -> S
 
 /// Record an externally-derived cache write (`p import`, `share`) in
 /// the manifest, so sync doesn't re-derive what was just written.
-pub(crate) fn record_stub(stub: &ArtifactRef, cache_id: &str) -> Result<()> {
+pub(crate) fn record_artifact(artifact: &ArtifactRef, cache_id: &str) -> Result<()> {
     update_manifest(|manifest| {
         manifest
-            .entry(stub.artifact_type.name().to_string())
+            .entry(artifact.artifact_type.name().to_string())
             .or_default()
             .insert(
-                stub.id.clone(),
+                artifact.id.clone(),
                 SyncRecord {
-                    path: stub.path.clone(),
+                    path: artifact.path.clone(),
                     cache_id: Some(cache_id.to_string()),
-                    modified: stub.modified,
-                    size: stub.size,
+                    modified: artifact.modified,
+                    size: artifact.size,
                     synced_at: Utc::now(),
                 },
             );
@@ -845,20 +412,20 @@ pub(crate) fn record_stub(stub: &ArtifactRef, cache_id: &str) -> Result<()> {
 /// Whether the manifest already records exactly this artifact state
 /// under exactly this cache entry, with the doc present — i.e. a
 /// write would reproduce what's already there.
-pub(crate) fn record_is_current(stub: &ArtifactRef, cache_id: &str) -> bool {
+pub(crate) fn record_is_current(artifact: &ArtifactRef, cache_id: &str) -> bool {
     let Ok(manifest) = load_manifest() else {
         return false;
     };
     manifest
-        .get(stub.artifact_type.name())
-        .and_then(|records| records.get(&stub.id))
+        .get(artifact.artifact_type.name())
+        .and_then(|records| records.get(&artifact.id))
         .is_some_and(|rec| {
             rec.cache_id.as_deref() == Some(cache_id)
                 // None stamps mean freshness is unknowable (git); only
                 // a real, matching stamp can vouch for the cache entry.
                 && (rec.modified.is_some() || rec.size.is_some())
-                && rec.modified == stub.modified
-                && rec.size == stub.size
+                && rec.modified == artifact.modified
+                && rec.size == artifact.size
                 && crate::cmd_cache::cache_path(cache_id).is_ok_and(|p| p.exists())
         })
 }
@@ -877,7 +444,7 @@ pub(crate) fn fresh_cache_id(
     let manifest = load_manifest().ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
     let cache_id = rec.cache_id.clone()?;
-    let (modified, size) = stamp_one(bundle, artifact_type, project, id)?;
+    let (modified, size) = sources::source_for(bundle, artifact_type)?.stamp(project, id)?;
     // None stamps mean freshness is unknowable; only a real,
     // matching stamp can vouch for the cache entry.
     ((rec.modified.is_some() || rec.size.is_some())
@@ -885,77 +452,6 @@ pub(crate) fn fresh_cache_id(
         && rec.size == size
         && crate::cmd_cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
     .then_some(cache_id)
-}
-
-/// Stat-level fingerprint for a single artifact, resolved directly.
-/// Uses the same stat targets as `enumerate_stubs` and the
-/// `derive_*_session_with` provenance stamps, so the result compares
-/// against manifest records. `project` is required for the
-/// path-keyed providers (claude/gemini/pi).
-fn stamp_one(
-    bundle: &HarnessBundle,
-    artifact_type: ArtifactType,
-    project: Option<&str>,
-    id: &str,
-) -> Option<(Option<DateTime<Utc>>, Option<u64>)> {
-    match artifact_type {
-        ArtifactType::Claude => Some(super::claude_chain_stamp(
-            bundle.claude.as_ref()?,
-            project?,
-            id,
-        )),
-        ArtifactType::Gemini => {
-            let entries = bundle
-                .gemini
-                .as_ref()?
-                .resolver()
-                .list_session_entries(project?)
-                .ok()?;
-            let entry = entries
-                .into_iter()
-                .find(|e| e.id == id || e.session_uuid.as_deref() == Some(id))?;
-            Some(stat_stamp(&entry.path))
-        }
-        ArtifactType::Pi => {
-            let mgr = bundle.pi.as_ref()?;
-            let files = toolpath_pi::reader::list_session_files(mgr.resolver(), project?).ok()?;
-            let file = files.into_iter().find(|f| {
-                toolpath_pi::reader::peek_header(f).is_ok_and(|h| h.id == id)
-                    || f.file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .and_then(|stem| stem.split_once('_'))
-                        .is_some_and(|(_, rest)| rest == id)
-            })?;
-            Some(stat_stamp(&file))
-        }
-        ArtifactType::Codex => {
-            let file = bundle
-                .codex
-                .as_ref()?
-                .resolver()
-                .find_rollout_file(id)
-                .ok()?;
-            Some(stat_stamp(&file))
-        }
-        ArtifactType::Copilot => {
-            let file = bundle.copilot.as_ref()?.resolver().events_file(id).ok()?;
-            Some(stat_stamp(&file))
-        }
-        ArtifactType::Opencode => {
-            let sessions = bundle.opencode.as_ref()?.io().list_sessions(None).ok()?;
-            let session = sessions.into_iter().find(|s| s.id == id)?;
-            Some((session.last_activity(), None))
-        }
-        ArtifactType::Cursor => {
-            let headers = bundle.cursor.as_ref()?.io().read_composer_headers().ok()?;
-            let composer = headers
-                .all_composers
-                .into_iter()
-                .find(|c| c.composer_id == id)?;
-            Some((composer.last_updated_at_utc(), None))
-        }
-        ArtifactType::Git => None,
-    }
 }
 
 /// `p cache rm` eviction: the doc is gone, so any record pointing
@@ -1105,7 +601,7 @@ mod tests {
         doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
     }
 
-    fn make_stub(artifact_type: ArtifactType, id: &str) -> ArtifactRef {
+    fn make_ref(artifact_type: ArtifactType, id: &str) -> ArtifactRef {
         ArtifactRef {
             artifact_type,
             id: id.to_string(),
@@ -1162,16 +658,20 @@ mod tests {
     }
 
     #[test]
-    fn enumerate_stubs_stats_claude_sessions() {
+    fn enumerated_claude_sessions_are_stamped() {
         with_cfg(|home| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            let stubs = enumerate_stubs(&bundle, ArtifactType::Claude, None);
-            assert_eq!(stubs.len(), 1);
-            assert_eq!(stubs[0].id, "sess-aaa");
-            assert_eq!(stubs[0].path.as_deref(), Some("/test/project"));
-            assert!(stubs[0].modified.is_some(), "file mtime must be stamped");
-            assert!(stubs[0].size.unwrap() > 0, "file size must be stamped");
+            let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
+            let artifacts = source.enumerate(None);
+            assert_eq!(artifacts.len(), 1);
+            assert_eq!(artifacts[0].id, "sess-aaa");
+            assert_eq!(artifacts[0].path.as_deref(), Some("/test/project"));
+            assert!(
+                artifacts[0].modified.is_some(),
+                "file mtime must be stamped"
+            );
+            assert!(artifacts[0].size.unwrap() > 0, "file size must be stamped");
         });
     }
 
@@ -1290,10 +790,12 @@ mod tests {
         with_cfg(|home| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            let mut stubs = enumerate_stubs(&bundle, ArtifactType::Claude, None);
-            stubs.push(make_stub(ArtifactType::Claude, "does-not-exist"));
+            let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
+            let mut artifacts = source.enumerate(None);
+            artifacts.push(make_ref(ArtifactType::Claude, "does-not-exist"));
 
-            let outcome = sync_stubs(&bundle, &stubs, &BTreeMap::new(), None).unwrap();
+            let outcome =
+                sync_artifacts(source.as_ref(), &artifacts, &BTreeMap::new(), None).unwrap();
             assert_eq!((outcome.new, outcome.failed), (1, 1));
             let records = &load_manifest().unwrap()["claude"];
             assert!(records.contains_key("sess-aaa"));
@@ -1366,8 +868,9 @@ mod tests {
             let rec = records.get_mut("sess-aaa").unwrap();
             rec.modified = None;
             rec.size = None;
-            let stub = make_stub(ArtifactType::Claude, "sess-aaa");
-            let outcome = sync_stubs(&bundle, &[stub], &records, None).unwrap();
+            let artifact = make_ref(ArtifactType::Claude, "sess-aaa");
+            let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
+            let outcome = sync_artifacts(source.as_ref(), &[artifact], &records, None).unwrap();
             assert_eq!((outcome.updated, outcome.unchanged), (1, 0));
         });
     }
@@ -1386,11 +889,11 @@ mod tests {
                 "sess-aaa",
             )
             .unwrap();
-            let stub = derived.provenance.as_ref().unwrap();
-            assert_eq!(stub.id, "sess-aaa");
-            assert!(stub.modified.is_some() && stub.size.is_some());
+            let artifact = derived.provenance.as_ref().unwrap();
+            assert_eq!(artifact.id, "sess-aaa");
+            assert!(artifact.modified.is_some() && artifact.size.is_some());
             crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
-            record_stub(stub, &derived.cache_id).unwrap();
+            record_artifact(artifact, &derived.cache_id).unwrap();
 
             // The import's stamp must match sync's own enumeration.
             let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
@@ -1658,25 +1161,6 @@ mod tests {
     }
 
     #[test]
-    fn pi_scope_matching_survives_hyphenated_paths() {
-        // decode_project turns the dir-encoded '-' back into '/', so a
-        // real path /Users/b/my-repo arrives as /Users/b/my/repo; the
-        // comparator must match it against the real constraint anyway.
-        assert!(pi_project_in_scope(
-            "/Users/b/my/repo",
-            Path::new("/Users/b/my-repo")
-        ));
-        assert!(pi_project_in_scope(
-            "/Users/b/my/repo/sub",
-            Path::new("/Users/b/my-repo")
-        ));
-        assert!(!pi_project_in_scope(
-            "/Users/b/other",
-            Path::new("/Users/b/my-repo")
-        ));
-    }
-
-    #[test]
     fn copilot_peek_accepts_top_level_cwd() {
         with_cfg(|home| {
             // Older CLIs store cwd at the payload top level, no
@@ -1712,22 +1196,12 @@ mod tests {
     }
 
     #[test]
-    fn derive_stub_errors_when_provider_missing() {
-        let bundle = HarnessBundle::default();
-        let stub = make_stub(ArtifactType::Claude, "sess");
-        let Err(err) = derive_stub(&bundle, &stub) else {
-            panic!("derive_stub must fail without a claude manager");
-        };
-        assert!(err.to_string().contains("provider not available"));
-    }
-
-    #[test]
     fn newest_first_orders_by_mtime_with_unstamped_last() {
-        let mut old = make_stub(ArtifactType::Claude, "old");
+        let mut old = make_ref(ArtifactType::Claude, "old");
         old.modified = Some("2026-01-01T00:00:00Z".parse().unwrap());
-        let mut new = make_stub(ArtifactType::Claude, "new");
+        let mut new = make_ref(ArtifactType::Claude, "new");
         new.modified = Some("2026-07-01T00:00:00Z".parse().unwrap());
-        let unstamped = make_stub(ArtifactType::Claude, "unstamped");
+        let unstamped = make_ref(ArtifactType::Claude, "unstamped");
 
         let stubs = vec![old, unstamped, new];
         let ids: Vec<&str> = newest_first(&stubs).iter().map(|s| s.id.as_str()).collect();
