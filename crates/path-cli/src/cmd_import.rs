@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use toolpath::v1::Graph;
 
 use crate::cmd_cache::{make_id, write_cached};
-use crate::sync::{ArtifactStub, ArtifactType, claude_chain_stamp, codex_artifact_id, stat_stamp};
+use crate::sync::{ArtifactRef, ArtifactType, claude_chain_stamp, codex_artifact_id, stat_stamp};
 
 #[derive(Subcommand, Debug)]
 pub enum ImportSource {
@@ -203,7 +203,7 @@ pub(crate) struct DerivedDoc {
     /// run). `None` for sources the manifest doesn't track (github,
     /// pathbase) and for bulk `--all` derives that no longer know
     /// per-artifact sources.
-    pub(crate) provenance: Option<ArtifactStub>,
+    pub(crate) provenance: Option<ArtifactRef>,
 }
 
 fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Result<()> {
@@ -350,7 +350,7 @@ fn derive_git(
         Ok(vec![DerivedDoc {
             cache_id,
             doc,
-            provenance: Some(ArtifactStub {
+            provenance: Some(ArtifactRef {
                 artifact_type: ArtifactType::Git,
                 id: format!("{repo_tag}-{inner}"),
                 path: Some(canonical.to_string_lossy().into_owned()),
@@ -573,7 +573,7 @@ pub(crate) fn derive_claude_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        provenance: Some(ArtifactStub {
+        provenance: Some(ArtifactRef {
             artifact_type: ArtifactType::Claude,
             id: artifact_id,
             path: Some(project.to_string()),
@@ -817,7 +817,7 @@ pub(crate) fn derive_gemini_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        provenance: Some(ArtifactStub {
+        provenance: Some(ArtifactRef {
             artifact_type: ArtifactType::Gemini,
             id: artifact_id,
             path: Some(project.to_string()),
@@ -1016,7 +1016,7 @@ pub(crate) fn derive_codex_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        provenance: Some(ArtifactStub {
+        provenance: Some(ArtifactRef {
             artifact_type: ArtifactType::Codex,
             id: artifact_id,
             path: None,
@@ -1153,7 +1153,7 @@ pub(crate) fn derive_copilot_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        provenance: Some(ArtifactStub {
+        provenance: Some(ArtifactRef {
             artifact_type: ArtifactType::Copilot,
             id: session.to_string(),
             path: None,
@@ -1301,7 +1301,7 @@ pub(crate) fn derive_opencode_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        provenance: Some(ArtifactStub {
+        provenance: Some(ArtifactRef {
             artifact_type: ArtifactType::Opencode,
             id: session.to_string(),
             path: None,
@@ -1476,7 +1476,7 @@ pub(crate) fn derive_cursor_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
-        provenance: Some(ArtifactStub {
+        provenance: Some(ArtifactRef {
             artifact_type: ArtifactType::Cursor,
             id: session.to_string(),
             path: None,
@@ -1694,7 +1694,7 @@ pub(crate) fn derive_pi_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc,
-        provenance: Some(ArtifactStub {
+        provenance: Some(ArtifactRef {
             artifact_type: ArtifactType::Pi,
             id: artifact_id,
             path: Some(project.to_string()),

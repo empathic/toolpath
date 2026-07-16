@@ -96,7 +96,7 @@ impl ArtifactType {
 /// the provenance of each derived document so the write can be
 /// recorded in the manifest.
 #[derive(Debug, Clone)]
-pub(crate) struct ArtifactStub {
+pub(crate) struct ArtifactRef {
     pub(crate) artifact_type: ArtifactType,
     pub(crate) id: String,
     /// Filesystem path the artifact is keyed under, for path-keyed
@@ -181,7 +181,7 @@ mod engine {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    use super::{ArtifactStub, ArtifactType, codex_artifact_id, stat_stamp};
+    use super::{ArtifactRef, ArtifactType, codex_artifact_id, stat_stamp};
     use crate::cmd_cache::write_cached;
     use crate::cmd_import::DerivedDoc;
     use crate::cmd_share::{
@@ -300,7 +300,7 @@ mod engine {
     /// stub needs nothing — no read, no scope check. All-`None` stamps
     /// mean freshness is unknowable; only a real stamp can vouch
     /// (mirrors `record_is_current`).
-    fn is_unchanged(rec: Option<&SyncRecord>, stub: &ArtifactStub) -> bool {
+    fn is_unchanged(rec: Option<&SyncRecord>, stub: &ArtifactRef) -> bool {
         rec.is_some_and(|rec| {
             (rec.modified.is_some() || rec.size.is_some())
                 && rec.modified == stub.modified
@@ -314,8 +314,8 @@ mod engine {
 
     /// Stubs newest-first (unstamped last), so an interrupted run has
     /// spent its time on the sessions the user most likely wants.
-    fn newest_first(stubs: &[ArtifactStub]) -> Vec<&ArtifactStub> {
-        let mut order: Vec<&ArtifactStub> = stubs.iter().collect();
+    fn newest_first(stubs: &[ArtifactRef]) -> Vec<&ArtifactRef> {
+        let mut order: Vec<&ArtifactRef> = stubs.iter().collect();
         order.sort_by(|a, b| b.modified.cmp(&a.modified));
         order
     }
@@ -347,14 +347,14 @@ mod engine {
     /// (disk, permissions) abort.
     fn sync_stubs(
         bundle: &HarnessBundle,
-        stubs: &[ArtifactStub],
+        stubs: &[ArtifactRef],
         records: &BTreeMap<String, SyncRecord>,
         parent_dir: Option<&Path>,
     ) -> Result<SyncOutcome> {
         let mut outcome = SyncOutcome::default();
         // Evaluate the stat gate once per stub: the pass feeds both the
         // progress denominator and the loop's skip decision.
-        let order: Vec<(&ArtifactStub, bool)> = newest_first(stubs)
+        let order: Vec<(&ArtifactRef, bool)> = newest_first(stubs)
             .into_iter()
             .map(|stub| (stub, is_unchanged(records.get(&stub.id), stub)))
             .collect();
@@ -535,7 +535,7 @@ mod engine {
 
     /// Derive one artifact through the same manager it was enumerated
     /// from, so listing and derivation always agree on provider roots.
-    fn derive_stub(bundle: &HarnessBundle, stub: &ArtifactStub) -> Result<DerivedDoc> {
+    fn derive_stub(bundle: &HarnessBundle, stub: &ArtifactRef) -> Result<DerivedDoc> {
         use crate::cmd_import as imp;
         let path = || {
             stub.path
@@ -619,7 +619,7 @@ mod engine {
     /// doesn't carry it. Codex is the only case: the rollout's first
     /// line is `session_meta` with the session cwd — one bounded read,
     /// and the result is memoized into the manifest record afterwards.
-    fn peek_stub_dir(bundle: &HarnessBundle, stub: &ArtifactStub) -> Option<String> {
+    fn peek_stub_dir(bundle: &HarnessBundle, stub: &ArtifactRef) -> Option<String> {
         let file = match stub.artifact_type {
             ArtifactType::Codex => bundle
                 .codex
@@ -677,7 +677,7 @@ mod engine {
         bundle: &HarnessBundle,
         t: ArtifactType,
         parent_dir: Option<&Path>,
-    ) -> Vec<ArtifactStub> {
+    ) -> Vec<ArtifactRef> {
         let mut out = Vec::new();
         match t {
             ArtifactType::Claude => {
@@ -730,7 +730,7 @@ mod engine {
     fn stubs_claude(
         mgr: &toolpath_claude::ClaudeConvo,
         parent_dir: Option<&Path>,
-        out: &mut Vec<ArtifactStub>,
+        out: &mut Vec<ArtifactRef>,
     ) {
         let projects = match mgr.list_projects() {
             Ok(ps) => ps,
@@ -755,7 +755,7 @@ mod engine {
             };
             for head in heads {
                 let (modified, size) = super::claude_chain_stamp(mgr, &project, &head);
-                out.push(ArtifactStub {
+                out.push(ArtifactRef {
                     artifact_type: ArtifactType::Claude,
                     id: head,
                     path: Some(project.clone()),
@@ -772,7 +772,7 @@ mod engine {
     fn stubs_gemini(
         mgr: &toolpath_gemini::GeminiConvo,
         parent_dir: Option<&Path>,
-        out: &mut Vec<ArtifactStub>,
+        out: &mut Vec<ArtifactRef>,
     ) {
         let projects = match mgr.list_projects() {
             Ok(ps) => ps,
@@ -797,7 +797,7 @@ mod engine {
             };
             for entry in entries {
                 let (modified, size) = stat_stamp(&entry.path);
-                out.push(ArtifactStub {
+                out.push(ArtifactRef {
                     artifact_type: ArtifactType::Gemini,
                     id: entry.session_uuid.unwrap_or(entry.id),
                     path: Some(project.clone()),
@@ -812,7 +812,7 @@ mod engine {
     /// `<id>/events.jsonl` under `session-state/` (or its legacy
     /// sibling); the directory name is the id and the events file is
     /// the fingerprint target.
-    fn stubs_copilot(mgr: &toolpath_copilot::CopilotConvo, out: &mut Vec<ArtifactStub>) {
+    fn stubs_copilot(mgr: &toolpath_copilot::CopilotConvo, out: &mut Vec<ArtifactRef>) {
         let mut seen = std::collections::HashSet::new();
         let dirs = [
             mgr.resolver().session_state_dir(),
@@ -831,7 +831,7 @@ mod engine {
                     continue;
                 }
                 let (modified, size) = stat_stamp(&events);
-                out.push(ArtifactStub {
+                out.push(ArtifactRef {
                     artifact_type: ArtifactType::Copilot,
                     id,
                     path: None,
@@ -845,7 +845,7 @@ mod engine {
     /// Rollout files, stat-only. The artifact id is the trailing UUID of
     /// the filename stem (`rollout-<timestamp>-<uuid>`); `read_session`
     /// accepts either the UUID or the full stem, so the fallback is safe.
-    fn stubs_codex(mgr: &toolpath_codex::CodexConvo, out: &mut Vec<ArtifactStub>) {
+    fn stubs_codex(mgr: &toolpath_codex::CodexConvo, out: &mut Vec<ArtifactRef>) {
         let files = match mgr.io().list_rollout_files() {
             Ok(f) => f,
             Err(e) if is_not_found_codex(&e) => return,
@@ -860,7 +860,7 @@ mod engine {
             };
             let id = codex_artifact_id(stem).to_string();
             let (modified, size) = stat_stamp(&file);
-            out.push(ArtifactStub {
+            out.push(ArtifactRef {
                 artifact_type: ArtifactType::Codex,
                 id,
                 path: None,
@@ -872,7 +872,7 @@ mod engine {
 
     /// One header-only `SELECT` — `time_updated` is the fingerprint; no
     /// message bodies are loaded.
-    fn stubs_opencode(mgr: &toolpath_opencode::OpencodeConvo, out: &mut Vec<ArtifactStub>) {
+    fn stubs_opencode(mgr: &toolpath_opencode::OpencodeConvo, out: &mut Vec<ArtifactRef>) {
         let sessions = match mgr.io().list_sessions(None) {
             Ok(s) => s,
             Err(e) if is_not_found_opencode(&e) => return,
@@ -882,7 +882,7 @@ mod engine {
             }
         };
         for s in sessions {
-            out.push(ArtifactStub {
+            out.push(ArtifactRef {
                 artifact_type: ArtifactType::Opencode,
                 modified: s.last_activity(),
                 path: Some(s.directory.to_string_lossy().into_owned()),
@@ -896,7 +896,7 @@ mod engine {
     /// check) — `lastUpdatedAt` is the fingerprint. Bubble-less drafts
     /// are skipped; unlike `share`, composers without a workspace are
     /// included, since sync doesn't need to rank them by project.
-    fn stubs_cursor(mgr: &toolpath_cursor::CursorConvo, out: &mut Vec<ArtifactStub>) {
+    fn stubs_cursor(mgr: &toolpath_cursor::CursorConvo, out: &mut Vec<ArtifactRef>) {
         let listings = match mgr.io().list_composers() {
             Ok(l) => l,
             Err(e) if is_not_found_cursor(&e) => return,
@@ -906,7 +906,7 @@ mod engine {
             }
         };
         for l in listings.into_iter().filter(|l| l.has_bubbles) {
-            out.push(ArtifactStub {
+            out.push(ArtifactRef {
                 artifact_type: ArtifactType::Cursor,
                 modified: l.head.last_updated_at_utc(),
                 path: l
@@ -925,7 +925,7 @@ mod engine {
     fn stubs_pi(
         mgr: &toolpath_pi::PiConvo,
         parent_dir: Option<&Path>,
-        out: &mut Vec<ArtifactStub>,
+        out: &mut Vec<ArtifactRef>,
     ) {
         let projects = match mgr.list_projects() {
             Ok(ps) => ps,
@@ -962,7 +962,7 @@ mod engine {
                     continue;
                 };
                 let (modified, size) = stat_stamp(&file);
-                out.push(ArtifactStub {
+                out.push(ArtifactRef {
                     artifact_type: ArtifactType::Pi,
                     id,
                     path: Some(project.clone()),
@@ -1005,7 +1005,7 @@ mod engine {
 
     /// Record an externally-derived cache write (`p import`, `share`) in
     /// the manifest, so sync doesn't re-derive what was just written.
-    pub(crate) fn record_stub(stub: &ArtifactStub, cache_id: &str) -> Result<()> {
+    pub(crate) fn record_stub(stub: &ArtifactRef, cache_id: &str) -> Result<()> {
         update_manifest(|manifest| {
             manifest
                 .entry(stub.artifact_type.name().to_string())
@@ -1026,7 +1026,7 @@ mod engine {
     /// Whether the manifest already records exactly this artifact state
     /// under exactly this cache entry, with the doc present — i.e. a
     /// write would reproduce what's already there.
-    pub(crate) fn record_is_current(stub: &ArtifactStub, cache_id: &str) -> bool {
+    pub(crate) fn record_is_current(stub: &ArtifactRef, cache_id: &str) -> bool {
         let Ok(manifest) = load_manifest() else {
             return false;
         };
@@ -1288,8 +1288,8 @@ mod engine {
             doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
         }
 
-        fn make_stub(artifact_type: ArtifactType, id: &str) -> ArtifactStub {
-            ArtifactStub {
+        fn make_stub(artifact_type: ArtifactType, id: &str) -> ArtifactRef {
+            ArtifactRef {
                 artifact_type,
                 id: id.to_string(),
                 path: Some("/test/project".to_string()),

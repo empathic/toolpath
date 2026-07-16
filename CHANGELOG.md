@@ -42,7 +42,7 @@ users no longer have to `p import` each session by hand.
     types always report. Derivation failures warn and tally as `failed`
     without aborting the run.
   - `p import` and `share` record what they write: session derives carry
-    a provenance stub (source stamped before the read), and the cache
+    a provenance `ArtifactRef` (source stamped before the read), and the cache
     write upserts the manifest — so sync never re-derives an artifact
     that import or share just produced. `ArtifactType` gains `Git`:
     git imports are recorded (repo path + `<repo-tag>-<graph-id>` id)
