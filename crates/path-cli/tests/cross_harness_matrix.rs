@@ -47,6 +47,14 @@ trait Harness {
     fn roundtrips_compaction(&self) -> bool {
         true
     }
+    /// Whether the harness's native wire also carries the boundary's kept
+    /// anchor (`Compaction.kept_from`). When false the boundary + summary
+    /// round-trip but the anchor is dropped by design (codex's `compacted`
+    /// payload is wholesale), so `kept_anchor_survives` skips it as a
+    /// translation target.
+    fn roundtrips_kept(&self) -> bool {
+        self.roundtrips_compaction()
+    }
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -134,6 +142,12 @@ impl Harness for CodexHarness {
         let session = toolpath_codex::RolloutReader::read_session(&path)
             .expect("codex compacted fixture parse");
         Some(toolpath_codex::to_view(&session))
+    }
+    /// Codex's `compacted` payload carries only the summary `message` —
+    /// no kept encoding — so the anchor is dropped on translation into
+    /// codex even though the boundary itself round-trips.
+    fn roundtrips_kept(&self) -> bool {
+        false
     }
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
         let projector = toolpath_codex::project::CodexProjector::new();
@@ -613,8 +627,9 @@ mod invariants {
     /// collapsing every boundary onto the first summary). An empty summary
     /// normalizes to `None`, so an absent and an empty summary compare equal
     /// — Codex always carries a (possibly empty) message, and that empty
-    /// survives as empty. `kept` is still not compared — wholesale harnesses
-    /// (Codex) drop it by design, so it isn't a cross-harness invariant.
+    /// survives as empty. The kept anchor is checked separately by
+    /// `kept_anchor_survives`, gated on `roundtrips_kept()` — wholesale
+    /// targets (Codex) drop it by design.
     pub fn compaction_survives(
         original: &ConversationView,
         result: &ConversationView,
@@ -641,6 +656,37 @@ mod invariants {
                     "compaction {i} summary diverged:\n      first:  {:?}\n      second: {:?}",
                     clip(&sa),
                     clip(&sb)
+                ));
+            }
+        }
+    }
+
+    /// Each boundary's kept anchor, expressed as a position — how many
+    /// prior turns survive the boundary (`expand_kept` against the view's
+    /// own items) — must cross the translation leg unchanged. Position, not
+    /// ids: projectors re-mint turn ids, but the number of surviving prior
+    /// turns is what a resumed reader experiences. `None` (wholesale) must
+    /// stay `None` — a target synthesizing an anchor would be inventing
+    /// provenance.
+    pub fn kept_anchor_survives(
+        original: &ConversationView,
+        result: &ConversationView,
+        failures: &mut Vec<String>,
+    ) {
+        if original.compactions().count() != result.compactions().count() {
+            // compaction_survives already reports the count divergence.
+            return;
+        }
+        let position = |view: &ConversationView, c: &toolpath_convo::Compaction| -> Option<usize> {
+            c.kept_from
+                .as_ref()
+                .map(|_| toolpath_convo::expand_kept(&view.items, c).len())
+        };
+        for (i, (a, b)) in original.compactions().zip(result.compactions()).enumerate() {
+            let (pa, pb) = (position(original, a), position(result, b));
+            if pa != pb {
+                failures.push(format!(
+                    "compaction {i} kept anchor diverged (surviving prior turns): first={pa:?} second={pb:?}"
                 ));
             }
         }
@@ -1119,6 +1165,9 @@ fn run_cell(
     invariants::files_changed(&view_first, &view_second, &mut failures);
     if target.roundtrips_compaction() {
         invariants::compaction_survives(&view_after_source, &view_first, &mut failures);
+        if target.roundtrips_kept() {
+            invariants::kept_anchor_survives(&view_after_source, &view_first, &mut failures);
+        }
     }
     failures
 }
@@ -1263,6 +1312,17 @@ fn matrix_translation_compacted() {
                 "{} compacted fixture carries no compaction",
                 h.name()
             );
+            if h.roundtrips_compaction() {
+                // Guard against a vacuous matrix: if the source's own
+                // round-trip dropped its boundary, every cell sourced from
+                // it would pass `compaction_survives` as 0 == 0.
+                let view_after_source = ir_roundtrip(&h.roundtrip(&view));
+                assert!(
+                    view_after_source.compactions().count() > 0,
+                    "{} own round-trip dropped its compaction boundary",
+                    h.name()
+                );
+            }
             eprintln!(
                 "loaded {} compacted fixture: {} turns, {} compaction(s)",
                 h.name(),

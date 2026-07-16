@@ -45,6 +45,7 @@ It may also carry any of the following, present only when the turn has them:
 | `stop_reason` | string | why the model stopped (`end_turn`, `tool_use`, …)             |
 | `delegations` | array  | sub-agent work spawned from this turn (shape below)           |
 | `environment` | object | working environment at this turn (shape below)                |
+| `source_parent` | string \| null | the pre-splice source parent (null for a source root), when derive-splicing rewired the step's `parents` through intervening event steps |
 
 The model identifier is not on the change. It lives in `step.actor` (`agent:<model>`) and `meta.actors`. There is no provider-specific blob: every field the derivation captures is one of those listed above.
 
@@ -138,9 +139,11 @@ Only `type` is always present. Every other field appears only when the source re
 | `trigger`    | string           | `"auto"` (context overflow) or `"manual"` (user-invoked), when known             |
 | `summary`    | string           | the compaction summary text the harness produced, when one was recorded          |
 | `pre_tokens` | number           | the context token count immediately before the boundary, when known             |
-| `kept`       | array            | ids of the prior turns that survive verbatim into the post-compaction window (may be non-contiguous; empty = wholesale) |
+| `kept`       | array            | ids of the prior turns that survive verbatim into the post-compaction window — always a contiguous parent-chain run, oldest first, whose first element is the anchor (empty = wholesale) |
+| `extra`      | object           | provider-namespaced native compaction detail (e.g. `extra["claude"]["preserved_uuids"]`, Claude's verbatim preserved set, which may be non-contiguous) |
+| `source_parent` | string \| null | the pre-splice source parent, recorded when derive-splicing rewired the step's `parents` through intervening event steps |
 
-A compaction step has no `text`, `role`, or `tool_uses` — it is not a turn. Consumers that only care about the transcript can skip it; consumers reconstructing the source format use it to place the boundary. The `kept` ids are the harness-agnostic payload: each harness's projector renders that set in its own form (Claude re-emits those turns on-chain before the boundary; opencode/Pi anchor a kept tail at the earliest id; Codex keeps none).
+A compaction step has no `text`, `role`, or `tool_uses` — it is not a turn. Consumers that only care about the transcript can skip it; consumers reconstructing the source format use it to place the boundary. The `kept` run is the harness-agnostic payload: its first element is the anchor — the oldest surviving turn — and every harness's marker reduces to that anchor (Pi's `firstKeptEntryId`, opencode's `tailStartID`, the start of Claude's preserved tail; Codex keeps none). Each projector renders the run in its own form; anything richer than the contiguous run — like Claude's possibly non-contiguous preserved set — rides `extra` under the provider's key and is ignored by every other projector.
 
 ## Non-turn entries
 

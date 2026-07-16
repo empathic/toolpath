@@ -3,6 +3,7 @@
 pub mod derive;
 pub mod extract;
 pub mod project;
+pub mod testing;
 
 pub use derive::{DeriveConfig, derive_path, file_write_diff, unified_diff};
 
@@ -237,15 +238,72 @@ pub struct Compaction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_tokens: Option<u64>,
 
-    /// Ids of the prior turns that survive verbatim into the
-    /// post-compaction context window — the harness-agnostic "what's kept".
-    /// May be non-contiguous (Claude keeps a recent tail PLUS a scattered
-    /// set of pinned tool results). Empty = wholesale (the summary replaced
-    /// everything). Each harness's projector renders this set in its own
-    /// form: Claude re-emits these turns on-chain before the boundary;
-    /// opencode/Pi anchor a kept tail at the earliest id; Codex keeps none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub kept: Vec<String>,
+    /// Id of the oldest prior turn that survives verbatim into the
+    /// post-compaction context window — the anchor of the kept tail.
+    /// The surviving set is the contiguous parent-chain run from this
+    /// anchor up to the boundary; [`expand_kept`] computes it. `None` =
+    /// wholesale (the summary replaced everything). This is the
+    /// harness-agnostic contract: every round-tripping harness's native
+    /// marker names an anchor (Pi's `firstKeptEntryId`, opencode's
+    /// `tailStartID`, the start of Claude's preserved tail); anything
+    /// richer is provider detail and belongs in `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_from: Option<String>,
+
+    /// Provider-namespaced native detail that doesn't fit the
+    /// harness-agnostic fields (same convention as `Turn.extra`), e.g.
+    /// `extra["claude"]["preserved_uuids"]` — Claude's verbatim
+    /// `preservedMessages` set, which may be non-contiguous. Preserved
+    /// across derive ↔ extract; projectors other than the native one
+    /// ignore it.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// Expand a boundary's [`Compaction::kept_from`] anchor into the concrete
+/// list of surviving turn ids, oldest first.
+///
+/// Walks the turn parent chain backward from the boundary's `parent_id`
+/// until it reaches the anchor. The result is the contiguous run of prior
+/// turns `[anchor ..= boundary.parent]` — abandoned tree branches (turns
+/// off the boundary's ancestry) are never included, no matter where they
+/// sit in file order. Returns an empty list when `kept_from` is `None`
+/// (wholesale) or when the anchor is not on the boundary's parent chain
+/// (an inconsistency [`check_view_invariants`] reports).
+pub fn expand_kept(items: &[Item], boundary: &Compaction) -> Vec<String> {
+    let Some(anchor) = boundary.kept_from.as_deref() else {
+        return Vec::new();
+    };
+    let turns: HashMap<&str, &Turn> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Turn(t) => Some((t.id.as_str(), t)),
+            _ => None,
+        })
+        .collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut cur = boundary.parent_id.as_deref();
+    let mut found = false;
+    while let Some(id) = cur {
+        if !seen.insert(id) {
+            break; // cycle guard
+        }
+        let Some(turn) = turns.get(id) else {
+            break; // chain left turn-space (e.g. an earlier boundary)
+        };
+        kept.push(id.to_string());
+        if id == anchor {
+            found = true;
+            break;
+        }
+        cur = turn.parent_id.as_deref();
+    }
+    if !found {
+        return Vec::new();
+    }
+    kept.reverse();
+    kept
 }
 
 /// One element of a conversation's ordered stream — a turn, a

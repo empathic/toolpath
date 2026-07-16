@@ -507,19 +507,22 @@ Preserves the original error so the audit trail survives the retry.
   type: "compaction"
   auto: boolean               // true = triggered by context-overflow
   overflow?: boolean
-  tail_start_id?: MessageID   // First message of the post-compaction tail
+  tailStartID?: MessageID     // First message of the post-compaction tail
 }
 ```
 
 Inserted when opencode compacts the conversation to stay under the
-context window. Messages before `tail_start_id` are summarized into
+context window. Messages before `tailStartID` are summarized into
 a single synthetic user message; the history above the marker is
-kept in the DB for reverts.
+kept in the DB for reverts. (`toolpath-opencode` also accepts the
+`tailStartId` / `tail_start_id` spellings as serde aliases, but the
+wire key opencode writes — and the one we write back — is
+`tailStartID`, matching its `parentID`/`sessionID` convention.)
 
 Compaction stays **within one session** — it sets the session row's
 `time_compacting` timestamp but does not create a new session row.
 (`session.parent_id` is for forked sub-agent sessions, not
-compaction.) `tail_start_id` is a single anchor describing a
+compaction.) `tailStartID` is a single anchor describing a
 **contiguous** kept tail — everything from it forward survives, so
 there is no non-contiguous "pinned" retention here. Message and part
 ids are **not** reused across the boundary, so opencode compaction
@@ -528,11 +531,16 @@ carries no duplicate-id hazard.
 **IR-projection notes.** `auto` is a plain boolean, so the IR `trigger`
 round-trips as auto / not-auto only: a boundary with no trigger (or a
 `manual` one) reads back as `Manual`, and only context-overflow boundaries
-read back as `Auto`. Each boundary's summary is the `summary.body` of *its
-own* synthetic summary message (the one opencode writes at that boundary),
-so a session with several compactions keeps a distinct summary per
-boundary — they are not collapsed onto the session's first summary.
-opencode carries no per-boundary `pre_tokens`.
+read back as `Auto`. `tailStartID` maps to the IR's `Compaction.kept_from`
+anchor when it names a turn emitted *before* the boundary; when it lands
+at-or-after the boundary (e.g. the part rides on the host assistant
+message and names it) no prior turn survives and `kept_from` is `None` —
+post-boundary turns are trivially in context, never "kept". Each
+boundary's summary is the `summary.body` of *its own* synthetic summary
+message (the one opencode writes at that boundary), so a session with
+several compactions keeps a distinct summary per boundary — they are not
+collapsed onto the session's first summary. opencode carries no
+per-boundary `pre_tokens`.
 
 ## Tool catalogue
 
@@ -716,7 +724,7 @@ Minimum viable mapping, if we follow the Pi-style approach (build a
 | `patch` part | file-artifact sibling `ArtifactChange.raw` from `git diff <from> <to>` |
 | `step-finish.tokens` | `Turn.token_usage` (delta) + summed into `ConversationView.total_usage` |
 | `subtask` part | `Turn.delegations[]`, with sub-session linked via `session.parent_id` |
-| `compaction` part | `Item::Compaction` in place (parented on the prior turn; `auto` ⇒ `trigger`, `tailStartID` ⇒ `kept`); projects to a `conversation.compact` step |
+| `compaction` part | `Item::Compaction` in place (parented on the prior turn; `auto` ⇒ `trigger`, `tailStartID` ⇒ `kept_from` when it names a prior turn); projects to a `conversation.compact` step |
 | `retry` part | `ConversationEvent { event_type: "retry" }` |
 | `todo` row | `ConversationEvent { event_type: "todo" }` or top-level path meta |
 | unknown part `type` | `ConversationEvent` preserving the raw payload |

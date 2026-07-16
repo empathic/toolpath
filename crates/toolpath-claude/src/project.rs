@@ -133,7 +133,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
             toolpath_convo::Item::Turn(t) => t,
             toolpath_convo::Item::Compaction(c) => {
                 // Emit the boundary (+ summary) that `to_view` re-folds into
-                // this `Item::Compaction`. `kept` rides in
+                // this `Item::Compaction`. The preserved set rides in
                 // compactMetadata.preservedMessages, which is how re-read
                 // recovers it.
                 let effective_parent = c
@@ -141,8 +141,17 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     .as_ref()
                     .and_then(|pid| parent_rewrites.get(pid).cloned())
                     .or_else(|| c.parent_id.clone());
-                for entry in compaction_entries(c, &view.id, effective_parent) {
+                let entries = compaction_entries(c, &view.id, effective_parent, &view.items);
+                let summary_uuid = entries.get(1).map(|e| e.uuid.clone());
+                for entry in entries {
                     convo.add_entry(entry);
+                }
+                // Claude's wire convention chains the first post-boundary
+                // entry through the synthetic summary (boundary ← summary ←
+                // first-post-entry), so IR parents pointing at the boundary
+                // must be redirected to the summary we just emitted.
+                if let Some(summary_uuid) = summary_uuid {
+                    parent_rewrites.insert(c.id.clone(), summary_uuid);
                 }
                 continue;
             }
@@ -251,21 +260,25 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
 /// Inverse of [`crate::provider::compaction_from_boundary`]: turn an
 /// [`Item::Compaction`](toolpath_convo::Item) back into the on-disk entries
 /// Claude writes for a compaction, so re-reading re-detects the same
-/// compaction with the same `kept` set.
+/// compaction with the same preserved set.
 ///
 /// Emits the boundary (`type: "system"`, `subtype: "compact_boundary"`)
 /// carrying `logicalParentUuid` and `compactMetadata.{trigger, preTokens,
 /// preservedMessages}` in `extra` — where [`crate::provider::is_compact_boundary`]
-/// and `compaction_from_boundary` read them; `kept` rides in
-/// `preservedMessages.uuids`, which is how re-read recovers it. Then the
-/// synthetic summary (`type: "user"`, `isCompactSummary: true`, `parentUuid` =
-/// boundary), only when `summary` is `Some`.
+/// and `compaction_from_boundary` read them. `preservedMessages.uuids` is the
+/// native passthrough `extra["claude"]["preserved_uuids"]` verbatim when
+/// present (lossless Claude→Claude round-trip, including non-contiguous
+/// replay pins); for foreign sources it falls back to
+/// [`toolpath_convo::expand_kept`] — the coherent contiguous tail named by
+/// `kept_from`. Then the synthetic summary (`type: "user"`,
+/// `isCompactSummary: true`, `parentUuid` = boundary), only when `summary` is
+/// `Some`.
 ///
-/// `kept` turns are NOT re-logged as a replay block. Claude's resume rebuilds
-/// context from the summary plus post-boundary turns only — anything before the
-/// boundary's `parentUuid: null` is unreachable — so a replay is dead weight (a
-/// resume test confirmed it changes nothing), and `kept` already round-trips
-/// through `preservedMessages`.
+/// Preserved turns are NOT re-logged as a replay block. Claude's resume
+/// rebuilds context from the summary plus post-boundary turns only — anything
+/// before the boundary's `parentUuid: null` is unreachable — so a replay is
+/// dead weight (a resume test confirmed it changes nothing), and the preserved
+/// set already round-trips through `preservedMessages`.
 ///
 /// `effective_parent` is the boundary's logical parent after any tool-result
 /// parent rewrites — it lands in `compactMetadata`'s `logicalParentUuid`.
@@ -273,6 +286,7 @@ fn compaction_entries(
     c: &Compaction,
     session_id: &str,
     effective_parent: Option<String>,
+    items: &[toolpath_convo::Item],
 ) -> Vec<ConversationEntry> {
     let mut entries: Vec<ConversationEntry> = Vec::new();
 
@@ -287,8 +301,20 @@ fn compaction_entries(
     if let Some(pre_tokens) = c.pre_tokens {
         compact_metadata.insert("preTokens".into(), json!(pre_tokens));
     }
-    if !c.kept.is_empty() {
-        compact_metadata.insert("preservedMessages".into(), json!({ "uuids": c.kept }));
+    let preserved: Vec<String> = match c
+        .extra
+        .get("claude")
+        .and_then(|v| v.get("preserved_uuids"))
+        .and_then(|v| v.as_array())
+    {
+        Some(uuids) => uuids
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        None => toolpath_convo::expand_kept(items, c),
+    };
+    if !preserved.is_empty() {
+        compact_metadata.insert("preservedMessages".into(), json!({ "uuids": preserved }));
     }
 
     let mut boundary_extra: HashMap<String, serde_json::Value> = HashMap::new();

@@ -78,11 +78,11 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
     // Map from event step ID → that step's first parent, for undoing
     // derive's `splice_onto_intervening` when rebuilding turn/compaction
     // parents (see `parent_past_events`).
-    let mut event_parents: HashMap<String, Option<String>> = HashMap::new();
+    let mut event_parents: HashMap<String, (usize, Option<String>)> = HashMap::new();
     // Track files_changed for dedup in insertion order.
     let mut files_seen: HashSet<String> = HashSet::new();
 
-    for step in &path.steps {
+    for (step_idx, step) in path.steps.iter().enumerate() {
         // Pre-collect file.write entries on this step. They attach to the
         // turn built from this step's `conversation.append` change (below);
         // the iteration order of `step.change` (HashMap) is non-deterministic
@@ -133,26 +133,35 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                 None => continue,
             };
 
+            // The shared-derive path doesn't emit conversation.init; it
+            // encodes provider + session in the artifact key of every
+            // conversation step (e.g. `gemini-cli://<session>`). Pick them
+            // up from the first one — append, event, or compact — so a
+            // path with no turns still keeps its identity.
+            if matches!(
+                structural.change_type.as_str(),
+                "conversation.append" | "conversation.event" | "conversation.compact"
+            ) && view.id.is_empty()
+                && let Some((provider, session)) = artifact_key.split_once("://")
+                && !provider.is_empty()
+                && !session.is_empty()
+            {
+                view.provider_id = Some(provider.to_string());
+                view.id = session.to_string();
+            }
+
             match structural.change_type.as_str() {
                 "conversation.init" => {
                     handle_init(&mut view, artifact_key, &structural.extra);
                 }
                 "conversation.append" => {
-                    // The shared-derive path doesn't emit conversation.init;
-                    // it encodes provider + session in the artifact key of
-                    // each append step (e.g. `gemini-cli://<session>`).
-                    // Pick them up the first time we see one.
-                    if view.id.is_empty()
-                        && let Some((provider, session)) = artifact_key.split_once("://")
-                        && !provider.is_empty()
-                        && !session.is_empty()
-                    {
-                        view.provider_id = Some(provider.to_string());
-                        view.id = session.to_string();
-                    }
-
                     let mut turn = build_turn(step, &structural.extra);
-                    turn.parent_id = parent_past_events(turn.parent_id.take(), &event_parents);
+                    turn.parent_id = restore_source_parent(
+                        turn.parent_id.take(),
+                        &structural.extra,
+                        step_idx,
+                        &event_parents,
+                    );
                     // Attach pre-collected file mutations to the turn.
                     // `tool_id` on each mutation links back to the
                     // specific `ToolInvocation` (when set by derive).
@@ -196,7 +205,10 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         event_type,
                         data,
                     };
-                    event_parents.insert(step.step.id.clone(), step.step.parents.first().cloned());
+                    event_parents.insert(
+                        step.step.id.clone(),
+                        (step_idx, step.step.parents.first().cloned()),
+                    );
                     view.items.push(Item::Event(event));
                 }
                 "conversation.compact" => {
@@ -215,22 +227,35 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     let pre_tokens = structural.extra.get("pre_tokens").and_then(|v| v.as_u64());
-                    let kept = structural
+                    // The wire carries the expanded kept run, oldest first;
+                    // the anchor is its first element.
+                    let kept_from = structural
                         .extra
                         .get("kept")
                         .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+                        .and_then(|kept| kept.into_iter().next());
+                    let extra = structural
+                        .extra
+                        .get("extra")
+                        .and_then(|v| {
+                            serde_json::from_value::<HashMap<String, serde_json::Value>>(v.clone())
+                                .ok()
+                        })
                         .unwrap_or_default();
                     let compaction = Compaction {
                         id: step.step.id.clone(),
-                        parent_id: parent_past_events(
+                        parent_id: restore_source_parent(
                             step.step.parents.first().cloned(),
+                            &structural.extra,
+                            step_idx,
                             &event_parents,
                         ),
                         timestamp: step.step.timestamp.clone(),
                         trigger,
                         summary,
                         pre_tokens,
-                        kept,
+                        kept_from,
+                        extra,
                     };
                     view.items.push(Item::Compaction(compaction));
                 }
@@ -311,20 +336,43 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
 /// Events themselves keep their spliced parents: event-to-event chains are
 /// legitimate wire data (Claude chains consecutive tool-result entries), and
 /// `derive_path` re-splices on the way back in, so the round-trip is stable.
+/// Restore a turn's or compaction's source parent. Steps whose parents the
+/// derive splice rewired carry the pre-splice parent in `source_parent`
+/// (`null` = root) — read it back verbatim. Documents derived before that
+/// key existed fall back to [`parent_past_events`]'s best-effort walk.
+fn restore_source_parent(
+    parent: Option<String>,
+    extra: &HashMap<String, serde_json::Value>,
+    step_idx: usize,
+    event_parents: &HashMap<String, (usize, Option<String>)>,
+) -> Option<String> {
+    match extra.get("source_parent") {
+        Some(serde_json::Value::String(s)) => Some(s.clone()),
+        Some(serde_json::Value::Null) => None,
+        _ => parent_past_events(parent, step_idx, event_parents),
+    }
+}
+
 fn parent_past_events(
     parent: Option<String>,
-    event_parents: &HashMap<String, Option<String>>,
+    step_idx: usize,
+    event_parents: &HashMap<String, (usize, Option<String>)>,
 ) -> Option<String> {
     let mut current = parent;
-    // Each hop moves to an earlier step in a well-formed path; the bound
-    // only guards against a malformed document with a parent cycle.
-    for _ in 0..=event_parents.len() {
+    let mut at = step_idx;
+    // The derive splice always rewires onto the immediately-preceding step,
+    // so only adjacent event hops are splice artifacts. A parent naming an
+    // event elsewhere in the path is native linkage and stays untouched.
+    // `at` strictly decreases, so the walk terminates on any input.
+    loop {
         match current.as_deref().and_then(|id| event_parents.get(id)) {
-            Some(next) => current = next.clone(),
-            None => return current,
+            Some((event_idx, next)) if event_idx + 1 == at => {
+                at = *event_idx;
+                current = next.clone();
+            }
+            _ => return current,
         }
     }
-    current
 }
 
 fn handle_init(
@@ -1454,7 +1502,8 @@ mod tests {
             trigger: Some(CompactionTrigger::Manual),
             summary: Some("condensed".into()),
             pre_tokens: Some(4096),
-            kept: vec!["a".into(), "a".into()],
+            kept_from: Some("a".into()),
+            extra: Default::default(),
         };
 
         let source = ConversationView {
@@ -1484,7 +1533,7 @@ mod tests {
         assert_eq!(rc.trigger, Some(CompactionTrigger::Manual));
         assert_eq!(rc.summary.as_deref(), Some("condensed"));
         assert_eq!(rc.pre_tokens, Some(4096));
-        assert_eq!(rc.kept, vec!["a".to_string(), "a".to_string()]);
+        assert_eq!(rc.kept_from.as_deref(), Some("a"));
     }
 
     fn bare_turn(id: &str, parent_id: Option<&str>, role: Role, timestamp: &str) -> Turn {
@@ -1616,7 +1665,8 @@ mod tests {
             trigger: Some(CompactionTrigger::Auto),
             summary: Some("condensed".into()),
             pre_tokens: None,
-            kept: vec![],
+            kept_from: None,
+            extra: Default::default(),
         };
         let source = ConversationView {
             id: "sess-1".into(),

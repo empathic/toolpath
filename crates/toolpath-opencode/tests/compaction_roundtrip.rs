@@ -151,14 +151,20 @@ fn to_view_surfaces_compaction_as_compaction_item() {
         c.parent_id.is_some(),
         "compaction should parent on the prior turn"
     );
-    // `tailStartId` anchors on `msg_u1`. The compaction part lives inside
-    // `msg_a1`, so that assistant turn isn't emitted yet when the boundary
-    // is recorded — the kept tail is just the turns emitted so far from the
-    // anchor onward, i.e. `[msg_u1]`.
+    // `tailStartId` anchors on `msg_u1`, a turn emitted before the
+    // boundary — so it is `kept_from`. The host assistant message
+    // (`msg_a1`, which carries the compaction part) sits after the
+    // boundary and is trivially in context, so it is correctly NOT part
+    // of the kept run.
     assert_eq!(
-        c.kept,
+        c.kept_from.as_deref(),
+        Some("msg_u1"),
+        "tailStartID names a prior turn ⇒ it anchors the kept run"
+    );
+    assert_eq!(
+        toolpath_convo::expand_kept(&view.items, c),
         vec!["msg_u1".to_string()],
-        "tailStartId present ⇒ surviving turn ids from anchor to last emitted turn"
+        "only the anchor turn precedes the boundary"
     );
 }
 
@@ -453,9 +459,9 @@ fn real_fixture_emits_one_manual_compaction_item() {
     assert_eq!(c.trigger, Some(CompactionTrigger::Manual));
     // No `tailStartId` and no synthetic summary message in this fixture.
     assert!(
-        c.kept.is_empty(),
-        "no tailStartId ⇒ empty kept range; got {:?}",
-        c.kept
+        c.kept_from.is_none(),
+        "no tailStartID ⇒ wholesale boundary; got {:?}",
+        c.kept_from
     );
     assert!(
         c.parent_id.is_some(),
@@ -515,6 +521,9 @@ fn projector_reproduces_compaction_item_through_to_view() {
     );
 
     let reread = to_view(&projected);
+    let twice = to_view(&projector.project(&reread).expect("re-project"));
+    toolpath_convo::testing::assert_fixpoint(&view, &reread, &twice);
+
     let compactions: Vec<_> = reread.compactions().collect();
     assert_eq!(
         compactions.len(),
@@ -740,7 +749,8 @@ fn compaction_summary_and_kept_survive_real_sqlite_wire_roundtrip() {
                 trigger: Some(CompactionTrigger::Auto),
                 summary: Some("condensed everything up to the auth refactor".into()),
                 pre_tokens: None,
-                kept: vec!["a1".into()],
+                kept_from: Some("a1".into()),
+                extra: std::collections::HashMap::new(),
             }),
             Item::Turn(mk_turn(
                 "u2",
@@ -780,20 +790,22 @@ fn compaction_summary_and_kept_survive_real_sqlite_wire_roundtrip() {
         "compaction summary lost across the SQLite wire round-trip"
     );
 
-    // #4: the kept tail must survive and resolve to a real re-read turn id.
-    // It survives only because the projector rewrote the kept anchor to the
-    // re-minted message id; with the raw source id it would match no message
-    // and the reader would yield an empty kept set.
-    assert_eq!(
-        c.kept.len(),
-        1,
-        "kept tail collapsed across the SQLite wire round-trip: {:?}",
-        c.kept
-    );
-    let kept_id = &c.kept[0];
+    // #4: the kept anchor must survive and resolve to a real re-read turn
+    // id. It survives only because the projector rewrote it to the
+    // re-minted message id; with the raw source id it would match no
+    // message and the reader would yield `kept_from: None`.
+    let kept_id = c
+        .kept_from
+        .as_ref()
+        .expect("kept anchor collapsed across the SQLite wire round-trip");
     assert!(
         reread.turns().any(|t| &t.id == kept_id),
         "kept anchor {kept_id:?} does not resolve to any re-read turn"
+    );
+    assert_eq!(
+        toolpath_convo::expand_kept(&reread.items, c).len(),
+        1,
+        "the kept run should still be exactly the assistant turn"
     );
 
     // Sanity: surrounding turns survived too.
@@ -809,4 +821,102 @@ fn compaction_summary_and_kept_survive_real_sqlite_wire_roundtrip() {
             .any(|t| t.text.contains("now add session validation")),
         "post-compaction turn lost"
     );
+
+    // The full fixpoint contract across two real-reader cycles.
+    let twice = persist_and_reread(&projector.project(&reread).expect("re-project"));
+    toolpath_convo::testing::assert_fixpoint(&source, &reread, &twice);
+}
+
+#[test]
+fn assistant_hosted_boundary_with_late_timestamp_survives_real_sqlite_wire_roundtrip() {
+    // The assistant-hosted shape: the compaction part rides ON the host
+    // assistant message, stamped LATER (1500) than the host message's own
+    // time_created (1002). In the IR the boundary therefore precedes the
+    // host turn but carries the later timestamp. Naively projected, the
+    // boundary message would sort AFTER the host message on re-read (the
+    // real reader orders by `time_created ASC, id ASC`) and the boundary
+    // would move; the projector's monotonized emission times keep re-read
+    // order identical to emission order.
+    let source = ConversationView {
+        id: "src-sess-late".into(),
+        items: vec![
+            Item::Turn(mk_turn(
+                "u1",
+                Role::User,
+                "refactor the auth module",
+                "1970-01-01T00:00:01.000Z",
+                None,
+            )),
+            Item::Compaction(Compaction {
+                id: "c1".into(),
+                parent_id: Some("u1".into()),
+                timestamp: "1970-01-01T00:00:01.500Z".into(),
+                trigger: Some(CompactionTrigger::Auto),
+                summary: None,
+                pre_tokens: None,
+                kept_from: Some("u1".into()),
+                extra: std::collections::HashMap::new(),
+            }),
+            Item::Turn(mk_turn(
+                "a1",
+                Role::Assistant,
+                "reading the current auth code",
+                "1970-01-01T00:00:01.002Z",
+                Some("claude-sonnet-4-6"),
+            )),
+        ],
+        provider_id: Some("opencode".into()),
+        ..Default::default()
+    };
+
+    let projector = OpencodeProjector::new()
+        .with_directory(PathBuf::from("/tmp/proj"))
+        .with_project_id("proj-test");
+    let projected: Session = projector.project(&source).expect("project");
+    let reread = persist_and_reread(&projected);
+
+    // Position: the boundary still sits between the two turns — exactly
+    // one turn before it, one after.
+    let idx = reread
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Compaction(_)))
+        .expect("a Compaction item");
+    let turns_before = reread.items[..idx]
+        .iter()
+        .filter(|i| matches!(i, Item::Turn(_)))
+        .count();
+    let turns_after = reread.items[idx + 1..]
+        .iter()
+        .filter(|i| matches!(i, Item::Turn(_)))
+        .count();
+    assert_eq!(turns_before, 1, "boundary moved past the user turn");
+    assert_eq!(
+        turns_after, 1,
+        "boundary moved past the host assistant turn"
+    );
+
+    // Kept: the anchor still resolves to the (re-minted) user turn.
+    let c = reread.compactions().next().expect("compaction");
+    let user_id = reread
+        .turns()
+        .find(|t| t.role == Role::User)
+        .map(|t| t.id.clone())
+        .expect("user turn");
+    assert_eq!(
+        c.kept_from.as_deref(),
+        Some(user_id.as_str()),
+        "kept anchor no longer names the user turn"
+    );
+
+    // Parent: the boundary still parents on the user turn (the last turn
+    // before it), not on the assistant that hosted the part.
+    assert_eq!(
+        c.parent_id.as_deref(),
+        Some(user_id.as_str()),
+        "boundary parent moved off the user turn"
+    );
+
+    let twice = persist_and_reread(&projector.project(&reread).expect("re-project"));
+    toolpath_convo::testing::assert_fixpoint(&source, &reread, &twice);
 }

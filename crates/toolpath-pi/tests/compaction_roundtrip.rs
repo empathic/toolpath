@@ -140,14 +140,14 @@ fn real_fixture_has_two_compaction_items() {
         assert!(c.summary.is_some(), "summary should be carried");
         assert!(c.pre_tokens.is_some(), "pre_tokens should be carried");
         assert_eq!(c.trigger, None, "Pi doesn't persist auto-vs-manual");
-        // `kept` is now a flat list of surviving turn ids, never empty.
-        assert!(!c.kept.is_empty(), "kept should carry surviving turn ids");
+        assert!(c.kept_from.is_some(), "kept_from should carry the anchor");
     }
-    // The first boundary's anchor is a discarded `model_change` entry, so it
-    // falls back to the bare anchor id; the second anchors at an emitted
-    // assistant turn that is the last turn before the boundary.
-    assert_eq!(comps[0].kept, vec!["4cc7b46c".to_string()]);
-    assert_eq!(comps[1].kept, vec!["3a47185e".to_string()]);
+    // The first boundary's `firstKeptEntryId` names a discarded
+    // `model_change` entry ("4cc7b46c"); the anchor resolves to the first
+    // turn at-or-after it in entry order — the user turn "b51e82ae". The
+    // second anchors directly at the assistant turn "3a47185e".
+    assert_eq!(comps[0].kept_from.as_deref(), Some("b51e82ae"));
+    assert_eq!(comps[1].kept_from.as_deref(), Some("3a47185e"));
 }
 
 #[test]
@@ -174,6 +174,23 @@ fn real_fixture_compactions_and_turns_survive_roundtrip() {
     }
 }
 
+/// Project a view to Pi JSONL and read it back — one full native cycle.
+fn project_and_reread(view: &ConversationView) -> ConversationView {
+    let session = PiProjector::new().project(view).expect("project");
+    let lines: Vec<String> = session
+        .entries
+        .iter()
+        .map(|e| serde_json::to_string(e).expect("serialize pi entry"))
+        .collect();
+    let tmp = tempfile::Builder::new()
+        .suffix(".jsonl")
+        .tempfile()
+        .expect("tempfile");
+    std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
+    let reread = reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
+    session_to_view(&reread)
+}
+
 #[test]
 fn projector_output_is_re_parseable_by_reader() {
     let view = load_view();
@@ -192,6 +209,15 @@ fn projector_output_is_re_parseable_by_reader() {
         .expect("tempfile");
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
+}
+
+#[test]
+fn projection_roundtrip_satisfies_fixpoint_contract() {
+    for source in [load_view(), load_real_view()] {
+        let once = project_and_reread(&source);
+        let twice = project_and_reread(&once);
+        toolpath_convo::testing::assert_fixpoint(&source, &once, &twice);
+    }
 }
 
 /// Direct projection round-trip on the real two-compaction fixture:
@@ -238,12 +264,13 @@ fn projector_reconstructs_compaction_entries() {
         assert!(c.summary.is_some(), "summary survives projection");
         assert!(c.pre_tokens.is_some(), "pre_tokens survives projection");
         assert_eq!(c.trigger, None, "Pi doesn't persist auto-vs-manual");
-        assert!(!c.kept.is_empty(), "kept survives projection");
+        assert!(c.kept_from.is_some(), "kept_from survives projection");
     }
-    // The anchor (`kept.first()`) round-trips through projection: it's
-    // written back as `firstKeptEntryId` and recovered on re-read.
-    assert_eq!(comps[0].kept, vec!["4cc7b46c".to_string()]);
-    assert_eq!(comps[1].kept, vec!["3a47185e".to_string()]);
+    // The anchor round-trips through projection: it's written back as
+    // `firstKeptEntryId` — a turn id the projector actually writes — and
+    // recovered on re-read.
+    assert_eq!(comps[0].kept_from.as_deref(), Some("b51e82ae"));
+    assert_eq!(comps[1].kept_from.as_deref(), Some("3a47185e"));
 
     // Each compaction is positioned in the entry stream after the turns
     // it summarizes — never the first item, always preceded by a turn.

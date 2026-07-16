@@ -53,6 +53,11 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
     extract_conversation(&path)
 }
 
+fn project_and_reread(view: &ConversationView) -> ConversationView {
+    let convo = ClaudeProjector.project(view).expect("project view");
+    toolpath_claude::provider::to_view(&convo)
+}
+
 #[test]
 fn fixture_loads_without_panic() {
     let view = load_view();
@@ -189,6 +194,32 @@ fn projector_output_is_re_parseable_by_reader() {
         .expect("tempfile");
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     ConversationReader::read_conversation(tmp.path()).expect("re-read projected JSONL");
+}
+
+#[test]
+fn projection_fixpoint_holds() {
+    // Shared oracle: one projection may normalize (re-mint the summary uuid,
+    // reorder events), but a second cycle must be the identity, the
+    // compaction payload must survive the first, and both output views must
+    // satisfy the structural invariants.
+    let source = load_view();
+    let once = project_and_reread(&source);
+    let twice = project_and_reread(&once);
+    toolpath_convo::testing::assert_fixpoint(&source, &once, &twice);
+
+    // Claude→Claude projection preserves turn uuids, so the parent chain
+    // must survive verbatim — including the first post-boundary turn, which
+    // chains through the compaction on both sides of the trip.
+    let parents = |v: &ConversationView| -> Vec<(String, Option<String>)> {
+        v.turns()
+            .map(|t| (t.id.clone(), t.parent_id.clone()))
+            .collect()
+    };
+    assert_eq!(
+        parents(&source),
+        parents(&once),
+        "turn parent chain changed across projection"
+    );
 }
 
 #[test]

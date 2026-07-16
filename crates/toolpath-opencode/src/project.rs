@@ -152,8 +152,12 @@ fn project_view(
     // IR turn id → the message id we re-mint for it, so a compaction's kept
     // tail anchor (an IR turn id) can be rewritten to the id the projected
     // session actually carries — otherwise `tailStartID` would dangle and the
-    // kept set would collapse to empty on re-read.
+    // kept anchor would collapse to `None` on re-read.
     let mut id_map: HashMap<String, String> = HashMap::new();
+    // Indexes (into `messages`) of boundary messages projected from a
+    // wholesale compaction (`kept_from: None`). Their `tailStartID` is the
+    // first message written after the boundary, patched in once it exists.
+    let mut wholesale_boundaries: Vec<usize> = Vec::new();
 
     let default_provider = cfg
         .default_model_provider
@@ -215,15 +219,23 @@ fn project_view(
                 // boundary carries a summary, emit the synthetic summary
                 // user message the forward path reads from
                 // `UserMessage.summary.body`.
-                // Rewrite the kept-tail anchor (an IR turn id) to the message
-                // id we minted for that turn, so it matches a real message on
-                // re-read. Falls back to the raw id when the anchor wasn't a
-                // projected turn (e.g. a non-contiguous kept set).
+                // Rewrite the kept anchor (an IR turn id) to the message id
+                // we minted for that turn, so it matches a real message on
+                // re-read. A wholesale boundary (`kept_from: None`) instead
+                // anchors on the first message written after it — patched in
+                // below — or omits `tailStartID` when nothing follows.
+                // Synthetic boundary/summary messages don't advance
+                // `prev_msg_id`: assistant turns parent on the previous
+                // conversational message, never on a marker message that
+                // won't re-read as a turn.
                 let tail_anchor = c
-                    .kept
-                    .first()
+                    .kept_from
+                    .as_ref()
                     .map(|k| id_map.get(k).cloned().unwrap_or_else(|| k.clone()));
-                for msg in build_compaction_messages(
+                if tail_anchor.is_none() {
+                    wholesale_boundaries.push(messages.len());
+                }
+                messages.extend(build_compaction_messages(
                     c,
                     tail_anchor,
                     &session_id,
@@ -231,10 +243,7 @@ fn project_view(
                     &agent,
                     &default_provider,
                     &default_model,
-                ) {
-                    prev_msg_id = Some(msg.id.clone());
-                    messages.push(msg);
-                }
+                ));
             }
             toolpath_convo::Item::Event(_) => {
                 // Non-conversational events have no opencode message form;
@@ -242,6 +251,22 @@ fn project_view(
             }
         }
     }
+
+    for idx in wholesale_boundaries {
+        let next_id = match messages.get(idx + 1) {
+            Some(m) => m.id.clone(),
+            None => continue,
+        };
+        if let Some(msg) = messages.get_mut(idx) {
+            for part in &mut msg.parts {
+                if let PartData::Compaction(cp) = &mut part.data {
+                    cp.tail_start_id = Some(next_id.clone());
+                }
+            }
+        }
+    }
+
+    monotonize_times(&mut messages);
 
     Ok(Session {
         id: session_id,
@@ -262,6 +287,38 @@ fn project_view(
         time_archived: None,
         messages,
     })
+}
+
+/// Force strictly increasing `time_created` across the emitted message
+/// sequence. The real reader orders rows by `time_created ASC, id ASC`,
+/// so a message whose native time is at-or-before its predecessor's (e.g.
+/// a compaction boundary stamped later than the host assistant message
+/// that follows it) would MOVE on re-read. Bumping each such message to
+/// its predecessor's time + 1 keeps re-read order identical to emission
+/// order.
+fn monotonize_times(messages: &mut [Message]) {
+    let mut prev: Option<i64> = None;
+    for msg in messages {
+        let t = match prev {
+            Some(p) if msg.time_created <= p => p + 1,
+            _ => msg.time_created,
+        };
+        if t != msg.time_created {
+            msg.time_created = t;
+            msg.time_updated = msg.time_updated.max(t);
+            match &mut msg.data {
+                MessageData::User(u) => u.time.created = t,
+                MessageData::Assistant(a) => {
+                    a.time.created = t;
+                    if a.time.completed.is_some_and(|c| c < t) {
+                        a.time.completed = Some(t);
+                    }
+                }
+                MessageData::Other => {}
+            }
+        }
+        prev = Some(t);
+    }
 }
 
 fn build_user_message(
@@ -990,7 +1047,8 @@ mod tests {
             trigger: Some(CompactionTrigger::Auto),
             summary: Some("condensed".into()),
             pre_tokens: None,
-            kept: vec!["a1".into()],
+            kept_from: Some("a1".into()),
+            extra: std::collections::HashMap::new(),
         }));
 
         let s = OpencodeProjector::default().project(&view).unwrap();

@@ -109,7 +109,11 @@
           "type": "array",
           "items": { "$ref": "#/$defs/delegation" }
         },
-        "environment": { "$ref": "#/$defs/environment" }
+        "environment": { "$ref": "#/$defs/environment" },
+        "source_parent": {
+          "type": ["string", "null"],
+          "description": "The pre-splice source parent (null for a source root), recorded when derive-splicing rewired the step's `parents` through intervening event steps — lets consumers restore the original source linkage exactly."
+        }
       },
       "required": ["type", "role", "text"]
     },
@@ -142,7 +146,7 @@
 
     "conversationCompact": {
       "type": "object",
-      "description": "The `structural` object of a `conversation.compact` change — a context-compaction boundary. Sits as its own step between the turns it separates; only `type` is required and every other field appears only when the source records it.",
+      "description": "The `structural` object of a `conversation.compact` change — a context-compaction boundary. Sits as its own step between the turns it separates; only `type` is required and every other field appears only when the producer has it.",
       "properties": {
         "type": { "const": "conversation.compact" },
         "trigger": { "type": "string", "enum": ["auto", "manual"] },
@@ -150,8 +154,16 @@
         "pre_tokens": { "type": "number" },
         "kept": {
           "type": "array",
-          "description": "Ids of the prior turns that survive verbatim into the post-compaction context window. May be non-contiguous. Empty = wholesale (the summary replaced everything).",
+          "description": "Ids of the prior turns that survive verbatim into the post-compaction context window — always a contiguous parent-chain run, oldest first, whose first element is the anchor (the oldest surviving turn). Empty = wholesale (the summary replaced everything). Non-contiguous native detail belongs in `extra` under the provider's key.",
           "items": { "type": "string" }
+        },
+        "extra": {
+          "type": "object",
+          "description": "Provider-namespaced native compaction detail that doesn't fit the harness-agnostic fields, keyed by provider (e.g. `extra[\"claude\"][\"preserved_uuids\"]` — Claude's verbatim preservedMessages set, which may be non-contiguous). Preserved across round-trips; projectors other than the native one ignore it."
+        },
+        "source_parent": {
+          "type": ["string", "null"],
+          "description": "The pre-splice source parent (null for a source root), recorded when derive-splicing rewired the step's `parents` through intervening event steps — lets consumers restore the original source linkage exactly."
         }
       },
       "required": ["type"]

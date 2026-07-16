@@ -165,14 +165,20 @@ fn project_view(
 
     // Walk `view.items` in order so compaction boundaries land at their
     // true position in the entry stream (between the surrounding turns).
-    for item in &view.items {
+    for (idx, item) in view.items.iter().enumerate() {
         match item {
             Item::Turn(turn) => {
                 let pi = pi_extras(turn).cloned().unwrap_or_default();
                 emit_pending_meta(&mut entries, turn, &pi);
                 emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
             }
-            Item::Compaction(comp) => emit_compaction(comp, &mut entries),
+            Item::Compaction(comp) => {
+                let next_turn_id = view.items[idx + 1..]
+                    .iter()
+                    .find_map(Item::as_turn)
+                    .map(|t| t.id.as_str());
+                emit_compaction(comp, next_turn_id, &mut entries);
+            }
             Item::Event(_) => {}
         }
     }
@@ -555,13 +561,17 @@ fn emit_bash_execution(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<E
 /// Reconstruct a Pi `Entry::Compaction` from an `Item::Compaction`.
 /// This is the inverse of the forward path's `Item::Compaction` mapping
 /// in [`crate::provider::session_to_view`].
-fn emit_compaction(comp: &Compaction, entries: &mut Vec<Entry>) {
+fn emit_compaction(comp: &Compaction, next_turn_id: Option<&str>, entries: &mut Vec<Entry>) {
     let summary = comp.summary.clone().unwrap_or_default();
-    // Pi's format requires a single `firstKeptEntryId` anchor; the forward
-    // path expands it into a flat list of surviving turn ids, the earliest
-    // of which is the anchor. Recover it as the first kept id (empty string
-    // when nothing survived).
-    let first_kept_entry_id = comp.kept.first().cloned().unwrap_or_default();
+    // Pi's `firstKeptEntryId` names the first retained entry. `kept_from`
+    // is exactly that — a turn id this projection writes. A wholesale
+    // boundary retains everything from the next message on, so anchor
+    // there; when nothing follows, omit the field rather than writing an
+    // empty string that would re-read as a bogus anchor.
+    let first_kept_entry_id = comp
+        .kept_from
+        .clone()
+        .or_else(|| next_turn_id.map(str::to_string));
     entries.push(Entry::Compaction {
         base: EntryBase {
             id: comp.id.clone(),

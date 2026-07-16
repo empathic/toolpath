@@ -300,10 +300,12 @@ so far is `agent-coding-session`, currently at
 `https://toolpath.net/kinds/agent-coding-session/v1.2.0` — a path recording an
 AI coding conversation, where each conversational-turn step carries a
 `"conversation.append"` structural change with the turn's role, text, and so
-on, and context-compaction boundaries carry a `"conversation.compact"` step.
-The earlier `v1.1.0` URI (message-level token accounting, without
-`conversation.compact`) and `v1.0.0` URI both remain valid and documented. See
-the linked spec for the full contract.
+on, and context-compaction boundaries carry a `"conversation.compact"` step
+whose `kept` list names the prior turns that survived into the post-compaction
+window — always a contiguous parent-chain run, oldest first, anchored at its
+first element. The earlier `v1.1.0` URI (message-level token accounting,
+without `conversation.compact`) and `v1.0.0` URI both remain valid and
+documented. See the linked spec for the full contract.
 
 #### Actor Definitions
 

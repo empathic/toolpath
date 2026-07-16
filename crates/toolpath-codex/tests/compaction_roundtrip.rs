@@ -9,8 +9,8 @@
 //! (see `docs/agents/formats/codex.md`). Only `message` is consumed, as
 //! `Compaction.summary`. Codex never persists the manual-vs-auto trigger
 //! or the pre-compaction token count, and we don't fold in
-//! `replacement_history`, so `trigger`/`pre_tokens` are `None` and `kept`
-//! is empty.
+//! `replacement_history`, so `trigger`/`pre_tokens` are `None` and
+//! `kept_from` is `None` (wholesale).
 //!
 //! Two fixtures:
 //!   - synthetic `tests/fixtures/compacted_session.jsonl` — small,
@@ -71,6 +71,25 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
     extract_conversation(&path)
 }
 
+/// One native cycle: project the view to a Codex session, serialize it to
+/// JSONL, re-read through `RolloutReader`, and run `to_view`.
+fn native_roundtrip(view: &ConversationView) -> ConversationView {
+    let session = CodexProjector::new().project(view).expect("project");
+    let body = session
+        .lines
+        .iter()
+        .map(|l| serde_json::to_string(l).expect("serialize rollout line"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tmp = tempfile::Builder::new()
+        .suffix(".jsonl")
+        .tempfile()
+        .expect("tempfile");
+    std::fs::write(tmp.path(), body).expect("write tempfile");
+    let reread = RolloutReader::read_session(tmp.path()).expect("re-read projected JSONL");
+    to_view(&reread)
+}
+
 /// Index of the single compaction in the item stream, asserting there is
 /// exactly one.
 fn sole_compaction_index(view: &ConversationView) -> usize {
@@ -117,10 +136,10 @@ fn synthetic_emits_one_compaction_with_codex_field_shape() {
         )
     );
     // Codex never persists trigger or pre-token count; we don't consume
-    // replacement_history, so no kept ranges.
+    // replacement_history, so no kept anchor (wholesale).
     assert_eq!(c.trigger, None);
     assert_eq!(c.pre_tokens, None);
-    assert!(c.kept.is_empty());
+    assert!(c.kept_from.is_none());
     // Synthesized stable id, and a parent that links to the prior turn.
     assert_eq!(c.id, "compact-1");
     assert!(
@@ -202,6 +221,14 @@ fn synthetic_projector_output_is_re_parseable_by_reader() {
     RolloutReader::read_session(tmp.path()).expect("re-read projected JSONL");
 }
 
+#[test]
+fn synthetic_projection_fixpoint() {
+    let source = load_view(synthetic_fixture_path());
+    let once = native_roundtrip(&source);
+    let twice = native_roundtrip(&once);
+    toolpath_convo::testing::assert_fixpoint(&source, &once, &twice);
+}
+
 // ── Real captured fixture ───────────────────────────────────────────
 
 #[test]
@@ -214,14 +241,14 @@ fn real_fixture_emits_one_compaction() {
 
     // The real capture's `message` is the empty string, so summary is
     // `Some("")` — present but empty. The remaining fields follow the
-    // Codex payload shape: no trigger, no pre-token count, no kept ranges.
+    // Codex payload shape: no trigger, no pre-token count, no kept anchor.
     assert!(
         c.summary.is_some(),
         "summary should be Some (message field present, even if empty)"
     );
     assert_eq!(c.trigger, None);
     assert_eq!(c.pre_tokens, None);
-    assert!(c.kept.is_empty());
+    assert!(c.kept_from.is_none());
     assert!(
         c.parent_id.is_some(),
         "compaction should parent on the prior turn"
@@ -271,6 +298,14 @@ fn real_fixture_projector_output_is_re_parseable_by_reader() {
         .expect("tempfile");
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     RolloutReader::read_session(tmp.path()).expect("re-read projected JSONL");
+}
+
+#[test]
+fn real_fixture_projection_fixpoint() {
+    let source = load_view(real_fixture_path());
+    let once = native_roundtrip(&source);
+    let twice = native_roundtrip(&once);
+    toolpath_convo::testing::assert_fixpoint(&source, &once, &twice);
 }
 
 /// View → Codex `Session` → JSONL → `Session` → view: the compaction
@@ -335,7 +370,7 @@ fn real_fixture_projection_round_trips_compaction() {
     assert_eq!(c.summary, orig_summary, "summary should round-trip");
     assert_eq!(c.trigger, None, "Codex never persists the trigger");
     assert!(c.pre_tokens.is_none());
-    assert!(c.kept.is_empty());
+    assert!(c.kept_from.is_none());
 
     // The compaction sits between turns: a turn precedes it and a turn
     // follows it in the re-read item stream.

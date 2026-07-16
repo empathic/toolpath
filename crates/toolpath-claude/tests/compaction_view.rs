@@ -14,7 +14,7 @@ use toolpath::v1::Graph;
 use toolpath_claude::{ClaudeProjector, ConversationReader};
 use toolpath_convo::{
     CompactionTrigger, ConversationProjector, ConversationView, DeriveConfig, Item, derive_path,
-    extract_conversation,
+    expand_kept, extract_conversation, testing::assert_fixpoint,
 };
 
 /// The real captured Claude session with one manual compaction boundary.
@@ -79,15 +79,27 @@ fn boundary_becomes_single_compaction_item_with_expected_fields() {
         c.pre_tokens.is_some(),
         "preTokens carried from compactMetadata"
     );
+    let preserved = vec![
+        "8a1c3178-ba2b-43cc-a376-3ad159a03d25".to_string(),
+        "1b85db73-91ac-4095-a45e-6feb3e495282".to_string(),
+    ];
     assert_eq!(
-        c.kept,
-        vec![
-            "8a1c3178-ba2b-43cc-a376-3ad159a03d25".to_string(),
-            "1b85db73-91ac-4095-a45e-6feb3e495282".to_string(),
-        ],
-        "kept = the de-duplicated union of preservedMessages.uuids and the \
-         re-emitted (replayed) set; this fixture has no re-emission, so it's \
-         exactly the two preserved-tail uuids"
+        c.extra.get("claude").and_then(|v| v.get("preserved_uuids")),
+        Some(&serde_json::json!(preserved)),
+        "extra[\"claude\"][\"preserved_uuids\"] = the de-duplicated union of \
+         preservedMessages.uuids and the re-emitted (replayed) set; this \
+         fixture has no re-emission, so it's exactly the two preserved-tail \
+         uuids"
+    );
+    assert_eq!(
+        c.kept_from.as_deref(),
+        Some("8a1c3178-ba2b-43cc-a376-3ad159a03d25"),
+        "kept_from = the oldest preserved turn on the boundary's parent chain"
+    );
+    assert_eq!(
+        expand_kept(&view.items, c),
+        preserved,
+        "the anchor expands back to the full contiguous preserved tail"
     );
     assert!(
         c.parent_id.is_some(),
@@ -148,7 +160,13 @@ fn compaction_roundtrips_through_derive_and_extract() {
     assert_eq!(after_c.trigger, orig_c.trigger, "trigger diverged");
     assert_eq!(after_c.summary, orig_c.summary, "summary diverged");
     assert_eq!(after_c.pre_tokens, orig_c.pre_tokens, "pre_tokens diverged");
-    assert_eq!(after_c.kept, orig_c.kept, "kept ranges diverged");
+    assert_eq!(after_c.kept_from, orig_c.kept_from, "kept_from diverged");
+    assert_eq!(after_c.extra, orig_c.extra, "provider extra diverged");
+    assert_eq!(
+        expand_kept(&after.items, after_c),
+        expand_kept(&original.items, &orig_c),
+        "kept runs diverged"
+    );
     assert_eq!(after_c.parent_id, orig_c.parent_id, "parent_id diverged");
 }
 
@@ -184,7 +202,27 @@ fn compaction_survives_projection_roundtrip() {
     let orig_c = only_compaction(&original).clone();
 
     // view → project (emit boundary + summary entries) → to_view (re-fold).
+    // The shared oracle asserts the full contract: idempotency (a second
+    // cycle is the identity), summary/trigger/kept-anchor/boundary-position
+    // survival, and structural invariants on both output views.
     let after = project_and_reread(&original);
+    let twice = project_and_reread(&after);
+    assert_fixpoint(&original, &after, &twice);
+
+    // Claude→Claude projection preserves turn uuids, so the parent chain
+    // must survive verbatim — including the first post-boundary turn, which
+    // chains through the compaction on both sides of the trip.
+    let parents = |v: &ConversationView| -> Vec<(String, Option<String>)> {
+        v.turns()
+            .map(|t| (t.id.clone(), t.parent_id.clone()))
+            .collect()
+    };
+    assert_eq!(
+        parents(&original),
+        parents(&after),
+        "turn parent chain changed across projection"
+    );
+
     let after_c = only_compaction(&after);
 
     assert_eq!(after_c.trigger, orig_c.trigger, "trigger diverged");
@@ -194,7 +232,13 @@ fn compaction_survives_projection_roundtrip() {
         "summary presence diverged"
     );
     assert_eq!(after_c.pre_tokens, orig_c.pre_tokens, "pre_tokens diverged");
-    assert_eq!(after_c.kept, orig_c.kept, "kept ranges diverged");
+    assert_eq!(after_c.kept_from, orig_c.kept_from, "kept_from diverged");
+    assert_eq!(after_c.extra, orig_c.extra, "provider extra diverged");
+    assert_eq!(
+        expand_kept(&after.items, after_c),
+        expand_kept(&original.items, &orig_c),
+        "kept runs diverged"
+    );
 
     // The re-folded compaction must sit between turns, not at an edge.
     let pos = after
@@ -227,9 +271,10 @@ fn compaction_survives_projection_roundtrip() {
 }
 
 /// The re-emission strip keeps step ids unique so `derive_path` succeeds, the
-/// `Compaction.kept` set is populated, every surviving turn appears exactly
+/// boundary's preserved set (`extra["claude"]["preserved_uuids"]`) and
+/// `kept_from` anchor are populated, every surviving turn appears exactly
 /// once, and the compaction survives a project → re-read roundtrip with the
-/// same `kept`.
+/// same preserved set.
 #[test]
 fn re_emission_is_stripped_and_kept_round_trips() {
     use std::collections::HashSet;
@@ -258,16 +303,35 @@ fn re_emission_is_stripped_and_kept_round_trips() {
         );
     }
 
-    // kept is populated.
+    // The preserved set and its anchor are populated.
     let c = only_compaction(&view);
-    assert!(!c.kept.is_empty(), "Compaction.kept should be populated");
+    let preserved = c
+        .extra
+        .get("claude")
+        .and_then(|v| v.get("preserved_uuids"))
+        .and_then(|v| v.as_array())
+        .expect("preserved_uuids should be populated");
+    assert!(!preserved.is_empty(), "preserved_uuids should be non-empty");
+    assert!(c.kept_from.is_some(), "kept_from anchor should be resolved");
 
-    // Reverse: project (re-synthesizing the replay block) → re-read. The
-    // compaction survives with the same `kept`, and re-reading still produces
-    // unique step ids (the re-synthesized replay block is stripped again).
+    // Reverse: project → re-read. The compaction survives with the same
+    // preserved set and anchor, and re-reading still produces unique step
+    // ids.
     let after = project_and_reread(&view);
     let after_c = only_compaction(&after);
-    assert_eq!(after_c.kept, c.kept, "kept diverged after projection");
+    assert_eq!(
+        after_c.extra, c.extra,
+        "preserved set diverged after projection"
+    );
+    assert_eq!(
+        after_c.kept_from, c.kept_from,
+        "kept_from diverged after projection"
+    );
+    assert_eq!(
+        expand_kept(&after.items, after_c),
+        expand_kept(&view.items, c),
+        "kept run diverged after projection"
+    );
 
     let path2 = derive_path(&after, &DeriveConfig::default());
     let mut ids2 = HashSet::new();

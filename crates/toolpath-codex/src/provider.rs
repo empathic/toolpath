@@ -708,8 +708,9 @@ impl<'a> Builder<'a> {
     /// consumed (as `summary`). The trigger (manual vs. auto) and
     /// pre-compaction token count are never persisted to the rollout, and
     /// `replacement_history` is a wholesale replacement we don't fold in, so
-    /// `trigger`/`pre_tokens` are `None` and `kept` is empty. The marker
-    /// carries no id of its own, so we synthesize a stable `compact-<n>`.
+    /// `trigger`/`pre_tokens` are `None` and `kept_from` is `None`
+    /// (wholesale). The marker carries no id of its own, so we synthesize a
+    /// stable `compact-<n>`.
     /// See `docs/agents/formats/codex.md`.
     fn handle_compacted(&mut self, timestamp: &str, payload: &Value) {
         self.compact_count += 1;
@@ -724,7 +725,8 @@ impl<'a> Builder<'a> {
             trigger: None,
             summary,
             pre_tokens: None,
-            kept: Vec::new(),
+            kept_from: None,
+            extra: HashMap::new(),
         };
         // Buffer index of the last turn pushed before this marker; the
         // compaction is slotted right after it during assembly, and its

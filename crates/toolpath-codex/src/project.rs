@@ -25,7 +25,7 @@
 //! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
 //! Codex's protocol and would pollute the JSONL.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
@@ -188,6 +188,7 @@ fn project_view(
     // `running` exactly once — on the group's final turn — rather than once
     // per member, which would double-count.
     let group_last_idx = group_last_indices(view);
+    let group_attributed = groups_with_attribution(view);
 
     // Walk the full ordered item stream so compaction boundaries land at
     // their true position between the surrounding turns. Events have no
@@ -211,7 +212,8 @@ fn project_view(
                 }
                 let codex = codex_extras(turn).cloned().unwrap_or_default();
                 let is_final_assistant = Some(turn_idx) == last_assistant_idx;
-                let contribution = running_contribution(turn, turn_idx, &group_last_idx);
+                let contribution =
+                    running_contribution(turn, turn_idx, &group_last_idx, &group_attributed);
                 emit_turn_lines(
                     turn,
                     &codex,
@@ -248,25 +250,40 @@ fn group_last_indices(view: &ConversationView) -> HashMap<String, usize> {
     last
 }
 
+/// Groups in which any member carries `attributed_token_usage`. In such a
+/// group the attributions already sum to the group total, so a member's
+/// bare `token_usage` (the stamped group total) must not advance `running`
+/// on top of them.
+fn groups_with_attribution(view: &ConversationView) -> HashSet<String> {
+    view.turns()
+        .filter(|t| t.attributed_token_usage.is_some())
+        .filter_map(|t| t.group_id.clone())
+        .collect()
+}
+
 /// The per-step usage this turn contributes to the session-cumulative
 /// `running` counter (and thus the `token_count` line emitted after it):
 ///
 /// - `attributed_token_usage` when the source reports a per-step split
 ///   (codex-native): each member of a group carries its own slice, summing
 ///   to the group total.
-/// - otherwise the turn's `token_usage` — but for a grouped turn whose total
-///   is repeated on every member (no per-step split), only on the group's
-///   last turn, so the message total is counted once, not once per member.
+/// - otherwise the turn's `token_usage` — but only when no member of the
+///   group carries an attribution (those already advanced `running` by the
+///   full group total), and for a grouped turn whose total is repeated on
+///   every member (no per-step split), only on the group's last turn, so
+///   the message total is counted once, not once per member.
 fn running_contribution<'a>(
     turn: &'a Turn,
     turn_idx: usize,
     group_last_idx: &HashMap<String, usize>,
+    group_attributed: &HashSet<String>,
 ) -> Option<&'a toolpath_convo::TokenUsage> {
     if let Some(attr) = turn.attributed_token_usage.as_ref() {
         return Some(attr);
     }
     let usage = turn.token_usage.as_ref()?;
     match &turn.group_id {
+        Some(mid) if group_attributed.contains(mid) => None,
         Some(mid) if group_last_idx.get(mid) != Some(&turn_idx) => None,
         _ => Some(usage),
     }
@@ -1148,6 +1165,59 @@ mod tests {
         // Counted once: 20, not 40.
         assert_eq!(last["output_tokens"], 20);
         assert_eq!(last["input_tokens"], 100);
+    }
+
+    #[test]
+    fn attributed_group_total_does_not_advance_running_again() {
+        // A group whose interior members carry per-step attributions and
+        // whose final turn carries only the stamped group total: the
+        // attributions (40 + 60) already advance `running` by the full
+        // group total, so the group-final's bare `token_usage` must not
+        // advance it again — otherwise the cumulative ends at 200 and a
+        // re-read attributes double the real spend.
+        let mut a1 = assistant_turn("a1", "first");
+        a1.group_id = Some("g".into());
+        a1.token_usage = None;
+        a1.attributed_token_usage = Some(TokenUsage {
+            output_tokens: Some(40),
+            ..Default::default()
+        });
+        let mut a2 = assistant_turn("a2", "second");
+        a2.group_id = Some("g".into());
+        a2.token_usage = None;
+        a2.attributed_token_usage = Some(TokenUsage {
+            output_tokens: Some(60),
+            ..Default::default()
+        });
+        let mut a3 = assistant_turn("a3", "answer");
+        a3.group_id = Some("g".into());
+        a3.token_usage = Some(TokenUsage {
+            output_tokens: Some(100),
+            ..Default::default()
+        });
+        a3.attributed_token_usage = None;
+
+        let s = CodexProjector::default()
+            .project(&view_with(vec![a1, a2, a3]))
+            .unwrap();
+
+        let totals: Vec<&Value> = s
+            .lines
+            .iter()
+            .filter(|l| l.payload.get("type").and_then(Value::as_str) == Some("token_count"))
+            .map(|l| &l.payload["info"]["total_token_usage"])
+            .collect();
+        let last = totals.last().expect("a token_count line");
+        assert_eq!(last["output_tokens"], 100, "cumulative must end at 100");
+
+        // Re-read: the differenced deltas attribute 100 total, not 200.
+        let view = crate::to_view(&s);
+        let attributed: u32 = view
+            .turns()
+            .filter_map(|t| t.attributed_token_usage.as_ref())
+            .filter_map(|u| u.output_tokens)
+            .sum();
+        assert_eq!(attributed, 100);
     }
 
     #[test]

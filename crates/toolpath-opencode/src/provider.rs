@@ -232,22 +232,22 @@ impl<'a> Builder<'a> {
         } else {
             CompactionTrigger::Manual
         });
-        // `tail_start_id` anchors the kept tail. When present, the kept
-        // tail is every turn from it through the last turn before the
-        // boundary; absent means the whole prior context was condensed.
-        let kept = match &c.tail_start_id {
-            Some(anchor) => self
-                .items
-                .iter()
-                .filter_map(|item| match item {
-                    Item::Turn(t) => Some(&t.id),
-                    _ => None,
-                })
-                .skip_while(|id| *id != anchor)
-                .cloned()
-                .collect(),
-            None => Vec::new(),
-        };
+        // `tailStartID` names the first message of the post-compaction
+        // tail. When it resolves to a turn emitted *before* the boundary,
+        // that turn is the anchor of the kept run (`kept_from`). When it
+        // lands at-or-after the boundary (e.g. the part rides on the host
+        // assistant message and names it) no prior turn survives — and
+        // post-boundary turns are trivially in context — so `kept_from`
+        // is `None`, same as an absent anchor.
+        let kept_from = c
+            .tail_start_id
+            .as_ref()
+            .filter(|anchor| {
+                self.items
+                    .iter()
+                    .any(|item| matches!(item, Item::Turn(t) if &t.id == *anchor))
+            })
+            .cloned();
         self.items.push(Item::Compaction(Compaction {
             id: part.id.clone(),
             parent_id: self.last_turn_id.clone(),
@@ -258,7 +258,8 @@ impl<'a> Builder<'a> {
             // single session-global summary shared across boundaries.
             summary: None,
             pre_tokens: None,
-            kept,
+            kept_from,
+            extra: HashMap::new(),
         }));
         self.pending_compaction_idx = Some(self.items.len() - 1);
     }
@@ -1253,9 +1254,14 @@ mod tests {
             "compaction parents on the last turn before it (the assistant turn)"
         );
         assert_eq!(
-            c.kept,
+            c.kept_from.as_deref(),
+            Some("mu"),
+            "tailStartID names a prior turn ⇒ it anchors the kept run"
+        );
+        assert_eq!(
+            toolpath_convo::expand_kept(&view.items, c),
             vec!["mu".to_string(), "ma".to_string()],
-            "tailStartId present ⇒ surviving turn ids from anchor to last pre-compaction turn"
+            "parent-chain expansion recovers the surviving run from anchor to boundary"
         );
 
         // Item order: user turn, assistant turn, then the compaction.
