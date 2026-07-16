@@ -56,6 +56,7 @@ echo
 # Safety net: if the Pi driver patched settings.json and the script dies
 # mid-pass, restore it on exit. Format: "<backup-path>::<dest-path>".
 PI_SETTINGS_RESTORE=""
+# shellcheck disable=SC2329  # invoked via the EXIT trap two lines down
 on_exit() {
     if [[ -n "${PI_SETTINGS_RESTORE:-}" ]]; then
         local bak="${PI_SETTINGS_RESTORE%%::*}" dst="${PI_SETTINGS_RESTORE##*::}"

@@ -12,6 +12,6 @@ Kind URIs are immutable: revisions ship at a new version URI, and old URIs keep 
 
 ## Defined kinds
 
-| Kind                                                   | Current URI                                              | Spec                                          |
-| ------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------- |
+| Kind                                                   | Current URI                                              | Spec                                                                                                                                        |
+| ------------------------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.2.0` | [v1.2.0](/kinds/agent-coding-session/v1.2.0/), [v1.1.0](/kinds/agent-coding-session/v1.1.0/), [v1.0.0](/kinds/agent-coding-session/v1.0.0/) |

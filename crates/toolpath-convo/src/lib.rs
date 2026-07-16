@@ -269,7 +269,7 @@ pub struct Compaction {
 /// off the boundary's ancestry) are never included, no matter where they
 /// sit in file order. Returns an empty list when `kept_from` is `None`
 /// (wholesale) or when the anchor is not on the boundary's parent chain
-/// (an inconsistency [`check_view_invariants`] reports).
+/// (an inconsistency [`testing::check_view_invariants`] reports).
 pub fn expand_kept(items: &[Item], boundary: &Compaction) -> Vec<String> {
     let Some(anchor) = boundary.kept_from.as_deref() else {
         return Vec::new();
