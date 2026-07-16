@@ -600,3 +600,26 @@ fn input_only_query_never_touches_the_cache() {
         .stdout(predicate::str::contains("true"));
     assert!(!cfg.path().join("sync.json").exists());
 }
+
+#[test]
+fn query_parent_dir_scopes_sync_and_read() {
+    let home = claude_home();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+
+    // Constraint matches the session's project: ingested and read.
+    fixture_query(
+        &home,
+        cfg.path(),
+        ["--parent-dir", project.to_str().unwrap(), "length > 0"],
+    )
+    .success()
+    .stdout(predicate::str::contains("true"))
+    .stderr(predicate::str::contains("synced claude: 1 new"));
+
+    // Constraint elsewhere: nothing read, nothing new ingested.
+    fixture_query(&home, cfg.path(), ["--parent-dir", "/nowhere", "length"])
+        .success()
+        .stdout(predicate::str::contains("0"))
+        .stderr(predicate::str::contains("synced").not());
+}
