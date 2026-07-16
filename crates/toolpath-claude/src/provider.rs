@@ -123,11 +123,23 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
     Turn {
         id: entry.uuid.clone(),
         parent_id: entry.parent_uuid.clone(),
-        // The API message ID (`msg_…`). Claude Code writes one JSONL line
-        // per content block, so several turns can share one group_id —
-        // and each repeats the message-level `usage`. Downstream accounting
-        // (sum_usage, derive_path) counts a message group once.
-        group_id: msg.id.clone(),
+        // Group key: the API message ID (`msg_…`). Claude Code writes one
+        // JSONL line per content block, so several turns can share one
+        // group_id — and each repeats the message-level `usage`. Downstream
+        // accounting (sum_usage, derive_path) counts a message group once.
+        //
+        // Some captures omit `message.id`. The entry-level `requestId` still
+        // identifies the API request for assistant entries — Anthropic's
+        // request ID is "useful for deduping streamed messages" (one
+        // assistant message per request; see
+        // docs/agents/formats/claude-code/jsonl-envelope.md) — so it's the
+        // natural fallback: split lines of an id-less message still dedupe
+        // their repeated usage. User entries never group.
+        group_id: msg.id.clone().or_else(|| {
+            (msg.role == MessageRole::Assistant)
+                .then(|| entry.request_id.clone())
+                .flatten()
+        }),
         role: claude_role_to_role(&msg.role),
         timestamp: entry.timestamp.clone(),
         text,
@@ -561,55 +573,72 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
 /// per-step attribution from them, and — the format being undocumented — we
 /// do not trust line order.
 ///
-/// For each consecutive `group_id` run this sets `token_usage` on the run's
-/// **final** turn to the field-wise **maximum** across the run (the message
-/// total — never under-counts whatever the stream order) and clears it from
-/// the others, so summing `token_usage` over turns yields session totals.
+/// Groups by `group_id` **globally**, not by consecutive run — multi-terminal
+/// writers can interleave a split message's lines non-contiguously (see
+/// docs/agents/formats/claude-code/known-issues.md, "Multi-terminal writes to
+/// the same project"). Treating an interleaved group as two contiguous runs
+/// would count the message total once per fragment; this sets `token_usage`
+/// on the group's **last occurrence** (by turn order) to the field-wise
+/// **maximum** across *all* the group's turns and clears it from the rest, so
+/// summing `token_usage` over turns yields session totals regardless of
+/// interleaving.
 fn canonicalize_message_usage(turns: &mut [Turn]) {
-    let mut i = 0;
-    while i < turns.len() {
-        let Some(mid) = turns[i].group_id.clone() else {
-            i += 1;
-            continue;
-        };
-        let mut j = i;
-        while j < turns.len() && turns[j].group_id.as_deref() == Some(mid.as_str()) {
-            j += 1;
-        }
+    use std::collections::HashMap;
 
-        // Message total = field-wise max across the run (the final streaming
-        // snapshot, found without trusting line order).
-        let mut total: Option<TokenUsage> = None;
-        for t in &turns[i..j] {
-            if let Some(u) = &t.token_usage {
-                total = Some(match total {
-                    Some(acc) => max_usage(&acc, u),
-                    None => u.clone(),
-                });
-            }
+    // gid -> (field-wise max across ALL occurrences, index of last occurrence).
+    let mut groups: HashMap<String, (Option<TokenUsage>, usize)> = HashMap::new();
+    for (i, t) in turns.iter().enumerate() {
+        let Some(gid) = &t.group_id else { continue };
+        let entry = groups.entry(gid.clone()).or_insert((None, i));
+        if let Some(u) = &t.token_usage {
+            entry.0 = Some(match &entry.0 {
+                Some(acc) => max_usage(acc, u),
+                None => u.clone(),
+            });
         }
+        entry.1 = i;
+    }
 
-        for t in &mut turns[i..j] {
+    for t in turns.iter_mut() {
+        if t.group_id.is_some() {
             t.token_usage = None;
         }
+    }
+    for (total, last) in groups.into_values() {
         if let Some(total) = total {
-            turns[j - 1].token_usage = Some(total);
+            turns[last].token_usage = Some(total);
         }
-        i = j;
     }
 }
 
 /// Sum token usage across all turns.
+///
+/// Adjacency-free: a turn's usage counts only when it has no `group_id`, or
+/// when it's the **last** turn (by index) carrying its `group_id` — computed
+/// by scanning for each gid's max index, not by checking the next turn, so
+/// interleaved (non-contiguous) groups still count once. Note the counted
+/// value is that last turn's **own** `token_usage`: it equals the message
+/// total only when the group's usage is repeated on every line or carried on
+/// the last line (or was already canonicalized to the field-wise max).
+/// Production always runs [`canonicalize_message_usage`] first, which
+/// guarantees that precondition.
 fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
+    use std::collections::HashMap;
+
+    let mut last_occurrence: HashMap<&str, usize> = HashMap::new();
+    for (idx, turn) in turns.iter().enumerate() {
+        if let Some(gid) = &turn.group_id {
+            last_occurrence.insert(gid.as_str(), idx);
+        }
+    }
+
     let mut total = TokenUsage::default();
     let mut any = false;
     for (idx, turn) in turns.iter().enumerate() {
-        // Turns split from one provider message all repeat that message's
-        // usage; count it once, on the run's last turn.
-        if let Some(mid) = &turn.group_id
-            && turns
-                .get(idx + 1)
-                .is_some_and(|next| next.group_id.as_ref() == Some(mid))
+        // Turns sharing a group_id all repeat that message's usage; count it
+        // once, on the group's last occurrence.
+        if let Some(gid) = &turn.group_id
+            && last_occurrence.get(gid.as_str()) != Some(&idx)
         {
             continue;
         }
@@ -929,6 +958,119 @@ mod tests {
         for t in &turns {
             assert!(t.attributed_token_usage.is_none());
         }
+    }
+
+    #[test]
+    fn interleaved_group_ids_still_count_message_usage_once() {
+        // Two terminals interleaving writes to the same project (see
+        // docs/agents/formats/claude-code/known-issues.md, "Multi-terminal
+        // writes to the same project") can split one message's lines
+        // non-contiguously: A(gid=m1), B(gid=m2), C(gid=m1). Adjacency-based
+        // grouping treats A and C as two independent one-line "runs" and
+        // counts msg_A's usage twice.
+        let turns_before = vec![
+            grp_turn("t1", "msg_A", 100),
+            grp_turn("t2", "msg_B", 50),
+            grp_turn("t3", "msg_A", 100),
+        ];
+
+        // sum_usage must be adjacency-free: correct even before
+        // canonicalization runs.
+        let total = sum_usage(&turns_before).unwrap();
+        assert_eq!(total.output_tokens, Some(150), "X + Y, not 2X + Y");
+
+        let mut turns = turns_before;
+        canonicalize_message_usage(&mut turns);
+
+        assert!(
+            turns[0].token_usage.is_none(),
+            "msg_A's first (non-last) fragment must not carry the total"
+        );
+        assert_eq!(
+            turns[1].token_usage.as_ref().unwrap().output_tokens,
+            Some(50),
+            "msg_B's only line keeps its usage"
+        );
+        assert_eq!(
+            turns[2].token_usage.as_ref().unwrap().output_tokens,
+            Some(100),
+            "msg_A's total lands on its LAST occurrence, not its first"
+        );
+
+        let total_after = sum_usage(&turns).unwrap();
+        assert_eq!(total_after.output_tokens, Some(150), "still X + Y after canonicalization");
+    }
+
+    /// An id-less assistant message split across content-block lines: two
+    /// entries share `requestId` but `message.id` is absent from both.
+    fn setup_idless_message_provider() -> (TempDir, ClaudeConvo) {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entries = [
+            r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Fix the bug"}}"#.to_string(),
+            r#"{"uuid":"uuid-2","type":"assistant","parentUuid":"uuid-1","timestamp":"2024-01-01T00:00:01Z","requestId":"req_1","message":{"role":"assistant","content":[{"type":"text","text":"Working on it."}],"model":"claude-opus-4-7","stop_reason":null,"usage":{"input_tokens":5,"output_tokens":10}}}"#.to_string(),
+            r#"{"uuid":"uuid-3","type":"assistant","parentUuid":"uuid-2","timestamp":"2024-01-01T00:00:02Z","requestId":"req_1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.rs"}}],"model":"claude-opus-4-7","stop_reason":"tool_use","usage":{"input_tokens":5,"output_tokens":10}}}"#.to_string(),
+        ];
+        fs::write(project_dir.join("session-3.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        (temp, ClaudeConvo::with_resolver(resolver))
+    }
+
+    #[test]
+    fn idless_assistant_message_groups_by_request_id() {
+        let (_temp, provider) = setup_idless_message_provider();
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-3")
+            .unwrap();
+
+        assert_eq!(view.turns.len(), 3);
+        assert!(view.turns[0].group_id.is_none(), "user line carries no group id");
+        assert!(
+            view.turns[1].group_id.is_some(),
+            "id-less assistant lines still get a group id (from requestId)"
+        );
+        assert_eq!(
+            view.turns[1].group_id, view.turns[2].group_id,
+            "both lines of the split id-less message share one group id"
+        );
+
+        let total = view.total_usage.as_ref().unwrap();
+        assert_eq!(
+            total.output_tokens,
+            Some(10),
+            "one message's usage counted once, not once per content-block line"
+        );
+    }
+
+    #[test]
+    fn user_entries_never_group_by_request_id() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        // A user entry carrying `requestId` (not something real Claude Code
+        // emits per docs/agents/formats/claude-code/jsonl-envelope.md, which
+        // scopes `requestId` to assistant entries — but the grouping logic
+        // must not rely on that being enforced upstream).
+        let entries = [
+            r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","requestId":"req_x","message":{"role":"user","content":"Fix the bug"}}"#,
+        ];
+        fs::write(project_dir.join("session-4.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-4")
+            .unwrap();
+
+        assert_eq!(view.turns.len(), 1);
+        assert!(
+            view.turns[0].group_id.is_none(),
+            "user entries never group by request_id"
+        );
     }
 
     fn setup_provider() -> (TempDir, ClaudeConvo) {

@@ -15,7 +15,24 @@ over-counts (~3× on typical sessions) — the values are **cumulative
 snapshots of one message, not per-line bills.**
 
 The grouping key is **`message.id`** (`msg_…`), identical on every line
-of the split. Empirically, across every session sampled:
+of the split. Some captures omit `message.id`; for assistant entries
+`toolpath-claude` falls back to the entry-level `requestId`
+([jsonl-envelope.md](jsonl-envelope.md#api-correlation)), which is
+"useful for deduping streamed messages" per Anthropic — one assistant
+message per API request — so id-less split lines still dedupe their
+repeated usage under one group. User entries never fall back to
+`requestId`, even if one happened to carry it.
+
+Grouping is **not** adjacency-based: multi-terminal writers can
+interleave a split message's lines with another message's lines (see
+[known-issues.md](known-issues.md), "Multi-terminal writes to the same
+project"), so a group's lines aren't guaranteed to be contiguous.
+`toolpath-claude` groups by `group_id` globally — across the whole
+turn sequence, not just consecutive runs — before taking the max;
+adjacency-based grouping would double-count an interleaved group's
+usage once per contiguous fragment.
+
+Empirically, across every session sampled:
 
 - `input_tokens` and the cache counters are **constant** across a
   message's lines (prompt-side cost, paid once for the message).
