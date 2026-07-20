@@ -1,7 +1,7 @@
 //! The harness layer over [`ArtifactType`]: [`Harness`] names the
 //! agent runtimes sessions can be shared from and resumed into, and
-//! [`HarnessBundle`] carries one provider manager per installed
-//! harness for commands that aggregate across them.
+//! `HarnessBundle` carries one provider manager per installed harness
+//! for commands that aggregate across them.
 
 use crate::artifact::ArtifactType;
 

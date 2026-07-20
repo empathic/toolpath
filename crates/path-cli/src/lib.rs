@@ -1,4 +1,4 @@
-mod artifact;
+pub mod artifact;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
 mod cmd_cache;
@@ -29,7 +29,7 @@ mod config;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
 #[cfg(not(target_os = "emscripten"))]
-mod harness;
+pub mod harness;
 mod io;
 mod kinds;
 mod query;
