@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use clap::Subcommand;
+#[cfg(not(target_os = "emscripten"))]
 use std::path::PathBuf;
 
 use crate::cache::{list_cached, remove_cached};

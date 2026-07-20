@@ -14,13 +14,18 @@ use clap::Subcommand;
 use std::path::PathBuf;
 use toolpath::v1::Graph;
 
-use crate::artifact::{ArtifactRef, ArtifactType, codex_artifact_id};
-use crate::cache::{make_id, write_cached};
+use crate::artifact::codex_artifact_id;
+#[cfg(not(target_os = "emscripten"))]
+use crate::artifact::{ArtifactRef, ArtifactType};
+#[cfg(not(target_os = "emscripten"))]
+use crate::cache::make_id;
+use crate::cache::write_cached;
 use crate::derive::{
     DerivedDoc, derive_claude_session_with, derive_codex_session_with, derive_copilot_session_with,
-    derive_cursor_session_with, derive_gemini_session_with, derive_opencode_session_with,
-    derive_pi_session_with, doc_inner_id,
+    derive_gemini_session_with, derive_pi_session_with,
 };
+#[cfg(not(target_os = "emscripten"))]
+use crate::derive::{derive_cursor_session_with, derive_opencode_session_with, doc_inner_id};
 
 #[derive(Subcommand, Debug)]
 pub enum ImportSource {
