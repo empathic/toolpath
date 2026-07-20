@@ -11,9 +11,11 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 
-use super::{ArtifactRef, ArtifactType, claude_chain_stamp, codex_artifact_id, stat_stamp};
+use crate::artifact::{
+    ArtifactRef, ArtifactType, claude_chain_stamp, codex_artifact_id, stat_stamp,
+};
 use crate::cmd_import::{self as imp, DerivedDoc};
-use crate::cmd_share::{
+use crate::harness::{
     HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_cursor,
     is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
 };

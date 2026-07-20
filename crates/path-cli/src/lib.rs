@@ -1,3 +1,4 @@
+mod artifact;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
 mod cmd_cache;
@@ -27,13 +28,15 @@ mod cmd_validate;
 mod config;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
+#[cfg(not(target_os = "emscripten"))]
+mod harness;
 mod io;
 mod kinds;
 mod query;
 mod schema;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
-pub mod sync;
+mod sync;
 mod term;
 
 use anyhow::Result;

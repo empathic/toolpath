@@ -128,7 +128,7 @@ fn sync_query_scope(args: &QueryArgs) {
     if types.is_empty() {
         return;
     }
-    let bundle = crate::cmd_share::HarnessBundle::from_environment();
+    let bundle = crate::harness::HarnessBundle::from_environment();
     match crate::sync::sync_bundle(&bundle, &types, args.parent_dir.as_deref()) {
         Ok(outcomes) => {
             for (t, o) in outcomes {
@@ -160,8 +160,8 @@ fn sync_types_for(
     source: Option<&str>,
     ids: &[String],
     inputs: &[String],
-) -> Vec<crate::sync::ArtifactType> {
-    use crate::sync::ArtifactType;
+) -> Vec<crate::artifact::ArtifactType> {
+    use crate::artifact::ArtifactType;
     let scans_cache = source.is_some() || !ids.is_empty() || inputs.is_empty();
     if !scans_cache {
         return Vec::new();
@@ -186,7 +186,7 @@ fn sync_types_for(
 #[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
     use super::sync_types_for;
-    use crate::sync::ArtifactType;
+    use crate::artifact::ArtifactType;
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

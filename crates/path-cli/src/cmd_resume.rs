@@ -47,7 +47,7 @@ use std::path::PathBuf;
 /// Re-exported so external callers (integration tests, future consumers)
 /// can construct [`ResumeArgs`] without depending on the private
 /// `cmd_share` module directly.
-pub use crate::cmd_share::Harness;
+pub use crate::harness::Harness;
 
 #[derive(Args, Debug)]
 pub struct ResumeArgs {

@@ -29,7 +29,7 @@ pub enum CacheOp {
     Sync {
         /// Artifact types to sync (default: every agent harness)
         #[arg(value_enum)]
-        types: Vec<crate::sync::ArtifactType>,
+        types: Vec<crate::artifact::ArtifactType>,
 
         /// Only ingest artifacts living under this directory (subtree
         /// match). Out-of-scope artifacts are noted in the manifest but

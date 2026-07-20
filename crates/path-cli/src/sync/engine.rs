@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::sources::{self, ArtifactSource};
-use super::{ArtifactRef, ArtifactType};
+use crate::artifact::{ArtifactRef, ArtifactType};
 use crate::cmd_cache::write_cached;
-use crate::cmd_share::HarnessBundle;
+use crate::harness::HarnessBundle;
 use crate::config::config_dir;
 
 const MANIFEST_FILE: &str = "sync.json";
