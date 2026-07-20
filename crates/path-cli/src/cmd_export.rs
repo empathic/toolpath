@@ -23,7 +23,7 @@ use clap::Subcommand;
 use std::path::PathBuf;
 
 #[cfg(not(target_os = "emscripten"))]
-use crate::cmd_cache::cache_ref;
+use crate::cache::cache_ref;
 
 #[derive(Subcommand, Debug)]
 pub enum ExportTarget {

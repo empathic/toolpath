@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::sources::{self, ArtifactSource};
 use crate::artifact::{ArtifactRef, ArtifactType};
-use crate::cmd_cache::write_cached;
+use crate::cache::write_cached;
 use crate::config::config_dir;
 use crate::harness::HarnessBundle;
 
@@ -139,7 +139,7 @@ fn is_unchanged(rec: Option<&SyncRecord>, artifact: &ArtifactRef) -> bool {
             && rec
                 .cache_id
                 .as_deref()
-                .is_some_and(|id| crate::cmd_cache::cache_path(id).is_ok_and(|p| p.exists()))
+                .is_some_and(|id| crate::cache::cache_path(id).is_ok_and(|p| p.exists()))
     })
 }
 
@@ -426,7 +426,7 @@ pub(crate) fn record_is_current(artifact: &ArtifactRef, cache_id: &str) -> bool 
                 && (rec.modified.is_some() || rec.size.is_some())
                 && rec.modified == artifact.modified
                 && rec.size == artifact.size
-                && crate::cmd_cache::cache_path(cache_id).is_ok_and(|p| p.exists())
+                && crate::cache::cache_path(cache_id).is_ok_and(|p| p.exists())
         })
 }
 
@@ -450,7 +450,7 @@ pub(crate) fn fresh_cache_id(
     ((rec.modified.is_some() || rec.size.is_some())
         && rec.modified == modified
         && rec.size == size
-        && crate::cmd_cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
+        && crate::cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
     .then_some(cache_id)
 }
 
@@ -595,7 +595,7 @@ mod tests {
     }
 
     fn cached_step_count(cache_id: &str) -> usize {
-        let path = crate::cmd_cache::cache_path(cache_id).unwrap();
+        let path = crate::cache::cache_path(cache_id).unwrap();
         let json = std::fs::read_to_string(path).unwrap();
         let doc = toolpath::v1::Graph::from_json(&json).unwrap();
         doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
@@ -702,7 +702,7 @@ mod tests {
                 .as_deref()
                 .expect("synced record is materialized");
             assert!(
-                crate::cmd_cache::cache_path(cache_id).unwrap().exists(),
+                crate::cache::cache_path(cache_id).unwrap().exists(),
                 "cache doc must exist for {cache_id}"
             );
 
@@ -883,7 +883,7 @@ mod tests {
 
             // What `p import` does: derive with provenance, write the
             // cache, record the stub.
-            let derived = crate::cmd_import::derive_claude_session_with(
+            let derived = crate::derive::derive_claude_session_with(
                 bundle.claude.as_ref().unwrap(),
                 "/test/project",
                 "sess-aaa",
@@ -892,7 +892,7 @@ mod tests {
             let artifact = derived.provenance.as_ref().unwrap();
             assert_eq!(artifact.id, "sess-aaa");
             assert!(artifact.modified.is_some() && artifact.size.is_some());
-            crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
+            crate::cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
             record_artifact(artifact, &derived.cache_id).unwrap();
 
             // The import's stamp must match sync's own enumeration.
@@ -1053,7 +1053,7 @@ mod tests {
                 .unwrap();
 
             // `p cache rm`: doc removed, record downgraded to known.
-            crate::cmd_cache::remove_cached(&cache_id).unwrap();
+            crate::cache::remove_cached(&cache_id).unwrap();
             evict_cache_id(&cache_id).unwrap();
             assert!(
                 load_manifest().unwrap()["claude"]["sess-aaa"]
@@ -1064,7 +1064,7 @@ mod tests {
             let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
             assert_eq!((outcome.new, outcome.updated), (0, 1));
             assert!(
-                crate::cmd_cache::cache_path(&cache_id).unwrap().exists(),
+                crate::cache::cache_path(&cache_id).unwrap().exists(),
                 "evicted artifact re-materializes"
             );
         });
@@ -1083,7 +1083,7 @@ mod tests {
 
             // Doc deleted behind the CLI's back: the record still claims
             // materialization, but sync verifies the doc exists.
-            let doc = crate::cmd_cache::cache_path(&cache_id).unwrap();
+            let doc = crate::cache::cache_path(&cache_id).unwrap();
             std::fs::remove_file(&doc).unwrap();
             let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], None).unwrap()[0];
             assert_eq!((outcome.new, outcome.updated), (0, 1));
@@ -1146,7 +1146,7 @@ mod tests {
             );
 
             // Evicted: known but not materialized, so not fresh.
-            crate::cmd_cache::remove_cached(&cache_id).unwrap();
+            crate::cache::remove_cached(&cache_id).unwrap();
             evict_cache_id(&cache_id).unwrap();
             assert!(
                 fresh_cache_id(

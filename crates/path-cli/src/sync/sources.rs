@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::artifact::{
     ArtifactRef, ArtifactType, claude_chain_stamp, codex_artifact_id, stat_stamp,
 };
-use crate::cmd_import::{self as imp, DerivedDoc};
+use crate::derive::{self, DerivedDoc};
 use crate::harness::{
     HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_cursor,
     is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
@@ -152,7 +152,7 @@ impl ArtifactSource for ClaudeSource<'_> {
     }
 
     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
-        imp::derive_claude_session_with(self.0, require_path(artifact)?, &artifact.id)
+        derive::derive_claude_session_with(self.0, require_path(artifact)?, &artifact.id)
     }
 
     fn in_scope(&self, dir: &str, parent_dir: &Path) -> bool {
@@ -231,7 +231,7 @@ impl ArtifactSource for GeminiSource<'_> {
     }
 
     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
-        imp::derive_gemini_session_with(self.0, require_path(artifact)?, &artifact.id)
+        derive::derive_gemini_session_with(self.0, require_path(artifact)?, &artifact.id)
     }
 }
 
@@ -276,7 +276,7 @@ impl ArtifactSource for CodexSource<'_> {
     }
 
     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
-        imp::derive_codex_session_with(self.0, &artifact.id)
+        derive::derive_codex_session_with(self.0, &artifact.id)
     }
 
     /// The rollout's first line is `session_meta`; its payload carries
@@ -328,7 +328,7 @@ impl ArtifactSource for OpencodeSource<'_> {
     }
 
     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
-        imp::derive_opencode_session_with(self.0, &artifact.id, false)
+        derive::derive_opencode_session_with(self.0, &artifact.id, false)
     }
 }
 
@@ -376,7 +376,7 @@ impl ArtifactSource for CursorSource<'_> {
     }
 
     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
-        imp::derive_cursor_session_with(self.0, &artifact.id)
+        derive::derive_cursor_session_with(self.0, &artifact.id)
     }
 }
 
@@ -450,7 +450,7 @@ impl ArtifactSource for PiSource<'_> {
     }
 
     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
-        imp::derive_pi_session_with(self.0, require_path(artifact)?, &artifact.id)
+        derive::derive_pi_session_with(self.0, require_path(artifact)?, &artifact.id)
     }
 
     fn in_scope(&self, dir: &str, parent_dir: &Path) -> bool {
@@ -522,7 +522,7 @@ impl ArtifactSource for CopilotSource<'_> {
     }
 
     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
-        imp::derive_copilot_session_with(self.0, &artifact.id)
+        derive::derive_copilot_session_with(self.0, &artifact.id)
     }
 
     /// `session.start` is usually first but the format tolerates it
