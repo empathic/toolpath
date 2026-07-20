@@ -27,7 +27,7 @@ users no longer have to `p import` each session by hand.
     Pending work reports progress on stderr (live `<type> done/total`
     on a TTY, a plain line every 25 items otherwise; no-op syncs stay
     silent).
-  - `ArtifactType` (in `sync.rs`) is the general enum naming artifact
+  - `ArtifactType` (in `artifact.rs`) is the general enum naming artifact
     sources: `p cache sync` types, the manifest keys, and import
     cache-id prefixes all use it (it absorbs the former `HarnessArg`).
     The `Harness` enum stays as the harness-only layer that
@@ -125,6 +125,14 @@ users no longer have to `p import` each session by hand.
     longer stripped at egress: uploads carry the same full derivation
     as the cache and `resume` (`--include-thinking` on `share` /
     `p export pathbase` is gone).
+  - PR review round 4: cross-command machinery gets its own modules —
+    `artifact.rs` (`ArtifactType` + `ArtifactRef` + the stamp
+    helpers), `harness.rs` (`Harness`, `HarnessBundle`, the provider
+    not-found probes), `cache.rs` (the document store), and
+    `derive.rs` (`DerivedDoc`, the per-session `derive_*_session`
+    helpers, the Pathbase fetch) — so `cmd_*.rs` files hold only their
+    command's argument surface and flow, and sync depends on shared
+    modules rather than reaching into other commands' files.
   - Claude fingerprints cover the whole session chain. Claude Code
     rotates to a new JSONL file on continuation (plan-mode exit,
     resume, fork) while `list_conversations` keys the chain by its
