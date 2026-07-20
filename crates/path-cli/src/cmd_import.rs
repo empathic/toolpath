@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use toolpath::v1::Graph;
 
 use crate::cmd_cache::{make_id, write_cached};
-use crate::sync::{ArtifactRef, ArtifactType, claude_chain_stamp, codex_artifact_id, stat_stamp};
+use crate::artifact::{
+    ArtifactRef, ArtifactType, claude_chain_stamp, codex_artifact_id, stat_stamp,
+};
 
 #[derive(Subcommand, Debug)]
 pub enum ImportSource {
