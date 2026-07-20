@@ -1,5 +1,5 @@
 //! [`ArtifactType`], the single enum naming the artifact sources the
-//! CLI operates over, plus [`ArtifactRef`] — an artifact's identity
+//! CLI operates over, plus `ArtifactRef` — an artifact's identity
 //! and stat-level fingerprint — and the stamp helpers that produce
 //! those fingerprints for sync and import provenance.
 
