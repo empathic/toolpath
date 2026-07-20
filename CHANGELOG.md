@@ -120,14 +120,22 @@ sources, per-session derive plumbing in every import flow, and cheap
 session-fingerprint APIs in the provider crates.
 
 - **`path-cli`** (0.16.0):
-  - `ArtifactType` (in `sync.rs`) is the general enum naming artifact
-    sources; `--harness` filters and import cache-id prefixes all use
-    it (it absorbs the former `HarnessArg`). The `Harness` enum stays
-    as the harness-only layer that `share`/`resume` `--harness` take —
-    you can't resume into a git repo — mapping into the general enum
-    via `Harness::artifact_type()`. `SessionRow` generalizes to
-    `ArtifactRow` (its `message_count` is now optional, for future
-    non-session artifact kinds).
+  - `ArtifactType` (in `artifact.rs`) is the general enum naming
+    artifact sources; `--harness` filters and import cache-id prefixes
+    all use it (it absorbs the former `HarnessArg`). The `Harness`
+    enum stays as the harness-only layer that `share`/`resume`
+    `--harness` take — you can't resume into a git repo — mapping into
+    the general enum via `Harness::artifact_type()`. `SessionRow`
+    generalizes to `ArtifactRow` (its `message_count` is now optional,
+    for future non-session artifact kinds).
+  - Cross-command machinery moved out of the command modules into
+    modules of its own: `artifact.rs` (`ArtifactType`), `harness.rs`
+    (`Harness`, `HarnessBundle`, the provider not-found probes),
+    `cache.rs` (the document store: `write_cached`, `cache_ref`,
+    `list_cached`, `make_id`, …), and `derive.rs` (`DerivedDoc`, the
+    per-session `derive_*_session` helpers, the Pathbase fetch).
+    `cmd_*.rs` files hold only their command's argument surface and
+    flow.
   - Every import flow loops per-session derive helpers
     (`derive_*_session_with`, one per provider, each usable with an
     injected provider manager) — explicit `--session`, picker
