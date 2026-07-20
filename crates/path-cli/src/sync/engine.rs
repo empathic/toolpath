@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use super::sources::{self, ArtifactSource};
 use crate::artifact::{ArtifactRef, ArtifactType};
 use crate::cmd_cache::write_cached;
-use crate::harness::HarnessBundle;
 use crate::config::config_dir;
+use crate::harness::HarnessBundle;
 
 const MANIFEST_FILE: &str = "sync.json";
 
