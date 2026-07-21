@@ -330,7 +330,6 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     summary: Some(summary.clone()),
                     pre_tokens: Some(*tokens_before),
                     kept_from,
-                    extra: HashMap::new(),
                 }));
             }
 

@@ -1048,7 +1048,6 @@ mod tests {
             summary: Some("condensed".into()),
             pre_tokens: None,
             kept_from: Some("a1".into()),
-            extra: std::collections::HashMap::new(),
         }));
 
         let s = OpencodeProjector::default().project(&view).unwrap();

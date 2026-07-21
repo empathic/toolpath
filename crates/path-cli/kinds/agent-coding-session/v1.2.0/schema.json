@@ -154,12 +154,8 @@
         "pre_tokens": { "type": "number" },
         "kept": {
           "type": "array",
-          "description": "Ids of the prior turns that survive verbatim into the post-compaction context window — always a contiguous parent-chain run, oldest first, whose first element is the anchor (the oldest surviving turn). Empty = wholesale (the summary replaced everything). Non-contiguous native detail belongs in `extra` under the provider's key.",
+          "description": "Ids of the prior turns that survive verbatim into the post-compaction context window — always a contiguous parent-chain run, oldest first, whose first element is the anchor (the oldest surviving turn). Empty = wholesale (the summary replaced everything). Compaction provenance is this closed field set; native detail richer than the contiguous run is not carried.",
           "items": { "type": "string" }
-        },
-        "extra": {
-          "type": "object",
-          "description": "Provider-namespaced native compaction detail that doesn't fit the harness-agnostic fields, keyed by provider (e.g. `extra[\"claude\"][\"preserved_uuids\"]` — Claude's verbatim preservedMessages set, which may be non-contiguous). Preserved across round-trips; projectors other than the native one ignore it."
         },
         "source_parent": {
           "type": ["string", "null"],

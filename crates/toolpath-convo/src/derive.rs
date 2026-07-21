@@ -605,11 +605,6 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 {
                     extra.insert("kept".to_string(), v);
                 }
-                if !c.extra.is_empty()
-                    && let Ok(v) = serde_json::to_value(&c.extra)
-                {
-                    extra.insert("extra".to_string(), v);
-                }
 
                 let mut step = Step {
                     step: StepIdentity {
@@ -1206,7 +1201,6 @@ mod tests {
             summary: None,
             pre_tokens: None,
             kept_from: None,
-            extra: Default::default(),
         };
         let mut d = base_turn("d", Role::Assistant);
         d.parent_id = Some("a".into());
@@ -2056,7 +2050,6 @@ mod tests {
             summary: Some("s".into()),
             pre_tokens: Some(100),
             kept_from: Some("a".into()),
-            extra: Default::default(),
         };
 
         let mut view = view_with(vec![a]);

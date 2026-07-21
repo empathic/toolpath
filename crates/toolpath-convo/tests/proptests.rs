@@ -121,7 +121,6 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
                     summary: Some("condensed".into()),
                     pre_tokens: None,
                     kept_from: resolve(k, &ids),
-                    extra: Default::default(),
                 }));
                 ids.push(format!("c{compact_n}"));
             }

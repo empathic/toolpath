@@ -11,14 +11,13 @@ contiguous parent-chain run from that anchor up to the boundary, computed
 by the new shared `toolpath_convo::expand_kept`. The wire `kept` array
 (on the `conversation.compact` structural change) keeps its shape (turn-id
 strings) but tightens its meaning: always a contiguous run, oldest first,
-whose first element is the anchor. Native detail richer than the run rides
-a new provider-namespaced structural `extra` — e.g. Claude's possibly
-non-contiguous `preservedMessages` set as
-`extra["claude"]["preserved_uuids"]` — preserved across derive ↔ extract
-and ignored by non-native projectors.
+whose first element is the anchor. Compaction provenance is a closed typed
+set — there is deliberately no catch-all `extra`; native detail richer
+than the contiguous run (e.g. Claude's replay-pinned messages) is not
+carried, and round-trips are lossy beyond these fields.
 
-- **`toolpath-convo`**: `Compaction.kept` (id list) → `kept_from` (anchor)
-  + `extra` (provider passthrough); shared `expand_kept`. Steps whose
+- **`toolpath-convo`**: `Compaction.kept` (id list) → `kept_from` (anchor);
+  shared `expand_kept`. Steps whose
   `parents` were rewired by derive-splicing now stamp `source_parent`
   (string|null — the pre-splice source parent) on their
   `conversation.append`/`conversation.compact` structural change, so
@@ -33,12 +32,11 @@ and ignored by non-native projectors.
   chaining the first post-boundary entry through the synthetic summary
   (boundary ← summary ← first-post-entry) — IR parents pointing at the
   boundary are redirected to the emitted summary. Reads recover the
-  boundary anchor from the preserved set (`kept_anchor` walks the
-  boundary's parent chain through `preserved_uuids`; a native set that
-  doesn't form a contiguous tail is wholesale at view granularity, with
-  the full set still in `extra`). Claude→Claude round-trips write
-  `preservedMessages.uuids` verbatim from the passthrough; foreign
-  sources fall back to `expand_kept`.
+  boundary anchor from the native preserved tail (`kept_anchor` walks the
+  boundary's parent chain through `preservedMessages.uuids`; a native set
+  that doesn't form a contiguous tail ending at the boundary is wholesale
+  at view granularity). Projection writes `preservedMessages.uuids` as the
+  `expand_kept` run.
 - **`toolpath-pi`**: Pi's `firstKeptEntryId` can name a non-turn entry
   (`model_change`, folded tool result); it now resolves to the first turn
   at-or-after the anchor instead of dangling, and projection passes the

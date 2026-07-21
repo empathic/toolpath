@@ -259,7 +259,6 @@ impl<'a> Builder<'a> {
             summary: None,
             pre_tokens: None,
             kept_from,
-            extra: HashMap::new(),
         }));
         self.pending_compaction_idx = Some(self.items.len() - 1);
     }

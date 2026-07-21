@@ -265,14 +265,11 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
 /// Emits the boundary (`type: "system"`, `subtype: "compact_boundary"`)
 /// carrying `logicalParentUuid` and `compactMetadata.{trigger, preTokens,
 /// preservedMessages}` in `extra` — where [`crate::provider::is_compact_boundary`]
-/// and `compaction_from_boundary` read them. `preservedMessages.uuids` is the
-/// native passthrough `extra["claude"]["preserved_uuids"]` verbatim when
-/// present (lossless Claude→Claude round-trip, including non-contiguous
-/// replay pins); for foreign sources it falls back to
-/// [`toolpath_convo::expand_kept`] — the coherent contiguous tail named by
-/// `kept_from`. Then the synthetic summary (`type: "user"`,
-/// `isCompactSummary: true`, `parentUuid` = boundary), only when `summary` is
-/// `Some`.
+/// and `compaction_from_boundary` read them. `preservedMessages.uuids` is
+/// [`toolpath_convo::expand_kept`] — the contiguous kept tail named by
+/// `kept_from` (the compaction contract carries nothing richer). Then the
+/// synthetic summary (`type: "user"`, `isCompactSummary: true`,
+/// `parentUuid` = boundary), only when `summary` is `Some`.
 ///
 /// Preserved turns are NOT re-logged as a replay block. Claude's resume
 /// rebuilds context from the summary plus post-boundary turns only — anything
@@ -301,18 +298,7 @@ fn compaction_entries(
     if let Some(pre_tokens) = c.pre_tokens {
         compact_metadata.insert("preTokens".into(), json!(pre_tokens));
     }
-    let preserved: Vec<String> = match c
-        .extra
-        .get("claude")
-        .and_then(|v| v.get("preserved_uuids"))
-        .and_then(|v| v.as_array())
-    {
-        Some(uuids) => uuids
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect(),
-        None => toolpath_convo::expand_kept(items, c),
-    };
+    let preserved: Vec<String> = toolpath_convo::expand_kept(items, c);
     if !preserved.is_empty() {
         compact_metadata.insert("preservedMessages".into(), json!({ "uuids": preserved }));
     }

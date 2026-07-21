@@ -245,19 +245,12 @@ pub struct Compaction {
     /// wholesale (the summary replaced everything). This is the
     /// harness-agnostic contract: every round-tripping harness's native
     /// marker names an anchor (Pi's `firstKeptEntryId`, opencode's
-    /// `tailStartID`, the start of Claude's preserved tail); anything
-    /// richer is provider detail and belongs in `extra`.
+    /// `tailStartID`, the start of Claude's preserved tail). Native detail
+    /// richer than these fields is deliberately not carried — the
+    /// compaction provenance is this closed typed set, and round-trips
+    /// are lossy beyond it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept_from: Option<String>,
-
-    /// Provider-namespaced native detail that doesn't fit the
-    /// harness-agnostic fields (same convention as `Turn.extra`), e.g.
-    /// `extra["claude"]["preserved_uuids"]` — Claude's verbatim
-    /// `preservedMessages` set, which may be non-contiguous. Preserved
-    /// across derive ↔ extract; projectors other than the native one
-    /// ignore it.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Expand a boundary's [`Compaction::kept_from`] anchor into the concrete

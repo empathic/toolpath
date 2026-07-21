@@ -84,14 +84,6 @@ fn boundary_becomes_single_compaction_item_with_expected_fields() {
         "1b85db73-91ac-4095-a45e-6feb3e495282".to_string(),
     ];
     assert_eq!(
-        c.extra.get("claude").and_then(|v| v.get("preserved_uuids")),
-        Some(&serde_json::json!(preserved)),
-        "extra[\"claude\"][\"preserved_uuids\"] = the de-duplicated union of \
-         preservedMessages.uuids and the re-emitted (replayed) set; this \
-         fixture has no re-emission, so it's exactly the two preserved-tail \
-         uuids"
-    );
-    assert_eq!(
         c.kept_from.as_deref(),
         Some("8a1c3178-ba2b-43cc-a376-3ad159a03d25"),
         "kept_from = the oldest preserved turn on the boundary's parent chain"
@@ -99,7 +91,8 @@ fn boundary_becomes_single_compaction_item_with_expected_fields() {
     assert_eq!(
         expand_kept(&view.items, c),
         preserved,
-        "the anchor expands back to the full contiguous preserved tail"
+        "the anchor expands to the fixture's contiguous preserved tail \
+         (compactMetadata.preservedMessages.uuids)"
     );
     assert!(
         c.parent_id.is_some(),
@@ -161,7 +154,6 @@ fn compaction_roundtrips_through_derive_and_extract() {
     assert_eq!(after_c.summary, orig_c.summary, "summary diverged");
     assert_eq!(after_c.pre_tokens, orig_c.pre_tokens, "pre_tokens diverged");
     assert_eq!(after_c.kept_from, orig_c.kept_from, "kept_from diverged");
-    assert_eq!(after_c.extra, orig_c.extra, "provider extra diverged");
     assert_eq!(
         expand_kept(&after.items, after_c),
         expand_kept(&original.items, &orig_c),
@@ -233,7 +225,6 @@ fn compaction_survives_projection_roundtrip() {
     );
     assert_eq!(after_c.pre_tokens, orig_c.pre_tokens, "pre_tokens diverged");
     assert_eq!(after_c.kept_from, orig_c.kept_from, "kept_from diverged");
-    assert_eq!(after_c.extra, orig_c.extra, "provider extra diverged");
     assert_eq!(
         expand_kept(&after.items, after_c),
         expand_kept(&original.items, &orig_c),
@@ -271,10 +262,9 @@ fn compaction_survives_projection_roundtrip() {
 }
 
 /// The re-emission strip keeps step ids unique so `derive_path` succeeds, the
-/// boundary's preserved set (`extra["claude"]["preserved_uuids"]`) and
-/// `kept_from` anchor are populated, every surviving turn appears exactly
-/// once, and the compaction survives a project → re-read roundtrip with the
-/// same preserved set.
+/// boundary's `kept_from` anchor resolves to a non-empty kept run, every
+/// surviving turn appears exactly once, and the compaction survives a
+/// project → re-read roundtrip with the same anchor and run.
 #[test]
 fn re_emission_is_stripped_and_kept_round_trips() {
     use std::collections::HashSet;
@@ -303,26 +293,18 @@ fn re_emission_is_stripped_and_kept_round_trips() {
         );
     }
 
-    // The preserved set and its anchor are populated.
+    // The kept anchor is populated and expands to a non-empty run.
     let c = only_compaction(&view);
-    let preserved = c
-        .extra
-        .get("claude")
-        .and_then(|v| v.get("preserved_uuids"))
-        .and_then(|v| v.as_array())
-        .expect("preserved_uuids should be populated");
-    assert!(!preserved.is_empty(), "preserved_uuids should be non-empty");
     assert!(c.kept_from.is_some(), "kept_from anchor should be resolved");
+    assert!(
+        !expand_kept(&view.items, c).is_empty(),
+        "kept run should be non-empty"
+    );
 
     // Reverse: project → re-read. The compaction survives with the same
-    // preserved set and anchor, and re-reading still produces unique step
-    // ids.
+    // anchor and kept run, and re-reading still produces unique step ids.
     let after = project_and_reread(&view);
     let after_c = only_compaction(&after);
-    assert_eq!(
-        after_c.extra, c.extra,
-        "preserved set diverged after projection"
-    );
     assert_eq!(
         after_c.kept_from, c.kept_from,
         "kept_from diverged after projection"

@@ -234,14 +234,6 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         .get("kept")
                         .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
                         .and_then(|kept| kept.into_iter().next());
-                    let extra = structural
-                        .extra
-                        .get("extra")
-                        .and_then(|v| {
-                            serde_json::from_value::<HashMap<String, serde_json::Value>>(v.clone())
-                                .ok()
-                        })
-                        .unwrap_or_default();
                     let compaction = Compaction {
                         id: step.step.id.clone(),
                         parent_id: restore_source_parent(
@@ -255,7 +247,6 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         summary,
                         pre_tokens,
                         kept_from,
-                        extra,
                     };
                     view.items.push(Item::Compaction(compaction));
                 }
@@ -1503,7 +1494,6 @@ mod tests {
             summary: Some("condensed".into()),
             pre_tokens: Some(4096),
             kept_from: Some("a".into()),
-            extra: Default::default(),
         };
 
         let source = ConversationView {
@@ -1666,7 +1656,6 @@ mod tests {
             summary: Some("condensed".into()),
             pre_tokens: None,
             kept_from: None,
-            extra: Default::default(),
         };
         let source = ConversationView {
             id: "sess-1".into(),

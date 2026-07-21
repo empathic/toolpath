@@ -726,7 +726,6 @@ impl<'a> Builder<'a> {
             summary,
             pre_tokens: None,
             kept_from: None,
-            extra: HashMap::new(),
         };
         // Buffer index of the last turn pushed before this marker; the
         // compaction is slotted right after it during assembly, and its

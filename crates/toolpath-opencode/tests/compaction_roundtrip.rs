@@ -750,7 +750,6 @@ fn compaction_summary_and_kept_survive_real_sqlite_wire_roundtrip() {
                 summary: Some("condensed everything up to the auth refactor".into()),
                 pre_tokens: None,
                 kept_from: Some("a1".into()),
-                extra: std::collections::HashMap::new(),
             }),
             Item::Turn(mk_turn(
                 "u2",
@@ -855,7 +854,6 @@ fn assistant_hosted_boundary_with_late_timestamp_survives_real_sqlite_wire_round
                 summary: None,
                 pre_tokens: None,
                 kept_from: Some("u1".into()),
-                extra: std::collections::HashMap::new(),
             }),
             Item::Turn(mk_turn(
                 "a1",

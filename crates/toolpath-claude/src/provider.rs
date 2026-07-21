@@ -377,27 +377,22 @@ fn is_compact_summary(entry: &ConversationEntry) -> bool {
 }
 
 /// Build a [`Compaction`] from Claude's boundary marker and (optionally) the
-/// synthetic summary that follows it.
+/// synthetic summary that follows it. Returns the boundary plus its native
+/// preserved tail (`compactMetadata.preservedMessages.uuids`), which the
+/// caller feeds to [`kept_anchor`] once the boundary's parent is final.
 ///
 /// All the boundary's compaction-specific data lives in `entry.extra`
 /// (`logicalParentUuid`, `compactMetadata.{trigger,preTokens,preservedMessages}`).
 /// `summary` comes from the following `isCompactSummary` entry's message text.
 ///
-/// `replayed` is the set of turn-ids that Claude re-emitted just before this
-/// boundary (detected by duplicate-uuid stripping in [`conversation_to_view`]):
-/// the tool_use/tool_result entries it "pins" into the post-compaction window.
-/// The de-duplicated union, in order, of (a) the explicit preserved tail
-/// (`compactMetadata.preservedMessages.uuids`) and (b) that replayed set —
-/// every uuid that survives verbatim into the post-compaction context — lands
-/// in `extra["claude"]["preserved_uuids"]` as the native passthrough for
-/// lossless Claude→Claude round-trips. `kept_from` (the harness-agnostic
-/// anchor) is computed by the caller once the boundary's parent is final —
-/// see [`kept_anchor`].
+/// Only the marked tail counts as kept: the block Claude re-emits just
+/// before the boundary is deduped away by [`conversation_to_view`]'s
+/// duplicate-uuid stripping and is deliberately not part of the kept
+/// provenance (the compaction contract is `kept_from` alone).
 fn compaction_from_boundary(
     boundary: &ConversationEntry,
     summary: Option<String>,
-    replayed: &[String],
-) -> Compaction {
+) -> (Compaction, Vec<String>) {
     let extra = &boundary.extra;
 
     // The pre-compaction message the boundary logically continues from.
@@ -422,38 +417,19 @@ fn compaction_from_boundary(
         .and_then(|m| m.get("preTokens"))
         .and_then(|v| v.as_u64());
 
-    // The uuids that survive verbatim into the post-compaction window: the
-    // explicit preserved tail (preservedMessages.uuids) plus the re-emitted
-    // "pinned" set we detected via duplicate-uuid stripping. Union in order,
-    // de-duplicated — the two sets are disjoint in practice but we guard anyway.
-    let mut preserved_uuids: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let preserved_tail = meta
+    let preserved_uuids: Vec<String> = meta
         .and_then(|m| m.get("preservedMessages"))
         .and_then(|p| p.get("uuids"))
-        .and_then(|v| v.as_array());
-    if let Some(uuids) = preserved_tail {
-        for u in uuids.iter().filter_map(|v| v.as_str()) {
-            if seen.insert(u.to_string()) {
-                preserved_uuids.push(u.to_string());
-            }
-        }
-    }
-    for u in replayed {
-        if seen.insert(u.clone()) {
-            preserved_uuids.push(u.clone());
-        }
-    }
+        .and_then(|v| v.as_array())
+        .map(|uuids| {
+            uuids
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
 
-    let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
-    if !preserved_uuids.is_empty() {
-        extra.insert(
-            "claude".to_string(),
-            serde_json::json!({ "preserved_uuids": preserved_uuids }),
-        );
-    }
-
-    Compaction {
+    let compaction = Compaction {
         id: boundary.uuid.clone(),
         parent_id,
         timestamp: boundary.timestamp.clone(),
@@ -461,27 +437,19 @@ fn compaction_from_boundary(
         summary,
         pre_tokens,
         kept_from: None,
-        extra,
-    }
+    };
+    (compaction, preserved_uuids)
 }
 
 /// Compute a boundary's [`Compaction::kept_from`] anchor from its native
-/// preserved set: walk the boundary's parent chain backward through the
-/// already-emitted turns while each id is in `extra["claude"]
-/// ["preserved_uuids"]`; the deepest such turn is the anchor. `None` when
-/// the boundary's own parent didn't survive — the preserved set doesn't
-/// form a contiguous tail ending at the boundary, so at view granularity
-/// the compaction is wholesale (the full native set still rides in
-/// `extra`).
-fn kept_anchor(items: &[Item], c: &Compaction) -> Option<String> {
-    let preserved: std::collections::HashSet<&str> = c
-        .extra
-        .get("claude")?
-        .get("preserved_uuids")?
-        .as_array()?
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
+/// preserved tail: walk the parent chain backward from `parent_id` through
+/// the already-emitted turns while each id is in `preserved`; the deepest
+/// such turn is the anchor. `None` when the boundary's own parent didn't
+/// survive — the preserved set doesn't form a contiguous tail ending at
+/// the boundary, so at view granularity the compaction is wholesale.
+fn kept_anchor(items: &[Item], parent_id: Option<&str>, preserved: &[String]) -> Option<String> {
+    let preserved: std::collections::HashSet<&str> =
+        preserved.iter().map(String::as_str).collect();
     let turns: HashMap<&str, &Turn> = items
         .iter()
         .filter_map(|i| match i {
@@ -491,7 +459,7 @@ fn kept_anchor(items: &[Item], c: &Compaction) -> Option<String> {
         .collect();
     let mut anchor: Option<String> = None;
     let mut visited = std::collections::HashSet::new();
-    let mut cur = c.parent_id.as_deref();
+    let mut cur = parent_id;
     while let Some(id) = cur {
         if !preserved.contains(id) || !visited.insert(id) {
             break;
@@ -538,15 +506,12 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // Duplicate-uuid stripping. When Claude compacts, it re-emits a block of
     // earlier tool_use/tool_result entries — already-seen uuids — that it
     // "pins" into the post-compaction context, immediately before the
-    // boundary. We keep only the FIRST occurrence of each uuid and capture the
-    // re-emitted ones in the boundary's preserved set rather than surfacing
-    // them as turns. (`derive_path` would otherwise dedupe them itself —
-    // dropping a byte-identical re-emission, renaming a changed one — but
-    // doing it here is what lets the boundary record them.) The stripped uuids
-    // since the last boundary are the "replayed" set, folded into the next
-    // boundary's `extra["claude"]["preserved_uuids"]`.
+    // boundary. We keep only the FIRST occurrence of each uuid: the original
+    // carries the true lineage, and the re-emission is a context-window
+    // artifact, not provenance (`derive_path` would otherwise dedupe the
+    // byte-identical copies itself and rename changed ones). The kept
+    // provenance is the marked tail alone — see `compaction_from_boundary`.
     let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut replayed_since_boundary: Vec<String> = Vec::new();
 
     let entries = &convo.entries;
     let mut i = 0;
@@ -555,13 +520,11 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
 
         // Strip re-emitted entries: any non-boundary entry whose uuid already
         // appeared earlier in this conversation. Boundary entries are exempt
-        // (their uuid is always unique). Record the uuid as replayed so the
-        // next boundary can list it in its preserved set.
+        // (their uuid is always unique).
         if !is_compact_boundary(entry)
             && !entry.uuid.is_empty()
             && !seen_uuids.insert(entry.uuid.clone())
         {
-            replayed_since_boundary.push(entry.uuid.clone());
             i += 1;
             continue;
         }
@@ -572,8 +535,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         if is_compact_boundary(entry) {
             let summary = entries.get(i + 1).filter(|next| is_compact_summary(next));
             let summary_text = summary.map(|s| s.text());
-            let replayed = std::mem::take(&mut replayed_since_boundary);
-            let compaction = compaction_from_boundary(entry, summary_text, &replayed);
+            let (compaction, preserved) = compaction_from_boundary(entry, summary_text);
             seen_uuids.insert(entry.uuid.clone());
             if let Some(s) = summary {
                 seen_uuids.insert(s.uuid.clone());
@@ -586,7 +548,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             {
                 compaction.parent_id = Some(real.clone());
             }
-            compaction.kept_from = kept_anchor(&items, &compaction);
+            compaction.kept_from = kept_anchor(&items, compaction.parent_id.as_deref(), &preserved);
             let boundary_uuid = compaction.id.clone();
             items.push(Item::Compaction(compaction));
             // Later turns whose wire parentUuid points at the folded summary
