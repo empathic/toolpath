@@ -61,10 +61,118 @@ pub fn run(scope: &Scope, code: &str, compact: bool, raw: bool) -> Result<()> {
     // raw `StdoutLock` is line-buffered (a syscall per line).
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    filter::execute(&plan, code, compact, raw, &mut out, |emit| {
-        stream_files(scope, emit)
-    })?;
+    execute_plan(scope, &plan, code, compact, raw, &mut out)?;
     out.flush().context("flush stdout")
+}
+
+/// Dispatch a plan to its driver. `PerFileStream` and `Decompose` treat every
+/// file independently, so their whole per-file pipeline — parse, wrap, filter,
+/// render/pack — runs on worker threads and only ordered consumption stays
+/// here. `Slurp` needs all steps as one jaq array on one thread, so it
+/// parallelizes parsing only.
+#[cfg(not(target_os = "emscripten"))]
+fn execute_plan(
+    scope: &Scope,
+    plan: &plan::Plan,
+    code: &str,
+    compact: bool,
+    raw: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    match plan {
+        plan::Plan::Slurp => filter::execute(plan, code, compact, raw, out, |emit| {
+            stream_files(scope, emit)
+        }),
+        plan::Plan::PerFileStream => {
+            filter::compile_check(code)?;
+            for_each_file(
+                scope,
+                |steps| filter::render_file(code, steps, compact, raw),
+                |bytes| {
+                    out.write_all(&bytes)?;
+                    Ok(())
+                },
+            )
+        }
+        plan::Plan::Decompose { reduce } => {
+            filter::compile_check(code)?;
+            let mut partials: Vec<Val> = Vec::new();
+            let mut saw_file = false;
+            for_each_file(
+                scope,
+                |steps| filter::partials_file(code, steps),
+                |bytes| {
+                    saw_file = true;
+                    partials.extend(filter::unpack_partials(&bytes)?);
+                    Ok(())
+                },
+            )?;
+            filter::finish_decompose(code, reduce, partials, saw_file, compact, raw, out)
+        }
+    }
+}
+
+/// The playground build has no threads (emscripten without pthreads): every
+/// plan runs on the sequential engine.
+#[cfg(target_os = "emscripten")]
+fn execute_plan(
+    scope: &Scope,
+    plan: &plan::Plan,
+    code: &str,
+    compact: bool,
+    raw: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    filter::execute(plan, code, compact, raw, out, |emit| {
+        stream_files(scope, emit)
+    })
+}
+
+/// Drive the per-file parallel plans: evaluate `per_file` for each selected,
+/// scoped document on a thread pool in chunks, consuming products in
+/// selection order on this thread. Chunking keeps output (and per-file
+/// warnings) byte-identical to a sequential scan while holding at most one
+/// chunk of products in memory. Explicit-file failures abort at the file's
+/// position; a corrupt cache file skips with a warning, exactly like the
+/// sequential scan.
+#[cfg(not(target_os = "emscripten"))]
+fn for_each_file<T: Send>(
+    scope: &Scope,
+    per_file: impl Fn(Vec<serde_json::Value>) -> Result<T> + Sync,
+    mut consume: impl FnMut(T) -> Result<()>,
+) -> Result<()> {
+    use rayon::prelude::*;
+
+    let kind_sel = scope.kind.as_deref().map(kinds::parse_kind_selector);
+    let project = scope.project.as_deref().map(canonicalize_or_self);
+    let project_under = scope.project_under.as_deref().map(canonicalize_or_self);
+    let sources = select_files(scope)?;
+
+    let chunk = rayon::current_num_threads().max(1) * 2;
+    for batch in sources.chunks(chunk) {
+        let products: Vec<Result<T>> = batch
+            .par_iter()
+            .map(|src| {
+                load_and_wrap(
+                    src,
+                    kind_sel.as_ref(),
+                    project.as_deref(),
+                    project_under.as_deref(),
+                )
+                .and_then(&per_file)
+            })
+            .collect();
+        for (src, res) in batch.iter().zip(products) {
+            match res {
+                Ok(product) => consume(product)?,
+                Err(e) if src.explicit => {
+                    return Err(e.context(format!("read {}", src.label())));
+                }
+                Err(e) => eprintln!("warning: skipping {}: {e:#}", src.label()),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Where a document came from, and the `cache_id` to stamp on its steps.
@@ -91,41 +199,85 @@ impl DocSource {
     }
 }
 
-/// Stream each selected, scoped document to `emit` as a jaq array value,
-/// one file at a time. Only one document's `Graph` and step values are alive
-/// per iteration; the executor decides how to combine them.
+/// Stream each selected, scoped document to `emit` as a jaq array value, in
+/// selection order. Reading and parsing — the dominant cost — runs on a
+/// thread pool in chunks; conversion to `Val` and emission stay on this
+/// thread because jaq values are `Rc`-based, not `Send`. Chunking keeps
+/// output (and per-file warnings) byte-identical to a sequential scan while
+/// holding at most one chunk of parsed documents in memory.
 fn stream_files(scope: &Scope, emit: &mut dyn FnMut(Val) -> Result<()>) -> Result<()> {
     let kind_sel = scope.kind.as_deref().map(kinds::parse_kind_selector);
     let project = scope.project.as_deref().map(canonicalize_or_self);
     let project_under = scope.project_under.as_deref().map(canonicalize_or_self);
+    let sources = select_files(scope)?;
 
-    for src in select_files(scope)? {
-        let graph = match read_source(&src) {
-            Ok(g) => g,
-            // An explicitly named document that won't read/parse is a hard
-            // error (a typo'd `--input`, bad stdin). A corrupt file merely
-            // encountered while scanning the cache is skipped with a warning.
-            Err(e) if src.explicit => {
-                return Err(e.context(format!("read {}", src.label())));
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        use rayon::prelude::*;
+        let chunk = rayon::current_num_threads().max(1) * 2;
+        for batch in sources.chunks(chunk) {
+            let parsed: Vec<Result<Vec<serde_json::Value>>> = batch
+                .par_iter()
+                .map(|src| {
+                    load_and_wrap(
+                        src,
+                        kind_sel.as_ref(),
+                        project.as_deref(),
+                        project_under.as_deref(),
+                    )
+                })
+                .collect();
+            for (src, res) in batch.iter().zip(parsed) {
+                emit_wrapped(src, res, emit)?;
             }
-            Err(e) => {
-                eprintln!("warning: skipping {}: {e:#}", src.label());
-                continue;
-            }
-        };
-        let mut steps = Vec::new();
-        wrap_graph(
-            &src,
-            &graph,
+        }
+    }
+
+    // The playground build has no threads (emscripten without pthreads).
+    #[cfg(target_os = "emscripten")]
+    for src in &sources {
+        let res = load_and_wrap(
+            src,
             kind_sel.as_ref(),
             project.as_deref(),
             project_under.as_deref(),
-            &mut steps,
         );
-        drop(graph);
-        emit(filter::steps_to_val(steps)?)?;
+        emit_wrapped(src, res, emit)?;
     }
+
     Ok(())
+}
+
+/// Read, parse, and wrap one document's steps.
+fn load_and_wrap(
+    src: &DocSource,
+    kind_sel: Option<&KindSelector>,
+    project: Option<&FsPath>,
+    project_under: Option<&FsPath>,
+) -> Result<Vec<serde_json::Value>> {
+    let graph = read_source(src)?;
+    let mut steps = Vec::new();
+    wrap_graph(src, &graph, kind_sel, project, project_under, &mut steps);
+    Ok(steps)
+}
+
+/// Emit one file's outcome. An explicitly named document that won't
+/// read/parse is a hard error (a typo'd `--input`, bad stdin); a corrupt
+/// file merely encountered while scanning the cache is skipped with a
+/// warning.
+fn emit_wrapped(
+    src: &DocSource,
+    res: Result<Vec<serde_json::Value>>,
+    emit: &mut dyn FnMut(Val) -> Result<()>,
+) -> Result<()> {
+    match res {
+        Ok(steps) => emit(filter::steps_to_val(steps)?),
+        Err(e) if src.explicit => Err(e.context(format!("read {}", src.label()))),
+        Err(e) => {
+            eprintln!("warning: skipping {}: {e:#}", src.label());
+            Ok(())
+        }
+    }
 }
 
 /// Resolve the scope's file-selection flags to a deterministic list of
