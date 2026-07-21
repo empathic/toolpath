@@ -426,7 +426,11 @@ impl<'a> Builder<'a> {
 
         self.push_turn(Turn {
             id: msg.id.clone(),
-            parent_id: None,
+            // opencode's native user rows carry no parentID, but the log is
+            // strictly linear — synthesize the previous item as parent so
+            // the IR turn chain (which `expand_kept` and derive splicing
+            // walk) doesn't break at every user message.
+            parent_id: self.last_anchor_id.clone(),
             group_id: None,
             role: Role::User,
             timestamp: millis_to_iso(msg.time_created),

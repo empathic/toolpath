@@ -55,6 +55,16 @@ trait Harness {
     fn roundtrips_kept(&self) -> bool {
         self.roundtrips_compaction()
     }
+    /// Whether translating INTO this harness may lengthen a boundary's
+    /// kept run. A strictly linear wire (opencode's message log) cannot
+    /// encode a boundary whose logical parent skips intervening turns —
+    /// e.g. Claude's `/compact` command turn, which Claude excludes from
+    /// the preserved window but a linear log necessarily retains before
+    /// the boundary. Growth is bounded, keep-more lossiness; a shrunk run
+    /// or a lost anchor is still a failure.
+    fn kept_run_may_inflate(&self) -> bool {
+        false
+    }
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -335,6 +345,9 @@ struct OpencodeHarness;
 impl Harness for OpencodeHarness {
     fn name(&self) -> &'static str {
         "opencode"
+    }
+    fn kept_run_may_inflate(&self) -> bool {
+        true
     }
     fn roundtrip(&self, view: &ConversationView) -> ConversationView {
         let projector = toolpath_opencode::project::OpencodeProjector::new();
@@ -671,6 +684,7 @@ mod invariants {
     pub fn kept_anchor_survives(
         original: &ConversationView,
         result: &ConversationView,
+        may_inflate: bool,
         failures: &mut Vec<String>,
     ) {
         if original.compactions().count() != result.compactions().count() {
@@ -684,7 +698,14 @@ mod invariants {
         };
         for (i, (a, b)) in original.compactions().zip(result.compactions()).enumerate() {
             let (pa, pb) = (position(original, a), position(result, b));
-            if pa != pb {
+            let ok = match (pa, pb) {
+                // A linear target may retain intervening turns the source's
+                // boundary skipped (see `kept_run_may_inflate`) — the run
+                // may grow, never shrink, and the anchor must survive.
+                (Some(x), Some(y)) if may_inflate => y >= x,
+                _ => pa == pb,
+            };
+            if !ok {
                 failures.push(format!(
                     "compaction {i} kept anchor diverged (surviving prior turns): first={pa:?} second={pb:?}"
                 ));
@@ -825,37 +846,37 @@ mod invariants {
 
     /// Survival check: tokens present in the pre-B IR must survive the B
     /// leg. Catches projectors that silently drop tokens (idempotence
-    /// alone won't — both passes drop identically). Pair by assistant
-    /// subsequence: some forward paths (pi) insert `Role::Other("tool")`
-    /// turns for tool results, which would misalign a positional pairing.
+    /// alone won't — both passes drop identically).
+    ///
+    /// The bar is **conservation of totals**, not sequence equality:
+    /// harnesses legitimately fold turns in translation (codex merges
+    /// consecutive assistant messages into one round, summing their
+    /// usage), and zero↔`None` flips at wire boundaries are inherent
+    /// (codex's cumulative counters can't express an unknown input;
+    /// opencode's tokens struct can't distinguish `output: 0` from
+    /// absent). What every conversion must preserve — the documented
+    /// session-total guarantee — is the assistant input/output sums.
     pub fn token_usage_survives(
         before_target: &ConversationView,
         after_target: &ConversationView,
         failures: &mut Vec<String>,
     ) {
-        // Harnesses legitimately fold or split turns in translation
-        // (e.g. thinking-only claude turns merge into codex `reasoning`
-        // lines), so assistant indexes don't align across harnesses.
-        // The accounting invariant is order-preserving instead: the
-        // sequence of usage values on assistant turns survives, compared
-        // on input/output — the fields every wire carries (codex has no
-        // cache_write analog, cursor carries no cache counters at all).
-        let usage_seq = |v: &ConversationView| -> Vec<(Option<u32>, Option<u32>)> {
+        let sums = |v: &ConversationView| -> (u64, u64) {
             v.turns()
                 .filter(|t| matches!(t.role, Role::Assistant))
                 .filter_map(|t| t.token_usage.as_ref())
-                .map(|u| (u.input_tokens, u.output_tokens))
-                .collect()
+                .fold((0u64, 0u64), |(i, o), u| {
+                    (
+                        i + u64::from(u.input_tokens.unwrap_or(0)),
+                        o + u64::from(u.output_tokens.unwrap_or(0)),
+                    )
+                })
         };
-        let pre = usage_seq(before_target);
-        let post = usage_seq(after_target);
+        let pre = sums(before_target);
+        let post = sums(after_target);
         if pre != post {
             failures.push(format!(
-                "assistant usage sequence diverged ({} -> {} entries)\n      first:  {:?}\n      second: {:?}",
-                pre.len(),
-                post.len(),
-                pre,
-                post
+                "assistant usage totals diverged: (input, output) first={pre:?} second={post:?}"
             ));
         }
         if before_target.total_usage.is_some() && after_target.total_usage.is_none() {
@@ -1166,7 +1187,12 @@ fn run_cell(
     if target.roundtrips_compaction() {
         invariants::compaction_survives(&view_after_source, &view_first, &mut failures);
         if target.roundtrips_kept() {
-            invariants::kept_anchor_survives(&view_after_source, &view_first, &mut failures);
+            invariants::kept_anchor_survives(
+                &view_after_source,
+                &view_first,
+                target.kept_run_may_inflate(),
+                &mut failures,
+            );
         }
     }
     failures
@@ -1334,4 +1360,114 @@ fn matrix_translation_compacted() {
     }
     assert!(!sources.is_empty(), "no compacted fixtures on disk");
     run_matrix("matrix (compacted fixtures)", &sources);
+}
+
+// ── Real-artifact matrix (opt-in) ────────────────────────────────────
+
+/// Load a real local session as a matrix source. Spec: `harness:locator`,
+/// where the locator is harness-specific — a session file path (claude,
+/// codex, pi, gemini), a session id resolved against the harness's real
+/// store (opencode), a session-state directory (copilot), or a composer
+/// uuid in the real `state.vscdb` (cursor).
+fn load_real_source(spec: &str) -> Result<(String, ConversationView), String> {
+    let (harness, loc) = spec
+        .split_once(':')
+        .ok_or_else(|| format!("spec {spec:?} is not harness:locator"))?;
+    let view = match harness {
+        "claude" => {
+            let convo = toolpath_claude::ConversationReader::read_conversation(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            toolpath_claude::provider::to_view(&convo)
+        }
+        "codex" => {
+            let session = toolpath_codex::RolloutReader::read_session(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            toolpath_codex::to_view(&session)
+        }
+        "pi" => {
+            let session = toolpath_pi::reader::read_session_from_file(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            toolpath_pi::session_to_view(&session)
+        }
+        "opencode" => {
+            let mgr = toolpath_opencode::OpencodeConvo::with_resolver(
+                toolpath_opencode::PathResolver::new(),
+            );
+            let session = mgr.read_session(loc).map_err(|e| format!("read: {e}"))?;
+            toolpath_opencode::to_view(&session)
+        }
+        "gemini" => {
+            let chat = toolpath_gemini::ConversationReader::read_chat_file(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            let uuid = chat.session_id.clone();
+            toolpath_gemini::provider::to_view(&toolpath_gemini::types::Conversation::new(
+                uuid, chat,
+            ))
+        }
+        "copilot" => {
+            let session = toolpath_copilot::EventReader::read_session_dir(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            toolpath_copilot::to_view(&session)
+        }
+        "cursor" => {
+            let db = std::env::home_dir()
+                .ok_or("no home dir")?
+                .join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+            let reader =
+                toolpath_cursor::reader::DbReader::open(&db).map_err(|e| format!("open: {e}"))?;
+            let session = reader
+                .load_session(loc)
+                .map_err(|e| format!("load composer: {e}"))?;
+            toolpath_cursor::session_to_view(&session)
+        }
+        other => return Err(format!("unknown harness {other:?}")),
+    };
+    Ok((harness.to_string(), view))
+}
+
+#[test]
+#[ignore = "drives real local sessions; set TOOLPATH_REAL_MATRIX to comma-separated harness:locator specs"]
+fn matrix_translation_real_sessions() {
+    // The full translation matrix, sourced from real sessions on this
+    // machine instead of the captured fixtures — every listed source runs
+    // against every target with the same per-cell invariants. Failures
+    // aggregate across sources so one broken session doesn't hide the rest.
+    let specs = match std::env::var("TOOLPATH_REAL_MATRIX") {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => {
+            eprintln!("TOOLPATH_REAL_MATRIX unset — nothing to do");
+            return;
+        }
+    };
+    let mut failed: Vec<String> = Vec::new();
+    for spec in specs.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let (name, view) = match load_real_source(spec) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("✗ load {spec}: {e}");
+                failed.push(format!("load {spec}: {e}"));
+                continue;
+            }
+        };
+        eprintln!(
+            "── source {spec}: {} items, {} turns, {} compaction(s)",
+            view.items.len(),
+            view.turns().count(),
+            view.compactions().count()
+        );
+        let sources = vec![(name, view)];
+        if let Err(panic) = std::panic::catch_unwind(|| run_matrix(spec, &sources)) {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "non-string panic".into());
+            failed.push(format!("{spec}: {msg}"));
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "real-session matrix had failures:\n  {}",
+        failed.join("\n  ")
+    );
 }

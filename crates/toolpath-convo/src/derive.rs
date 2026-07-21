@@ -917,9 +917,12 @@ fn file_write_change(
             );
         }
         extra.insert("after".to_string(), serde_json::Value::String(content));
-    } else if let Some(edits) = input.get("edits").and_then(|v| v.as_array()) {
-        extra.insert("edits".to_string(), serde_json::Value::Array(edits.clone()));
     }
+    // Multi-edit shapes (`edits: [...]`) contribute only the raw diff: the
+    // per-edit pairs are provider-shaped JSON that `FileMutation` cannot
+    // carry, so copying them onto the wire made the first round-trip
+    // silently degrade the document. The full input still rides the
+    // `tool.invoke` step.
 
     (
         file_write_diff(&tool.name, input, path, before_state),

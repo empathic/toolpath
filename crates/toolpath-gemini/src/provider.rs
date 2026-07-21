@@ -103,7 +103,20 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
         .collect();
     let file_mutations = compute_file_mutations(msg.tool_calls());
 
-    let token_usage = msg.tokens.as_ref().map(tokens_to_usage);
+    // An all-zero counter block decodes as `None` (matching claude/pi/
+    // opencode): gemini writes degenerate `{input: 0}` records on aborted
+    // generations, and stamping them as measurements breaks cross-harness
+    // accounting.
+    let token_usage = msg.tokens.as_ref().map(tokens_to_usage).filter(|u| {
+        [
+            u.input_tokens,
+            u.output_tokens,
+            u.cache_read_tokens,
+            u.cache_write_tokens,
+        ]
+        .iter()
+        .any(|v| v.unwrap_or(0) > 0)
+    });
 
     let environment = working_dir.map(|wd| EnvironmentSnapshot {
         working_dir: Some(wd.to_string()),
@@ -1238,5 +1251,33 @@ mod tests {
         // a.json attaches to the task (first delegation), b.json is leftover
         assert_eq!(delegations[0].agent_id, "a");
         assert_eq!(delegations[1].agent_id, "b");
+    }
+
+    #[test]
+    fn all_zero_tokens_decode_as_no_usage() {
+        // Gemini writes degenerate `{input: 0}` token records on aborted
+        // generations (seen in real sessions). Placeholder counters must
+        // decode as `None`, matching the claude/pi/opencode convention —
+        // otherwise cross-harness legs that apply the convention drop the
+        // entry and accounting sequences diverge.
+        let msg: GeminiMessage = serde_json::from_value(serde_json::json!({
+            "id": "m1",
+            "timestamp": "2026-05-11T17:30:00Z",
+            "type": "gemini",
+            "content": "partial",
+            "tokens": {"input": 0}
+        }))
+        .unwrap();
+        assert_eq!(to_turn(&msg).token_usage, None);
+
+        let real: GeminiMessage = serde_json::from_value(serde_json::json!({
+            "id": "m2",
+            "timestamp": "2026-05-11T17:30:01Z",
+            "type": "gemini",
+            "content": "answer",
+            "tokens": {"input": 3, "output": 7}
+        }))
+        .unwrap();
+        assert!(to_turn(&real).token_usage.is_some());
     }
 }

@@ -101,13 +101,30 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let file_mutations = compute_file_mutations(&tool_uses, entry.cwd.as_deref());
 
-    let token_usage = msg.usage.as_ref().map(|u| TokenUsage {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-        cache_read_tokens: u.cache_read_input_tokens,
-        cache_write_tokens: u.cache_creation_input_tokens,
-        ..Default::default()
-    });
+    // An all-zero usage block is a placeholder, not a measurement —
+    // Claude stamps one on synthetic entries (API errors) that consumed
+    // nothing. The convention (matching pi/opencode) decodes it as `None`
+    // rather than stamping zero-filled counters onto a step.
+    let token_usage = msg
+        .usage
+        .as_ref()
+        .map(|u| TokenUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            cache_read_tokens: u.cache_read_input_tokens,
+            cache_write_tokens: u.cache_creation_input_tokens,
+            ..Default::default()
+        })
+        .filter(|u| {
+            [
+                u.input_tokens,
+                u.output_tokens,
+                u.cache_read_tokens,
+                u.cache_write_tokens,
+            ]
+            .iter()
+            .any(|v| v.unwrap_or(0) > 0)
+        });
 
     let environment = if entry.cwd.is_some() || entry.git_branch.is_some() {
         Some(EnvironmentSnapshot {

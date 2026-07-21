@@ -248,14 +248,21 @@ fn resolve_kept_from(
 /// (the session header, `model_change` / `thinking_level_change` / `label`
 /// metadata, folded tool results), walking the entry parent chain up to
 /// the nearest ancestor that did. Ids not present in this session's
-/// entries (e.g. a chained parent-session entry) are preserved verbatim.
+/// entries (e.g. a chained parent-session entry) are preserved verbatim —
+/// except the `<session-id>-init` virtual root, which Pi writes as the
+/// first entry's `parentId` without any such entry existing: that is the
+/// tree root and resolves to `None`.
 fn resolve_item_parent(
     start: Option<&str>,
     entry_parents: &HashMap<&str, Option<&str>>,
     item_ids: &std::collections::HashSet<String>,
+    virtual_root: &str,
 ) -> Option<String> {
     let mut cur = start?;
     for _ in 0..=entry_parents.len() {
+        if cur == virtual_root {
+            return None;
+        }
         if item_ids.contains(cur) {
             return Some(cur.to_string());
         }
@@ -583,7 +590,12 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
             Item::Compaction(c) => &mut c.parent_id,
             Item::Event(_) => continue,
         };
-        *parent = resolve_item_parent(parent.as_deref(), &entry_parents, &item_ids);
+        *parent = resolve_item_parent(
+            parent.as_deref(),
+            &entry_parents,
+            &item_ids,
+            &format!("{}-init", session.header.id),
+        );
     }
 
     // Aggregate token usage from Assistant turns.
@@ -1587,5 +1599,23 @@ mod tests {
             Role::Other("custom:foo".to_string())
         );
         assert_eq!(v.turns().next().unwrap().text, "body");
+    }
+
+    #[test]
+    fn init_virtual_root_parent_resolves_to_none() {
+        // Pi writes the first entry's parentId as `<session-id>-init` — a
+        // virtual root no entry carries as its own id (seen in real
+        // sessions). It must resolve to `None`, not survive as a dangling
+        // parent that `check_view_invariants` rejects.
+        let session = session_from(
+            vec![user_text_entry("m1", Some("sess-1-init"), "first prompt")],
+            "/tmp/p",
+        );
+        let v = session_to_view(&session);
+        assert_eq!(v.turns().next().unwrap().parent_id, None);
+        assert!(
+            toolpath_convo::testing::check_view_invariants(&v).is_empty(),
+            "invariants must accept the resolved view"
+        );
     }
 }

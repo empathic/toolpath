@@ -70,6 +70,39 @@ carried, and round-trips are lossy beyond these fields.
   no turn, so later turns whose native `parentID` named it dangled. Such
   parents now redirect to the item standing in for the skipped message —
   the boundary itself.
+- **Real-session cross-harness matrix** (`cross_harness_matrix.rs`): a new
+  opt-in `matrix_translation_real_sessions` test drives the full
+  translation matrix from real local sessions (`TOOLPATH_REAL_MATRIX`
+  env var, `harness:locator` specs). Running it over every session on a
+  dev machine (26 sources × 7 targets, then a 298-session native sweep)
+  surfaced and fixed:
+  - **`toolpath-claude`**: all-zero `usage` blocks (synthetic API-error
+    entries) decoded as measurements instead of `None`, breaking
+    cross-harness accounting; and extract lost the `<synthetic>` model
+    marker (see above).
+  - **`toolpath-gemini`**: same all-zero-decodes-as-`None` gap for
+    degenerate `{input: 0}` records on aborted generations.
+  - **`toolpath-copilot`**: the reader dropped empty-text, tool-less
+    assistant turns that carry real `outputTokens` (aborted responses),
+    un-conserving session totals; and the projector re-derived `view`
+    `view_range` from `offset`/`limit` only, so an already-native input
+    lost its range on the second cycle.
+  - **`toolpath-opencode`**: native user rows carry no `parentID`, so IR
+    turn chains broke at every user message — the reader now synthesizes
+    the linear parent, which also keeps foreign kept anchors resolvable.
+  - **`toolpath-pi`**: the `<session-id>-init` virtual root Pi writes as
+    the first entry's `parentId` survived as a dangling parent; it now
+    resolves to `None`.
+  - **`toolpath-convo`**: the multi-edit file-write fallback copied
+    provider-shaped `edits` JSON onto the wire that `FileMutation` can't
+    represent, so one round-trip silently degraded the document; the raw
+    diff (and the `tool.invoke` input) already carry that information.
+  - Matrix invariants tightened to the true contract: token-usage
+    survival is conservation of assistant input/output totals (turn
+    folding and zero↔`None` wire limits make sequence equality wrong),
+    and `kept_run_may_inflate` documents that a strictly linear target
+    (opencode) may retain intervening turns a source boundary skipped —
+    growth allowed, shrink or anchor loss still fails.
 
 Crates bumped: `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
 `toolpath-claude` 0.13.0, `toolpath-gemini` 0.7.0, `toolpath-codex`

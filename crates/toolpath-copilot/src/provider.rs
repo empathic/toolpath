@@ -469,11 +469,16 @@ fn push_linked(turns: &mut Vec<Turn>, mut t: Turn) {
 }
 
 fn turn_has_content(t: &Turn) -> bool {
+    // Token usage counts as content: an aborted response is an empty-text,
+    // tool-less assistant message that still consumed real tokens, and
+    // dropping it breaks session-total conservation across round-trips.
     !t.text.trim().is_empty()
         || !t.tool_uses.is_empty()
         || !t.delegations.is_empty()
         || !t.file_mutations.is_empty()
         || t.thinking.is_some()
+        || t.token_usage.is_some()
+        || t.attributed_token_usage.is_some()
 }
 
 fn flush(turns: &mut Vec<Turn>, current: &mut Option<Turn>) {
@@ -1056,5 +1061,44 @@ mod tests {
         assert_eq!(shell.result.as_ref().unwrap().content, "a.rs");
         // body() has two id-bearing tool calls: bash + create_file.
         assert_eq!(view.turns().nth(1).unwrap().tool_uses.len(), 2);
+    }
+
+    #[test]
+    fn empty_message_with_usage_survives_as_a_turn() {
+        // An aborted response: assistant.message with no content, no tools,
+        // no reasoning — but real outputTokens. Dropping it would break
+        // session-total conservation (seen crossing real sessions into
+        // copilot in the cross-harness matrix).
+        let body = [
+            r#"{"type":"session.start","timestamp":"2026-07-01T00:00:00Z","data":{"copilotVersion":"1.0.67","context":{"cwd":"/p"}}}"#,
+            r#"{"type":"user.message","timestamp":"2026-07-01T00:00:01Z","data":{"content":"go"}}"#,
+            r#"{"type":"assistant.turn_start","timestamp":"2026-07-01T00:00:02Z","data":{}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-07-01T00:00:03Z","data":{"content":"","outputTokens":7}}"#,
+            r#"{"type":"assistant.turn_end","timestamp":"2026-07-01T00:00:04Z","data":{}}"#,
+        ]
+        .join("\n");
+        let session = crate::Session {
+            id: "s-abort".into(),
+            dir_path: "/tmp/s-abort".into(),
+            lines: body
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect(),
+            workspace: None,
+        };
+        let view = to_view(&session);
+        let aborted = view
+            .turns()
+            .find(|t| matches!(t.role, Role::Assistant))
+            .expect("empty assistant turn with usage must survive");
+        assert_eq!(
+            aborted.token_usage.as_ref().and_then(|u| u.output_tokens),
+            Some(7)
+        );
+        assert_eq!(
+            view.total_usage.as_ref().and_then(|u| u.output_tokens),
+            Some(7),
+            "session total must include the aborted response's tokens"
+        );
     }
 }

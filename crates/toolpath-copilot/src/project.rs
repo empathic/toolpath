@@ -403,11 +403,18 @@ fn projected_tool(tu: &ToolInvocation) -> (String, Value) {
     {
         let mut args = Map::new();
         args.insert("path".into(), json!(path));
-        // Claude's Read offset/limit ≈ Copilot view's view_range.
-        let off = tu.input.get("offset").and_then(|v| v.as_i64());
-        let lim = tu.input.get("limit").and_then(|v| v.as_i64());
-        if let (Some(o), Some(l)) = (off, lim) {
-            args.insert("view_range".into(), json!([o, o + l - 1]));
+        // A native `view_range` (already-projected input) passes through
+        // unchanged — re-deriving it would drop the range and break the
+        // second-cycle fixed point. Claude's Read offset/limit ≈ Copilot
+        // view's view_range.
+        if let Some(vr) = tu.input.get("view_range").filter(|v| v.is_array()) {
+            args.insert("view_range".into(), vr.clone());
+        } else {
+            let off = tu.input.get("offset").and_then(|v| v.as_i64());
+            let lim = tu.input.get("limit").and_then(|v| v.as_i64());
+            if let (Some(o), Some(l)) = (off, lim) {
+                args.insert("view_range".into(), json!([o, o + l - 1]));
+            }
         }
         return ("view".to_string(), Value::Object(args));
     }
