@@ -27,7 +27,8 @@ carried, and round-trips are lossy beyond these fields.
   as executable checks — `check_view_invariants` (e.g. a `kept_from`
   anchor must resolve to a non-empty run on the boundary's ancestry) and
   `assert_fixpoint` (derive → extract → derive is stable) — plus a
-  proptest suite driving randomized views through them.
+  proptest suite asserting unique derived step ids, derive → extract →
+  derive stability, and byte-identical-replay drops on randomized views.
 - **`toolpath-claude`**: projection follows Claude's wire convention of
   chaining the first post-boundary entry through the synthetic summary
   (boundary ← summary ← first-post-entry) — IR parents pointing at the

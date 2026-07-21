@@ -508,9 +508,11 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // "pins" into the post-compaction context, immediately before the
     // boundary. We keep only the FIRST occurrence of each uuid: the original
     // carries the true lineage, and the re-emission is a context-window
-    // artifact, not provenance (`derive_path` would otherwise dedupe the
-    // byte-identical copies itself and rename changed ones). The kept
-    // provenance is the marked tail alone — see `compaction_from_boundary`.
+    // artifact, not provenance. Stripping must happen here, before
+    // `derive_path` — its step-level dedup compares emitted steps, where
+    // group-total token stamping can make a replayed copy differ from its
+    // original and survive as a rename. The kept provenance is the marked
+    // tail alone — see `compaction_from_boundary`.
     let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     let entries = &convo.entries;

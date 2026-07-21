@@ -278,7 +278,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
 /// set already round-trips through `preservedMessages`.
 ///
 /// `effective_parent` is the boundary's logical parent after any tool-result
-/// parent rewrites — it lands in `compactMetadata`'s `logicalParentUuid`.
+/// parent rewrites — it lands in the entry's top-level `logicalParentUuid`.
 fn compaction_entries(
     c: &Compaction,
     session_id: &str,
