@@ -195,6 +195,16 @@ struct Builder<'a> {
     /// compaction's summary. Tracked per-boundary (not session-global) so a
     /// session with several compactions keeps each one's distinct summary.
     pending_compaction_idx: Option<usize>,
+    /// Message ids that emitted no turn (e.g. a user message hosting only
+    /// a compaction part, or a summary-only synthetic message) → the item
+    /// a later turn's native `parent_id` should chain onto instead. A real
+    /// manual `/compact` writes the boundary on its own user message, and
+    /// the next assistant message's `parent_id` names it — without the
+    /// redirect that parent dangles.
+    msg_redirects: HashMap<String, Option<String>>,
+    /// Id of the most recent turn *or* compaction pushed — the redirect
+    /// target for messages that emit no turn.
+    last_anchor_id: Option<String>,
 }
 
 impl<'a> Builder<'a> {
@@ -210,6 +220,8 @@ impl<'a> Builder<'a> {
             snapshot_repo: None,
             prev_snapshot_after: None,
             pending_compaction_idx: None,
+            msg_redirects: HashMap::new(),
+            last_anchor_id: None,
         }
     }
 
@@ -217,7 +229,21 @@ impl<'a> Builder<'a> {
     /// `parent_id`.
     fn push_turn(&mut self, turn: Turn) {
         self.last_turn_id = Some(turn.id.clone());
+        self.last_anchor_id = Some(turn.id.clone());
         self.items.push(Item::Turn(turn));
+    }
+
+    /// Resolve a turn's native parent message id through `msg_redirects`,
+    /// so parents pointing at messages that emitted no turn land on the
+    /// item that took their place (usually the compaction boundary).
+    fn resolve_parent(&self, parent: Option<String>) -> Option<String> {
+        match parent {
+            Some(p) => match self.msg_redirects.get(&p) {
+                Some(redirect) => redirect.clone(),
+                None => Some(p),
+            },
+            None => None,
+        }
     }
 
     fn push_event(&mut self, event: ConversationEvent) {
@@ -248,6 +274,7 @@ impl<'a> Builder<'a> {
                     .any(|item| matches!(item, Item::Turn(t) if &t.id == *anchor))
             })
             .cloned();
+        self.last_anchor_id = Some(part.id.clone());
         self.items.push(Item::Compaction(Compaction {
             id: part.id.clone(),
             parent_id: self.last_turn_id.clone(),
@@ -381,8 +408,13 @@ impl<'a> Builder<'a> {
         }
 
         // Skip an empty user turn when the message carried only a
-        // compaction marker (the common synthetic-boundary case).
+        // compaction marker (the common synthetic-boundary case) or only
+        // a summary body. Later turns whose native `parent_id` names this
+        // message chain onto the item that stands in for it — the
+        // boundary pushed just above, or the last item before it.
         if text.is_empty() {
+            self.msg_redirects
+                .insert(msg.id.clone(), self.last_anchor_id.clone());
             return;
         }
 
@@ -556,11 +588,11 @@ impl<'a> Builder<'a> {
 
         self.push_turn(Turn {
             id: msg.id.clone(),
-            parent_id: if a.parent_id.is_empty() {
+            parent_id: self.resolve_parent(if a.parent_id.is_empty() {
                 None
             } else {
                 Some(a.parent_id.clone())
-            },
+            }),
             group_id: None,
             role: Role::Assistant,
             timestamp: millis_to_iso(msg.time_created),
@@ -1350,5 +1382,46 @@ mod tests {
         assert_eq!(ids, vec!["ses_x".to_string()]);
         let v = ConversationProvider::load_conversation(&mgr, "", "ses_x").unwrap();
         assert_eq!(v.turns().count(), 2);
+    }
+
+    #[test]
+    fn turn_parent_redirects_through_compaction_host_message() {
+        // The real manual `/compact` shape: the boundary rides a user
+        // message containing ONLY the compaction part (no text → no turn),
+        // and the next assistant message's native parentID names that
+        // message. The parent must land on the boundary item, not dangle.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.1.49',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m1','s',1001,1001,'{"role":"user","time":{"created":1001},"model":{"providerID":"anthropic","modelID":"claude"}}'),
+              ('m2','s',1002,1100,'{"parentID":"m1","role":"assistant","path":{"cwd":"/p","root":"/p"},"modelID":"claude","providerID":"anthropic","time":{"created":1002,"completed":1100}}'),
+              ('m3','s',2000,2000,'{"role":"user","time":{"created":2000},"model":{"providerID":"anthropic","modelID":"claude"}}'),
+              ('m4','s',2001,2100,'{"parentID":"m3","role":"assistant","path":{"cwd":"/p","root":"/p"},"modelID":"claude","providerID":"anthropic","time":{"created":2001,"completed":2100}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m1','s',1001,1001,'{"type":"text","text":"hi"}'),
+              ('p2','m2','s',1003,1003,'{"type":"text","text":"hello"}'),
+              ('pc','m3','s',2000,2000,'{"type":"compaction","auto":false}'),
+              ('p4','m4','s',2002,2002,'{"type":"text","text":"continuing"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+
+        let boundary = view.compactions().next().expect("boundary present");
+        assert_eq!(boundary.id, "pc");
+        assert_eq!(boundary.parent_id.as_deref(), Some("m2"));
+
+        let last_turn = view.turns().last().expect("post-boundary turn");
+        assert_eq!(last_turn.id, "m4");
+        assert_eq!(
+            last_turn.parent_id.as_deref(),
+            Some("pc"),
+            "parent must redirect from the skipped host message to the boundary"
+        );
+
+        let problems = toolpath_convo::testing::check_view_invariants(&view);
+        assert!(problems.is_empty(), "invariants violated: {problems:?}");
     }
 }

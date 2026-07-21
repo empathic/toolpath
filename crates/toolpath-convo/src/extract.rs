@@ -82,6 +82,20 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
     // Track files_changed for dedup in insertion order.
     let mut files_seen: HashSet<String> = HashSet::new();
 
+    // Session-level `files_changed` rides `meta.extra` (derive writes it
+    // from the view). Recover it first — steps carry `file.write` changes
+    // only where the source had per-turn mutations, so rebuilding from
+    // steps alone drops every file the provider recorded at session level.
+    if let Some(meta) = &path.meta
+        && let Some(list) = meta.extra.get("files_changed").and_then(|v| v.as_array())
+    {
+        for f in list.iter().filter_map(|v| v.as_str()) {
+            if files_seen.insert(f.to_string()) {
+                view.files_changed.push(f.to_string());
+            }
+        }
+    }
+
     for (step_idx, step) in path.steps.iter().enumerate() {
         // Pre-collect file.write entries on this step. They attach to the
         // turn built from this step's `conversation.append` change (below);
@@ -406,8 +420,14 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Model is attributed via the step actor (`agent:{model}`).
-    let model = model_from_actor(&step.step.actor);
+    // Model is attributed via the step actor (`agent:{model}`). An
+    // assistant turn with a `tool:` actor is a harness-synthetic message
+    // (`actor_for_turn` maps `model == "<synthetic>"` there); restore the
+    // marker so re-derivation reproduces the same actor.
+    let model = model_from_actor(&step.step.actor).or_else(|| {
+        (matches!(role, Role::Assistant) && step.step.actor.starts_with("tool:"))
+            .then(|| "<synthetic>".to_string())
+    });
 
     let stop_reason = extra
         .get("stop_reason")
@@ -1695,6 +1715,61 @@ mod tests {
         );
         let turns: Vec<&Turn> = view.turns().collect();
         assert_eq!(turns[1].parent_id.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn test_session_files_changed_recovered_from_meta() {
+        use crate::DeriveConfig;
+        // Real providers record session-level files_changed that has no
+        // per-step file.write backing (e.g. Claude without file-history
+        // snapshots); it must survive derive → extract via meta.extra.
+        let source = ConversationView {
+            id: "s1".into(),
+            items: vec![Item::Turn(bare_turn(
+                "u1",
+                None,
+                Role::User,
+                "2026-01-01T00:00:00Z",
+            ))],
+            provider_id: Some("claude-code".into()),
+            files_changed: vec!["/w/a.rs".into(), "/w/b.rs".into()],
+            ..Default::default()
+        };
+        let gen1 = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let view2 = extract_conversation(&gen1);
+        assert_eq!(view2.files_changed, source.files_changed);
+        let gen2 = crate::derive::derive_path(&view2, &DeriveConfig::default());
+        assert_eq!(
+            serde_json::to_value(&gen1).unwrap(),
+            serde_json::to_value(&gen2).unwrap(),
+            "files_changed round-trip must be stable"
+        );
+    }
+
+    #[test]
+    fn test_synthetic_assistant_turn_actor_stable() {
+        use crate::DeriveConfig;
+        // A harness-synthetic assistant message (e.g. Claude's "API Error"
+        // entries) derives to actor `tool:<provider>`; extract must restore
+        // `model = "<synthetic>"` so re-derivation keeps that actor instead
+        // of drifting to `agent:unknown`.
+        let mut t = bare_turn("a1", None, Role::Assistant, "2026-01-01T00:00:00Z");
+        t.model = Some("<synthetic>".into());
+        let source = ConversationView {
+            id: "s1".into(),
+            items: vec![Item::Turn(t)],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+        let gen1 = crate::derive::derive_path(&source, &DeriveConfig::default());
+        assert_eq!(gen1.steps[0].step.actor, "tool:claude-code");
+        let view2 = extract_conversation(&gen1);
+        let gen2 = crate::derive::derive_path(&view2, &DeriveConfig::default());
+        assert_eq!(gen2.steps[0].step.actor, "tool:claude-code");
+        assert_eq!(
+            serde_json::to_value(&gen1).unwrap(),
+            serde_json::to_value(&gen2).unwrap(),
+        );
     }
 
     #[test]

@@ -54,6 +54,22 @@ carried, and round-trips are lossy beyond these fields.
 - **`toolpath-md`**: transcript rendering matched only the newest
   `agent-coding-session` kind URI, silently downgrading v1.0.0/v1.1.0
   documents to the generic DAG layout; it now matches all three.
+- **`toolpath-convo`**: validating against real compacted sessions (10
+  live Claude/opencode sessions driven through invariants, stability, and
+  the fixpoint oracle) caught two extract gaps the fixtures missed:
+  session-level `files_changed` was rebuilt only from per-step
+  `file.write` changes, dropping every file the provider recorded at
+  session level (now recovered from `meta.extra` first); and a
+  harness-synthetic assistant turn (actor `tool:<provider>`, e.g.
+  Claude's API-error entries) lost its `<synthetic>` model marker and
+  re-derived as `agent:unknown` (now restored from the step actor). The
+  proptest generator now covers synthetic and model-less assistant turns
+  plus session-level `files_changed`.
+- **`toolpath-opencode`**: a real manual `/compact` hosts the boundary on
+  a user message containing only the compaction part; that message emits
+  no turn, so later turns whose native `parentID` named it dangled. Such
+  parents now redirect to the item standing in for the skipped message —
+  the boundary itself.
 
 Crates bumped: `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
 `toolpath-claude` 0.13.0, `toolpath-gemini` 0.7.0, `toolpath-codex`

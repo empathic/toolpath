@@ -41,8 +41,11 @@ fn turn(id: &str, parent: Option<&str>, role: Role, text: &str) -> Turn {
 /// One generated stream element, before ids/parents are resolved.
 #[derive(Debug, Clone)]
 enum Elem {
-    /// (id-pool slot, parent slot among earlier elems or None, user?)
-    Turn(u8, Option<u8>, bool),
+    /// (id-pool slot, parent slot among earlier elems or None, kind).
+    /// Kind: 0 = user, 1 = assistant with a model, 2 = harness-synthetic
+    /// assistant (`model == "<synthetic>"`, e.g. an API-error message),
+    /// 3 = assistant with no model.
+    Turn(u8, Option<u8>, u8),
     /// (has native id?, parent slot or None)
     Event(bool, Option<u8>),
     /// (parent slot or None, kept-anchor slot or None, auto?)
@@ -51,8 +54,8 @@ enum Elem {
 
 fn elem() -> impl Strategy<Value = Elem> {
     prop_oneof![
-        4 => (0u8..6, proptest::option::of(0u8..8), any::<bool>())
-            .prop_map(|(id, p, u)| Elem::Turn(id, p, u)),
+        4 => (0u8..6, proptest::option::of(0u8..8), 0u8..4)
+            .prop_map(|(id, p, kind)| Elem::Turn(id, p, kind)),
         1 => (any::<bool>(), proptest::option::of(0u8..8))
             .prop_map(|(has_id, p)| Elem::Event(has_id, p)),
         1 => (proptest::option::of(0u8..8), proptest::option::of(0u8..8), any::<bool>())
@@ -80,12 +83,18 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
     let mut compact_n = 0usize;
     for e in elems {
         match e {
-            Elem::Turn(id_slot, p, user) => {
+            Elem::Turn(id_slot, p, kind) => {
                 let id = format!("t{id_slot}");
                 let parent = resolve(p, &ids);
-                let role = if user { Role::User } else { Role::Assistant };
-                let text = format!("text-{id_slot}-{user}");
-                items.push(Item::Turn(turn(&id, parent.as_deref(), role, &text)));
+                let role = if kind == 0 { Role::User } else { Role::Assistant };
+                let text = format!("text-{id_slot}-{kind}");
+                let mut t = turn(&id, parent.as_deref(), role, &text);
+                t.model = match kind {
+                    1 => Some("model-x".into()),
+                    2 => Some("<synthetic>".into()),
+                    _ => None,
+                };
+                items.push(Item::Turn(t));
                 ids.push(id);
             }
             Elem::Event(has_id, p) => {
@@ -126,10 +135,18 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
             }
         }
     }
+    // Session-level files_changed rides `meta.extra` on the wire; a
+    // non-empty list makes the stability property cover its recovery.
+    let files_changed = if items.is_empty() {
+        vec![]
+    } else {
+        vec!["/abs/gen.rs".into(), "rel/gen.rs".into()]
+    };
     ConversationView {
         id: "prop-session".into(),
         items,
         provider_id: Some("prop".into()),
+        files_changed,
         ..Default::default()
     }
 }
