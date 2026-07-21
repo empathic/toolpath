@@ -8,6 +8,8 @@
 //! documents load and hands jaq the array.
 
 mod filter;
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) mod index;
 mod plan;
 
 use anyhow::{Context, Result};
@@ -51,18 +53,158 @@ pub struct Scope {
 /// path, which is still lean — the step values are held once, not re-serialized.
 pub fn run(scope: &Scope, code: &str, compact: bool, raw: bool) -> Result<()> {
     let plan = plan::analyze(code);
+    let ctx = LoadCtx::new(scope, code);
     // Opt-in observability: `TOOLPATH_QUERY_EXPLAIN=1` reveals the execution
     // strategy on stderr. Not a behavioral flag — purely diagnostic.
     let explain = std::env::var("TOOLPATH_QUERY_EXPLAIN");
     if matches!(explain.as_deref(), Ok(v) if !v.is_empty() && v != "0") {
         eprintln!("query plan: {}", plan.describe());
+        #[cfg(not(target_os = "emscripten"))]
+        eprintln!("query index: {}", ctx.describe(scope, code));
     }
     // Buffer stdout: the streaming path prints one value per output, and a
     // raw `StdoutLock` is line-buffered (a syscall per line).
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    execute_plan(scope, &plan, code, compact, raw, &mut out)?;
+    execute_plan(scope, &ctx, &plan, code, compact, raw, &mut out)?;
     out.flush().context("flush stdout")
+}
+
+/// Everything a per-document load needs: the content-scope filters, and (off
+/// wasm) the step index plus the filter's recognized leading predicate.
+/// Content-scoped queries (`--kind`/`--project`/`--project-under`) bypass the
+/// index entirely — its rows are wrapped unfiltered, and the path-level
+/// filters (with their canonicalization) run during wrapping — so those
+/// take the parse path where the filters already live.
+struct LoadCtx {
+    kind_sel: Option<KindSelector>,
+    project: Option<PathBuf>,
+    project_under: Option<PathBuf>,
+    #[cfg(not(target_os = "emscripten"))]
+    index: Option<index::StepIndex>,
+    #[cfg(not(target_os = "emscripten"))]
+    pred: Option<plan::RowPredicate>,
+}
+
+impl LoadCtx {
+    fn new(scope: &Scope, code: &str) -> Self {
+        #[cfg(target_os = "emscripten")]
+        let _ = code;
+        #[cfg(not(target_os = "emscripten"))]
+        let index =
+            if scope.kind.is_some() || scope.project.is_some() || scope.project_under.is_some() {
+                None
+            } else {
+                index::open_default()
+            };
+        Self {
+            kind_sel: scope.kind.as_deref().map(kinds::parse_kind_selector),
+            project: scope.project.as_deref().map(canonicalize_or_self),
+            project_under: scope.project_under.as_deref().map(canonicalize_or_self),
+            #[cfg(not(target_os = "emscripten"))]
+            pred: index.as_ref().and_then(|_| plan::row_predicate(code)),
+            #[cfg(not(target_os = "emscripten"))]
+            index,
+        }
+    }
+
+    /// One line for `TOOLPATH_QUERY_EXPLAIN`.
+    #[cfg(not(target_os = "emscripten"))]
+    fn describe(&self, scope: &Scope, code: &str) -> String {
+        let Some(_) = &self.index else {
+            return "off (disabled, unavailable, or content-scoped)".to_string();
+        };
+        if scope.inputs.is_empty()
+            && let Some(pred) = plan::absorbable_count(code)
+        {
+            return match pred {
+                Some(p) => format!("count absorbed into SQL ({})", p.describe()),
+                None => "count absorbed into SQL".to_string(),
+            };
+        }
+        match &self.pred {
+            Some(p) => format!("serving fresh docs, prefilter {}", p.describe()),
+            None => "serving fresh docs".to_string(),
+        }
+    }
+}
+
+/// One document's wrapped steps: served from the index when the doc is
+/// fresh (prefiltered in SQL), else parsed from the file — reindexing it in
+/// passing when it was merely stale. Never touches the index for `--input`
+/// files or stdin.
+fn doc_steps(ctx: &LoadCtx, src: &DocSource) -> Result<Vec<serde_json::Value>> {
+    #[cfg(not(target_os = "emscripten"))]
+    if src.indexed
+        && let Some(step_index) = &ctx.index
+        && let SourceLoc::File(path) = &src.location
+        && let Some((mtime_ns, size)) = index::file_stamp(path)
+    {
+        if let Some(steps) =
+            step_index.fresh_steps(&src.cache_id, mtime_ns, size, ctx.pred.as_ref())?
+        {
+            return Ok(steps);
+        }
+        // Stale (or never indexed): the stamp was taken before the read, so
+        // a write racing the parse re-serves from the file next query
+        // instead of going unnoticed.
+        let steps = load_and_wrap(src, None, None, None)?;
+        if let Err(e) = step_index.store(&src.cache_id, &steps, mtime_ns, size) {
+            eprintln!(
+                "warning: query index not updated for {}: {e:#}",
+                src.cache_id
+            );
+        }
+        return Ok(match &ctx.pred {
+            Some(p) => steps.into_iter().filter(|s| p.matches(s)).collect(),
+            None => steps,
+        });
+    }
+    load_and_wrap(
+        src,
+        ctx.kind_sel.as_ref(),
+        ctx.project.as_deref(),
+        ctx.project_under.as_deref(),
+    )
+}
+
+/// One document's step count under the absorbed-count path: `SELECT
+/// count(*)` for a fresh doc (no row bytes read), else the length of
+/// `doc_steps` (which reindexes and prefilters with the same predicate).
+#[cfg(not(target_os = "emscripten"))]
+fn doc_count(ctx: &LoadCtx, src: &DocSource) -> Result<i64> {
+    if src.indexed
+        && let Some(step_index) = &ctx.index
+        && let SourceLoc::File(path) = &src.location
+        && let Some((mtime_ns, size)) = index::file_stamp(path)
+        && let Some(n) = step_index.fresh_count(&src.cache_id, mtime_ns, size, ctx.pred.as_ref())?
+    {
+        return Ok(n);
+    }
+    Ok(doc_steps(ctx, src)?.len() as i64)
+}
+
+/// Wrap a whole document's steps with no content scoping — what the index
+/// stores. Used by the `write_cached` write-through.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn wrap_document(cache_id: &str, graph: &Graph) -> Vec<serde_json::Value> {
+    let mut steps = Vec::new();
+    wrap_graph(cache_id, graph, None, None, None, &mut steps);
+    steps
+}
+
+/// On a full-cache scan, drop index rows for docs no longer in the cache
+/// (`p cache rm` purges eagerly; this catches out-of-band deletions). Only a
+/// full scan sees the complete listing, so only it may prune.
+#[cfg(not(target_os = "emscripten"))]
+fn maybe_retain(scope: &Scope, ctx: &LoadCtx, sources: &[DocSource]) {
+    let full_scan = scope.source.is_none() && scope.ids.is_empty() && scope.inputs.is_empty();
+    if full_scan && let Some(step_index) = &ctx.index {
+        let keep: HashSet<&str> = sources.iter().map(|s| s.cache_id.as_str()).collect();
+        if let Err(e) = step_index.retain(&keep) {
+            eprintln!("warning: query index not pruned: {e:#}");
+        }
+    }
 }
 
 /// Dispatch a plan to its driver. `PerFileStream` and `Decompose` treat every
@@ -73,21 +215,43 @@ pub fn run(scope: &Scope, code: &str, compact: bool, raw: bool) -> Result<()> {
 #[cfg(not(target_os = "emscripten"))]
 fn execute_plan(
     scope: &Scope,
+    ctx: &LoadCtx,
     plan: &plan::Plan,
     code: &str,
     compact: bool,
     raw: bool,
     out: &mut dyn Write,
 ) -> Result<()> {
+    // Fully absorbed count: the whole filter is a (possibly predicated)
+    // `length`, so fresh docs answer with `SELECT count(*)` and no step is
+    // ever parsed. `--input` docs would still need jaq, so their presence
+    // falls through to the general drivers.
+    if ctx.index.is_some() && scope.inputs.is_empty() && plan::absorbable_count(code).is_some() {
+        filter::compile_check(code)?;
+        let mut total: i64 = 0;
+        for_each_file(
+            scope,
+            ctx,
+            |src| doc_count(ctx, src),
+            |n| {
+                total += n;
+                Ok(())
+            },
+        )?;
+        writeln!(out, "{total}")?;
+        return Ok(());
+    }
+
     match plan {
         plan::Plan::Slurp => filter::execute(plan, code, compact, raw, out, |emit| {
-            stream_files(scope, emit)
+            stream_files(scope, ctx, emit)
         }),
         plan::Plan::PerFileStream => {
             filter::compile_check(code)?;
             for_each_file(
                 scope,
-                |steps| filter::render_file(code, steps, compact, raw),
+                ctx,
+                |src| filter::render_file(code, doc_steps(ctx, src)?, compact, raw),
                 |bytes| {
                     out.write_all(&bytes)?;
                     Ok(())
@@ -100,7 +264,8 @@ fn execute_plan(
             let mut saw_file = false;
             for_each_file(
                 scope,
-                |steps| filter::partials_file(code, steps),
+                ctx,
+                |src| filter::partials_file(code, doc_steps(ctx, src)?),
                 |bytes| {
                     saw_file = true;
                     partials.extend(filter::unpack_partials(&bytes)?);
@@ -117,6 +282,7 @@ fn execute_plan(
 #[cfg(target_os = "emscripten")]
 fn execute_plan(
     scope: &Scope,
+    ctx: &LoadCtx,
     plan: &plan::Plan,
     code: &str,
     compact: bool,
@@ -124,7 +290,7 @@ fn execute_plan(
     out: &mut dyn Write,
 ) -> Result<()> {
     filter::execute(plan, code, compact, raw, out, |emit| {
-        stream_files(scope, emit)
+        stream_files(scope, ctx, emit)
     })
 }
 
@@ -138,30 +304,18 @@ fn execute_plan(
 #[cfg(not(target_os = "emscripten"))]
 fn for_each_file<T: Send>(
     scope: &Scope,
-    per_file: impl Fn(Vec<serde_json::Value>) -> Result<T> + Sync,
+    ctx: &LoadCtx,
+    per_file: impl Fn(&DocSource) -> Result<T> + Sync,
     mut consume: impl FnMut(T) -> Result<()>,
 ) -> Result<()> {
     use rayon::prelude::*;
 
-    let kind_sel = scope.kind.as_deref().map(kinds::parse_kind_selector);
-    let project = scope.project.as_deref().map(canonicalize_or_self);
-    let project_under = scope.project_under.as_deref().map(canonicalize_or_self);
     let sources = select_files(scope)?;
+    maybe_retain(scope, ctx, &sources);
 
     let chunk = rayon::current_num_threads().max(1) * 2;
     for batch in sources.chunks(chunk) {
-        let products: Vec<Result<T>> = batch
-            .par_iter()
-            .map(|src| {
-                load_and_wrap(
-                    src,
-                    kind_sel.as_ref(),
-                    project.as_deref(),
-                    project_under.as_deref(),
-                )
-                .and_then(&per_file)
-            })
-            .collect();
+        let products: Vec<Result<T>> = batch.par_iter().map(&per_file).collect();
         for (src, res) in batch.iter().zip(products) {
             match res {
                 Ok(product) => consume(product)?,
@@ -183,6 +337,11 @@ struct DocSource {
     /// or parse failure is an error — not the skip-with-warning that's right
     /// for a corrupt file encountered during the whole-cache scan.
     explicit: bool,
+    /// A cache document — the only kind the step index may serve or store.
+    /// `--input` files and stdin are never indexed. (Read only off wasm;
+    /// the emscripten build has no index.)
+    #[cfg_attr(target_os = "emscripten", allow(dead_code))]
+    indexed: bool,
 }
 
 enum SourceLoc {
@@ -205,28 +364,21 @@ impl DocSource {
 /// thread because jaq values are `Rc`-based, not `Send`. Chunking keeps
 /// output (and per-file warnings) byte-identical to a sequential scan while
 /// holding at most one chunk of parsed documents in memory.
-fn stream_files(scope: &Scope, emit: &mut dyn FnMut(Val) -> Result<()>) -> Result<()> {
-    let kind_sel = scope.kind.as_deref().map(kinds::parse_kind_selector);
-    let project = scope.project.as_deref().map(canonicalize_or_self);
-    let project_under = scope.project_under.as_deref().map(canonicalize_or_self);
+fn stream_files(
+    scope: &Scope,
+    ctx: &LoadCtx,
+    emit: &mut dyn FnMut(Val) -> Result<()>,
+) -> Result<()> {
     let sources = select_files(scope)?;
 
     #[cfg(not(target_os = "emscripten"))]
     {
         use rayon::prelude::*;
+        maybe_retain(scope, ctx, &sources);
         let chunk = rayon::current_num_threads().max(1) * 2;
         for batch in sources.chunks(chunk) {
-            let parsed: Vec<Result<Vec<serde_json::Value>>> = batch
-                .par_iter()
-                .map(|src| {
-                    load_and_wrap(
-                        src,
-                        kind_sel.as_ref(),
-                        project.as_deref(),
-                        project_under.as_deref(),
-                    )
-                })
-                .collect();
+            let parsed: Vec<Result<Vec<serde_json::Value>>> =
+                batch.par_iter().map(|src| doc_steps(ctx, src)).collect();
             for (src, res) in batch.iter().zip(parsed) {
                 emit_wrapped(src, res, emit)?;
             }
@@ -236,12 +388,7 @@ fn stream_files(scope: &Scope, emit: &mut dyn FnMut(Val) -> Result<()>) -> Resul
     // The playground build has no threads (emscripten without pthreads).
     #[cfg(target_os = "emscripten")]
     for src in &sources {
-        let res = load_and_wrap(
-            src,
-            kind_sel.as_ref(),
-            project.as_deref(),
-            project_under.as_deref(),
-        );
+        let res = doc_steps(ctx, src);
         emit_wrapped(src, res, emit)?;
     }
 
@@ -257,7 +404,14 @@ fn load_and_wrap(
 ) -> Result<Vec<serde_json::Value>> {
     let graph = read_source(src)?;
     let mut steps = Vec::new();
-    wrap_graph(src, &graph, kind_sel, project, project_under, &mut steps);
+    wrap_graph(
+        &src.cache_id,
+        &graph,
+        kind_sel,
+        project,
+        project_under,
+        &mut steps,
+    );
     Ok(steps)
 }
 
@@ -323,6 +477,7 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
                 cache_id: entry.id,
                 location: SourceLoc::File(entry.path),
                 explicit: by_id,
+                indexed: true,
             });
         }
         // Every requested `--id` must have matched a cached document.
@@ -341,6 +496,7 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
                 cache_id: "stdin".to_string(),
                 location: SourceLoc::Stdin,
                 explicit: true,
+                indexed: false,
             });
         } else {
             // The full path as given, so two inputs sharing a basename
@@ -350,6 +506,7 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
                 cache_id: inp.clone(),
                 location: SourceLoc::File(PathBuf::from(inp)),
                 explicit: true,
+                indexed: false,
             });
         }
     }
@@ -384,7 +541,7 @@ fn read_source(src: &DocSource) -> Result<Graph> {
 /// Walk a graph's inline paths, apply content scoping, and wrap surviving
 /// steps into `out`.
 fn wrap_graph(
-    src: &DocSource,
+    cache_id: &str,
     graph: &Graph,
     kind_sel: Option<&KindSelector>,
     project: Option<&FsPath>,
@@ -413,12 +570,12 @@ fn wrap_graph(
             continue;
         }
 
-        wrap_path(src, path, out);
+        wrap_path(cache_id, path, out);
     }
 }
 
 /// Wrap every step of one path, computing the dead-end set once.
-fn wrap_path(src: &DocSource, path: &Path, out: &mut Vec<serde_json::Value>) {
+fn wrap_path(cache_id: &str, path: &Path, out: &mut Vec<serde_json::Value>) {
     let dead: HashSet<&str> = query::dead_ends(&path.steps, &path.path.head)
         .into_iter()
         .map(|s| s.step.id.as_str())
@@ -435,7 +592,7 @@ fn wrap_path(src: &DocSource, path: &Path, out: &mut Vec<serde_json::Value>) {
         };
         obj.insert(
             "cache_id".to_string(),
-            serde_json::Value::String(src.cache_id.clone()),
+            serde_json::Value::String(cache_id.to_string()),
         );
         obj.insert("path".to_string(), path_ctx.clone());
         obj.insert(
@@ -492,14 +649,6 @@ mod tests {
     use super::*;
     use toolpath::v1::{Base, Graph, Path, PathIdentity, PathMeta, Step};
 
-    fn doc_src(id: &str) -> DocSource {
-        DocSource {
-            cache_id: id.to_string(),
-            location: SourceLoc::Stdin,
-            explicit: false,
-        }
-    }
-
     /// A path with a fork: s1 → {s2 → s3 (head), s2a (dead end)}.
     fn forked_path() -> Path {
         let s1 = Step::new("s1", "human:alex", "2026-01-01T10:00:00Z")
@@ -533,7 +682,7 @@ mod tests {
     fn wraps_step_verbatim_with_context() {
         let path = forked_path();
         let mut out = Vec::new();
-        wrap_path(&doc_src("claude-abc"), &path, &mut out);
+        wrap_path("claude-abc", &path, &mut out);
 
         assert_eq!(out.len(), 4);
         let first = &out[0];
@@ -551,7 +700,7 @@ mod tests {
     fn dead_end_flag_tracks_ancestry_of_head() {
         let path = forked_path();
         let mut out = Vec::new();
-        wrap_path(&doc_src("g"), &path, &mut out);
+        wrap_path("g", &path, &mut out);
 
         let dead: std::collections::HashMap<&str, bool> = out
             .iter()
@@ -573,12 +722,12 @@ mod tests {
         let graph = Graph::from_path(forked_path());
         let mut out = Vec::new();
         let sel = kinds::parse_kind_selector(toolpath::v1::PATH_KIND_AGENT_CODING_SESSION);
-        wrap_graph(&doc_src("g"), &graph, Some(&sel), None, None, &mut out);
+        wrap_graph("g", &graph, Some(&sel), None, None, &mut out);
         assert_eq!(out.len(), 4, "matching kind keeps all steps");
 
         out.clear();
         let miss = kinds::parse_kind_selector("agent-coding-session/v2");
-        wrap_graph(&doc_src("g"), &graph, Some(&miss), None, None, &mut out);
+        wrap_graph("g", &graph, Some(&miss), None, None, &mut out);
         assert!(out.is_empty(), "non-matching kind drops the whole path");
     }
 

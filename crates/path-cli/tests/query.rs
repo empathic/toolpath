@@ -625,3 +625,101 @@ fn query_project_under_scopes_sync_and_read() {
         .stdout(predicate::str::contains("0"))
         .stderr(predicate::str::contains("synced").not());
 }
+
+// ── The SQLite step index ─────────────────────────────────────────────
+//
+// The index is a disposable accelerator: its output must be byte-identical
+// to the plain file-parsing path, it must self-heal when a cache file
+// changes behind it, and `TOOLPATH_QUERY_NO_INDEX` must bypass it.
+
+/// Stdout of a query run in `cfg`, optionally with the index disabled.
+fn query_stdout(cfg: &Path, args: &[&str], no_index: bool) -> String {
+    let mut c = cmd();
+    c.env("TOOLPATH_CONFIG_DIR", cfg);
+    if no_index {
+        c.env("TOOLPATH_QUERY_NO_INDEX", "1");
+    }
+    let assert = c
+        .arg("query")
+        .arg("--no-sync")
+        .args(args)
+        .assert()
+        .success();
+    String::from_utf8(assert.get_output().stdout.clone()).unwrap()
+}
+
+#[test]
+fn index_output_matches_file_path_for_every_plan() {
+    let cfg = sandbox();
+    for args in [
+        // Absorbed counts (bare and predicated).
+        &["length"] as &[&str],
+        &["map(select(.dead_end)) | length"],
+        // Decompose with a recognized prefilter, and without.
+        &["map(select(.step.actor | startswith(\"agent:\")))"],
+        &["map(.step.id)"],
+        // Stream with a recognized prefilter.
+        &[".[] | select(.dead_end) | .step.id"],
+        // Slurp (holistic) with a recognized prefilter in front.
+        &["map(select(.step.actor == \"human:alex\")) | group_by(.step.id) | length"],
+        // Slurp, nothing recognized.
+        &["group_by(.step.actor) | map({a: .[0].step.actor, n: length})"],
+        // Scoped to a source prefix.
+        &["--source", "claude", "map(.step.id)"],
+        // Raw string output.
+        &["--raw", ".[] | .step.actor"],
+    ] {
+        let plain = query_stdout(cfg.path(), args, true);
+        let first = query_stdout(cfg.path(), args, false); // builds the index
+        let second = query_stdout(cfg.path(), args, false); // serves from it
+        assert_eq!(first, plain, "first (indexing) run differs for {args:?}");
+        assert_eq!(second, plain, "index-served run differs for {args:?}");
+    }
+    assert!(
+        cfg.path().join("index.db").exists(),
+        "queries must have materialized the index"
+    );
+}
+
+#[test]
+fn index_self_heals_when_a_cache_file_changes() {
+    let cfg = sandbox();
+    assert_eq!(query_stdout(cfg.path(), &["length"], false).trim(), "6");
+
+    // The doc shrinks behind the index's back (git-pr42 has 2 steps).
+    std::fs::remove_file(cfg.path().join("documents/git-pr42.json")).unwrap();
+    assert_eq!(query_stdout(cfg.path(), &["length"], false).trim(), "4");
+
+    // And a rewritten doc re-derives rather than serving stale rows.
+    seed(cfg.path(), "claude-sess1", GIT_DOC);
+    assert_eq!(query_stdout(cfg.path(), &["length"], false).trim(), "2");
+}
+
+#[test]
+fn explain_reports_index_strategy() {
+    let cfg = sandbox();
+    let assert = cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("TOOLPATH_QUERY_EXPLAIN", "1")
+        .args(["query", "--no-sync", "map(select(.dead_end)) | length"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("query index: count absorbed into SQL (dead_end=true)"),
+        "explain must name the absorbed strategy: {stderr}"
+    );
+}
+
+#[test]
+fn cache_rm_purges_index_rows() {
+    let cfg = sandbox();
+    query_stdout(cfg.path(), &["length"], false);
+
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "rm", "git-pr42"])
+        .assert()
+        .success();
+    assert_eq!(query_stdout(cfg.path(), &["length"], false).trim(), "4");
+}

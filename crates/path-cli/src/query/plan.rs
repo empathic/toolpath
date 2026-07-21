@@ -23,6 +23,8 @@
 
 use jaq_core::load::{self, parse::BinaryOp, parse::Term};
 use jaq_core::path::Part;
+#[cfg(not(target_os = "emscripten"))]
+use jaq_core::{load::lex::StrPart, ops::Cmp, path::Opt};
 
 /// How to execute a filter over the cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +56,213 @@ impl Plan {
             }
         }
     }
+}
+
+/// A per-row predicate recognized from a filter's leading `select`, mappable
+/// to SQL over the step index's generated columns. Recognition is exact, not
+/// merely implied: on wrapper-produced rows (`dead_end` always a boolean,
+/// `.step.actor` always a string) each atom means precisely its jq
+/// counterpart, so one recognizer serves both index prefiltering and the
+/// fully absorbed `count(*)` path. Anything not on this whitelist simply
+/// isn't recognized — the query still runs, unprefiltered.
+#[cfg(not(target_os = "emscripten"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowPredicate {
+    /// `select(.dead_end)` / `select(.dead_end | not)`
+    DeadEnd(bool),
+    /// `select(.step.actor == "…")`
+    ActorEq(String),
+    /// `select(.step.actor | startswith("…"))`
+    ActorStartsWith(String),
+    /// `select(.path.meta.source == "…")`
+    SourceEq(String),
+    /// `select(a and b)`
+    And(Box<RowPredicate>, Box<RowPredicate>),
+}
+
+#[cfg(not(target_os = "emscripten"))]
+impl RowPredicate {
+    /// The in-code mirror of the SQL clause, applied to rows that were just
+    /// reparsed from a stale file (the index's WHERE couldn't run). Must
+    /// agree with `index::predicate_clause` on every wrapper-produced row.
+    pub fn matches(&self, row: &serde_json::Value) -> bool {
+        match self {
+            RowPredicate::DeadEnd(b) => row["dead_end"].as_bool() == Some(*b),
+            RowPredicate::ActorEq(s) => row["step"]["actor"].as_str() == Some(s),
+            RowPredicate::ActorStartsWith(s) => row["step"]["actor"]
+                .as_str()
+                .is_some_and(|a| a.starts_with(s)),
+            RowPredicate::SourceEq(s) => row["path"]["meta"]["source"].as_str() == Some(s),
+            RowPredicate::And(l, r) => l.matches(row) && r.matches(row),
+        }
+    }
+
+    /// Short form for `TOOLPATH_QUERY_EXPLAIN`.
+    pub fn describe(&self) -> String {
+        match self {
+            RowPredicate::DeadEnd(b) => format!("dead_end={b}"),
+            RowPredicate::ActorEq(s) => format!("actor={s:?}"),
+            RowPredicate::ActorStartsWith(s) => format!("actor^={s:?}"),
+            RowPredicate::SourceEq(s) => format!("source={s:?}"),
+            RowPredicate::And(l, r) => format!("{} and {}", l.describe(), r.describe()),
+        }
+    }
+}
+
+/// The predicate established by the filter's first pipeline stage, if fully
+/// recognized: `map(select(P)) | …`, `[.[] | select(P)] | …`, or
+/// `.[] | select(P) | …`. Rows failing `P` are dropped by that first stage
+/// before anything downstream can observe them, so prefiltering the input
+/// with `P` leaves every later stage's input — and the final answer —
+/// unchanged, whatever the plan.
+#[cfg(not(target_os = "emscripten"))]
+pub fn row_predicate(code: &str) -> Option<RowPredicate> {
+    let term = load::parse(code, |p| p.term())?;
+    let segs = pipe_segments(&term)?;
+    if let Some(body) = map_select_body(segs[0]) {
+        return predicate(body);
+    }
+    if is_iterate(segs[0])
+        && let Some(second) = segs.get(1)
+        && let Some(body) = select_body(second)
+    {
+        return predicate(body);
+    }
+    None
+}
+
+/// Whether the whole filter is a count the index can answer with
+/// `SELECT count(*)`: bare `length`, or `map(select(P)) | length` (and the
+/// collected-iteration spelling) with `P` fully recognized. Returns the
+/// predicate to count under (`None` = count everything).
+#[cfg(not(target_os = "emscripten"))]
+pub fn absorbable_count(code: &str) -> Option<Option<RowPredicate>> {
+    let term = load::parse(code, |p| p.term())?;
+    let segs = pipe_segments(&term)?;
+    let is_length = |t: &Term<&str>| matches!(t, Term::Call(name, args) if *name == "length" && args.is_empty());
+    match segs.as_slice() {
+        [only] if is_length(only) => Some(None),
+        [head, tail] if is_length(tail) => {
+            let body = map_select_body(head)?;
+            Some(Some(predicate(body)?))
+        }
+        _ => None,
+    }
+}
+
+/// `select(P)` → `P`.
+#[cfg(not(target_os = "emscripten"))]
+fn select_body<'a, 's>(t: &'a Term<&'s str>) -> Option<&'a Term<&'s str>> {
+    match t {
+        Term::Call(name, args) if *name == "select" && args.len() == 1 => Some(&args[0]),
+        _ => None,
+    }
+}
+
+/// `map(select(P))` or `[.[] | select(P)]` → `P`.
+#[cfg(not(target_os = "emscripten"))]
+fn map_select_body<'a, 's>(t: &'a Term<&'s str>) -> Option<&'a Term<&'s str>> {
+    if let Term::Call(name, args) = t
+        && *name == "map"
+        && args.len() == 1
+    {
+        return select_body(&args[0]);
+    }
+    if let Term::Arr(Some(inner)) = t {
+        let segs = pipe_segments(inner)?;
+        if let [head, sel] = segs.as_slice()
+            && is_iterate(head)
+        {
+            return select_body(sel);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn predicate(t: &Term<&str>) -> Option<RowPredicate> {
+    match t {
+        Term::BinOp(l, BinaryOp::And, r) => Some(RowPredicate::And(
+            Box::new(predicate(l)?),
+            Box::new(predicate(r)?),
+        )),
+        // `.step.actor == "…"` / `.path.meta.source == "…"` (either order).
+        Term::BinOp(l, BinaryOp::Cmp(Cmp::Eq), r) => {
+            let (path, lit) = match (field_path(l), str_lit(r)) {
+                (Some(p), Some(s)) => (p, s),
+                _ => (field_path(r)?, str_lit(l)?),
+            };
+            match path.as_slice() {
+                ["step", "actor"] => Some(RowPredicate::ActorEq(lit)),
+                ["path", "meta", "source"] => Some(RowPredicate::SourceEq(lit)),
+                _ => None,
+            }
+        }
+        // `.step.actor | startswith("…")`
+        Term::BinOp(l, BinaryOp::Pipe(None), r) => match r.as_ref() {
+            Term::Call(name, args)
+                if *name == "startswith"
+                    && args.len() == 1
+                    && field_path(l).as_deref() == Some(&["step", "actor"]) =>
+            {
+                Some(RowPredicate::ActorStartsWith(str_lit(&args[0])?))
+            }
+            Term::Call(name, args)
+                if *name == "not"
+                    && args.is_empty()
+                    && field_path(l).as_deref() == Some(&["dead_end"]) =>
+            {
+                Some(RowPredicate::DeadEnd(false))
+            }
+            _ => None,
+        },
+        // `.dead_end` — truthiness; exact because the wrapper always writes
+        // a boolean.
+        _ => match field_path(t)?.as_slice() {
+            ["dead_end"] => Some(RowPredicate::DeadEnd(true)),
+            _ => None,
+        },
+    }
+}
+
+/// `.a.b.c` as `["a","b","c"]` — literal, non-optional field accesses only.
+#[cfg(not(target_os = "emscripten"))]
+fn field_path<'a>(t: &Term<&'a str>) -> Option<Vec<&'a str>> {
+    let Term::Path(inner, path) = t else {
+        return None;
+    };
+    if !matches!(inner.as_ref(), Term::Id) {
+        return None;
+    }
+    let mut fields = Vec::with_capacity(path.0.len());
+    for (part, opt) in &path.0 {
+        if !matches!(opt, Opt::Essential) {
+            return None;
+        }
+        let Part::Index(idx) = part else {
+            return None;
+        };
+        fields.push(term_str(idx)?);
+    }
+    (!fields.is_empty()).then_some(fields)
+}
+
+/// A plain string literal (no interpolation, no escapes, no format).
+#[cfg(not(target_os = "emscripten"))]
+fn term_str<'a>(t: &Term<&'a str>) -> Option<&'a str> {
+    match t {
+        Term::Str(None, parts) => match parts.as_slice() {
+            [StrPart::Str(s)] => Some(s),
+            [] => Some(""),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn str_lit(t: &Term<&str>) -> Option<String> {
+    term_str(t).map(str::to_string)
 }
 
 /// Classify `code` into a [`Plan`]. Unparseable or unrecognized filters map to
@@ -324,5 +533,115 @@ mod tests {
     fn bare_identity_slurps() {
         // `.` (whole array) has no decomposition; slurp (it's cheap anyway).
         assert_eq!(analyze("."), Plan::Slurp);
+    }
+
+    // ── Row-predicate recognition (index pushdown) ────────────────────
+
+    #[test]
+    fn recognizes_leading_select_predicates() {
+        assert_eq!(
+            row_predicate("map(select(.dead_end))"),
+            Some(RowPredicate::DeadEnd(true))
+        );
+        assert_eq!(
+            row_predicate(".[] | select(.dead_end | not) | .step.id"),
+            Some(RowPredicate::DeadEnd(false))
+        );
+        assert_eq!(
+            row_predicate("[.[] | select(.step.actor == \"human:ben\")] | length"),
+            Some(RowPredicate::ActorEq("human:ben".into()))
+        );
+        assert_eq!(
+            row_predicate(r#"map(select(.step.actor | startswith("agent:")))"#),
+            Some(RowPredicate::ActorStartsWith("agent:".into()))
+        );
+        assert_eq!(
+            row_predicate(r#"map(select(.path.meta.source == "claude-code")) | length"#),
+            Some(RowPredicate::SourceEq("claude-code".into()))
+        );
+        assert_eq!(
+            row_predicate(r#"map(select(.dead_end and .step.actor == "agent:x"))"#),
+            Some(RowPredicate::And(
+                Box::new(RowPredicate::DeadEnd(true)),
+                Box::new(RowPredicate::ActorEq("agent:x".into()))
+            ))
+        );
+        // Literal-first comparison order.
+        assert_eq!(
+            row_predicate(r#"map(select("agent:x" == .step.actor))"#),
+            Some(RowPredicate::ActorEq("agent:x".into()))
+        );
+    }
+
+    #[test]
+    fn unrecognized_predicates_stay_none() {
+        // A partially recognized conjunction is not used (whole-P only).
+        assert_eq!(
+            row_predicate("map(select(.dead_end and (.change | length > 2)))"),
+            None
+        );
+        // Fields off the whitelist.
+        assert_eq!(row_predicate("map(select(.step.intent == \"x\"))"), None);
+        // Optional access, dynamic values, non-select heads.
+        assert_eq!(row_predicate("map(select(.dead_end?))"), None);
+        assert_eq!(row_predicate("map(select(.step.actor == .other))"), None);
+        assert_eq!(row_predicate("map(.step)"), None);
+        assert_eq!(row_predicate("group_by(.step.actor)"), None);
+        // select not in the first stage: prefiltering could change what the
+        // first stage sees, so it is not recognized.
+        assert_eq!(row_predicate("map(.step) | map(select(.dead_end))"), None);
+        // Interpolated strings are not literals.
+        assert_eq!(
+            row_predicate(r#"map(select(.step.actor == "a\(.x)"))"#),
+            None
+        );
+    }
+
+    #[test]
+    fn matches_mirrors_the_predicates() {
+        use serde_json::json;
+        let row = json!({
+            "dead_end": true,
+            "step": {"actor": "agent:claude"},
+            "path": {"meta": {"source": "claude-code"}}
+        });
+        assert!(RowPredicate::DeadEnd(true).matches(&row));
+        assert!(!RowPredicate::DeadEnd(false).matches(&row));
+        assert!(RowPredicate::ActorEq("agent:claude".into()).matches(&row));
+        assert!(RowPredicate::ActorStartsWith("agent:".into()).matches(&row));
+        assert!(!RowPredicate::ActorStartsWith("human:".into()).matches(&row));
+        assert!(RowPredicate::SourceEq("claude-code".into()).matches(&row));
+        assert!(
+            RowPredicate::And(
+                Box::new(RowPredicate::DeadEnd(true)),
+                Box::new(RowPredicate::ActorStartsWith("agent:".into()))
+            )
+            .matches(&row)
+        );
+        // Missing source: `null == "x"` is false, like the SQL NULL.
+        let no_meta = json!({"dead_end": false, "step": {"actor": "a"}, "path": {"id": "p"}});
+        assert!(!RowPredicate::SourceEq("claude-code".into()).matches(&no_meta));
+    }
+
+    #[test]
+    fn absorbable_counts() {
+        assert_eq!(absorbable_count("length"), Some(None));
+        assert_eq!(
+            absorbable_count("map(select(.dead_end)) | length"),
+            Some(Some(RowPredicate::DeadEnd(true)))
+        );
+        assert_eq!(
+            absorbable_count(r#"[.[] | select(.step.actor | startswith("agent:"))] | length"#),
+            Some(Some(RowPredicate::ActorStartsWith("agent:".into())))
+        );
+        // Not a bare count: extra stages, unrecognized predicates, other tails.
+        assert_eq!(
+            absorbable_count("map(select(.dead_end)) | length + 1"),
+            None
+        );
+        assert_eq!(absorbable_count("map(select(.tokens > 3)) | length"), None);
+        assert_eq!(absorbable_count("map(.step) | length"), None);
+        assert_eq!(absorbable_count(".[] | length"), None);
+        assert_eq!(absorbable_count("length | tostring"), None);
     }
 }
