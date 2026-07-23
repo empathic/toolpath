@@ -135,6 +135,13 @@ pub struct ResumeArgs {
     /// local harness.
     #[arg(long)]
     pub remote: Option<String>,
+
+    /// Wrap the remote launch in a named tmux session
+    /// (`tmux new-session -A -s path-<id> …`) so it survives SSH
+    /// disconnects and can be detached/re-attached; re-running the same
+    /// resume re-attaches. Requires --remote and tmux on the remote.
+    #[arg(long, requires = "remote")]
+    pub tmux: bool,
 }
 
 pub fn run(args: ResumeArgs) -> Result<()> {
@@ -1169,7 +1176,12 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     // 4. Interactive launch of the harness against the shipped session,
     //    with a real TTY — the one step that stays on the real `ssh`
     //    binary (it needs the user's terminal and ssh config).
-    let launch_cmd = remote_launch_command(&session_id, args.cwd.as_deref());
+    let launch_cmd = remote_launch_command(
+        crate::cmd_share::Harness::Claude,
+        &session_id,
+        args.cwd.as_deref(),
+        args.tmux,
+    );
     let (binary, argv) = ssh_invocation_tty(remote, &launch_cmd, true)?;
     let cwd = std::env::current_dir()?;
     exec_harness(&binary, &argv, &cwd, exec)
@@ -1183,19 +1195,53 @@ fn claude_project_dir_name(project_path: &str) -> String {
     project_path.replace(['/', '_', '.'], "-")
 }
 
-/// The far-side launch command: `claude -r <id>`, prefixed with a
-/// `cd <cwd> &&` when a cwd was pinned so the harness starts where the
-/// shipped session is keyed. The directory itself is created over SFTP
-/// before launch — this is the only remote shell string left, and it's
-/// minimal because a `cd` can't happen anywhere else.
-fn remote_launch_command(session_id: &str, cwd: Option<&std::path::Path>) -> String {
-    let launch = format!("claude -r {}", shell_single_quote(session_id));
-    match cwd {
-        Some(dir) => format!(
-            "cd {} && {launch}",
-            shell_single_quote(&dir.display().to_string())
-        ),
+/// The far-side launch command, derived from the same per-harness
+/// invocation table the local resume uses (`name()` + [`argv_for`]) so
+/// the two can't drift — prefixed with a `cd <cwd> &&` when a cwd was
+/// pinned so the harness starts where the shipped session is keyed.
+/// The directory itself is created over SFTP before launch — this is
+/// the only remote shell string left, and it's minimal because a `cd`
+/// can't happen anywhere else.
+fn remote_launch_command(
+    harness: crate::cmd_share::Harness,
+    session_id: &str,
+    cwd: Option<&std::path::Path>,
+    tmux: bool,
+) -> String {
+    let launch: Vec<String> = std::iter::once(harness.name().to_string())
+        .chain(argv_for(harness, session_id).iter().map(|a| shell_quote(a)))
+        .collect();
+    let launch = launch.join(" ");
+    let launch = match cwd {
+        Some(dir) => format!("cd {} && {launch}", shell_quote(&dir.display().to_string())),
         None => launch,
+    };
+    if tmux {
+        // Detachable session: `-A` attaches when the named session
+        // already exists, so re-running the same resume re-attaches
+        // instead of erroring. Session names can't contain `.`/`:`.
+        let name = format!("path-{}", session_id.replace(['.', ':'], "-"));
+        format!(
+            "tmux new-session -A -s {} {}",
+            shell_quote(&name),
+            shell_single_quote(&launch)
+        )
+    } else {
+        launch
+    }
+}
+
+/// Quote for the remote shell only when needed — plain flags, ids, and
+/// paths stay bare so the echoed recipe reads like something a human
+/// would type; anything else gets [`shell_single_quote`].
+fn shell_quote(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@'));
+    if safe {
+        s.to_string()
+    } else {
+        shell_single_quote(s)
     }
 }
 
@@ -1427,14 +1473,53 @@ mod tests {
     }
 
     #[test]
-    fn remote_launch_command_quotes_id_and_cds() {
-        assert_eq!(remote_launch_command("sess-1", None), "claude -r 'sess-1'");
+    fn remote_launch_command_derives_from_harness_table() {
+        use crate::cmd_share::Harness;
+        // Binary + argv come from the same per-harness table the local
+        // resume uses; safe args stay bare so the recipe reads cleanly.
+        assert_eq!(
+            remote_launch_command(Harness::Claude, "sess-1", None, false),
+            "claude -r sess-1"
+        );
         // Directory creation happens over SFTP before launch — the shell
         // string stays minimal: just the cd and the harness.
         assert_eq!(
-            remote_launch_command("sess-1", Some(std::path::Path::new("/srv/work"))),
-            "cd '/srv/work' && claude -r 'sess-1'"
+            remote_launch_command(
+                Harness::Claude,
+                "sess-1",
+                Some(std::path::Path::new("/srv/work")),
+                false
+            ),
+            "cd /srv/work && claude -r sess-1"
         );
+    }
+
+    #[test]
+    fn remote_launch_command_tmux_wraps_for_detachable_sessions() {
+        use crate::cmd_share::Harness;
+        // --tmux: the whole launch runs inside a named tmux session so
+        // it survives SSH disconnects; -A re-attaches on a second run.
+        assert_eq!(
+            remote_launch_command(Harness::Claude, "sess-1", None, true),
+            "tmux new-session -A -s path-sess-1 'claude -r sess-1'"
+        );
+        assert_eq!(
+            remote_launch_command(
+                Harness::Claude,
+                "sess-1",
+                Some(std::path::Path::new("/srv/work")),
+                true
+            ),
+            "tmux new-session -A -s path-sess-1 'cd /srv/work && claude -r sess-1'"
+        );
+    }
+
+    #[test]
+    fn shell_quote_leaves_safe_strings_bare() {
+        assert_eq!(shell_quote("-r"), "-r");
+        assert_eq!(shell_quote("/srv/work"), "/srv/work");
+        assert_eq!(shell_quote("has space"), "'has space'");
+        assert_eq!(shell_quote(""), "''");
     }
 
     /// Write a minimal agent-bearing Path to a temp file and return
@@ -1453,6 +1538,7 @@ mod tests {
             force: false,
             url: None,
             remote: Some("ssh://dev@example.com:2222".to_string()),
+            tmux: false,
         }
     }
 
@@ -1505,7 +1591,7 @@ mod tests {
             cap.args
         );
         assert!(
-            cap.args.iter().any(|a| a == "claude -r 'remote-v1-test'"),
+            cap.args.iter().any(|a| a == "claude -r remote-v1-test"),
             "launch cmd: {:?}",
             cap.args
         );
@@ -1530,7 +1616,7 @@ mod tests {
         assert!(
             cap.args
                 .iter()
-                .any(|a| a == "cd '/srv/fresh' && claude -r 'remote-v1-test'"),
+                .any(|a| a == "cd /srv/fresh && claude -r remote-v1-test"),
             "launch should cd only (no shell mkdir): {:?}",
             cap.args
         );
@@ -1607,6 +1693,7 @@ mod tests {
             force: false,
             url: None,
             remote: None,
+            tmux: false,
         };
 
         let recorder = RecordingExec::default();
@@ -1745,6 +1832,7 @@ mod tests {
             force: false,
             url: None,
             remote: None,
+            tmux: false,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
@@ -1780,6 +1868,7 @@ mod tests {
             force: false,
             url: None,
             remote: None,
+            tmux: false,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
@@ -1842,6 +1931,7 @@ mod tests {
             force: false,
             url: None,
             remote: None,
+            tmux: false,
         };
         let result = resolve_input(&args);
 
@@ -1871,6 +1961,7 @@ mod tests {
             force: false,
             url: None,
             remote: None,
+            tmux: false,
         };
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();

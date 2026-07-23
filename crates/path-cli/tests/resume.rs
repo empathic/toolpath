@@ -269,6 +269,7 @@ fn cache_id_input_loads_and_projects() {
         force: false,
         url: None,
         remote: None,
+        tmux: false,
     };
 
     let recorder = RecordingExec::default();
@@ -409,7 +410,7 @@ fn remote_flag_dispatches_resume_over_ssh() {
     assert!(
         cap.args
             .iter()
-            .any(|a| a.contains("claude -r 'resume-remote-int'")),
+            .any(|a| a.contains("claude -r resume-remote-int")),
         "ssh should launch `claude -r <id>` on the remote, got {:?}",
         cap.args
     );

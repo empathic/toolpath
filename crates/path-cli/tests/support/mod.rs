@@ -203,6 +203,7 @@ pub fn args_explicit(input: PathBuf, cwd: &Path, harness: HarnessArg) -> ResumeA
         force: false,
         url: None,
         remote: None,
+        tmux: false,
     }
 }
 
