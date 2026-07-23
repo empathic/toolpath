@@ -268,6 +268,7 @@ fn cache_id_input_loads_and_projects() {
         no_cache: false,
         force: false,
         url: None,
+        remote: None,
     };
 
     let recorder = RecordingExec::default();
@@ -352,4 +353,75 @@ fn explicit_harness_not_on_path_errors() {
     let s = err.to_string();
     assert!(s.contains("isn't on PATH"), "actual: {s}");
     assert!(s.contains("claude"), "actual: {s}");
+}
+
+// ── Remote resume over SSH ──────────────────────────────────────────
+
+/// With `--remote <ssh url>`, resume should be dispatched to the remote
+/// host over SSH rather than exec'ing a local harness: the recorded
+/// invocation must be `ssh`, target the remote host, and run `path
+/// resume` on the far side.
+#[test]
+fn remote_flag_dispatches_resume_over_ssh() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-remote-int");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), HarnessArg::Claude);
+    args.remote = Some("ssh://dev@example.com:2222/home/dev/project".to_string());
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(args, &recorder).unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(
+        cap.binary, "ssh",
+        "remote resume should exec ssh, not the local harness (got {})",
+        cap.binary
+    );
+    assert!(
+        cap.args.iter().any(|a| a.contains("example.com")),
+        "ssh argv should target the remote host, got {:?}",
+        cap.args
+    );
+    assert!(
+        cap.args.iter().any(|a| a.contains("path resume")),
+        "ssh should invoke `path resume` on the remote, got {:?}",
+        cap.args
+    );
+}
+
+/// `--remote` without `--harness` must fail fast on the host with a
+/// clear message: the remote resume runs over a non-interactive SSH
+/// session where the harness picker has no TTY, and the host can't run
+/// the picker either (it never resolves the doc in v0).
+#[test]
+fn remote_without_harness_errors_before_dispatch() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-remote-nohar");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), HarnessArg::Claude);
+    args.harness = None;
+    args.remote = Some("ssh://dev@example.com:2222".to_string());
+
+    let recorder = RecordingExec::default();
+    let err = run_with_strategy(args, &recorder).unwrap_err();
+    let s = err.to_string();
+    assert!(
+        s.contains("--harness"),
+        "error should mention --harness: {s}"
+    );
+    assert!(
+        recorder.captured().binary.is_empty(),
+        "must not dispatch ssh when --harness is missing"
+    );
 }

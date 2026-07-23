@@ -35,6 +35,17 @@
 //! integration tests use [`RecordingExec`] to capture
 //! `(binary, args, cwd)` without launching anything.
 //!
+//! ## Remote (`--remote ssh://[user@]host[:port][/path]`)
+//!
+//! v0: dispatch the whole resume to a remote host that has `path`
+//! installed, over SSH. The host does **no** local resolution or
+//! projection — it builds an `ssh` command and hands off. `--remote`
+//! itself is the only host-side arg (forwarding it would recurse);
+//! every other arg is forwarded verbatim into the far-side
+//! `path resume …` so the remote does the resolve, harness pick,
+//! projection, and exec. `--harness` is effectively required here:
+//! without it the remote's interactive picker has no TTY over SSH.
+//!
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
 //! for the full design.
 
@@ -83,6 +94,13 @@ pub struct ResumeArgs {
     /// then `$PATHBASE_URL`, then `https://pathbase.dev`.
     #[arg(long)]
     pub url: Option<String>,
+
+    /// Resume on a remote host over SSH instead of locally. Takes a
+    /// full SSH URL (`ssh://[user@]host[:port][/path]`). When set, the
+    /// resume is dispatched to the remote host rather than exec'ing a
+    /// local harness.
+    #[arg(long)]
+    pub remote: Option<String>,
 }
 
 pub fn run(args: ResumeArgs) -> Result<()> {
@@ -92,6 +110,28 @@ pub fn run(args: ResumeArgs) -> Result<()> {
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
+    // v0 remote resume: forward `path resume <input>` to a remote host
+    // over SSH, where `path` is installed and does the resolve itself.
+    // No local resolution or harness projection happens.
+    if let Some(remote) = args.remote.as_deref() {
+        // The picker can't run over a non-interactive SSH session (no
+        // TTY on the remote), and the host can't run it either — in v0
+        // it never resolves the doc, so it knows neither the source
+        // harness nor what's installed on the remote. Require an
+        // explicit pin and fail fast here rather than deep on the far
+        // side.
+        if args.harness.is_none() {
+            anyhow::bail!(
+                "--remote requires --harness <X>: the remote resume runs over a \
+                 non-interactive SSH session, so the harness picker has no TTY"
+            );
+        }
+        let remote_cmd = remote_resume_command(&args);
+        let (binary, argv) = ssh_invocation(remote, &remote_cmd)?;
+        let cwd = std::env::current_dir()?;
+        return exec_harness(&binary, &argv, &cwd, exec);
+    }
+
     let (graph, source_harness) = resolve_input(&args)?;
     let path = ensure_path_with_agent(&graph)?;
 
@@ -586,6 +626,90 @@ pub(crate) fn exec_harness(
     strategy.exec(binary, args, cwd)
 }
 
+/// Build the far-side `path resume …` command line for a v0 remote
+/// resume. Every resume arg *except* `--remote` (which is host-only —
+/// forwarding it would recurse) is passed through so the remote does
+/// the resolve, harness pick, projection, and exec. `--harness` in
+/// particular is essential: without it the remote picker needs a TTY
+/// the SSH connection doesn't provide.
+fn remote_resume_command(args: &ResumeArgs) -> String {
+    let mut parts = vec![shell_single_quote(&args.input)];
+    if let Some(harness) = args.harness {
+        parts.push("--harness".to_string());
+        parts.push(harness_value(harness));
+    }
+    if let Some(cwd) = args.cwd.as_ref() {
+        parts.push("--cwd".to_string());
+        parts.push(shell_single_quote(&cwd.display().to_string()));
+    }
+    if args.no_cache {
+        parts.push("--no-cache".to_string());
+    }
+    if args.force {
+        parts.push("--force".to_string());
+    }
+    if let Some(url) = args.url.as_ref() {
+        parts.push("--url".to_string());
+        parts.push(shell_single_quote(url));
+    }
+    format!("path resume {}", parts.join(" "))
+}
+
+/// The lowercase CLI value for a `--harness` choice (e.g. `claude`),
+/// taken from clap's own value table so it stays in sync with the enum.
+fn harness_value(harness: HarnessArg) -> String {
+    use clap::ValueEnum;
+    harness
+        .to_possible_value()
+        .expect("HarnessArg has no skipped variants")
+        .get_name()
+        .to_string()
+}
+
+/// Build the `ssh` invocation for a v0 remote resume from a full SSH
+/// URL (`ssh://[user@]host[:port][/path]`) and an already-built remote
+/// command. Returns `("ssh", argv)` where argv is
+/// `[-p <port>,]? <[user@]host> <remote command>`.
+fn ssh_invocation(remote: &str, remote_cmd: &str) -> Result<(String, Vec<String>)> {
+    let rest = remote
+        .strip_prefix("ssh://")
+        .with_context(|| format!("remote must be a full SSH URL (ssh://…), got `{remote}`"))?;
+
+    // Strip an optional `/path` component; the authority is everything
+    // before the first slash.
+    let authority = match rest.find('/') {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    if authority.is_empty() {
+        anyhow::bail!("SSH URL `{remote}` is missing a host");
+    }
+
+    // Split a trailing `:port` (all-digit) off the `[user@]host` part.
+    let (userhost, port) = match authority.rsplit_once(':') {
+        Some((uh, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => (uh, Some(p)),
+        _ => (authority, None),
+    };
+    if userhost.is_empty() {
+        anyhow::bail!("SSH URL `{remote}` is missing a host");
+    }
+
+    let mut argv = Vec::new();
+    if let Some(port) = port {
+        argv.push("-p".to_string());
+        argv.push(port.to_string());
+    }
+    argv.push(userhost.to_string());
+    argv.push(remote_cmd.to_string());
+    Ok(("ssh".to_string(), argv))
+}
+
+/// Single-quote a string for safe interpolation into the remote shell
+/// command, escaping any embedded single quotes.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 fn looks_like_pathbase_shorthand(s: &str) -> bool {
     // Three non-empty slash-separated segments, none containing whitespace
     // or starting with a dot/slash (which would indicate a relative or
@@ -603,6 +727,104 @@ fn looks_like_pathbase_shorthand(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal `ResumeArgs` with only `input` set — the base for
+    /// exercising `remote_resume_command` arg forwarding.
+    fn remote_args(input: &str) -> ResumeArgs {
+        ResumeArgs {
+            input: input.to_string(),
+            cwd: None,
+            harness: None,
+            no_cache: false,
+            force: false,
+            url: None,
+            remote: Some("ssh://h".to_string()),
+        }
+    }
+
+    #[test]
+    fn ssh_invocation_parses_user_host_port_and_path() {
+        let (binary, argv) = ssh_invocation(
+            "ssh://dev@example.com:2222/home/dev/project",
+            "path resume 'owner/repo/slug'",
+        )
+        .unwrap();
+        assert_eq!(binary, "ssh");
+        assert_eq!(
+            argv,
+            vec![
+                "-p".to_string(),
+                "2222".to_string(),
+                "dev@example.com".to_string(),
+                "path resume 'owner/repo/slug'".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ssh_invocation_without_port_omits_p_flag() {
+        let (_binary, argv) = ssh_invocation("ssh://example.com", "path resume 'abc'").unwrap();
+        assert_eq!(
+            argv,
+            vec!["example.com".to_string(), "path resume 'abc'".to_string()]
+        );
+    }
+
+    #[test]
+    fn ssh_invocation_rejects_non_ssh_url() {
+        let err = ssh_invocation("https://example.com/x", "path resume 'abc'").unwrap_err();
+        assert!(err.to_string().contains("full SSH URL"), "actual: {err}");
+    }
+
+    #[test]
+    fn remote_resume_command_forwards_input_only_by_default() {
+        let cmd = remote_resume_command(&remote_args("owner/repo/slug"));
+        assert_eq!(cmd, "path resume 'owner/repo/slug'");
+    }
+
+    #[test]
+    fn remote_resume_command_single_quotes_input_with_spaces() {
+        let cmd = remote_resume_command(&remote_args("a b"));
+        assert_eq!(cmd, "path resume 'a b'");
+    }
+
+    #[test]
+    fn remote_resume_command_forwards_harness() {
+        let mut args = remote_args("x");
+        args.harness = Some(HarnessArg::Claude);
+        assert_eq!(
+            remote_resume_command(&args),
+            "path resume 'x' --harness claude"
+        );
+    }
+
+    #[test]
+    fn remote_resume_command_forwards_cache_url_and_cwd_flags() {
+        let mut args = remote_args("x");
+        args.no_cache = true;
+        args.force = true;
+        args.url = Some("https://pb.example".to_string());
+        args.cwd = Some(std::path::PathBuf::from("/srv/work"));
+        let cmd = remote_resume_command(&args);
+        assert!(cmd.contains("--no-cache"), "missing --no-cache: {cmd}");
+        assert!(cmd.contains("--force"), "missing --force: {cmd}");
+        assert!(
+            cmd.contains("--url 'https://pb.example'"),
+            "missing --url: {cmd}"
+        );
+        assert!(cmd.contains("--cwd '/srv/work'"), "missing --cwd: {cmd}");
+    }
+
+    #[test]
+    fn remote_resume_command_never_forwards_the_remote_flag() {
+        let mut args = remote_args("x");
+        args.remote = Some("ssh://elsewhere:22".to_string());
+        let cmd = remote_resume_command(&args);
+        assert!(
+            !cmd.contains("--remote") && !cmd.contains("elsewhere"),
+            "remote flag must stay host-side: {cmd}"
+        );
+    }
 
     #[test]
     fn run_with_strategy_records_invocation_for_file_input_with_explicit_harness() {
@@ -631,6 +853,7 @@ mod tests {
             no_cache: false,
             force: false,
             url: None,
+            remote: None,
         };
 
         let recorder = RecordingExec::default();
@@ -768,6 +991,7 @@ mod tests {
             no_cache: false,
             force: false,
             url: None,
+            remote: None,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
@@ -802,6 +1026,7 @@ mod tests {
             no_cache: true, // skip cache write in tests
             force: false,
             url: None,
+            remote: None,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
@@ -863,6 +1088,7 @@ mod tests {
             no_cache: false,
             force: false,
             url: None,
+            remote: None,
         };
         let result = resolve_input(&args);
 
@@ -891,6 +1117,7 @@ mod tests {
             no_cache: false,
             force: false,
             url: None,
+            remote: None,
         };
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();

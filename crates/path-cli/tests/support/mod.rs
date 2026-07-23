@@ -186,6 +186,7 @@ pub fn args_explicit(input: PathBuf, cwd: &Path, harness: HarnessArg) -> ResumeA
         no_cache: false,
         force: false,
         url: None,
+        remote: None,
     }
 }
 
