@@ -37,35 +37,36 @@
 //!
 //! ## Remote (`--remote ssh://[user@]host[:port][/path]`)
 //!
-//! v2 (host resolves, remote incepts): the **host** resolves the
-//! document locally, pipes the hydrated JSON into `path p incept` on the
-//! remote, and launches the harness directly — so the remote needs
-//! `path` (for incept) and the harness installed, but no Pathbase
-//! access and no temp files. Steps ([`run_remote`]):
+//! v3 (host projects, remote just receives files): the **host** resolves
+//! the document AND projects the session fully in memory, then ships the
+//! finished harness file to the remote and launches the harness — so the
+//! remote needs only SSH and the harness installed. **No `path` on the
+//! remote**, no Pathbase access, no temp files. Steps ([`run_remote`]):
 //!
-//! 1. **Resolve + validate on the host** — same `resolve_input` /
+//! 1. **Resolve + project on the host** — same `resolve_input` /
 //!    `ensure_path_with_agent` as a local resume, so a bad or non-agent
-//!    document fails fast on the host, not deep inside SSH. The host
-//!    also computes the session id here: it's a pure function of the
-//!    document ([`crate::cmd_export::claude_session_id`]), so both
-//!    sides projecting the same bytes agree on it.
-//! 2. **Version preflight** — `ssh host 'path --version'`, captured and
-//!    echoed as `host path: <X> / remote path: <Y>`. Confirms SSH is
-//!    reachable and `path` is installed; a failed probe aborts here
-//!    rather than dropping the user into a doomed session.
-//! 3. **Hydrate** — `ssh host 'path p incept claude [--project <cwd>]'`
-//!    with the resolved JSON on stdin; incept writes the session into
-//!    the remote's Claude project layout.
+//!    document fails fast on the host, not deep inside SSH. The session
+//!    id and JSONL come from the same in-memory projection
+//!    ([`crate::cmd_export::claude_session_jsonl`]).
+//! 2. **Reachability probe** — `ssh host 'pwd'` (deliberately not
+//!    `path`). A failed probe aborts here rather than dropping the user
+//!    into a doomed session; the probed cwd doubles as the launch dir
+//!    when no `--cwd` was pinned.
+//! 3. **Ship** — `ssh host 'mkdir -p "$HOME/.claude/projects/<dir>" &&
+//!    cat > "$HOME/.claude/projects/<dir>/<id>.jsonl"'` with the
+//!    projected JSONL on stdin. `<dir>` is the launch cwd run through
+//!    Claude Code's own project-dir sanitization, so `claude -r`
+//!    started there finds the session.
 //! 4. **Launch** — `execvp` an interactive `ssh -t host '[cd <cwd> && ]
 //!    claude -r <id>'`. The `-t` gives the remote harness a real
 //!    terminal.
 //!
 //! `--harness` is required with `--remote` (and currently must be
-//! `claude` — incept and the id computation are Claude-specific). The
-//! resolution-only flags (`--no-cache`/`--force`/`--url`) act on the
-//! host and are never forwarded. `--cwd` does double duty as incept's
-//! `--project` dir and the launch's `cd` target; absent, both default
-//! to the remote's ssh cwd (`$HOME`).
+//! `claude` — the projection and layout knowledge are Claude-specific).
+//! The resolution-only flags (`--no-cache`/`--force`/`--url`) act on the
+//! host and are never forwarded. `--cwd` does double duty as the
+//! project-dir key for the shipped file and the launch's `cd` target;
+//! absent, both default to the remote's ssh cwd (`$HOME`).
 //!
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
 //! for the full design.
@@ -131,9 +132,9 @@ pub fn run(args: ResumeArgs) -> Result<()> {
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
-    // Remote resume: resolve here, hydrate the session on the remote via
-    // `path p incept`, and launch the harness over an interactive SSH.
-    // See the module docs' "Remote" section and `run_remote`.
+    // Remote resume: resolve + project here, ship the finished session
+    // file to the remote (no `path` needed there), and launch the harness
+    // over an interactive SSH. See the module docs' "Remote" section.
     if let Some(remote) = args.remote.as_deref() {
         return run_remote(&args, remote, exec);
     }
@@ -559,8 +560,8 @@ pub trait ExecStrategy {
     fn capture(&self, binary: &str, args: &[String]) -> Result<String>;
 
     /// Run a command, feeding `input` to its stdin, and wait for it to
-    /// finish. Used to hydrate the resolved document on the remote
-    /// (`ssh host 'path p incept claude …'`). Errors if the command
+    /// finish. Used to ship the projected session file to the remote
+    /// (`ssh host 'mkdir -p … && cat > …'`). Errors if the command
     /// can't be spawned or exits non-zero.
     fn pipe(&self, binary: &str, args: &[String], input: &[u8]) -> Result<()>;
 }
@@ -761,8 +762,8 @@ pub(crate) fn exec_harness(
 /// session). Absent, both default to the remote's ssh cwd (`$HOME`).
 fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Result<()> {
     // The remote's interactive picker can't run from here, so pin the
-    // harness explicitly. Only Claude is wired up so far: incept and the
-    // host-side session-id computation are Claude-specific.
+    // harness explicitly. Only Claude is wired up so far: the host-side
+    // projection and layout knowledge are Claude-specific.
     match args.harness {
         None => anyhow::bail!(
             "--remote requires --harness <X>: the host can't run the remote's \
@@ -773,43 +774,42 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     }
 
     // 1. Resolve + validate locally so a bad document fails on the host,
-    //    not deep inside an SSH session — and compute the session id the
-    //    remote's projection will deterministically arrive at.
+    //    not deep inside an SSH session — and project the session fully
+    //    in memory: the remote never sees the toolpath document, only the
+    //    finished harness file.
     let (graph, _source) = resolve_input(args)?;
     let path = ensure_path_with_agent(&graph)?;
-    let session_id = crate::cmd_export::claude_session_id(path)?;
-    let json = graph
-        .to_json()
-        .map_err(|e| anyhow::anyhow!("serialize resolved document: {e}"))?;
+    let (session_id, jsonl) = crate::cmd_export::claude_session_jsonl(path)?;
 
-    // 2. Version preflight: confirm SSH is reachable and `path` is
-    //    installed remotely, echoing host + remote versions.
-    let (ssh_bin, probe_argv) = ssh_invocation(remote, "path --version")?;
-    let remote_version = exec.capture(&ssh_bin, &probe_argv).with_context(|| {
-        format!(
-            "probing remote `path` over {remote} — is `path` installed there and is the host reachable over SSH?"
-        )
+    // 2. Reachability probe: plain `pwd` — deliberately not `path`, which
+    //    isn't required on the remote. Its output doubles as the remote
+    //    working directory when no --cwd was pinned.
+    let (ssh_bin, probe_argv) = ssh_invocation(remote, "pwd")?;
+    let remote_pwd = exec.capture(&ssh_bin, &probe_argv).with_context(|| {
+        format!("probing remote over {remote} — is the host reachable over SSH?")
     })?;
-    eprintln!(
-        "host path: {} / remote path: {}",
-        env!("CARGO_PKG_VERSION"),
-        remote_version.trim()
-    );
+    let remote_pwd = remote_pwd.trim().to_string();
+    if remote_pwd.is_empty() {
+        anyhow::bail!("remote probe over {remote} returned no working directory");
+    }
+    eprintln!("remote {remote}: reachable (cwd {remote_pwd})");
 
-    // 3. Hydrate: pipe the JSON into remote incept, which writes the
-    //    session into the remote's Claude project layout.
-    let incept_cmd = remote_incept_command(args.cwd.as_deref());
-    let (incept_bin, incept_argv) = ssh_invocation(remote, &incept_cmd)?;
-    exec.pipe(&incept_bin, &incept_argv, json.as_bytes())
-        .with_context(|| {
-            format!(
-                "hydrating session on {remote} via `{incept_cmd}` — does the \
-                 remote `path` support `p incept`?"
-            )
-        })?;
-    eprintln!("Incepted session {session_id} on {remote}");
+    // 3. Ship: pipe the projected JSONL straight into the remote's Claude
+    //    project layout. The project dir is keyed on the launch cwd
+    //    (--cwd, else the probed remote cwd) with Claude Code's own
+    //    sanitization, so `claude -r` started there finds the session.
+    let project_path = match args.cwd.as_ref() {
+        Some(dir) => dir.display().to_string(),
+        None => remote_pwd,
+    };
+    let dir_name = claude_project_dir_name(&project_path);
+    let ship_cmd = remote_ship_command(&dir_name, &session_id);
+    let (ship_bin, ship_argv) = ssh_invocation(remote, &ship_cmd)?;
+    exec.pipe(&ship_bin, &ship_argv, jsonl.as_bytes())
+        .with_context(|| format!("shipping session file to {remote}"))?;
+    eprintln!("Shipped session {session_id} → {remote} ~/.claude/projects/{dir_name}/");
 
-    // 4. Interactive launch of the harness against the incepted session,
+    // 4. Interactive launch of the harness against the shipped session,
     //    with a real TTY.
     let launch_cmd = remote_launch_command(&session_id, args.cwd.as_deref());
     let (binary, argv) = ssh_invocation_tty(remote, &launch_cmd, true)?;
@@ -817,20 +817,20 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     exec_harness(&binary, &argv, &cwd, exec)
 }
 
-/// The far-side hydrate command: `path p incept claude`, targeting
-/// `--project <cwd>` when a cwd was pinned. The dir may not exist on the
-/// remote yet (resuming into a fresh directory is the normal case), and
-/// incept canonicalizes its project path — so create it first. Without a
-/// cwd, incept defaults to the remote process cwd — `$HOME` over ssh,
-/// matching where the `cd`-less launch lands.
-fn remote_incept_command(cwd: Option<&std::path::Path>) -> String {
-    match cwd {
-        Some(dir) => {
-            let dir = shell_single_quote(&dir.display().to_string());
-            format!("mkdir -p {dir} && path p incept claude --project {dir}")
-        }
-        None => "path p incept claude".to_string(),
-    }
+/// The name Claude Code gives a project's directory under
+/// `~/.claude/projects/`. Host-side mirror of `toolpath-claude`'s
+/// (private) `sanitize_project_path` — kept in sync by a unit test that
+/// compares against `PathResolver::project_dir`.
+fn claude_project_dir_name(project_path: &str) -> String {
+    project_path.replace(['/', '_', '.'], "-")
+}
+
+/// The far-side ship command: create the Claude project dir and write
+/// the piped JSONL as the session file. `$HOME` is left for the remote
+/// shell to expand — the host doesn't know the remote home.
+fn remote_ship_command(project_dir_name: &str, session_id: &str) -> String {
+    let dir = format!("$HOME/.claude/projects/{project_dir_name}");
+    format!("mkdir -p \"{dir}\" && cat > \"{dir}/{session_id}.jsonl\"")
 }
 
 /// The far-side launch command: `claude -r <id>`, prefixed with a
@@ -975,14 +975,32 @@ mod tests {
     }
 
     #[test]
-    fn remote_incept_command_with_and_without_cwd() {
-        assert_eq!(remote_incept_command(None), "path p incept claude");
-        // The pinned dir may not exist on the remote yet (resuming into a
-        // fresh directory is the normal case) — incept must create it.
+    fn remote_ship_command_writes_into_remote_claude_projects() {
+        // v3 ships the fully-projected JSONL straight into the remote's
+        // Claude layout — no `path` on the remote. `$HOME` stays for the
+        // remote shell to expand.
         assert_eq!(
-            remote_incept_command(Some(std::path::Path::new("/srv/work"))),
-            "mkdir -p '/srv/work' && path p incept claude --project '/srv/work'"
+            remote_ship_command("-tmp-somewhere", "sess-1"),
+            "mkdir -p \"$HOME/.claude/projects/-tmp-somewhere\" && \
+             cat > \"$HOME/.claude/projects/-tmp-somewhere/sess-1.jsonl\""
         );
+    }
+
+    #[test]
+    fn claude_project_dir_name_matches_projector_sanitization() {
+        // The host-side mirror of Claude Code's project-dir sanitization
+        // must agree with toolpath-claude's (private) implementation, or
+        // the shipped file lands where `claude -r` won't look. Compare
+        // against the resolver's own dir name.
+        let resolver = toolpath_claude::PathResolver::new();
+        let expected = resolver
+            .project_dir("/srv/my_app/v1.2")
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(claude_project_dir_name("/srv/my_app/v1.2"), expected);
     }
 
     #[test]
@@ -1014,41 +1032,49 @@ mod tests {
     }
 
     #[test]
-    fn remote_resume_probes_incepts_then_launches() {
-        // v2: host resolves the doc locally, probes `path --version`, pipes
-        // the JSON into `path p incept claude` on the remote, then launches
-        // an interactive `ssh -t … claude -r <id>` where <id> is computed
-        // host-side from the document (deterministic: same bytes → same id).
+    fn remote_resume_probes_ships_then_launches() {
+        // v3: host resolves AND projects the session locally, probes the
+        // remote with plain `pwd` (no `path` needed there), ships the
+        // projected JSONL straight into the remote's Claude layout, then
+        // launches an interactive `ssh -t … claude -r <id>`.
         let td = tempfile::tempdir().unwrap();
         let rec = RecordingExec::default();
         run_with_strategy(remote_args_with_doc(td.path()), &rec).unwrap();
 
-        // 1. version probe
+        // 1. reachability probe: `pwd`, never `path` — the remote doesn't
+        //    need `path` installed.
         let probes = rec.probes();
-        assert_eq!(probes.len(), 1, "exactly one version probe");
+        assert_eq!(probes.len(), 1, "exactly one probe");
         assert!(
-            probes[0].args.iter().any(|a| a == "path --version"),
+            probes[0].args.iter().any(|a| a == "pwd"),
             "probe argv: {:?}",
             probes[0].args
         );
-
-        // 2. incept: `ssh … 'path p incept claude'` with the JSON on stdin.
-        let staged = rec.staged();
-        assert_eq!(staged.len(), 1, "exactly one incept step");
-        let (incept_inv, stdin) = &staged[0];
-        assert_eq!(incept_inv.binary, "ssh");
         assert!(
-            incept_inv
-                .args
-                .iter()
-                .any(|a| a.starts_with("path p incept claude")),
-            "incept argv: {:?}",
-            incept_inv.args
+            !probes[0].args.iter().any(|a| a.contains("path")),
+            "v3 must not require `path` on the remote: {:?}",
+            probes[0].args
         );
-        // The piped bytes are the resolved document.
+
+        // 2. ship: `ssh … 'mkdir -p … && cat > ~/.claude/projects/…'` with
+        //    the projected JSONL (not the toolpath doc) on stdin.
+        let staged = rec.staged();
+        assert_eq!(staged.len(), 1, "exactly one ship step");
+        let (ship_inv, stdin) = &staged[0];
+        assert_eq!(ship_inv.binary, "ssh");
+        let ship_arg = ship_inv
+            .args
+            .iter()
+            .find(|a| a.contains("cat > "))
+            .expect("ship should `cat >` the session file");
         assert!(
-            stdin.contains("claude-code://remote-v1-test"),
-            "stdin: {stdin}"
+            ship_arg.contains(".claude/projects/") && ship_arg.contains("remote-v1-test.jsonl"),
+            "ship target: {ship_arg}"
+        );
+        // The piped bytes are Claude JSONL, not the raw toolpath doc.
+        assert!(
+            stdin.contains("\"sessionId\":\"remote-v1-test\""),
+            "stdin should be projected JSONL: {stdin}"
         );
 
         // 3. launch: interactive `ssh -t … claude -r '<id>'` with the id

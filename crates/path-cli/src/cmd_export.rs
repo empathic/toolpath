@@ -299,17 +299,21 @@ pub(crate) struct PathbaseUploadArgs {
 // projected session id. They are called by `path resume`; the existing
 // `run_<harness>` functions are untouched.
 
-/// The Claude session id `path` would project to, without writing
-/// anything. Deterministic: the projector takes the id verbatim from
-/// the document's conversation view, so host and remote projecting the
-/// same bytes agree on the id (relied on by `path resume --remote`).
+/// Project `path` into a Claude session entirely in memory, returning
+/// `(session_id, jsonl)` without writing anything. The id is
+/// deterministic — the projector takes it verbatim from the document's
+/// conversation view — and the JSONL is byte-identical to what
+/// `p export claude` would write. Used by `path resume --remote` to
+/// ship a ready-to-resume session file to a host with no `path`
+/// installed.
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn claude_session_id(path: &toolpath::v1::Path) -> Result<String> {
+pub(crate) fn claude_session_jsonl(path: &toolpath::v1::Path) -> Result<(String, String)> {
     let conv = build_claude_conversation(path)?;
     if conv.session_id.is_empty() {
         anyhow::bail!("document projects to an empty Claude session id");
     }
-    Ok(conv.session_id)
+    let jsonl = serialize_jsonl(&conv)?;
+    Ok((conv.session_id, jsonl))
 }
 
 /// Project `path` into a Claude session under `project_dir` and return

@@ -358,9 +358,10 @@ fn explicit_harness_not_on_path_errors() {
 // ── Remote resume over SSH ──────────────────────────────────────────
 
 /// With `--remote <ssh url>`, resume should be dispatched to the remote
-/// host over SSH rather than exec'ing a local harness: the JSON is piped
-/// into `path p incept claude` on the remote, and the final recorded
-/// invocation must be `ssh -t` targeting the remote host and launching
+/// host over SSH rather than exec'ing a local harness: the session is
+/// projected locally and the JSONL shipped into the remote's Claude
+/// layout (no `path` on the remote), and the final recorded invocation
+/// must be `ssh -t` targeting the remote host and launching
 /// `claude -r <id>` directly (id computed host-side from the doc).
 #[test]
 fn remote_flag_dispatches_resume_over_ssh() {
@@ -378,21 +379,27 @@ fn remote_flag_dispatches_resume_over_ssh() {
     let recorder = RecordingExec::default();
     run_with_strategy(args, &recorder).unwrap();
 
-    // Hydration: the resolved JSON is piped into remote incept.
+    // Ship: the locally-projected JSONL is piped into the remote's
+    // Claude projects layout — no `path` runs on the remote.
     let staged = recorder.staged();
-    assert_eq!(staged.len(), 1, "exactly one incept pipe");
-    let (incept_inv, stdin) = &staged[0];
+    assert_eq!(staged.len(), 1, "exactly one ship pipe");
+    let (ship_inv, stdin) = &staged[0];
     assert!(
-        incept_inv
+        ship_inv
             .args
             .iter()
-            .any(|a| a.contains("path p incept claude")),
-        "remote should hydrate via `path p incept claude`, got {:?}",
-        incept_inv.args
+            .any(|a| a.contains("cat > ") && a.contains(".claude/projects/")),
+        "remote should receive the file via `cat >` into ~/.claude/projects, got {:?}",
+        ship_inv.args
     );
     assert!(
-        stdin.contains("claude-code://resume-remote-int"),
-        "incept stdin should carry the resolved doc"
+        !ship_inv.args.iter().any(|a| a.contains("path p incept")),
+        "v3 must not run `path` on the remote, got {:?}",
+        ship_inv.args
+    );
+    assert!(
+        stdin.contains("\"sessionId\":\"resume-remote-int\""),
+        "ship stdin should carry the projected JSONL"
     );
 
     // Launch: interactive ssh -t running the harness directly.
