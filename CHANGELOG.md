@@ -14,11 +14,11 @@ Output is byte-identical to the sequential scan — same ordering, same
 warnings, same error precedence — enforced by tests pinning the
 parallel building blocks against the sequential engine.
 
-Measured on a real 97-doc / 220 MB cache (M-series, medians of 5):
-streamed and decomposed queries drop from ~1.3 s to ~0.64 s (2.0–2.8×;
-floored by one 110 MB document that dominates the cache), slurped
-queries improve ~1.1×. On an even 60-doc / 56 MB synthetic cache the
-same queries run ~4.7× faster (e.g. `length` 966 ms → 206 ms).
+Measured on a real 97-doc / 114 MB cache (M-series, medians of 5):
+streamed and decomposed queries drop from ~0.95 s to ~0.31 s (~3.1×),
+slurped queries improve ~1.2×. On an even 60-doc / 56 MB synthetic
+cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
+206 ms).
 
 - **`path-cli`** (0.17.0):
   - `query/mod.rs`: plan dispatch (`execute_plan`) and a chunked
