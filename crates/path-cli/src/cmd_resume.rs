@@ -818,15 +818,17 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
 }
 
 /// The far-side hydrate command: `path p incept claude`, targeting
-/// `--project <cwd>` when a cwd was pinned. Without one, incept defaults
-/// to the remote process cwd — `$HOME` over ssh, matching where the
-/// `cd`-less launch lands.
+/// `--project <cwd>` when a cwd was pinned. The dir may not exist on the
+/// remote yet (resuming into a fresh directory is the normal case), and
+/// incept canonicalizes its project path — so create it first. Without a
+/// cwd, incept defaults to the remote process cwd — `$HOME` over ssh,
+/// matching where the `cd`-less launch lands.
 fn remote_incept_command(cwd: Option<&std::path::Path>) -> String {
     match cwd {
-        Some(dir) => format!(
-            "path p incept claude --project {}",
-            shell_single_quote(&dir.display().to_string())
-        ),
+        Some(dir) => {
+            let dir = shell_single_quote(&dir.display().to_string());
+            format!("mkdir -p {dir} && path p incept claude --project {dir}")
+        }
         None => "path p incept claude".to_string(),
     }
 }
@@ -975,9 +977,11 @@ mod tests {
     #[test]
     fn remote_incept_command_with_and_without_cwd() {
         assert_eq!(remote_incept_command(None), "path p incept claude");
+        // The pinned dir may not exist on the remote yet (resuming into a
+        // fresh directory is the normal case) — incept must create it.
         assert_eq!(
             remote_incept_command(Some(std::path::Path::new("/srv/work"))),
-            "path p incept claude --project '/srv/work'"
+            "mkdir -p '/srv/work' && path p incept claude --project '/srv/work'"
         );
     }
 

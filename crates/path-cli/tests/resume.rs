@@ -386,7 +386,7 @@ fn remote_flag_dispatches_resume_over_ssh() {
         incept_inv
             .args
             .iter()
-            .any(|a| a.starts_with("path p incept claude")),
+            .any(|a| a.contains("path p incept claude")),
         "remote should hydrate via `path p incept claude`, got {:?}",
         incept_inv.args
     );
