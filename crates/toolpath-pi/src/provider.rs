@@ -374,6 +374,12 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 tokens_before,
                 ..
             } => {
+                // Observed at pi 0.72 (real capture,
+                // test-fixtures/pi/compacted-real.jsonl): the entry also
+                // carries `details` ({readFiles, modifiedFiles}) and
+                // `fromHook` — pi bookkeeping outside the closed typed set,
+                // deliberately not carried; a projected session resumes
+                // correctly without them.
                 // Pi's `firstKeptEntryId` can name a non-turn entry (e.g. a
                 // discarded `model_change`); resolve it to the first turn
                 // at-or-after the anchor in entry order — that turn is the

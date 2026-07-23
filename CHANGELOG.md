@@ -34,6 +34,45 @@ real `/compact`) and validating the resulting artifacts.
   Docs de-staled: `session.compaction_*` rows are `[observed, 1.0.68]`,
   compaction token semantics resolved, checkpoint mirroring
   (`checkpoints/NNN-*.md`) recorded.
+- **`toolpath-codex`**: resume fidelity, verified in the real codex TUI
+  (0.144.4). The projector follows every `compacted` line with the
+  `event_msg`/`context_compacted` marker the TUI renders its "Context
+  compacted" row from, and places the opening `turn_context` at its
+  native position (after leading system-envelope messages, immediately
+  before the first real prompt). `path resume` now mints a deterministic
+  fresh session id (reusing the source id made imports ambiguous and let
+  the thread-row INSERT OR REPLACE clobber the native session) and
+  titles the registered thread from the first non-envelope user message
+  instead of the `<environment_context>` XML. The 2026-07 payload
+  (window-id chain, encrypted summary in `replacement_history`, a
+  prefix-keep the suffix-anchored contract cannot represent) is
+  documented as deliberate loss; the empty `message` now normalizes to
+  no summary. Real capture checked in as
+  `test-fixtures/codex/compacted-real.jsonl`.
+- **`toolpath-claude`**: resume-rendering fidelity, verified in the real
+  Claude TUI (2.1.216). An assistant entry whose content is
+  `[{"type":"text","text":""}]` aborts the transcript renderer (a
+  resumed session lost every ❯ prompt and the Compacted indicator); the
+  projector now re-emits fully empty assistant turns as the empty
+  thinking block real Claude writes, and `path p import claude` /
+  `path share` derive with thinking included. Events (attachments,
+  system entries) emit inline at their item position instead of
+  regrouping at the end of the file; the caveat entry keeps `isMeta`;
+  the reader stream-parses each line so a mid-write flush boundary
+  (two objects on one physical line) no longer drops entries.
+- **`toolpath-pi`**: model/thinking state survives resume, verified in
+  pi 0.72. `model_change` / `thinking_level_change` / `label` entries
+  map to typed `Item::Event`s (previously discarded — a resumed
+  projection lost its model selection), and the projector threads the
+  chain's model context into assistant `provider`/`api` fields.
+- **`toolpath-convo`**: the item-space `expand_kept` passes through
+  events on the parent chain, matching its documented step-space twin.
+- **`path-cli`**: `path p import` prints an `events preserved:` count
+  by type, so an unmapped source encoding (like Copilot's compaction
+  pair, which shipped unnoticed as `compactions=0`) is visible at
+  import time. New `docs/agents/tui-drift-check.md` records the
+  per-harness-release verification loop and the versions each harness
+  was last verified against.
 
 ## Compaction kept contract: anchor-based + executable round-trip invariants — 2026-07-16
 

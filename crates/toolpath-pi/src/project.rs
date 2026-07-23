@@ -754,15 +754,6 @@ fn tool_native_name(tu: &ToolInvocation) -> String {
     tu.name.clone()
 }
 
-/// Coerce a `Value` (expected to be a map) into Pi's `extra:
-/// HashMap<String, Value>` shape.
-fn extra_map_from(v: Option<&Value>) -> HashMap<String, Value> {
-    match v {
-        Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        _ => HashMap::new(),
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
