@@ -703,20 +703,25 @@ impl<'a> Builder<'a> {
     }
 
     /// Map a Codex `compacted` marker to a [`Compaction`], recorded for
-    /// slotting into the turn stream at its source position. Codex's payload
-    /// is `{message, replacement_history?, window_id?}` — only `message` is
-    /// consumed (as `summary`). The trigger (manual vs. auto) and
-    /// pre-compaction token count are never persisted to the rollout, and
-    /// `replacement_history` is a wholesale replacement we don't fold in, so
-    /// `trigger`/`pre_tokens` are `None` and `kept_from` is `None`
-    /// (wholesale). The marker carries no id of its own, so we synthesize a
-    /// stable `compact-<n>`.
+    /// slotting into the turn stream at its source position. Only `message`
+    /// is consumed (as `summary`), and only when non-empty. Observed at
+    /// 0.5x-era Codex (2026-07): the payload grew
+    /// `{window_id, first_window_id, previous_window_id, window_number,
+    /// replacement_history}`; `message` is empty, the real summary lives in
+    /// `replacement_history` as a `compaction` entry with
+    /// `encrypted_content` (unrecoverable), and the surviving turns in
+    /// `replacement_history` are a *prefix*-keep (the first user message) —
+    /// not representable by the suffix-anchored `kept_from` contract. So
+    /// `trigger`/`pre_tokens`/`kept_from` stay `None` (wholesale) and the
+    /// window bookkeeping is deliberately not carried. The marker has no id
+    /// of its own; we synthesize a stable `compact-<n>`.
     /// See `docs/agents/formats/codex.md`.
     fn handle_compacted(&mut self, timestamp: &str, payload: &Value) {
         self.compact_count += 1;
         let summary = payload
             .get("message")
             .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
             .map(str::to_string);
         let compaction = Compaction {
             id: format!("compact-{}", self.compact_count),

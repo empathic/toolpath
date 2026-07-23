@@ -352,14 +352,61 @@ pub(crate) fn project_codex(
 
     let view = toolpath_convo::extract_conversation(path);
     let projector = toolpath_codex::project::CodexProjector::new().with_cwd(cwd_str);
-    let session = projector
+    let mut session = projector
         .project(&view)
         .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
     if session.id.is_empty() {
         anyhow::bail!("Projected session has no id");
     }
+    // Mint a deterministic fresh id (like opencode's `ses_<sha1>`): keeping
+    // the source id produces two rollouts sharing one session id, which
+    // makes `p import codex --session` ambiguous, lets INSERT OR REPLACE
+    // clobber the native session's thread row, and confuses
+    // `codex resume <id>` about which rollout to load. Deterministic so a
+    // re-resume overwrites its own projection instead of accumulating.
+    let fresh = codex_resume_session_id(&session.id);
+    for line in &mut session.lines {
+        if line.kind == "session_meta" {
+            if let Some(id) = line.payload.get_mut("id") {
+                *id = serde_json::Value::String(fresh.clone());
+            }
+            if let Some(id) = line.payload.get_mut("session_id") {
+                *id = serde_json::Value::String(fresh.clone());
+            }
+        }
+    }
+    session.id = fresh;
     write_into_codex_project(&session)?;
     Ok(session.id)
+}
+
+/// Deterministic UUID-shaped resume id for a projected Codex session,
+/// derived from the source session id. `codex resume` requires a UUID.
+fn codex_resume_session_id(source_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"codex-resume:");
+    h.update(source_id.as_bytes());
+    let d = h.finalize();
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:01x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        d[0],
+        d[1],
+        d[2],
+        d[3],
+        d[4],
+        d[5],
+        d[6] & 0x0f,
+        d[7],
+        (d[8] & 0x3f) | 0x80,
+        d[9],
+        d[10],
+        d[11],
+        d[12],
+        d[13],
+        d[14],
+        d[15]
+    )
 }
 
 /// Build a Copilot [`Session`](toolpath_copilot::Session) from `path`, rooted
@@ -1260,7 +1307,15 @@ fn first_user_message_text(session: &toolpath_codex::Session) -> String {
             && m.role == "user"
         {
             let t = m.text();
-            if !t.is_empty() {
+            // System-injected envelopes (`<environment_context>`, caveats)
+            // precede the real prompt in the rollout; titling from one gave
+            // the registered thread an XML blob for a title in
+            // `codex resume`'s picker.
+            let is_envelope = {
+                let trimmed = t.trim_start();
+                trimmed.starts_with('<') && trimmed.contains('>')
+            };
+            if !t.is_empty() && !is_envelope {
                 return t;
             }
         }
@@ -3235,10 +3290,57 @@ mod tests {
         }
 
         let returned_id = result.expect("project_codex should succeed");
-        assert_eq!(returned_id, session_uuid);
+        assert_ne!(
+            returned_id, session_uuid,
+            "resume must mint a fresh id — reusing the source id collides \
+             with the native rollout"
+        );
+        assert_eq!(
+            returned_id,
+            codex_resume_session_id(session_uuid),
+            "minted id is deterministic so a re-resume overwrites itself"
+        );
+        assert_eq!(returned_id.len(), 36, "codex resume requires a UUID");
 
         let codex_sessions = fake_home.join(".codex/sessions");
         assert!(codex_sessions.exists(), "codex sessions dir missing");
+
+        // The written rollout's session_meta must carry the minted id, and
+        // the file name must embed it.
+        fn find_file(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+            for entry in std::fs::read_dir(dir).ok()? {
+                let p = entry.ok()?.path();
+                if p.is_dir() {
+                    if let Some(f) = find_file(&p) {
+                        return Some(f);
+                    }
+                } else {
+                    return Some(p);
+                }
+            }
+            None
+        }
+        let rollout = find_file(&codex_sessions).expect("a rollout file was written");
+        assert!(
+            rollout
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains(&returned_id),
+            "rollout filename embeds the minted id"
+        );
+        let first_line = std::fs::read_to_string(&rollout)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        let meta: serde_json::Value = serde_json::from_str(&first_line).unwrap();
+        assert_eq!(
+            meta["payload"]["id"].as_str(),
+            Some(returned_id.as_str()),
+            "session_meta payload carries the minted id"
+        );
     }
 
     #[test]

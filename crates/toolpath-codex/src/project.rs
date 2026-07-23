@@ -157,9 +157,17 @@ fn project_view(
             .unwrap_or_else(|| format!("{}-t{}", view.id, idx))
     };
 
-    // Line 2: an opening turn_context (real Codex writes it right after
-    // session_meta, before the first user turn). Its turn_id is the first
-    // group's, so leading user turns and the first assistant share it; later
+    // The opening turn_context. Real Codex writes it AFTER the leading
+    // system-envelope messages (permissions/developer instructions,
+    // `<environment_context>`) and immediately before the first real user
+    // prompt — and its session indexer titles a backfilled rollout from the
+    // first user message after the last turn_context, so emitting the
+    // context at the top made a projected session's title the
+    // `<environment_context>` XML instead of the prompt (observed against
+    // codex 0.144.4's `threads` table). Emit it right before the first
+    // non-envelope user turn or first assistant turn; a view with neither
+    // gets it right after session_meta as before. Its turn_id is the first
+    // group's, so the first prompt and the first assistant share it; later
     // group boundaries emit their own. This is what makes the source's
     // grouping survive the round-trip — the reader keys `Turn.group_id`
     // off the turn_context `turn_id`.
@@ -169,13 +177,23 @@ fn project_view(
         .find(|(_, t)| matches!(t.role, Role::Assistant))
         .map(|(i, t)| group_of(i, t))
         .unwrap_or_else(|| view.id.clone());
-    lines.push(make_turn_context_line(
-        &first_group,
-        &session_timestamp,
-        &cwd,
-        &model,
-    ));
-    let mut current_group = Some(first_group);
+    let opening_ctx_at: Option<usize> = view.items.iter().position(|it| match it {
+        Item::Turn(t) => match t.role {
+            Role::Assistant => true,
+            Role::User => !is_system_caveat(&t.text),
+            _ => false,
+        },
+        _ => false,
+    });
+    if opening_ctx_at.is_none() {
+        lines.push(make_turn_context_line(
+            &first_group,
+            &session_timestamp,
+            &cwd,
+            &model,
+        ));
+    }
+    let mut current_group = Some(first_group.clone());
 
     // Running session-cumulative usage. Codex's `total_token_usage` is
     // cumulative; we advance it by each turn's per-step contribution and
@@ -195,7 +213,15 @@ fn project_view(
     // Codex analog on the return path and are dropped; turns and compactions
     // both project to rollout lines.
     let mut turn_idx = 0usize;
-    for item in &view.items {
+    for (item_idx, item) in view.items.iter().enumerate() {
+        if Some(item_idx) == opening_ctx_at {
+            lines.push(make_turn_context_line(
+                &first_group,
+                &session_timestamp,
+                &cwd,
+                &model,
+            ));
+        }
         match item {
             Item::Turn(turn) => {
                 if matches!(turn.role, Role::Assistant) {
@@ -358,9 +384,13 @@ fn codex_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
 
 /// Emit a `compacted` rollout line for a [`Compaction`] boundary — the
 /// inverse of `Builder::handle_compacted`. Codex's payload is
-/// `{message, replacement_history?, window_id?}`; only `summary` survives
+/// `{message, replacement_history?, window_id?, …}`; only `summary` survives
 /// the forward path, so we round-trip it as `message` (defaulting to the
-/// empty string) and leave the other fields absent.
+/// empty string) and leave the other fields absent. The `compacted` line is
+/// followed by the `event_msg`/`context_compacted` marker Codex writes with
+/// every real compaction — the resumed TUI renders its "Context compacted"
+/// row from that event, not from the `compacted` line, so omitting it made
+/// projected resumes drop the visible boundary.
 fn emit_compaction(c: &Compaction, lines: &mut Vec<RolloutLine>) {
     let payload = CompactedItem {
         message: c.summary.clone().unwrap_or_default(),
@@ -372,6 +402,12 @@ fn emit_compaction(c: &Compaction, lines: &mut Vec<RolloutLine>) {
         timestamp: c.timestamp.clone(),
         kind: "compacted".to_string(),
         payload: serde_json::to_value(&payload).unwrap_or(Value::Null),
+        extra: HashMap::new(),
+    });
+    lines.push(RolloutLine {
+        timestamp: c.timestamp.clone(),
+        kind: "event_msg".to_string(),
+        payload: json!({ "type": "context_compacted" }),
         extra: HashMap::new(),
     });
 }

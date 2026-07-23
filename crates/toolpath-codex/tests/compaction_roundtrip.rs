@@ -239,12 +239,14 @@ fn real_fixture_emits_one_compaction() {
         unreachable!()
     };
 
-    // The real capture's `message` is the empty string, so summary is
-    // `Some("")` — present but empty. The remaining fields follow the
-    // Codex payload shape: no trigger, no pre-token count, no kept anchor.
+    // The real capture's `message` is the empty string — current Codex
+    // moves the summary into `replacement_history` as `encrypted_content`
+    // (unrecoverable), so the empty message normalizes to no summary. The
+    // remaining fields follow the Codex payload shape: no trigger, no
+    // pre-token count, no kept anchor.
     assert!(
-        c.summary.is_some(),
-        "summary should be Some (message field present, even if empty)"
+        c.summary.is_none(),
+        "empty message must normalize to no summary"
     );
     assert_eq!(c.trigger, None);
     assert_eq!(c.pre_tokens, None);
@@ -269,7 +271,7 @@ fn real_fixture_compaction_survives_roundtrip() {
     let Item::Compaction(c) = &after.items[idx] else {
         unreachable!()
     };
-    assert!(c.summary.is_some());
+    assert_eq!(c.summary, None, "no-summary boundary stays summary-less");
     assert!(c.parent_id.is_some());
 
     // Surrounding turns survive (count preserved through derive ↔ extract).
@@ -341,9 +343,21 @@ fn real_fixture_projection_round_trips_compaction() {
     );
     assert_eq!(
         compacted[0].payload.get("message").and_then(|m| m.as_str()),
-        orig_summary.as_deref(),
-        "compacted line `message` should carry the compaction summary"
+        Some(orig_summary.as_deref().unwrap_or("")),
+        "compacted line `message` carries the summary (empty when none)"
     );
+    // Every real compaction is followed by the `context_compacted` marker
+    // the TUI renders its boundary row from.
+    let follows_marker = session
+        .lines
+        .windows(2)
+        .any(|w| {
+            w[0].kind == "compacted"
+                && w[1].kind == "event_msg"
+                && w[1].payload.get("type").and_then(|t| t.as_str())
+                    == Some("context_compacted")
+        });
+    assert!(follows_marker, "compacted must be followed by context_compacted");
 
     // Serialize one JSON line per rollout entry and read it back through
     // the crate's reader, then run the forward `to_view`.
@@ -387,5 +401,64 @@ fn real_fixture_projection_round_trips_compaction() {
     assert!(
         turn_after.is_some(),
         "a turn should follow the round-tripped compaction"
+    );
+}
+
+fn real_2026_07_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("test-fixtures")
+        .join("codex")
+        .join("compacted-real.jsonl")
+}
+
+/// The 2026-07 capture: `compacted.message` is empty (the summary is an
+/// encrypted `replacement_history` entry) and the payload carries the
+/// window-id chain (`window_id`, `first_window_id`, `previous_window_id`,
+/// `window_number`). All of that is deliberately not carried — the boundary
+/// derives as wholesale with no summary — and must not disturb the
+/// round-trip.
+#[test]
+fn real_2026_07_fixture_window_payload_derives_wholesale() {
+    let view = load_view(real_2026_07_fixture_path());
+    assert_eq!(view.compactions().count(), 1);
+    let c = view.compactions().next().unwrap();
+    assert_eq!(c.summary, None, "empty message + encrypted summary → none");
+    assert_eq!(c.kept_from, None, "prefix-keep is not representable");
+    assert_eq!(c.pre_tokens, None);
+    assert!(c.parent_id.is_some());
+
+    for _ in 0..24 {
+        let gen1 = derive_path(&view, &DeriveConfig::default());
+        let gen2 = derive_path(&extract_conversation(&gen1), &DeriveConfig::default());
+        assert_eq!(
+            serde_json::to_value(&gen1).unwrap(),
+            serde_json::to_value(&gen2).unwrap(),
+            "derive → extract → derive changed the document"
+        );
+    }
+
+    // Projection emits the compacted + context_compacted pair and re-reads
+    // to the same boundary.
+    let session = CodexProjector::new().project(&view).expect("project");
+    let kinds: Vec<(&str, Option<&str>)> = session
+        .lines
+        .iter()
+        .map(|l| {
+            (
+                l.kind.as_str(),
+                l.payload.get("type").and_then(|t| t.as_str()),
+            )
+        })
+        .collect();
+    let pos = kinds
+        .iter()
+        .position(|(k, _)| *k == "compacted")
+        .expect("compacted emitted");
+    assert_eq!(
+        kinds.get(pos + 1),
+        Some(&("event_msg", Some("context_compacted"))),
+        "marker follows the compacted line"
     );
 }
