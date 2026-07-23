@@ -61,6 +61,30 @@ reference not yet built on first-hand session samples, so it leans on
 official docs plus reverse-engineering and tags every claim with a
 confidence level.
 
+## Compaction at a glance
+
+How each harness records context compaction (summarizing older turns to
+stay under the window). Detail lives in each harness's doc.
+
+| Harness | Marker | New session/file? | Kept set | Duplicate-id hazard |
+|---|---|---|---|---|
+| Claude Code | `compact_boundary` + synthetic `isCompactSummary` user msg (inline) | no | `compactMetadata` enumerates a contiguous recent tail — **but** an early block is *also* re-emitted, so realized retention is non-contiguous | **yes** — the re-emitted block reuses UUIDs; dedupe keeping the first occurrence |
+| Codex | `compacted` rollout line | no | opaque `summary` (wholesale replace) | no |
+| opencode | `compaction` part (sets `time_compacting`) | no | contiguous tail via `tail_start_id` | no |
+| Pi | `Compaction` entry on the id/parentId tree | no | contiguous tail via `firstKeptEntryId` | no |
+| Gemini | — (compresses in-memory; nothing persisted) | — | — | no |
+
+Manual vs. automatic compaction produce the **same record** in every
+harness; only the trigger's visibility differs (persisted by Claude and
+opencode; analytics-only/absent for Codex and Pi; Gemini persists
+nothing). Two takeaways that drive our derivation: (1) **no harness
+starts a new session/entity for compaction** — it's always an inline
+marker (session *rotation* is a separate mechanism); and (2) **only
+Claude Code reuses ids at the boundary**, so it's the only harness that
+needs a dedupe pass — everyone else marks compaction cleanly with
+unique ids, or (Gemini) compresses only in-memory with nothing
+persisted.
+
 ## Conventions used in these docs
 
 - **"In the wild"** = observed in real JSONL files on disk, not just in types

@@ -6,13 +6,15 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    Compaction, CompactionTrigger, ConversationProjector, ConversationView, ConvoError, Result,
+    Role, ToolInvocation, Turn,
 };
 
 use crate::types::{
-    AssistantMessage, Message, MessageData, MessagePath, MessageTime, ModelRef, Part, PartData,
-    ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange, Tokens, ToolPart,
-    ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
+    AssistantMessage, CompactionPart, Message, MessageData, MessagePath, MessageTime, ModelRef,
+    Part, PartData, ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange,
+    Tokens, ToolPart, ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
+    UserSummary,
 };
 
 const DEFAULT_AGENT: &str = "build";
@@ -147,6 +149,15 @@ fn project_view(
     let mut messages: Vec<Message> = Vec::new();
     let mut prev_msg_id: Option<String> = None;
     let mut counter: u32 = 0;
+    // IR turn id → the message id we re-mint for it, so a compaction's kept
+    // tail anchor (an IR turn id) can be rewritten to the id the projected
+    // session actually carries — otherwise `tailStartID` would dangle and the
+    // kept anchor would collapse to `None` on re-read.
+    let mut id_map: HashMap<String, String> = HashMap::new();
+    // Indexes (into `messages`) of boundary messages projected from a
+    // wholesale compaction (`kept_from: None`). Their `tailStartID` is the
+    // first message written after the boundary, patched in once it exists.
+    let mut wholesale_boundaries: Vec<usize> = Vec::new();
 
     let default_provider = cfg
         .default_model_provider
@@ -157,9 +168,9 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
-    // Walk the ordered item stream. Only turns project to messages;
-    // events (including `part.compaction` boundaries) have no opencode
-    // message form on the return path and are dropped below.
+    // Walk the ordered item stream so compaction boundaries land at their
+    // true position (between the turns they separate) — the inverse of the
+    // forward Builder, which reads `compaction` parts in message order.
     for item in &view.items {
         match item {
             toolpath_convo::Item::Turn(turn) => match turn.role {
@@ -172,6 +183,7 @@ fn project_view(
                         &default_provider,
                         &default_model,
                     );
+                    id_map.insert(turn.id.clone(), msg.id.clone());
                     prev_msg_id = Some(msg.id.clone());
                     messages.push(msg);
                 }
@@ -189,6 +201,7 @@ fn project_view(
                         &default_provider,
                         &default_model,
                     );
+                    id_map.insert(turn.id.clone(), msg.id.clone());
                     prev_msg_id = Some(msg.id.clone());
                     messages.push(msg);
                 }
@@ -199,9 +212,56 @@ fn project_view(
                     // UserMessage.system if needed.
                 }
             },
+            toolpath_convo::Item::Compaction(c) => {
+                // Inverse of the forward Builder's compaction handling:
+                // emit a synthetic compaction-bearing user message so a
+                // re-read reproduces the `Item::Compaction`. When the
+                // boundary carries a summary, emit the synthetic summary
+                // user message the forward path reads from
+                // `UserMessage.summary.body`.
+                // Rewrite the kept anchor (an IR turn id) to the message id
+                // we minted for that turn, so it matches a real message on
+                // re-read. A wholesale boundary (`kept_from: None`) instead
+                // anchors on the first message written after it — patched in
+                // below — or omits `tailStartID` when nothing follows.
+                // Synthetic boundary/summary messages don't advance
+                // `prev_msg_id`: assistant turns parent on the previous
+                // conversational message, never on a marker message that
+                // won't re-read as a turn.
+                let tail_anchor = c
+                    .kept_from
+                    .as_ref()
+                    .map(|k| id_map.get(k).cloned().unwrap_or_else(|| k.clone()));
+                if tail_anchor.is_none() {
+                    wholesale_boundaries.push(messages.len());
+                }
+                messages.extend(build_compaction_messages(
+                    c,
+                    tail_anchor,
+                    &session_id,
+                    &mut counter,
+                    &agent,
+                    &default_provider,
+                    &default_model,
+                ));
+            }
             toolpath_convo::Item::Event(_) => {
                 // Non-conversational events have no opencode message form;
                 // they're metadata that doesn't round-trip through parts.
+            }
+        }
+    }
+
+    for idx in wholesale_boundaries {
+        let next_id = match messages.get(idx + 1) {
+            Some(m) => m.id.clone(),
+            None => continue,
+        };
+        if let Some(msg) = messages.get_mut(idx) {
+            for part in &mut msg.parts {
+                if let PartData::Compaction(cp) = &mut part.data {
+                    cp.tail_start_id = Some(next_id.clone());
+                }
             }
         }
     }
@@ -331,6 +391,121 @@ fn build_user_message(
         data: MessageData::User(user),
         parts,
     }
+}
+
+/// Inverse of the forward Builder's `push_compaction`: project an
+/// [`Item::Compaction`] back into opencode messages so a re-read
+/// reproduces it.
+///
+/// opencode writes a compaction as a synthetic user message carrying a
+/// single `compaction` part. We mirror that: one user message whose only
+/// part is a [`CompactionPart`]. When the boundary has a `summary`, we
+/// also emit, immediately after, the synthetic summary user message the
+/// forward path pairs with this boundary via its `UserMessage.summary.body`.
+fn build_compaction_messages(
+    c: &Compaction,
+    tail_anchor: Option<String>,
+    session_id: &str,
+    counter: &mut u32,
+    agent: &str,
+    default_provider: &str,
+    default_model: &str,
+) -> Vec<Message> {
+    let time_created = parse_timestamp_ms(&c.timestamp).unwrap_or(0);
+    let model = ModelRef {
+        provider_id: default_provider.to_string(),
+        model_id: default_model.to_string(),
+        variant: None,
+    };
+
+    let mut out = Vec::new();
+
+    *counter += 1;
+    let msg_id = mint_message_id(session_id, *counter);
+    let user = UserMessage {
+        time: MessageTime {
+            created: time_created,
+            completed: None,
+        },
+        agent: agent.to_string(),
+        model: model.clone(),
+        format: None,
+        summary: Some(UserSummary {
+            title: None,
+            body: None,
+            diffs: vec![],
+            extra: HashMap::new(),
+        }),
+        system: None,
+        tools: None,
+        extra: HashMap::new(),
+    };
+
+    *counter += 1;
+    let compaction_part = Part {
+        id: mint_part_id(session_id, *counter),
+        message_id: msg_id.clone(),
+        session_id: session_id.to_string(),
+        time_created,
+        time_updated: time_created,
+        data: PartData::Compaction(CompactionPart {
+            auto: c.trigger == Some(CompactionTrigger::Auto),
+            overflow: None,
+            // The kept tail anchors on the earliest surviving turn — already
+            // rewritten by the caller to the message id this projection minted
+            // for it, so the `tailStartID` wire key resolves on re-read.
+            tail_start_id: tail_anchor,
+            extra: HashMap::new(),
+        }),
+    };
+
+    out.push(Message {
+        id: msg_id,
+        session_id: session_id.to_string(),
+        time_created,
+        time_updated: time_created,
+        data: MessageData::User(user),
+        parts: vec![compaction_part],
+    });
+
+    if let Some(summary) = c.summary.as_ref().filter(|s| !s.is_empty()) {
+        // The summary message must sort strictly AFTER the compaction message
+        // so the reader (which orders by `(time_created ASC, id ASC)`) sees the
+        // boundary first and pairs this summary with it. Sharing `time_created`
+        // would leave the order to the non-monotonic minted ids — dropping the
+        // summary whenever it happened to sort first.
+        let summary_time = time_created + 1;
+        *counter += 1;
+        let summary_msg_id = mint_message_id(session_id, *counter);
+        let summary_user = UserMessage {
+            time: MessageTime {
+                created: summary_time,
+                completed: None,
+            },
+            agent: agent.to_string(),
+            model,
+            format: None,
+            summary: Some(UserSummary {
+                title: None,
+                body: Some(summary.clone()),
+                diffs: vec![],
+                extra: HashMap::new(),
+            }),
+            system: None,
+            tools: None,
+            extra: HashMap::new(),
+        };
+        out.push(Message {
+            id: summary_msg_id,
+            session_id: session_id.to_string(),
+            time_created: summary_time,
+            time_updated: summary_time,
+            data: MessageData::User(summary_user),
+            parts: Vec::new(),
+        });
+    }
+
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -852,6 +1027,75 @@ mod tests {
             .unwrap();
         assert!(s.id.starts_with("ses_"));
         assert!(s.messages.is_empty());
+    }
+
+    #[test]
+    fn compaction_summary_and_kept_anchor_survive_projection() {
+        use toolpath_convo::Item;
+        // A compaction with a summary and a kept tail anchored on the
+        // assistant turn `a1`. The projector must (a) rewrite the anchor to
+        // the message id it mints for `a1` (not the raw IR id, which no
+        // projected message carries), and (b) give the summary message a
+        // strictly-later timestamp so the reader — which orders by
+        // (time_created, id) — pairs it with the boundary instead of dropping
+        // it on a hash-id tie.
+        let mut view = view_with(vec![user_turn("first"), assistant_turn("ans")]);
+        view.items.push(Item::Compaction(Compaction {
+            id: "c".into(),
+            parent_id: Some("a1".into()),
+            timestamp: "2026-04-21T12:00:02.000Z".into(),
+            trigger: Some(CompactionTrigger::Auto),
+            summary: Some("condensed".into()),
+            pre_tokens: None,
+            kept_from: Some("a1".into()),
+        }));
+
+        let s = OpencodeProjector::default().project(&view).unwrap();
+
+        let assistant_id = s
+            .messages
+            .iter()
+            .find(|m| matches!(m.data, MessageData::Assistant(_)))
+            .map(|m| m.id.clone())
+            .expect("assistant message");
+
+        let comp_msg = s
+            .messages
+            .iter()
+            .find(|m| {
+                m.parts
+                    .iter()
+                    .any(|p| matches!(p.data, PartData::Compaction(_)))
+            })
+            .expect("compaction-bearing message");
+        let cp = comp_msg
+            .parts
+            .iter()
+            .find_map(|p| match &p.data {
+                PartData::Compaction(cp) => Some(cp),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            cp.tail_start_id.as_deref(),
+            Some(assistant_id.as_str()),
+            "kept anchor rewritten to the minted message id"
+        );
+
+        let summary_msg = s
+            .messages
+            .iter()
+            .find(|m| match &m.data {
+                MessageData::User(u) => {
+                    u.summary.as_ref().and_then(|sm| sm.body.as_ref()).is_some()
+                }
+                _ => false,
+            })
+            .expect("summary message");
+        assert!(
+            summary_msg.time_created > comp_msg.time_created,
+            "summary must sort after the compaction message"
+        );
     }
 
     #[test]

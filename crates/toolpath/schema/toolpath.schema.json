@@ -340,7 +340,7 @@
           "type": "string",
           "format": "uri",
           "description": "URI naming a kind specification this path conforms to. Defined kinds are listed at https://toolpath.net/kinds/. Kind URIs are immutable; revisions ship at a new version URI. Consumers should treat an absent or unrecognized URI as a generic path.",
-          "examples": ["https://toolpath.net/kinds/agent-coding-session/v1.0.0"]
+          "examples": ["https://toolpath.net/kinds/agent-coding-session/v1.2.0"]
         },
         "source": {
           "type": "string",

@@ -126,12 +126,18 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     // compactions) without an explicit parent chain off whatever came before.
     let mut turn_idx = 0usize;
     let mut event_idx = 0usize;
+    let mut compact_idx = 0usize;
     let mut last_step_id: Option<String> = None;
     // The step id of the most recent *turn* (events/compactions don't update
     // it). Used to splice intervening events/compactions into the linear
     // parent chain so they land on the head's ancestry instead of dangling
     // as false dead ends — without disturbing genuine branches.
     let mut prev_turn_step: Option<String> = None;
+    // The most recent turn OR compaction step — the chain anchor. Turns
+    // advance both; compactions advance only this, so a post-compaction
+    // turn chaining onto the boundary splices correctly while genuine
+    // turn-to-turn branches are still judged against `prev_turn_step`.
+    let mut prev_anchor_step: Option<String> = None;
     let mut event_steps: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // A byte-identical re-emission of an id-bearing item (the Claude
@@ -219,8 +225,12 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 }
 
                 let pre_splice = step.step.parents.first().cloned();
-                step.step.parents =
-                    splice_onto_intervening(step.step.parents, &prev_turn_step, &last_step_id);
+                step.step.parents = splice_onto_intervening(
+                    step.step.parents,
+                    &prev_turn_step,
+                    &prev_anchor_step,
+                    &last_step_id,
+                );
                 let final_parent = step.step.parents.first().cloned();
                 let spliced = final_parent != pre_splice;
                 let onto_event = final_parent
@@ -443,7 +453,8 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 turn_to_step.insert(turn.id.clone(), final_id.clone());
                 if appended {
                     last_step_id = Some(final_id.clone());
-                    prev_turn_step = Some(final_id);
+                    prev_turn_step = Some(final_id.clone());
+                    prev_anchor_step = Some(final_id);
                 }
             }
 
@@ -548,7 +559,12 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     .or_else(|| last_step_id.clone())
                     .into_iter()
                     .collect();
-                let parents = splice_onto_intervening(parents, &prev_turn_step, &last_step_id);
+                let parents = splice_onto_intervening(
+                    parents,
+                    &prev_turn_step,
+                    &prev_anchor_step,
+                    &last_step_id,
+                );
 
                 let mut step = Step {
                     step: StepIdentity {
@@ -578,6 +594,130 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 event_steps.insert(final_id.clone());
                 if appended {
                     last_step_id = Some(final_id);
+                }
+            }
+
+            // A context-compaction boundary projects to one
+            // `conversation.compact` step, positioned between the turns it
+            // separates. Later turns whose `parent_id` references this
+            // compaction resolve to its step via `turn_to_step`, so the DAG
+            // is rewired through the boundary.
+            Item::Compaction(c) => {
+                let step_id = if c.id.is_empty() {
+                    compact_idx += 1;
+                    format!("compact-{:04}", compact_idx)
+                } else {
+                    c.id.clone()
+                };
+
+                let actor = format!("tool:{}", provider);
+                actors
+                    .entry(actor.clone())
+                    .or_insert_with(|| ActorDefinition {
+                        name: Some(provider.to_string()),
+                        provider: Some(provider.to_string()),
+                        ..Default::default()
+                    });
+
+                let resolved = c
+                    .parent_id
+                    .as_ref()
+                    .and_then(|pid| turn_to_step.get(pid).cloned());
+                // Fall back to whatever step came before (as events do)
+                // so a compaction with a missing/unresolvable parent_id
+                // still chains onto the DAG instead of becoming a
+                // disconnected root that orphans the pre-compaction turns.
+                let parents: Vec<String> = resolved
+                    .clone()
+                    .or_else(|| last_step_id.clone())
+                    .into_iter()
+                    .collect();
+                // Splice: if the boundary chains onto the previous turn but an
+                // event was emitted between them, chain through that event so
+                // it isn't orphaned.
+                let parents = splice_onto_intervening(
+                    parents,
+                    &prev_turn_step,
+                    &prev_anchor_step,
+                    &last_step_id,
+                );
+                let rewired = parents.first().cloned() != resolved;
+                let onto_event = parents.first().is_some_and(|p| event_steps.contains(p));
+
+                let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
+                // As in the turn arm: fallback and splice rewire `parents`,
+                // so the pre-rewrite source parent rides along for extract.
+                if rewired || onto_event {
+                    extra.insert(
+                        "source_parent".to_string(),
+                        resolved
+                            .clone()
+                            .map_or(serde_json::Value::Null, serde_json::Value::String),
+                    );
+                }
+                if let Some(trigger) = &c.trigger {
+                    let s = match trigger {
+                        crate::CompactionTrigger::Auto => "auto",
+                        crate::CompactionTrigger::Manual => "manual",
+                    };
+                    extra.insert("trigger".to_string(), serde_json::Value::String(s.into()));
+                }
+                if let Some(summary) = &c.summary {
+                    extra.insert(
+                        "summary".to_string(),
+                        serde_json::Value::String(summary.clone()),
+                    );
+                }
+                if let Some(pre_tokens) = c.pre_tokens {
+                    extra.insert(
+                        "pre_tokens".to_string(),
+                        serde_json::Value::Number(pre_tokens.into()),
+                    );
+                }
+                // `kept` on the wire is the expanded contiguous run (oldest
+                // first) so consumers get concrete ids; the anchor is
+                // recoverable as its first element. Expanded over the emitted
+                // steps — not `view.items` — because dedup renames and splices
+                // change ids and parents during emission, and the wire list
+                // must lie on the boundary step's own ancestry.
+                let anchor = c
+                    .kept_from
+                    .as_ref()
+                    .map(|k| turn_to_step.get(k).cloned().unwrap_or_else(|| k.clone()));
+                let kept = expand_kept_steps(&steps, &by_id, &parents, anchor.as_deref());
+                if !kept.is_empty()
+                    && let Ok(v) = serde_json::to_value(&kept)
+                {
+                    extra.insert("kept".to_string(), v);
+                }
+
+                let mut step = Step {
+                    step: StepIdentity {
+                        id: step_id.clone(),
+                        parents,
+                        actor,
+                        timestamp: c.timestamp.clone(),
+                    },
+                    change: HashMap::new(),
+                    meta: None,
+                };
+                step.change.insert(
+                    conv_artifact_key.clone(),
+                    ArtifactChange {
+                        raw: None,
+                        structural: Some(StructuralChange {
+                            change_type: "conversation.compact".to_string(),
+                            extra,
+                        }),
+                    },
+                );
+                let (final_id, appended) = push_step(&mut steps, &mut by_id, step);
+                // Later turns whose `parent_id` references the boundary resolve
+                // through `turn_to_step`; map to the final (possibly renamed) id.
+                turn_to_step.insert(c.id.clone(), final_id.clone());
+                if appended {
+                    last_step_id = Some(final_id.clone());
+                    prev_anchor_step = Some(final_id);
                 }
             }
         }
@@ -644,13 +784,82 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     }
 }
 
+/// Step-space twin of [`crate::expand_kept`]: walk the emitted steps'
+/// parent chain from the boundary's `parents` back to `anchor` (already
+/// mapped through `turn_to_step`), collecting `conversation.append` step
+/// ids oldest-first. Event steps are chain links, not kept turns — the walk
+/// passes through them; hitting an earlier boundary (or running out of
+/// parents) without reaching the anchor yields an empty list.
+fn expand_kept_steps(
+    steps: &[Step],
+    by_id: &HashMap<String, usize>,
+    boundary_parents: &[String],
+    anchor: Option<&str>,
+) -> Vec<String> {
+    let Some(anchor) = anchor else {
+        return Vec::new();
+    };
+    let mut kept: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut cur = boundary_parents.first().cloned();
+    let mut found = false;
+    while let Some(id) = cur {
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        let Some(&idx) = by_id.get(&id) else { break };
+        let step = &steps[idx];
+        // A turn step carries file.write changes alongside its
+        // conversation.append; `change` is a HashMap, so classify by the
+        // step's conversation.* change specifically — taking whichever
+        // structural iterates first made the walk abort on hash order.
+        let change_type = step
+            .change
+            .values()
+            .filter_map(|ch| ch.structural.as_ref())
+            .map(|s| s.change_type.as_str())
+            .find(|t| t.starts_with("conversation."));
+        match change_type {
+            Some("conversation.append") => {
+                kept.push(id.clone());
+                if id == anchor {
+                    found = true;
+                    break;
+                }
+            }
+            Some("conversation.event") => {}
+            _ => break,
+        }
+        cur = step.step.parents.first().cloned();
+    }
+    if !found {
+        return Vec::new();
+    }
+    kept.reverse();
+    kept
+}
+
+/// Splice a step into the linear parent chain. If `parents` chains onto the
+/// immediately-preceding chain anchor — the previous turn (`prev_turn_step`)
+/// or the previous turn-or-compaction (`prev_anchor_step`); the ordinary
+/// linear case, including a root reached only after some leading events —
+/// but other steps were emitted since (`last_step_id` differs), re-parent
+/// onto that intervening chain so those steps land on the head's ancestry
+/// instead of dangling as false dead ends. Compactions count as anchors for
+/// the same reason turns do: `extract_conversation` resolves a spliced
+/// parent back to the nearest turn/compaction, so derive must re-splice
+/// from either or derive → extract → derive would drift. A genuine branch
+/// (parent is an *earlier* step, not the immediately-preceding anchor) is
+/// left untouched, so abandoned branches stay dead ends.
 fn splice_onto_intervening(
     mut parents: Vec<String>,
     prev_turn_step: &Option<String>,
+    prev_anchor_step: &Option<String>,
     last_step_id: &Option<String>,
 ) -> Vec<String> {
     let resolved = parents.first().cloned();
-    let chains_onto_prev = resolved == *prev_turn_step;
+    let chains_onto_prev = resolved == *prev_turn_step
+        || (prev_anchor_step.is_some() && resolved == *prev_anchor_step);
     if chains_onto_prev
         && let Some(last) = last_step_id
         && Some(last) != resolved.as_ref()
@@ -917,7 +1126,9 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolResult};
+    use crate::{
+        Compaction, CompactionTrigger, DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolResult,
+    };
 
     fn base_turn(id: &str, role: Role) -> Turn {
         Turn {
@@ -1068,6 +1279,49 @@ mod tests {
     }
 
     #[test]
+    fn test_mid_stream_replay_drop_keeps_stream_position() {
+        // A byte-identical replay of `a` arrives AFTER a compaction that
+        // chains onto `a`. Dropping the replay must not regress the stream
+        // position back to `a`: the next turn still wires through the
+        // boundary, and the boundary is not a dead end. (Claude chain
+        // merges produce exactly this shape: rotated segments replay the
+        // prefix verbatim with boundary entries in between.)
+        let a = base_turn("a", Role::User);
+        let replay = base_turn("a", Role::User);
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:01Z".into(),
+            trigger: None,
+            summary: None,
+            pre_tokens: None,
+            kept_from: None,
+        };
+        let mut d = base_turn("d", Role::Assistant);
+        d.parent_id = Some("a".into());
+
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+        view.items.push(Item::Turn(replay));
+        view.items.push(Item::Turn(d));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "c", "d"], "replay dropped, order kept");
+        assert_eq!(
+            path.steps[2].step.parents,
+            vec!["c".to_string()],
+            "d splices through the boundary, not back onto a"
+        );
+        let dead = toolpath::v1::query::dead_ends(&path.steps, &path.path.head);
+        assert!(
+            dead.is_empty(),
+            "no false dead ends: {:?}",
+            dead.iter().map(|s| &s.step.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn test_duplicate_id_identical_content_is_dropped() {
         // The same turn id can appear twice with byte-identical content (a
         // Claude compaction replay re-emitting an unchanged message). The
@@ -1087,6 +1341,35 @@ mod tests {
         // step the dropped duplicate collapsed into — so any real step after
         // that earlier one (here `mid`) stays on the head's ancestry.
         assert_eq!(path.path.head, "mid", "head is the last surviving step");
+    }
+
+    #[test]
+    fn test_dropped_final_duplicate_keeps_compaction_on_head_ancestry() {
+        // Regression for the head-regression bug: a compaction sits between a
+        // turn and that turn's byte-identical replay at the end of the stream.
+        // The replay is dropped, but `head` must remain the compaction (the
+        // last surviving step) so the boundary is on the head's ancestry
+        // rather than orphaned as a dead end.
+        let mut a = base_turn("a", Role::User);
+        a.text = "same".into();
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let mut replay = base_turn("a", Role::User);
+        replay.text = "same".into();
+
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+        view.items.push(Item::Turn(replay));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "c"], "byte-identical replay dropped");
+        assert_eq!(path.path.head, "c", "head is the compaction, not turn a");
+        assert_eq!(path.steps[1].step.parents, vec!["a".to_string()]);
     }
 
     #[test]
@@ -1989,11 +2272,217 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_compaction_emits_compact_step_and_rewires_dag() {
+        // [Turn(a), Compaction(c, parent=a), Turn(b, parent=c)] must derive
+        // to three steps in order, with the middle step carrying a
+        // `conversation.compact` change whose extras survive, parented on a,
+        // and turn b rewired through the boundary onto c.
+        let a = base_turn("a", Role::User);
+        let mut b = base_turn("b", Role::Assistant);
+        b.parent_id = Some("c".into());
+        b.model = Some("m".into());
+
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            trigger: Some(CompactionTrigger::Manual),
+            summary: Some("s".into()),
+            pre_tokens: Some(100),
+            kept_from: Some("a".into()),
+        };
+
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+        view.items.push(Item::Turn(b));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "c", "b"], "items emitted in order");
+
+        let compact = &path.steps[1];
+        assert_eq!(compact.step.parents, vec!["a".to_string()]);
+        let sc = conv_change(compact);
+        assert_eq!(sc.change_type, "conversation.compact");
+        assert_eq!(sc.extra["trigger"], serde_json::json!("manual"));
+        assert_eq!(sc.extra["summary"], serde_json::json!("s"));
+        assert_eq!(sc.extra["pre_tokens"], serde_json::json!(100));
+        // `kept` on the wire is the parent-chain expansion of `kept_from`,
+        // deduplicated by construction.
+        assert_eq!(sc.extra["kept"], serde_json::json!(["a"]));
+
+        // Turn b rewired through the boundary: its parent is the compact step.
+        assert_eq!(path.steps[2].step.parents, vec!["c".to_string()]);
+    }
+
+    #[test]
+    fn test_kept_expansion_survives_turns_with_file_mutations() {
+        // Turns in the kept run whose steps carry sibling `file.write`
+        // changes next to the `conversation.append`. `step.change` is a
+        // HashMap, so classifying the step by whichever structural change
+        // iterates first made the kept walk abort when a file change came
+        // up before the conversation change — a per-process coin flip.
+        // Looped: each iteration builds fresh maps with fresh hash keys,
+        // so a hash-order regression fails the loop almost surely.
+        for _ in 0..64 {
+            let mutations = |n: usize| {
+                (0..n)
+                    .map(|i| crate::FileMutation {
+                        path: format!("f{i}.txt"),
+                        tool_id: None,
+                        operation: Some("write".into()),
+                        raw_diff: None,
+                        before: None,
+                        after: Some(format!("body-{i}")),
+                        rename_to: None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let mut t1 = base_turn("t1", Role::User);
+            t1.file_mutations = mutations(3);
+            let mut t2 = base_turn("t2", Role::Assistant);
+            t2.parent_id = Some("t1".into());
+            t2.model = Some("m".into());
+            t2.file_mutations = mutations(2);
+            let c = Compaction {
+                id: "c".into(),
+                parent_id: Some("t2".into()),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                trigger: Some(CompactionTrigger::Auto),
+                summary: Some("s".into()),
+                pre_tokens: None,
+                kept_from: Some("t1".into()),
+            };
+            let mut t3 = base_turn("t3", Role::User);
+            t3.parent_id = Some("c".into());
+
+            let mut view = view_with(vec![t1, t2]);
+            view.items.push(Item::Compaction(c));
+            view.items.push(Item::Turn(t3));
+
+            let path = derive_path(&view, &DeriveConfig::default());
+            let sc = conv_change(&path.steps[2]);
+            assert_eq!(sc.change_type, "conversation.compact");
+            assert_eq!(sc.extra["kept"], serde_json::json!(["t1", "t2"]));
+        }
+    }
+
+    #[test]
+    fn test_compaction_omits_optional_extras_when_absent() {
+        let a = base_turn("a", Role::User);
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let sc = conv_change(&path.steps[1]);
+        assert_eq!(sc.change_type, "conversation.compact");
+        assert!(!sc.extra.contains_key("trigger"));
+        assert!(!sc.extra.contains_key("summary"));
+        assert!(!sc.extra.contains_key("pre_tokens"));
+        assert!(!sc.extra.contains_key("kept"));
+    }
+
+    #[test]
+    fn test_compaction_synthesizes_id_when_empty() {
+        let a = base_turn("a", Role::User);
+        let c = Compaction {
+            id: String::new(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[1].step.id, "compact-0001");
+    }
+
+    #[test]
+    fn test_compaction_with_unresolvable_parent_chains_onto_previous_step() {
+        // A compaction whose parent_id resolves to no emitted step must chain
+        // onto whatever step came before it (the same fallback events use),
+        // not become a disconnected root that orphans the pre-compaction turns.
+        let a = base_turn("a", Role::User);
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("ghost".into()), // resolves to nothing
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Compaction(c));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[1].step.id, "c");
+        assert_eq!(
+            path.steps[1].step.parents,
+            vec!["a".to_string()],
+            "unresolvable parent falls back to the previous step, not an empty (root) parent set"
+        );
+    }
+
     fn dead_end_ids(path: &Path) -> Vec<String> {
         toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
             .iter()
             .map(|s| s.step.id.clone())
             .collect()
+    }
+
+    fn snapshot_event(id: &str) -> crate::ConversationEvent {
+        crate::ConversationEvent {
+            id: id.into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: None,
+            event_type: "file-history-snapshot".into(),
+            data: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_events_and_compaction_land_on_head_ancestry() {
+        // A linear stream (Codex/opencode shape): a leading event, an
+        // interleaved event, and a compaction that only back-links to the
+        // prior turn. All must end up on the head's ancestry — none flagged as
+        // a false dead end (`query dead-ends` / `render dot` would otherwise
+        // show them as abandoned).
+        let mut a = base_turn("a", Role::User);
+        a.text = "go".into();
+        let mut b = base_turn("b", Role::Assistant);
+        b.parent_id = Some("a".into());
+        let mut c = base_turn("c", Role::Assistant);
+        c.parent_id = Some("b".into());
+        let cmp = Compaction {
+            id: "cmp".into(),
+            parent_id: Some("a".into()), // back-link only, as Codex/opencode emit
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+
+        let mut view = view_with(vec![]);
+        view.items = vec![
+            Item::Event(snapshot_event("lead-evt")),
+            Item::Turn(a),
+            Item::Event(snapshot_event("mid-evt")),
+            Item::Compaction(cmp),
+            Item::Turn(b),
+            Item::Turn(c),
+        ];
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert!(
+            dead_end_ids(&path).is_empty(),
+            "events + compaction must be on the head's ancestry, got dead ends: {:?}",
+            dead_end_ids(&path)
+        );
     }
 
     #[test]

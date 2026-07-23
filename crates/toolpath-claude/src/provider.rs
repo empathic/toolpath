@@ -12,8 +12,9 @@ use crate::types::{Conversation, ConversationEntry, Message, MessageContent, Mes
 #[cfg(any(feature = "watcher", test))]
 use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Item, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    Compaction, CompactionTrigger, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, Role, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -382,11 +383,119 @@ fn is_compact_boundary(entry: &ConversationEntry) -> bool {
             .unwrap_or(false)
 }
 
+/// Returns true if this entry is the synthetic compaction summary that Claude
+/// writes immediately after a boundary (`isCompactSummary: true`).
+fn is_compact_summary(entry: &ConversationEntry) -> bool {
+    entry
+        .extra
+        .get("isCompactSummary")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Build a [`Compaction`] from Claude's boundary marker and (optionally) the
+/// synthetic summary that follows it. Returns the boundary plus its native
+/// preserved tail (`compactMetadata.preservedMessages.uuids`), which the
+/// caller feeds to [`kept_anchor`] once the boundary's parent is final.
+///
+/// All the boundary's compaction-specific data lives in `entry.extra`
+/// (`logicalParentUuid`, `compactMetadata.{trigger,preTokens,preservedMessages}`).
+/// `summary` comes from the following `isCompactSummary` entry's message text.
+///
+/// Only the marked tail counts as kept: the block Claude re-emits just
+/// before the boundary is deduped away by [`conversation_to_view`]'s
+/// duplicate-uuid stripping and is deliberately not part of the kept
+/// provenance (the compaction contract is `kept_from` alone).
+fn compaction_from_boundary(
+    boundary: &ConversationEntry,
+    summary: Option<String>,
+) -> (Compaction, Vec<String>) {
+    let extra = &boundary.extra;
+
+    // The pre-compaction message the boundary logically continues from.
+    // `parentUuid` is always null on the boundary, so use logicalParentUuid.
+    let parent_id = extra
+        .get("logicalParentUuid")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let meta = extra.get("compactMetadata");
+
+    let trigger = meta
+        .and_then(|m| m.get("trigger"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "auto" => Some(CompactionTrigger::Auto),
+            "manual" => Some(CompactionTrigger::Manual),
+            _ => None,
+        });
+
+    let pre_tokens = meta
+        .and_then(|m| m.get("preTokens"))
+        .and_then(|v| v.as_u64());
+
+    let preserved_uuids: Vec<String> = meta
+        .and_then(|m| m.get("preservedMessages"))
+        .and_then(|p| p.get("uuids"))
+        .and_then(|v| v.as_array())
+        .map(|uuids| {
+            uuids
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let compaction = Compaction {
+        id: boundary.uuid.clone(),
+        parent_id,
+        timestamp: boundary.timestamp.clone(),
+        trigger,
+        summary,
+        pre_tokens,
+        kept_from: None,
+    };
+    (compaction, preserved_uuids)
+}
+
+/// Compute a boundary's [`Compaction::kept_from`] anchor from its native
+/// preserved tail: walk the parent chain backward from `parent_id` through
+/// the already-emitted turns while each id is in `preserved`; the deepest
+/// such turn is the anchor. `None` when the boundary's own parent didn't
+/// survive — the preserved set doesn't form a contiguous tail ending at
+/// the boundary, so at view granularity the compaction is wholesale.
+fn kept_anchor(items: &[Item], parent_id: Option<&str>, preserved: &[String]) -> Option<String> {
+    let preserved: std::collections::HashSet<&str> = preserved.iter().map(String::as_str).collect();
+    let turns: HashMap<&str, &Turn> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Turn(t) => Some((t.id.as_str(), t)),
+            _ => None,
+        })
+        .collect();
+    let mut anchor: Option<String> = None;
+    let mut visited = std::collections::HashSet::new();
+    let mut cur = parent_id;
+    while let Some(id) = cur {
+        if !preserved.contains(id) || !visited.insert(id) {
+            break;
+        }
+        let Some(turn) = turns.get(id) else { break };
+        anchor = Some(id.to_string());
+        cur = turn.parent_id.as_deref();
+    }
+    anchor
+}
+
 /// Convert a full conversation to a view with cross-entry tool result assembly.
 ///
 /// Tool-result-only user entries are absorbed into the preceding assistant
 /// turn's `ToolInvocation.result` fields rather than emitted as separate turns.
 ///
+/// Compaction boundaries are detected and emitted as [`Item::Compaction`] at
+/// their position in the ordered item stream: the boundary's `compactMetadata`
+/// becomes the `Compaction`, and the immediately-following synthetic summary
+/// entry is folded into `Compaction.summary` rather than surfaced as a turn.
 fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // Items are built in source order so a compaction boundary lands at its
     // true position between the turns it separates. Preamble events come
@@ -440,6 +549,40 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             && !entry.uuid.is_empty()
             && !seen_uuids.insert(entry.uuid.clone())
         {
+            i += 1;
+            continue;
+        }
+
+        // Compaction boundary: emit one Item::Compaction at this position,
+        // folding the immediately-following synthetic summary entry (if any)
+        // into Compaction.summary rather than surfacing it as a turn.
+        if is_compact_boundary(entry) {
+            let summary = entries.get(i + 1).filter(|next| is_compact_summary(next));
+            let summary_text = summary.map(|s| s.text());
+            let (compaction, preserved) = compaction_from_boundary(entry, summary_text);
+            seen_uuids.insert(entry.uuid.clone());
+            if let Some(s) = summary {
+                seen_uuids.insert(s.uuid.clone());
+            }
+            // Rewire the compaction's logical parent through any prior
+            // absorption so it lands on a real Item in the derived DAG.
+            let mut compaction = compaction;
+            if let Some(pid) = compaction.parent_id.as_ref()
+                && let Some(real) = parent_rewrites.get(pid)
+            {
+                compaction.parent_id = Some(real.clone());
+            }
+            compaction.kept_from = kept_anchor(&items, compaction.parent_id.as_deref(), &preserved);
+            let boundary_uuid = compaction.id.clone();
+            items.push(Item::Compaction(compaction));
+            // Later turns whose wire parentUuid points at the folded summary
+            // chain through the compaction (the boundary itself is a real
+            // Item, so parents that point at it need no rewrite).
+            if let Some(s) = summary {
+                parent_rewrites.insert(s.uuid.clone(), boundary_uuid.clone());
+                i += 1; // consume the folded summary entry
+            }
+            last_anchor_uuid = Some(boundary_uuid);
             i += 1;
             continue;
         }
@@ -1370,6 +1513,7 @@ mod tests {
             .map(|item| match item {
                 Item::Turn(t) => t.id.as_str(),
                 Item::Event(e) => e.id.as_str(),
+                Item::Compaction(c) => c.id.as_str(),
             })
             .collect()
     }
@@ -1450,11 +1594,11 @@ mod tests {
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
         assert_eq!(item_ids(&view), vec!["u1", "cb-1", "cb-1", "u2"]);
-        let boundaries: Vec<_> = view
-            .events()
-            .filter(|e| e.event_type == "compact_boundary")
-            .collect();
-        assert_eq!(boundaries.len(), 2, "both boundary copies survive to_view");
+        assert_eq!(
+            view.compactions().count(),
+            2,
+            "both boundary copies survive to_view"
+        );
     }
 
     #[test]

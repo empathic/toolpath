@@ -13,8 +13,9 @@ use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
 use crate::{
-    ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation, Item,
-    ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    Compaction, CompactionTrigger, ConversationEvent, ConversationView, DelegatedWork,
+    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Extract a [`ConversationView`] from a toolpath [`Path`] document.
@@ -153,7 +154,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
             // path with no turns still keeps its identity.
             if matches!(
                 structural.change_type.as_str(),
-                "conversation.append" | "conversation.event"
+                "conversation.append" | "conversation.event" | "conversation.compact"
             ) && view.id.is_empty()
                 && let Some((provider, session)) = artifact_key.split_once("://")
                 && !provider.is_empty()
@@ -231,6 +232,45 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         (step_idx, step.step.parents.first().cloned()),
                     );
                     view.items.push(Item::Event(event));
+                }
+                "conversation.compact" => {
+                    let trigger = structural
+                        .extra
+                        .get("trigger")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| match s {
+                            "auto" => Some(CompactionTrigger::Auto),
+                            "manual" => Some(CompactionTrigger::Manual),
+                            _ => None,
+                        });
+                    let summary = structural
+                        .extra
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let pre_tokens = structural.extra.get("pre_tokens").and_then(|v| v.as_u64());
+                    // The wire carries the expanded kept run, oldest first;
+                    // the anchor is its first element.
+                    let kept_from = structural
+                        .extra
+                        .get("kept")
+                        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+                        .and_then(|kept| kept.into_iter().next());
+                    let compaction = Compaction {
+                        id: step.step.id.clone(),
+                        parent_id: restore_source_parent(
+                            step.step.parents.first().cloned(),
+                            &structural.extra,
+                            step_idx,
+                            &event_parents,
+                        ),
+                        timestamp: step.step.timestamp.clone(),
+                        trigger,
+                        summary,
+                        pre_tokens,
+                        kept_from,
+                    };
+                    view.items.push(Item::Compaction(compaction));
                 }
                 "tool.invoke" => {
                     let invocation = build_tool_invocation(&structural.extra);
@@ -1436,6 +1476,84 @@ mod tests {
         assert_eq!(events[0].event_type, "unknown");
     }
 
+    #[test]
+    fn test_compaction_round_trips_through_derive_and_extract() {
+        use crate::DeriveConfig;
+
+        let a = Turn {
+            id: "a".into(),
+            parent_id: None,
+            role: Role::User,
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            text: "first".into(),
+            thinking: None,
+            tool_uses: vec![],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+            group_id: None,
+            attributed_token_usage: None,
+        };
+        let b = Turn {
+            id: "b".into(),
+            parent_id: Some("c".into()),
+            role: Role::Assistant,
+            timestamp: "2026-01-01T00:00:02Z".into(),
+            text: "second".into(),
+            thinking: None,
+            tool_uses: vec![],
+            model: Some("m".into()),
+            stop_reason: None,
+            token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+            group_id: None,
+            attributed_token_usage: None,
+        };
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:01Z".into(),
+            trigger: Some(CompactionTrigger::Manual),
+            summary: Some("condensed".into()),
+            pre_tokens: Some(4096),
+            kept_from: Some("a".into()),
+        };
+
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![Item::Turn(a), Item::Compaction(c), Item::Turn(b)],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let view = extract_conversation(&path);
+
+        // Item order [Turn, Compaction, Turn] is preserved.
+        assert_eq!(view.items.len(), 3);
+        assert!(matches!(view.items[0], Item::Turn(_)));
+        assert!(matches!(view.items[2], Item::Turn(_)));
+
+        let Item::Compaction(rc) = &view.items[1] else {
+            panic!(
+                "middle item should be a compaction, got {:?}",
+                view.items[1]
+            );
+        };
+        assert_eq!(rc.id, "c");
+        assert_eq!(rc.parent_id.as_deref(), Some("a"));
+        assert_eq!(rc.timestamp, "2026-01-01T00:00:01Z");
+        assert_eq!(rc.trigger, Some(CompactionTrigger::Manual));
+        assert_eq!(rc.summary.as_deref(), Some("condensed"));
+        assert_eq!(rc.pre_tokens, Some(4096));
+        assert_eq!(rc.kept_from.as_deref(), Some("a"));
+    }
+
     fn bare_turn(id: &str, parent_id: Option<&str>, role: Role, timestamp: &str) -> Turn {
         Turn {
             id: id.into(),
@@ -1554,6 +1672,59 @@ mod tests {
         let events: Vec<&ConversationEvent> = view.events().collect();
         assert_eq!(events[0].parent_id, None);
         assert_eq!(events[1].parent_id, None);
+    }
+
+    #[test]
+    fn test_compaction_parent_resolves_past_spliced_event_steps() {
+        use crate::DeriveConfig;
+
+        let compaction = Compaction {
+            id: "c".into(),
+            parent_id: Some("u1".into()),
+            timestamp: "2026-01-01T00:00:02Z".into(),
+            trigger: Some(CompactionTrigger::Auto),
+            summary: Some("condensed".into()),
+            pre_tokens: None,
+            kept_from: None,
+        };
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![
+                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:00Z")),
+                Item::Event(bare_event(
+                    "",
+                    "file-history-snapshot",
+                    "2026-01-01T00:00:01Z",
+                )),
+                Item::Compaction(compaction),
+                Item::Turn(bare_turn(
+                    "b",
+                    Some("c"),
+                    Role::User,
+                    "2026-01-01T00:00:03Z",
+                )),
+            ],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let c_step = path.steps.iter().find(|s| s.step.id == "c").unwrap();
+        assert_eq!(c_step.step.parents, vec!["event-0001".to_string()]);
+
+        let view = extract_conversation(&path);
+        let Some(Item::Compaction(rc)) =
+            view.items.iter().find(|i| matches!(i, Item::Compaction(_)))
+        else {
+            panic!("compaction survives the roundtrip");
+        };
+        assert_eq!(
+            rc.parent_id.as_deref(),
+            Some("u1"),
+            "compaction's logical parent is the last turn, not the spliced event"
+        );
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns[1].parent_id.as_deref(), Some("c"));
     }
 
     #[test]

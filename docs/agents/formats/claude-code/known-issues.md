@@ -49,6 +49,24 @@ snapshot.
 
 **Defense:** if continuity matters, checkpoint before compaction.
 
+### Duplicate UUIDs at compaction boundaries
+
+In long `[1m]`-context sessions, an auto-compaction can re-emit an
+earlier block of the conversation as fresh entries that **reuse the
+original `uuid`s** (with re-threaded `parentUuid`s) in the run just
+before the `compact_boundary`. The result is the **same `uuid`
+appearing twice in one file** — violating the usual within-file
+uniqueness assumption. This is what makes a naively-derived path carry
+duplicate `step.id`s, which then fails any store with a
+`(path, step_id)` primary key.
+
+**Defense:** dedupe by `uuid`, keeping the **first** occurrence — it
+carries the true `parentUuid` lineage; the re-emitted copy is
+re-parented into a synthetic linear chain and should be dropped. The
+re-emitted block is *not* the same as `compactMetadata.preservedMessages`
+(which enumerates only the recent kept tail). See
+[session-chains.md §Re-emitted messages with duplicate UUIDs](session-chains.md#re-emitted-messages-with-duplicate-uuids).
+
 ## Race conditions
 
 ### Multi-terminal writes to the same project

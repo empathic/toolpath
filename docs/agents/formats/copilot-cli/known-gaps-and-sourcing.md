@@ -51,8 +51,14 @@ and the checklist for the next (feature-rich) capture.
    **resolved**: native `edit`/`create` embed a git-style diff inline in
    `result.detailedContent` — see [file-fidelity.md](file-fidelity.md) — so
    snapshot reconstruction is only relevant for rewind, not derivation.)
-2. **Compaction token semantics** — `session.compaction_*` still unobserved;
-   apply the "never stamp a cumulative counter" rule defensively when it shows up.
+2. **Compaction token semantics** — **resolved at 1.0.68**: `session.compaction_start`
+   carries `{systemTokens, conversationTokens, toolDefinitionsTokens}`;
+   `session.compaction_complete` carries `{success, preCompactionTokens,
+   postCompactionTokens, preCompactionMessagesLength, messagesRemoved,
+   tokensRemoved, summaryContent, checkpointNumber}` — all point-in-time
+   totals for this one compaction, nothing cumulative to difference. Reader
+   maps a successful complete to `Item::Compaction` (`pre_tokens` ←
+   `preCompactionTokens`); the summary also lands in `checkpoints/NNN-*.md`.
 3. **Sub-agent transcript location** — the sub-agent's own turns aren't in the
    parent `events.jsonl`; whether they land in a sibling session dir is unknown
    (`DelegatedWork.turns` stays empty).
@@ -98,8 +104,10 @@ tests below hold the line). Remaining boxes, tied to the open questions above:
 - [ ] Inspect `checkpoints/` + `rewind-snapshots/`: record the on-disk format
       and the checkpoint→event mapping (open question #1).
 - [ ] Find where a sub-agent's own transcript lands (open question #3).
-- [ ] Capture a session exercising skills / hooks / abort / compaction and
-      record their `data` shapes (open questions #2, #4).
+- [x] Capture a session exercising compaction and record its `data` shape
+      (2026-07-21, 1.0.68 — `test-fixtures/copilot/compacted-real.jsonl`).
+- [ ] Capture a session exercising skills / hooks / abort and record their
+      `data` shapes (open question #4).
 - [ ] Open `session-store.db` read-only; dump the **real** schema
       (`.schema`); correct [session-store-db.md](session-store-db.md) (#5).
 - [ ] Re-run `scripts/verify-copilot-live.sh` + refresh the elicit fixture

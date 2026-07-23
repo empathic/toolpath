@@ -494,8 +494,14 @@ fn write_artifact_change(
 // ── Kind: agent-coding-session rendering ────────────────────────────
 
 fn is_agent_coding_session(path: &Path) -> bool {
-    path.meta.as_ref().and_then(|m| m.kind.as_deref())
-        == Some(toolpath::v1::PATH_KIND_AGENT_CODING_SESSION)
+    matches!(
+        path.meta.as_ref().and_then(|m| m.kind.as_deref()),
+        Some(
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION
+                | toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0
+                | toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_0_0
+        )
+    )
 }
 
 /// Render an agent-coding-session path as a flat transcript: the active
@@ -2762,6 +2768,36 @@ mod tests {
             !md.contains("## Timeline"),
             "timeline heading leaked:\n{md}"
         );
+    }
+
+    #[test]
+    fn superseded_kind_uris_still_render_as_transcript() {
+        // v1.0.0/v1.1.0 documents predate the current kind URI but are the
+        // same shape; they must get the transcript rendering, not the
+        // generic DAG layout.
+        for kind in [
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_0_0,
+        ] {
+            let mut path = agent_coding_session_path();
+            path.meta.as_mut().unwrap().kind = Some(kind.into());
+            let md = render_path(
+                &path,
+                &RenderOptions {
+                    detail: Detail::Full,
+                    front_matter: false,
+                },
+            );
+            assert!(
+                md.contains("**User:** add a greeting"),
+                "{kind}: transcript turn missing:\n{md}"
+            );
+            assert!(!md.contains("### a1"), "{kind}: step header leaked:\n{md}");
+            assert!(
+                !md.contains("## Timeline"),
+                "{kind}: timeline heading leaked:\n{md}"
+            );
+        }
     }
 
     #[test]

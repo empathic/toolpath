@@ -115,6 +115,207 @@ non-turn entries survive import/export.
 - **`path-cli`** (0.17.0), **`toolpath-cli`** (0.17.0): dependency
   bumps for all of the above. 0.17.0 rather than 0.16.0 because
   0.16.0 had already been released from main.
+## Real-session hardening: deterministic kept expansion + observed Copilot compaction — 2026-07-23
+
+Follow-ups from driving every harness TUI interactively (real keystrokes,
+real `/compact`) and validating the resulting artifacts.
+
+- **`toolpath-convo`** (fix): `expand_kept_steps` classified each step on
+  the kept walk by whichever structural change `HashMap` iteration
+  returned first. Turn steps carry `file.write` changes next to their
+  `conversation.append`, so the walk aborted on hash order and silently
+  emptied the wire `kept` list about one derive in four on sessions with
+  tool-created files. Steps are now classified by their `conversation.*`
+  change specifically. Regression coverage: a looped unit test, file
+  mutations in the proptest turn generator, and a real captured pi
+  session (`test-fixtures/pi/compacted-real.jsonl`) with a looped
+  stability test.
+- **`toolpath-claude`** (fix): projected compact summaries now carry
+  `isVisibleInTranscriptOnly: true` — without it the Claude TUI renders
+  the entire summary text inline on resume instead of collapsing it
+  (verified in claude 2.1.216).
+- **`toolpath-copilot` 0.2.0**: context compaction is now **observed**
+  (first-hand capture at 1.0.68, `test-fixtures/copilot/compacted-real.jsonl`)
+  and mapped both directions. A successful `session.compaction_complete`
+  becomes the typed `Item::Compaction` (`summary` ← `summaryContent`,
+  `pre_tokens` ← `preCompactionTokens`; wholesale — Copilot reports
+  removed-message counts, not surviving ids, so there is no kept run);
+  `success: false` stays a generic event, as does the
+  `session.compaction_start` bookkeeping marker. The projector emits the
+  observed start/complete pair back. Turn parents now stitch through
+  boundaries so the head-ancestry walk crosses the compaction in order.
+  Docs de-staled: `session.compaction_*` rows are `[observed, 1.0.68]`,
+  compaction token semantics resolved, checkpoint mirroring
+  (`checkpoints/NNN-*.md`) recorded.
+- **`toolpath-codex`**: resume fidelity, verified in the real codex TUI
+  (0.144.4). The projector follows every `compacted` line with the
+  `event_msg`/`context_compacted` marker the TUI renders its "Context
+  compacted" row from, and places the opening `turn_context` at its
+  native position (after leading system-envelope messages, immediately
+  before the first real prompt). `path resume` now mints a deterministic
+  fresh session id (reusing the source id made imports ambiguous and let
+  the thread-row INSERT OR REPLACE clobber the native session) and
+  titles the registered thread from the first non-envelope user message
+  instead of the `<environment_context>` XML. The 2026-07 payload
+  (window-id chain, encrypted summary in `replacement_history`, a
+  prefix-keep the suffix-anchored contract cannot represent) is
+  documented as deliberate loss; the empty `message` now normalizes to
+  no summary. Real capture checked in as
+  `test-fixtures/codex/compacted-real.jsonl`.
+- **`toolpath-claude`**: resume-rendering fidelity, verified in the real
+  Claude TUI (2.1.216). An assistant entry whose content is
+  `[{"type":"text","text":""}]` aborts the transcript renderer (a
+  resumed session lost every ❯ prompt and the Compacted indicator); the
+  projector now re-emits fully empty assistant turns as the empty
+  thinking block real Claude writes, and `path p import claude` /
+  `path share` derive with thinking included. Events (attachments,
+  system entries) emit inline at their item position instead of
+  regrouping at the end of the file; the caveat entry keeps `isMeta`;
+  the reader stream-parses each line so a mid-write flush boundary
+  (two objects on one physical line) no longer drops entries.
+- **`toolpath-pi`**: model/thinking state survives resume, verified in
+  pi 0.72. `model_change` / `thinking_level_change` / `label` entries
+  map to typed `Item::Event`s (previously discarded — a resumed
+  projection lost its model selection), and the projector threads the
+  chain's model context into assistant `provider`/`api` fields.
+- **`toolpath-convo`**: the item-space `expand_kept` passes through
+  events on the parent chain, matching its documented step-space twin.
+- **`path-cli`**: `path p import` prints an `events preserved:` count
+  by type, so an unmapped source encoding (like Copilot's compaction
+  pair, which shipped unnoticed as `compactions=0`) is visible at
+  import time. New `docs/agents/tui-drift-check.md` records the
+  per-harness-release verification loop and the versions each harness
+  was last verified against.
+
+## Compaction kept contract: anchor-based + executable round-trip invariants — 2026-07-16
+
+The `Compaction` kept contract is now anchor-based. The IR carries
+`kept_from` — the id of the oldest prior turn surviving verbatim into the
+post-compaction window — and the surviving set is *defined* as the
+contiguous parent-chain run from that anchor up to the boundary, computed
+by the new shared `toolpath_convo::expand_kept`. The wire `kept` array
+(on the `conversation.compact` structural change) keeps its shape (turn-id
+strings) but tightens its meaning: always a contiguous run, oldest first,
+whose first element is the anchor. Compaction provenance is a closed typed
+set — there is deliberately no catch-all `extra`; native detail richer
+than the contiguous run (e.g. Claude's replay-pinned messages) is not
+carried, and round-trips are lossy beyond these fields.
+
+- **`toolpath-convo`**: `Compaction.kept` (id list) → `kept_from` (anchor);
+  shared `expand_kept`. Steps whose
+  `parents` were rewired by derive-splicing now stamp `source_parent`
+  (string|null — the pre-splice source parent) on their
+  `conversation.append`/`conversation.compact` structural change, so
+  `extract_conversation` restores the original linkage exactly instead of
+  guessing it back from the event chain.
+- **`toolpath-convo`**: new `testing` module with the round-trip contract
+  as executable checks — `check_view_invariants` (e.g. a `kept_from`
+  anchor must resolve to a non-empty run on the boundary's ancestry) and
+  `assert_fixpoint` (derive → extract → derive is stable) — plus a
+  proptest suite asserting unique derived step ids, derive → extract →
+  derive stability, and byte-identical-replay drops on randomized views.
+- **`toolpath-claude`**: projection follows Claude's wire convention of
+  chaining the first post-boundary entry through the synthetic summary
+  (boundary ← summary ← first-post-entry) — IR parents pointing at the
+  boundary are redirected to the emitted summary. Reads recover the
+  boundary anchor from the native preserved tail (`kept_anchor` walks the
+  boundary's parent chain through `preservedMessages.uuids`; a native set
+  that doesn't form a contiguous tail ending at the boundary is wholesale
+  at view granularity). Projection writes `preservedMessages.uuids` as the
+  `expand_kept` run.
+- **`toolpath-pi`**: Pi's `firstKeptEntryId` can name a non-turn entry
+  (`model_change`, folded tool result); it now resolves to the first turn
+  at-or-after the anchor instead of dangling, and projection passes the
+  next turn's id so a projected anchor always names an entry that exists.
+- **`toolpath-opencode`**: projected message timestamps are forced
+  strictly increasing (`monotonize_times`) — the reader orders by
+  `time_created`, so a boundary stamped later than the message after it
+  would move on re-read.
+- **`toolpath-codex`**: projection guards mixed groups — when a group's
+  members carry per-step attributions (which already advance the
+  cumulative counter by the full group total), the group-final's bare
+  `token_usage` no longer advances it again, so a re-read doesn't
+  attribute double the real spend.
+- **`toolpath-md`**: transcript rendering matched only the newest
+  `agent-coding-session` kind URI, silently downgrading v1.0.0/v1.1.0
+  documents to the generic DAG layout; it now matches all three.
+- **`toolpath-convo`**: validating against real compacted sessions (10
+  live Claude/opencode sessions driven through invariants, stability, and
+  the fixpoint oracle) caught two extract gaps the fixtures missed:
+  session-level `files_changed` was rebuilt only from per-step
+  `file.write` changes, dropping every file the provider recorded at
+  session level (now recovered from `meta.extra` first); and a
+  harness-synthetic assistant turn (actor `tool:<provider>`, e.g.
+  Claude's API-error entries) lost its `<synthetic>` model marker and
+  re-derived as `agent:unknown` (now restored from the step actor). The
+  proptest generator now covers synthetic and model-less assistant turns
+  plus session-level `files_changed`.
+- **`toolpath-opencode`**: a real manual `/compact` hosts the boundary on
+  a user message containing only the compaction part; that message emits
+  no turn, so later turns whose native `parentID` named it dangled. Such
+  parents now redirect to the item standing in for the skipped message —
+  the boundary itself.
+- **Real-session cross-harness matrix** (`cross_harness_matrix.rs`): a new
+  opt-in `matrix_translation_real_sessions` test drives the full
+  translation matrix from real local sessions (`TOOLPATH_REAL_MATRIX`
+  env var, `harness:locator` specs). Running it over every session on a
+  dev machine (26 sources × 7 targets, then a 298-session native sweep)
+  surfaced and fixed:
+  - **`toolpath-claude`**: all-zero `usage` blocks (synthetic API-error
+    entries) decoded as measurements instead of `None`, breaking
+    cross-harness accounting; and extract lost the `<synthetic>` model
+    marker (see above).
+  - **`toolpath-gemini`**: same all-zero-decodes-as-`None` gap for
+    degenerate `{input: 0}` records on aborted generations.
+  - **`toolpath-copilot`**: the reader dropped empty-text, tool-less
+    assistant turns that carry real `outputTokens` (aborted responses),
+    un-conserving session totals; and the projector re-derived `view`
+    `view_range` from `offset`/`limit` only, so an already-native input
+    lost its range on the second cycle.
+  - **`toolpath-opencode`**: native user rows carry no `parentID`, so IR
+    turn chains broke at every user message — the reader now synthesizes
+    the linear parent, which also keeps foreign kept anchors resolvable.
+  - **`toolpath-pi`**: the `<session-id>-init` virtual root Pi writes as
+    the first entry's `parentId` survived as a dangling parent; it now
+    resolves to `None`.
+  - **`toolpath-convo`**: the multi-edit file-write fallback copied
+    provider-shaped `edits` JSON onto the wire that `FileMutation` can't
+    represent, so one round-trip silently degraded the document; the raw
+    diff (and the `tool.invoke` input) already carry that information.
+  - Matrix invariants tightened to the true contract: token-usage
+    survival is conservation of assistant input/output totals (turn
+    folding and zero↔`None` wire limits make sequence equality wrong),
+    and `kept_run_may_inflate` documents that a strictly linear target
+    (opencode) may retain intervening turns a source boundary skipped —
+    growth allowed, shrink or anchor loss still fails.
+
+Crates bumped: `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
+`toolpath-claude` 0.13.0, `toolpath-gemini` 0.7.0, `toolpath-codex`
+0.7.0, `toolpath-opencode` 0.6.0, `toolpath-cursor` 0.3.0, `toolpath-pi`
+0.7.0, `toolpath-git` 0.7.0, `toolpath-github` 0.7.0, `toolpath-dot`
+0.6.0, `toolpath-md` 0.8.0, `path-cli` 0.16.0, `toolpath-cli` 0.16.0.
+The four dependents of `toolpath` alone (`git`/`github`/`dot`/`md`) bump
+because their published versions declare `toolpath` ^0.7.0, which would
+resolve a second `toolpath` next to 0.8.0 in a registry build; `path-cli`
+and `toolpath-cli` skip to 0.16.0 because 0.15.0 is already published
+with different content.
+
+## Extract: undo the event splice when rebuilding wire parents — 2026-07-07
+
+- **`toolpath-convo`**: `derive_path` splices events and compactions onto the
+  head's ancestry, which re-parents neighboring steps through event steps —
+  ids that don't exist on the wire (Claude's headerless preamble/snapshot
+  lines carry no `uuid`, so nothing can chain through them).
+  `extract_conversation` now resolves a turn's or compaction's parent past
+  event-derived steps back to the nearest turn/compaction ancestor, so
+  projectors write valid wire chains: a re-exported Claude session's first
+  message keeps `parentUuid: null` instead of naming a synthesized
+  `claude-preamble-N` step, and messages after a snapshot line chain onto
+  the real prior message. Events keep their spliced parents (event-to-event
+  chains are legitimate wire data), and derive re-splices on re-derive, so
+  derive → extract → derive is stable. (Superseded by the items-stream
+  release above: event steps now always stamp `source_parent` and extract
+  restores their source linkage exactly.)
 ## `path p cache sync` — incremental session ingestion — 2026-07-16
 
 Adds `path p cache sync [types…]`, the first step toward a cache that
@@ -435,6 +636,64 @@ turn that mentions `RefCell`", "which sessions touched `cmd_resume.rs`?",
 are gone in favor of jaq forms — `path query 'map(select(.dead_end))'` and
 `path query 'map(select(.step.actor | startswith("agent:")))'`. `path-cli`
 0.14.0 → 0.15.0; adds the `jaq-core`/`jaq-std`/`jaq-json` dependencies.
+
+## Conversation items IR + compaction provenance — 2026-06-22
+
+`ConversationView` now exposes a single ordered `items` stream (the new
+`Item` enum) in place of the separate `turns`/`events` lists, giving every
+provider one timeline to populate and every consumer one timeline to walk.
+On top of that, compaction is now first-class provenance: when an agent
+summarizes and drops earlier context, we record what was kept and why
+instead of silently losing the boundary.
+
+- **`toolpath-convo`** (BREAKING): `ConversationView.turns`/`events` are
+  unified into `ConversationView.items: Vec<Item>`, with `turns()`,
+  `events()`, and `compactions()` accessors for walking the stream. New
+  public types `Compaction` and `CompactionTrigger` model a
+  context-compaction boundary — `kept` is the set of prior turn ids that
+  survived, and `trigger` records what caused it. `derive_path` resolves
+  step-id collisions as it emits steps — a byte-identical re-emission is
+  dropped, a same-id-but-different step is re-IDed to `<id>#<n>` — so it
+  is infallible (returns `Path`, not `Result`) and the result is always
+  collision-free. The per-provider `derive::derive_path` / `derive_project`
+  (and pi's `derive_graph`) wrappers are likewise infallible now; only the
+  disk-reading entry points (e.g. pi's `derive_project`) still return
+  `Result`.
+- **New step type**: `conversation.compact` records a compaction event as
+  a Step in the derived `Path`.
+- **Per-provider compaction population**: `toolpath-claude`,
+  `toolpath-codex`, `toolpath-opencode`, and `toolpath-pi` emit
+  `Compaction` items from their on-disk compaction signals.
+  `toolpath-gemini` and `toolpath-cursor` participate in the items IR but
+  persist no compaction: Gemini records none, and Cursor's `/summarize`
+  writes only a boundary marker (the summary and kept set live server-side
+  and are unrecoverable from local data), so the marker is skipped on read.
+- **`agent-coding-session` kind → v1.2.0**: the kind constant is now
+  `https://toolpath.net/kinds/agent-coding-session/v1.2.0`, extending
+  v1.1.0 (token usage) with the `conversation.compact` step type. The
+  v1.2.0 schema joins `path-cli`'s `BUNDLED_KINDS` alongside the
+  retained v1.0.0/v1.1.0 schemas; producers (the shared
+  `toolpath_convo::derive_path` and every provider built on it) emit the
+  new URI.
+- **Token-usage idempotency fixes** (surfaced by the cross-harness
+  round-trip matrix once compaction fixtures were added): message totals
+  are canonicalized per `group_id` across the whole turn sequence rather
+  than per consecutive run, so a group interrupted by an intervening turn
+  no longer double-counts on re-read (`toolpath-claude`); consecutive
+  same-id Gemini lines (one split message) now share a `group_id` so their
+  repeated `tokens` snapshot is counted once (`toolpath-gemini`); and
+  Codex's cumulative `token_count` advances by a group's total once, on the
+  group's last turn (`toolpath-codex`).
+
+Crates bumped: `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
+`toolpath-claude` 0.13.0, `toolpath-codex` 0.7.0, `toolpath-gemini`
+0.7.0, `toolpath-opencode` 0.6.0, `toolpath-pi` 0.7.0,
+`toolpath-cursor` 0.3.0, `path-cli` 0.16.0, `toolpath-cli` 0.16.0
+(0.15.0 was published from main with different content, so this
+branch's CLI changes land as 0.16.0). Unchanged here — but bumped
+by the compaction-contract section above: `toolpath-git`,
+`toolpath-github`, `toolpath-dot`, `toolpath-md`. Unchanged:
+`pathbase-client`.
 
 ## Token usage: once per message, with per-step attribution + kind v1.1.0 — 2026-06-17
 

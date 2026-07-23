@@ -3,7 +3,7 @@
 //! Walks `PiSession.entries` in file order. Each `Entry::Message` becomes a
 //! `Turn`; metadata-only entries like `ModelChange` / `ThinkingLevelChange` /
 //! `Label` buffer and attach to the next message's `extra["pi"]`.
-//! `Entry::Compaction` becomes an opaque `System` turn at its position in the
+//! `Entry::Compaction` becomes an `Item::Compaction` at its position in the
 //! stream; `BranchSummary`, `Custom`, and `CustomMessage` emit synthetic turns
 //! with appropriate roles.
 //!
@@ -21,9 +21,9 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Item, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation,
-    ToolResult, Turn,
+    Compaction, ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 // ── Classification helpers ───────────────────────────────────────────
@@ -222,6 +222,28 @@ fn truncate_output(output: &str, max: usize) -> String {
     }
 }
 
+/// Resolve Pi's `firstKeptEntryId` anchor to `Compaction.kept_from` — the
+/// id of the oldest turn surviving the boundary.
+///
+/// Pi's anchor can name a non-turn entry (a `model_change`, a
+/// `thinking_level_change`, a folded tool result); the contract wants a
+/// turn id, so resolution takes the first already-emitted turn whose
+/// source entry sits at-or-after the anchor in the session's entry order.
+/// `None` when the anchor id is unknown or no prior turn sits at-or-after
+/// it (nothing survived verbatim).
+fn resolve_kept_from(
+    items: &[Item],
+    entry_pos: &HashMap<&str, usize>,
+    first_kept_entry_id: &str,
+) -> Option<String> {
+    let anchor = *entry_pos.get(first_kept_entry_id)?;
+    items
+        .iter()
+        .filter_map(Item::as_turn)
+        .find(|t| entry_pos.get(t.id.as_str()).is_some_and(|p| *p >= anchor))
+        .map(|t| t.id.clone())
+}
+
 /// Resolve an item's parent reference past entries that produced no item
 /// (the session header, `model_change` / `thinking_level_change` / `label`
 /// metadata, folded tool results), walking the entry parent chain up to
@@ -267,6 +289,14 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
     //          invocation by id and populate `.result` (and any delegation
     //          result).
     let mut items: Vec<Item> = Vec::new();
+    // Entry id → position in `session.entries`, for anchoring `kept_from`
+    // resolution in the session's entry order.
+    let entry_pos: HashMap<&str, usize> = session
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(pos, e)| (e.entry_id(), pos))
+        .collect();
     // Map tool-call id → (item_idx, tool_idx); item_idx indexes an `Item::Turn`.
     let mut tool_call_locs: HashMap<String, (usize, usize)> = HashMap::new();
     // Map tool-call id → (item_idx, delegation index) within the turn (if any).
@@ -278,28 +308,95 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         match entry {
             Entry::Session(_) => continue,
 
-            Entry::ModelChange { .. } | Entry::ThinkingLevelChange { .. } | Entry::Label { .. } => {
-                // Discarded — these influence rendering only and don't map onto
-                // a cross-harness IR field.
+            // Meta entries ride as typed events: a resumed pi session
+            // replays model / thinking-level state from them, so dropping
+            // them degraded `path resume` (the resumed session lost its
+            // model selection). They stay chain links — turn parents that
+            // reference them resolve to the event id, and the kept walk
+            // passes through `conversation.event` steps.
+            Entry::ModelChange {
+                base,
+                provider,
+                model_id,
+                extra,
+            } => {
+                let mut data: HashMap<String, serde_json::Value> = HashMap::new();
+                data.insert("provider".to_string(), serde_json::json!(provider));
+                data.insert("modelId".to_string(), serde_json::json!(model_id));
+                for (k, v) in extra {
+                    data.insert(k.clone(), v.clone());
+                }
+                items.push(Item::Event(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "model_change".to_string(),
+                    data,
+                }));
+            }
+            Entry::ThinkingLevelChange {
+                base,
+                thinking_level,
+                extra,
+            } => {
+                let mut data: HashMap<String, serde_json::Value> = HashMap::new();
+                data.insert(
+                    "thinkingLevel".to_string(),
+                    serde_json::json!(thinking_level),
+                );
+                for (k, v) in extra {
+                    data.insert(k.clone(), v.clone());
+                }
+                items.push(Item::Event(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "thinking_level_change".to_string(),
+                    data,
+                }));
+            }
+            Entry::Label { base, extra } => {
+                let data: HashMap<String, serde_json::Value> =
+                    extra.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                items.push(Item::Event(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "label".to_string(),
+                    data,
+                }));
             }
 
-            Entry::Compaction { base, summary, .. } => {
-                items.push(Item::Turn(Turn {
+            Entry::Compaction {
+                base,
+                summary,
+                first_kept_entry_id,
+                tokens_before,
+                ..
+            } => {
+                // Observed at pi 0.72 (real capture,
+                // test-fixtures/pi/compacted-real.jsonl): the entry also
+                // carries `details` ({readFiles, modifiedFiles}) and
+                // `fromHook` — pi bookkeeping outside the closed typed set,
+                // deliberately not carried; a projected session resumes
+                // correctly without them.
+                // Pi's `firstKeptEntryId` can name a non-turn entry (e.g. a
+                // discarded `model_change`); resolve it to the first turn
+                // at-or-after the anchor in entry order — that turn is the
+                // contract's `kept_from`. `None` = nothing survived verbatim.
+                let kept_from = first_kept_entry_id
+                    .as_deref()
+                    .and_then(|anchor| resolve_kept_from(&items, &entry_pos, anchor));
+                items.push(Item::Compaction(Compaction {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
-                    group_id: None,
-                    role: Role::System,
                     timestamp: base.timestamp.clone(),
-                    text: format!("Compacted (summary): {}", summary),
-                    thinking: None,
-                    tool_uses: vec![],
-                    model: None,
-                    stop_reason: None,
-                    token_usage: None,
-                    attributed_token_usage: None,
-                    environment: Some(env.clone()),
-                    delegations: vec![],
-                    file_mutations: Vec::new(),
+                    // Pi's `fromHook` is extension-vs-default provenance, not
+                    // auto-vs-manual, so there's no trigger to record.
+                    trigger: None,
+                    summary: Some(summary.clone()),
+                    pre_tokens: Some(*tokens_before),
+                    kept_from,
                 }));
             }
 
@@ -543,12 +640,14 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         .iter()
         .map(|i| match i {
             Item::Turn(t) => t.id.clone(),
+            Item::Compaction(c) => c.id.clone(),
             Item::Event(e) => e.id.clone(),
         })
         .collect();
     for item in &mut items {
         let parent = match item {
             Item::Turn(t) => &mut t.parent_id,
+            Item::Compaction(c) => &mut c.parent_id,
             Item::Event(e) => &mut e.parent_id,
         };
         *parent = resolve_item_parent(
@@ -1061,9 +1160,9 @@ mod tests {
     }
 
     #[test]
-    fn test_compaction_produces_system_turn() {
+    fn test_compaction_produces_compaction_item() {
         let c = Entry::Compaction {
-            base: base("c", None, "t"),
+            base: base("c", Some("u1"), "t"),
             summary: "sum".into(),
             first_kept_entry_id: Some("x".into()),
             tokens_before: 100,
@@ -1072,15 +1171,23 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![c], "/tmp/p"));
-        let t = v.turns().next().unwrap();
-        assert_eq!(t.role, Role::System);
-        assert!(t.text.starts_with("Compacted"));
+        // No synthetic turn for the compaction.
+        assert_eq!(v.turns().count(), 0);
+        assert_eq!(v.items.len(), 1);
+        let comp = v.items[0].as_compaction().expect("compaction item");
+        assert_eq!(comp.id, "c");
+        assert_eq!(comp.summary.as_deref(), Some("sum"));
+        assert_eq!(comp.pre_tokens, Some(100));
+        assert_eq!(comp.trigger, None);
+        // `firstKeptEntryId` ("x") names no known entry, so no anchor.
+        assert_eq!(comp.kept_from, None);
     }
 
     #[test]
     fn test_resolve_item_parent_skips_discarded_entries() {
-        // Entry chain: turn "a" ← model_change "mc1" ← model_change "mc2".
-        // A parent naming "mc2" resolves to "a", the nearest item ancestor.
+        // Entry chain: turn "a" ← itemless entry "mc1" ← itemless entry
+        // "mc2" (e.g. folded tool results). A parent naming "mc2"
+        // resolves to "a", the nearest item ancestor.
         let entry_parents: HashMap<&str, Option<&str>> =
             [("a", None), ("mc1", Some("a")), ("mc2", Some("mc1"))]
                 .into_iter()
@@ -1124,6 +1231,182 @@ mod tests {
             resolve_item_parent(Some("x"), &entry_parents, &item_ids, "sess-1-init"),
             None
         );
+    }
+
+    #[test]
+    fn test_compaction_unknown_anchor_resolves_to_none() {
+        let c = Entry::Compaction {
+            base: base("c", None, "t"),
+            summary: "sum".into(),
+            first_kept_entry_id: Some("x".into()),
+            tokens_before: 100,
+            details: None,
+            from_hook: None,
+            extra: HashMap::new(),
+        };
+        let v = session_to_view(&session_from(vec![c], "/tmp/p"));
+        let comp = v.items[0].as_compaction().expect("compaction item");
+        assert_eq!(comp.parent_id, None);
+        // An unknown anchor id can't resolve to a surviving turn.
+        assert_eq!(comp.kept_from, None);
+    }
+
+    #[test]
+    fn test_compaction_anchor_on_turn_becomes_kept_from() {
+        // Two emitted turns precede the compaction; the anchor names the
+        // first of them, so it is `kept_from` and the parent-chain
+        // expansion recovers both surviving turn ids.
+        let v = session_to_view(&session_from(
+            vec![
+                user_text_entry("u1", None, "first"),
+                user_text_entry("u2", Some("u1"), "second"),
+                Entry::Compaction {
+                    base: base("c", Some("u2"), "t"),
+                    summary: "sum".into(),
+                    first_kept_entry_id: Some("u1".into()),
+                    tokens_before: 50,
+                    details: None,
+                    from_hook: None,
+                    extra: HashMap::new(),
+                },
+            ],
+            "/tmp/p",
+        ));
+        let comp = v.items[2].as_compaction().expect("compaction item");
+        assert_eq!(comp.kept_from.as_deref(), Some("u1"));
+        assert_eq!(
+            toolpath_convo::expand_kept(&v.items, comp),
+            vec!["u1".to_string(), "u2".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_compaction_non_turn_anchor_resolves_to_next_turn() {
+        // The anchor names a `model_change` — a non-turn entry.
+        // `kept_from` must resolve to the first turn at-or-after it in
+        // entry order, never carry the raw non-turn id.
+        let v = session_to_view(&session_from(
+            vec![
+                user_text_entry("u1", None, "before the anchor"),
+                Entry::ModelChange {
+                    base: base("mc", Some("u1"), "t"),
+                    provider: "anthropic".into(),
+                    model_id: "claude".into(),
+                    extra: HashMap::new(),
+                },
+                user_text_entry("u2", Some("mc"), "after the anchor"),
+                Entry::Compaction {
+                    base: base("c", Some("u2"), "t"),
+                    summary: "sum".into(),
+                    first_kept_entry_id: Some("mc".into()),
+                    tokens_before: 50,
+                    details: None,
+                    from_hook: None,
+                    extra: HashMap::new(),
+                },
+            ],
+            "/tmp/p",
+        ));
+        let comp = v
+            .items
+            .iter()
+            .find_map(Item::as_compaction)
+            .expect("compaction item");
+        assert_eq!(comp.kept_from.as_deref(), Some("u2"));
+        assert_eq!(
+            toolpath_convo::expand_kept(&v.items, comp),
+            vec!["u2".to_string()]
+        );
+        // No turn at-or-after the anchor ⇒ nothing survived verbatim.
+        let v = session_to_view(&session_from(
+            vec![
+                user_text_entry("u1", None, "only turn"),
+                Entry::ModelChange {
+                    base: base("mc", Some("u1"), "t"),
+                    provider: "anthropic".into(),
+                    model_id: "claude".into(),
+                    extra: HashMap::new(),
+                },
+                Entry::Compaction {
+                    base: base("c", Some("mc"), "t"),
+                    summary: "sum".into(),
+                    first_kept_entry_id: Some("mc".into()),
+                    tokens_before: 50,
+                    details: None,
+                    from_hook: None,
+                    extra: HashMap::new(),
+                },
+            ],
+            "/tmp/p",
+        ));
+        let comp = v
+            .items
+            .iter()
+            .find_map(Item::as_compaction)
+            .expect("compaction item");
+        assert_eq!(comp.kept_from, None);
+    }
+
+    #[test]
+    fn test_compaction_kept_expansion_follows_parent_chain_not_file_order() {
+        // A branched tree: u1 → a1 → a2 (abandoned branch A) and
+        // u1 → b1 (active branch B), with the boundary on b1 anchored at
+        // u1. The surviving run is the boundary's parent chain [u1, b1];
+        // the abandoned branch never appears no matter where its entries
+        // sit in file order.
+        let v = session_to_view(&session_from(
+            vec![
+                user_text_entry("u1", None, "root"),
+                user_text_entry("a1", Some("u1"), "branch A first"),
+                user_text_entry("a2", Some("a1"), "branch A second"),
+                user_text_entry("b1", Some("u1"), "branch B"),
+                Entry::Compaction {
+                    base: base("c", Some("b1"), "t"),
+                    summary: "sum".into(),
+                    first_kept_entry_id: Some("u1".into()),
+                    tokens_before: 50,
+                    details: None,
+                    from_hook: None,
+                    extra: HashMap::new(),
+                },
+            ],
+            "/tmp/p",
+        ));
+        let comp = v
+            .items
+            .iter()
+            .find_map(Item::as_compaction)
+            .expect("compaction item");
+        assert_eq!(comp.kept_from.as_deref(), Some("u1"));
+        assert_eq!(
+            toolpath_convo::expand_kept(&v.items, comp),
+            vec!["u1".to_string(), "b1".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_compaction_preserves_position_between_turns() {
+        let v = session_to_view(&session_from(
+            vec![
+                user_text_entry("u1", None, "before"),
+                Entry::Compaction {
+                    base: base("c", Some("u1"), "t"),
+                    summary: "sum".into(),
+                    first_kept_entry_id: Some("u1".into()),
+                    tokens_before: 50,
+                    details: None,
+                    from_hook: None,
+                    extra: HashMap::new(),
+                },
+                user_text_entry("u2", Some("c"), "after"),
+            ],
+            "/tmp/p",
+        ));
+        assert_eq!(v.items.len(), 3);
+        assert!(v.items[0].as_turn().is_some());
+        assert!(v.items[1].as_compaction().is_some());
+        assert!(v.items[2].as_turn().is_some());
+        assert_eq!(v.items[2].as_turn().unwrap().text, "after");
     }
 
     #[test]
@@ -1426,5 +1709,23 @@ mod tests {
             Role::Other("custom:foo".to_string())
         );
         assert_eq!(v.turns().next().unwrap().text, "body");
+    }
+
+    #[test]
+    fn init_virtual_root_parent_resolves_to_none() {
+        // Pi writes the first entry's parentId as `<session-id>-init` — a
+        // virtual root no entry carries as its own id (seen in real
+        // sessions). It must resolve to `None`, not survive as a dangling
+        // parent that `check_view_invariants` rejects.
+        let session = session_from(
+            vec![user_text_entry("m1", Some("sess-1-init"), "first prompt")],
+            "/tmp/p",
+        );
+        let v = session_to_view(&session);
+        assert_eq!(v.turns().next().unwrap().parent_id, None);
+        assert!(
+            toolpath_convo::testing::check_view_invariants(&v).is_empty(),
+            "invariants must accept the resolved view"
+        );
     }
 }

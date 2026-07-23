@@ -27,6 +27,12 @@ trait Harness {
     /// root) through the harness's native reader and forward it to IR.
     /// Returns `None` if the fixture isn't on disk.
     fn load_fixture(&self) -> Option<ConversationView>;
+    /// The `convo-compacted.{jsonl,json}` fixture — a captured session that
+    /// contains a real context compaction. `None` when the harness has no
+    /// compaction concept or no such fixture on disk.
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        None
+    }
     /// Project the IR view, serialize the native output to its on-disk
     /// wire format, and re-parse through the harness's own reader.
     /// Returns Err with a descriptive message if the wire round-trip
@@ -34,6 +40,31 @@ trait Harness {
     /// Some harnesses don't have a JSON/JSONL wire (opencode is SQL);
     /// those can return Ok(()) with the rationale documented inline.
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String>;
+    /// Whether our derive↔project pipeline round-trips a context compaction
+    /// for this harness. When false, `compaction_survives` skips it as a
+    /// translation target — either the on-disk format carries no boundary
+    /// (gemini) or the provider doesn't implement compaction yet (cursor).
+    fn roundtrips_compaction(&self) -> bool {
+        true
+    }
+    /// Whether the harness's native wire also carries the boundary's kept
+    /// anchor (`Compaction.kept_from`). When false the boundary + summary
+    /// round-trip but the anchor is dropped by design (codex's `compacted`
+    /// payload is wholesale), so `kept_anchor_survives` skips it as a
+    /// translation target.
+    fn roundtrips_kept(&self) -> bool {
+        self.roundtrips_compaction()
+    }
+    /// Whether translating INTO this harness may lengthen a boundary's
+    /// kept run. A strictly linear wire (opencode's message log) cannot
+    /// encode a boundary whose logical parent skips intervening turns —
+    /// e.g. Claude's `/compact` command turn, which Claude excludes from
+    /// the preserved window but a linear log necessarily retains before
+    /// the boundary. Growth is bounded, keep-more lossiness; a shrunk run
+    /// or a lost anchor is still a failure.
+    fn kept_run_may_inflate(&self) -> bool {
+        false
+    }
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -60,6 +91,15 @@ impl Harness for ClaudeHarness {
         }
         let convo = toolpath_claude::ConversationReader::read_conversation(&path)
             .expect("claude fixture parse");
+        Some(toolpath_claude::provider::to_view(&convo))
+    }
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("claude/convo-compacted.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let convo = toolpath_claude::ConversationReader::read_conversation(&path)
+            .expect("claude compacted fixture parse");
         Some(toolpath_claude::provider::to_view(&convo))
     }
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
@@ -103,6 +143,21 @@ impl Harness for CodexHarness {
         let session =
             toolpath_codex::RolloutReader::read_session(&path).expect("codex fixture parse");
         Some(toolpath_codex::to_view(&session))
+    }
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("codex/convo-compacted.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let session = toolpath_codex::RolloutReader::read_session(&path)
+            .expect("codex compacted fixture parse");
+        Some(toolpath_codex::to_view(&session))
+    }
+    /// Codex's `compacted` payload carries only the summary `message` —
+    /// no kept encoding — so the anchor is dropped on translation into
+    /// codex even though the boundary itself round-trips.
+    fn roundtrips_kept(&self) -> bool {
+        false
     }
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
         let projector = toolpath_codex::project::CodexProjector::new();
@@ -165,6 +220,14 @@ impl Harness for CopilotHarness {
             .map_err(|e| format!("re-read: {}", e))?;
         Ok(())
     }
+    /// Compaction round-trips as of the 1.0.68 observation: the projector
+    /// emits the `session.compaction_start`/`complete` pair and the reader
+    /// maps a successful complete back to `Item::Compaction`. The encoding
+    /// is wholesale (removed-message counts, no surviving ids), so the kept
+    /// anchor does NOT survive.
+    fn roundtrips_kept(&self) -> bool {
+        false
+    }
 }
 
 struct PiHarness;
@@ -183,6 +246,15 @@ impl Harness for PiHarness {
             return None;
         }
         let session = toolpath_pi::reader::read_session_from_file(&path).expect("pi fixture parse");
+        Some(toolpath_pi::session_to_view(&session))
+    }
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("pi/convo-compacted.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let session =
+            toolpath_pi::reader::read_session_from_file(&path).expect("pi compacted fixture parse");
         Some(toolpath_pi::session_to_view(&session))
     }
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
@@ -209,6 +281,11 @@ struct GeminiHarness;
 impl Harness for GeminiHarness {
     fn name(&self) -> &'static str {
         "gemini"
+    }
+    fn roundtrips_compaction(&self) -> bool {
+        // Gemini compresses context in memory but persists no boundary to the
+        // chat file, so there's nothing to round-trip.
+        false
     }
     fn roundtrip(&self, view: &ConversationView) -> ConversationView {
         let projector = toolpath_gemini::project::GeminiProjector::default();
@@ -271,6 +348,9 @@ impl Harness for OpencodeHarness {
     fn name(&self) -> &'static str {
         "opencode"
     }
+    fn kept_run_may_inflate(&self) -> bool {
+        true
+    }
     fn roundtrip(&self, view: &ConversationView) -> ConversationView {
         let projector = toolpath_opencode::project::OpencodeProjector::new();
         let session = projector.project(view).expect("opencode project");
@@ -282,6 +362,15 @@ impl Harness for OpencodeHarness {
             return None;
         }
         let json = std::fs::read_to_string(&path).expect("opencode fixture read");
+        let session = parse_opencode_export(&json);
+        Some(toolpath_opencode::to_view(&session))
+    }
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("opencode/convo-compacted.json");
+        if !path.exists() {
+            return None;
+        }
+        let json = std::fs::read_to_string(&path).expect("opencode compacted fixture read");
         let session = parse_opencode_export(&json);
         Some(toolpath_opencode::to_view(&session))
     }
@@ -309,6 +398,14 @@ struct CursorHarness;
 impl Harness for CursorHarness {
     fn name(&self) -> &'static str {
         "cursor"
+    }
+    fn roundtrips_compaction(&self) -> bool {
+        // Cursor DOES compact (`/summarize`) and writes a `capabilityType: 22`
+        // boundary marker bubble, but the summary text and kept set live
+        // server-side — not in the local store — so there's nothing
+        // reconstructable to round-trip. Like gemini, we don't derive a
+        // compaction. See docs/agents/formats/cursor.md.
+        false
     }
     fn roundtrip(&self, view: &ConversationView) -> ConversationView {
         let projector = toolpath_cursor::project::CursorProjector::new();
@@ -538,6 +635,86 @@ mod invariants {
         }
     }
 
+    /// Every compaction in `original` must survive: the boundary count and
+    /// each one's summary *text* (whitespace-normalized) are preserved.
+    /// Comparing the text — not just its presence — catches a boundary that
+    /// keeps *a* summary but the wrong one (e.g. a multi-compaction session
+    /// collapsing every boundary onto the first summary). An empty summary
+    /// normalizes to `None`, so an absent and an empty summary compare equal
+    /// — Codex always carries a (possibly empty) message, and that empty
+    /// survives as empty. The kept anchor is checked separately by
+    /// `kept_anchor_survives`, gated on `roundtrips_kept()` — wholesale
+    /// targets (Codex) drop it by design.
+    pub fn compaction_survives(
+        original: &ConversationView,
+        result: &ConversationView,
+        failures: &mut Vec<String>,
+    ) {
+        let want = original.compactions().count();
+        let got = result.compactions().count();
+        if want != got {
+            failures.push(format!(
+                "compaction count diverged: first={want} second={got}"
+            ));
+            return;
+        }
+        let summary = |c: &toolpath_convo::Compaction| -> Option<String> {
+            c.summary.as_deref().map(norm).filter(|s| !s.is_empty())
+        };
+        for (i, (a, b)) in original.compactions().zip(result.compactions()).enumerate() {
+            let (sa, sb) = (summary(a), summary(b));
+            if sa != sb {
+                let clip = |s: &Option<String>| {
+                    s.as_deref().map(|t| t.chars().take(80).collect::<String>())
+                };
+                failures.push(format!(
+                    "compaction {i} summary diverged:\n      first:  {:?}\n      second: {:?}",
+                    clip(&sa),
+                    clip(&sb)
+                ));
+            }
+        }
+    }
+
+    /// Each boundary's kept anchor, expressed as a position — how many
+    /// prior turns survive the boundary (`expand_kept` against the view's
+    /// own items) — must cross the translation leg unchanged. Position, not
+    /// ids: projectors re-mint turn ids, but the number of surviving prior
+    /// turns is what a resumed reader experiences. `None` (wholesale) must
+    /// stay `None` — a target synthesizing an anchor would be inventing
+    /// provenance.
+    pub fn kept_anchor_survives(
+        original: &ConversationView,
+        result: &ConversationView,
+        may_inflate: bool,
+        failures: &mut Vec<String>,
+    ) {
+        if original.compactions().count() != result.compactions().count() {
+            // compaction_survives already reports the count divergence.
+            return;
+        }
+        let position = |view: &ConversationView, c: &toolpath_convo::Compaction| -> Option<usize> {
+            c.kept_from
+                .as_ref()
+                .map(|_| toolpath_convo::expand_kept(&view.items, c).len())
+        };
+        for (i, (a, b)) in original.compactions().zip(result.compactions()).enumerate() {
+            let (pa, pb) = (position(original, a), position(result, b));
+            let ok = match (pa, pb) {
+                // A linear target may retain intervening turns the source's
+                // boundary skipped (see `kept_run_may_inflate`) — the run
+                // may grow, never shrink, and the anchor must survive.
+                (Some(x), Some(y)) if may_inflate => y >= x,
+                _ => pa == pb,
+            };
+            if !ok {
+                failures.push(format!(
+                    "compaction {i} kept anchor diverged (surviving prior turns): first={pa:?} second={pb:?}"
+                ));
+            }
+        }
+    }
+
     fn norm(s: &str) -> String {
         s.split_whitespace().collect::<Vec<_>>().join(" ")
     }
@@ -671,37 +848,37 @@ mod invariants {
 
     /// Survival check: tokens present in the pre-B IR must survive the B
     /// leg. Catches projectors that silently drop tokens (idempotence
-    /// alone won't — both passes drop identically). Pair by assistant
-    /// subsequence: some forward paths (pi) insert `Role::Other("tool")`
-    /// turns for tool results, which would misalign a positional pairing.
+    /// alone won't — both passes drop identically).
+    ///
+    /// The bar is **conservation of totals**, not sequence equality:
+    /// harnesses legitimately fold turns in translation (codex merges
+    /// consecutive assistant messages into one round, summing their
+    /// usage), and zero↔`None` flips at wire boundaries are inherent
+    /// (codex's cumulative counters can't express an unknown input;
+    /// opencode's tokens struct can't distinguish `output: 0` from
+    /// absent). What every conversion must preserve — the documented
+    /// session-total guarantee — is the assistant input/output sums.
     pub fn token_usage_survives(
         before_target: &ConversationView,
         after_target: &ConversationView,
         failures: &mut Vec<String>,
     ) {
-        // Harnesses legitimately fold or split turns in translation
-        // (e.g. thinking-only claude turns merge into codex `reasoning`
-        // lines), so assistant indexes don't align across harnesses.
-        // The accounting invariant is order-preserving instead: the
-        // sequence of usage values on assistant turns survives, compared
-        // on input/output — the fields every wire carries (codex has no
-        // cache_write analog, cursor carries no cache counters at all).
-        let usage_seq = |v: &ConversationView| -> Vec<(Option<u32>, Option<u32>)> {
+        let sums = |v: &ConversationView| -> (u64, u64) {
             v.turns()
                 .filter(|t| matches!(t.role, Role::Assistant))
                 .filter_map(|t| t.token_usage.as_ref())
-                .map(|u| (u.input_tokens, u.output_tokens))
-                .collect()
+                .fold((0u64, 0u64), |(i, o), u| {
+                    (
+                        i + u64::from(u.input_tokens.unwrap_or(0)),
+                        o + u64::from(u.output_tokens.unwrap_or(0)),
+                    )
+                })
         };
-        let pre = usage_seq(before_target);
-        let post = usage_seq(after_target);
+        let pre = sums(before_target);
+        let post = sums(after_target);
         if pre != post {
             failures.push(format!(
-                "assistant usage sequence diverged ({} -> {} entries)\n      first:  {:?}\n      second: {:?}",
-                pre.len(),
-                post.len(),
-                pre,
-                post
+                "assistant usage totals diverged: (input, output) first={pre:?} second={post:?}"
             ));
         }
         if before_target.total_usage.is_some() && after_target.total_usage.is_none() {
@@ -1009,6 +1186,17 @@ fn run_cell(
     invariants::delegations(&view_first, &view_second, &mut failures);
     invariants::delegations_survive(&view_after_source, &view_first, &mut failures);
     invariants::files_changed(&view_first, &view_second, &mut failures);
+    if target.roundtrips_compaction() {
+        invariants::compaction_survives(&view_after_source, &view_first, &mut failures);
+        if target.roundtrips_kept() {
+            invariants::kept_anchor_survives(
+                &view_after_source,
+                &view_first,
+                target.kept_run_may_inflate(),
+                &mut failures,
+            );
+        }
+    }
     failures
 }
 
@@ -1135,4 +1323,153 @@ fn matrix_schema_validation() {
             failures.len()
         );
     }
+}
+
+#[test]
+fn matrix_translation_compacted() {
+    // The same matrix, sourced from each harness's captured COMPACTED
+    // session, so `compaction_survives` in every cell exercises a real
+    // boundary alongside the usual translation invariants. Gemini has no
+    // compaction fixture and is skipped as a source.
+    let harnesses = all_harnesses();
+    let mut sources: Vec<(String, ConversationView)> = Vec::new();
+    for h in &harnesses {
+        if let Some(view) = h.load_compacted_fixture() {
+            assert!(
+                view.compactions().count() > 0,
+                "{} compacted fixture carries no compaction",
+                h.name()
+            );
+            if h.roundtrips_compaction() {
+                // Guard against a vacuous matrix: if the source's own
+                // round-trip dropped its boundary, every cell sourced from
+                // it would pass `compaction_survives` as 0 == 0.
+                let view_after_source = ir_roundtrip(&h.roundtrip(&view));
+                assert!(
+                    view_after_source.compactions().count() > 0,
+                    "{} own round-trip dropped its compaction boundary",
+                    h.name()
+                );
+            }
+            eprintln!(
+                "loaded {} compacted fixture: {} turns, {} compaction(s)",
+                h.name(),
+                view.turns().count(),
+                view.compactions().count()
+            );
+            sources.push((h.name().to_string(), view));
+        }
+    }
+    assert!(!sources.is_empty(), "no compacted fixtures on disk");
+    run_matrix("matrix (compacted fixtures)", &sources);
+}
+
+// ── Real-artifact matrix (opt-in) ────────────────────────────────────
+
+/// Load a real local session as a matrix source. Spec: `harness:locator`,
+/// where the locator is harness-specific — a session file path (claude,
+/// codex, pi, gemini), a session id resolved against the harness's real
+/// store (opencode), a session-state directory (copilot), or a composer
+/// uuid in the real `state.vscdb` (cursor).
+fn load_real_source(spec: &str) -> Result<(String, ConversationView), String> {
+    let (harness, loc) = spec
+        .split_once(':')
+        .ok_or_else(|| format!("spec {spec:?} is not harness:locator"))?;
+    let view = match harness {
+        "claude" => {
+            let convo = toolpath_claude::ConversationReader::read_conversation(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            toolpath_claude::provider::to_view(&convo)
+        }
+        "codex" => {
+            let session = toolpath_codex::RolloutReader::read_session(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            toolpath_codex::to_view(&session)
+        }
+        "pi" => {
+            let session = toolpath_pi::reader::read_session_from_file(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            toolpath_pi::session_to_view(&session)
+        }
+        "opencode" => {
+            let mgr = toolpath_opencode::OpencodeConvo::with_resolver(
+                toolpath_opencode::PathResolver::new(),
+            );
+            let session = mgr.read_session(loc).map_err(|e| format!("read: {e}"))?;
+            toolpath_opencode::to_view(&session)
+        }
+        "gemini" => {
+            let chat = toolpath_gemini::ConversationReader::read_chat_file(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            let uuid = chat.session_id.clone();
+            toolpath_gemini::provider::to_view(&toolpath_gemini::types::Conversation::new(
+                uuid, chat,
+            ))
+        }
+        "copilot" => {
+            let session = toolpath_copilot::EventReader::read_session_dir(Path::new(loc))
+                .map_err(|e| format!("read: {e}"))?;
+            toolpath_copilot::to_view(&session)
+        }
+        "cursor" => {
+            let db = std::env::home_dir()
+                .ok_or("no home dir")?
+                .join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+            let reader =
+                toolpath_cursor::reader::DbReader::open(&db).map_err(|e| format!("open: {e}"))?;
+            let session = reader
+                .load_session(loc)
+                .map_err(|e| format!("load composer: {e}"))?;
+            toolpath_cursor::session_to_view(&session)
+        }
+        other => return Err(format!("unknown harness {other:?}")),
+    };
+    Ok((harness.to_string(), view))
+}
+
+#[test]
+#[ignore = "drives real local sessions; set TOOLPATH_REAL_MATRIX to comma-separated harness:locator specs"]
+fn matrix_translation_real_sessions() {
+    // The full translation matrix, sourced from real sessions on this
+    // machine instead of the captured fixtures — every listed source runs
+    // against every target with the same per-cell invariants. Failures
+    // aggregate across sources so one broken session doesn't hide the rest.
+    let specs = match std::env::var("TOOLPATH_REAL_MATRIX") {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => {
+            eprintln!("TOOLPATH_REAL_MATRIX unset — nothing to do");
+            return;
+        }
+    };
+    let mut failed: Vec<String> = Vec::new();
+    for spec in specs.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let (name, view) = match load_real_source(spec) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("✗ load {spec}: {e}");
+                failed.push(format!("load {spec}: {e}"));
+                continue;
+            }
+        };
+        eprintln!(
+            "── source {spec}: {} items, {} turns, {} compaction(s)",
+            view.items.len(),
+            view.turns().count(),
+            view.compactions().count()
+        );
+        let sources = vec![(name, view)];
+        if let Err(panic) = std::panic::catch_unwind(|| run_matrix(spec, &sources)) {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "non-string panic".into());
+            failed.push(format!("{spec}: {msg}"));
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "real-session matrix had failures:\n  {}",
+        failed.join("\n  ")
+    );
 }
