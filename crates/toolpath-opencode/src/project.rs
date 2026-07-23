@@ -6,13 +6,14 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Result,
+    Role, ToolInvocation, Turn,
 };
 
 use crate::types::{
-    AssistantMessage, Message, MessageData, MessagePath, MessageTime, ModelRef, Part, PartData,
-    ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange, Tokens, ToolPart,
-    ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
+    AssistantMessage, Message, MessageData, MessagePath, MessageTime, ModelRef,
+    Part, PartData, ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange,
+    Tokens, ToolPart, ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
 };
 
 const DEFAULT_AGENT: &str = "build";
@@ -85,8 +86,7 @@ fn project_view(
         .directory
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
                 .map(PathBuf::from)
         })
@@ -116,8 +116,8 @@ fn project_view(
         .started_at
         .map(|t| t.timestamp_millis())
         .or_else(|| {
-            view.turns
-                .first()
+            view.turns()
+                .next()
                 .and_then(|t| parse_timestamp_ms(&t.timestamp))
         })
         .unwrap_or(0);
@@ -125,7 +125,7 @@ fn project_view(
         .last_activity
         .map(|t| t.timestamp_millis())
         .or_else(|| {
-            view.turns
+            view.turns()
                 .last()
                 .and_then(|t| parse_timestamp_ms(&t.timestamp))
         })
@@ -135,8 +135,7 @@ fn project_view(
         .title
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .filter(|t| matches!(t.role, Role::User))
                 .map(|t| t.text.as_str())
                 .find(|t| !t.is_empty() && !is_system_envelope(t))
@@ -149,6 +148,14 @@ fn project_view(
     let mut messages: Vec<Message> = Vec::new();
     let mut prev_msg_id: Option<String> = None;
     let mut counter: u32 = 0;
+    // IR turn id → the message id we re-mint for it, so a compaction's kept
+    // tail anchor (an IR turn id) can be rewritten to the id the projected
+    // session actually carries — otherwise `tailStartID` would dangle and the
+    // kept anchor would collapse to `None` on re-read.
+    let mut id_map: HashMap<String, String> = HashMap::new();
+    // Indexes (into `messages`) of boundary messages projected from a
+    // wholesale compaction (`kept_from: None`). Their `tailStartID` is the
+    // first message written after the boundary, patched in once it exists.
 
     let default_provider = cfg
         .default_model_provider
@@ -159,45 +166,59 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
-    for turn in &view.turns {
-        match turn.role {
-            Role::User => {
-                let msg = build_user_message(
-                    turn,
-                    &session_id,
-                    &mut counter,
-                    &agent,
-                    &default_provider,
-                    &default_model,
-                );
-                prev_msg_id = Some(msg.id.clone());
-                messages.push(msg);
-            }
-            Role::Assistant => {
-                let parent = prev_msg_id
-                    .clone()
-                    .unwrap_or_else(|| mint_message_id(&session_id, counter));
-                let msg = build_assistant_message(
-                    turn,
-                    &session_id,
-                    &mut counter,
-                    parent,
-                    &directory,
-                    &agent,
-                    &default_provider,
-                    &default_model,
-                );
-                prev_msg_id = Some(msg.id.clone());
-                messages.push(msg);
-            }
-            Role::System | Role::Other(_) => {
-                // opencode has no system-role message variant; fold the
-                // text into the next user/assistant turn's context by
-                // skipping. The system prompt itself rides on
-                // UserMessage.system if needed.
+    // Walk the ordered item stream so compaction boundaries land at their
+    // true position (between the turns they separate) — the inverse of the
+    // forward Builder, which reads `compaction` parts in message order.
+    for item in &view.items {
+        match item {
+            toolpath_convo::Item::Turn(turn) => match turn.role {
+                Role::User => {
+                    let msg = build_user_message(
+                        turn,
+                        &session_id,
+                        &mut counter,
+                        &agent,
+                        &default_provider,
+                        &default_model,
+                    );
+                    id_map.insert(turn.id.clone(), msg.id.clone());
+                    prev_msg_id = Some(msg.id.clone());
+                    messages.push(msg);
+                }
+                Role::Assistant => {
+                    let parent = prev_msg_id
+                        .clone()
+                        .unwrap_or_else(|| mint_message_id(&session_id, counter));
+                    let msg = build_assistant_message(
+                        turn,
+                        &session_id,
+                        &mut counter,
+                        parent,
+                        &directory,
+                        &agent,
+                        &default_provider,
+                        &default_model,
+                    );
+                    id_map.insert(turn.id.clone(), msg.id.clone());
+                    prev_msg_id = Some(msg.id.clone());
+                    messages.push(msg);
+                }
+                Role::System | Role::Other(_) => {
+                    // opencode has no system-role message variant; fold the
+                    // text into the next user/assistant turn's context by
+                    // skipping. The system prompt itself rides on
+                    // UserMessage.system if needed.
+                }
+            },
+            toolpath_convo::Item::Event(_) => {
+                // Non-conversational events have no opencode message form;
+                // they're metadata that doesn't round-trip through parts.
             }
         }
     }
+
+
+    monotonize_times(&mut messages);
 
     Ok(Session {
         id: session_id,
@@ -218,6 +239,38 @@ fn project_view(
         time_archived: None,
         messages,
     })
+}
+
+/// Force strictly increasing `time_created` across the emitted message
+/// sequence. The real reader orders rows by `time_created ASC, id ASC`,
+/// so a message whose native time is at-or-before its predecessor's (e.g.
+/// a compaction boundary stamped later than the host assistant message
+/// that follows it) would MOVE on re-read. Bumping each such message to
+/// its predecessor's time + 1 keeps re-read order identical to emission
+/// order.
+fn monotonize_times(messages: &mut [Message]) {
+    let mut prev: Option<i64> = None;
+    for msg in messages {
+        let t = match prev {
+            Some(p) if msg.time_created <= p => p + 1,
+            _ => msg.time_created,
+        };
+        if t != msg.time_created {
+            msg.time_created = t;
+            msg.time_updated = msg.time_updated.max(t);
+            match &mut msg.data {
+                MessageData::User(u) => u.time.created = t,
+                MessageData::Assistant(a) => {
+                    a.time.created = t;
+                    if a.time.completed.is_some_and(|c| c < t) {
+                        a.time.completed = Some(t);
+                    }
+                }
+                MessageData::Other => {}
+            }
+        }
+        prev = Some(t);
+    }
 }
 
 fn build_user_message(
@@ -291,6 +344,7 @@ fn build_user_message(
         parts,
     }
 }
+
 
 #[allow(clippy::too_many_arguments)]
 fn build_assistant_message(
@@ -795,12 +849,11 @@ mod tests {
             id: "session-uuid".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("opencode".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }
@@ -813,6 +866,7 @@ mod tests {
         assert!(s.id.starts_with("ses_"));
         assert!(s.messages.is_empty());
     }
+
 
     #[test]
     fn user_turn_becomes_user_message_with_text_part() {

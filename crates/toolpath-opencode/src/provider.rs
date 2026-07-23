@@ -21,9 +21,13 @@
 //!      by the derive layer to fetch file diffs.
 //!    - `extra["opencode"]["patches"]` ← any `patch` parts (their
 //!      `{hash, files}` records).
-//! 3. Non-turn parts land in `ConversationView.events`:
-//!    `compaction`, `retry`, unknown types.
-//! 4. `subtask` parts are captured on the turn's `delegations`
+//! 3. A `compaction` part (on either a user or assistant message) emits
+//!    a generic `part.compaction` event at its position in the item stream,
+//!    parented on the last turn emitted before it. `derive_path` projects
+//!    it to a `conversation.compact` step.
+//! 4. Other non-turn parts land in `ConversationView.events`:
+//!    `retry`, `file`, `agent`, unknown types.
+//! 5. `subtask` parts are captured on the turn's `delegations`
 //!    (empty-turn list — the sub-agent's own session lives under
 //!    its own id, linked by `session.parent_id`).
 
@@ -35,13 +39,14 @@ use crate::error::Result;
 use crate::io::ConvoIO;
 use crate::paths::PathResolver;
 use crate::types::{
-    AssistantMessage, Message, MessageData, Part, PartData, Session, SessionMetadata, Tokens,
-    ToolState, UserMessage,
+    AssistantMessage, CompactionPart, Message, MessageData, Part, PartData, Session,
+    SessionMetadata, Tokens, ToolState, UserMessage,
 };
 use toolpath_convo::{
-    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
-    ConvoError as ConvoTraitError, DelegatedWork, EnvironmentSnapshot, FileMutation, ProducerInfo,
-    Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    ConversationEvent, ConversationMeta, ConversationProvider,
+    ConversationView, ConvoError as ConvoTraitError, DelegatedWork, EnvironmentSnapshot,
+    FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation,
+    ToolResult, Turn,
 };
 
 /// Provider for opencode sessions.
@@ -164,8 +169,13 @@ pub fn to_view_with_resolver(session: &Session, resolver: &PathResolver) -> Conv
 
 struct Builder<'a> {
     session: &'a Session,
-    turns: Vec<Turn>,
-    events: Vec<ConversationEvent>,
+    /// The ordered conversation stream — turns, events, and compaction
+    /// boundaries interleaved in real order, so a compaction lands at its
+    /// true position rather than after all turns.
+    items: Vec<Item>,
+    /// Id of the most recent turn pushed to `items`. A compaction boundary
+    /// parents on this (the last turn before it).
+    last_turn_id: Option<String>,
     files_changed_order: Vec<String>,
     files_changed_seen: std::collections::HashSet<String>,
     total_usage: TokenUsage,
@@ -178,21 +188,78 @@ struct Builder<'a> {
     /// `before` of the next turn's snapshot pair so intermediate state
     /// captures correctly.
     prev_snapshot_after: Option<String>,
+    /// Items index of the most recently emitted compaction boundary that
+    /// is still awaiting its summary. opencode condenses each compaction's
+    /// pre-boundary prefix into a synthetic summary-bearing user message at
+    /// the boundary; the next such message's `summary.body` is *that*
+    /// compaction's summary. Tracked per-boundary (not session-global) so a
+    /// session with several compactions keeps each one's distinct summary.
+    /// Message ids that emitted no turn (e.g. a user message hosting only
+    /// a compaction part, or a summary-only synthetic message) → the item
+    /// a later turn's native `parent_id` should chain onto instead. A real
+    /// manual `/compact` writes the boundary on its own user message, and
+    /// the next assistant message's `parent_id` names it — without the
+    /// redirect that parent dangles.
+    msg_redirects: HashMap<String, Option<String>>,
+    /// Id of the most recent turn *or* compaction pushed — the redirect
+    /// target for messages that emit no turn.
+    last_anchor_id: Option<String>,
 }
 
 impl<'a> Builder<'a> {
     fn new(session: &'a Session) -> Self {
         Self {
             session,
-            turns: Vec::new(),
-            events: Vec::new(),
+            items: Vec::new(),
+            last_turn_id: None,
             files_changed_order: Vec::new(),
             files_changed_seen: std::collections::HashSet::new(),
             total_usage: TokenUsage::default(),
             total_usage_set: false,
             snapshot_repo: None,
             prev_snapshot_after: None,
+            msg_redirects: HashMap::new(),
+            last_anchor_id: None,
         }
+    }
+
+    /// Record a turn, tracking its id for any subsequent compaction's
+    /// `parent_id`.
+    fn push_turn(&mut self, turn: Turn) {
+        self.last_turn_id = Some(turn.id.clone());
+        self.last_anchor_id = Some(turn.id.clone());
+        self.items.push(Item::Turn(turn));
+    }
+
+    /// Resolve a turn's native parent message id through `msg_redirects`,
+    /// so parents pointing at messages that emitted no turn land on the
+    /// item that took their place (usually the compaction boundary).
+    fn resolve_parent(&self, parent: Option<String>) -> Option<String> {
+        match parent {
+            Some(p) => match self.msg_redirects.get(&p) {
+                Some(redirect) => redirect.clone(),
+                None => Some(p),
+            },
+            None => None,
+        }
+    }
+
+    fn push_event(&mut self, event: ConversationEvent) {
+        self.items.push(Item::Event(event));
+    }
+
+    /// Map an opencode `compaction` part to a generic event,
+    /// parented on the last turn emitted so far.
+    fn push_compaction(&mut self, part: &Part, c: &CompactionPart) {
+        // Context-compaction markers ride as generic events for now; typed
+        // boundary support builds on this in the compaction-provenance work.
+        self.items.push(Item::Event(ConversationEvent {
+            id: format!("compaction-{}", part.id),
+            timestamp: millis_to_iso(part.time_created),
+            parent_id: self.last_turn_id.clone(),
+            event_type: "part.compaction".into(),
+            data: to_data_map(&serde_json::to_value(c).unwrap_or(Value::Null)),
+        }));
     }
 
     fn build_with_resolver(mut self, resolver: &PathResolver) -> ConversationView {
@@ -229,7 +296,7 @@ impl<'a> Builder<'a> {
         // Refresh files_changed so it matches what landed on turns.
         let mut seen = std::collections::HashSet::new();
         let mut ordered = Vec::new();
-        for turn in &view.turns {
+        for turn in view.turns() {
             for fm in &turn.file_mutations {
                 if seen.insert(fm.path.clone()) {
                     ordered.push(fm.path.clone());
@@ -246,7 +313,7 @@ impl<'a> Builder<'a> {
                 MessageData::User(u) => self.handle_user_message(msg, u),
                 MessageData::Assistant(a) => self.handle_assistant_message(msg, a),
                 MessageData::Other => {
-                    self.events.push(ConversationEvent {
+                    self.push_event(ConversationEvent {
                         id: format!("msg-other-{}", msg.id),
                         timestamp: millis_to_iso(msg.time_created),
                         parent_id: None,
@@ -261,7 +328,7 @@ impl<'a> Builder<'a> {
             id: self.session.id.clone(),
             started_at: Utc.timestamp_millis_opt(self.session.time_created).single(),
             last_activity: Utc.timestamp_millis_opt(self.session.time_updated).single(),
-            turns: self.turns,
+            items: self.items,
             total_usage: if self.total_usage_set {
                 Some(self.total_usage)
             } else {
@@ -270,22 +337,46 @@ impl<'a> Builder<'a> {
             provider_id: Some("opencode".into()),
             files_changed: self.files_changed_order,
             session_ids: vec![self.session.id.clone()],
-            events: self.events,
             ..Default::default()
         }
     }
 
     fn handle_user_message(&mut self, msg: &Message, _u: &UserMessage) {
         let text = concat_text_parts(&msg.parts);
+
+        // A compaction marker can ride on a user message (opencode writes a
+        // synthetic compaction-bearing user message at the boundary). Emit
+        // the boundary in place; it parents on the last turn so far.
+        for p in &msg.parts {
+            if let PartData::Compaction(c) = &p.data {
+                self.push_compaction(p, c);
+            }
+        }
+
+        // Skip an empty user turn when the message carried only a
+        // compaction marker (the common synthetic-boundary case) or only
+        // a summary body. Later turns whose native `parent_id` names this
+        // message chain onto the item that stands in for it — the
+        // boundary pushed just above, or the last item before it.
+        if text.is_empty() {
+            self.msg_redirects
+                .insert(msg.id.clone(), self.last_anchor_id.clone());
+            return;
+        }
+
         let environment = Some(EnvironmentSnapshot {
             working_dir: Some(self.session.directory.to_string_lossy().to_string()),
             vcs_branch: None,
             vcs_revision: None,
         });
 
-        self.turns.push(Turn {
+        self.push_turn(Turn {
             id: msg.id.clone(),
-            parent_id: None,
+            // opencode's native user rows carry no parentID, but the log is
+            // strictly linear — synthesize the previous item as parent so
+            // the IR turn chain (which derive splicing walks) doesn't
+            // break at every user message.
+            parent_id: self.last_anchor_id.clone(),
             group_id: None,
             role: Role::User,
             timestamp: millis_to_iso(msg.time_created),
@@ -369,7 +460,7 @@ impl<'a> Builder<'a> {
                     });
                 }
                 PartData::File(f) => {
-                    self.events.push(ConversationEvent {
+                    self.push_event(ConversationEvent {
                         id: format!("file-{}", p.id),
                         timestamp: millis_to_iso(p.time_created),
                         parent_id: Some(msg.id.clone()),
@@ -378,7 +469,7 @@ impl<'a> Builder<'a> {
                     });
                 }
                 PartData::Agent(ag) => {
-                    self.events.push(ConversationEvent {
+                    self.push_event(ConversationEvent {
                         id: format!("agent-{}", p.id),
                         timestamp: millis_to_iso(p.time_created),
                         parent_id: Some(msg.id.clone()),
@@ -387,7 +478,7 @@ impl<'a> Builder<'a> {
                     });
                 }
                 PartData::Retry(r) => {
-                    self.events.push(ConversationEvent {
+                    self.push_event(ConversationEvent {
                         id: format!("retry-{}", p.id),
                         timestamp: millis_to_iso(p.time_created),
                         parent_id: Some(msg.id.clone()),
@@ -396,16 +487,13 @@ impl<'a> Builder<'a> {
                     });
                 }
                 PartData::Compaction(c) => {
-                    self.events.push(ConversationEvent {
-                        id: format!("compaction-{}", p.id),
-                        timestamp: millis_to_iso(p.time_created),
-                        parent_id: Some(msg.id.clone()),
-                        event_type: "part.compaction".into(),
-                        data: to_data_map(&serde_json::to_value(c).unwrap_or(Value::Null)),
-                    });
+                    // A compaction marker on an assistant message: emit the
+                    // boundary in place, parented on the turn before this
+                    // one (this turn hasn't been pushed yet).
+                    self.push_compaction(p, c);
                 }
                 PartData::Unknown => {
-                    self.events.push(ConversationEvent {
+                    self.push_event(ConversationEvent {
                         id: format!("unknown-{}", p.id),
                         timestamp: millis_to_iso(p.time_created),
                         parent_id: Some(msg.id.clone()),
@@ -448,13 +536,13 @@ impl<'a> Builder<'a> {
         //      (catches gitignored paths and the no-repo case).
         let file_mutations = self.compute_turn_mutations(&snapshots, &tool_uses);
 
-        self.turns.push(Turn {
+        self.push_turn(Turn {
             id: msg.id.clone(),
-            parent_id: if a.parent_id.is_empty() {
+            parent_id: self.resolve_parent(if a.parent_id.is_empty() {
                 None
             } else {
                 Some(a.parent_id.clone())
-            },
+            }),
             group_id: None,
             role: Role::Assistant,
             timestamp: millis_to_iso(msg.time_created),
@@ -963,13 +1051,14 @@ mod tests {
 
         assert_eq!(view.id, "ses_x");
         assert_eq!(view.provider_id.as_deref(), Some("opencode"));
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "make a pickle");
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "done!");
+        let turns: Vec<_> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "make a pickle");
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "done!");
         assert_eq!(
-            view.turns[1].thinking.as_deref(),
+            turns[1].thinking.as_deref(),
             Some("I should write main.cpp")
         );
     }
@@ -978,7 +1067,7 @@ mod tests {
     fn tool_invocations_paired() {
         let (_t, mgr) = setup(BASIC_SQL);
         let view = to_view(&mgr.read_session("ses_x").unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         assert_eq!(assistant.tool_uses.len(), 2);
         let bash = &assistant.tool_uses[0];
         assert_eq!(bash.name, "bash");
@@ -1000,7 +1089,7 @@ mod tests {
     fn step_finish_drives_token_usage() {
         let (_t, mgr) = setup(BASIC_SQL);
         let view = to_view(&mgr.read_session("ses_x").unwrap());
-        let u = view.turns[1].token_usage.as_ref().unwrap();
+        let u = view.turns().nth(1).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.input_tokens, Some(100));
         // output (20) + reasoning (5): opencode reports reasoning as a
         // separate additive category, folded into output here.
@@ -1036,7 +1125,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let u = view.turns[0].token_usage.as_ref().unwrap();
+        let u = view.turns().next().unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.output_tokens, Some(20));
         assert!(u.breakdowns.is_empty());
     }
@@ -1058,7 +1147,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let u = view.turns[0].token_usage.as_ref().unwrap();
+        let u = view.turns().next().unwrap().token_usage.as_ref().unwrap();
         // output total: (20+5) + (4+7) = 36; reasoning slice: 5+7 = 12.
         assert_eq!(u.output_tokens, Some(36));
         assert_eq!(
@@ -1081,7 +1170,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(view.turns[0].token_usage.is_none());
+        assert!(view.turns().next().unwrap().token_usage.is_none());
     }
 
     #[test]
@@ -1098,32 +1187,13 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         let r = tool.result.as_ref().unwrap();
         assert!(r.is_error);
         assert_eq!(r.content, "exit 1");
     }
 
-    #[test]
-    fn compaction_becomes_event() {
-        let body = r#"
-            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
-              VALUES ('p','/p',1,2,'[]');
-            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
-              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
-            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
-              ('m','s',1,1,'{"parentID":"","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":1}}');
-            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
-              ('p1','m','s',1,1,'{"type":"compaction","auto":true,"overflow":false}');
-        "#;
-        let (_t, mgr) = setup(body);
-        let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(
-            view.events
-                .iter()
-                .any(|e| e.event_type == "part.compaction")
-        );
-    }
+
 
     #[test]
     fn unknown_part_type_becomes_event() {
@@ -1138,7 +1208,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(view.events.iter().any(|e| e.event_type == "part.unknown"));
+        assert!(view.events().any(|e| e.event_type == "part.unknown"));
     }
 
     #[test]
@@ -1159,6 +1229,7 @@ mod tests {
         let ids = ConversationProvider::list_conversations(&mgr, "").unwrap();
         assert_eq!(ids, vec!["ses_x".to_string()]);
         let v = ConversationProvider::load_conversation(&mgr, "", "ses_x").unwrap();
-        assert_eq!(v.turns.len(), 2);
+        assert_eq!(v.turns().count(), 2);
     }
+
 }

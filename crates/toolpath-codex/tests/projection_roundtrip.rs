@@ -81,13 +81,47 @@ fn rebuilt_has_session_meta_first() {
 }
 
 #[test]
-fn rebuilt_has_turn_context_after_session_meta() {
+fn rebuilt_places_turn_context_before_first_real_prompt() {
+    // Native Codex writes the opening turn_context AFTER the leading
+    // system-envelope messages (developer instructions, environment
+    // context) and immediately before the first real user prompt — the
+    // fixture itself has that order — and its session indexer titles a
+    // backfilled rollout from the first user message after turn_context.
+    // Emitting it at the top made projected sessions title themselves
+    // with the `<environment_context>` XML.
     let (_t, source) = load_source();
     let (_, rebuilt, _) = roundtrip(&source);
-    assert!(rebuilt.lines.len() >= 2, "need session_meta + turn_context");
-    assert_eq!(rebuilt.lines[1].kind, "turn_context");
+
+    let ctx = rebuilt
+        .lines
+        .iter()
+        .position(|l| l.kind == "turn_context")
+        .expect("an opening turn_context is emitted");
+    let first_prompt = rebuilt
+        .lines
+        .iter()
+        .position(|l| {
+            l.kind == "response_item"
+                && l.payload["type"] == "message"
+                && l.payload["role"] == "user"
+                && l.payload["content"][0]["text"]
+                    .as_str()
+                    .is_some_and(|t| !t.trim_start().starts_with('<'))
+        })
+        .expect("a real user prompt survives");
     assert_eq!(
-        rebuilt.lines[1].payload["cwd"].as_str(),
+        ctx,
+        first_prompt - 1,
+        "turn_context sits immediately before the first real prompt"
+    );
+    for line in &rebuilt.lines[..ctx] {
+        assert_ne!(
+            line.kind, "event_msg",
+            "no user_message event may precede the opening turn_context"
+        );
+    }
+    assert_eq!(
+        rebuilt.lines[ctx].payload["cwd"].as_str(),
         source
             .meta()
             .as_ref()

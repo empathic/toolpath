@@ -509,8 +509,7 @@ mod invariants {
     }
 
     fn meaningful_turns(view: &ConversationView) -> Vec<&Turn> {
-        view.turns
-            .iter()
+        view.turns()
             .filter(|t| !is_system_envelope(t))
             .collect()
     }
@@ -690,8 +689,7 @@ mod invariants {
         // on input/output — the fields every wire carries (codex has no
         // cache_write analog, cursor carries no cache counters at all).
         let usage_seq = |v: &ConversationView| -> Vec<(Option<u32>, Option<u32>)> {
-            v.turns
-                .iter()
+            v.turns()
                 .filter(|t| matches!(t.role, Role::Assistant))
                 .filter_map(|t| t.token_usage.as_ref())
                 .map(|u| (u.input_tokens, u.output_tokens))
@@ -745,13 +743,11 @@ mod invariants {
         failures: &mut Vec<String>,
     ) {
         let pre: Vec<&Turn> = before_target
-            .turns
-            .iter()
+            .turns()
             .filter(|t| matches!(t.role, Role::Assistant))
             .collect();
         let post: Vec<&Turn> = after_target
-            .turns
-            .iter()
+            .turns()
             .filter(|t| matches!(t.role, Role::Assistant))
             .collect();
         for (i, (a, b)) in pre.iter().zip(post.iter()).enumerate() {
@@ -813,8 +809,7 @@ mod invariants {
         failures: &mut Vec<String>,
     ) {
         let edges = |v: &ConversationView| -> BTreeSet<(String, Option<String>)> {
-            v.turns
-                .iter()
+            v.turns()
                 .map(|t| (t.id.clone(), t.parent_id.clone()))
                 .collect()
         };
@@ -864,7 +859,7 @@ mod invariants {
         failures: &mut Vec<String>,
     ) {
         let count =
-            |v: &ConversationView| -> usize { v.turns.iter().map(|t| t.delegations.len()).sum() };
+            |v: &ConversationView| -> usize { v.turns().map(|t| t.delegations.len()).sum() };
         let o = count(original);
         let f = count(final_);
         if o != f {
@@ -875,7 +870,7 @@ mod invariants {
             return;
         }
 
-        for (i, (a, b)) in original.turns.iter().zip(final_.turns.iter()).enumerate() {
+        for (i, (a, b)) in original.turns().zip(final_.turns()).enumerate() {
             if a.delegations.len() != b.delegations.len() {
                 failures.push(format!(
                     "turn {} delegation count diverged: first={} second={}",
@@ -938,14 +933,12 @@ mod invariants {
         failures: &mut Vec<String>,
     ) {
         let agent_ids = |v: &ConversationView| -> BTreeSet<String> {
-            v.turns
-                .iter()
+            v.turns()
                 .flat_map(|t| t.delegations.iter().map(|d| d.agent_id.clone()))
                 .collect()
         };
         let tool_use_ids = |v: &ConversationView| -> BTreeSet<String> {
-            v.turns
-                .iter()
+            v.turns()
                 .flat_map(|t| t.tool_uses.iter().map(|tu| tu.id.clone()))
                 .collect()
         };
@@ -1099,7 +1092,7 @@ fn matrix_translation() {
                 h.name()
             )
         });
-        eprintln!("loaded {} fixture: {} turns", h.name(), view.turns.len());
+        eprintln!("loaded {} fixture: {} turns", h.name(), view.turns().count());
         sources.push((h.name().to_string(), view));
     }
     run_matrix("matrix (real fixtures)", &sources);

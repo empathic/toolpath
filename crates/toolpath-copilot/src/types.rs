@@ -107,6 +107,7 @@ impl EventLine {
         match self.kind.as_str() {
             EV_SESSION_START => CopilotEvent::SessionStart(SessionStart::from_payload(&p)),
             EV_SESSION_SHUTDOWN => CopilotEvent::SessionShutdown(SessionShutdown::from_payload(&p)),
+            EV_SESSION_COMPACTION_START => CopilotEvent::CompactionStart(p),
             EV_SESSION_COMPACTION_COMPLETE => CopilotEvent::CompactionComplete(p),
             k if k.starts_with("session.") => CopilotEvent::SessionOther {
                 kind: k.to_string(),
@@ -143,6 +144,7 @@ impl EventLine {
 pub enum CopilotEvent {
     SessionStart(SessionStart),
     SessionShutdown(SessionShutdown),
+    CompactionStart(Value),
     CompactionComplete(Value),
     /// Any other `session.*` event we don't specifically model.
     SessionOther {

@@ -2,7 +2,7 @@
 {"timestamp":"2026-06-01T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","started_at":1722499201}}
 {"timestamp":"2026-06-01T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"refactor the auth module"}]}}
 {"timestamp":"2026-06-01T10:00:03.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"reading the current auth code"}],"phase":"final"}}
-{"timestamp":"2026-06-01T10:30:00.000Z","type":"compacted","payload":{"trigger":"auto","preTokens":180000,"summary":"Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation."}}
+{"timestamp":"2026-06-01T10:30:00.000Z","type":"compacted","payload":{"message":"Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation.","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"refactor the auth module"}]}]}}
 {"timestamp":"2026-06-01T10:31:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"now add session validation"}]}}
 {"timestamp":"2026-06-01T10:31:01.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"added session validation to login()"}],"phase":"final"}}
 {"timestamp":"2026-06-01T10:31:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-2","completed_at":1722500862}}
