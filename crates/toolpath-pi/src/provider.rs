@@ -2,9 +2,10 @@
 //!
 //! Walks `PiSession.entries` in file order. Each `Entry::Message` becomes a
 //! `Turn`; metadata-only entries like `ModelChange` / `ThinkingLevelChange` /
-//! `Label` buffer and attach to the next message's `extra["pi"]`. `Compaction`,
-//! `BranchSummary`, `Custom`, and `CustomMessage` emit synthetic turns with
-//! appropriate roles.
+//! `Label` buffer and attach to the next message's `extra["pi"]`.
+//! `Entry::Compaction` becomes an opaque `System` turn at its position in the
+//! stream; `BranchSummary`, `Custom`, and `CustomMessage` emit synthetic turns
+//! with appropriate roles.
 //!
 //! Tool-result correlation is a two-pass process: we record tool-call ids as
 //! assistant turns are built, then in a second pass populate matching tool
@@ -21,8 +22,8 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult,
-    Turn,
+    EnvironmentSnapshot, Item, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation,
+    ToolResult, Turn,
 };
 
 // ── Classification helpers ───────────────────────────────────────────
@@ -221,6 +222,38 @@ fn truncate_output(output: &str, max: usize) -> String {
     }
 }
 
+
+/// Resolve an item's parent reference past entries that produced no item
+/// (the session header, `model_change` / `thinking_level_change` / `label`
+/// metadata, folded tool results), walking the entry parent chain up to
+/// the nearest ancestor that did. Ids not present in this session's
+/// entries (e.g. a chained parent-session entry) are preserved verbatim —
+/// except the `<session-id>-init` virtual root, which Pi writes as the
+/// first entry's `parentId` without any such entry existing: that is the
+/// tree root and resolves to `None`.
+fn resolve_item_parent(
+    start: Option<&str>,
+    entry_parents: &HashMap<&str, Option<&str>>,
+    item_ids: &std::collections::HashSet<String>,
+    virtual_root: &str,
+) -> Option<String> {
+    let mut cur = start?;
+    for _ in 0..=entry_parents.len() {
+        if cur == virtual_root {
+            return None;
+        }
+        if item_ids.contains(cur) {
+            return Some(cur.to_string());
+        }
+        match entry_parents.get(cur) {
+            None => return Some(cur.to_string()),
+            Some(Some(next)) => cur = next,
+            Some(None) => return None,
+        }
+    }
+    None
+}
+
 // ── Main conversion ──────────────────────────────────────────────────
 
 /// Convert a PiSession into a provider-agnostic ConversationView.
@@ -228,15 +261,16 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
     let env = environment_for(session);
 
     // Two-pass strategy:
-    //  Pass 1: walk entries, emit turns. Track tool-call invocation locations
-    //          (turn_idx, tool_idx) by id for later correlation.
-    //  Pass 2: walk turns again for tool-result roles; find the matching
+    //  Pass 1: walk entries, emit items (turns + compaction boundaries in
+    //          place). Track tool-call invocation locations (item_idx,
+    //          tool_idx) by id for later correlation.
+    //  Pass 2: walk items again for tool-result roles; find the matching
     //          invocation by id and populate `.result` (and any delegation
     //          result).
-    let mut turns: Vec<Turn> = Vec::new();
-    // Map tool-call id → (turn_idx, tool_idx).
+    let mut items: Vec<Item> = Vec::new();
+    // Map tool-call id → (item_idx, tool_idx); item_idx indexes an `Item::Turn`.
     let mut tool_call_locs: HashMap<String, (usize, usize)> = HashMap::new();
-    // Map tool-call id → delegation index within the turn (if any).
+    // Map tool-call id → (item_idx, delegation index) within the turn (if any).
     let mut delegation_locs: HashMap<String, (usize, usize)> = HashMap::new();
     // Per-turn tool-result info: (tool_call_id, content, is_error).
     let mut tool_result_payloads: Vec<(usize, String, String, bool)> = Vec::new();
@@ -251,7 +285,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
             }
 
             Entry::Compaction { base, summary, .. } => {
-                turns.push(Turn {
+                items.push(Item::Turn(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -267,11 +301,11 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     environment: Some(env.clone()),
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                });
+                }));
             }
 
             Entry::BranchSummary { base, summary, .. } => {
-                turns.push(Turn {
+                items.push(Item::Turn(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -287,11 +321,11 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     environment: Some(env.clone()),
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                });
+                }));
             }
 
             Entry::Custom { base, .. } => {
-                turns.push(Turn {
+                items.push(Item::Turn(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -307,7 +341,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     environment: Some(env.clone()),
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                });
+                }));
             }
 
             Entry::CustomMessage {
@@ -316,7 +350,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 content,
                 ..
             } => {
-                turns.push(Turn {
+                items.push(Item::Turn(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -332,7 +366,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     environment: Some(env.clone()),
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                });
+                }));
             }
 
             Entry::Message { base, message, .. } => {
@@ -365,7 +399,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                         stop_reason_s = Some(stop_reason_to_string(stop_reason));
                         token_usage = usage_to_token_usage(usage);
 
-                        let turn_idx = turns.len();
+                        let turn_idx = items.len();
                         for block in content {
                             if let ContentBlock::ToolCall {
                                 id,
@@ -456,7 +490,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     }
                 }
 
-                turns.push(Turn {
+                items.push(Item::Turn(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
@@ -472,15 +506,15 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     environment: Some(env.clone()),
                     delegations,
                     file_mutations: Vec::new(),
-                });
+                }));
             }
         }
     }
 
-    // Pass 2: tool-result correlation.
+    // Pass 2: tool-result correlation. Indices reference `Item::Turn` slots.
     for (_tr_turn_idx, tool_call_id, content, is_error) in &tool_result_payloads {
         if let Some((turn_idx, tool_idx)) = tool_call_locs.get(tool_call_id)
-            && let Some(turn) = turns.get_mut(*turn_idx)
+            && let Some(Item::Turn(turn)) = items.get_mut(*turn_idx)
             && let Some(inv) = turn.tool_uses.get_mut(*tool_idx)
         {
             inv.result = Some(ToolResult {
@@ -489,17 +523,47 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
             });
         }
         if let Some((turn_idx, deleg_idx)) = delegation_locs.get(tool_call_id)
-            && let Some(turn) = turns.get_mut(*turn_idx)
+            && let Some(Item::Turn(turn)) = items.get_mut(*turn_idx)
             && let Some(d) = turn.delegations.get_mut(*deleg_idx)
         {
             d.result = Some(content.clone());
         }
     }
 
+    // Discarded entries leave dangling parent references on the items
+    // derived from their children (a turn parented on a `model_change`, a
+    // turn after a folded tool result). Resolve each parent to the
+    // nearest ancestor that became an item, so the view is self-contained
+    // and `expand_kept` chains never break at a non-item entry.
+    let entry_parents: HashMap<&str, Option<&str>> = session
+        .entries
+        .iter()
+        .map(|e| (e.entry_id(), e.parent_entry_id()))
+        .collect();
+    let item_ids: std::collections::HashSet<String> = items
+        .iter()
+        .map(|i| match i {
+            Item::Turn(t) => t.id.clone(),
+            Item::Event(e) => e.id.clone(),
+        })
+        .collect();
+    for item in &mut items {
+        let parent = match item {
+            Item::Turn(t) => &mut t.parent_id,
+            Item::Event(e) => &mut e.parent_id,
+        };
+        *parent = resolve_item_parent(
+            parent.as_deref(),
+            &entry_parents,
+            &item_ids,
+            &format!("{}-init", session.header.id),
+        );
+    }
+
     // Aggregate token usage from Assistant turns.
     let mut have_any_usage = false;
     let mut total = TokenUsage::default();
-    for turn in &turns {
+    for turn in items.iter().filter_map(Item::as_turn) {
         if let Some(u) = &turn.token_usage {
             have_any_usage = true;
             total.input_tokens =
@@ -519,7 +583,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
     // files_changed: dedup-in-order from FileWrite tool inputs.
     let mut files_changed: Vec<String> = Vec::new();
     let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for turn in &turns {
+    for turn in items.iter().filter_map(Item::as_turn) {
         for inv in &turn.tool_uses {
             if inv.category == Some(ToolCategory::FileWrite)
                 && let Some(p) = extract_file_path(&inv.input)
@@ -541,7 +605,11 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
     walk_parents(session, &mut session_ids);
 
     let started_at = parse_ts(&session.header.timestamp);
-    let last_activity = turns.last().and_then(|t| parse_ts(&t.timestamp));
+    let last_activity = items
+        .iter()
+        .filter_map(Item::as_turn)
+        .next_back()
+        .and_then(|t| parse_ts(&t.timestamp));
 
     let base = if session.header.cwd.is_empty() {
         None
@@ -556,12 +624,11 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         id: session.header.id.clone(),
         started_at,
         last_activity,
-        turns,
+        items,
         total_usage,
         provider_id: Some("pi".to_string()),
         files_changed,
         session_ids,
-        events: vec![],
         base,
         ..Default::default()
     }
@@ -752,7 +819,7 @@ mod tests {
     fn test_empty_session_produces_view() {
         let session = session_from(vec![], "/tmp/p");
         let v = session_to_view(&session);
-        assert_eq!(v.turns.len(), 0);
+        assert_eq!(v.turns().count(), 0);
         assert_eq!(v.provider_id.as_deref(), Some("pi"));
         assert_eq!(v.id, "sess-1");
     }
@@ -761,9 +828,9 @@ mod tests {
     fn test_user_message_becomes_user_turn() {
         let session = session_from(vec![user_text_entry("a", None, "hello")], "/tmp/p");
         let v = session_to_view(&session);
-        assert_eq!(v.turns.len(), 1);
-        assert_eq!(v.turns[0].role, Role::User);
-        assert_eq!(v.turns[0].text, "hello");
+        assert_eq!(v.turns().count(), 1);
+        assert_eq!(v.turns().next().unwrap().role, Role::User);
+        assert_eq!(v.turns().next().unwrap().text, "hello");
     }
 
     #[test]
@@ -793,7 +860,7 @@ mod tests {
         };
         let session = session_from(vec![entry], "/tmp/p");
         let v = session_to_view(&session);
-        assert_eq!(v.turns[0].text, "first\nsecond");
+        assert_eq!(v.turns().next().unwrap().text, "first\nsecond");
     }
 
     #[test]
@@ -810,10 +877,16 @@ mod tests {
             "claude-opus",
         );
         let v = session_to_view(&session_from(vec![entry], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::Assistant);
-        assert_eq!(v.turns[0].model.as_deref(), Some("claude-opus"));
-        assert_eq!(v.turns[0].stop_reason.as_deref(), Some("stop"));
-        let u = v.turns[0].token_usage.as_ref().unwrap();
+        assert_eq!(v.turns().next().unwrap().role, Role::Assistant);
+        assert_eq!(
+            v.turns().next().unwrap().model.as_deref(),
+            Some("claude-opus")
+        );
+        assert_eq!(
+            v.turns().next().unwrap().stop_reason.as_deref(),
+            Some("stop")
+        );
+        let u = v.turns().next().unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.input_tokens, Some(10));
         assert_eq!(u.output_tokens, Some(20));
     }
@@ -842,8 +915,8 @@ mod tests {
             "m",
         );
         let v = session_to_view(&session_from(vec![entry], "/tmp/p"));
-        assert_eq!(v.turns[0].text, "one\ntwo");
-        assert_eq!(v.turns[0].thinking.as_deref(), Some("mmm"));
+        assert_eq!(v.turns().next().unwrap().text, "one\ntwo");
+        assert_eq!(v.turns().next().unwrap().thinking.as_deref(), Some("mmm"));
     }
 
     #[test]
@@ -862,8 +935,8 @@ mod tests {
             "m",
         );
         let v = session_to_view(&session_from(vec![entry], "/tmp/p"));
-        assert_eq!(v.turns[0].tool_uses.len(), 1);
-        let inv = &v.turns[0].tool_uses[0];
+        assert_eq!(v.turns().next().unwrap().tool_uses.len(), 1);
+        let inv = &v.turns().next().unwrap().tool_uses[0];
         assert_eq!(inv.id, "tc1");
         assert_eq!(inv.name, "Read");
         assert_eq!(inv.category, Some(ToolCategory::FileRead));
@@ -916,7 +989,7 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![assistant, tr], "/tmp/p"));
-        let inv = &v.turns[0].tool_uses[0];
+        let inv = &v.turns().next().unwrap().tool_uses[0];
         let res = inv.result.as_ref().unwrap();
         assert_eq!(res.content, "result");
         assert!(!res.is_error);
@@ -943,7 +1016,7 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![tr], "/tmp/p"));
-        assert_eq!(v.turns.len(), 0);
+        assert_eq!(v.turns().count(), 0);
     }
 
     #[test]
@@ -964,10 +1037,16 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![e], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::Other("bash".to_string()));
-        assert!(v.turns[0].text.starts_with("$ ls"));
-        assert_eq!(v.turns[0].tool_uses.len(), 1);
-        assert_eq!(v.turns[0].tool_uses[0].category, Some(ToolCategory::Shell));
+        assert_eq!(
+            v.turns().next().unwrap().role,
+            Role::Other("bash".to_string())
+        );
+        assert!(v.turns().next().unwrap().text.starts_with("$ ls"));
+        assert_eq!(v.turns().next().unwrap().tool_uses.len(), 1);
+        assert_eq!(
+            v.turns().next().unwrap().tool_uses[0].category,
+            Some(ToolCategory::Shell)
+        );
     }
 
     #[test]
@@ -979,24 +1058,14 @@ mod tests {
             ],
             "/tmp/p",
         ));
-        assert_eq!(v.turns[1].parent_id.as_deref(), Some("a"));
+        assert_eq!(v.turns().nth(1).unwrap().parent_id.as_deref(), Some("a"));
     }
 
-    #[test]
-    fn test_compaction_produces_system_turn() {
-        let c = Entry::Compaction {
-            base: base("c", None, "t"),
-            summary: "sum".into(),
-            first_kept_entry_id: "x".into(),
-            tokens_before: 100,
-            details: None,
-            from_hook: Some(false),
-            extra: HashMap::new(),
-        };
-        let v = session_to_view(&session_from(vec![c], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::System);
-        assert!(v.turns[0].text.starts_with("Compacted"));
-    }
+
+
+
+
+
 
     #[test]
     fn test_branch_summary_produces_system_turn() {
@@ -1009,8 +1078,8 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![bs], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::System);
-        assert!(v.turns[0].text.starts_with("Branch summary"));
+        assert_eq!(v.turns().next().unwrap().role, Role::System);
+        assert!(v.turns().next().unwrap().text.starts_with("Branch summary"));
     }
 
     #[test]
@@ -1023,7 +1092,7 @@ mod tests {
         };
         let msg = user_text_entry("u", None, "hi");
         let v = session_to_view(&session_from(vec![mc, msg], "/tmp/p"));
-        assert_eq!(v.turns.len(), 1);
+        assert_eq!(v.turns().count(), 1);
     }
 
     #[test]
@@ -1035,7 +1104,7 @@ mod tests {
             ],
             "/Users/alex/p",
         ));
-        for t in &v.turns {
+        for t in v.turns() {
             assert_eq!(
                 t.environment.as_ref().unwrap().working_dir.as_deref(),
                 Some("/Users/alex/p")
@@ -1203,8 +1272,8 @@ mod tests {
         let pi = PiConvo::with_resolver(resolver);
         let v = ConversationProvider::load_conversation(&pi, "/tmp/p", "s1").unwrap();
         assert_eq!(v.id, "s1");
-        assert_eq!(v.turns.len(), 1);
-        assert_eq!(v.turns[0].role, Role::User);
+        assert_eq!(v.turns().count(), 1);
+        assert_eq!(v.turns().next().unwrap().role, Role::User);
     }
 
     #[test]
@@ -1259,9 +1328,12 @@ mod tests {
             "m",
         );
         let v = session_to_view(&session_from(vec![a], "/tmp/p"));
-        assert_eq!(v.turns[0].delegations.len(), 1);
-        assert_eq!(v.turns[0].delegations[0].prompt, "do the thing");
-        assert_eq!(v.turns[0].delegations[0].agent_id, "d1");
+        assert_eq!(v.turns().next().unwrap().delegations.len(), 1);
+        assert_eq!(
+            v.turns().next().unwrap().delegations[0].prompt,
+            "do the thing"
+        );
+        assert_eq!(v.turns().next().unwrap().delegations[0].agent_id, "d1");
     }
 
     #[test]
@@ -1275,7 +1347,7 @@ mod tests {
             "m",
         );
         let v = session_to_view(&session_from(vec![a], "/tmp/p"));
-        let sr = v.turns[0].stop_reason.as_deref().unwrap();
+        let sr = v.turns().next().unwrap().stop_reason.as_deref().unwrap();
         assert!(sr.to_lowercase().contains("tool"), "got: {}", sr);
     }
 
@@ -1290,7 +1362,11 @@ mod tests {
             extra: HashMap::new(),
         };
         let v = session_to_view(&session_from(vec![cm], "/tmp/p"));
-        assert_eq!(v.turns[0].role, Role::Other("custom:foo".to_string()));
-        assert_eq!(v.turns[0].text, "body");
+        assert_eq!(
+            v.turns().next().unwrap().role,
+            Role::Other("custom:foo".to_string())
+        );
+        assert_eq!(v.turns().next().unwrap().text, "body");
     }
+
 }

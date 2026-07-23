@@ -26,7 +26,7 @@ use std::any::Any;
 ///     type Output = usize;
 ///
 ///     fn project(&self, view: &ConversationView) -> Result<usize> {
-///         Ok(view.turns.len())
+///         Ok(view.turns().count())
 ///     }
 /// }
 /// ```
@@ -77,7 +77,7 @@ where
 /// impl ConversationProjector for TurnCounter {
 ///     type Output = usize;
 ///     fn project(&self, view: &ConversationView) -> Result<usize> {
-///         Ok(view.turns.len())
+///         Ok(view.turns().count())
 ///     }
 /// }
 ///
@@ -134,7 +134,7 @@ impl AnyProjector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Role, TokenUsage, ToolInvocation, ToolResult, Turn};
+    use crate::{Item, Role, TokenUsage, ToolInvocation, ToolResult, Turn};
 
     // ── helpers ──────────────────────────────────────────────────────
 
@@ -143,12 +143,11 @@ mod tests {
             id: "sess-1".into(),
             started_at: None,
             last_activity: None,
-            turns: vec![],
+            items: vec![],
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }
@@ -178,16 +177,15 @@ mod tests {
             id: "sess-2".into(),
             started_at: None,
             last_activity: None,
-            turns: vec![
-                make_turn("t1", Role::User, "hello"),
-                make_turn("t2", Role::Assistant, "world"),
-                make_turn("t3", Role::User, "done"),
+            items: vec![
+                Item::Turn(make_turn("t1", Role::User, "hello")),
+                Item::Turn(make_turn("t2", Role::Assistant, "world")),
+                Item::Turn(make_turn("t3", Role::User, "done")),
             ],
             total_usage: None,
             provider_id: Some("test-provider".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }
@@ -198,7 +196,7 @@ mod tests {
     impl ConversationProjector for TurnCounter {
         type Output = usize;
         fn project(&self, view: &ConversationView) -> Result<usize> {
-            Ok(view.turns.len())
+            Ok(view.turns().count())
         }
     }
 
@@ -306,7 +304,7 @@ mod tests {
     impl ConversationProjector for TextCollector {
         type Output = Vec<String>;
         fn project(&self, view: &ConversationView) -> Result<Vec<String>> {
-            Ok(view.turns.iter().map(|t| t.text.clone()).collect())
+            Ok(view.turns().map(|t| t.text.clone()).collect())
         }
     }
 
@@ -315,8 +313,7 @@ mod tests {
         type Output = Vec<String>;
         fn project(&self, view: &ConversationView) -> Result<Vec<String>> {
             Ok(view
-                .turns
-                .iter()
+                .turns()
                 .flat_map(|t| t.tool_uses.iter().map(|u| u.name.clone()))
                 .collect())
         }
@@ -335,8 +332,7 @@ mod tests {
             id: "s3".into(),
             started_at: None,
             last_activity: None,
-            events: vec![],
-            turns: vec![Turn {
+            items: vec![Item::Turn(Turn {
                 id: "t1".into(),
                 parent_id: None,
                 group_id: None,
@@ -370,7 +366,7 @@ mod tests {
                 environment: None,
                 delegations: vec![],
                 file_mutations: Vec::new(),
-            }],
+            })],
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
@@ -398,8 +394,7 @@ mod tests {
             type Output = u32;
             fn project(&self, view: &ConversationView) -> Result<u32> {
                 Ok(view
-                    .turns
-                    .iter()
+                    .turns()
                     .filter_map(|t| t.token_usage.as_ref())
                     .filter_map(|u| u.input_tokens)
                     .sum())
@@ -410,9 +405,8 @@ mod tests {
             id: "s4".into(),
             started_at: None,
             last_activity: None,
-            events: vec![],
-            turns: vec![
-                Turn {
+            items: vec![
+                Item::Turn(Turn {
                     id: "t1".into(),
                     parent_id: None,
                     group_id: None,
@@ -434,8 +428,8 @@ mod tests {
                     environment: None,
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                },
-                Turn {
+                }),
+                Item::Turn(Turn {
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
                     group_id: None,
@@ -457,7 +451,7 @@ mod tests {
                     environment: None,
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                },
+                }),
             ],
             total_usage: None,
             provider_id: None,

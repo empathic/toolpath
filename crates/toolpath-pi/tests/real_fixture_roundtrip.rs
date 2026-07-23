@@ -54,10 +54,7 @@ fn is_system_envelope(turn: &Turn) -> bool {
 }
 
 fn meaningful(view: &ConversationView) -> Vec<&Turn> {
-    view.turns
-        .iter()
-        .filter(|t| !is_system_envelope(t))
-        .collect()
+    view.turns().filter(|t| !is_system_envelope(t)).collect()
 }
 
 fn norm(s: &str) -> String {
@@ -68,7 +65,7 @@ fn norm(s: &str) -> String {
 fn fixture_loads() {
     let view = load_fixture_view();
     assert!(
-        !view.turns.is_empty(),
+        view.turns().next().is_some(),
         "pi fixture should produce a non-empty view"
     );
     let m = meaningful(&view);
@@ -182,14 +179,14 @@ fn roundtrip_preserves_delegations() {
     let original = load_fixture_view();
     let after = ir_roundtrip(&original);
 
-    let total_before: usize = original.turns.iter().map(|t| t.delegations.len()).sum();
-    let total_after: usize = after.turns.iter().map(|t| t.delegations.len()).sum();
+    let total_before: usize = original.turns().map(|t| t.delegations.len()).sum();
+    let total_after: usize = after.turns().map(|t| t.delegations.len()).sum();
     assert_eq!(
         total_before, total_after,
         "total delegation count diverged: {total_before} → {total_after}"
     );
 
-    for (i, (a, b)) in original.turns.iter().zip(after.turns.iter()).enumerate() {
+    for (i, (a, b)) in original.turns().zip(after.turns()).enumerate() {
         assert_eq!(
             a.delegations.len(),
             b.delegations.len(),
@@ -236,3 +233,4 @@ fn projector_output_is_re_parseable_by_reader() {
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
 }
+
