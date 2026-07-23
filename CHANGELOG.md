@@ -2,6 +2,21 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Project: drop empty streaming-seed assistant lines — 2026-07-23
+
+- **`toolpath-claude`** (0.12.2): the Claude projector no longer emits
+  content-empty assistant messages. Claude Code streams a message as several
+  JSONL lines — the first an empty "seed" (`text: ""`) superseded by the
+  real-text line, both sharing one `message.id`. Projecting that seed as
+  `content:[{"type":"text","text":""}]` produced an API-invalid message: on the
+  next turn of a *resumed* session Claude replays the whole transcript and
+  Anthropic rejects the empty text block with `400 … text content blocks must
+  be non-empty`, so the resumed session couldn't take a second turn. The
+  projector now skips any assistant turn with no text, thinking, tool-uses,
+  delegations, or file-mutations and re-links the following turn's `parentUuid`
+  to the dropped seed's parent, keeping the uuid chain intact. The group's
+  token total is re-expanded onto the surviving line as before.
+
 ## One artifact-type layer and per-session imports — 2026-07-16
 
 Groundwork for a cache that fills itself: one enum for artifact
