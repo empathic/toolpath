@@ -339,6 +339,11 @@ fn compaction_entries(
     if let Some(summary) = &c.summary {
         let mut summary_extra: HashMap<String, serde_json::Value> = HashMap::new();
         summary_extra.insert("isCompactSummary".into(), json!(true));
+        // Real boundaries also mark the summary transcript-only; without it
+        // the TUI renders the entire summary text inline on resume instead
+        // of collapsing it behind the "Compacted" indicator (verified
+        // against claude 2.1.216 by resuming a projected session).
+        summary_extra.insert("isVisibleInTranscriptOnly".into(), json!(true));
 
         entries.push(ConversationEntry {
             uuid: format!("{}-summary", c.id),

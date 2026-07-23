@@ -223,6 +223,22 @@ fn projection_fixpoint_holds() {
 }
 
 #[test]
+fn projected_summary_carries_render_flags() {
+    let view = load_view();
+    let convo = ClaudeProjector.project(&view).expect("project view");
+    let summary = convo
+        .entries
+        .iter()
+        .find(|e| e.extra.get("isCompactSummary") == Some(&serde_json::json!(true)))
+        .expect("projected conversation should contain a compact-summary entry");
+    assert_eq!(
+        summary.extra.get("isVisibleInTranscriptOnly"),
+        Some(&serde_json::json!(true)),
+        "summary must be transcript-only or the TUI renders it inline on resume"
+    );
+}
+
+#[test]
 fn role_distribution_is_sane() {
     let view = load_view();
     let user_count = view
