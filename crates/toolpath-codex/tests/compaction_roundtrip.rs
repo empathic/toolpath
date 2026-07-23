@@ -56,7 +56,7 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
 fn fixture_loads_without_panic() {
     let view = load_view();
     assert!(
-        !view.turns.is_empty(),
+        view.turns().next().is_some(),
         "compaction fixture should produce turns"
     );
 }
@@ -69,11 +69,11 @@ fn pre_compact_content_survives_roundtrip() {
     let needles = ["refactor the auth module", "reading the current auth code"];
     for n in needles {
         assert!(
-            original.turns.iter().any(|t| t.text.contains(n)),
+            original.turns().any(|t| t.text.contains(n)),
             "pre-compact text {n:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(n)),
+            after.turns().any(|t| t.text.contains(n)),
             "pre-compact text {n:?} dropped after roundtrip"
         );
     }
@@ -90,11 +90,11 @@ fn post_compact_content_survives_roundtrip() {
     ];
     for n in needles {
         assert!(
-            original.turns.iter().any(|t| t.text.contains(n)),
+            original.turns().any(|t| t.text.contains(n)),
             "post-compact text {n:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(n)),
+            after.turns().any(|t| t.text.contains(n)),
             "post-compact text {n:?} dropped after roundtrip"
         );
     }

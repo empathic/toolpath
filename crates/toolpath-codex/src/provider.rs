@@ -41,9 +41,9 @@ use crate::types::{
 };
 use serde_json::Value;
 use toolpath_convo::{
-    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
-    EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn,
+    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError, EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase,
+    TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Provider for Codex sessions.
@@ -187,6 +187,7 @@ pub fn to_turn(line_payload: &ResponseItem) -> Option<Turn> {
     }
 }
 
+
 struct Builder<'a> {
     session: &'a Session,
     turns: Vec<Turn>,
@@ -264,6 +265,9 @@ impl<'a> Builder<'a> {
                         .push(event_from_raw(&line.timestamp, "session_state", &payload));
                 }
                 RolloutItem::Compacted(payload) => {
+                    // Context-compaction markers ride as generic events for
+                    // now; typed boundary support builds on this in the
+                    // compaction-provenance work.
                     self.events
                         .push(event_from_raw(&line.timestamp, "compacted", &payload));
                 }
@@ -314,36 +318,60 @@ impl<'a> Builder<'a> {
 
         // Filter empty carrier turns (no text, no thinking, no tool calls).
         // Previously done inside `derive_path_from_view`; moved here so the
-        // canonical `derive_path` sees only meaningful turns.
-        self.turns
-            .retain(|t| !(t.text.is_empty() && t.thinking.is_none() && t.tool_uses.is_empty()));
+        // canonical `derive_path` sees only meaningful turns. We compute a
+        // keep-mask instead of `retain`-ing in place so the buffer indices
+        // recorded for pending compactions stay valid. A turn that carries
+        // token accounting is NOT empty: `finalize_usage` (above) may have
+        // stamped a group's total `token_usage` onto an otherwise-bare
+        // group-final turn, and dropping it would make Σ token_usage < the
+        // session total.
+        let keep: Vec<bool> = self
+            .turns
+            .iter()
+            .map(|t| {
+                !(t.text.is_empty()
+                    && t.thinking.is_none()
+                    && t.tool_uses.is_empty()
+                    && t.token_usage.is_none()
+                    && t.attributed_token_usage.is_none())
+            })
+            .collect();
 
-        // Assign synthetic ids to turns whose source message didn't carry
-        // one, then link sequentially via `parent_id` so the shared
+        // Assign synthetic ids to surviving turns whose source message didn't
+        // carry one, then link them sequentially via `parent_id` so the shared
         // `derive_path` can walk a connected DAG. Codex turns don't carry
-        // explicit parent ids on the wire; this preserves the linear
-        // ordering the old `derive_path_from_view` produced.
-        for (idx, t) in self.turns.iter_mut().enumerate() {
-            if t.id.is_empty() {
-                t.id = format!("codex-turn-{:04}", idx + 1);
-            }
-        }
+        // explicit parent ids on the wire; this preserves the linear ordering
+        // the old `derive_path_from_view` produced. Numbering follows the
+        // post-filter position to match the prior `retain`-then-enumerate id.
+        let mut surviving = 0usize;
         let mut prev: Option<String> = None;
-        for t in self.turns.iter_mut() {
+        // Final id of each surviving turn, indexed by its position in
+        // `self.turns`; `None` for dropped turns. Used to resolve a
+        // compaction's `parent_id` back to a real turn step.
+        let mut turn_final_id: Vec<Option<String>> = vec![None; self.turns.len()];
+        for (idx, t) in self.turns.iter_mut().enumerate() {
+            if !keep[idx] {
+                continue;
+            }
+            surviving += 1;
+            if t.id.is_empty() {
+                t.id = format!("codex-turn-{:04}", surviving);
+            }
             if t.parent_id.is_none() {
                 t.parent_id = prev.clone();
             }
             prev = Some(t.id.clone());
+            turn_final_id[idx] = Some(t.id.clone());
         }
 
         // Disambiguate event ids. `event_from_raw` synthesizes
         // `<event_type>-<timestamp>`, which collides when codex emits
         // multiple events of the same type at the same timestamp (rare
         // but real). Suffix duplicates with their position so each step
-        // gets a unique ID.
+        // gets a unique id.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for t in &self.turns {
-            seen.insert(t.id.clone());
+        for id in turn_final_id.iter().flatten() {
+            seen.insert(id.clone());
         }
         for (i, e) in self.events.iter_mut().enumerate() {
             if !seen.insert(e.id.clone()) {
@@ -352,11 +380,24 @@ impl<'a> Builder<'a> {
             }
         }
 
+        // Assemble the ordered stream: surviving turns first, then all
+        // events. Keeping events grouped after the turns reproduces the
+        // former layout, so the derived DAG stays a single connected
+        // ancestry.
+        let mut items: Vec<Item> = Vec::with_capacity(self.turns.len() + self.events.len() + 1);
+        for (idx, turn) in self.turns.into_iter().enumerate() {
+            if !keep[idx] {
+                continue;
+            }
+            items.push(Item::Turn(turn));
+        }
+        items.extend(self.events.into_iter().map(Item::Event));
+
         ConversationView {
             id: self.session.id.clone(),
             started_at: self.session.started_at(),
             last_activity: self.session.last_activity(),
-            turns: self.turns,
+            items,
             total_usage: if self.total_usage_set {
                 Some(self.total_usage)
             } else {
@@ -365,7 +406,6 @@ impl<'a> Builder<'a> {
             provider_id: Some("codex".into()),
             files_changed: self.files_changed_order,
             session_ids: vec![],
-            events: self.events,
             base,
             producer,
         }
@@ -615,6 +655,7 @@ impl<'a> Builder<'a> {
         self.turns.push(turn);
     }
 
+
     fn drain_pending_onto(&mut self, turn: &mut Turn) {
         if turn.role != Role::Assistant {
             return;
@@ -723,6 +764,7 @@ impl<'a> Builder<'a> {
             .or_else(|| self.turns.len().checked_sub(1))
     }
 }
+
 
 // ── Patch → FileMutation conversion ─────────────────────────────────
 
@@ -1077,6 +1119,43 @@ mod tests {
     }
 
     #[test]
+    fn empty_group_final_assistant_turn_keeps_its_usage() {
+        // A round whose only assistant message is empty (no text, no tools)
+        // but which still incurs token spend. `finalize_usage` stamps the
+        // round total onto that turn; the empty-carrier keep-mask must NOT
+        // drop it, or the spend disappears from per-step accounting while the
+        // session total still counts it (Σ token_usage < session total).
+        let body = [
+            r#"{"timestamp":"2026-04-20T16:44:37.772Z","type":"session_meta","payload":{"id":"019dabc6-8fef-7681-a054-b5bb75fcb97d","timestamp":"2026-04-20T16:43:30.171Z","cwd":"/tmp/proj","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:37.773Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/tmp/proj","model":"gpt-5.4"}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:37.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:38.800Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":0,"total_tokens":120}}}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:38.900Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":""}],"phase":"final","end_turn":true}}"#,
+            r#"{"timestamp":"2026-04-20T16:44:39.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":""}}"#,
+        ]
+        .join("\n");
+
+        let (_t, mgr, id) = setup_session_fixture(&body);
+        let session = mgr.read_session(&id).unwrap();
+        let view = to_view(&session);
+
+        let assistant = view
+            .turns()
+            .find(|t| t.role == Role::Assistant)
+            .expect("empty assistant turn carrying the round's usage must survive");
+        let usage = assistant
+            .token_usage
+            .as_ref()
+            .or(assistant.attributed_token_usage.as_ref())
+            .expect("surviving turn must carry the round's usage");
+        assert_eq!(
+            usage.output_tokens,
+            Some(20),
+            "the round's output spend must land on the surviving turn"
+        );
+    }
+
+    #[test]
     fn build_view_basic() {
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let session = mgr.read_session(&id).unwrap();
@@ -1084,12 +1163,15 @@ mod tests {
 
         assert_eq!(view.id, "019dabc6-8fef-7681-a054-b5bb75fcb97d");
         assert_eq!(view.provider_id.as_deref(), Some("codex"));
-        assert_eq!(view.turns.len(), 3);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "please do a thing");
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "working on it");
-        assert_eq!(view.turns[1].model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(view.turns().count(), 3);
+        assert_eq!(view.turns().next().unwrap().role, Role::User);
+        assert_eq!(view.turns().next().unwrap().text, "please do a thing");
+        assert_eq!(view.turns().nth(1).unwrap().role, Role::Assistant);
+        assert_eq!(view.turns().nth(1).unwrap().text, "working on it");
+        assert_eq!(
+            view.turns().nth(1).unwrap().model.as_deref(),
+            Some("gpt-5.4")
+        );
     }
 
     /// Two API rounds. Codex's `token_count` events carry cumulative
@@ -1123,12 +1205,12 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&two_round_session(true));
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let first = view.turns[1].token_usage.as_ref().unwrap();
+        let first = view.turns().nth(1).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(first.input_tokens, Some(100));
         assert_eq!(first.output_tokens, Some(20));
         assert_eq!(first.cache_read_tokens, Some(10));
 
-        let second = view.turns[3].token_usage.as_ref().unwrap();
+        let second = view.turns().nth(3).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(second.input_tokens, Some(200));
         assert_eq!(second.output_tokens, Some(30));
         assert_eq!(second.cache_read_tokens, Some(30));
@@ -1165,11 +1247,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let assistants: Vec<&Turn> = view
-            .turns
-            .iter()
-            .filter(|t| t.role == Role::Assistant)
-            .collect();
+        let assistants: Vec<&Turn> = view.turns().filter(|t| t.role == Role::Assistant).collect();
         assert_eq!(assistants.len(), 2);
         // Per-step attribution: 40 then 60 — NOT 80/120 (which doubling gives).
         assert_eq!(
@@ -1232,11 +1310,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let assistants: Vec<&Turn> = view
-            .turns
-            .iter()
-            .filter(|t| t.role == Role::Assistant)
-            .collect();
+        let assistants: Vec<&Turn> = view.turns().filter(|t| t.role == Role::Assistant).collect();
         assert_eq!(assistants.len(), 2);
         // Per-step reasoning deltas, NOT cumulative (100/260) and NOT doubled.
         assert_eq!(
@@ -1274,11 +1348,7 @@ mod tests {
         ].join("\n");
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let a = view
-            .turns
-            .iter()
-            .find(|t| t.role == Role::Assistant)
-            .unwrap();
+        let a = view.turns().find(|t| t.role == Role::Assistant).unwrap();
         assert!(
             a.attributed_token_usage
                 .as_ref()
@@ -1310,15 +1380,16 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        assert_eq!(view.turns.len(), 3);
-        assert!(view.turns[0].group_id.is_none(), "user turn ungrouped");
-        assert_eq!(view.turns[1].group_id.as_deref(), Some("round-1"));
-        assert_eq!(view.turns[2].group_id.as_deref(), Some("round-1"));
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 3);
+        assert!(turns[0].group_id.is_none(), "user turn ungrouped");
+        assert_eq!(turns[1].group_id.as_deref(), Some("round-1"));
+        assert_eq!(turns[2].group_id.as_deref(), Some("round-1"));
         assert!(
-            view.turns[1].token_usage.is_none(),
+            turns[1].token_usage.is_none(),
             "interior turn of the round must not carry usage"
         );
-        let total = view.turns[2].token_usage.as_ref().unwrap();
+        let total = turns[2].token_usage.as_ref().unwrap();
         assert_eq!(total.output_tokens, Some(20));
         assert_eq!(total.input_tokens, Some(100));
     }
@@ -1330,7 +1401,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&two_round_session(false));
         let view = to_view(&mgr.read_session(&id).unwrap());
 
-        let second = view.turns[3].token_usage.as_ref().unwrap();
+        let second = view.turns().nth(3).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(second.input_tokens, Some(200));
         assert_eq!(second.output_tokens, Some(30));
         assert_eq!(second.cache_read_tokens, Some(30));
@@ -1343,7 +1414,7 @@ mod tests {
         // Turn.extra was removed, encrypted ciphertext is simply dropped.
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         assert!(
             assistant.thinking.is_none(),
             "encrypted ciphertext must not appear as thinking"
@@ -1363,7 +1434,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
         assert_eq!(
-            view.turns[0].thinking.as_deref(),
+            view.turns().next().unwrap().thinking.as_deref(),
             Some("I should check the file")
         );
     }
@@ -1372,7 +1443,7 @@ mod tests {
     fn function_call_pairs_with_output() {
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         assert_eq!(assistant.tool_uses.len(), 2);
         let exec = &assistant.tool_uses[0];
         assert_eq!(exec.name, "exec_command");
@@ -1385,7 +1456,7 @@ mod tests {
     fn custom_tool_call_preserves_raw_input() {
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         let apply = &assistant.tool_uses[1];
         assert_eq!(apply.name, "apply_patch");
         assert_eq!(apply.category, Some(ToolCategory::FileWrite));
@@ -1430,15 +1501,13 @@ mod tests {
         // Find the turn that hosts the `apply_patch` file mutation. The
         // mutation's `tool_id` should link back to the apply_patch tool.
         let apply_patch_id = view
-            .turns
-            .iter()
+            .turns()
             .flat_map(|t| t.tool_uses.iter())
             .find(|tu| tu.name == "apply_patch")
             .map(|tu| tu.id.clone())
             .expect("apply_patch tool invocation present");
         let fm = view
-            .turns
-            .iter()
+            .turns()
             .flat_map(|t| t.file_mutations.iter())
             .find(|fm| fm.path == "/tmp/proj/a.rs")
             .expect("file mutation present");
@@ -1461,7 +1530,7 @@ mod tests {
     fn events_preserve_non_turn_content() {
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
-        let kinds: Vec<&str> = view.events.iter().map(|e| e.event_type.as_str()).collect();
+        let kinds: Vec<&str> = view.events().map(|e| e.event_type.as_str()).collect();
         assert!(kinds.contains(&"session_meta"));
         assert!(kinds.contains(&"turn_context"));
         assert!(kinds.contains(&"task_started"));
@@ -1497,7 +1566,7 @@ mod tests {
             "019dabc6-8fef-7681-a054-b5bb75fcb97d",
         )
         .unwrap();
-        assert_eq!(view.turns.len(), 3);
+        assert_eq!(view.turns().count(), 3);
     }
 
     #[test]
@@ -1509,6 +1578,6 @@ mod tests {
         .join("\n");
         let (_t, mgr, id) = setup_session_fixture(&body);
         let view = to_view(&mgr.read_session(&id).unwrap());
-        assert_eq!(view.turns[0].role, Role::System);
+        assert_eq!(view.turns().next().unwrap().role, Role::System);
     }
 }

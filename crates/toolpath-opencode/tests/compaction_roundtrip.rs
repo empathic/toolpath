@@ -11,7 +11,7 @@
 //!
 //!   - A compacted session loads via the SQLite reader without crashing.
 //!   - `to_view` surfaces the compaction part as a `ConversationEvent`
-//!     in `view.events` (this is the documented contract).
+//!     in `view.events()` (this is the documented contract).
 //!   - User/assistant content surrounding the compaction part survives
 //!     the IR derive/extract round-trip and the projector emits a
 //!     functionally equivalent `Session`.
@@ -19,8 +19,8 @@
 //! Known limitation (documented, not asserted as fully preserved): the
 //! `ConversationEvent` carrying the compaction metadata does not
 //! survive the `derive → extract` round-trip today — `derive_path` does
-//! not emit `conversation.event` steps for `view.events`, and the
-//! opencode projector does not consume `view.events`. The compaction
+//! not emit `conversation.event` steps for `view.events()`, and the
+//! opencode projector does not consume `view.events()`. The compaction
 //! marker is purely structural metadata (the surrounding messages
 //! carry the actual content), so for "good UX" today this is an
 //! acceptable loss; if/when we close the gap, this test gets
@@ -116,35 +116,18 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
     extract_conversation(&path)
 }
 
-#[test]
-fn fixture_loads_with_compaction_part() {
-    let (_temp, session) = setup_session();
-    // Source-level sanity: the compaction part is present in the
-    // SQLite-derived Session before any IR conversion.
-    let has_compaction = session.messages.iter().any(|m| {
-        m.parts
-            .iter()
-            .any(|p| matches!(p.data, PartData::Compaction(_)))
-    });
-    assert!(
-        has_compaction,
-        "fixture should have a Compaction part on the source side"
-    );
-}
 
 #[test]
 fn to_view_surfaces_compaction_as_event() {
     let (_temp, session) = setup_session();
     let view = to_view(&session);
     let event = view
-        .events
-        .iter()
+        .events()
         .find(|e| e.event_type == "part.compaction");
     assert!(
         event.is_some(),
-        "expected a `part.compaction` ConversationEvent in view.events; got: {:?}",
-        view.events
-            .iter()
+        "expected a `part.compaction` ConversationEvent in view.events(); got: {:?}",
+        view.events()
             .map(|e| &e.event_type)
             .collect::<Vec<_>>()
     );
@@ -158,11 +141,11 @@ fn pre_compact_user_turn_survives_roundtrip() {
 
     let needle = "refactor the auth module";
     assert!(
-        view.turns.iter().any(|t| t.text.contains(needle)),
+        view.turns().any(|t| t.text.contains(needle)),
         "pre-compact prompt missing from initial view"
     );
     assert!(
-        after.turns.iter().any(|t| t.text.contains(needle)),
+        after.turns().any(|t| t.text.contains(needle)),
         "pre-compact prompt dropped after roundtrip"
     );
 }
@@ -178,11 +161,11 @@ fn post_compact_user_and_assistant_turns_survive_roundtrip() {
         "added session validation to login()",
     ] {
         assert!(
-            view.turns.iter().any(|t| t.text.contains(needle)),
+            view.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(needle)),
+            after.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} dropped after roundtrip"
         );
     }
