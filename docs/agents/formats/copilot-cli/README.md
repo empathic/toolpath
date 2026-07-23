@@ -32,8 +32,12 @@ This reference began without first-hand samples and has since been **partly
 verified against one captured session at `copilotVersion` 1.0.67** — the line
 envelope, `session.start`/`model_change`/`task_complete`, `system.message`,
 `user.message`, `assistant.*`, and `tool.execution_*` are now `[observed]`.
-Event types that didn't occur in that session (`subagent.*`, `skill.invoked`,
-`hook.*`, `abort`, `session.shutdown`, compaction) remain `[reverse-eng]`.
+A 1.0.68 feature-elicit capture added `subagent.*` and `session.shutdown`,
+and a 1.0.68 interactive `/compact` capture added `session.compaction_start`/
+`complete` (`test-fixtures/copilot/compacted-real.jsonl`), plus
+`permission.requested`/`completed`. Event types still unobserved
+(`skill.invoked`, `hook.*`, `abort`, mode/plan changes) remain
+`[reverse-eng]`.
 It is compiled from:
 
 - **Official GitHub documentation** — the config-directory and command
@@ -59,9 +63,10 @@ Every non-trivial claim carries an inline tag:
 | `[unverified]` | Believed but unconfirmed; flagged for sample verification. | — |
 
 The 1.0.67 capture upgraded much of the core format to `[observed]`; the
-remaining `[reverse-eng]`/`[unverified]` items (sub-agents, skills, hooks,
-abort, shutdown, compaction, the `checkpoints/` format) still need a session
-that exercises them. The
+remaining `[reverse-eng]`/`[unverified]` items (skills, hooks, abort,
+mode/plan changes) still need a session that exercises them; sub-agents,
+shutdown, and compaction have since been observed at 1.0.68 (compaction
+summaries mirror to `checkpoints/NNN-*.md` + `index.md`). The
 [verification checklist](known-gaps-and-sourcing.md#verify-once-we-have-samples)
 tracks what's left.
 

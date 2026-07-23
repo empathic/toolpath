@@ -11,8 +11,8 @@ the file a forward provider parses to reconstruct the conversation.
 > change between releases. **The envelope and almost all event types below are
 > now `[observed]` against first-hand captures at `copilotVersion` 1.0.67–1.0.68**
 > (incl. a feature-elicit run with a real sub-agent and `session.shutdown`);
-> only `skill.*` / `hook.*` / `abort` / mode-plan-compaction remain
-> `[reverse-eng]`.
+> only `skill.*` / `hook.*` / `abort` / mode-plan remain `[reverse-eng]`
+> (compaction was observed at 1.0.68 — see the `session.compaction_*` rows).
 
 ## Line envelope `[observed, 1.0.67]`
 
@@ -51,7 +51,9 @@ did not occur in that session. Field paths are relative to `data`.
 | `session.model_change` | `newModel` (e.g. `"auto"`) | `[observed]` Model switched (also emitted once right after start). |
 | `session.task_complete` | `summary` | `[observed]` A task finished. |
 | `session.shutdown` | `shutdownType`, **`tokenDetails`** `{input,cache_read,cache_write,output: {tokenCount}}`, `modelMetrics` (**map keyed by model name** → `{requests: {count, cost}, usage}`), `totalPremiumRequests`, `totalApiDurationMs`, `sessionStartTime` (epoch ms), `eventsFileSizeBytes`, `codeChanges {linesAdded, linesRemoved, filesModified[]}` | `[observed, 1.0.68]` Session close. `tokenDetails.output.tokenCount` equals Σ per-message `outputTokens` (verified) — totals, not additive. The old reverse-eng shape (`usage.inputTokens`, `modelMetrics.model`) was wrong. |
-| `session.mode_changed` / `session.plan_changed` / `session.compaction_start` / `session.compaction_complete` | (mode / plan / token counts) | `[reverse-eng]` Not seen in the sample. |
+| `session.compaction_start` | `systemTokens`, `conversationTokens`, `toolDefinitionsTokens` | `[observed, 1.0.68]` Pre-compaction token bookkeeping. Kept as a `ConversationEvent`. |
+| `session.compaction_complete` | **`success`**, **`preCompactionTokens`**, `postCompactionTokens`, `preCompactionMessagesLength`, `messagesRemoved`, `tokensRemoved`, **`summaryContent`**, `checkpointNumber`, `checkpointPath` | `[observed, 1.0.68]` A successful one becomes the typed `Item::Compaction` (`summary` ← `summaryContent`, `pre_tokens` ← `preCompactionTokens`; wholesale — Copilot reports removed-message *counts*, not surviving ids, so there is no kept run). `success: false` stays a generic event. The summary is mirrored to `checkpoints/NNN-*.md` + `index.md` in the session dir. The removed counts and checkpoint path are outside the closed typed set and do not round-trip. |
+| `session.mode_changed` / `session.plan_changed` | (mode / plan) | `[reverse-eng]` Not seen in a capture yet. |
 
 ### `system.*`, `user.*`, `assistant.*` — the conversation
 
@@ -126,7 +128,9 @@ note, all `[inferred]` pending a sample):
 | `subagent.started`/`completed` | `Turn.delegations` (`DelegatedWork`) |
 | `skill.invoked` | a `Delegation`-category `ToolInvocation`, or a `ConversationEvent` |
 | `hook.*`, `abort` | `ConversationView.events` |
-| `session.shutdown`, `session.compaction_complete` | `TokenUsage` (see token-accounting caveats in [known-gaps](known-gaps-and-sourcing.md)) |
+| `session.shutdown` | `TokenUsage` (see token-accounting caveats in [known-gaps](known-gaps-and-sourcing.md)) |
+| `session.compaction_start` | `ConversationEvent` (token bookkeeping only) |
+| `session.compaction_complete` (`success: true`) | `Item::Compaction { summary, pre_tokens }` — wholesale, no kept run |
 
 The single biggest unknown for this mapping is **where tool result content and
 file edits live** — covered next in [file-fidelity.md](file-fidelity.md).

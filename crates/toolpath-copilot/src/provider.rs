@@ -1,9 +1,10 @@
 //! Build a provider-agnostic [`ConversationView`] from a Copilot [`Session`].
 //!
-//! ⚠️ The mapping below follows the *inferred* `events.jsonl` semantics in
-//! `docs/agents/formats/copilot-cli/events.md`. Tool-name classification and
-//! file-mutation extraction are best-effort and should be tightened once a
-//! real session is captured.
+//! The mapping follows the `events.jsonl` semantics in
+//! `docs/agents/formats/copilot-cli/events.md`, verified against first-hand
+//! captures at `copilotVersion` 1.0.67–1.0.68 (turns, tools, sub-agents,
+//! shutdown totals, and context compaction). Tool-name classification stays
+//! deliberately broad for MCP/custom pass-through names.
 
 use crate::io::ConvoIO;
 use crate::paths::PathResolver;
@@ -11,8 +12,8 @@ use crate::types::{CopilotEvent, Session};
 use serde_json::Value;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationEvent, ConversationView, DelegatedWork, FileMutation, Item, ProducerInfo, Role,
-    SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    Compaction, ConversationEvent, ConversationView, DelegatedWork, FileMutation, Item,
+    ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Provider identity used for `path-<provider>-…` ids and dispatch.
@@ -145,6 +146,9 @@ pub fn to_view(session: &Session) -> ConversationView {
     // (flushed turns plus a content-bearing in-progress turn), so the final
     // `items` assembly can restore the real turn/event interleaving.
     let mut events: Vec<(usize, ConversationEvent)> = Vec::new();
+    // Compaction boundaries, tagged like events so assembly can put each
+    // between the turns it separates.
+    let mut compactions: Vec<(usize, Compaction)> = Vec::new();
     // Copilot reports per-message tokens (`outputTokens`, and — on a projected
     // session — `inputTokens`/cache). We set them per-turn and sum for the
     // session total; `session.shutdown` (when present) is the fallback total.
@@ -288,11 +292,50 @@ pub fn to_view(session: &Session) -> ConversationView {
                     make_event(i, "abort", &ts, p),
                 ));
             }
-            CopilotEvent::CompactionComplete(p) => {
+            // Observed at 1.0.68: `session.compaction_start` carries only
+            // pre-compaction token bookkeeping ({system,conversation,
+            // toolDefinitions}Tokens); the boundary's substance rides
+            // `session.compaction_complete` ({success, preCompactionTokens,
+            // postCompactionTokens, preCompactionMessagesLength,
+            // messagesRemoved, tokensRemoved, summaryContent, checkpoint*}).
+            // The start stays a generic event; a successful complete becomes
+            // the typed `Item::Compaction`. Copilot reports removed-message
+            // *counts*, not surviving ids, so there is no kept anchor —
+            // wholesale (`kept_from: None`); the counts and checkpoint path
+            // are copilot bookkeeping outside the closed typed set.
+            CopilotEvent::CompactionStart(p) => {
+                flush(&mut turns, &mut current);
                 events.push((
                     turn_watermark(&turns, &current),
-                    make_event(i, "session.compaction_complete", &ts, p),
+                    make_event(i, "session.compaction_start", &ts, p),
                 ));
+            }
+            CopilotEvent::CompactionComplete(p) => {
+                flush(&mut turns, &mut current);
+                if p.get("success").and_then(Value::as_bool) == Some(true) {
+                    compactions.push((
+                        turn_watermark(&turns, &current),
+                        Compaction {
+                            // Renumbered by final position during assembly,
+                            // alongside turn ids.
+                            id: String::new(),
+                            parent_id: None,
+                            timestamp: ts.clone(),
+                            trigger: None,
+                            summary: p
+                                .get("summaryContent")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            pre_tokens: p.get("preCompactionTokens").and_then(Value::as_u64),
+                            kept_from: None,
+                        },
+                    ));
+                } else {
+                    events.push((
+                        turn_watermark(&turns, &current),
+                        make_event(i, "session.compaction_complete", &ts, p),
+                    ));
+                }
             }
             CopilotEvent::SessionOther { kind, payload } => {
                 events.push((
@@ -314,9 +357,10 @@ pub fn to_view(session: &Session) -> ConversationView {
     // were created-then-dropped as empty (which differs across re-derivation
     // and would break parent-graph idempotency). Turn ids are only used for the
     // step DAG; tool/delegation pairing keys off tool/agent ids, not turn ids.
+    // Parents are stitched during `items` assembly below, where compaction
+    // boundaries join the chain.
     for (i, t) in turns.iter_mut().enumerate() {
         t.id = format!("t{i}");
-        t.parent_id = (i > 0).then(|| format!("t{}", i - 1));
     }
 
     // Session total = field-wise sum of per-turn usage (Σ turns = session
@@ -385,17 +429,50 @@ pub fn to_view(session: &Session) -> ConversationView {
         None
     };
 
-    // Merge turns and events into the ordered `items` stream, restoring the
-    // real interleaving from each event's turn watermark.
+    // Merge turns, events, and compaction boundaries into the ordered
+    // `items` stream, restoring the real interleaving from each one's turn
+    // watermark. At an equal watermark events go first: the only same-slot
+    // pairing in the wire format is `compaction_start` (generic event)
+    // immediately followed by its `compaction_complete` (the boundary).
     let mut items: Vec<Item> = Vec::new();
     let mut ev = events.into_iter().peekable();
+    let mut cp = compactions.into_iter().peekable();
     for (i, t) in turns.into_iter().enumerate() {
         while ev.peek().is_some_and(|(w, _)| *w <= i) {
             items.push(Item::Event(ev.next().unwrap().1));
         }
+        while cp.peek().is_some_and(|(w, _)| *w <= i) {
+            items.push(Item::Compaction(cp.next().unwrap().1));
+        }
         items.push(Item::Turn(t));
     }
     items.extend(ev.map(|(_, e)| Item::Event(e)));
+    items.extend(cp.map(|(_, c)| Item::Compaction(c)));
+
+    // Stitch the linear parent chain through compaction boundaries: a turn
+    // after a boundary parents on the boundary, not on the previous turn,
+    // so the head-ancestry walk crosses the compaction in order. Compaction
+    // ids are renumbered by final position like turn ids — the envelope UUID
+    // is re-minted by every projection, so keeping it would break
+    // project → re-read idempotency (the id, and with it the post-boundary
+    // turn's parent, would change on each hop).
+    let mut prev: Option<String> = None;
+    let mut compact_n = 0usize;
+    for item in &mut items {
+        match item {
+            Item::Turn(t) => {
+                t.parent_id = prev.clone();
+                prev = Some(t.id.clone());
+            }
+            Item::Compaction(c) => {
+                c.id = format!("compact{compact_n}");
+                compact_n += 1;
+                c.parent_id = prev.clone();
+                prev = Some(c.id.clone());
+            }
+            Item::Event(_) => {}
+        }
+    }
 
     ConversationView {
         id: session.id.clone(),
@@ -1099,6 +1176,72 @@ mod tests {
             view.total_usage.as_ref().and_then(|u| u.output_tokens),
             Some(7),
             "session total must include the aborted response's tokens"
+        );
+    }
+
+    fn compaction_body(success: bool) -> String {
+        [
+            r#"{"type":"session.start","timestamp":"2026-07-21T22:00:00.000Z","data":{"copilotVersion":"1.0.68","context":{"cwd":"/p"}}}"#,
+            r#"{"type":"user.message","timestamp":"2026-07-21T22:00:01.000Z","data":{"content":"make a file"}}"#,
+            r#"{"type":"assistant.turn_start","timestamp":"2026-07-21T22:00:02.000Z","data":{}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-07-21T22:00:03.000Z","data":{"content":"Done."}}"#,
+            r#"{"type":"assistant.turn_end","timestamp":"2026-07-21T22:00:04.000Z","data":{}}"#,
+            r#"{"type":"session.compaction_start","timestamp":"2026-07-21T22:00:05.000Z","data":{"systemTokens":6075,"conversationTokens":424,"toolDefinitionsTokens":7681}}"#,
+            &format!(
+                r#"{{"type":"session.compaction_complete","id":"c0ffee00-0000-4000-8000-000000000001","timestamp":"2026-07-21T22:00:06.000Z","data":{{"success":{success},"preCompactionTokens":427,"postCompactionTokens":663,"preCompactionMessagesLength":6,"messagesRemoved":5,"tokensRemoved":-236,"summaryContent":"<overview>made a file</overview>","checkpointNumber":1}}}}"#
+            ),
+            r#"{"type":"user.message","timestamp":"2026-07-21T22:00:07.000Z","data":{"content":"what did you make?"}}"#,
+            r#"{"type":"assistant.turn_start","timestamp":"2026-07-21T22:00:08.000Z","data":{}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-07-21T22:00:09.000Z","data":{"content":"A file."}}"#,
+            r#"{"type":"assistant.turn_end","timestamp":"2026-07-21T22:00:10.000Z","data":{}}"#,
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn successful_compaction_complete_becomes_a_boundary() {
+        let view = to_view(&parse(&compaction_body(true)));
+        let c = view.compactions().next().expect("one compaction");
+        assert_eq!(view.compactions().count(), 1);
+        assert_eq!(c.id, "compact0", "position-stable id, like turn ids");
+        assert_eq!(c.summary.as_deref(), Some("<overview>made a file</overview>"));
+        assert_eq!(c.pre_tokens, Some(427));
+        assert_eq!(c.kept_from, None, "copilot compaction is wholesale");
+
+        // Chain: pre-turns → boundary → post-turns, in item order.
+        let pre_assistant = view.turns().nth(1).unwrap();
+        assert_eq!(c.parent_id.as_deref(), Some(pre_assistant.id.as_str()));
+        let post_user = view.turns().nth(2).unwrap();
+        assert_eq!(post_user.parent_id.as_deref(), Some(c.id.as_str()));
+
+        // The start marker stays observable as a generic event.
+        let start_events = view
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::Event(e) if e.event_type == "session.compaction_start"))
+            .count();
+        assert_eq!(start_events, 1);
+    }
+
+    #[test]
+    fn failed_compaction_complete_stays_a_generic_event() {
+        let view = to_view(&parse(&compaction_body(false)));
+        assert_eq!(view.compactions().count(), 0);
+        let complete_events = view
+            .items
+            .iter()
+            .filter(
+                |i| matches!(i, Item::Event(e) if e.event_type == "session.compaction_complete"),
+            )
+            .count();
+        assert_eq!(complete_events, 1);
+        // With no boundary the post-compaction user turn chains straight to
+        // the previous assistant turn.
+        let post_user = view.turns().nth(2).unwrap();
+        let pre_assistant = view.turns().nth(1).unwrap();
+        assert_eq!(
+            post_user.parent_id.as_deref(),
+            Some(pre_assistant.id.as_str())
         );
     }
 }

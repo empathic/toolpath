@@ -2,6 +2,39 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Real-session hardening: deterministic kept expansion + observed Copilot compaction — 2026-07-23
+
+Follow-ups from driving every harness TUI interactively (real keystrokes,
+real `/compact`) and validating the resulting artifacts.
+
+- **`toolpath-convo`** (fix): `expand_kept_steps` classified each step on
+  the kept walk by whichever structural change `HashMap` iteration
+  returned first. Turn steps carry `file.write` changes next to their
+  `conversation.append`, so the walk aborted on hash order and silently
+  emptied the wire `kept` list about one derive in four on sessions with
+  tool-created files. Steps are now classified by their `conversation.*`
+  change specifically. Regression coverage: a looped unit test, file
+  mutations in the proptest turn generator, and a real captured pi
+  session (`test-fixtures/pi/compacted-real.jsonl`) with a looped
+  stability test.
+- **`toolpath-claude`** (fix): projected compact summaries now carry
+  `isVisibleInTranscriptOnly: true` — without it the Claude TUI renders
+  the entire summary text inline on resume instead of collapsing it
+  (verified in claude 2.1.216).
+- **`toolpath-copilot` 0.2.0**: context compaction is now **observed**
+  (first-hand capture at 1.0.68, `test-fixtures/copilot/compacted-real.jsonl`)
+  and mapped both directions. A successful `session.compaction_complete`
+  becomes the typed `Item::Compaction` (`summary` ← `summaryContent`,
+  `pre_tokens` ← `preCompactionTokens`; wholesale — Copilot reports
+  removed-message counts, not surviving ids, so there is no kept run);
+  `success: false` stays a generic event, as does the
+  `session.compaction_start` bookkeeping marker. The projector emits the
+  observed start/complete pair back. Turn parents now stitch through
+  boundaries so the head-ancestry walk crosses the compaction in order.
+  Docs de-staled: `session.compaction_*` rows are `[observed, 1.0.68]`,
+  compaction token semantics resolved, checkpoint mirroring
+  (`checkpoints/NNN-*.md`) recorded.
+
 ## Compaction kept contract: anchor-based + executable round-trip invariants — 2026-07-16
 
 The `Compaction` kept contract is now anchor-based. The IR carries

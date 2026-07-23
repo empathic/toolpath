@@ -57,7 +57,7 @@
   },
   {
     "name": "toolpath-copilot",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Derive from GitHub Copilot CLI session logs (preview)",
     "docs": "https://docs.rs/toolpath-copilot",
     "crate": "https://crates.io/crates/toolpath-copilot",

@@ -220,10 +220,12 @@ impl Harness for CopilotHarness {
             .map_err(|e| format!("re-read: {}", e))?;
         Ok(())
     }
-    /// Copilot's `events.jsonl` has no verified compaction encoding (the
-    /// event type is unobserved at 1.0.68), so the projector drops
-    /// `Item::Compaction` — same policy as gemini/cursor.
-    fn roundtrips_compaction(&self) -> bool {
+    /// Compaction round-trips as of the 1.0.68 observation: the projector
+    /// emits the `session.compaction_start`/`complete` pair and the reader
+    /// maps a successful complete back to `Item::Compaction`. The encoding
+    /// is wholesale (removed-message counts, no surviving ids), so the kept
+    /// anchor does NOT survive.
+    fn roundtrips_kept(&self) -> bool {
         false
     }
 }

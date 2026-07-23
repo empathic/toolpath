@@ -117,29 +117,56 @@ impl CopilotProjector {
             self.session_start_data(view, &base_ts),
         );
 
-        // Only turns project to Copilot's wire format: foreign `Item::Event`s
-        // and `Item::Compaction`s have no verified `events.jsonl` encoding
-        // (compaction is an unobserved event type there), so they are dropped —
-        // same policy as the Gemini and Cursor projectors.
+        // Turns and compaction boundaries project to Copilot's wire format.
+        // A boundary becomes the observed (1.0.68) event pair:
+        // `session.compaction_start` (payload dropped — its token bookkeeping
+        // is not re-derivable) then `session.compaction_complete` with the
+        // typed fields we carry (`summaryContent`, `preCompactionTokens`).
+        // `Item::Event`s are dropped — same policy as the Gemini and Cursor
+        // projectors; the reader's generic `session.compaction_start` event is
+        // among them, replaced by the marker emitted from the boundary here.
         let mut assistant_turn: usize = 0;
-        for turn in view.turns() {
-            let ts = iso_or(&turn.timestamp, &base_ts);
-            match &turn.role {
-                Role::User => b.push("user.message", &ts, json!({ "content": turn.text })),
-                Role::System => b.push(
-                    "system.message",
-                    &ts,
-                    json!({ "role": "system", "content": turn.text }),
-                ),
-                Role::Assistant => {
-                    let turn_id = assistant_turn.to_string();
-                    let message_id = message_uuid(assistant_turn);
-                    assistant_turn += 1;
-                    self.push_assistant(&mut b, turn, &ts, &turn_id, &message_id);
+        for item in &view.items {
+            match item {
+                toolpath_convo::Item::Turn(turn) => {
+                    let ts = iso_or(&turn.timestamp, &base_ts);
+                    match &turn.role {
+                        Role::User => {
+                            b.push("user.message", &ts, json!({ "content": turn.text }))
+                        }
+                        Role::System => b.push(
+                            "system.message",
+                            &ts,
+                            json!({ "role": "system", "content": turn.text }),
+                        ),
+                        Role::Assistant => {
+                            let turn_id = assistant_turn.to_string();
+                            let message_id = message_uuid(assistant_turn);
+                            assistant_turn += 1;
+                            self.push_assistant(&mut b, turn, &ts, &turn_id, &message_id);
+                        }
+                        // Unknown/other roles (e.g. pi's `tool` role) fold into
+                        // a user message so the forward path reproduces them
+                        // stably.
+                        Role::Other(_) => {
+                            b.push("user.message", &ts, json!({ "content": turn.text }))
+                        }
+                    }
                 }
-                // Unknown/other roles (e.g. pi's `tool` role) fold into a user
-                // message so the forward path reproduces them stably.
-                Role::Other(_) => b.push("user.message", &ts, json!({ "content": turn.text })),
+                toolpath_convo::Item::Compaction(c) => {
+                    let ts = iso_or(&c.timestamp, &base_ts);
+                    b.push("session.compaction_start", &ts, json!({}));
+                    let mut data = Map::new();
+                    data.insert("success".into(), json!(true));
+                    if let Some(pre) = c.pre_tokens {
+                        data.insert("preCompactionTokens".into(), json!(pre));
+                    }
+                    if let Some(summary) = &c.summary {
+                        data.insert("summaryContent".into(), json!(summary));
+                    }
+                    b.push("session.compaction_complete", &ts, Value::Object(data));
+                }
+                toolpath_convo::Item::Event(_) => {}
             }
         }
 
