@@ -834,15 +834,16 @@ fn remote_ship_command(project_dir_name: &str, session_id: &str) -> String {
 }
 
 /// The far-side launch command: `claude -r <id>`, prefixed with a
-/// `cd <cwd> &&` when a cwd was pinned so the harness starts where the
-/// session was incepted.
+/// `mkdir -p <cwd> && cd <cwd> &&` when a cwd was pinned so the harness
+/// starts where the shipped session is keyed — creating the directory
+/// first, since resuming into a fresh one is the normal case.
 fn remote_launch_command(session_id: &str, cwd: Option<&std::path::Path>) -> String {
     let launch = format!("claude -r {}", shell_single_quote(session_id));
     match cwd {
-        Some(dir) => format!(
-            "cd {} && {launch}",
-            shell_single_quote(&dir.display().to_string())
-        ),
+        Some(dir) => {
+            let dir = shell_single_quote(&dir.display().to_string());
+            format!("mkdir -p {dir} && cd {dir} && {launch}")
+        }
         None => launch,
     }
 }
@@ -1006,9 +1007,11 @@ mod tests {
     #[test]
     fn remote_launch_command_quotes_id_and_cds() {
         assert_eq!(remote_launch_command("sess-1", None), "claude -r 'sess-1'");
+        // The pinned cwd may not exist on the remote (resuming into a
+        // fresh directory is the normal case) — create it before cd'ing.
         assert_eq!(
             remote_launch_command("sess-1", Some(std::path::Path::new("/srv/work"))),
-            "cd '/srv/work' && claude -r 'sess-1'"
+            "mkdir -p '/srv/work' && cd '/srv/work' && claude -r 'sess-1'"
         );
     }
 
