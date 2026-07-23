@@ -233,3 +233,60 @@ fn projector_output_is_re_parseable_by_reader() {
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
 }
+
+fn compacted_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("test-fixtures")
+        .join("pi")
+        .join("compacted-real.jsonl")
+}
+
+/// Real compacted session (captured from pi interactively, 2026-07-21):
+/// model changes, tool-call turns that create files, a manual compaction
+/// with a six-turn kept run, and a post-compaction exchange. The kept
+/// turns' steps carry `file.write` changes next to `conversation.append` —
+/// the shape whose hash-order-dependent classification silently emptied
+/// the wire `kept` list about one run in four. Looped: each iteration
+/// builds fresh maps with fresh hash keys.
+#[test]
+fn compacted_fixture_derive_extract_derive_is_stable() {
+    let session =
+        reader::read_session_from_file(&compacted_fixture_path()).expect("read compacted fixture");
+    let view = session_to_view(&session);
+    let compaction = view
+        .compactions()
+        .next()
+        .expect("fixture must contain a compaction");
+    assert!(
+        compaction.kept_from.is_some(),
+        "fixture compaction must carry a kept anchor"
+    );
+
+    for _ in 0..32 {
+        let gen1 = derive_path(&view, &DeriveConfig::default());
+        let gen2 = derive_path(&extract_conversation(&gen1), &DeriveConfig::default());
+        let v1 = serde_json::to_value(&gen1).expect("serialize gen1");
+        let v2 = serde_json::to_value(&gen2).expect("serialize gen2");
+        assert_eq!(v1, v2, "derive → extract → derive changed the document");
+
+        let kept = gen1
+            .steps
+            .iter()
+            .find_map(|s| {
+                s.change.values().find_map(|ch| {
+                    ch.structural
+                        .as_ref()
+                        .filter(|st| st.change_type == "conversation.compact")
+                        .and_then(|st| st.extra.get("kept"))
+                })
+            })
+            .expect("compact step must carry a kept list");
+        assert_eq!(
+            kept.as_array().map(Vec::len),
+            Some(6),
+            "kept run must cover all six pre-compaction turns"
+        );
+    }
+}

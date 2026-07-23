@@ -41,11 +41,14 @@ fn turn(id: &str, parent: Option<&str>, role: Role, text: &str) -> Turn {
 /// One generated stream element, before ids/parents are resolved.
 #[derive(Debug, Clone)]
 enum Elem {
-    /// (id-pool slot, parent slot among earlier elems or None, kind).
-    /// Kind: 0 = user, 1 = assistant with a model, 2 = harness-synthetic
-    /// assistant (`model == "<synthetic>"`, e.g. an API-error message),
-    /// 3 = assistant with no model.
-    Turn(u8, Option<u8>, u8),
+    /// (id-pool slot, parent slot among earlier elems or None, kind,
+    /// file-mutation count). Kind: 0 = user, 1 = assistant with a model,
+    /// 2 = harness-synthetic assistant (`model == "<synthetic>"`, e.g. an
+    /// API-error message), 3 = assistant with no model. Mutations give the
+    /// step sibling `file.write` changes next to its `conversation.append` —
+    /// the shape that made hash-order step classification (the pi kept-run
+    /// loss) reachable.
+    Turn(u8, Option<u8>, u8, u8),
     /// (has native id?, parent slot or None)
     Event(bool, Option<u8>),
     /// (parent slot or None, kept-anchor slot or None, auto?)
@@ -54,8 +57,8 @@ enum Elem {
 
 fn elem() -> impl Strategy<Value = Elem> {
     prop_oneof![
-        4 => (0u8..6, proptest::option::of(0u8..8), 0u8..4)
-            .prop_map(|(id, p, kind)| Elem::Turn(id, p, kind)),
+        4 => (0u8..6, proptest::option::of(0u8..8), 0u8..4, 0u8..4)
+            .prop_map(|(id, p, kind, muts)| Elem::Turn(id, p, kind, muts)),
         1 => (any::<bool>(), proptest::option::of(0u8..8))
             .prop_map(|(has_id, p)| Elem::Event(has_id, p)),
         1 => (proptest::option::of(0u8..8), proptest::option::of(0u8..8), any::<bool>())
@@ -83,7 +86,7 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
     let mut compact_n = 0usize;
     for e in elems {
         match e {
-            Elem::Turn(id_slot, p, kind) => {
+            Elem::Turn(id_slot, p, kind, muts) => {
                 let id = format!("t{id_slot}");
                 let parent = resolve(p, &ids);
                 let role = if kind == 0 { Role::User } else { Role::Assistant };
@@ -94,6 +97,17 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
                     2 => Some("<synthetic>".into()),
                     _ => None,
                 };
+                t.file_mutations = (0..muts)
+                    .map(|i| toolpath_convo::FileMutation {
+                        path: format!("f{i}.txt"),
+                        tool_id: None,
+                        operation: Some("write".into()),
+                        raw_diff: None,
+                        before: None,
+                        after: Some(format!("content-{id_slot}-{i}")),
+                        rename_to: None,
+                    })
+                    .collect();
                 items.push(Item::Turn(t));
                 ids.push(id);
             }

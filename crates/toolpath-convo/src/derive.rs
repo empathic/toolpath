@@ -736,11 +736,16 @@ fn expand_kept_steps(
         }
         let Some(&idx) = by_id.get(&id) else { break };
         let step = &steps[idx];
+        // A turn step carries file.write changes alongside its
+        // conversation.append; `change` is a HashMap, so classify by the
+        // step's conversation.* change specifically — taking whichever
+        // structural iterates first made the walk abort on hash order.
         let change_type = step
             .change
             .values()
-            .find_map(|ch| ch.structural.as_ref())
-            .map(|s| s.change_type.as_str());
+            .filter_map(|ch| ch.structural.as_ref())
+            .map(|s| s.change_type.as_str())
+            .find(|t| t.starts_with("conversation."));
         match change_type {
             Some("conversation.append") => {
                 kept.push(id.clone());
@@ -2077,6 +2082,58 @@ mod tests {
 
         // Turn b rewired through the boundary: its parent is the compact step.
         assert_eq!(path.steps[2].step.parents, vec!["c".to_string()]);
+    }
+
+    #[test]
+    fn test_kept_expansion_survives_turns_with_file_mutations() {
+        // Turns in the kept run whose steps carry sibling `file.write`
+        // changes next to the `conversation.append`. `step.change` is a
+        // HashMap, so classifying the step by whichever structural change
+        // iterates first made the kept walk abort when a file change came
+        // up before the conversation change — a per-process coin flip.
+        // Looped: each iteration builds fresh maps with fresh hash keys,
+        // so a hash-order regression fails the loop almost surely.
+        for _ in 0..64 {
+            let mutations = |n: usize| {
+                (0..n)
+                    .map(|i| crate::FileMutation {
+                        path: format!("f{i}.txt"),
+                        tool_id: None,
+                        operation: Some("write".into()),
+                        raw_diff: None,
+                        before: None,
+                        after: Some(format!("body-{i}")),
+                        rename_to: None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let mut t1 = base_turn("t1", Role::User);
+            t1.file_mutations = mutations(3);
+            let mut t2 = base_turn("t2", Role::Assistant);
+            t2.parent_id = Some("t1".into());
+            t2.model = Some("m".into());
+            t2.file_mutations = mutations(2);
+            let c = Compaction {
+                id: "c".into(),
+                parent_id: Some("t2".into()),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                trigger: Some(CompactionTrigger::Auto),
+                summary: Some("s".into()),
+                pre_tokens: None,
+                kept_from: Some("t1".into()),
+            };
+            let mut t3 = base_turn("t3", Role::User);
+            t3.parent_id = Some("c".into());
+
+            let mut view = view_with(vec![t1, t2]);
+            view.items.push(Item::Compaction(c));
+            view.items.push(Item::Turn(t3));
+
+            let path = derive_path(&view, &DeriveConfig::default());
+            let sc = conv_change(&path.steps[2]);
+            assert_eq!(sc.change_type, "conversation.compact");
+            assert_eq!(sc.extra["kept"], serde_json::json!(["t1", "t2"]));
+        }
     }
 
     #[test]
