@@ -358,9 +358,10 @@ fn explicit_harness_not_on_path_errors() {
 // ── Remote resume over SSH ──────────────────────────────────────────
 
 /// With `--remote <ssh url>`, resume should be dispatched to the remote
-/// host over SSH rather than exec'ing a local harness: the recorded
-/// invocation must be `ssh`, target the remote host, and run `path
-/// resume` on the far side.
+/// host over SSH rather than exec'ing a local harness: the JSON is piped
+/// into `path p incept claude` on the remote, and the final recorded
+/// invocation must be `ssh -t` targeting the remote host and launching
+/// `claude -r <id>` directly (id computed host-side from the doc).
 #[test]
 fn remote_flag_dispatches_resume_over_ssh() {
     let _env = env_lock();
@@ -377,6 +378,24 @@ fn remote_flag_dispatches_resume_over_ssh() {
     let recorder = RecordingExec::default();
     run_with_strategy(args, &recorder).unwrap();
 
+    // Hydration: the resolved JSON is piped into remote incept.
+    let staged = recorder.staged();
+    assert_eq!(staged.len(), 1, "exactly one incept pipe");
+    let (incept_inv, stdin) = &staged[0];
+    assert!(
+        incept_inv
+            .args
+            .iter()
+            .any(|a| a.starts_with("path p incept claude")),
+        "remote should hydrate via `path p incept claude`, got {:?}",
+        incept_inv.args
+    );
+    assert!(
+        stdin.contains("claude-code://resume-remote-int"),
+        "incept stdin should carry the resolved doc"
+    );
+
+    // Launch: interactive ssh -t running the harness directly.
     let cap = recorder.captured();
     assert_eq!(
         cap.binary, "ssh",
@@ -389,8 +408,10 @@ fn remote_flag_dispatches_resume_over_ssh() {
         cap.args
     );
     assert!(
-        cap.args.iter().any(|a| a.contains("path resume")),
-        "ssh should invoke `path resume` on the remote, got {:?}",
+        cap.args
+            .iter()
+            .any(|a| a.contains("claude -r 'resume-remote-int'")),
+        "ssh should launch `claude -r <id>` on the remote, got {:?}",
         cap.args
     );
 }

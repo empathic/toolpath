@@ -37,31 +37,35 @@
 //!
 //! ## Remote (`--remote ssh://[user@]host[:port][/path]`)
 //!
-//! v1 (two-phase, host resolves): the **host** resolves the document
-//! locally, ships the hydrated JSON to the remote, and the remote only
-//! projects + execs — so the remote needs `path` and the target harness
-//! installed, but no Pathbase access. Steps ([`run_remote`]):
+//! v2 (host resolves, remote incepts): the **host** resolves the
+//! document locally, pipes the hydrated JSON into `path p incept` on the
+//! remote, and launches the harness directly — so the remote needs
+//! `path` (for incept) and the harness installed, but no Pathbase
+//! access and no temp files. Steps ([`run_remote`]):
 //!
 //! 1. **Resolve + validate on the host** — same `resolve_input` /
 //!    `ensure_path_with_agent` as a local resume, so a bad or non-agent
-//!    document fails fast on the host, not deep inside SSH.
+//!    document fails fast on the host, not deep inside SSH. The host
+//!    also computes the session id here: it's a pure function of the
+//!    document ([`crate::cmd_export::claude_session_id`]), so both
+//!    sides projecting the same bytes agree on it.
 //! 2. **Version preflight** — `ssh host 'path --version'`, captured and
 //!    echoed as `host path: <X> / remote path: <Y>`. Confirms SSH is
 //!    reachable and `path` is installed; a failed probe aborts here
 //!    rather than dropping the user into a doomed session.
-//! 3. **Stage** — `ssh host 'cat > /tmp/toolpath-resume-<uuid>.json'`
-//!    with the resolved JSON on stdin. Cleanup is best-effort (the next
-//!    step `execvp`s the harness, so a trailing `rm` would never run;
-//!    the OS reaps `/tmp`).
-//! 4. **Resume** — `execvp` an interactive `ssh -t host 'path resume
-//!    <tempfile> --harness X [-C cwd]'`. The `-t` gives the remote
-//!    harness a real terminal.
+//! 3. **Hydrate** — `ssh host 'path p incept claude [--project <cwd>]'`
+//!    with the resolved JSON on stdin; incept writes the session into
+//!    the remote's Claude project layout.
+//! 4. **Launch** — `execvp` an interactive `ssh -t host '[cd <cwd> && ]
+//!    claude -r <id>'`. The `-t` gives the remote harness a real
+//!    terminal.
 //!
-//! `--harness` is required with `--remote`: the host can't run the
-//! remote's picker, so the target must be pinned. Only `--cwd` is
-//! forwarded alongside the staged file; the resolution-only flags
-//! (`--no-cache`/`--force`/`--url`) are moot once the doc is a local
-//! file on the remote and are dropped.
+//! `--harness` is required with `--remote` (and currently must be
+//! `claude` — incept and the id computation are Claude-specific). The
+//! resolution-only flags (`--no-cache`/`--force`/`--url`) act on the
+//! host and are never forwarded. `--cwd` does double duty as incept's
+//! `--project` dir and the launch's `cd` target; absent, both default
+//! to the remote's ssh cwd (`$HOME`).
 //!
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
 //! for the full design.
@@ -127,9 +131,9 @@ pub fn run(args: ResumeArgs) -> Result<()> {
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
-    // v0 remote resume: forward `path resume <input>` to a remote host
-    // over SSH, where `path` is installed and does the resolve itself.
-    // No local resolution or harness projection happens.
+    // Remote resume: resolve here, hydrate the session on the remote via
+    // `path p incept`, and launch the harness over an interactive SSH.
+    // See the module docs' "Remote" section and `run_remote`.
     if let Some(remote) = args.remote.as_deref() {
         return run_remote(&args, remote, exec);
     }
@@ -555,9 +559,9 @@ pub trait ExecStrategy {
     fn capture(&self, binary: &str, args: &[String]) -> Result<String>;
 
     /// Run a command, feeding `input` to its stdin, and wait for it to
-    /// finish. Used to stage the resolved document onto the remote
-    /// (`ssh host 'cat > <tempfile>'`). Errors if the command can't be
-    /// spawned or exits non-zero.
+    /// finish. Used to hydrate the resolved document on the remote
+    /// (`ssh host 'path p incept claude …'`). Errors if the command
+    /// can't be spawned or exits non-zero.
     fn pipe(&self, binary: &str, args: &[String], input: &[u8]) -> Result<()>;
 }
 
@@ -732,32 +736,48 @@ pub(crate) fn exec_harness(
     strategy.exec(binary, args, cwd)
 }
 
-/// v1 remote resume: the host resolves the document locally, stages the
-/// JSON onto the remote via `ssh host 'cat > <tempfile>'`, then hands off
-/// to an interactive `ssh -t host 'path resume <tempfile> …'`. The remote
-/// needs `path` + the target harness installed — but no Pathbase access,
-/// since the host already resolved the doc.
+/// v2 remote resume: the host resolves the document locally, pipes the
+/// JSON into `ssh host 'path p incept claude …'` (which hydrates the
+/// session into the remote's Claude layout), then hands off to an
+/// interactive `ssh -t host 'claude -r <id>'`. The remote needs `path`
+/// (for incept) + the harness installed — but no Pathbase access, since
+/// the host already resolved the doc.
+///
+/// The host knows `<id>` without asking the remote: the Claude session
+/// id is a pure function of the document (the projector takes it
+/// verbatim from the conversation view), so projecting the same bytes on
+/// both sides yields the same id — see [`crate::cmd_export::claude_session_id`].
 ///
 /// Steps:
-/// 1. resolve + validate the doc on the host (fail fast on bad input);
+/// 1. resolve + validate the doc on the host (fail fast on bad input),
+///    and compute the session id locally;
 /// 2. version preflight (`ssh host 'path --version'`), echoing both
 ///    versions and aborting if `path`/SSH is unreachable;
-/// 3. stage the JSON to a unique `/tmp` file on the remote;
-/// 4. `execvp` the interactive `ssh -t … path resume <tempfile>`.
+/// 3. hydrate: pipe the JSON into `path p incept claude [--project …]`;
+/// 4. `execvp` the interactive `ssh -t … '[cd … && ]claude -r <id>'`.
+///
+/// `--cwd` does double duty: it is incept's `--project` dir AND the `cd`
+/// target for the launch (they must match for `claude -r` to find the
+/// session). Absent, both default to the remote's ssh cwd (`$HOME`).
 fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Result<()> {
-    // The remote's interactive picker runs over the `-t` TTY, but the host
-    // can't infer what's installed there, so pin the harness explicitly.
-    if args.harness.is_none() {
-        anyhow::bail!(
+    // The remote's interactive picker can't run from here, so pin the
+    // harness explicitly. Only Claude is wired up so far: incept and the
+    // host-side session-id computation are Claude-specific.
+    match args.harness {
+        None => anyhow::bail!(
             "--remote requires --harness <X>: the host can't run the remote's \
              harness picker, so the target must be pinned"
-        );
+        ),
+        Some(HarnessArg::Claude) => {}
+        Some(_) => anyhow::bail!("remote resume currently supports only --harness claude"),
     }
 
     // 1. Resolve + validate locally so a bad document fails on the host,
-    //    not deep inside an SSH session.
+    //    not deep inside an SSH session — and compute the session id the
+    //    remote's projection will deterministically arrive at.
     let (graph, _source) = resolve_input(args)?;
-    ensure_path_with_agent(&graph)?;
+    let path = ensure_path_with_agent(&graph)?;
+    let session_id = crate::cmd_export::claude_session_id(path)?;
     let json = graph
         .to_json()
         .map_err(|e| anyhow::anyhow!("serialize resolved document: {e}"))?;
@@ -776,60 +796,57 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
         remote_version.trim()
     );
 
-    // 3. Stage the JSON to a unique remote temp file. Cleanup is
-    //    best-effort: the interactive resume `execvp`s the harness, so a
-    //    trailing `rm` would never run; the OS reaps /tmp.
-    let remote_path = remote_temp_path();
-    let stage_cmd = format!("cat > {}", shell_single_quote(&remote_path));
-    let (stage_bin, stage_argv) = ssh_invocation(remote, &stage_cmd)?;
-    exec.pipe(&stage_bin, &stage_argv, json.as_bytes())
-        .with_context(|| format!("staging document to {remote}:{remote_path}"))?;
-    eprintln!("Staged session to {remote_path}");
+    // 3. Hydrate: pipe the JSON into remote incept, which writes the
+    //    session into the remote's Claude project layout.
+    let incept_cmd = remote_incept_command(args.cwd.as_deref());
+    let (incept_bin, incept_argv) = ssh_invocation(remote, &incept_cmd)?;
+    exec.pipe(&incept_bin, &incept_argv, json.as_bytes())
+        .with_context(|| {
+            format!(
+                "hydrating session on {remote} via `{incept_cmd}` — does the \
+                 remote `path` support `p incept`?"
+            )
+        })?;
+    eprintln!("Incepted session {session_id} on {remote}");
 
-    // 4. Interactive resume against the staged file, with a real TTY.
-    let remote_cmd = remote_staged_command(args, &remote_path);
-    let (binary, argv) = ssh_invocation_tty(remote, &remote_cmd, true)?;
+    // 4. Interactive launch of the harness against the incepted session,
+    //    with a real TTY.
+    let launch_cmd = remote_launch_command(&session_id, args.cwd.as_deref());
+    let (binary, argv) = ssh_invocation_tty(remote, &launch_cmd, true)?;
     let cwd = std::env::current_dir()?;
     exec_harness(&binary, &argv, &cwd, exec)
 }
 
-/// A unique remote temp path for the staged document. Random v4 UUID so
-/// concurrent resumes to the same host don't collide.
-fn remote_temp_path() -> String {
-    format!("/tmp/toolpath-resume-{}.json", uuid::Uuid::new_v4())
+/// The far-side hydrate command: `path p incept claude`, targeting
+/// `--project <cwd>` when a cwd was pinned. Without one, incept defaults
+/// to the remote process cwd — `$HOME` over ssh, matching where the
+/// `cd`-less launch lands.
+fn remote_incept_command(cwd: Option<&std::path::Path>) -> String {
+    match cwd {
+        Some(dir) => format!(
+            "path p incept claude --project {}",
+            shell_single_quote(&dir.display().to_string())
+        ),
+        None => "path p incept claude".to_string(),
+    }
 }
 
-/// Build the far-side `path resume <staged-file> …` command for a v1
-/// remote resume. The document is already staged on the remote, so this
-/// points at the temp file rather than the original input, and drops the
-/// resolution-only flags (`--no-cache`/`--force`/`--url`) which are moot
-/// once the doc is a local file on the remote. `--cwd` still forwards.
-fn remote_staged_command(args: &ResumeArgs, remote_path: &str) -> String {
-    let mut parts = vec![shell_single_quote(remote_path)];
-    if let Some(harness) = args.harness {
-        parts.push("--harness".to_string());
-        parts.push(harness_value(harness));
+/// The far-side launch command: `claude -r <id>`, prefixed with a
+/// `cd <cwd> &&` when a cwd was pinned so the harness starts where the
+/// session was incepted.
+fn remote_launch_command(session_id: &str, cwd: Option<&std::path::Path>) -> String {
+    let launch = format!("claude -r {}", shell_single_quote(session_id));
+    match cwd {
+        Some(dir) => format!(
+            "cd {} && {launch}",
+            shell_single_quote(&dir.display().to_string())
+        ),
+        None => launch,
     }
-    if let Some(cwd) = args.cwd.as_ref() {
-        parts.push("--cwd".to_string());
-        parts.push(shell_single_quote(&cwd.display().to_string()));
-    }
-    format!("path resume {}", parts.join(" "))
-}
-
-/// The lowercase CLI value for a `--harness` choice (e.g. `claude`),
-/// taken from clap's own value table so it stays in sync with the enum.
-fn harness_value(harness: HarnessArg) -> String {
-    use clap::ValueEnum;
-    harness
-        .to_possible_value()
-        .expect("HarnessArg has no skipped variants")
-        .get_name()
-        .to_string()
 }
 
 /// Build a non-interactive `ssh` invocation (no `-t`). Used for the
-/// version probe and the `cat >` staging step.
+/// version probe and the incept hydration step.
 fn ssh_invocation(remote: &str, remote_cmd: &str) -> Result<(String, Vec<String>)> {
     ssh_invocation_tty(remote, remote_cmd, false)
 }
@@ -901,20 +918,6 @@ fn looks_like_pathbase_shorthand(s: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Minimal `ResumeArgs` with only `input` set — the base for
-    /// exercising `remote_resume_command` arg forwarding.
-    fn remote_args(input: &str) -> ResumeArgs {
-        ResumeArgs {
-            input: input.to_string(),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
-            remote: Some("ssh://h".to_string()),
-        }
-    }
-
     #[test]
     fn ssh_invocation_parses_user_host_port_and_path() {
         let (binary, argv) = ssh_invocation(
@@ -970,52 +973,21 @@ mod tests {
     }
 
     #[test]
-    fn remote_staged_command_points_at_staged_file_with_harness() {
-        let mut args = remote_args("owner/repo/slug");
-        args.harness = Some(HarnessArg::Claude);
-        let cmd = remote_staged_command(&args, "/tmp/toolpath-resume-abc.json");
+    fn remote_incept_command_with_and_without_cwd() {
+        assert_eq!(remote_incept_command(None), "path p incept claude");
         assert_eq!(
-            cmd,
-            "path resume '/tmp/toolpath-resume-abc.json' --harness claude"
+            remote_incept_command(Some(std::path::Path::new("/srv/work"))),
+            "path p incept claude --project '/srv/work'"
         );
     }
 
     #[test]
-    fn remote_staged_command_forwards_cwd_but_drops_resolution_flags() {
-        // The doc is already a local file on the remote, so --no-cache /
-        // --force / --url are moot and must not be forwarded. --cwd still is.
-        let mut args = remote_args("owner/repo/slug");
-        args.harness = Some(HarnessArg::Claude);
-        args.no_cache = true;
-        args.force = true;
-        args.url = Some("https://pb.example".to_string());
-        args.cwd = Some(std::path::PathBuf::from("/srv/work"));
-        let cmd = remote_staged_command(&args, "/tmp/staged.json");
-        assert!(cmd.contains("--cwd '/srv/work'"), "missing --cwd: {cmd}");
-        assert!(!cmd.contains("--no-cache"), "leaked --no-cache: {cmd}");
-        assert!(!cmd.contains("--force"), "leaked --force: {cmd}");
-        assert!(!cmd.contains("--url"), "leaked --url: {cmd}");
-    }
-
-    #[test]
-    fn remote_staged_command_never_forwards_the_remote_flag() {
-        let mut args = remote_args("x");
-        args.harness = Some(HarnessArg::Claude);
-        args.remote = Some("ssh://elsewhere:22".to_string());
-        let cmd = remote_staged_command(&args, "/tmp/s.json");
-        assert!(
-            !cmd.contains("--remote") && !cmd.contains("elsewhere"),
-            "remote flag must stay host-side: {cmd}"
+    fn remote_launch_command_quotes_id_and_cds() {
+        assert_eq!(remote_launch_command("sess-1", None), "claude -r 'sess-1'");
+        assert_eq!(
+            remote_launch_command("sess-1", Some(std::path::Path::new("/srv/work"))),
+            "cd '/srv/work' && claude -r 'sess-1'"
         );
-    }
-
-    #[test]
-    fn remote_temp_path_is_unique_and_well_formed() {
-        let a = remote_temp_path();
-        let b = remote_temp_path();
-        assert_ne!(a, b, "temp paths must be unique per resume");
-        assert!(a.starts_with("/tmp/toolpath-resume-"), "path: {a}");
-        assert!(a.ends_with(".json"), "path: {a}");
     }
 
     /// Write a minimal agent-bearing Path to a temp file and return
@@ -1038,11 +1010,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_resume_probes_stages_then_dispatches() {
-        // v1: host resolves the doc locally, probes `path --version`, stages
-        // the JSON via `cat >`, then dispatches an interactive `ssh -t`
-        // resume against the staged file. All three go through the
-        // ExecStrategy so we can capture them.
+    fn remote_resume_probes_incepts_then_launches() {
+        // v2: host resolves the doc locally, probes `path --version`, pipes
+        // the JSON into `path p incept claude` on the remote, then launches
+        // an interactive `ssh -t … claude -r <id>` where <id> is computed
+        // host-side from the document (deterministic: same bytes → same id).
         let td = tempfile::tempdir().unwrap();
         let rec = RecordingExec::default();
         run_with_strategy(remote_args_with_doc(td.path()), &rec).unwrap();
@@ -1056,48 +1028,53 @@ mod tests {
             probes[0].args
         );
 
-        // 2. staging: `ssh … 'cat > <tempfile>'` with the JSON on stdin.
+        // 2. incept: `ssh … 'path p incept claude'` with the JSON on stdin.
         let staged = rec.staged();
-        assert_eq!(staged.len(), 1, "exactly one stage step");
-        let (stage_inv, stdin) = &staged[0];
-        assert_eq!(stage_inv.binary, "ssh");
-        let cat_arg = stage_inv
-            .args
-            .iter()
-            .find(|a| a.starts_with("cat > "))
-            .expect("stage should run `cat > <tempfile>`");
+        assert_eq!(staged.len(), 1, "exactly one incept step");
+        let (incept_inv, stdin) = &staged[0];
+        assert_eq!(incept_inv.binary, "ssh");
         assert!(
-            cat_arg.contains("/tmp/toolpath-resume-"),
-            "stage target: {cat_arg}"
+            incept_inv
+                .args
+                .iter()
+                .any(|a| a.starts_with("path p incept claude")),
+            "incept argv: {:?}",
+            incept_inv.args
         );
-        // The staged bytes are the resolved document.
+        // The piped bytes are the resolved document.
         assert!(
             stdin.contains("claude-code://remote-v1-test"),
             "stdin: {stdin}"
         );
 
-        // 3. dispatch: interactive `ssh -t … path resume <tempfile> --harness`.
+        // 3. launch: interactive `ssh -t … claude -r '<id>'` with the id
+        // derived from the doc's `claude-code://remote-v1-test` key.
         let cap = rec.captured();
         assert_eq!(cap.binary, "ssh");
         assert!(
             cap.args.iter().any(|a| a == "-t"),
-            "dispatch needs -t: {:?}",
+            "launch needs -t: {:?}",
             cap.args
         );
-        let resume_arg = cap
-            .args
-            .iter()
-            .find(|a| a.starts_with("path resume"))
-            .expect("dispatch should run `path resume`");
         assert!(
-            resume_arg.contains("/tmp/toolpath-resume-") && resume_arg.contains("--harness claude"),
-            "dispatch cmd: {resume_arg}"
+            cap.args.iter().any(|a| a == "claude -r 'remote-v1-test'"),
+            "launch cmd: {:?}",
+            cap.args
         );
-        // The staged file the dispatch resumes must be the one we cat'd.
+    }
+
+    #[test]
+    fn remote_resume_rejects_non_claude_harness() {
+        let td = tempfile::tempdir().unwrap();
+        let mut args = remote_args_with_doc(td.path());
+        args.harness = Some(HarnessArg::Codex);
+        let rec = RecordingExec::default();
+        let err = run_with_strategy(args, &rec).unwrap_err();
         assert!(
-            cat_arg.contains(resume_arg.split('\'').nth(1).unwrap()),
-            "dispatch must target the staged file"
+            err.to_string().contains("claude"),
+            "error should name the supported harness: {err}"
         );
+        assert!(rec.probes().is_empty(), "must fail before probing");
     }
 
     #[test]
