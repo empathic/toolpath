@@ -64,9 +64,14 @@
 //! 4. **Launch** — `execvp` an interactive `ssh -t host '[cd <cwd> && ]
 //!    claude -r <id>'`. The `-t` gives the remote harness a real
 //!    terminal; this is the one step that stays on the real `ssh`
-//!    binary (it needs the user's TTY and ssh config). libssh2 uses
-//!    agent auth and does not read `~/.ssh/config`/`known_hosts`; the
-//!    launch does.
+//!    binary (it needs the user's TTY and full ssh config). The
+//!    transport honors the `HostName`/`User`/`Port`/`IdentityFile`
+//!    subset of `~/.ssh/config` (natively parsed — see
+//!    [`parse_ssh_config`]) with URL values winning; configured
+//!    identities are matched against the agent by public-key blob, so
+//!    key-pinned hosts (exe.dev-style, where the key IS the identity)
+//!    authenticate as the right account. `known_hosts` is still not
+//!    checked on the transport connection.
 //!
 //! `--harness` is required with `--remote` (and currently must be
 //! `claude` — the projection and layout knowledge are Claude-specific).
@@ -133,7 +138,7 @@ pub struct ResumeArgs {
 }
 
 pub fn run(args: ResumeArgs) -> Result<()> {
-    run_with_strategy(args, &RealExec)
+    run_with_strategy(args, &RealExec::default())
 }
 
 /// Internal entry point that the integration tests call with a
@@ -590,7 +595,24 @@ pub trait ExecStrategy {
 /// Production implementation. On Unix this never returns on success
 /// (the current process is replaced); on Windows it spawns the child,
 /// waits, and propagates the exit code.
-pub struct RealExec;
+///
+/// The remote-transport methods share one authenticated SSH connection
+/// (cached across calls) and prefer SFTP; when the server won't open an
+/// SFTP channel (some custom sshds don't, e.g. exe.dev VMs), they fall
+/// back to the SCP protocol for writes and a minimal exec channel for
+/// `pwd`/`mkdir -p` — all still through libssh2, no external binaries.
+#[derive(Default)]
+pub struct RealExec {
+    conn: std::sync::Mutex<Option<RemoteConn>>,
+}
+
+/// A live authenticated session plus the SFTP channel if the server
+/// offers one (`None` ⇒ SCP/exec fallback).
+struct RemoteConn {
+    key: SshTarget,
+    sess: ssh2::Session,
+    sftp: Option<ssh2::Sftp>,
+}
 
 impl ExecStrategy for RealExec {
     fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()> {
@@ -631,69 +653,343 @@ impl ExecStrategy for RealExec {
     }
 
     fn remote_home(&self, target: &SshTarget) -> Result<String> {
-        let sftp = sftp_channel(target)?;
-        let home = sftp
-            .realpath(std::path::Path::new("."))
-            .context("resolve remote home directory")?;
-        Ok(home.to_string_lossy().to_string())
+        self.with_conn(target, |conn| match &conn.sftp {
+            Some(sftp) => {
+                let home = sftp
+                    .realpath(std::path::Path::new("."))
+                    .context("resolve remote home directory")?;
+                Ok(home.to_string_lossy().to_string())
+            }
+            None => {
+                let out = exec_channel_capture(&conn.sess, "pwd")?;
+                let home = out.trim().to_string();
+                if home.is_empty() {
+                    anyhow::bail!("remote `pwd` returned nothing");
+                }
+                Ok(home)
+            }
+        })
     }
 
     fn remote_mkdirs(&self, target: &SshTarget, dir: &str) -> Result<()> {
-        let sftp = sftp_channel(target)?;
-        // Walk the components, creating as we go — `mkdir -p` semantics.
-        let mut cur = std::path::PathBuf::new();
-        for comp in std::path::Path::new(dir).components() {
-            cur.push(comp);
-            if cur.parent().is_none() {
-                continue; // skip the root component
+        self.with_conn(target, |conn| match &conn.sftp {
+            Some(sftp) => {
+                // Walk the components, creating as we go — `mkdir -p`
+                // semantics.
+                let mut cur = std::path::PathBuf::new();
+                for comp in std::path::Path::new(dir).components() {
+                    cur.push(comp);
+                    if cur.parent().is_none() {
+                        continue; // skip the root component
+                    }
+                    if sftp.stat(&cur).is_ok() {
+                        continue; // already exists
+                    }
+                    sftp.mkdir(&cur, 0o755)
+                        .with_context(|| format!("create remote dir {}", cur.display()))?;
+                }
+                Ok(())
             }
-            if sftp.stat(&cur).is_ok() {
-                continue; // already exists
+            None => {
+                exec_channel_capture(&conn.sess, &format!("mkdir -p {}", shell_single_quote(dir)))
+                    .with_context(|| format!("create remote dir {dir}"))?;
+                Ok(())
             }
-            sftp.mkdir(&cur, 0o755)
-                .with_context(|| format!("create remote dir {}", cur.display()))?;
-        }
-        Ok(())
+        })
     }
 
     fn remote_write(&self, target: &SshTarget, path: &str, data: &[u8]) -> Result<()> {
         use std::io::Write;
-        let sftp = sftp_channel(target)?;
-        let mut f = sftp
-            .create(std::path::Path::new(path))
-            .with_context(|| format!("create remote file {path}"))?;
-        f.write_all(data)
-            .with_context(|| format!("write remote file {path}"))?;
-        Ok(())
+        self.with_conn(target, |conn| match &conn.sftp {
+            Some(sftp) => {
+                let mut f = sftp
+                    .create(std::path::Path::new(path))
+                    .with_context(|| format!("create remote file {path}"))?;
+                f.write_all(data)
+                    .with_context(|| format!("write remote file {path}"))?;
+                Ok(())
+            }
+            None => {
+                // SCP protocol upload — libssh2's scp_send, no external
+                // binary.
+                let mut ch = conn
+                    .sess
+                    .scp_send(std::path::Path::new(path), 0o644, data.len() as u64, None)
+                    .with_context(|| format!("open SCP upload to {path}"))?;
+                ch.write_all(data)
+                    .with_context(|| format!("SCP write to {path}"))?;
+                ch.send_eof().context("SCP finish (eof)")?;
+                ch.wait_eof().context("SCP finish (wait eof)")?;
+                ch.close().context("SCP close")?;
+                ch.wait_close().context("SCP close (wait)")?;
+                Ok(())
+            }
+        })
     }
 }
 
-/// Open an authenticated SFTP channel to `target`: TCP connect,
-/// handshake, then SSH-agent auth as the URL's user (or `$USER`). Each
-/// call opens a fresh connection — the remote flow makes a handful of
-/// calls, so pooling isn't worth the state.
+impl RealExec {
+    /// Run `f` against the cached connection for `target`, dialing (and
+    /// probing for SFTP support) on first use or when the target
+    /// changed.
+    fn with_conn<T>(
+        &self,
+        target: &SshTarget,
+        f: impl FnOnce(&RemoteConn) -> Result<T>,
+    ) -> Result<T> {
+        let mut guard = self.conn.lock().unwrap();
+        if guard.as_ref().is_none_or(|c| &c.key != target) {
+            *guard = Some(connect_remote(target)?);
+        }
+        f(guard.as_ref().expect("connection just established"))
+    }
+}
+
+/// Run a one-shot command over a libssh2 exec channel and return its
+/// stdout. Used only on servers without an SFTP subsystem, and only for
+/// `pwd` / `mkdir -p`.
+fn exec_channel_capture(sess: &ssh2::Session, cmd: &str) -> Result<String> {
+    use std::io::Read;
+    let mut ch = sess.channel_session().context("open exec channel")?;
+    ch.exec(cmd).with_context(|| format!("run `{cmd}`"))?;
+    let mut out = String::new();
+    ch.read_to_string(&mut out)
+        .with_context(|| format!("read `{cmd}` output"))?;
+    let mut err = String::new();
+    ch.stderr().read_to_string(&mut err).ok();
+    ch.wait_close().ok();
+    let status = ch.exit_status().unwrap_or(-1);
+    // Some minimal sshds report a bogus nonzero exit even on success —
+    // trust actual output over the status code when there is any.
+    if status != 0 && out.trim().is_empty() {
+        anyhow::bail!(
+            "`{cmd}` exited {status}{}",
+            if err.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", err.trim())
+            }
+        );
+    }
+    Ok(out)
+}
+
+/// The subset of `~/.ssh/config` the transport honors for a host:
+/// `HostName`, `User`, `Port`, `IdentityFile`. Parsed natively —
+/// libssh2 reads no config at all, and without this, agent auth picks
+/// whatever key happens to be first (which servers like exe.dev, that
+/// identify accounts *by key*, then misroute).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SshHostConfig {
+    host_name: Option<String>,
+    user: Option<String>,
+    port: Option<u16>,
+    identity_files: Vec<std::path::PathBuf>,
+}
+
+/// Load [`SshHostConfig`] for `host` from `~/.ssh/config` (empty config
+/// when the file or `$HOME` is missing).
+fn ssh_host_config(host: &str) -> SshHostConfig {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return SshHostConfig::default();
+    };
+    match std::fs::read_to_string(home.join(".ssh/config")) {
+        Ok(content) => parse_ssh_config(&content, host, &home),
+        Err(_) => SshHostConfig::default(),
+    }
+}
+
+/// Minimal ssh_config parser: `Host` blocks with `*`/`?`/`!` patterns,
+/// first-obtained-value-wins for scalars (OpenSSH semantics),
+/// accumulating `IdentityFile` with `~` expansion. Directives before
+/// the first `Host` line apply to every host.
+fn parse_ssh_config(content: &str, host: &str, home: &std::path::Path) -> SshHostConfig {
+    let mut cfg = SshHostConfig::default();
+    let mut active = true; // pre-Host directives are global
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (keyword, value) = match line.split_once([' ', '\t', '=']) {
+            Some((k, v)) => (k.to_ascii_lowercase(), v.trim().trim_matches('"')),
+            None => continue,
+        };
+        if keyword == "host" {
+            let patterns: Vec<&str> = value.split_whitespace().collect();
+            let negated = patterns
+                .iter()
+                .any(|p| p.strip_prefix('!').is_some_and(|p| glob_match(p, host)));
+            let matched = patterns
+                .iter()
+                .any(|p| !p.starts_with('!') && glob_match(p, host));
+            active = matched && !negated;
+            continue;
+        }
+        if !active {
+            continue;
+        }
+        match keyword.as_str() {
+            "hostname" if cfg.host_name.is_none() => cfg.host_name = Some(value.to_string()),
+            "user" if cfg.user.is_none() => cfg.user = Some(value.to_string()),
+            "port" if cfg.port.is_none() => cfg.port = value.parse().ok(),
+            "identityfile" => {
+                let path = match value.strip_prefix("~/") {
+                    Some(rest) => home.join(rest),
+                    None => std::path::PathBuf::from(value),
+                };
+                if !cfg.identity_files.contains(&path) {
+                    cfg.identity_files.push(path);
+                }
+            }
+            _ => {}
+        }
+    }
+    cfg
+}
+
+/// ssh_config-style glob: `*` matches any run, `?` a single char.
+fn glob_match(pattern: &str, s: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = s.chars().collect();
+    // Iterative wildcard match with backtracking on the last `*`.
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star, mut mark) = (None::<usize>, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(sp) = star {
+            pi = sp + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// Authenticate `sess` as `user`, honoring configured identities: for
+/// each `IdentityFile`, first look for the matching key in the agent
+/// (by public-key blob — works for passphrase-protected keys), then
+/// try the key file directly; fall back to plain agent auth (any key)
+/// only when no identity is configured or none worked.
+fn authenticate(
+    sess: &ssh2::Session,
+    user: &str,
+    identity_files: &[std::path::PathBuf],
+    addr: &str,
+) -> Result<()> {
+    for key_path in identity_files {
+        if agent_auth_with_key(sess, user, key_path)? {
+            return Ok(());
+        }
+        if sess
+            .userauth_pubkey_file(user, None, key_path, None)
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    sess.userauth_agent(user).with_context(|| {
+        format!("SSH agent auth as `{user}` on {addr} — is the key loaded (`ssh-add`)?")
+    })
+}
+
+/// Try agent auth with the specific key whose public half sits next to
+/// `key_path` (`<key>.pub`). Returns Ok(false) when the pub file or a
+/// matching agent identity isn't there — callers fall through.
+fn agent_auth_with_key(
+    sess: &ssh2::Session,
+    user: &str,
+    key_path: &std::path::Path,
+) -> Result<bool> {
+    use base64::Engine as _;
+    let pub_path = std::path::PathBuf::from(format!("{}.pub", key_path.display()));
+    let Ok(line) = std::fs::read_to_string(&pub_path) else {
+        return Ok(false);
+    };
+    let Some(b64) = line.split_whitespace().nth(1) else {
+        return Ok(false);
+    };
+    let Ok(blob) = base64::engine::general_purpose::STANDARD.decode(b64) else {
+        return Ok(false);
+    };
+    let mut agent = sess.agent().context("open SSH agent")?;
+    if agent.connect().is_err() {
+        return Ok(false); // no agent running — try the key file instead
+    }
+    agent.list_identities().context("list agent identities")?;
+    for identity in agent.identities().context("read agent identities")? {
+        if identity.blob() == blob.as_slice() {
+            agent
+                .userauth(user, &identity)
+                .with_context(|| format!("agent auth with {}", pub_path.display()))?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Dial + authenticate a session to `target` and probe for SFTP: TCP
+/// connect (bounded), handshake, config-aware auth (see
+/// [`authenticate`]), then one SFTP-open attempt — servers without the
+/// subsystem (e.g. exe.dev VMs) get the SCP/exec fallback instead.
 ///
-/// Note: libssh2 does not consult `~/.ssh/known_hosts` or
-/// `~/.ssh/config`; auth is agent-only. The interactive launch still
-/// goes through the real `ssh` binary with the user's full config.
-fn sftp_channel(target: &SshTarget) -> Result<ssh2::Sftp> {
-    let port = target.port.unwrap_or(22);
-    let addr = format!("{}:{}", target.host, port);
-    let tcp = std::net::TcpStream::connect(&addr).with_context(|| format!("connect to {addr}"))?;
+/// `~/.ssh/config` fills the gaps the URL leaves open (HostName, User,
+/// Port, IdentityFile); URL values win. known_hosts is still not
+/// checked — the interactive launch goes through the real `ssh` binary
+/// with the user's full config.
+fn connect_remote(target: &SshTarget) -> Result<RemoteConn> {
+    use std::net::ToSocketAddrs;
+    let cfg = ssh_host_config(&target.host);
+    let host = cfg.host_name.clone().unwrap_or_else(|| target.host.clone());
+    let port = target.port.or(cfg.port).unwrap_or(22);
+    let addr = format!("{host}:{port}");
+    // Bounded connect + per-operation timeouts: a wedged remote should
+    // fail with context, never hang the resume silently.
+    let sock = addr
+        .to_socket_addrs()
+        .with_context(|| format!("resolve {addr}"))?
+        .next()
+        .with_context(|| format!("no address for {addr}"))?;
+    let tcp = std::net::TcpStream::connect_timeout(&sock, std::time::Duration::from_secs(10))
+        .with_context(|| format!("connect to {addr}"))?;
     let mut sess = ssh2::Session::new().context("create SSH session")?;
     sess.set_tcp_stream(tcp);
+    sess.set_timeout(30_000); // ms; applies to handshake/auth/channel ops
     sess.handshake()
         .with_context(|| format!("SSH handshake with {addr}"))?;
-    let user = match target.user.clone() {
+    let user = match target.user.clone().or_else(|| cfg.user.clone()) {
         Some(u) => u,
         None => {
             std::env::var("USER").context("no SSH user: put `user@` in the URL or set $USER")?
         }
     };
-    sess.userauth_agent(&user).with_context(|| {
-        format!("SSH agent auth as `{user}` on {addr} — is the key loaded (`ssh-add`)?")
-    })?;
-    sess.sftp().context("open SFTP channel")
+    authenticate(&sess, &user, &cfg.identity_files, &addr)?;
+
+    // SFTP probe: keep it brief — a server without the subsystem may
+    // just sit on the channel request until a timeout.
+    sess.set_timeout(5_000);
+    let sftp = sess.sftp().ok();
+    sess.set_timeout(30_000);
+    if sftp.is_none() {
+        eprintln!("note: remote has no SFTP subsystem — using SCP fallback");
+    }
+
+    Ok(RemoteConn {
+        key: target.clone(),
+        sess,
+        sftp,
+    })
 }
 
 /// Recording strategy for tests. `captured()` returns the most recent
@@ -1070,6 +1366,47 @@ mod tests {
     fn parse_ssh_url_rejects_out_of_range_port() {
         let err = parse_ssh_url("ssh://example.com:99999").unwrap_err();
         assert!(err.to_string().contains("out-of-range"), "actual: {err}");
+    }
+
+    #[test]
+    fn ssh_config_matches_wildcard_host_and_expands_identity() {
+        // The exe.dev shape: a wildcard Host block pinning an identity.
+        // libssh2 doesn't read ~/.ssh/config, so the transport must — or
+        // agent auth picks whatever key happens to be first.
+        let config = "Host exe.dev *.exe.xyz\n\
+                      \x20 IdentitiesOnly yes\n\
+                      \x20 IdentityFile ~/.ssh/id_ed25519_signing\n\
+                      \x20 StrictHostKeyChecking accept-new\n";
+        let cfg = parse_ssh_config(
+            config,
+            "pathremote.exe.xyz",
+            std::path::Path::new("/home/u"),
+        );
+        assert_eq!(
+            cfg.identity_files,
+            vec![std::path::PathBuf::from("/home/u/.ssh/id_ed25519_signing")]
+        );
+        assert_eq!(cfg.user, None);
+        // A non-matching host gets nothing.
+        let other = parse_ssh_config(config, "example.com", std::path::Path::new("/home/u"));
+        assert!(other.identity_files.is_empty());
+    }
+
+    #[test]
+    fn ssh_config_first_value_wins_across_blocks() {
+        let config = "Host other\n\
+                      \x20 User nope\n\
+                      Host pathremote.*\n\
+                      \x20 User dev\n\
+                      \x20 Port 2200\n\
+                      \x20 HostName real.example.com\n\
+                      Host *\n\
+                      \x20 User fallback\n\
+                      \x20 Port 9\n";
+        let cfg = parse_ssh_config(config, "pathremote.exe.xyz", std::path::Path::new("/h"));
+        assert_eq!(cfg.user.as_deref(), Some("dev"));
+        assert_eq!(cfg.port, Some(2200));
+        assert_eq!(cfg.host_name.as_deref(), Some("real.example.com"));
     }
 
     #[test]

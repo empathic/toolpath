@@ -57,6 +57,7 @@ reqwest = { workspace = true }
 tokio = { workspace = true }
 rusqlite = { workspace = true }
 ssh2 = { workspace = true }
+base64 = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 # Embedded fuzzy picker — used when external `fzf` isn't on PATH.
 # Disable default features to avoid pulling in skim's CLI deps
