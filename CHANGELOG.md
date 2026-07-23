@@ -2,6 +2,31 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Resume: remote resume over SSH — 2026-07-23
+
+- **`path-cli`** (0.16.0): `path resume` gains `--remote
+  ssh://[user@]host[:port]` — resume a session on a remote host. The host
+  resolves the Toolpath document AND projects the session fully in memory,
+  ships the finished harness file to the remote, and launches the harness
+  over an interactive `ssh -t`. The remote needs only sshd + the harness:
+  no `path` installed, no Pathbase access, no temp files.
+  - Transport is typed libssh2 calls (SFTP, with an SCP-protocol +
+    minimal-exec fallback for servers whose SFTP channel won't open) — no
+    composed remote shell strings, same ethos as `git2` over shelling out.
+  - Natively honors the `HostName`/`User`/`Port`/`IdentityFile` subset of
+    `~/.ssh/config` (Host blocks, `*`/`?`/`!` globs, first-value-wins, `~`
+    expansion); configured identities are matched against the SSH agent by
+    public-key blob, so key-pinned hosts (e.g. exe.dev, which identifies
+    the account *by* the key) authenticate as the right account.
+  - `--tmux` wraps the remote launch in `tmux new-session -A -s
+    path-<id> …` for detachable sessions: detach with `ctrl-b d`, re-run
+    the same resume to re-attach.
+  - `--harness` is required with `--remote` and currently must be
+    `claude`; `--cwd` keys the remote project dir and the launch `cd`
+    (both created if missing). Bounded connect/per-op timeouts; one cached
+    connection per target.
+  - New deps: `ssh2`, `base64`.
+
 ## Project: drop empty streaming-seed assistant lines — 2026-07-23
 
 - **`toolpath-claude`** (0.12.1): the Claude projector no longer emits

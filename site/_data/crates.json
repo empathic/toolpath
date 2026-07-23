@@ -113,7 +113,7 @@
   },
   {
     "name": "path-cli",
-    "version": "0.15.0",
+    "version": "0.16.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
