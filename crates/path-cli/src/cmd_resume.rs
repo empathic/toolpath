@@ -46,6 +46,13 @@
 //! projection, and exec. `--harness` is effectively required here:
 //! without it the remote's interactive picker has no TTY over SSH.
 //!
+//! Before handing off, the host runs a **version preflight**:
+//! `ssh host 'path --version'`, captured and echoed as
+//! `host path: <X> / remote path: <Y>`. It confirms SSH is reachable
+//! and `path` is installed on the remote; if the probe fails the host
+//! aborts with a clear error instead of dropping the user into a
+//! doomed interactive session.
+//!
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
 //! for the full design.
 
@@ -126,6 +133,23 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
                  non-interactive SSH session, so the harness picker has no TTY"
             );
         }
+        // Preflight: probe the remote's `path --version` over SSH and echo
+        // it back alongside the host's version. This confirms SSH is
+        // reachable and `path` is installed before we hand off to an
+        // interactive resume; a failure aborts here with a clear error
+        // rather than dropping the user into a doomed session.
+        let (ssh_bin, probe_argv) = ssh_invocation(remote, "path --version")?;
+        let remote_version = exec.capture(&ssh_bin, &probe_argv).with_context(|| {
+            format!(
+                "probing remote `path` over {remote} — is `path` installed there and is the host reachable over SSH?"
+            )
+        })?;
+        eprintln!(
+            "host path: {} / remote path: {}",
+            env!("CARGO_PKG_VERSION"),
+            remote_version.trim()
+        );
+
         let remote_cmd = remote_resume_command(&args);
         let (binary, argv) = ssh_invocation(remote, &remote_cmd)?;
         let cwd = std::env::current_dir()?;
@@ -546,6 +570,11 @@ pub struct CapturedExec {
 /// Unix, spawn-and-wait on Windows). Tests use `RecordingExec`.
 pub trait ExecStrategy {
     fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()>;
+
+    /// Run a command and return its trimmed stdout. Used for the remote
+    /// version preflight (`ssh host 'path --version'`). Errors if the
+    /// command can't be spawned or exits non-zero.
+    fn capture(&self, binary: &str, args: &[String]) -> Result<String>;
 }
 
 /// Production implementation. On Unix this never returns on success
@@ -590,6 +619,18 @@ impl ExecStrategy for RealExec {
             std::process::exit(status.code().unwrap_or(1));
         }
     }
+
+    fn capture(&self, binary: &str, args: &[String]) -> Result<String> {
+        let out = std::process::Command::new(binary)
+            .args(args)
+            .output()
+            .with_context(|| format!("run `{}`", binary))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            anyhow::bail!("`{} {}` failed: {}", binary, args.join(" "), stderr.trim());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
 }
 
 /// Recording strategy for tests. `captured()` returns the most recent
@@ -597,11 +638,29 @@ impl ExecStrategy for RealExec {
 #[derive(Default)]
 pub struct RecordingExec {
     inner: std::sync::Mutex<CapturedExec>,
+    probes: std::sync::Mutex<Vec<CapturedExec>>,
+    /// When true, `capture` returns an error instead of a fake version —
+    /// simulates a remote where `path` is missing or SSH is unreachable.
+    probe_fails: bool,
 }
 
 impl RecordingExec {
+    /// A recorder whose version probe fails, for exercising the
+    /// abort-before-dispatch path.
+    pub fn failing_probe() -> Self {
+        Self {
+            probe_fails: true,
+            ..Default::default()
+        }
+    }
+
     pub fn captured(&self) -> CapturedExec {
         self.inner.lock().unwrap().clone()
+    }
+
+    /// Every `capture` (version-probe) invocation, in call order.
+    pub fn probes(&self) -> Vec<CapturedExec> {
+        self.probes.lock().unwrap().clone()
     }
 }
 
@@ -614,6 +673,18 @@ impl ExecStrategy for RecordingExec {
             cwd: cwd.to_path_buf(),
         };
         Ok(())
+    }
+
+    fn capture(&self, binary: &str, args: &[String]) -> Result<String> {
+        self.probes.lock().unwrap().push(CapturedExec {
+            binary: binary.to_string(),
+            args: args.to_vec(),
+            cwd: std::path::PathBuf::new(),
+        });
+        if self.probe_fails {
+            anyhow::bail!("`path: command not found`");
+        }
+        Ok("path 0.0.0-recording".to_string())
     }
 }
 
@@ -824,6 +895,53 @@ mod tests {
             !cmd.contains("--remote") && !cmd.contains("elsewhere"),
             "remote flag must stay host-side: {cmd}"
         );
+    }
+
+    #[test]
+    fn remote_resume_probes_remote_version_before_dispatch() {
+        // A `--remote` resume first probes the remote's `path --version`
+        // (echoing it back to the host), then dispatches the interactive
+        // resume. Both go through the ExecStrategy so we can capture them.
+        let mut args = remote_args("owner/repo/slug");
+        args.harness = Some(HarnessArg::Claude);
+
+        let rec = RecordingExec::default();
+        run_with_strategy(args, &rec).unwrap();
+
+        let probes = rec.probes();
+        assert_eq!(probes.len(), 1, "exactly one version probe expected");
+        assert_eq!(probes[0].binary, "ssh");
+        assert!(
+            probes[0].args.iter().any(|a| a == "path --version"),
+            "probe should run `path --version` on the remote, got {:?}",
+            probes[0].args
+        );
+
+        // Dispatch still happens after the probe.
+        let cap = rec.captured();
+        assert_eq!(cap.binary, "ssh");
+        assert!(
+            cap.args.iter().any(|a| a.starts_with("path resume")),
+            "dispatch should run `path resume` on the remote, got {:?}",
+            cap.args
+        );
+    }
+
+    #[test]
+    fn remote_resume_aborts_when_version_probe_fails() {
+        // If the remote probe fails (no path, no SSH), abort before the
+        // interactive dispatch rather than hand off to a doomed session.
+        let mut args = remote_args("owner/repo/slug");
+        args.harness = Some(HarnessArg::Claude);
+
+        let rec = RecordingExec::failing_probe();
+        let err = run_with_strategy(args, &rec).unwrap_err();
+        assert!(
+            err.to_string().contains("remote") || err.to_string().contains("path"),
+            "error should explain the remote probe failure: {err}"
+        );
+        // No dispatch was recorded.
+        assert!(rec.captured().binary.is_empty());
     }
 
     #[test]
