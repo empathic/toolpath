@@ -39,27 +39,34 @@
 //!
 //! v3 (host projects, remote just receives files): the **host** resolves
 //! the document AND projects the session fully in memory, then ships the
-//! finished harness file to the remote and launches the harness — so the
-//! remote needs only SSH and the harness installed. **No `path` on the
-//! remote**, no Pathbase access, no temp files. Steps ([`run_remote`]):
+//! finished harness file to the remote over SFTP and launches the
+//! harness — so the remote needs only SSH and the harness installed.
+//! **No `path` on the remote**, no Pathbase access, no temp files, and
+//! no composed remote shell strings: the file operations are typed SFTP
+//! calls via libssh2 (matching the repo's `git2`-over-shelling-out
+//! ethos). Steps ([`run_remote`]):
 //!
 //! 1. **Resolve + project on the host** — same `resolve_input` /
 //!    `ensure_path_with_agent` as a local resume, so a bad or non-agent
 //!    document fails fast on the host, not deep inside SSH. The session
 //!    id and JSONL come from the same in-memory projection
 //!    ([`crate::cmd_export::claude_session_jsonl`]).
-//! 2. **Reachability probe** — `ssh host 'pwd'` (deliberately not
-//!    `path`). A failed probe aborts here rather than dropping the user
-//!    into a doomed session; the probed cwd doubles as the launch dir
-//!    when no `--cwd` was pinned.
-//! 3. **Ship** — `ssh host 'mkdir -p "$HOME/.claude/projects/<dir>" &&
-//!    cat > "$HOME/.claude/projects/<dir>/<id>.jsonl"'` with the
-//!    projected JSONL on stdin. `<dir>` is the launch cwd run through
-//!    Claude Code's own project-dir sanitization, so `claude -r`
-//!    started there finds the session.
+//! 2. **Preflight** — resolve the remote home over SFTP
+//!    ([`ExecStrategy::remote_home`]). First remote touch, so
+//!    reachability/auth failures abort here rather than dropping the
+//!    user into a doomed session; the home anchors the Claude layout
+//!    and the default launch dir.
+//! 3. **Ship** — SFTP `mkdir -p` + write of
+//!    `<home>/.claude/projects/<dir>/<id>.jsonl`, where `<dir>` is the
+//!    launch cwd run through Claude Code's own project-dir sanitization
+//!    so `claude -r` started there finds the session. A pinned `--cwd`
+//!    is also created over SFTP.
 //! 4. **Launch** — `execvp` an interactive `ssh -t host '[cd <cwd> && ]
 //!    claude -r <id>'`. The `-t` gives the remote harness a real
-//!    terminal.
+//!    terminal; this is the one step that stays on the real `ssh`
+//!    binary (it needs the user's TTY and ssh config). libssh2 uses
+//!    agent auth and does not read `~/.ssh/config`/`known_hosts`; the
+//!    launch does.
 //!
 //! `--harness` is required with `--remote` (and currently must be
 //! `claude` — the projection and layout knowledge are Claude-specific).
@@ -549,21 +556,35 @@ pub struct CapturedExec {
     pub cwd: std::path::PathBuf,
 }
 
-/// Pluggable exec backend. Production uses `RealExec` (`execvp` on
-/// Unix, spawn-and-wait on Windows). Tests use `RecordingExec`.
+/// A parsed `ssh://[user@]host[:port][/path]` remote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshTarget {
+    /// Login user; falls back to `$USER` at connect time when absent.
+    pub user: Option<String>,
+    pub host: String,
+    /// Explicit port from the URL; SSH's default 22 when absent.
+    pub port: Option<u16>,
+}
+
+/// Pluggable exec + remote-transport backend. Production uses
+/// `RealExec` (`execvp` on Unix, spawn-and-wait on Windows; SFTP via
+/// libssh2 for the remote file operations — typed calls, not composed
+/// shell strings). Tests use `RecordingExec`.
 pub trait ExecStrategy {
     fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()>;
 
-    /// Run a command and return its trimmed stdout. Used for the remote
-    /// version preflight (`ssh host 'path --version'`). Errors if the
-    /// command can't be spawned or exits non-zero.
-    fn capture(&self, binary: &str, args: &[String]) -> Result<String>;
+    /// Resolve the remote login home directory. Doubles as the
+    /// reachability/auth preflight: it's the first remote touch, so a
+    /// bad host, port, or key fails here with context.
+    fn remote_home(&self, target: &SshTarget) -> Result<String>;
 
-    /// Run a command, feeding `input` to its stdin, and wait for it to
-    /// finish. Used to ship the projected session file to the remote
-    /// (`ssh host 'mkdir -p … && cat > …'`). Errors if the command
-    /// can't be spawned or exits non-zero.
-    fn pipe(&self, binary: &str, args: &[String], input: &[u8]) -> Result<()>;
+    /// Create `dir` (and any missing parents) on the remote —
+    /// `mkdir -p` semantics, existing directories are fine.
+    fn remote_mkdirs(&self, target: &SshTarget, dir: &str) -> Result<()>;
+
+    /// Write `data` to the absolute remote `path`, truncating any
+    /// existing file. Parent directories must already exist.
+    fn remote_write(&self, target: &SshTarget, path: &str, data: &[u8]) -> Result<()>;
 }
 
 /// Production implementation. On Unix this never returns on success
@@ -609,70 +630,93 @@ impl ExecStrategy for RealExec {
         }
     }
 
-    fn capture(&self, binary: &str, args: &[String]) -> Result<String> {
-        let out = std::process::Command::new(binary)
-            .args(args)
-            .output()
-            .with_context(|| format!("run `{}`", binary))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            anyhow::bail!("`{} {}` failed: {}", binary, args.join(" "), stderr.trim());
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    fn remote_home(&self, target: &SshTarget) -> Result<String> {
+        let sftp = sftp_channel(target)?;
+        let home = sftp
+            .realpath(std::path::Path::new("."))
+            .context("resolve remote home directory")?;
+        Ok(home.to_string_lossy().to_string())
     }
 
-    fn pipe(&self, binary: &str, args: &[String], input: &[u8]) -> Result<()> {
+    fn remote_mkdirs(&self, target: &SshTarget, dir: &str) -> Result<()> {
+        let sftp = sftp_channel(target)?;
+        // Walk the components, creating as we go — `mkdir -p` semantics.
+        let mut cur = std::path::PathBuf::new();
+        for comp in std::path::Path::new(dir).components() {
+            cur.push(comp);
+            if cur.parent().is_none() {
+                continue; // skip the root component
+            }
+            if sftp.stat(&cur).is_ok() {
+                continue; // already exists
+            }
+            sftp.mkdir(&cur, 0o755)
+                .with_context(|| format!("create remote dir {}", cur.display()))?;
+        }
+        Ok(())
+    }
+
+    fn remote_write(&self, target: &SshTarget, path: &str, data: &[u8]) -> Result<()> {
         use std::io::Write;
-        use std::process::Stdio;
-        let mut child = std::process::Command::new(binary)
-            .args(args)
-            .stdin(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("spawn `{}`", binary))?;
-        // Take + drop the handle after writing so the child sees EOF.
-        {
-            let mut stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("`{}` stdin unavailable", binary))?;
-            stdin
-                .write_all(input)
-                .with_context(|| format!("write to `{}` stdin", binary))?;
-        }
-        let status = child
-            .wait()
-            .with_context(|| format!("wait for `{}`", binary))?;
-        if !status.success() {
-            anyhow::bail!(
-                "`{} {}` failed (exit {:?})",
-                binary,
-                args.join(" "),
-                status.code()
-            );
-        }
+        let sftp = sftp_channel(target)?;
+        let mut f = sftp
+            .create(std::path::Path::new(path))
+            .with_context(|| format!("create remote file {path}"))?;
+        f.write_all(data)
+            .with_context(|| format!("write remote file {path}"))?;
         Ok(())
     }
 }
 
+/// Open an authenticated SFTP channel to `target`: TCP connect,
+/// handshake, then SSH-agent auth as the URL's user (or `$USER`). Each
+/// call opens a fresh connection — the remote flow makes a handful of
+/// calls, so pooling isn't worth the state.
+///
+/// Note: libssh2 does not consult `~/.ssh/known_hosts` or
+/// `~/.ssh/config`; auth is agent-only. The interactive launch still
+/// goes through the real `ssh` binary with the user's full config.
+fn sftp_channel(target: &SshTarget) -> Result<ssh2::Sftp> {
+    let port = target.port.unwrap_or(22);
+    let addr = format!("{}:{}", target.host, port);
+    let tcp = std::net::TcpStream::connect(&addr).with_context(|| format!("connect to {addr}"))?;
+    let mut sess = ssh2::Session::new().context("create SSH session")?;
+    sess.set_tcp_stream(tcp);
+    sess.handshake()
+        .with_context(|| format!("SSH handshake with {addr}"))?;
+    let user = match target.user.clone() {
+        Some(u) => u,
+        None => {
+            std::env::var("USER").context("no SSH user: put `user@` in the URL or set $USER")?
+        }
+    };
+    sess.userauth_agent(&user).with_context(|| {
+        format!("SSH agent auth as `{user}` on {addr} — is the key loaded (`ssh-add`)?")
+    })?;
+    sess.sftp().context("open SFTP channel")
+}
+
 /// Recording strategy for tests. `captured()` returns the most recent
-/// invocation.
+/// invocation; the remote-transport calls are recorded as typed values
+/// (targets, dirs, `(path, contents)` pairs) instead of shell strings.
 #[derive(Default)]
 pub struct RecordingExec {
     inner: std::sync::Mutex<CapturedExec>,
-    probes: std::sync::Mutex<Vec<CapturedExec>>,
-    /// Staged documents: (invocation, stdin bytes as UTF-8 string).
-    staged: std::sync::Mutex<Vec<(CapturedExec, String)>>,
-    /// When true, `capture` returns an error instead of a fake version —
-    /// simulates a remote where `path` is missing or SSH is unreachable.
-    probe_fails: bool,
+    homes: std::sync::Mutex<Vec<SshTarget>>,
+    mkdirs: std::sync::Mutex<Vec<String>>,
+    /// Written files: (remote path, contents as UTF-8 string).
+    writes: std::sync::Mutex<Vec<(String, String)>>,
+    /// When true, `remote_home` returns an error — simulates an
+    /// unreachable or unauthenticated remote.
+    home_fails: bool,
 }
 
 impl RecordingExec {
-    /// A recorder whose version probe fails, for exercising the
+    /// A recorder whose remote preflight fails, for exercising the
     /// abort-before-dispatch path.
-    pub fn failing_probe() -> Self {
+    pub fn failing_remote() -> Self {
         Self {
-            probe_fails: true,
+            home_fails: true,
             ..Default::default()
         }
     }
@@ -681,16 +725,25 @@ impl RecordingExec {
         self.inner.lock().unwrap().clone()
     }
 
-    /// Every `capture` (version-probe) invocation, in call order.
-    pub fn probes(&self) -> Vec<CapturedExec> {
-        self.probes.lock().unwrap().clone()
+    /// Every `remote_home` (preflight) call, in call order.
+    pub fn homes(&self) -> Vec<SshTarget> {
+        self.homes.lock().unwrap().clone()
     }
 
-    /// Every `pipe` (stage) invocation as `(invocation, stdin string)`.
-    pub fn staged(&self) -> Vec<(CapturedExec, String)> {
-        self.staged.lock().unwrap().clone()
+    /// Every `remote_mkdirs` call, in call order.
+    pub fn mkdirs(&self) -> Vec<String> {
+        self.mkdirs.lock().unwrap().clone()
+    }
+
+    /// Every `remote_write` call as `(remote path, contents)`.
+    pub fn writes(&self) -> Vec<(String, String)> {
+        self.writes.lock().unwrap().clone()
     }
 }
+
+/// The fake remote home `RecordingExec` reports; tests key expected
+/// paths off it.
+pub const RECORDING_REMOTE_HOME: &str = "/home/recording";
 
 impl ExecStrategy for RecordingExec {
     fn exec(&self, binary: &str, args: &[String], cwd: &std::path::Path) -> Result<()> {
@@ -703,27 +756,24 @@ impl ExecStrategy for RecordingExec {
         Ok(())
     }
 
-    fn capture(&self, binary: &str, args: &[String]) -> Result<String> {
-        self.probes.lock().unwrap().push(CapturedExec {
-            binary: binary.to_string(),
-            args: args.to_vec(),
-            cwd: std::path::PathBuf::new(),
-        });
-        if self.probe_fails {
-            anyhow::bail!("`path: command not found`");
+    fn remote_home(&self, target: &SshTarget) -> Result<String> {
+        self.homes.lock().unwrap().push(target.clone());
+        if self.home_fails {
+            anyhow::bail!("connection refused");
         }
-        Ok("path 0.0.0-recording".to_string())
+        Ok(RECORDING_REMOTE_HOME.to_string())
     }
 
-    fn pipe(&self, binary: &str, args: &[String], input: &[u8]) -> Result<()> {
-        self.staged.lock().unwrap().push((
-            CapturedExec {
-                binary: binary.to_string(),
-                args: args.to_vec(),
-                cwd: std::path::PathBuf::new(),
-            },
-            String::from_utf8_lossy(input).to_string(),
-        ));
+    fn remote_mkdirs(&self, _target: &SshTarget, dir: &str) -> Result<()> {
+        self.mkdirs.lock().unwrap().push(dir.to_string());
+        Ok(())
+    }
+
+    fn remote_write(&self, _target: &SshTarget, path: &str, data: &[u8]) -> Result<()> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push((path.to_string(), String::from_utf8_lossy(data).to_string()));
         Ok(())
     }
 }
@@ -780,37 +830,49 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     let (graph, _source) = resolve_input(args)?;
     let path = ensure_path_with_agent(&graph)?;
     let (session_id, jsonl) = crate::cmd_export::claude_session_jsonl(path)?;
+    let target = parse_ssh_url(remote)?;
 
-    // 2. Reachability probe: plain `pwd` — deliberately not `path`, which
-    //    isn't required on the remote. Its output doubles as the remote
-    //    working directory when no --cwd was pinned.
-    let (ssh_bin, probe_argv) = ssh_invocation(remote, "pwd")?;
-    let remote_pwd = exec.capture(&ssh_bin, &probe_argv).with_context(|| {
+    // 2. Preflight: resolve the remote home over SFTP. First remote
+    //    touch, so reachability/auth failures surface here; the home also
+    //    anchors the Claude layout and the default launch dir.
+    let home = exec.remote_home(&target).with_context(|| {
         format!("probing remote over {remote} — is the host reachable over SSH?")
     })?;
-    let remote_pwd = remote_pwd.trim().to_string();
-    if remote_pwd.is_empty() {
-        anyhow::bail!("remote probe over {remote} returned no working directory");
+    if home.is_empty() {
+        anyhow::bail!("remote probe over {remote} returned no home directory");
     }
-    eprintln!("remote {remote}: reachable (cwd {remote_pwd})");
+    eprintln!("remote {remote}: reachable (home {home})");
 
-    // 3. Ship: pipe the projected JSONL straight into the remote's Claude
-    //    project layout. The project dir is keyed on the launch cwd
-    //    (--cwd, else the probed remote cwd) with Claude Code's own
-    //    sanitization, so `claude -r` started there finds the session.
+    // 3. Ship: create the Claude project dir and write the projected
+    //    JSONL over SFTP — typed file operations, no remote shell. The
+    //    project dir is keyed on the launch cwd (--cwd, else the remote
+    //    home) with Claude Code's own sanitization, so `claude -r`
+    //    started there finds the session.
     let project_path = match args.cwd.as_ref() {
         Some(dir) => dir.display().to_string(),
-        None => remote_pwd,
+        None => home.clone(),
     };
     let dir_name = claude_project_dir_name(&project_path);
-    let ship_cmd = remote_ship_command(&dir_name, &session_id);
-    let (ship_bin, ship_argv) = ssh_invocation(remote, &ship_cmd)?;
-    exec.pipe(&ship_bin, &ship_argv, jsonl.as_bytes())
-        .with_context(|| format!("shipping session file to {remote}"))?;
-    eprintln!("Shipped session {session_id} → {remote} ~/.claude/projects/{dir_name}/");
+    let projects_dir = format!("{home}/.claude/projects/{dir_name}");
+    exec.remote_mkdirs(&target, &projects_dir)
+        .with_context(|| format!("creating {projects_dir} on {remote}"))?;
+    let dest = format!("{projects_dir}/{session_id}.jsonl");
+    exec.remote_write(&target, &dest, jsonl.as_bytes())
+        .with_context(|| format!("shipping session file to {remote}:{dest}"))?;
+    eprintln!("Shipped session {session_id} → {remote}:{dest}");
+
+    // The launch cwd must exist before the interactive `cd` — create it
+    // over SFTP too, since resuming into a fresh directory is the normal
+    // case.
+    if let Some(dir) = args.cwd.as_ref() {
+        let dir = dir.display().to_string();
+        exec.remote_mkdirs(&target, &dir)
+            .with_context(|| format!("creating launch dir {dir} on {remote}"))?;
+    }
 
     // 4. Interactive launch of the harness against the shipped session,
-    //    with a real TTY.
+    //    with a real TTY — the one step that stays on the real `ssh`
+    //    binary (it needs the user's terminal and ssh config).
     let launch_cmd = remote_launch_command(&session_id, args.cwd.as_deref());
     let (binary, argv) = ssh_invocation_tty(remote, &launch_cmd, true)?;
     let cwd = std::env::current_dir()?;
@@ -825,42 +887,25 @@ fn claude_project_dir_name(project_path: &str) -> String {
     project_path.replace(['/', '_', '.'], "-")
 }
 
-/// The far-side ship command: create the Claude project dir and write
-/// the piped JSONL as the session file. `$HOME` is left for the remote
-/// shell to expand — the host doesn't know the remote home.
-fn remote_ship_command(project_dir_name: &str, session_id: &str) -> String {
-    let dir = format!("$HOME/.claude/projects/{project_dir_name}");
-    format!("mkdir -p \"{dir}\" && cat > \"{dir}/{session_id}.jsonl\"")
-}
-
 /// The far-side launch command: `claude -r <id>`, prefixed with a
-/// `mkdir -p <cwd> && cd <cwd> &&` when a cwd was pinned so the harness
-/// starts where the shipped session is keyed — creating the directory
-/// first, since resuming into a fresh one is the normal case.
+/// `cd <cwd> &&` when a cwd was pinned so the harness starts where the
+/// shipped session is keyed. The directory itself is created over SFTP
+/// before launch — this is the only remote shell string left, and it's
+/// minimal because a `cd` can't happen anywhere else.
 fn remote_launch_command(session_id: &str, cwd: Option<&std::path::Path>) -> String {
     let launch = format!("claude -r {}", shell_single_quote(session_id));
     match cwd {
-        Some(dir) => {
-            let dir = shell_single_quote(&dir.display().to_string());
-            format!("mkdir -p {dir} && cd {dir} && {launch}")
-        }
+        Some(dir) => format!(
+            "cd {} && {launch}",
+            shell_single_quote(&dir.display().to_string())
+        ),
         None => launch,
     }
 }
 
-/// Build a non-interactive `ssh` invocation (no `-t`). Used for the
-/// version probe and the incept hydration step.
-fn ssh_invocation(remote: &str, remote_cmd: &str) -> Result<(String, Vec<String>)> {
-    ssh_invocation_tty(remote, remote_cmd, false)
-}
-
-/// Build the `ssh` invocation from a full SSH URL
-/// (`ssh://[user@]host[:port][/path]`) and an already-built remote
-/// command. Returns `("ssh", argv)` where argv is
-/// `[-t]? [-p <port>]? <[user@]host> <remote command>`. Pass `tty = true`
-/// for the interactive resume so the remote harness (and its picker) get
-/// a real terminal.
-fn ssh_invocation_tty(remote: &str, remote_cmd: &str, tty: bool) -> Result<(String, Vec<String>)> {
+/// Parse a full SSH URL (`ssh://[user@]host[:port][/path]`) into a
+/// typed [`SshTarget`]. The optional `/path` component is ignored.
+fn parse_ssh_url(remote: &str) -> Result<SshTarget> {
     let rest = remote
         .strip_prefix("ssh://")
         .with_context(|| format!("remote must be a full SSH URL (ssh://…), got `{remote}`"))?;
@@ -876,23 +921,47 @@ fn ssh_invocation_tty(remote: &str, remote_cmd: &str, tty: bool) -> Result<(Stri
     }
 
     // Split a trailing `:port` (all-digit) off the `[user@]host` part.
-    let (userhost, port) = match authority.rsplit_once(':') {
-        Some((uh, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => (uh, Some(p)),
-        _ => (authority, None),
-    };
+    let (userhost, port) =
+        match authority.rsplit_once(':') {
+            Some((uh, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => (
+                uh,
+                Some(p.parse::<u16>().with_context(|| {
+                    format!("SSH URL `{remote}` has an out-of-range port `{p}`")
+                })?),
+            ),
+            _ => (authority, None),
+        };
     if userhost.is_empty() {
         anyhow::bail!("SSH URL `{remote}` is missing a host");
     }
 
+    let (user, host) = match userhost.split_once('@') {
+        Some((u, h)) if !u.is_empty() && !h.is_empty() => (Some(u.to_string()), h.to_string()),
+        Some(_) => anyhow::bail!("SSH URL `{remote}` has an empty user or host"),
+        None => (None, userhost.to_string()),
+    };
+
+    Ok(SshTarget { user, host, port })
+}
+
+/// Build the `ssh` invocation for the interactive launch from a full
+/// SSH URL and an already-built remote command. Returns `("ssh", argv)`
+/// where argv is `[-t]? [-p <port>]? <[user@]host> <remote command>`.
+/// Pass `tty = true` so the remote harness gets a real terminal.
+fn ssh_invocation_tty(remote: &str, remote_cmd: &str, tty: bool) -> Result<(String, Vec<String>)> {
+    let target = parse_ssh_url(remote)?;
     let mut argv = Vec::new();
     if tty {
         argv.push("-t".to_string());
     }
-    if let Some(port) = port {
+    if let Some(port) = target.port {
         argv.push("-p".to_string());
         argv.push(port.to_string());
     }
-    argv.push(userhost.to_string());
+    argv.push(match &target.user {
+        Some(user) => format!("{user}@{}", target.host),
+        None => target.host.clone(),
+    });
     argv.push(remote_cmd.to_string());
     Ok(("ssh".to_string(), argv))
 }
@@ -923,9 +992,10 @@ mod tests {
 
     #[test]
     fn ssh_invocation_parses_user_host_port_and_path() {
-        let (binary, argv) = ssh_invocation(
+        let (binary, argv) = ssh_invocation_tty(
             "ssh://dev@example.com:2222/home/dev/project",
             "path resume 'owner/repo/slug'",
+            false,
         )
         .unwrap();
         assert_eq!(binary, "ssh");
@@ -942,7 +1012,8 @@ mod tests {
 
     #[test]
     fn ssh_invocation_without_port_omits_p_flag() {
-        let (_binary, argv) = ssh_invocation("ssh://example.com", "path resume 'abc'").unwrap();
+        let (_binary, argv) =
+            ssh_invocation_tty("ssh://example.com", "path resume 'abc'", false).unwrap();
         assert_eq!(
             argv,
             vec!["example.com".to_string(), "path resume 'abc'".to_string()]
@@ -951,7 +1022,7 @@ mod tests {
 
     #[test]
     fn ssh_invocation_rejects_non_ssh_url() {
-        let err = ssh_invocation("https://example.com/x", "path resume 'abc'").unwrap_err();
+        let err = parse_ssh_url("https://example.com/x").unwrap_err();
         assert!(err.to_string().contains("full SSH URL"), "actual: {err}");
     }
 
@@ -976,15 +1047,29 @@ mod tests {
     }
 
     #[test]
-    fn remote_ship_command_writes_into_remote_claude_projects() {
-        // v3 ships the fully-projected JSONL straight into the remote's
-        // Claude layout — no `path` on the remote. `$HOME` stays for the
-        // remote shell to expand.
+    fn parse_ssh_url_extracts_user_host_port_and_ignores_path() {
         assert_eq!(
-            remote_ship_command("-tmp-somewhere", "sess-1"),
-            "mkdir -p \"$HOME/.claude/projects/-tmp-somewhere\" && \
-             cat > \"$HOME/.claude/projects/-tmp-somewhere/sess-1.jsonl\""
+            parse_ssh_url("ssh://dev@example.com:2222/home/dev/project").unwrap(),
+            SshTarget {
+                user: Some("dev".to_string()),
+                host: "example.com".to_string(),
+                port: Some(2222),
+            }
         );
+        assert_eq!(
+            parse_ssh_url("ssh://example.com").unwrap(),
+            SshTarget {
+                user: None,
+                host: "example.com".to_string(),
+                port: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ssh_url_rejects_out_of_range_port() {
+        let err = parse_ssh_url("ssh://example.com:99999").unwrap_err();
+        assert!(err.to_string().contains("out-of-range"), "actual: {err}");
     }
 
     #[test]
@@ -1007,11 +1092,11 @@ mod tests {
     #[test]
     fn remote_launch_command_quotes_id_and_cds() {
         assert_eq!(remote_launch_command("sess-1", None), "claude -r 'sess-1'");
-        // The pinned cwd may not exist on the remote (resuming into a
-        // fresh directory is the normal case) — create it before cd'ing.
+        // Directory creation happens over SFTP before launch — the shell
+        // string stays minimal: just the cd and the harness.
         assert_eq!(
             remote_launch_command("sess-1", Some(std::path::Path::new("/srv/work"))),
-            "mkdir -p '/srv/work' && cd '/srv/work' && claude -r 'sess-1'"
+            "cd '/srv/work' && claude -r 'sess-1'"
         );
     }
 
@@ -1036,48 +1121,41 @@ mod tests {
 
     #[test]
     fn remote_resume_probes_ships_then_launches() {
-        // v3: host resolves AND projects the session locally, probes the
-        // remote with plain `pwd` (no `path` needed there), ships the
-        // projected JSONL straight into the remote's Claude layout, then
-        // launches an interactive `ssh -t … claude -r <id>`.
+        // v3 over SFTP: host resolves AND projects the session locally,
+        // preflights by resolving the remote home (typed transport call,
+        // no shell), writes the projected JSONL into the remote's Claude
+        // layout, then launches an interactive `ssh -t … claude -r <id>`.
         let td = tempfile::tempdir().unwrap();
         let rec = RecordingExec::default();
         run_with_strategy(remote_args_with_doc(td.path()), &rec).unwrap();
 
-        // 1. reachability probe: `pwd`, never `path` — the remote doesn't
-        //    need `path` installed.
-        let probes = rec.probes();
-        assert_eq!(probes.len(), 1, "exactly one probe");
-        assert!(
-            probes[0].args.iter().any(|a| a == "pwd"),
-            "probe argv: {:?}",
-            probes[0].args
-        );
-        assert!(
-            !probes[0].args.iter().any(|a| a.contains("path")),
-            "v3 must not require `path` on the remote: {:?}",
-            probes[0].args
+        // 1. preflight: one home lookup against the parsed target.
+        let homes = rec.homes();
+        assert_eq!(homes.len(), 1, "exactly one preflight");
+        assert_eq!(
+            homes[0],
+            SshTarget {
+                user: Some("dev".to_string()),
+                host: "example.com".to_string(),
+                port: Some(2222),
+            }
         );
 
-        // 2. ship: `ssh … 'mkdir -p … && cat > ~/.claude/projects/…'` with
-        //    the projected JSONL (not the toolpath doc) on stdin.
-        let staged = rec.staged();
-        assert_eq!(staged.len(), 1, "exactly one ship step");
-        let (ship_inv, stdin) = &staged[0];
-        assert_eq!(ship_inv.binary, "ssh");
-        let ship_arg = ship_inv
-            .args
-            .iter()
-            .find(|a| a.contains("cat > "))
-            .expect("ship should `cat >` the session file");
-        assert!(
-            ship_arg.contains(".claude/projects/") && ship_arg.contains("remote-v1-test.jsonl"),
-            "ship target: {ship_arg}"
+        // 2. ship: mkdir + write into the remote Claude layout, keyed on
+        //    the remote home (no --cwd pinned). The written bytes are
+        //    Claude JSONL, not the raw toolpath doc.
+        let projects_dir = format!(
+            "{RECORDING_REMOTE_HOME}/.claude/projects/{}",
+            claude_project_dir_name(RECORDING_REMOTE_HOME)
         );
-        // The piped bytes are Claude JSONL, not the raw toolpath doc.
+        assert_eq!(rec.mkdirs(), vec![projects_dir.clone()]);
+        let writes = rec.writes();
+        assert_eq!(writes.len(), 1, "exactly one file written");
+        let (dest, body) = &writes[0];
+        assert_eq!(dest, &format!("{projects_dir}/remote-v1-test.jsonl"));
         assert!(
-            stdin.contains("\"sessionId\":\"remote-v1-test\""),
-            "stdin should be projected JSONL: {stdin}"
+            body.contains("\"sessionId\":\"remote-v1-test\""),
+            "written bytes should be projected JSONL: {body}"
         );
 
         // 3. launch: interactive `ssh -t … claude -r '<id>'` with the id
@@ -1097,6 +1175,31 @@ mod tests {
     }
 
     #[test]
+    fn remote_resume_with_cwd_creates_launch_dir_over_sftp() {
+        // A pinned --cwd is created via a typed mkdir call — not a shell
+        // `mkdir -p` baked into the launch string.
+        let td = tempfile::tempdir().unwrap();
+        let mut args = remote_args_with_doc(td.path());
+        args.cwd = Some(std::path::PathBuf::from("/srv/fresh"));
+        let rec = RecordingExec::default();
+        run_with_strategy(args, &rec).unwrap();
+
+        assert!(
+            rec.mkdirs().contains(&"/srv/fresh".to_string()),
+            "launch dir should be created over SFTP: {:?}",
+            rec.mkdirs()
+        );
+        let cap = rec.captured();
+        assert!(
+            cap.args
+                .iter()
+                .any(|a| a == "cd '/srv/fresh' && claude -r 'remote-v1-test'"),
+            "launch should cd only (no shell mkdir): {:?}",
+            cap.args
+        );
+    }
+
+    #[test]
     fn remote_resume_rejects_non_claude_harness() {
         let td = tempfile::tempdir().unwrap();
         let mut args = remote_args_with_doc(td.path());
@@ -1107,23 +1210,23 @@ mod tests {
             err.to_string().contains("claude"),
             "error should name the supported harness: {err}"
         );
-        assert!(rec.probes().is_empty(), "must fail before probing");
+        assert!(rec.homes().is_empty(), "must fail before any remote touch");
     }
 
     #[test]
-    fn remote_resume_aborts_when_version_probe_fails() {
-        // If the remote probe fails (no path, no SSH), abort before staging
-        // or dispatch rather than hand off to a doomed session.
+    fn remote_resume_aborts_when_preflight_fails() {
+        // If the remote preflight fails (unreachable, bad auth), abort
+        // before writing anything or dispatching.
         let td = tempfile::tempdir().unwrap();
-        let rec = RecordingExec::failing_probe();
+        let rec = RecordingExec::failing_remote();
         let err = run_with_strategy(remote_args_with_doc(td.path()), &rec).unwrap_err();
         assert!(
-            err.to_string().contains("remote") || err.to_string().contains("path"),
-            "error should explain the remote probe failure: {err}"
+            err.to_string().contains("remote"),
+            "error should explain the preflight failure: {err}"
         );
         assert!(
-            rec.staged().is_empty(),
-            "must not stage after a failed probe"
+            rec.writes().is_empty() && rec.mkdirs().is_empty(),
+            "must not touch the remote after a failed preflight"
         );
         assert!(rec.captured().binary.is_empty(), "must not dispatch");
     }
@@ -1136,7 +1239,7 @@ mod tests {
         let rec = RecordingExec::default();
         let err = run_with_strategy(args, &rec).unwrap_err();
         assert!(err.to_string().contains("--harness"), "actual: {err}");
-        assert!(rec.probes().is_empty(), "must fail before probing");
+        assert!(rec.homes().is_empty(), "must fail before any remote touch");
     }
 
     #[test]

@@ -379,27 +379,19 @@ fn remote_flag_dispatches_resume_over_ssh() {
     let recorder = RecordingExec::default();
     run_with_strategy(args, &recorder).unwrap();
 
-    // Ship: the locally-projected JSONL is piped into the remote's
-    // Claude projects layout — no `path` runs on the remote.
-    let staged = recorder.staged();
-    assert_eq!(staged.len(), 1, "exactly one ship pipe");
-    let (ship_inv, stdin) = &staged[0];
+    // Ship: the locally-projected JSONL is written over SFTP into the
+    // remote's Claude projects layout — typed transport calls, no shell
+    // strings and no `path` on the remote.
+    let writes = recorder.writes();
+    assert_eq!(writes.len(), 1, "exactly one file written");
+    let (dest, body) = &writes[0];
     assert!(
-        ship_inv
-            .args
-            .iter()
-            .any(|a| a.contains("cat > ") && a.contains(".claude/projects/")),
-        "remote should receive the file via `cat >` into ~/.claude/projects, got {:?}",
-        ship_inv.args
+        dest.contains(".claude/projects/") && dest.ends_with("resume-remote-int.jsonl"),
+        "file should land in the remote Claude layout, got {dest}"
     );
     assert!(
-        !ship_inv.args.iter().any(|a| a.contains("path p incept")),
-        "v3 must not run `path` on the remote, got {:?}",
-        ship_inv.args
-    );
-    assert!(
-        stdin.contains("\"sessionId\":\"resume-remote-int\""),
-        "ship stdin should carry the projected JSONL"
+        body.contains("\"sessionId\":\"resume-remote-int\""),
+        "written bytes should carry the projected JSONL"
     );
 
     // Launch: interactive ssh -t running the harness directly.
