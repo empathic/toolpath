@@ -274,6 +274,13 @@ pub fn expand_kept(items: &[Item], boundary: &Compaction) -> Vec<String> {
             _ => None,
         })
         .collect();
+    let events: HashMap<&str, &ConversationEvent> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Event(e) => Some((e.id.as_str(), e)),
+            _ => None,
+        })
+        .collect();
     let mut kept: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut cur = boundary.parent_id.as_deref();
@@ -282,15 +289,22 @@ pub fn expand_kept(items: &[Item], boundary: &Compaction) -> Vec<String> {
         if !seen.insert(id) {
             break; // cycle guard
         }
-        let Some(turn) = turns.get(id) else {
-            break; // chain left turn-space (e.g. an earlier boundary)
-        };
-        kept.push(id.to_string());
-        if id == anchor {
-            found = true;
-            break;
+        if let Some(turn) = turns.get(id) {
+            kept.push(id.to_string());
+            if id == anchor {
+                found = true;
+                break;
+            }
+            cur = turn.parent_id.as_deref();
+        } else if let Some(event) = events.get(id) {
+            // Events are chain links, not kept turns — the walk passes
+            // through them (same rule as the step-space twin,
+            // `expand_kept_steps`). E.g. pi threads its `model_change`
+            // entries into the turn parent chain.
+            cur = event.parent_id.as_deref();
+        } else {
+            break; // chain left the item space (e.g. an earlier boundary)
         }
-        cur = turn.parent_id.as_deref();
     }
     if !found {
         return Vec::new();

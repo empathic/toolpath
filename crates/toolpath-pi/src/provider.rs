@@ -21,9 +21,9 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use toolpath_convo::{
-    Compaction, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
-    DelegatedWork, EnvironmentSnapshot, Item, Role, SessionBase, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn,
+    Compaction, ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 // ── Classification helpers ───────────────────────────────────────────
@@ -308,9 +308,63 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         match entry {
             Entry::Session(_) => continue,
 
-            Entry::ModelChange { .. } | Entry::ThinkingLevelChange { .. } | Entry::Label { .. } => {
-                // Discarded — these influence rendering only and don't map onto
-                // a cross-harness IR field.
+            // Meta entries ride as typed events: a resumed pi session
+            // replays model / thinking-level state from them, so dropping
+            // them degraded `path resume` (the resumed session lost its
+            // model selection). They stay chain links — turn parents that
+            // reference them resolve to the event id, and the kept walk
+            // passes through `conversation.event` steps.
+            Entry::ModelChange {
+                base,
+                provider,
+                model_id,
+                extra,
+            } => {
+                let mut data: HashMap<String, serde_json::Value> = HashMap::new();
+                data.insert("provider".to_string(), serde_json::json!(provider));
+                data.insert("modelId".to_string(), serde_json::json!(model_id));
+                for (k, v) in extra {
+                    data.insert(k.clone(), v.clone());
+                }
+                items.push(Item::Event(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "model_change".to_string(),
+                    data,
+                }));
+            }
+            Entry::ThinkingLevelChange {
+                base,
+                thinking_level,
+                extra,
+            } => {
+                let mut data: HashMap<String, serde_json::Value> = HashMap::new();
+                data.insert(
+                    "thinkingLevel".to_string(),
+                    serde_json::json!(thinking_level),
+                );
+                for (k, v) in extra {
+                    data.insert(k.clone(), v.clone());
+                }
+                items.push(Item::Event(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "thinking_level_change".to_string(),
+                    data,
+                }));
+            }
+            Entry::Label { base, extra } => {
+                let data: HashMap<String, serde_json::Value> =
+                    extra.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                items.push(Item::Event(ConversationEvent {
+                    id: base.id.clone(),
+                    timestamp: base.timestamp.clone(),
+                    parent_id: base.parent_id.clone(),
+                    event_type: "label".to_string(),
+                    data,
+                }));
             }
 
             Entry::Compaction {
@@ -588,7 +642,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         let parent = match item {
             Item::Turn(t) => &mut t.parent_id,
             Item::Compaction(c) => &mut c.parent_id,
-            Item::Event(_) => continue,
+            Item::Event(e) => &mut e.parent_id,
         };
         *parent = resolve_item_parent(
             parent.as_deref(),

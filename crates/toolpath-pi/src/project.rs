@@ -165,12 +165,18 @@ fn project_view(
 
     // Walk `view.items` in order so compaction boundaries land at their
     // true position in the entry stream (between the surrounding turns).
+    // `model_ctx` tracks the (provider, modelId) established by the most
+    // recent `model_change` event: Pi restores a resumed session's model
+    // from the LAST assistant message's `provider` + `model` pair, so
+    // stamping a fixed provider mismatched real sessions (observed as
+    // "Could not restore model anthropic/gemma4" resuming a projected
+    // ollama session in pi 0.72).
+    let mut model_ctx: Option<(String, String)> = None;
     for (idx, item) in view.items.iter().enumerate() {
         match item {
             Item::Turn(turn) => {
                 let pi = pi_extras(turn).cloned().unwrap_or_default();
-                emit_pending_meta(&mut entries, turn, &pi);
-                emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
+                emit_turn_entries(cfg, turn, &pi, model_ctx.as_ref(), &covered, &mut entries);
             }
             Item::Compaction(comp) => {
                 let next_turn_id = view.items[idx + 1..]
@@ -179,7 +185,26 @@ fn project_view(
                     .map(|t| t.id.as_str());
                 emit_compaction(comp, next_turn_id, &mut entries);
             }
-            Item::Event(_) => {}
+            Item::Event(event) => {
+                if event.event_type == "model_change" {
+                    let provider = event
+                        .data
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let model_id = event
+                        .data
+                        .get("modelId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if !provider.is_empty() {
+                        model_ctx = Some((provider.to_string(), model_id.to_string()));
+                    }
+                }
+                if let Some(entry) = meta_event_to_entry(event) {
+                    entries.push(entry);
+                }
+            }
         }
     }
 
@@ -198,90 +223,56 @@ fn pi_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
     None
 }
 
-/// Emit `ModelChange` / `ThinkingLevelChange` / `Label` entries that the
-/// forward path buffered into the next turn's `extra["pi"]`.
-fn emit_pending_meta(entries: &mut Vec<Entry>, turn: &Turn, pi: &Map<String, Value>) {
-    if let Some(mc) = pi.get("modelChange").and_then(Value::as_object) {
-        let id = mc
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{}-mc", turn.id));
-        let timestamp = mc
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| turn.timestamp.clone());
-        let provider = mc
-            .get("provider")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let model_id = mc
-            .get("modelId")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        entries.push(Entry::ModelChange {
-            base: EntryBase {
-                id,
-                parent_id: None,
-                timestamp,
-            },
-            provider,
-            model_id,
-            extra: extra_map_from(mc.get("rawExtra")),
-        });
-    }
-    if let Some(tlc) = pi.get("thinkingLevelChange").and_then(Value::as_object) {
-        let id = tlc
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{}-tlc", turn.id));
-        let timestamp = tlc
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| turn.timestamp.clone());
-        let thinking_level = tlc
-            .get("thinkingLevel")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        entries.push(Entry::ThinkingLevelChange {
-            base: EntryBase {
-                id,
-                parent_id: None,
-                timestamp,
-            },
-            thinking_level,
-            extra: extra_map_from(tlc.get("rawExtra")),
-        });
-    }
-    if let Some(labels) = pi.get("labels").and_then(Value::as_array) {
-        for (i, label) in labels.iter().enumerate() {
-            let lo = label.as_object();
-            let id = lo
-                .and_then(|m| m.get("id"))
+/// Reconstruct a Pi meta entry (`model_change` / `thinking_level_change` /
+/// `label`) from the typed event the forward path emits for it — the
+/// inverse of `session_to_view`'s meta-entry arms. Non-meta events have no
+/// Pi wire encoding and are dropped.
+fn meta_event_to_entry(event: &toolpath_convo::ConversationEvent) -> Option<Entry> {
+    let base = EntryBase {
+        id: event.id.clone(),
+        parent_id: event.parent_id.clone(),
+        timestamp: event.timestamp.clone(),
+    };
+    let rest = |skip: &[&str]| -> HashMap<String, Value> {
+        event
+            .data
+            .iter()
+            .filter(|(k, _)| !skip.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+    match event.event_type.as_str() {
+        "model_change" => Some(Entry::ModelChange {
+            base,
+            provider: event
+                .data
+                .get("provider")
                 .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("{}-lbl-{}", turn.id, i));
-            let timestamp = lo
-                .and_then(|m| m.get("timestamp"))
+                .unwrap_or_default()
+                .to_string(),
+            model_id: event
+                .data
+                .get("modelId")
                 .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| turn.timestamp.clone());
-            let extra = extra_map_from(lo.and_then(|m| m.get("rawExtra")));
-            entries.push(Entry::Label {
-                base: EntryBase {
-                    id,
-                    parent_id: None,
-                    timestamp,
-                },
-                extra,
-            });
-        }
+                .unwrap_or_default()
+                .to_string(),
+            extra: rest(&["provider", "modelId"]),
+        }),
+        "thinking_level_change" => Some(Entry::ThinkingLevelChange {
+            base,
+            thinking_level: event
+                .data
+                .get("thinkingLevel")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            extra: rest(&["thinkingLevel"]),
+        }),
+        "label" => Some(Entry::Label {
+            base,
+            extra: rest(&[]),
+        }),
+        _ => None,
     }
 }
 
@@ -293,6 +284,7 @@ fn emit_turn_entries(
     cfg: &PiProjector,
     turn: &Turn,
     pi: &Map<String, Value>,
+    model_ctx: Option<&(String, String)>,
     covered_tool_ids: &std::collections::HashSet<String>,
     entries: &mut Vec<Entry>,
 ) {
@@ -314,7 +306,7 @@ fn emit_turn_entries(
 
     match &turn.role {
         Role::User => emit_user(turn, entries),
-        Role::Assistant => emit_assistant(cfg, turn, pi, covered_tool_ids, entries),
+        Role::Assistant => emit_assistant(cfg, turn, pi, model_ctx, covered_tool_ids, entries),
         Role::System => {
             // System turns from non-Pi sources don't have a direct
             // analog; fold them into a custom-system message.
@@ -350,10 +342,22 @@ fn emit_user(turn: &Turn, entries: &mut Vec<Entry>) {
     });
 }
 
+/// Pi's wire `api` value for a provider, as observed in real sessions
+/// (anthropic → "anthropic-messages", ollama/openai → "openai-completions").
+/// Unknown providers reuse the provider name.
+fn api_for_provider(provider: &str) -> String {
+    match provider {
+        "anthropic" => "anthropic-messages".to_string(),
+        "ollama" | "openai" | "openrouter" => "openai-completions".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn emit_assistant(
     cfg: &PiProjector,
     turn: &Turn,
     pi: &Map<String, Value>,
+    model_ctx: Option<&(String, String)>,
     covered_tool_ids: &std::collections::HashSet<String>,
     entries: &mut Vec<Entry>,
 ) {
@@ -386,10 +390,14 @@ fn emit_assistant(
     }
 
     let api_obj = pi.get("api").and_then(Value::as_object);
+    // Provider precedence: the chain's `model_change` context (real Pi
+    // sessions), then the projector's configured default, then "anthropic".
+    let ctx_provider = model_ctx.map(|(p, _)| p.clone());
     let api = api_obj
         .and_then(|m| m.get("api"))
         .and_then(Value::as_str)
         .map(str::to_string)
+        .or_else(|| ctx_provider.as_deref().map(api_for_provider))
         .unwrap_or_else(|| {
             cfg.default_api
                 .clone()
@@ -399,6 +407,7 @@ fn emit_assistant(
         .and_then(|m| m.get("provider"))
         .and_then(Value::as_str)
         .map(str::to_string)
+        .or(ctx_provider)
         .unwrap_or_else(|| {
             cfg.default_provider
                 .clone()

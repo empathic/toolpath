@@ -290,3 +290,90 @@ fn compacted_fixture_derive_extract_derive_is_stable() {
         );
     }
 }
+
+/// Meta entries (`model_change` / `thinking_level_change`) survive the
+/// projection round-trip as typed events. The compacted capture carries
+/// three model changes and one thinking-level change, one of them inside
+/// the turn parent chain — dropping them lost the resumed session's model
+/// selection.
+#[test]
+fn compacted_fixture_meta_entries_survive_projection() {
+    let session =
+        reader::read_session_from_file(&compacted_fixture_path()).expect("read compacted fixture");
+    let count = |s: &toolpath_pi::PiSession, want: &str| {
+        s.entries
+            .iter()
+            .filter(|e| match e {
+                toolpath_pi::Entry::ModelChange { .. } => want == "model_change",
+                toolpath_pi::Entry::ThinkingLevelChange { .. } => want == "thinking_level_change",
+                _ => false,
+            })
+            .count()
+    };
+    assert_eq!(count(&session, "model_change"), 3);
+    assert_eq!(count(&session, "thinking_level_change"), 1);
+
+    let view = session_to_view(&session);
+    let events: Vec<&str> = view
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            toolpath_convo::Item::Event(e) => Some(e.event_type.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        events,
+        vec![
+            "model_change",
+            "thinking_level_change",
+            "model_change",
+            "model_change"
+        ],
+        "meta entries land as typed events in stream order"
+    );
+
+    let projected = PiProjector::new().project(&view).expect("project");
+    assert_eq!(count(&projected, "model_change"), 3);
+    assert_eq!(count(&projected, "thinking_level_change"), 1);
+
+    // Assistant messages carry the provider established by the chain's
+    // model_change context — Pi restores a resumed session's model from
+    // the last assistant's provider + model pair. The capture switches
+    // anthropic → ollama mid-session.
+    let providers: Vec<(String, String)> = projected
+        .entries
+        .iter()
+        .filter_map(|e| match e {
+            toolpath_pi::Entry::Message { message, .. } => match message {
+                toolpath_pi::AgentMessage::Assistant {
+                    provider, model, ..
+                } => Some((provider.clone(), model.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(
+        providers.contains(&("anthropic".to_string(), "claude-haiku-4-5".to_string())),
+        "pre-switch assistants keep the anthropic pairing: {providers:?}"
+    );
+    assert_eq!(
+        providers.last().map(|(p, m)| (p.as_str(), m.as_str())),
+        Some(("ollama", "gemma4")),
+        "the final assistant carries the post-switch ollama pairing"
+    );
+
+    // And the pipeline stays stable with events on the chain.
+    for _ in 0..24 {
+        let gen1 = derive_path(&view, &DeriveConfig::default());
+        let gen2 = derive_path(&extract_conversation(&gen1), &DeriveConfig::default());
+        assert_eq!(
+            serde_json::to_value(&gen1).unwrap(),
+            serde_json::to_value(&gen2).unwrap(),
+        );
+    }
+    let view2 = session_to_view(&projected);
+    let view3 = session_to_view(&PiProjector::new().project(&view2).expect("project"));
+    toolpath_convo::testing::assert_fixpoint(&view, &view2, &view3);
+}
