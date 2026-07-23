@@ -405,9 +405,14 @@ fn derive_claude_with_manager(
     session: Option<String>,
     all: bool,
 ) -> Result<Vec<DerivedDoc>> {
+    // Thinking rides along: dropping it degrades resume (the harness
+    // re-reads it) and used to leave empty-thinking assistant entries
+    // projecting as `[{"type":"text","text":""}]` — a content shape that
+    // aborts Claude 2.1.216's transcript renderer, blanking every ❯ prompt
+    // and the Compacted indicator on a resumed session.
     let make_config = |p: &str| toolpath_claude::derive::DeriveConfig {
         project_path: Some(p.to_string()),
-        include_thinking: false,
+        include_thinking: true,
     };
 
     // Interactive picker fires only when no explicit `--session` (and not
@@ -485,9 +490,11 @@ fn derive_claude_with_manager(
 /// `(Some(p), Some(s), _)` arm in [`derive_claude_with_manager`].
 pub(crate) fn derive_claude_session(project: &str, session: &str) -> Result<DerivedDoc> {
     let manager = toolpath_claude::ClaudeConvo::new();
+    // include_thinking matches derive_claude_with_manager — see the note
+    // there (resume fidelity + the empty-text-block renderer abort).
     let cfg = toolpath_claude::derive::DeriveConfig {
         project_path: Some(project.to_string()),
-        include_thinking: false,
+        include_thinking: true,
     };
     let convo = manager
         .read_conversation(project, session)

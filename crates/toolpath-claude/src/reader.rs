@@ -30,26 +30,34 @@ impl ConversationReader {
                 continue;
             }
 
-            // Try to parse as a conversation entry
-            match serde_json::from_str::<ConversationEntry>(&line) {
-                Ok(entry) if !entry.uuid.is_empty() => {
-                    conversation.add_entry(entry);
-                }
-                Ok(_) | Err(_) => {
+            // Parse the line as a *stream* of JSON values: reading a session
+            // Claude Code is actively writing can catch two objects
+            // concatenated on one line (a mid-write flush boundary), and
+            // whole-line parsing dropped both. A truncated trailing object
+            // still drops, but every complete value on the line survives.
+            let mut parsed_any = false;
+            for value in
+                serde_json::Deserializer::from_str(&line).into_iter::<serde_json::Value>()
+            {
+                let Ok(value) = value else { break };
+                parsed_any = true;
+                match serde_json::from_value::<ConversationEntry>(value.clone()) {
+                    Ok(entry) if !entry.uuid.is_empty() => {
+                        conversation.add_entry(entry);
+                    }
                     // Headerless / metadata lines (ai-title, last-prompt,
                     // queue-operation, permission-mode, file-history-snapshot,
                     // etc.) are preserved verbatim so the projector can
                     // re-emit them on roundtrip.
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                        conversation.preamble.push(value);
-                    } else if line_num < 5 || std::env::var("CLAUDE_CLI_DEBUG").is_ok() {
-                        eprintln!(
-                            "Warning: Failed to parse line {} in {:?}: not valid JSON",
-                            line_num + 1,
-                            path.file_name().unwrap_or_default()
-                        );
-                    }
+                    Ok(_) | Err(_) => conversation.preamble.push(value),
                 }
+            }
+            if !parsed_any && (line_num < 5 || std::env::var("CLAUDE_CLI_DEBUG").is_ok()) {
+                eprintln!(
+                    "Warning: Failed to parse line {} in {:?}: not valid JSON",
+                    line_num + 1,
+                    path.file_name().unwrap_or_default()
+                );
             }
         }
 
@@ -205,11 +213,17 @@ impl ConversationReader {
                 continue;
             }
 
-            // Try to parse as a conversation entry
-            if let Ok(entry) = serde_json::from_str::<ConversationEntry>(&line) {
-                // Only add entries with valid UUIDs (skip metadata entries)
-                if !entry.uuid.is_empty() {
-                    entries.push(entry);
+            // Stream-parse like `read_conversation`: a mid-write capture can
+            // concatenate two objects on one line; keep every complete one.
+            for value in
+                serde_json::Deserializer::from_str(&line).into_iter::<serde_json::Value>()
+            {
+                let Ok(value) = value else { break };
+                if let Ok(entry) = serde_json::from_value::<ConversationEntry>(value) {
+                    // Only add entries with valid UUIDs (skip metadata entries)
+                    if !entry.uuid.is_empty() {
+                        entries.push(entry);
+                    }
                 }
             }
             // Silently skip unparseable lines (metadata, file-history-snapshot, etc.)
@@ -281,6 +295,36 @@ mod tests {
         assert_eq!(convo.message_count(), 2);
         assert_eq!(convo.user_messages().len(), 1);
         assert_eq!(convo.assistant_messages().len(), 1);
+    }
+
+    #[test]
+    fn test_concatenated_objects_on_one_line_all_survive() {
+        // A mid-write flush boundary can land two entries on one physical
+        // line. Whole-line parsing dropped both; the stream parse keeps
+        // every complete object. A truncated trailing object still drops
+        // without taking the complete prefix with it.
+        let mut temp = NamedTempFile::new().unwrap();
+        write!(
+            temp,
+            r#"{{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"t","message":{{"role":"user","content":"a"}}}}{{"type":"assistant","uuid":"a1","timestamp":"2024-01-01T00:00:01Z","sessionId":"t","message":{{"role":"assistant","content":"b"}}}}"#
+        )
+        .unwrap();
+        writeln!(temp).unwrap();
+        write!(
+            temp,
+            r#"{{"type":"user","uuid":"u2","timestamp":"2024-01-01T00:00:02Z","sessionId":"t","message":{{"role":"user","content":"c"}}}}{{"type":"assist"#
+        )
+        .unwrap();
+        writeln!(temp).unwrap();
+        temp.flush().unwrap();
+
+        let convo = ConversationReader::read_conversation(temp.path()).unwrap();
+        let uuids: Vec<&str> = convo.entries.iter().map(|e| e.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["u1", "a1", "u2"]);
+
+        let (entries, _) = ConversationReader::read_from_offset(temp.path(), 0).unwrap();
+        let uuids: Vec<&str> = entries.iter().map(|e| e.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["u1", "a1", "u2"]);
     }
 
     #[test]
