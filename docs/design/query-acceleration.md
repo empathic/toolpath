@@ -17,12 +17,12 @@ every query still pays the full parse cost of the cache:
 - convert to `jaq_json::Val`,
 - run the filter.
 
-Measured baseline (2026-07-21, release build, M-series laptop):
+Measured baseline (2026-07-23, release build, M-series laptop):
 
 | Cache | Query | Wall time |
 |---|---|---|
-| 97 docs, 220 MB, 46,182 steps | `length` | ~1.2 s |
-| same | `map(select(.dead_end)) \| length` | ~1.2 s |
+| 97 docs, 114 MB, 46,043 steps | `length` | ~0.9 s |
+| same | `map(select(.dead_end)) \| length` | ~1.0 s |
 
 Almost all of it is user CPU — JSON parsing, not disk. Scope flags
 (`--source`, `--project`, `--parent-dir`, `--kind`) don't help the
@@ -184,36 +184,46 @@ exactly, over a seeded cache.
 ### Measured (implemented 2026-07-21, path-cli 0.17.0 + 0.18.0)
 
 Both this approach and the parallel scan landed; numbers on the real
-97-doc / 220 MB cache (medians of 5), against the pre-work baseline:
+97-doc / 114 MB / 46k-step cache (medians of 5, re-measured 2026-07-23
+after a 110 MB outlier document was deleted — see below), against the
+pre-work baseline:
 
 | Query | baseline | rayon (0.17.0) | + index (0.18.0) |
 |---|---|---|---|
-| `length` (absorbed) | 1233 ms | 596 ms | **27 ms** |
-| `map(select(.dead_end)) \| length` (absorbed) | 1251 ms | 605 ms | **26 ms** |
-| `map(select(.step.actor \| startswith("agent:"))) \| length` | 1287 ms | 612 ms | **254 ms** |
-| `.[] \| select(.dead_end) \| .step.id` | 1273 ms | 615 ms | 724 ms |
-| `map(.step.actor) \| unique` (slurp) | 1374 ms | 1203 ms | 1255 ms |
-| `group_by(.path.id) \| map(length) \| max` (slurp) | 1378 ms | 1215 ms | 1267 ms |
+| `length` (absorbed) | 898 ms | 292 ms | **30 ms** |
+| `map(select(.dead_end)) \| length` (absorbed) | 957 ms | 309 ms | **30 ms** |
+| `map(select(.step.actor \| startswith("agent:"))) \| length` | 976 ms | 310 ms | **169 ms** |
+| `.[] \| select(.dead_end) \| .step.id` | 937 ms | 304 ms | 311 ms |
+| `map(.step.actor) \| unique` (slurp) | 1021 ms | 856 ms | 881 ms |
+| `group_by(.path.id) \| map(length) \| max` (slurp) | 1032 ms | 879 ms | 902 ms |
 
-Learnings vs. the estimates above: exact absorption delivered (~46×,
-flat in cache size); predicated decomposes get ~5×; but a predicated
-*stream* whose surviving rows carry most of the bytes (dead-end rows
-hold the fat diffs) gains nothing over the parallel scan — row-fetch +
-per-row parse ≈ parallel whole-file parse — and unpredicated slurps
-are the parallel scan's territory. One-time index build: ~2.3 s;
-index size ~420 MB next to the 220 MB cache (rows + three hot-field
-indexes) — the "storage roughly doubles" estimate held. The
-parse-only-parallelism tier estimated here as ~0.4–0.6 s was measured
-and then superseded: per-file *filter execution* on the workers (what
-0.17.0 actually ships) reaches ~0.6 s on this skewed cache and ~4.7×
-on an even one, floored by the single 110 MB doc.
+Learnings vs. the estimates above: exact absorption delivered (~30×,
+flat in cache size); predicated decomposes get ~6×; a predicated
+*stream* lands at parity with the parallel scan — row-fetch + per-row
+parse ≈ parallel whole-file parse — and unpredicated slurps and
+streams are the parallel scan's territory (index rows within a few
+percent). One-time index build: ~1.7 s; index size ~250 MB next to the
+114 MB cache (rows + three hot-field indexes) — the "storage roughly
+doubles" estimate held. The parse-only-parallelism tier estimated
+above was measured and then superseded: per-file *filter execution* on
+the workers (what 0.17.0 actually ships) reaches ~3.1× here and ~4.7×
+on the even synthetic cache.
+
+The first round of measurements (2026-07-21) ran on a 220 MB version
+of this same cache dominated by a single 110 MB document (48% of all
+bytes, since deleted). Its effects were instructive: the parallel scan
+was floored at ~2× (one document cannot split across cores), and the
+predicated dead-end stream was *slower* than the scan (724 ms vs
+615 ms) because its surviving rows carried that document's fat diffs.
+Both effects vanished with the outlier — and both argue for the "lean
+rows" variant sketched under Costs.
 
 ## Other approaches (to explore)
 
 Sketches only; each gets its own section as it's worked through.
 
 - **Parallel scan, no index.** Keep the architecture exactly as-is and
-  parse docs on a thread pool. ~1.2 s is single-core; 8 cores → 
+  parse docs on a thread pool. ~0.9 s is single-core; 8 cores →
   ~200 ms with zero new state to maintain. Doesn't change asymptotics
   and can't serve selective queries in ms, but it's the honest
   baseline any index must beat — and it composes with every other

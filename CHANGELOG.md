@@ -12,22 +12,22 @@ stat-level freshness gate per document. The cache files stay canonical
 version bump rebuilds it automatically. `TOOLPATH_QUERY_NO_INDEX=1`
 bypasses it.
 
-What it accelerates (real 97-doc / 220 MB / 46k-step cache, medians;
+What it accelerates (real 97-doc / 114 MB / 46k-step cache, medians;
 "rayon" = 0.17.0's parallel scan):
 
 - **Absorbed counts** — a filter that is exactly `length` or
   `map(select(P)) | length` with a recognized `P` becomes
-  `SELECT count(*)`: 1.23 s → **27 ms** (~46×; no step is parsed at
+  `SELECT count(*)`: 0.90 s → **30 ms** (~30×; no step is parsed at
   all). Recognized `P` atoms: `.dead_end` (and `| not`),
   `.step.actor == "…"`, `.step.actor | startswith("…")`,
   `.path.meta.source == "…"`, and `and`-conjunctions of those.
 - **Predicated scans** — a leading `map(select(P))` / `.[] | select(P)`
   prefilters rows in SQL before parsing: `map(select(.step.actor |
-  startswith("agent:"))) | length` 1.29 s → 254 ms (5×; 612 ms under
+  startswith("agent:"))) | length` 0.98 s → 169 ms (~6×; 310 ms under
   rayon alone).
 - Unrecognized/slurp queries are unchanged (they ride 0.17.0's
-  parallel scan); a predicated stream whose surviving rows carry most
-  of the bytes gains little.
+  parallel scan); a predicated stream lands at parity with it
+  (row-fetch + per-row parse ≈ parallel whole-file parse).
 
 Correctness: recognition is exact (whole-predicate or nothing) and the
 prefilter feeds the *unchanged* original filter, so pruned rows are
@@ -41,7 +41,7 @@ queries (`--kind`/`--project`/`--project-under`) bypass the index.
     `(mtime_ns, size)` stamps, write-through from `cache::write_cached`
     (sync/import keep the index warm), purge on `p cache rm`, orphan
     pruning on full scans, version-gated self-rebuild. One-time build
-    cost on first query: ~2.3 s for the 220 MB cache; index size ~420 MB
+    cost on first query: ~1.7 s for the 114 MB cache; index size ~250 MB
     (rows + hot-field indexes).
   - `query/plan.rs`: `RowPredicate` — conservative recognizer for the
     leading-`select` predicate and the absorbable-count shape, with an
