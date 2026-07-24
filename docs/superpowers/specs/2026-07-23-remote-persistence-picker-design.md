@@ -38,24 +38,52 @@ default, and let a flag skip the picker entirely.
   does on its own.
 - Local (non-`--remote`) resume is unchanged.
 
+## The four independent layers
+
+Remote resume touches four *separate* concerns that stack rather than compete.
+Conflating any two is the classic mistake (expecting tmux to solve roaming, or
+mosh to solve NAT). This design keeps them separate:
+
+| Layer | Concern | How we express it |
+|---|---|---|
+| **Reachability** | Can I even connect? (NAT, mesh, broker) | **`~/.ssh/config`** — not a flag |
+| **Connection-survival** | Does the link survive roaming/sleep? | **`--via ssh\|mosh\|et`** |
+| **Session-survival** | Does work survive a client death? | **`--persist <backend>`** |
+| **Workspace** | Panes/tabs/layout | a `--persist` backend (zellij) |
+
+### Reachability is delegated to ssh config (no flag)
+
+Tailscale SSH, WireGuard, Cloudflare Tunnel (`cloudflared access ssh`),
+Teleport, Nebula, NetBird — all of these are expressed as a `Host` block
+(`ProxyCommand`, `ProxyJump`, or just a mesh hostname). Because `--remote`
+accepts a `~/.ssh/config` alias (see the parsing change on this branch),
+resume rides every one of them for free — the CLI launch honors the full config.
+
+**Known limitation:** the **libssh2 probe/ship half does not honor
+`ProxyCommand`/`ProxyJump`** — libssh2 dials a raw TCP socket. So a host reachable
+*only* through a broker/jump (Cloudflare Tunnel, a bastion) will launch fine but
+**fail at the ship step**. Mitigation (candidate, not v1): when the libssh2 dial
+fails and the config has a `ProxyCommand`, fall back to shipping over the `ssh`
+CLI (`ssh host 'cat > dest'` / scp), which honors the config. Recorded as an open
+question; v1 documents the limitation and errors clearly.
+
 ## Transport axis (`--via`) — forward-looking
 
-Persistence (`--persist`) and transport (`--via`) are **orthogonal**: one anchors
-the session server-side, the other keeps the client↔host link alive across
-roaming/sleep/IP-changes. The belt-and-suspenders combo is `--via mosh` + a
-`--persist` backend.
+Connection-survival only. Orthogonal to `--persist`; the belt-and-suspenders
+combo is `--via mosh` + a `--persist` backend.
 
-- `--via ssh` — **default, the only v1 implementation.** Launch is the current
-  interactive `ssh -t host '<persist-wrapped-cmd>'`.
-- `--via mosh` — **deferred.** Would launch `mosh host -- '<persist-wrapped-cmd>'`
-  (mosh manages the TTY itself, so no `-t`; requires `mosh-server` on the remote,
-  so it joins the up-front probe). The persistence wrapping is identical — `--via`
-  only swaps how the wrapped command is carried.
+- `--via ssh` — **default, the only v1 implementation.** Interactive
+  `ssh -t host '<persist-wrapped-cmd>'`.
+- `--via mosh` — **deferred.** `mosh host -- '<persist-wrapped-cmd>'` (mosh owns
+  the TTY, so no `-t`; needs `mosh-server` on the remote → joins the up-front
+  probe).
+- `--via et` — **deferred.** Eternal Terminal: `et host -c '<persist-wrapped-cmd>'`
+  (TCP auto-reconnect, native scrollback; needs `etserver` + its port → probe).
 
-Designing the flag in now (even with mosh unimplemented) keeps the launch code
-factored around a `Transport` seam so mosh is an additive drop-in, not a refactor.
-The libssh2 probe/ship half is unaffected — `--via` only changes the final
-interactive launch.
+The persistence wrapping is identical across transports — `--via` only swaps how
+the wrapped command is carried. Designing the flag in now keeps the launch code
+factored around a `Transport` seam so mosh/et are additive drop-ins, not a
+refactor. The libssh2 probe/ship half is unaffected by `--via`.
 
 ## Backends and launch mechanisms
 
@@ -105,9 +133,9 @@ This is honest about shpool's model rather than faking a launch it can't do.
 - `--tmux` — **deprecated alias** for `--persist tmux`. Kept working; emits a
   one-line deprecation note pointing at `--persist tmux`. Errors if combined
   with an explicit `--persist`.
-- `--via <transport>` — `ssh` (default) | `mosh` (deferred; errors with a
-  "not yet supported" message in v1). Requires `--remote`. See the Transport axis
-  section.
+- `--via <transport>` — `ssh` (default) | `mosh` | `et` (both deferred; error
+  with a "not yet supported" message in v1). Requires `--remote`. See the
+  Transport axis section.
 
 ### Picker behavior (mirrors the harness picker)
 1. After the remote is reachable and home is resolved, **probe** the remote once:
@@ -140,10 +168,11 @@ This is honest about shpool's model rather than faking a launch it can't do.
   **resolve backend** (flag or picker) → **build PersistPlan** → ship JSONL
   (+ `extra_file`) → print `post_note` → interactive launch of
   `plan.remote_command` **via the selected transport**.
-- New `enum Transport { Ssh, Mosh }`. A `fn launch_invocation(transport, remote,
-  remote_cmd) -> (binary, argv)` seam replaces the direct `ssh_invocation_tty`
-  call: `Ssh` → today's `ssh -t …`; `Mosh` → `mosh host -- …` (v1 returns a
-  "not yet supported" error). The probe/ship half never sees `Transport`.
+- New `enum Transport { Ssh, Mosh, Et }`. A `fn launch_invocation(transport,
+  remote, remote_cmd) -> (binary, argv)` seam replaces the direct
+  `ssh_invocation_tty` call: `Ssh` → today's `ssh -t …`; `Mosh`/`Et` → v1 returns
+  a "not yet supported" error (shape reserved). The probe/ship half never sees
+  `Transport`.
 - `remote_launch_command(harness, id, cwd, tmux: bool)` is replaced by
   `persist_plan(harness, id, cwd, backend) -> PersistPlan`. Existing
   `tmux: bool` call sites and tests migrate to `PersistBackend`.
