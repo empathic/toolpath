@@ -9,7 +9,7 @@
   },
   {
     "name": "toolpath-convo",
-    "version": "0.11.1",
+    "version": "0.12.0",
     "description": "Provider-agnostic conversation types, traits, and Toolpath-Path derivation",
     "docs": "https://docs.rs/toolpath-convo",
     "crate": "https://crates.io/crates/toolpath-convo",
@@ -33,7 +33,7 @@
   },
   {
     "name": "toolpath-claude",
-    "version": "0.12.1",
+    "version": "0.12.2",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",
@@ -113,7 +113,7 @@
   },
   {
     "name": "path-cli",
-    "version": "0.16.0",
+    "version": "0.18.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",

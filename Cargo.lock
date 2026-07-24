@@ -2441,10 +2441,11 @@ dependencies = [
 
 [[package]]
 name = "path-cli"
-version = "0.16.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64",
  "chrono",
  "clap",
  "git2",
@@ -2465,6 +2466,7 @@ dependencies = [
  "sha2",
  "similar",
  "skim",
+ "ssh2",
  "tempfile",
  "tokio",
  "toolpath",
@@ -3728,6 +3730,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh2"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f84d13b3b8a0d4e91a2629911e951db1bb8671512f5c09d7d4ba34500ba68c8"
+dependencies = [
+ "bitflags 2.11.1",
+ "libc",
+ "libssh2-sys",
+ "parking_lot",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4073,7 +4087,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-claude"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4104,7 +4118,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-convo"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "chrono",
  "jsonschema",
