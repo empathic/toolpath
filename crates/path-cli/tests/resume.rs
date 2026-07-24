@@ -8,7 +8,9 @@
 
 #![cfg(not(target_os = "emscripten"))]
 
-use path_cli::cmd_resume::{RecordingExec, ResumeArgs, Transport, run_with_strategy};
+use path_cli::cmd_resume::{
+    PersistBackend, RecordingExec, ResumeArgs, Transport, run_with_strategy,
+};
 use path_cli::harness::Harness;
 
 mod support;
@@ -411,6 +413,37 @@ fn remote_flag_dispatches_resume_over_ssh() {
             .iter()
             .any(|a| a.contains("claude -r resume-remote-int")),
         "ssh should launch `claude -r <id>` on the remote, got {:?}",
+        cap.args
+    );
+}
+
+/// With `--persist dtach` pinned explicitly (skipping the probe/picker),
+/// the launch command must be wrapped in `dtach -A /tmp/path-dtach-<id>`
+/// so the remote session survives an SSH disconnect.
+#[test]
+fn remote_resume_persist_dtach_records_launch_and_ships() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-persist-dtach");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.persist = Some(PersistBackend::Dtach);
+
+    let rec = RecordingExec::with_available(["dtach"]);
+    run_with_strategy(args, &rec).unwrap();
+
+    let cap = rec.captured();
+    assert_eq!(cap.binary, "ssh");
+    assert!(
+        cap.args
+            .iter()
+            .any(|a| a.contains("dtach -A /tmp/path-dtach-")),
+        "{:?}",
         cap.args
     );
 }

@@ -1307,22 +1307,106 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     // 4. Interactive launch of the harness against the shipped session,
     //    with a real TTY — the one step that stays on the real `ssh`
     //    binary (it needs the user's terminal and ssh config).
-    let backend = if args.tmux {
-        PersistBackend::Tmux
-    } else {
-        PersistBackend::Plain
+    let backend = match resolve_persist_flag(args)? {
+        Some(b) => b,
+        None => {
+            let bins: Vec<&str> = PersistBackend::DISPLAY_ORDER
+                .iter()
+                .filter_map(|b| b.bin())
+                .collect();
+            let avail = exec
+                .remote_which(&target, &bins)
+                .with_context(|| format!("probing persistence backends on {remote}"))?;
+            let cands = persist_candidates(&avail);
+            let preferred = preferred_backend(&avail);
+            if crate::fuzzy::available() {
+                pick_persist_backend(&cands, preferred)?
+            } else {
+                if preferred == PersistBackend::Plain {
+                    eprintln!(
+                        "note: no persistence backend found on remote; launching plain (won't survive disconnect)"
+                    );
+                }
+                preferred
+            }
+        }
     };
-    let launch_cmd = persist_plan(
+    let plan = persist_plan(
         Harness::Claude,
         &session_id,
         launch_cwd.as_deref(),
         backend,
         &home,
-    )
-    .remote_command;
-    let (binary, argv) = ssh_invocation_tty(remote, &launch_cmd, true)?;
+    );
+    if let Some((path, body)) = &plan.extra_file {
+        if let Some(parent) = std::path::Path::new(path).parent().and_then(|p| p.to_str()) {
+            exec.remote_mkdirs(&target, parent)
+                .with_context(|| format!("creating {parent} on {remote}"))?;
+        }
+        exec.remote_write(&target, path, body)
+            .with_context(|| format!("shipping {path} to {remote}"))?;
+    }
+    if let Some(note) = &plan.post_note {
+        eprintln!("{note}");
+    }
+    let (binary, argv) = launch_invocation(args.via, remote, &plan.remote_command)?;
     let cwd = std::env::current_dir()?;
     exec_harness(&binary, &argv, &cwd, exec)
+}
+
+/// Interactive persistence-backend picker, mirroring [`interactive_pick`]
+/// (the harness picker): present `describe()` rows via the fuzzy UI, with
+/// the probed-preferred backend flagged `(recommended)`, and map the
+/// picked row back to its [`PersistBackend`] by leading word.
+fn pick_persist_backend(
+    cands: &[PersistBackend],
+    preferred: PersistBackend,
+) -> Result<PersistBackend> {
+    if !crate::fuzzy::available() {
+        let hint = if crate::fuzzy::embedded_picker_available() {
+            "rerun in a terminal"
+        } else {
+            "install `fzf` (or build with the default `embedded-picker` feature) and rerun in a terminal"
+        };
+        anyhow::bail!("interactive picker requires a TTY; pass `--persist <X>` or {hint}");
+    }
+    let mut lines: Vec<String> = Vec::with_capacity(cands.len());
+    for b in cands {
+        let suffix = if *b == preferred {
+            "  (recommended)"
+        } else {
+            ""
+        };
+        lines.push(format!("{}{}", b.describe(), suffix));
+    }
+
+    let header = format!(
+        "pick a persistence backend (recommended: {})",
+        preferred.describe()
+    );
+    let opts = crate::fuzzy::PickOptions {
+        with_nth: "1..",
+        header: Some(&header),
+        ..Default::default()
+    };
+    let selected = match crate::fuzzy::pick(&lines, &opts)
+        .map_err(|e| anyhow::anyhow!("fzf failed: {}", e))?
+    {
+        crate::fuzzy::PickResult::Selected(rows) => rows.into_iter().next().unwrap_or_default(),
+        crate::fuzzy::PickResult::Cancelled => std::process::exit(130),
+        crate::fuzzy::PickResult::NoMatch => {
+            anyhow::bail!("fzf returned no match — picker UI was empty?");
+        }
+    };
+
+    let picked_word = selected.split_whitespace().next().unwrap_or_default();
+    for b in cands {
+        let word = b.describe().split_whitespace().next().unwrap_or_default();
+        if picked_word == word {
+            return Ok(*b);
+        }
+    }
+    anyhow::bail!("picker returned an unrecognized row: {selected}")
 }
 
 /// The name Claude Code gives a project's directory under
