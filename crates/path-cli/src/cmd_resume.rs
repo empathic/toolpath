@@ -1361,8 +1361,10 @@ fn zellij_plan(
     )
 }
 
-// TODO(task-4): attach-only + post_note.
-fn shpool_plan(name: &str, _inner: &str, _note: &mut Option<String>) -> String {
+fn shpool_plan(name: &str, inner: &str, note: &mut Option<String>) -> String {
+    *note = Some(format!(
+        "shpool has no command arg — in the persistent shell, run:\n    {inner}"
+    ));
     format!("shpool attach {}", shell_quote(name))
 }
 
@@ -1907,6 +1909,24 @@ mod tests {
             dtach.remote_command,
             "dtach -A /tmp/path-dtach-sess-1 -z sh -c 'claude -r sess-1'"
         );
+    }
+
+    #[test]
+    fn persist_plan_shpool_attach_only_with_note() {
+        let p = persist_plan(
+            Harness::Claude,
+            "sess-1",
+            Some("/srv/w"),
+            PersistBackend::Shpool,
+            "/home/u",
+        );
+        assert_eq!(p.remote_command, "shpool attach path-sess-1");
+        let note = p.post_note.expect("shpool note");
+        assert!(
+            note.contains("cd /srv/w && claude -r sess-1"),
+            "note: {note}"
+        );
+        assert!(p.extra_file.is_none());
     }
 
     #[test]
