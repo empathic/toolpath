@@ -665,15 +665,11 @@ impl ExecStrategy for RealExec {
                 let home = sftp
                     .realpath(std::path::Path::new("."))
                     .context("resolve remote home directory")?;
-                Ok(home.to_string_lossy().to_string())
+                validate_remote_home(&home.to_string_lossy())
             }
             None => {
                 let out = exec_channel_capture(&conn.sess, "pwd")?;
-                let home = out.trim().to_string();
-                if home.is_empty() {
-                    anyhow::bail!("remote `pwd` returned nothing");
-                }
-                Ok(home)
+                validate_remote_home(&out)
             }
         })
     }
@@ -779,6 +775,30 @@ fn exec_channel_capture(sess: &ssh2::Session, cmd: &str) -> Result<String> {
         );
     }
     Ok(out)
+}
+
+/// Validate that resolving the remote home produced a real absolute path,
+/// not an error banner. Some sshds authenticate a key at the transport
+/// layer but then answer every command with a notice — e.g. exe.dev
+/// replies `Please complete registration by running: ssh exe.dev` for a
+/// key not yet bound to an account. Without this check that banner gets
+/// spliced into the remote session path (`~/.claude/projects/Please
+/// complete registration…/`), which fails deep inside the file ship with
+/// an inscrutable error. Require a single-line absolute path so the
+/// failure is caught early with the offending output shown verbatim.
+fn validate_remote_home(raw: &str) -> Result<String> {
+    let home = raw.trim();
+    if home.is_empty() {
+        anyhow::bail!("remote home lookup returned nothing");
+    }
+    if !home.starts_with('/') || home.contains(['\n', '\r']) {
+        anyhow::bail!(
+            "remote home lookup returned an unexpected value (not an absolute path): {home:?}. \
+             This often means the SSH key authenticated but the host doesn't recognize it — \
+             e.g. an unregistered key on a key-identified host. Register/load the right key and retry."
+        );
+    }
+    Ok(home.to_string())
 }
 
 /// The subset of `~/.ssh/config` the transport honors for a host:
@@ -1408,6 +1428,38 @@ fn looks_like_pathbase_shorthand(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_remote_home_accepts_absolute_path() {
+        assert_eq!(
+            validate_remote_home("/home/exedev\n").unwrap(),
+            "/home/exedev"
+        );
+        assert_eq!(validate_remote_home("  /root  ").unwrap(), "/root");
+    }
+
+    #[test]
+    fn validate_remote_home_rejects_error_banner() {
+        // The exact exe.dev banner an unregistered-but-SSH-authenticated
+        // key produces — must fail early, not become a path component.
+        let err = validate_remote_home("Please complete registration by running: ssh exe.dev")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not an absolute path"), "got: {err}");
+        assert!(err.contains("unregistered key"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_remote_home_rejects_empty_and_multiline() {
+        assert!(
+            validate_remote_home("   ")
+                .unwrap_err()
+                .to_string()
+                .contains("nothing")
+        );
+        // A leading path with trailing banner lines is still rejected.
+        assert!(validate_remote_home("/home/x\nextra chatter").is_err());
+    }
 
     #[test]
     fn ssh_invocation_parses_user_host_port_and_path() {
