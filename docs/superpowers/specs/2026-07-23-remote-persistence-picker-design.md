@@ -30,11 +30,32 @@ default, and let a flag skip the picker entirely.
 
 ## Non-goals
 
-- Transport-layer persistence (mosh, Eternal Terminal). Those wrap the SSH
-  *connection*, not the remote command; different composition, out of scope.
+- **Implementing** transport-layer persistence (mosh, Eternal Terminal) in v1.
+  These wrap the SSH *connection*, not the remote command — a separate axis from
+  `--persist`. v1 reserves the flag shape (`--via ssh|mosh`, below) but only
+  implements `ssh`; mosh lands later.
 - Restore-after-reboot / resurrection semantics beyond what each backend already
   does on its own.
 - Local (non-`--remote`) resume is unchanged.
+
+## Transport axis (`--via`) — forward-looking
+
+Persistence (`--persist`) and transport (`--via`) are **orthogonal**: one anchors
+the session server-side, the other keeps the client↔host link alive across
+roaming/sleep/IP-changes. The belt-and-suspenders combo is `--via mosh` + a
+`--persist` backend.
+
+- `--via ssh` — **default, the only v1 implementation.** Launch is the current
+  interactive `ssh -t host '<persist-wrapped-cmd>'`.
+- `--via mosh` — **deferred.** Would launch `mosh host -- '<persist-wrapped-cmd>'`
+  (mosh manages the TTY itself, so no `-t`; requires `mosh-server` on the remote,
+  so it joins the up-front probe). The persistence wrapping is identical — `--via`
+  only swaps how the wrapped command is carried.
+
+Designing the flag in now (even with mosh unimplemented) keeps the launch code
+factored around a `Transport` seam so mosh is an additive drop-in, not a refactor.
+The libssh2 probe/ship half is unaffected — `--via` only changes the final
+interactive launch.
 
 ## Backends and launch mechanisms
 
@@ -84,6 +105,9 @@ This is honest about shpool's model rather than faking a launch it can't do.
 - `--tmux` — **deprecated alias** for `--persist tmux`. Kept working; emits a
   one-line deprecation note pointing at `--persist tmux`. Errors if combined
   with an explicit `--persist`.
+- `--via <transport>` — `ssh` (default) | `mosh` (deferred; errors with a
+  "not yet supported" message in v1). Requires `--remote`. See the Transport axis
+  section.
 
 ### Picker behavior (mirrors the harness picker)
 1. After the remote is reachable and home is resolved, **probe** the remote once:
@@ -114,8 +138,12 @@ This is honest about shpool's model rather than faking a launch it can't do.
   (single exec channel running `command -v …`), so probing is mockable in tests.
 - `run_remote` sequence becomes: resolve/project → connect/home → **probe** →
   **resolve backend** (flag or picker) → **build PersistPlan** → ship JSONL
-  (+ `extra_file`) → print `post_note` → interactive `ssh -t` of
-  `plan.remote_command`.
+  (+ `extra_file`) → print `post_note` → interactive launch of
+  `plan.remote_command` **via the selected transport**.
+- New `enum Transport { Ssh, Mosh }`. A `fn launch_invocation(transport, remote,
+  remote_cmd) -> (binary, argv)` seam replaces the direct `ssh_invocation_tty`
+  call: `Ssh` → today's `ssh -t …`; `Mosh` → `mosh host -- …` (v1 returns a
+  "not yet supported" error). The probe/ship half never sees `Transport`.
 - `remote_launch_command(harness, id, cwd, tmux: bool)` is replaced by
   `persist_plan(harness, id, cwd, backend) -> PersistPlan`. Existing
   `tmux: bool` call sites and tests migrate to `PersistBackend`.
