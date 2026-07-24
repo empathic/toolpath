@@ -1476,6 +1476,31 @@ fn looks_like_pathbase_shorthand(s: &str) -> bool {
             .all(|s| !s.is_empty() && !s.contains(char::is_whitespace))
 }
 
+/// Transport protocol for remote resume. v1 implements only SSH; mosh and ET
+/// are reserved for future use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Transport {
+    Ssh,
+    Mosh,
+    Et,
+}
+
+/// Carry the persist-wrapped remote command over the chosen transport.
+/// v1 implements only ssh; mosh/et are reserved (spec: Transport axis).
+fn launch_invocation(
+    transport: Transport,
+    remote: &str,
+    remote_cmd: &str,
+) -> Result<(String, Vec<String>)> {
+    match transport {
+        Transport::Ssh => ssh_invocation_tty(remote, remote_cmd, true),
+        Transport::Mosh => {
+            anyhow::bail!("--via mosh is not yet supported (reserved); use --via ssh")
+        }
+        Transport::Et => anyhow::bail!("--via et is not yet supported (reserved); use --via ssh"),
+    }
+}
+
 /// Remote session-persistence backend for `--remote` resume. See the
 /// design spec: three launch mechanisms (direct-wrap, layout-wrap for
 /// zellij, attach-only for shpool).
@@ -2602,6 +2627,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn launch_invocation_ssh_and_deferred_transports() {
+        let (bin, argv) = launch_invocation(Transport::Ssh, "ssh://h", "claude -r x").unwrap();
+        assert_eq!(bin, "ssh");
+        assert_eq!(
+            argv,
+            vec!["-t".to_string(), "h".to_string(), "claude -r x".to_string()]
+        );
+
+        let err = launch_invocation(Transport::Mosh, "ssh://h", "claude -r x").unwrap_err();
+        assert!(err.to_string().contains("not yet supported"), "{err}");
+        assert!(launch_invocation(Transport::Et, "ssh://h", "x").is_err());
     }
 
     #[test]
