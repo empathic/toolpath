@@ -3125,4 +3125,36 @@ mod tests {
             ["tmux", "shpool"].iter().map(|s| s.to_string()).collect();
         assert_eq!(preferred_backend(&with_tmux), PersistBackend::Tmux); // shpool never preferred over tmux
     }
+
+    #[test]
+    fn persist_backend_describe_covers_every_variant() {
+        use PersistBackend::*;
+        let expected = [
+            (Plain, "plain — no persistence; dies on disconnect"),
+            (Tmux, "tmux — detachable; survives drops, reattachable"),
+            (Abduco, "abduco — minimal detach/attach; survives drops"),
+            (Dtach, "dtach — tiny detach/attach; survives drops"),
+            (Zellij, "zellij — detachable workspace (layout-launched)"),
+            (
+                Shpool,
+                "shpool — persistent shell (attach-only; run the command yourself)",
+            ),
+        ];
+        // DISPLAY_ORDER holds every variant, so matching its length keeps
+        // this test honest when a new backend is added.
+        assert_eq!(
+            expected.len(),
+            PersistBackend::DISPLAY_ORDER.len(),
+            "describe test must cover every backend"
+        );
+        for (backend, text) in expected {
+            assert_eq!(backend.describe(), text, "describe() for {backend:?}");
+            // Each blurb leads with the backend's own name, lowercased.
+            let name = format!("{backend:?}").to_lowercase();
+            assert!(
+                backend.describe().starts_with(&name),
+                "{backend:?} blurb should start with its name"
+            );
+        }
+    }
 }
