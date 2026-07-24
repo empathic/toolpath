@@ -80,6 +80,48 @@
 //! project-dir key for the shipped file and the launch's `cd` target;
 //! absent, both default to the remote's ssh cwd (`$HOME`).
 //!
+//! ## Session persistence (`--persist <backend>`)
+//!
+//! `--remote` resumes can survive an SSH disconnect by wrapping the
+//! remote launch in a session multiplexer, chosen from six backends
+//! ([`PersistBackend`]): `plain` (no wrapping — dies on disconnect,
+//! always offered), `tmux`, `abduco`, `dtach`, `zellij`, `shpool`. Each
+//! backend maps to one of three launch mechanisms:
+//! 1. **Direct-wrap** (`plain`, `tmux`, `abduco`, `dtach`) — the harness
+//!    command is wrapped inline (e.g. `tmux new-session -A -s path-<id>
+//!    …`); detach/re-run to re-attach.
+//! 2. **Layout-wrap** (`zellij`) — a generated KDL layout drives the
+//!    launch so the harness starts inside a named zellij session/pane.
+//! 3. **Attach-only** (`shpool`) — shpool keeps a persistent remote shell
+//!    running the harness; resume prints the `shpool attach` command for
+//!    the user to run rather than launching it directly.
+//!
+//! Without `--persist`, a non-TTY invocation picks the best available
+//! backend automatically ([`preferred_backend`]: tmux > zellij > abduco >
+//! dtach > plain); an interactive TTY shows a picker built from
+//! [`persist_candidates`] — the remote is probed for installed backends
+//! ([`ExecStrategy::remote_which`]) and only those (plus `plain`) are
+//! offered. `--persist X` skips the picker. `--tmux` is a **deprecated
+//! alias** for `--persist tmux` ([`resolve_persist_flag`]); combining
+//! both flags is an error.
+//!
+//! ## Transport (`--via ssh|mosh|et`)
+//!
+//! `--via` selects the transport that carries the persist-wrapped
+//! remote command for the interactive launch ([`launch_invocation`]).
+//! `ssh` (the default) is implemented; `mosh` and `et` are reserved
+//! seams that currently error with "not yet supported" — the type is
+//! wired through so a future transport only needs a new match arm.
+//!
+//! ## Reachability
+//!
+//! Tailscale, Cloudflare Tunnel, and bastion-hop targets need no
+//! dedicated flag: point `--remote` at a `~/.ssh/config` `Host` alias
+//! (e.g. `path resume … --remote my-tailnet-box`) and the existing
+//! `HostName`/`User`/`Port`/`IdentityFile` resolution (see "Remote"
+//! above) does the rest, since those tools all work by rewriting what
+//! `ssh <alias>` resolves to.
+//!
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
 //! for the full design.
 

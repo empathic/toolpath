@@ -2,6 +2,27 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Resume: remote session-persistence picker + transport seam — 2026-07-24
+
+- **`path-cli`** (0.18.0): `path resume --remote` gains `--persist
+  <backend>`, generalizing the previous `--tmux`-only detach story into a
+  picker over six backends: `plain`, `tmux`, `abduco`, `dtach`, `zellij`,
+  `shpool`. Three launch mechanisms: direct-wrap (`plain`/`tmux`/`abduco`/
+  `dtach` — the harness command is wrapped inline), layout-wrap (`zellij`
+  — a generated KDL layout drives the launch), and attach-only (`shpool`
+  — a persistent remote shell; resume prints the attach command instead
+  of launching it directly). The remote is probed for installed backends
+  (mirroring the harness picker); `--persist X` skips the picker; a
+  non-TTY invocation auto-picks the best available backend (tmux >
+  zellij > abduco > dtach > plain). `--tmux` is now a **deprecated
+  alias** for `--persist tmux` — combining both flags is an error.
+  - New `--via ssh|mosh|et` transport axis carries the persist-wrapped
+    launch command; `ssh` is implemented (the prior default behavior),
+    `mosh`/`et` are reserved seams that error "not yet supported".
+  - Reachability over Tailscale, Cloudflare Tunnel, or a bastion hop
+    needs no new flag — it rides the existing `~/.ssh/config` `Host`
+    alias resolution already documented for `--remote`.
+
 ## Resume: remote resume over SSH — 2026-07-23
 
 - **`path-cli`** (0.17.0): `path resume` gains `--remote
