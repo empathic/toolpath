@@ -576,6 +576,13 @@ pub trait ExecStrategy {
     /// Write `data` to the absolute remote `path`, truncating any
     /// existing file. Parent directories must already exist.
     fn remote_write(&self, target: &SshTarget, path: &str, data: &[u8]) -> Result<()>;
+
+    /// Which of `bins` exist on the remote (`command -v`). One exec channel.
+    fn remote_which(
+        &self,
+        target: &SshTarget,
+        bins: &[&str],
+    ) -> Result<std::collections::BTreeSet<String>>;
 }
 
 /// Production implementation. On Unix this never returns on success
@@ -706,6 +713,35 @@ impl ExecStrategy for RealExec {
                 ch.wait_close().context("SCP close (wait)")?;
                 Ok(())
             }
+        })
+    }
+
+    fn remote_which(
+        &self,
+        target: &SshTarget,
+        bins: &[&str],
+    ) -> Result<std::collections::BTreeSet<String>> {
+        if bins.is_empty() {
+            return Ok(Default::default());
+        }
+        let probe = bins
+            .iter()
+            .map(|b| {
+                format!(
+                    "command -v {} >/dev/null 2>&1 && echo {}",
+                    shell_single_quote(b),
+                    shell_single_quote(b)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        self.with_conn(target, |conn| {
+            let out = exec_channel_capture(&conn.sess, &probe)?;
+            Ok(out
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect())
         })
     }
 }
@@ -1074,6 +1110,8 @@ pub struct RecordingExec {
     /// When true, `remote_home` returns an error — simulates an
     /// unreachable or unauthenticated remote.
     home_fails: bool,
+    /// Canned set of binaries `remote_which` reports as present.
+    available: std::collections::BTreeSet<String>,
 }
 
 impl RecordingExec {
@@ -1082,6 +1120,14 @@ impl RecordingExec {
     pub fn failing_remote() -> Self {
         Self {
             home_fails: true,
+            ..Default::default()
+        }
+    }
+
+    /// A recorder whose `remote_which` reports exactly `bins` as present.
+    pub fn with_available<'a>(bins: impl IntoIterator<Item = &'a str>) -> Self {
+        Self {
+            available: bins.into_iter().map(String::from).collect(),
             ..Default::default()
         }
     }
@@ -1140,6 +1186,18 @@ impl ExecStrategy for RecordingExec {
             .unwrap()
             .push((path.to_string(), String::from_utf8_lossy(data).to_string()));
         Ok(())
+    }
+
+    fn remote_which(
+        &self,
+        _target: &SshTarget,
+        bins: &[&str],
+    ) -> Result<std::collections::BTreeSet<String>> {
+        Ok(bins
+            .iter()
+            .filter(|b| self.available.contains(**b))
+            .map(|b| b.to_string())
+            .collect())
     }
 }
 
@@ -2693,5 +2751,22 @@ mod tests {
             "body: {body}"
         );
         assert!(body.contains("pane"), "must be a KDL layout: {body}");
+    }
+
+    #[test]
+    fn recording_exec_remote_which_returns_canned_set() {
+        let rec = RecordingExec::with_available(["tmux", "dtach"]);
+        let got = rec
+            .remote_which(
+                &SshTarget {
+                    user: None,
+                    host: "h".into(),
+                    port: None,
+                },
+                &["tmux", "zellij", "dtach"],
+            )
+            .unwrap();
+        assert!(got.contains("tmux") && got.contains("dtach"));
+        assert!(!got.contains("zellij"));
     }
 }
