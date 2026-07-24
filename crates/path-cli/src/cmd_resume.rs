@@ -1341,14 +1341,24 @@ fn persist_plan(
     }
 }
 
-// TODO(task-3): layout-wrap. Temporary: attach/create by name.
 fn zellij_plan(
     name: &str,
-    _inner: &str,
-    _home: &str,
-    _extra: &mut Option<(String, Vec<u8>)>,
+    inner: &str,
+    home: &str,
+    extra: &mut Option<(String, Vec<u8>)>,
 ) -> String {
-    format!("zellij attach --create {}", shell_quote(name))
+    let layout_path = format!("{home}/.cache/path/zellij-{name}.kdl");
+    // Single-pane layout that runs INNER via the shell. `close_on_exit`
+    // keeps the pane if the harness exits so output stays visible.
+    let kdl = format!(
+        "layout {{\n    pane command=\"sh\" {{\n        args \"-c\" {inner:?}\n    }}\n}}\n"
+    );
+    *extra = Some((layout_path.clone(), kdl.into_bytes()));
+    format!(
+        "zellij --session {} --layout {}",
+        shell_quote(name),
+        shell_quote(&layout_path)
+    )
 }
 
 // TODO(task-4): attach-only + post_note.
@@ -2601,5 +2611,28 @@ mod tests {
         assert_eq!(PersistBackend::DISPLAY_ORDER.len(), 6);
         assert_eq!(PersistBackend::DISPLAY_ORDER[0], PersistBackend::Tmux);
         assert!(PersistBackend::Tmux.describe().contains("detach"));
+    }
+
+    #[test]
+    fn persist_plan_zellij_ships_layout() {
+        let p = persist_plan(
+            Harness::Claude,
+            "sess-1",
+            Some("/srv/w"),
+            PersistBackend::Zellij,
+            "/home/u",
+        );
+        assert_eq!(
+            p.remote_command,
+            "zellij --session path-sess-1 --layout /home/u/.cache/path/zellij-path-sess-1.kdl"
+        );
+        let (path, body) = p.extra_file.expect("layout shipped");
+        assert_eq!(path, "/home/u/.cache/path/zellij-path-sess-1.kdl");
+        let body = String::from_utf8(body).unwrap();
+        assert!(
+            body.contains("cd /srv/w && claude -r sess-1"),
+            "body: {body}"
+        );
+        assert!(body.contains("pane"), "must be a KDL layout: {body}");
     }
 }
