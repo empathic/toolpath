@@ -10,7 +10,14 @@ use predicates::prelude::*;
 use std::path::Path;
 
 fn cmd() -> Command {
-    Command::cargo_bin("path").unwrap()
+    // `path query` auto-syncs the cache from the installed harnesses;
+    // pin $HOME to a shared empty sandbox so tests exercise that path
+    // without ingesting the developer's real sessions.
+    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let home = HOME.get_or_init(|| tempfile::tempdir().unwrap());
+    let mut c = Command::cargo_bin("path").unwrap();
+    c.env("HOME", home.path()).env_remove("XDG_DATA_HOME");
+    c
 }
 
 /// Write `json` into `<cfg>/documents/<id>.json`, creating the dir.
@@ -504,3 +511,5 @@ fn kind_unknown_errors() {
         .failure()
         .stderr(predicate::str::contains("Bundled kinds"));
 }
+
+// ── auto-sync on invocation ──────────────────────────────────────────

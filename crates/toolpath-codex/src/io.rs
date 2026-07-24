@@ -39,6 +39,18 @@ impl ConvoIO {
         self.resolver.list_rollout_files()
     }
 
+    /// List every session id (the rollout filename stem, which
+    /// [`Self::read_session`] resolves without a tree walk), newest
+    /// first. One directory walk, no file reads — unlike
+    /// [`Self::list_sessions`], which parses every file for metadata.
+    pub fn list_session_ids(&self) -> Result<Vec<String>> {
+        Ok(self
+            .list_rollout_files()?
+            .iter()
+            .filter_map(|p| p.file_stem().and_then(|s| s.to_str()).map(String::from))
+            .collect())
+    }
+
     /// Return lightweight metadata for every rollout, newest first.
     pub fn list_sessions(&self) -> Result<Vec<SessionMetadata>> {
         let files = self.list_rollout_files()?;
@@ -152,6 +164,28 @@ mod tests {
         assert_eq!(sessions[0].git_branch.as_deref(), Some("main"));
         assert_eq!(sessions[0].git_commit.as_deref(), Some("abc"));
         assert_eq!(sessions[0].cli_version.as_deref(), Some("0.118.0"));
+    }
+
+    /// Ids come from filenames alone, so even a file whose body would
+    /// fail to parse is listed; the failure surfaces on read instead.
+    #[test]
+    fn list_session_ids_returns_stems_without_reading_bodies() {
+        let (_t, io) = setup();
+        let day = io.resolver().sessions_root().unwrap().join("2026/04/21");
+        fs::create_dir_all(&day).unwrap();
+        fs::write(
+            day.join("rollout-2026-04-21T09-00-00-bbb.jsonl"),
+            "not json",
+        )
+        .unwrap();
+
+        let ids = io.list_session_ids().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"rollout-2026-04-20T10-00-00-019dabc6-aaa".to_string()));
+        assert!(ids.contains(&"rollout-2026-04-21T09-00-00-bbb".to_string()));
+        for id in &ids {
+            assert!(io.read_session(id).is_ok() || id.contains("bbb"));
+        }
     }
 
     #[test]

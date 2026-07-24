@@ -4,7 +4,7 @@ All notable changes to the Toolpath workspace are documented here.
 
 ## Resume: remote resume over SSH — 2026-07-23
 
-- **`path-cli`** (0.16.0): `path resume` gains `--remote
+- **`path-cli`** (0.17.0): `path resume` gains `--remote
   ssh://[user@]host[:port]` — resume a session on a remote host. The host
   resolves the Toolpath document AND projects the session fully in memory,
   ships the finished harness file to the remote, and launches the harness
@@ -41,6 +41,66 @@ All notable changes to the Toolpath workspace are documented here.
   delegations, or file-mutations and re-links the following turn's `parentUuid`
   to the dropped seed's parent, keeping the uuid chain intact. The group's
   token total is re-expanded onto the surviving line as before.
+
+## One artifact-type layer and per-session imports — 2026-07-16
+
+Groundwork for a cache that fills itself: one enum for artifact
+sources, per-session derive plumbing in every import flow, and cheap
+session-fingerprint APIs in the provider crates.
+
+- **`path-cli`** (0.16.0):
+  - `ArtifactType` (in `artifact.rs`) is the general enum naming
+    artifact sources; `--harness` filters and import cache-id prefixes
+    all use it (it absorbs the former `HarnessArg`). The `Harness`
+    enum stays as the harness-only layer that `share`/`resume`
+    `--harness` take — you can't resume into a git repo — mapping into
+    the general enum via `Harness::artifact_type()`. `SessionRow`
+    generalizes to `ArtifactRow` (its `message_count` is now optional,
+    for future non-session artifact kinds).
+  - Cross-command machinery moved out of the command modules into
+    modules of its own: `artifact.rs` (`ArtifactType`), `harness.rs`
+    (`Harness`, `HarnessBundle`, the provider not-found probes),
+    `cache.rs` (the document store: `write_cached`, `cache_ref`,
+    `list_cached`, `make_id`, …), and `derive.rs` (`DerivedDoc`, the
+    per-session `derive_*_session` helpers, the Pathbase fetch).
+    `cmd_*.rs` files hold only their command's argument surface and
+    flow.
+  - Every import flow loops per-session derive helpers
+    (`derive_*_session_with`, one per provider, each usable with an
+    injected provider manager) — explicit `--session`, picker
+    multi-select, `--all`, and the most-recent fallbacks — and `--all`
+    warns-and-skips unreadable sessions instead of aborting the batch.
+    **Breaking**: `p import pi --all` now emits one Path document per
+    session, consistent with every other provider (it previously
+    produced a single combined Graph).
+  - **Maximal ingest**: thinking blocks are always derived for claude
+    and gemini (**breaking**: `p import gemini` loses its
+    `--include-thinking` flag). Uploads, the local cache, and `resume`
+    all carry the full derivation.
+  - Claude derives leave `DeriveConfig.project_path` unset so
+    `path.base` comes from the session's own recorded cwd rather than
+    the lossy project-dir slug, falling back to the caller's
+    `--project` when no cwd was recorded.
+- **`toolpath-gemini`** (0.6.1): new `PathResolver::list_session_entries`
+  returns each session's listing id, inner `sessionId`, and backing
+  file/dir path, and `peek_session_id` is now bounded — it scans the
+  first 4 KiB of a main chat file (identity fields lead the JSON) and
+  falls back to a full parse only when they don't (including when a
+  small file declines in the prefix). `list_sessions` delegates to it
+  unchanged. This lets callers fingerprint gemini sessions without
+  reading chat bodies.
+- **`toolpath-claude`** (0.12.1): `ClaudeConvo::session_chain` is now
+  public — it resolves the full session chain for a session id (oldest
+  segment first), which lets callers fingerprint a conversation across
+  rotations without reading bodies. It rides the same cached chain
+  index as `list_conversations`, so calling it after a listing costs
+  no extra IO.
+- **`toolpath-codex`** (0.6.1): new `list_session_ids` on
+  `CodexConvo`/`ConvoIO` lists session ids (rollout filename stems)
+  from a single directory walk with no file reads, and
+  `find_rollout_file` resolves a full stem directly through its
+  `YYYY/MM/DD` bucket instead of walking the tree. Together these make
+  enumerate-then-read (`p import codex --all`) one parse per file.
 
 ## Derive: resolve duplicate step ids — 2026-07-01
 

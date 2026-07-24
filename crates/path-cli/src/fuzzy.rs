@@ -175,7 +175,7 @@ pub(crate) fn count(n: usize, unit: &str) -> String {
 /// Layout: `[{leading} ]{when:16}  {count}  [{project:28}]  {title}`.
 ///
 /// - `leading` is an optional prefix (used by `path share` to inject a
-///   cwd-match marker and a harness symbol; `None` for single-provider
+///   cwd-match marker and a padded harness name; `None` for single-provider
 ///   `path p import <provider>` pickers where neither applies).
 /// - `when` renders as `YYYY-MM-DD HH:MM` or a 16-char placeholder when
 ///   the provider doesn't have a timestamp on hand.
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(out, "2026-01-29 10:05    17 msgs  hello world");
     }
 
-    /// `path share` injects a scope marker + harness symbol as the
+    /// `path share` injects a scope marker + padded harness name as the
     /// `leading` prefix; assert it's separated from the timestamp by
     /// exactly one space so the layout is grep-able.
     #[test]

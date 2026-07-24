@@ -81,6 +81,11 @@ impl CodexConvo {
         self.io.list_sessions()
     }
 
+    /// List every session id, newest first, without reading any files.
+    pub fn list_session_ids(&self) -> crate::Result<Vec<String>> {
+        self.io.list_session_ids()
+    }
+
     /// Most recent session (by last activity), if any.
     pub fn most_recent_session(&self) -> crate::Result<Option<Session>> {
         let metas = self.list_sessions()?;

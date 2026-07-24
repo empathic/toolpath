@@ -147,7 +147,7 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
         // dropped. A `--source`/default scan is not explicit (skip-warn).
         let by_id = id_set.is_some();
         let mut seen_ids: HashSet<String> = HashSet::new();
-        for entry in crate::cmd_cache::list_cached()? {
+        for entry in crate::cache::list_cached()? {
             if let Some(ids) = &id_set
                 && !ids.contains(entry.id.as_str())
             {

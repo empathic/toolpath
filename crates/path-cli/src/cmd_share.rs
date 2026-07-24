@@ -5,22 +5,15 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use clap::{Args, ValueEnum};
+use clap::Args;
 use std::path::PathBuf;
 
+use crate::artifact::ArtifactType;
 use crate::cmd_export::RepoSpec;
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "lower")]
-pub enum HarnessArg {
-    Claude,
-    Gemini,
-    Codex,
-    Copilot,
-    Opencode,
-    Cursor,
-    Pi,
-}
+use crate::harness::{
+    Harness, HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_copilot,
+    is_not_found_cursor, is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
+};
 
 #[derive(Args, Debug)]
 pub struct ShareArgs {
@@ -49,7 +42,7 @@ pub struct ShareArgs {
     /// Narrow the picker to one harness, or skip the picker entirely
     /// when used with --session.
     #[arg(long, value_enum)]
-    pub harness: Option<HarnessArg>,
+    pub harness: Option<Harness>,
 
     /// Skip the picker. Requires --harness; requires --project for
     /// claude/gemini/pi.
@@ -66,123 +59,22 @@ pub struct ShareArgs {
     pub no_cache: bool,
 }
 
-/// Which agent harness a session was produced by.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Harness {
-    Claude,
-    Gemini,
-    Codex,
-    Copilot,
-    Opencode,
-    Cursor,
-    Pi,
-}
-
-impl Harness {
-    pub(crate) fn name(&self) -> &'static str {
-        match self {
-            Harness::Claude => "claude",
-            Harness::Gemini => "gemini",
-            Harness::Codex => "codex",
-            Harness::Copilot => "copilot",
-            Harness::Opencode => "opencode",
-            Harness::Cursor => "cursor",
-            Harness::Pi => "pi",
-        }
-    }
-
-    /// Padded so all symbols line up in the fzf column. Longest is
-    /// "opencode" (8); pad shorter names to match.
-    pub(crate) fn symbol(&self) -> &'static str {
-        match self {
-            Harness::Claude => "claude  ",
-            Harness::Gemini => "gemini  ",
-            Harness::Codex => "codex   ",
-            Harness::Copilot => "copilot ",
-            Harness::Opencode => "opencode",
-            Harness::Cursor => "cursor  ",
-            Harness::Pi => "pi      ",
-        }
-    }
-
-    /// True when the underlying provider keys sessions by project path.
-    /// claude/gemini/pi: true. codex/opencode/cursor: false (sessions
-    /// store cwd per-row, not as a directory key — cursor stores it as
-    /// `workspaceIdentifier.uri.fsPath` on each composer).
-    pub(crate) fn project_keyed(&self) -> bool {
-        matches!(self, Harness::Claude | Harness::Gemini | Harness::Pi)
-    }
-
-    pub(crate) fn from_arg(arg: HarnessArg) -> Self {
-        match arg {
-            HarnessArg::Claude => Harness::Claude,
-            HarnessArg::Gemini => Harness::Gemini,
-            HarnessArg::Codex => Harness::Codex,
-            HarnessArg::Copilot => Harness::Copilot,
-            HarnessArg::Opencode => Harness::Opencode,
-            HarnessArg::Cursor => Harness::Cursor,
-            HarnessArg::Pi => Harness::Pi,
-        }
-    }
-
-    pub(crate) fn parse(s: &str) -> Option<Self> {
-        match s {
-            "claude" => Some(Harness::Claude),
-            "gemini" => Some(Harness::Gemini),
-            "codex" => Some(Harness::Codex),
-            "copilot" => Some(Harness::Copilot),
-            "opencode" => Some(Harness::Opencode),
-            "cursor" => Some(Harness::Cursor),
-            "pi" => Some(Harness::Pi),
-            _ => None,
-        }
-    }
-}
-
-/// One row in the unified session picker.
+/// One artifact surfaced by a provider — today always an agent session.
+/// Rows feed both the unified `share` picker and `p cache sync`.
 #[derive(Debug, Clone)]
-pub(crate) struct SessionRow {
-    pub(crate) harness: Harness,
+pub(crate) struct ArtifactRow {
+    pub(crate) artifact_type: ArtifactType,
     /// Project path for keyed providers; `None` for codex/opencode.
-    pub(crate) project: Option<String>,
+    pub(crate) path: Option<String>,
     /// Recorded cwd from the session (codex/opencode only).
     pub(crate) cwd: Option<String>,
     pub(crate) session_id: String,
     pub(crate) title: String,
     pub(crate) last_activity: Option<DateTime<Utc>>,
-    pub(crate) message_count: usize,
+    /// Message count — populated only for harness artifact types
+    /// (agent sessions); `None` for future non-session artifact kinds.
+    pub(crate) message_count: Option<usize>,
     pub(crate) matches_cwd: bool,
-}
-
-/// Bundle of provider managers used during aggregation. Production code
-/// builds this from real `$HOME` via `from_environment`; tests construct
-/// it directly with provider-specific resolvers.
-#[derive(Default)]
-pub(crate) struct HarnessBundle {
-    pub(crate) claude: Option<toolpath_claude::ClaudeConvo>,
-    pub(crate) gemini: Option<toolpath_gemini::GeminiConvo>,
-    pub(crate) codex: Option<toolpath_codex::CodexConvo>,
-    pub(crate) copilot: Option<toolpath_copilot::CopilotConvo>,
-    pub(crate) opencode: Option<toolpath_opencode::OpencodeConvo>,
-    pub(crate) cursor: Option<toolpath_cursor::CursorConvo>,
-    pub(crate) pi: Option<toolpath_pi::PiConvo>,
-}
-
-impl HarnessBundle {
-    /// Build the production bundle. Each provider is included
-    /// unconditionally (its `new()` doesn't fail on a missing home dir);
-    /// `gather_sessions` skips the ones whose listing returns empty/NotFound.
-    pub(crate) fn from_environment() -> Self {
-        Self {
-            claude: Some(toolpath_claude::ClaudeConvo::new()),
-            gemini: Some(toolpath_gemini::GeminiConvo::new()),
-            codex: Some(toolpath_codex::CodexConvo::new()),
-            copilot: Some(toolpath_copilot::CopilotConvo::new()),
-            opencode: Some(toolpath_opencode::OpencodeConvo::new()),
-            cursor: Some(toolpath_cursor::CursorConvo::new()),
-            pi: Some(toolpath_pi::PiConvo::new()),
-        }
-    }
 }
 
 /// Aggregate sessions across the harnesses in `bundle`, ranked so that
@@ -192,49 +84,49 @@ impl HarnessBundle {
 /// Filters: `harness_filter` keeps only rows from one harness; `project_filter`
 /// keeps only rows whose project (for keyed) or cwd (for session-keyed)
 /// canonicalizes to that path.
-pub(crate) fn gather_sessions(
+pub(crate) fn gather_artifacts(
     bundle: &HarnessBundle,
     cwd: &std::path::Path,
-    harness_filter: Option<Harness>,
+    harness_filter: Option<ArtifactType>,
     project_filter: Option<&std::path::Path>,
-) -> Vec<SessionRow> {
+) -> Vec<ArtifactRow> {
     let mut rows = Vec::new();
     let canonical_cwd = canonicalize_or_self(cwd);
     let canonical_project = project_filter.map(canonicalize_or_self);
 
-    let want = |h: Harness| harness_filter.is_none_or(|f| f == h);
+    let want = |h: ArtifactType| harness_filter.is_none_or(|f| f == h);
 
-    if want(Harness::Claude)
+    if want(ArtifactType::Claude)
         && let Some(mgr) = &bundle.claude
     {
         collect_claude(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
-    if want(Harness::Gemini)
+    if want(ArtifactType::Gemini)
         && let Some(mgr) = &bundle.gemini
     {
         collect_gemini(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
-    if want(Harness::Pi)
+    if want(ArtifactType::Pi)
         && let Some(mgr) = &bundle.pi
     {
         collect_pi(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
-    if want(Harness::Codex)
+    if want(ArtifactType::Codex)
         && let Some(mgr) = &bundle.codex
     {
         collect_codex(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
-    if want(Harness::Copilot)
+    if want(ArtifactType::Copilot)
         && let Some(mgr) = &bundle.copilot
     {
         collect_copilot(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
-    if want(Harness::Opencode)
+    if want(ArtifactType::Opencode)
         && let Some(mgr) = &bundle.opencode
     {
         collect_opencode(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
-    if want(Harness::Cursor)
+    if want(ArtifactType::Cursor)
         && let Some(mgr) = &bundle.cursor
     {
         collect_cursor(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
@@ -260,7 +152,7 @@ fn collect_claude(
     mgr: &toolpath_claude::ClaudeConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
         Ok(ps) if !ps.is_empty() => ps,
@@ -287,16 +179,16 @@ fn collect_claude(
         };
         let matches_cwd = paths_match(project_path, canonical_cwd);
         for m in metas {
-            out.push(SessionRow {
-                harness: Harness::Claude,
-                project: Some(m.project_path),
+            out.push(ArtifactRow {
+                artifact_type: ArtifactType::Claude,
+                path: Some(m.project_path),
                 cwd: None,
                 session_id: m.session_id,
                 title: m
                     .first_user_message
                     .unwrap_or_else(|| "(no prompt)".to_string()),
                 last_activity: m.last_activity,
-                message_count: m.message_count,
+                message_count: Some(m.message_count),
                 matches_cwd,
             });
         }
@@ -307,7 +199,7 @@ fn collect_gemini(
     mgr: &toolpath_gemini::GeminiConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
         Ok(ps) if !ps.is_empty() => ps,
@@ -334,16 +226,16 @@ fn collect_gemini(
         };
         let matches_cwd = paths_match(project_path, canonical_cwd);
         for m in metas {
-            out.push(SessionRow {
-                harness: Harness::Gemini,
-                project: Some(m.project_path),
+            out.push(ArtifactRow {
+                artifact_type: ArtifactType::Gemini,
+                path: Some(m.project_path),
                 cwd: None,
                 session_id: m.session_uuid,
                 title: m
                     .first_user_message
                     .unwrap_or_else(|| "(no prompt)".to_string()),
                 last_activity: m.last_activity,
-                message_count: m.message_count,
+                message_count: Some(m.message_count),
                 matches_cwd,
             });
         }
@@ -354,7 +246,7 @@ fn collect_pi(
     mgr: &toolpath_pi::PiConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
         Ok(ps) if !ps.is_empty() => ps,
@@ -381,20 +273,29 @@ fn collect_pi(
         };
         let matches_cwd = paths_match(project_path, canonical_cwd);
         for m in metas {
-            // SessionMeta.timestamp is a String; parse to DateTime when possible.
-            let last_activity = chrono::DateTime::parse_from_rfc3339(&m.timestamp)
+            // Pi's SessionMeta.timestamp is the session *start*, so it
+            // never moves as the session grows; prefer the file's mtime
+            // as the change-detecting last_activity, falling back to
+            // the header timestamp when the stat fails.
+            let last_activity = std::fs::metadata(&m.file_path)
+                .and_then(|md| md.modified())
                 .ok()
-                .map(|d| d.with_timezone(&Utc));
-            out.push(SessionRow {
-                harness: Harness::Pi,
-                project: Some(project.clone()),
+                .map(DateTime::<Utc>::from)
+                .or_else(|| {
+                    chrono::DateTime::parse_from_rfc3339(&m.timestamp)
+                        .ok()
+                        .map(|d| d.with_timezone(&Utc))
+                });
+            out.push(ArtifactRow {
+                artifact_type: ArtifactType::Pi,
+                path: Some(project.clone()),
                 cwd: None,
                 session_id: m.id,
                 title: m
                     .first_user_message
                     .unwrap_or_else(|| "(no prompt)".to_string()),
                 last_activity,
-                message_count: m.entry_count,
+                message_count: Some(m.entry_count),
                 matches_cwd,
             });
         }
@@ -405,7 +306,7 @@ fn collect_codex(
     mgr: &toolpath_codex::CodexConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.list_sessions() {
         Ok(m) if !m.is_empty() => m,
@@ -432,16 +333,16 @@ fn collect_codex(
             .as_deref()
             .map(|p| paths_match(p, canonical_cwd))
             .unwrap_or(false);
-        out.push(SessionRow {
-            harness: Harness::Codex,
-            project: None,
+        out.push(ArtifactRow {
+            artifact_type: ArtifactType::Codex,
+            path: None,
             cwd: cwd_str,
             session_id: m.id,
             title: m
                 .first_user_message
                 .unwrap_or_else(|| "(no prompt)".to_string()),
             last_activity: m.last_activity,
-            message_count: m.line_count,
+            message_count: Some(m.line_count),
             matches_cwd,
         });
     }
@@ -451,7 +352,7 @@ fn collect_copilot(
     mgr: &toolpath_copilot::CopilotConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.list_sessions() {
         Ok(m) if !m.is_empty() => m,
@@ -475,16 +376,16 @@ fn collect_copilot(
             .as_deref()
             .map(|p| paths_match(p, canonical_cwd))
             .unwrap_or(false);
-        out.push(SessionRow {
-            harness: Harness::Copilot,
-            project: None,
+        out.push(ArtifactRow {
+            artifact_type: ArtifactType::Copilot,
+            path: None,
             cwd: m.cwd,
             session_id: m.id,
             title: m
                 .first_user_message
                 .unwrap_or_else(|| "(no prompt)".to_string()),
             last_activity: m.last_activity,
-            message_count: m.line_count,
+            message_count: Some(m.line_count),
             matches_cwd,
         });
     }
@@ -494,7 +395,7 @@ fn collect_opencode(
     mgr: &toolpath_opencode::OpencodeConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.io().list_session_metadata(None) {
         Ok(m) if !m.is_empty() => m,
@@ -518,14 +419,14 @@ fn collect_opencode(
             (_, false) => m.title.clone(),
             _ => "(no prompt)".to_string(),
         };
-        out.push(SessionRow {
-            harness: Harness::Opencode,
-            project: None,
+        out.push(ArtifactRow {
+            artifact_type: ArtifactType::Opencode,
+            path: None,
             cwd: Some(cwd_str),
             session_id: m.id,
             title,
             last_activity: m.last_activity,
-            message_count: m.message_count,
+            message_count: Some(m.message_count),
             matches_cwd,
         });
     }
@@ -535,7 +436,7 @@ fn collect_cursor(
     mgr: &toolpath_cursor::CursorConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
-    out: &mut Vec<SessionRow>,
+    out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.io().list_session_metadata() {
         Ok(m) if !m.is_empty() => m,
@@ -567,71 +468,21 @@ fn collect_cursor(
             (_, Some(n)) if !n.is_empty() => n.clone(),
             _ => "(no prompt)".to_string(),
         };
-        out.push(SessionRow {
-            harness: Harness::Cursor,
-            project: None,
+        out.push(ArtifactRow {
+            artifact_type: ArtifactType::Cursor,
+            path: None,
             cwd: Some(cwd_str),
             session_id: m.id,
             title,
             last_activity: m.last_activity,
-            message_count: m.message_count,
+            message_count: Some(m.message_count),
             matches_cwd,
         });
     }
 }
 
-fn is_not_found_claude(err: &toolpath_claude::ConvoError) -> bool {
-    use toolpath_claude::ConvoError;
-    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
-        || matches!(err, ConvoError::ClaudeDirectoryNotFound(_))
-}
-
-fn is_not_found_gemini(err: &toolpath_gemini::ConvoError) -> bool {
-    use toolpath_gemini::ConvoError;
-    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
-        || matches!(err, ConvoError::GeminiDirectoryNotFound(_))
-}
-
-fn is_not_found_pi(err: &toolpath_pi::PiError) -> bool {
-    use toolpath_pi::PiError;
-    matches!(err, PiError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, PiError::ProjectNotFound(_))
-}
-
-fn is_not_found_codex(err: &toolpath_codex::ConvoError) -> bool {
-    use toolpath_codex::ConvoError;
-    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
-        || matches!(err, ConvoError::CodexDirectoryNotFound(_))
-}
-
-fn is_not_found_copilot(err: &toolpath_copilot::ConvoError) -> bool {
-    use toolpath_copilot::ConvoError;
-    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
-        || matches!(err, ConvoError::CopilotDirectoryNotFound(_))
-}
-
-fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
-    use toolpath_opencode::ConvoError;
-    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
-        || matches!(err, ConvoError::OpencodeDirectoryNotFound(_))
-        || matches!(err, ConvoError::DatabaseNotFound(_))
-}
-
-fn is_not_found_cursor(err: &toolpath_cursor::CursorError) -> bool {
-    use toolpath_cursor::CursorError;
-    matches!(err, CursorError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, CursorError::NoHomeDirectory)
-        || matches!(err, CursorError::CursorDataDirectoryNotFound(_))
-        || matches!(err, CursorError::DatabaseNotFound(_))
-}
-
 pub fn run(args: ShareArgs) -> Result<()> {
-    let harness = args.harness.map(Harness::from_arg);
+    let harness = args.harness.map(|h| h.artifact_type());
 
     if args.session.is_some() && harness.is_none() {
         anyhow::bail!("--session requires --harness");
@@ -660,7 +511,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let bundle = HarnessBundle::from_environment();
     let project_filter = args.project.as_deref();
-    let rows = gather_sessions(&bundle, &cwd, harness, project_filter);
+    let rows = gather_artifacts(&bundle, &cwd, harness, project_filter);
 
     if rows.is_empty() {
         return bail_no_sessions(&bundle, project_filter);
@@ -720,9 +571,9 @@ pub fn run(args: ShareArgs) -> Result<()> {
         repo: args.repo.clone(),
         name: args.name.clone(),
         public: args.public,
-        harness: Some(harness_to_arg(h)),
+        harness: h.harness(),
         session: None, // unused by share_explicit
-        project: if h.project_keyed() {
+        project: if h.path_keyed() {
             Some(PathBuf::from(&key))
         } else {
             None
@@ -734,18 +585,6 @@ pub fn run(args: ShareArgs) -> Result<()> {
     // thing. `{:?}` adds the surrounding quotes per the spec.
     eprintln!("Picked {} session {:?}", h.name(), title);
     share_explicit(h, &session, &explicit, auth, base_url)
-}
-
-fn harness_to_arg(h: Harness) -> HarnessArg {
-    match h {
-        Harness::Claude => HarnessArg::Claude,
-        Harness::Gemini => HarnessArg::Gemini,
-        Harness::Codex => HarnessArg::Codex,
-        Harness::Copilot => HarnessArg::Copilot,
-        Harness::Opencode => HarnessArg::Opencode,
-        Harness::Cursor => HarnessArg::Cursor,
-        Harness::Pi => HarnessArg::Pi,
-    }
 }
 
 fn bail_no_sessions(
@@ -947,13 +786,13 @@ fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> Stri
 }
 
 fn share_explicit(
-    harness: Harness,
+    harness: ArtifactType,
     session: &str,
     args: &ShareArgs,
     auth: crate::cmd_pathbase::AuthMode,
     base_url: String,
 ) -> Result<()> {
-    let project = match (harness.project_keyed(), args.project.as_ref()) {
+    let project = match (harness.path_keyed(), args.project.as_ref()) {
         (true, Some(p)) => Some(p.to_string_lossy().into_owned()),
         (true, None) => anyhow::bail!(
             "--project required when --harness is {} and --session is set",
@@ -973,7 +812,7 @@ fn share_explicit(
         // the upload uses the fresh body, not the cache. Always
         // overwrite so cache and upload agree (use `--no-cache` to skip
         // the cache write entirely).
-        let path = crate::cmd_cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
         eprintln!(
             "Cached {} session → {} ({})",
             harness.name(),
@@ -1002,25 +841,27 @@ fn share_explicit(
 /// The display column is space-padded rather than tab-separated so the
 /// columns line up consistently across pickers — terminal tab stops
 /// produce ugly variable gaps in both fzf and skim.
-fn format_picker_row(row: &SessionRow) -> String {
+fn format_picker_row(row: &ArtifactRow) -> String {
     let key = row
-        .project
+        .path
         .clone()
         .or_else(|| row.cwd.clone())
         .unwrap_or_default();
     let scope = if row.matches_cwd { "·" } else { " " };
-    let leading = format!("{scope} {}", row.harness.symbol());
+    let leading = format!("{scope} {}", row.artifact_type.padded_name());
     let display = render_row(
         Some(&leading),
         row.last_activity,
-        &count(row.message_count, "msgs"),
+        &row.message_count
+            .map(|c| count(c, "msgs"))
+            .unwrap_or_default(),
         Some(&project_short(&key)),
         &row.title,
     );
     let title = clean_for_picker_display(&row.title);
     format!(
         "{}\t{}\t{}\t{}\t{}",
-        row.harness.name(),
+        row.artifact_type.name(),
         tab_safe(&key),
         tab_safe(&row.session_id),
         display,
@@ -1031,9 +872,9 @@ fn format_picker_row(row: &SessionRow) -> String {
 /// Inverse of [`format_picker_row`] — pulls (harness, key, session,
 /// title) back out of the line the picker returned. Returns `None` if
 /// the line is malformed.
-fn parse_picker_row(line: &str) -> Option<(Harness, String, String, String)> {
+fn parse_picker_row(line: &str) -> Option<(ArtifactType, String, String, String)> {
     let mut parts = line.split('\t');
-    let h = Harness::parse(parts.next()?)?;
+    let h = ArtifactType::parse(parts.next()?)?;
     let key = parts.next()?.to_string();
     let session = parts.next()?.to_string();
     if session.is_empty() {
@@ -1048,84 +889,33 @@ fn parse_picker_row(line: &str) -> Option<(Harness, String, String, String)> {
 use crate::fuzzy::{clean_for_picker_display, count, project_short, render_row, tab_safe};
 
 fn derive_session(
-    harness: Harness,
+    harness: ArtifactType,
     project: Option<&str>,
     session: &str,
-) -> Result<crate::cmd_import::DerivedDoc> {
+) -> Result<crate::derive::DerivedDoc> {
     match harness {
-        Harness::Claude => {
-            crate::cmd_import::derive_claude_session(project.expect("project_keyed"), session)
+        ArtifactType::Claude => {
+            crate::derive::derive_claude_session(project.expect("path_keyed"), session)
         }
-        Harness::Gemini => crate::cmd_import::derive_gemini_session(
-            project.expect("project_keyed"),
-            session,
-            false,
-        ),
-        Harness::Pi => {
-            crate::cmd_import::derive_pi_session(project.expect("project_keyed"), session, None)
+        ArtifactType::Gemini => {
+            crate::derive::derive_gemini_session(project.expect("path_keyed"), session)
         }
-        Harness::Codex => crate::cmd_import::derive_codex_session(session),
-        Harness::Copilot => crate::cmd_import::derive_copilot_session(session),
-        Harness::Opencode => crate::cmd_import::derive_opencode_session(session, false),
-        Harness::Cursor => crate::cmd_import::derive_cursor_session(session),
+        ArtifactType::Copilot => crate::derive::derive_copilot_session(session),
+        ArtifactType::Pi => {
+            crate::derive::derive_pi_session(project.expect("path_keyed"), session, None)
+        }
+        ArtifactType::Codex => crate::derive::derive_codex_session(session),
+        ArtifactType::Opencode => crate::derive::derive_opencode_session(session, false),
+        ArtifactType::Cursor => crate::derive::derive_cursor_session(session),
+        ArtifactType::Git => {
+            anyhow::bail!("share only handles agent sessions; git artifacts go through `p import`")
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn harness_name_and_symbol_are_distinct() {
-        let all = [
-            Harness::Claude,
-            Harness::Gemini,
-            Harness::Codex,
-            Harness::Opencode,
-            Harness::Cursor,
-            Harness::Pi,
-        ];
-        let names: Vec<&str> = all.iter().map(|h| h.name()).collect();
-        let symbols: Vec<&str> = all.iter().map(|h| h.symbol()).collect();
-        assert_eq!(names.len(), 6);
-        assert_eq!(
-            names.iter().collect::<std::collections::HashSet<_>>().len(),
-            6,
-            "names must be unique"
-        );
-        assert_eq!(
-            symbols
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len(),
-            6,
-            "symbols must be unique"
-        );
-    }
-
-    #[test]
-    fn harness_project_keyed_matches_design() {
-        assert!(Harness::Claude.project_keyed());
-        assert!(Harness::Gemini.project_keyed());
-        assert!(Harness::Pi.project_keyed());
-        assert!(!Harness::Codex.project_keyed());
-        assert!(!Harness::Opencode.project_keyed());
-        assert!(!Harness::Cursor.project_keyed());
-    }
-
-    #[test]
-    fn harness_from_arg_roundtrips() {
-        for (arg, harness) in [
-            (HarnessArg::Claude, Harness::Claude),
-            (HarnessArg::Gemini, Harness::Gemini),
-            (HarnessArg::Codex, Harness::Codex),
-            (HarnessArg::Opencode, Harness::Opencode),
-            (HarnessArg::Cursor, Harness::Cursor),
-            (HarnessArg::Pi, Harness::Pi),
-        ] {
-            assert_eq!(Harness::from_arg(arg), harness);
-        }
-    }
 
     use std::path::Path;
     use tempfile::TempDir;
@@ -1157,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn gather_sessions_includes_claude_rows_for_a_project() {
+    fn gather_artifacts_includes_claude_rows_for_a_project() {
         let temp = TempDir::new().unwrap();
         write_claude_session(
             &temp.path().join(".claude"),
@@ -1167,17 +957,17 @@ mod tests {
         );
         let bundle = claude_only_bundle(temp.path());
         let cwd = Path::new("/test/project");
-        let rows = gather_sessions(&bundle, cwd, None, None);
+        let rows = gather_artifacts(&bundle, cwd, None, None);
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].harness, Harness::Claude);
+        assert_eq!(rows[0].artifact_type, ArtifactType::Claude);
         assert_eq!(rows[0].session_id, "abc-session-one");
-        assert_eq!(rows[0].project.as_deref(), Some("/test/project"));
+        assert_eq!(rows[0].path.as_deref(), Some("/test/project"));
         assert!(rows[0].matches_cwd, "cwd should match the project path");
     }
 
     #[test]
-    fn gather_sessions_marks_non_matching_project_rows() {
+    fn gather_artifacts_marks_non_matching_project_rows() {
         let temp = TempDir::new().unwrap();
         write_claude_session(
             &temp.path().join(".claude"),
@@ -1187,22 +977,22 @@ mod tests {
         );
         let bundle = claude_only_bundle(temp.path());
         let cwd = Path::new("/some/other/place");
-        let rows = gather_sessions(&bundle, cwd, None, None);
+        let rows = gather_artifacts(&bundle, cwd, None, None);
 
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].matches_cwd);
     }
 
     #[test]
-    fn gather_sessions_skips_harness_with_no_home_dir() {
+    fn gather_artifacts_skips_harness_with_no_home_dir() {
         // Empty bundle => no rows, no panic.
         let bundle = HarnessBundle::default();
-        let rows = gather_sessions(&bundle, Path::new("/anywhere"), None, None);
+        let rows = gather_artifacts(&bundle, Path::new("/anywhere"), None, None);
         assert!(rows.is_empty());
     }
 
     #[test]
-    fn gather_sessions_filters_by_harness() {
+    fn gather_artifacts_filters_by_harness() {
         let temp = TempDir::new().unwrap();
         write_claude_session(
             &temp.path().join(".claude"),
@@ -1212,7 +1002,7 @@ mod tests {
         );
         let bundle = claude_only_bundle(temp.path());
         let cwd = Path::new("/test/project");
-        let rows = gather_sessions(&bundle, cwd, Some(Harness::Codex), None);
+        let rows = gather_artifacts(&bundle, cwd, Some(ArtifactType::Codex), None);
         assert!(rows.is_empty(), "filter to codex must drop claude rows");
     }
 
@@ -1239,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn gather_sessions_includes_codex_rows_with_cwd_match() {
+    fn gather_artifacts_includes_codex_rows_with_cwd_match() {
         let temp = TempDir::new().unwrap();
         write_codex_session(
             &temp.path().join(".codex"),
@@ -1247,9 +1037,9 @@ mod tests {
             "/work/proj",
         );
         let bundle = codex_only_bundle(temp.path());
-        let rows = gather_sessions(&bundle, Path::new("/work/proj"), None, None);
+        let rows = gather_artifacts(&bundle, Path::new("/work/proj"), None, None);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].harness, Harness::Codex);
+        assert_eq!(rows[0].artifact_type, ArtifactType::Codex);
         assert_eq!(rows[0].cwd.as_deref(), Some("/work/proj"));
         assert!(rows[0].matches_cwd);
     }
@@ -1281,9 +1071,9 @@ mod tests {
         let temp = TempDir::new().unwrap();
         write_copilot_session(&temp.path().join(".copilot"), "sess-aa", "/work/proj");
         let bundle = copilot_only_bundle(temp.path());
-        let rows = gather_sessions(&bundle, Path::new("/work/proj"), None, None);
+        let rows = gather_artifacts(&bundle, Path::new("/work/proj"), None, None);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].harness, Harness::Copilot);
+        assert_eq!(rows[0].artifact_type, ArtifactType::Copilot);
         assert_eq!(rows[0].cwd.as_deref(), Some("/work/proj"));
         assert!(rows[0].matches_cwd);
     }
@@ -1294,12 +1084,17 @@ mod tests {
         write_copilot_session(&temp.path().join(".copilot"), "sess-aa", "/work/proj");
         let bundle = copilot_only_bundle(temp.path());
         // Filtering to a different harness drops the copilot row.
-        let rows = gather_sessions(&bundle, Path::new("/work/proj"), Some(Harness::Codex), None);
+        let rows = gather_artifacts(
+            &bundle,
+            Path::new("/work/proj"),
+            Some(ArtifactType::Codex),
+            None,
+        );
         assert!(rows.is_empty());
     }
 
     #[test]
-    fn gather_sessions_ranks_cwd_matches_first() {
+    fn gather_artifacts_ranks_cwd_matches_first() {
         // Two claude sessions: one in cwd (older), one elsewhere (newer).
         // Despite the elsewhere row being newer, the cwd-match must come first.
         let temp = TempDir::new().unwrap();
@@ -1315,7 +1110,7 @@ mod tests {
         )
         .unwrap();
         let bundle = claude_only_bundle(temp.path());
-        let rows = gather_sessions(&bundle, Path::new("/cwd/project"), None, None);
+        let rows = gather_artifacts(&bundle, Path::new("/cwd/project"), None, None);
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].session_id, "in-cwd-session");
@@ -1326,14 +1121,14 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn paths_match_canonicalizes_through_symlink() {
-        // `paths_match` is the function that produces `SessionRow.matches_cwd`
+        // `paths_match` is the function that produces `ArtifactRow.matches_cwd`
         // (collect_* all delegate to it). Without canonicalization, a user who
         // navigated to a project via a symlink would see their cwd-row sink
         // in the picker because the symlink path string ≠ the project path
         // string. Verify both arguments are canonicalized.
         //
         // Note: we test `paths_match` directly rather than going through
-        // `gather_sessions` because Claude's project-dir slug encoding is
+        // `gather_artifacts` because Claude's project-dir slug encoding is
         // lossy (sanitize_project_path: '/', '_', '.' → '-'; unsanitize: only
         // '-' → '/'). On macOS, tempdir paths contain '.' and end up under
         // /private/var/..., so the unsanitized slug never round-trips back to
@@ -1367,19 +1162,19 @@ mod tests {
 
     #[test]
     fn parse_picker_row_roundtrips_keyed() {
-        let row = SessionRow {
-            harness: Harness::Claude,
-            project: Some("/tmp/proj".to_string()),
+        let row = ArtifactRow {
+            artifact_type: ArtifactType::Claude,
+            path: Some("/tmp/proj".to_string()),
             cwd: None,
             session_id: "sess-abc".to_string(),
             title: "Hello\tworld".to_string(),
             last_activity: None,
-            message_count: 3,
+            message_count: None,
             matches_cwd: true,
         };
         let line = format_picker_row(&row);
         let (harness, key, session, title) = parse_picker_row(&line).unwrap();
-        assert_eq!(harness, Harness::Claude);
+        assert_eq!(harness, ArtifactType::Claude);
         assert_eq!(key, "/tmp/proj");
         assert_eq!(session, "sess-abc");
         // tab_safe replaces the tab with a space, but the title content
@@ -1389,19 +1184,19 @@ mod tests {
 
     #[test]
     fn parse_picker_row_roundtrips_session_keyed() {
-        let row = SessionRow {
-            harness: Harness::Codex,
-            project: None,
+        let row = ArtifactRow {
+            artifact_type: ArtifactType::Codex,
+            path: None,
             cwd: Some("/work/proj".to_string()),
             session_id: "0190abcd".to_string(),
             title: "(no prompt)".to_string(),
             last_activity: None,
-            message_count: 0,
+            message_count: None,
             matches_cwd: false,
         };
         let line = format_picker_row(&row);
         let (harness, key, session, title) = parse_picker_row(&line).unwrap();
-        assert_eq!(harness, Harness::Codex);
+        assert_eq!(harness, ArtifactType::Codex);
         assert_eq!(key, "/work/proj"); // codex has no project; cwd carried as the keyed slot
         assert_eq!(session, "0190abcd");
         assert_eq!(title, "(no prompt)");
@@ -1409,14 +1204,14 @@ mod tests {
 
     #[test]
     fn parse_picker_row_carries_title_with_unicode() {
-        let row = SessionRow {
-            harness: Harness::Gemini,
-            project: Some("/work/proj".to_string()),
+        let row = ArtifactRow {
+            artifact_type: ArtifactType::Gemini,
+            path: Some("/work/proj".to_string()),
             cwd: None,
             session_id: "11111111-2222-3333-4444-555555555555".to_string(),
             title: "Add the share command — finally".to_string(),
             last_activity: None,
-            message_count: 42,
+            message_count: None,
             matches_cwd: true,
         };
         let line = format_picker_row(&row);

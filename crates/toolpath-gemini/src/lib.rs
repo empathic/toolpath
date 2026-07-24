@@ -15,7 +15,7 @@ pub mod watcher;
 
 pub use error::{ConvoError, Result};
 pub use io::ConvoIO;
-pub use paths::PathResolver;
+pub use paths::{PathResolver, SessionEntry};
 pub use query::ConversationQuery;
 pub use reader::ConversationReader;
 pub use types::{

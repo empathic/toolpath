@@ -658,6 +658,92 @@ fn cache_ls_after_import_lists_entry() {
         .stdout(predicate::str::contains("git-"));
 }
 
+/// A `$HOME` with one Claude session. Returns (home-tempdir, session file).
+fn claude_home_fixture() -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    // toolpath-claude maps '/', '_', and '.' to '-' when sanitizing project
+    // paths into directory slugs — mirror that here so the fixture lands
+    // where the resolver looks for it.
+    let project_slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let project_dir = temp.path().join(".claude/projects").join(&project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let session_file = project_dir.join("session-abc.jsonl");
+    std::fs::write(
+        &session_file,
+        format!(
+            r#"{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+    (temp, session_file)
+}
+
+#[test]
+fn import_ingests_thinking_maximally() {
+    let (home, session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+    // Append an assistant turn with a thinking block.
+    let mut body = std::fs::read_to_string(&session_file).unwrap();
+    body.push_str(
+        r#"{"type":"assistant","uuid":"a-2","timestamp":"2024-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"secret reasoning"},{"type":"text","text":"done"}]}}"#,
+    );
+    body.push('\n');
+    std::fs::write(&session_file, body).unwrap();
+
+    let out = cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "p",
+            "import",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let doc_path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let doc = std::fs::read_to_string(&doc_path).unwrap();
+    assert!(
+        doc.contains("secret reasoning"),
+        "the cache holds the maximal derivation, thinking included"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bulk_import_skips_unreadable_sessions() {
+    use std::os::unix::fs::PermissionsExt;
+    let (home, session_file) = claude_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let project = home.path().join("proj");
+    // A second session that cannot be read.
+    let bad = session_file.parent().unwrap().join("deadbeef-bad.jsonl");
+    std::fs::write(&bad, "x").unwrap();
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "import", "claude", "--all", "--project"])
+        .arg(&project)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Warning: skipping session"))
+        .stderr(predicate::str::contains("Imported"));
+}
+
 #[test]
 fn export_pathbase_repo_flag_requires_login() {
     // `export pathbase` without --repo falls through to the anonymous

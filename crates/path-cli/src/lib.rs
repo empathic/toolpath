@@ -1,3 +1,5 @@
+pub mod artifact;
+mod cache;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
 mod cmd_cache;
@@ -25,8 +27,11 @@ mod cmd_show;
 mod cmd_track;
 mod cmd_validate;
 mod config;
+mod derive;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
+#[cfg(not(target_os = "emscripten"))]
+pub mod harness;
 mod io;
 mod kinds;
 mod query;
