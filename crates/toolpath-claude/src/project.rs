@@ -150,13 +150,11 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 // pointed at it to its parent, keeping the uuid chain intact.
                 // (Turns carrying tool_result events are never skipped — those
                 // events would be orphaned.)
-                let is_content_empty = turn.text.trim().is_empty()
-                    && turn.thinking.is_none()
-                    && turn.tool_uses.is_empty()
-                    && turn.delegations.is_empty()
-                    && turn.file_mutations.is_empty()
-                    && !tool_result_events_by_parent.contains_key(&turn.id);
-                if is_content_empty {
+                // Content-empty *and* not carrying attached tool-result
+                // events (those would be orphaned if we dropped the turn).
+                let is_droppable_seed =
+                    turn.is_content_empty() && !tool_result_events_by_parent.contains_key(&turn.id);
+                if is_droppable_seed {
                     if let Some(parent) = effective_parent {
                         parent_rewrites.insert(turn.id.clone(), parent);
                     }

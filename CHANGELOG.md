@@ -16,6 +16,10 @@ All notable changes to the Toolpath workspace are documented here.
   delegations, or file-mutations and re-links the following turn's `parentUuid`
   to the dropped seed's parent, keeping the uuid chain intact. The group's
   token total is re-expanded onto the surviving line as before.
+- **`toolpath-convo`** (0.12.0): new `Turn::is_content_empty()` — the
+  "no renderable content of its own" predicate (no text/thinking/tool-uses/
+  delegations/file-mutations) that the Claude projector's seed-drop check
+  now calls instead of an inline conjunction.
 
 ## One artifact-type layer and per-session imports — 2026-07-16
 
