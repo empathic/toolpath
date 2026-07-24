@@ -140,6 +140,27 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 convo.add_entry(entry);
             }
             Role::Assistant => {
+                // Drop content-empty assistant turns. Claude Code streams a
+                // message as several JSONL lines, the first an empty "seed"
+                // (text: "") superseded by the real-text line. Projecting that
+                // seed as `content:[{type:text, text:""}]` yields an
+                // API-invalid message — on the next resumed turn Anthropic
+                // rejects the replayed transcript with "text content blocks
+                // must be non-empty". Skip the seed and re-link any child that
+                // pointed at it to its parent, keeping the uuid chain intact.
+                // (Turns carrying tool_result events are never skipped — those
+                // events would be orphaned.)
+                // Content-empty *and* not carrying attached tool-result
+                // events (those would be orphaned if we dropped the turn).
+                let is_droppable_seed =
+                    turn.is_content_empty() && !tool_result_events_by_parent.contains_key(&turn.id);
+                if is_droppable_seed {
+                    if let Some(parent) = effective_parent {
+                        parent_rewrites.insert(turn.id.clone(), parent);
+                    }
+                    continue;
+                }
+
                 // Grouped: the message total on every line of the split.
                 // Ungrouped: the turn's own usage.
                 let wire_usage: Option<toolpath_convo::TokenUsage> = match turn.group_id.as_deref()
@@ -1103,14 +1124,15 @@ mod tests {
             .iter()
             .filter(|e| e.entry_type == "assistant")
             .collect();
-        assert_eq!(assistants.len(), 2);
-        for entry in &assistants {
-            let msg = entry.message.as_ref().unwrap();
-            assert_eq!(msg.id.as_deref(), Some("msg_A"));
-            let u = msg.usage.as_ref().expect("every line carries usage");
-            assert_eq!(u.output_tokens, Some(997));
-            assert_eq!(u.cache_creation_input_tokens, Some(429_831));
-        }
+        // a2 is the content-empty tail of the split; it's dropped (an empty
+        // text block would be API-invalid on resume). The group total it
+        // carried is re-expanded onto the surviving line via `group_total`.
+        assert_eq!(assistants.len(), 1);
+        let msg = assistants[0].message.as_ref().unwrap();
+        assert_eq!(msg.id.as_deref(), Some("msg_A"));
+        let u = msg.usage.as_ref().expect("surviving line carries usage");
+        assert_eq!(u.output_tokens, Some(997));
+        assert_eq!(u.cache_creation_input_tokens, Some(429_831));
     }
 
     #[test]
@@ -1156,6 +1178,75 @@ mod tests {
         assert!(a[0].token_usage.is_none());
         assert_eq!(a[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
         assert!(a.iter().all(|t| t.attributed_token_usage.is_none()));
+    }
+
+    // ── Empty streaming-seed assistant lines ─────────────────────────
+
+    #[test]
+    fn test_projector_skips_empty_text_seed_and_relinks_chain() {
+        // Claude Code streams an assistant message as multiple JSONL lines;
+        // the first is an empty "seed" (text: "") superseded by the real-text
+        // line, both sharing one message id. Projecting the empty seed as
+        // `content:[{type:text, text:""}]` produces an API-invalid message —
+        // on the next resumed turn Anthropic rejects it with "text content
+        // blocks must be non-empty". The projector must drop the content-empty
+        // seed and re-link the following turn's parent to the seed's parent so
+        // the uuid chain stays intact.
+        let usage = TokenUsage {
+            input_tokens: Some(5710),
+            output_tokens: Some(224),
+            ..Default::default()
+        };
+        let mut seed = assistant_turn("seed", "");
+        seed.parent_id = Some("u1".into());
+        seed.group_id = Some("msg_A".into());
+        seed.stop_reason = Some("end_turn".into());
+        let mut real = assistant_turn("real", "Chocolate, vanilla, strawberry.");
+        real.parent_id = Some("seed".into());
+        real.group_id = Some("msg_A".into());
+        real.token_usage = Some(usage);
+
+        let view = make_view(
+            "sess-1",
+            vec![user_turn("u1", "icecream flavors"), seed, real],
+        );
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        let assistants: Vec<&ConversationEntry> = content_entries(&convo)
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+            .collect();
+
+        // The empty seed is gone; only the real-text line survives.
+        assert_eq!(assistants.len(), 1, "empty seed line must be dropped");
+        let entry = assistants[0];
+        assert_eq!(entry.uuid, "real");
+        // Re-linked past the dropped seed to its parent.
+        assert_eq!(
+            entry.parent_uuid.as_deref(),
+            Some("u1"),
+            "surviving turn must re-parent to the dropped seed's parent"
+        );
+
+        // No assistant message anywhere carries an empty/whitespace text block.
+        for e in content_entries(&convo)
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+        {
+            if let Some(MessageContent::Parts(parts)) =
+                e.message.as_ref().and_then(|m| m.content.as_ref())
+            {
+                for p in parts {
+                    if let ContentPart::Text { text } = p {
+                        assert!(!text.trim().is_empty(), "empty text content block leaked");
+                    }
+                }
+            }
+        }
+
+        // Usage from the group is preserved on the surviving line.
+        let msg = entry.message.as_ref().unwrap();
+        assert_eq!(msg.usage.as_ref().unwrap().output_tokens, Some(224));
     }
 
     // ── Permission-mode preamble ─────────────────────────────────────
