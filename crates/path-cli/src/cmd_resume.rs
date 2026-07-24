@@ -1225,12 +1225,19 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     // 4. Interactive launch of the harness against the shipped session,
     //    with a real TTY — the one step that stays on the real `ssh`
     //    binary (it needs the user's terminal and ssh config).
-    let launch_cmd = remote_launch_command(
+    let backend = if args.tmux {
+        PersistBackend::Tmux
+    } else {
+        PersistBackend::Plain
+    };
+    let launch_cmd = persist_plan(
         Harness::Claude,
         &session_id,
         launch_cwd.as_deref(),
-        args.tmux,
-    );
+        backend,
+        &home,
+    )
+    .remote_command;
     let (binary, argv) = ssh_invocation_tty(remote, &launch_cmd, true)?;
     let cwd = std::env::current_dir()?;
     exec_harness(&binary, &argv, &cwd, exec)
@@ -1278,33 +1285,75 @@ fn normalize_remote_cwd(cwd: &std::path::Path, home: &str) -> String {
 /// itself is created over SFTP before launch — this is the only remote
 /// shell string left, and it's minimal because a `cd` can't happen
 /// anywhere else.
-fn remote_launch_command(
+struct PersistPlan {
+    remote_command: String,
+    extra_file: Option<(String, Vec<u8>)>,
+    post_note: Option<String>,
+}
+
+fn persist_plan(
     harness: Harness,
     session_id: &str,
     cwd: Option<&str>,
-    tmux: bool,
-) -> String {
+    backend: PersistBackend,
+    home: &str,
+) -> PersistPlan {
     let launch: Vec<String> = std::iter::once(harness.name().to_string())
         .chain(argv_for(harness, session_id).iter().map(|a| shell_quote(a)))
         .collect();
-    let launch = launch.join(" ");
-    let launch = match cwd {
-        Some(dir) => format!("cd {} && {launch}", shell_quote(dir)),
-        None => launch,
+    let inner = launch.join(" ");
+    let inner = match cwd {
+        Some(dir) => format!("cd {} && {inner}", shell_quote(dir)),
+        None => inner,
     };
-    if tmux {
-        // Detachable session: `-A` attaches when the named session
-        // already exists, so re-running the same resume re-attaches
-        // instead of erroring. Session names can't contain `.`/`:`.
-        let name = format!("path-{}", session_id.replace(['.', ':'], "-"));
-        format!(
+    // Detachable session names can't contain `.`/`:`.
+    let name = format!("path-{}", session_id.replace(['.', ':'], "-"));
+
+    let mut extra_file = None;
+    let mut post_note = None;
+    let remote_command = match backend {
+        PersistBackend::Plain => inner,
+        PersistBackend::Tmux => format!(
             "tmux new-session -A -s {} {}",
             shell_quote(&name),
-            shell_single_quote(&launch)
-        )
-    } else {
-        launch
+            shell_single_quote(&inner)
+        ),
+        PersistBackend::Abduco => format!(
+            "abduco -A {} sh -c {}",
+            shell_quote(&name),
+            shell_single_quote(&inner)
+        ),
+        PersistBackend::Dtach => format!(
+            "dtach -A {} -z sh -c {}",
+            shell_quote(&format!(
+                "/tmp/path-dtach-{}",
+                session_id.replace(['.', ':'], "-")
+            )),
+            shell_single_quote(&inner)
+        ),
+        PersistBackend::Zellij => zellij_plan(&name, &inner, home, &mut extra_file),
+        PersistBackend::Shpool => shpool_plan(&name, &inner, &mut post_note),
+    };
+    PersistPlan {
+        remote_command,
+        extra_file,
+        post_note,
     }
+}
+
+// TODO(task-3): layout-wrap. Temporary: attach/create by name.
+fn zellij_plan(
+    name: &str,
+    _inner: &str,
+    _home: &str,
+    _extra: &mut Option<(String, Vec<u8>)>,
+) -> String {
+    format!("zellij attach --create {}", shell_quote(name))
+}
+
+// TODO(task-4): attach-only + post_note.
+fn shpool_plan(name: &str, _inner: &str, _note: &mut Option<String>) -> String {
+    format!("shpool attach {}", shell_quote(name))
 }
 
 /// Quote for the remote shell only when needed — plain flags, ids, and
@@ -1765,13 +1814,27 @@ mod tests {
         // Binary + argv come from the same per-harness table the local
         // resume uses; safe args stay bare so the recipe reads cleanly.
         assert_eq!(
-            remote_launch_command(Harness::Claude, "sess-1", None, false),
+            persist_plan(
+                Harness::Claude,
+                "sess-1",
+                None,
+                PersistBackend::Plain,
+                "/home/u"
+            )
+            .remote_command,
             "claude -r sess-1"
         );
         // Directory creation happens over SFTP before launch — the shell
         // string stays minimal: just the cd and the harness.
         assert_eq!(
-            remote_launch_command(Harness::Claude, "sess-1", Some("/srv/work"), false),
+            persist_plan(
+                Harness::Claude,
+                "sess-1",
+                Some("/srv/work"),
+                PersistBackend::Plain,
+                "/home/u"
+            )
+            .remote_command,
             "cd /srv/work && claude -r sess-1"
         );
     }
@@ -1781,12 +1844,58 @@ mod tests {
         // --tmux: the whole launch runs inside a named tmux session so
         // it survives SSH disconnects; -A re-attaches on a second run.
         assert_eq!(
-            remote_launch_command(Harness::Claude, "sess-1", None, true),
+            persist_plan(
+                Harness::Claude,
+                "sess-1",
+                None,
+                PersistBackend::Tmux,
+                "/home/u"
+            )
+            .remote_command,
             "tmux new-session -A -s path-sess-1 'claude -r sess-1'"
         );
         assert_eq!(
-            remote_launch_command(Harness::Claude, "sess-1", Some("/srv/work"), true),
+            persist_plan(
+                Harness::Claude,
+                "sess-1",
+                Some("/srv/work"),
+                PersistBackend::Tmux,
+                "/home/u"
+            )
+            .remote_command,
             "tmux new-session -A -s path-sess-1 'cd /srv/work && claude -r sess-1'"
+        );
+    }
+
+    #[test]
+    fn persist_plan_direct_wrap_backends() {
+        let id = "sess-1";
+        let plain = persist_plan(Harness::Claude, id, None, PersistBackend::Plain, "/home/u");
+        assert_eq!(plain.remote_command, "claude -r sess-1");
+        assert!(plain.extra_file.is_none() && plain.post_note.is_none());
+
+        let tmux = persist_plan(
+            Harness::Claude,
+            id,
+            Some("/srv/w"),
+            PersistBackend::Tmux,
+            "/home/u",
+        );
+        assert_eq!(
+            tmux.remote_command,
+            "tmux new-session -A -s path-sess-1 'cd /srv/w && claude -r sess-1'"
+        );
+
+        let abduco = persist_plan(Harness::Claude, id, None, PersistBackend::Abduco, "/home/u");
+        assert_eq!(
+            abduco.remote_command,
+            "abduco -A path-sess-1 sh -c 'claude -r sess-1'"
+        );
+
+        let dtach = persist_plan(Harness::Claude, id, None, PersistBackend::Dtach, "/home/u");
+        assert_eq!(
+            dtach.remote_command,
+            "dtach -A /tmp/path-dtach-sess-1 -z sh -c 'claude -r sess-1'"
         );
     }
 
