@@ -1415,6 +1415,56 @@ fn looks_like_pathbase_shorthand(s: &str) -> bool {
             .all(|s| !s.is_empty() && !s.contains(char::is_whitespace))
 }
 
+/// Remote session-persistence backend for `--remote` resume. See the
+/// design spec: three launch mechanisms (direct-wrap, layout-wrap for
+/// zellij, attach-only for shpool).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum PersistBackend {
+    Plain,
+    Tmux,
+    Abduco,
+    Dtach,
+    Zellij,
+    Shpool,
+}
+
+impl PersistBackend {
+    /// Probe target on the remote (`command -v <bin>`); `Plain` has none.
+    fn bin(&self) -> Option<&'static str> {
+        match self {
+            PersistBackend::Plain => None,
+            PersistBackend::Tmux => Some("tmux"),
+            PersistBackend::Abduco => Some("abduco"),
+            PersistBackend::Dtach => Some("dtach"),
+            PersistBackend::Zellij => Some("zellij"),
+            PersistBackend::Shpool => Some("shpool"),
+        }
+    }
+
+    fn describe(&self) -> &'static str {
+        match self {
+            PersistBackend::Plain => "plain — no persistence; dies on disconnect",
+            PersistBackend::Tmux => "tmux — detachable; survives drops, reattachable",
+            PersistBackend::Abduco => "abduco — minimal detach/attach; survives drops",
+            PersistBackend::Dtach => "dtach — tiny detach/attach; survives drops",
+            PersistBackend::Zellij => "zellij — detachable workspace (layout-launched)",
+            PersistBackend::Shpool => {
+                "shpool — persistent shell (attach-only; run the command yourself)"
+            }
+        }
+    }
+
+    /// Fixed picker display order.
+    const DISPLAY_ORDER: [PersistBackend; 6] = [
+        PersistBackend::Tmux,
+        PersistBackend::Zellij,
+        PersistBackend::Abduco,
+        PersistBackend::Dtach,
+        PersistBackend::Shpool,
+        PersistBackend::Plain,
+    ];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2431,5 +2481,16 @@ mod tests {
         assert_eq!(captured.binary, "claude");
         assert_eq!(captured.args, vec!["-r".to_string(), "abc123".to_string()]);
         assert_eq!(captured.cwd, std::path::PathBuf::from("/tmp/x"));
+    }
+
+    #[test]
+    fn persist_backend_bin_and_order() {
+        assert_eq!(PersistBackend::Plain.bin(), None);
+        assert_eq!(PersistBackend::Tmux.bin(), Some("tmux"));
+        assert_eq!(PersistBackend::Shpool.bin(), Some("shpool"));
+        // Display order is stable and complete.
+        assert_eq!(PersistBackend::DISPLAY_ORDER.len(), 6);
+        assert_eq!(PersistBackend::DISPLAY_ORDER[0], PersistBackend::Tmux);
+        assert!(PersistBackend::Tmux.describe().contains("detach"));
     }
 }
