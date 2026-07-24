@@ -103,7 +103,13 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // result turns, the next assistant's `parent_id` points at the prior
     // assistant. Claude expects it to point at the tool_result entry that
     // ran in between. Track those rewrites so we can patch the chain.
-    let mut parent_rewrites: HashMap<String, String> = HashMap::new();
+    // Maps a dropped/synthesized turn id → the parent its children
+    // should point at instead. The value is itself optional: a
+    // content-empty seed at the chain *root* has no parent, so its
+    // children must inherit `None` (not fall back to the seed's own id,
+    // which was never emitted). Presence-in-map, not Some-ness, decides
+    // whether a rewrite applies.
+    let mut parent_rewrites: HashMap<String, Option<String>> = HashMap::new();
 
     // Message-group accounting. The IR carries a message's total
     // `token_usage` only on the group's final turn; real Claude JSONL stamps
@@ -126,11 +132,17 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     for turn in &view.turns {
         // Pre-rewrite this turn's parent_id if a synthesized tool_result
         // was emitted between it and its IR-recorded parent.
-        let effective_parent = turn
-            .parent_id
-            .as_ref()
-            .and_then(|pid| parent_rewrites.get(pid).cloned())
-            .or_else(|| turn.parent_id.clone());
+        // A parent id present in the rewrite map is replaced by its
+        // (possibly-`None`) target; absent → keep the id as-is. This
+        // distinction matters at the chain root: a dropped rootless seed
+        // maps to `None`, so its children correctly get no parent.
+        let effective_parent = match turn.parent_id.as_ref() {
+            Some(pid) => match parent_rewrites.get(pid) {
+                Some(rewritten) => rewritten.clone(),
+                None => Some(pid.clone()),
+            },
+            None => None,
+        };
 
         match &turn.role {
             Role::User => {
@@ -157,9 +169,10 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     && turn.file_mutations.is_empty()
                     && !tool_result_events_by_parent.contains_key(&turn.id);
                 if is_content_empty {
-                    if let Some(parent) = effective_parent {
-                        parent_rewrites.insert(turn.id.clone(), parent);
-                    }
+                    // Always record the rewrite — including `None` for a
+                    // seed at the chain root — so children never dangle
+                    // onto this dropped turn's id.
+                    parent_rewrites.insert(turn.id.clone(), effective_parent);
                     continue;
                 }
 
@@ -193,7 +206,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     // turn should now point at the last tool-result entry
                     // we emitted, matching Claude's wire convention.
                     if last_uuid != turn.id {
-                        parent_rewrites.insert(turn.id.clone(), last_uuid);
+                        parent_rewrites.insert(turn.id.clone(), Some(last_uuid));
                     }
                 } else {
                     // Cross-harness fallback: synthesize per-tool-use
@@ -205,7 +218,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                         convo.add_entry(result_entry);
                     }
                     if last_uuid != turn.id {
-                        parent_rewrites.insert(turn.id.clone(), last_uuid);
+                        parent_rewrites.insert(turn.id.clone(), Some(last_uuid));
                     }
                 }
             }
@@ -1249,6 +1262,33 @@ mod tests {
         // Usage from the group is preserved on the surviving line.
         let msg = entry.message.as_ref().unwrap();
         assert_eq!(msg.usage.as_ref().unwrap().output_tokens, Some(224));
+    }
+
+    #[test]
+    fn test_projector_drops_content_empty_seed_at_chain_root() {
+        // A content-empty assistant seed at the ROOT of the chain (no
+        // parent) must not leave the surviving turn pointing at the
+        // dropped seed's never-emitted uuid. Cross-harness IR can put a
+        // content-empty assistant at position 0; the surviving child must
+        // inherit `None`, not dangle onto the seed.
+        let mut seed = assistant_turn("seed", "");
+        seed.parent_id = None; // chain root
+        let mut real = assistant_turn("real", "Real answer.");
+        real.parent_id = Some("seed".into());
+
+        let view = make_view("sess-1", vec![seed, real]);
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        let assistants: Vec<&ConversationEntry> = content_entries(&convo)
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+            .collect();
+        assert_eq!(assistants.len(), 1, "rootless empty seed must be dropped");
+        assert_eq!(assistants[0].uuid, "real");
+        assert_eq!(
+            assistants[0].parent_uuid, None,
+            "child of a dropped rootless seed must inherit None, not dangle on the seed id"
+        );
     }
 
     // ── Permission-mode preamble ─────────────────────────────────────

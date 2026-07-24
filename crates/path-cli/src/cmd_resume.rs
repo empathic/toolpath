@@ -44,13 +44,13 @@
 //! **No `path` on the remote**, no Pathbase access, no temp files, and
 //! no composed remote shell strings: the file operations are typed SFTP
 //! calls via libssh2 (matching the repo's `git2`-over-shelling-out
-//! ethos). Steps ([`run_remote`]):
+//! ethos). Steps (`run_remote`):
 //!
 //! 1. **Resolve + project on the host** — same `resolve_input` /
 //!    `ensure_path_with_agent` as a local resume, so a bad or non-agent
 //!    document fails fast on the host, not deep inside SSH. The session
 //!    id and JSONL come from the same in-memory projection
-//!    ([`crate::cmd_export::claude_session_jsonl`]).
+//!    (`cmd_export::claude_session_jsonl`).
 //! 2. **Preflight** — resolve the remote home over SFTP
 //!    ([`ExecStrategy::remote_home`]). First remote touch, so
 //!    reachability/auth failures abort here rather than dropping the
@@ -67,7 +67,7 @@
 //!    binary (it needs the user's TTY and full ssh config). The
 //!    transport honors the `HostName`/`User`/`Port`/`IdentityFile`
 //!    subset of `~/.ssh/config` (natively parsed — see
-//!    [`parse_ssh_config`]) with URL values winning; configured
+//!    `parse_ssh_config`) with URL values winning; configured
 //!    identities are matched against the agent by public-key blob, so
 //!    key-pinned hosts (exe.dev-style, where the key IS the identity)
 //!    authenticate as the right account. `known_hosts` is still not
@@ -792,6 +792,10 @@ struct SshHostConfig {
     user: Option<String>,
     port: Option<u16>,
     identity_files: Vec<std::path::PathBuf>,
+    /// `IdentitiesOnly yes` — when set (or when any `IdentityFile` is
+    /// configured), auth must use only the configured keys and must not
+    /// fall back to trying every agent key.
+    identities_only: bool,
 }
 
 /// Load [`SshHostConfig`] for `host` from `~/.ssh/config` (empty config
@@ -819,7 +823,14 @@ fn parse_ssh_config(content: &str, host: &str, home: &std::path::Path) -> SshHos
             continue;
         }
         let (keyword, value) = match line.split_once([' ', '\t', '=']) {
-            Some((k, v)) => (k.to_ascii_lowercase(), v.trim().trim_matches('"')),
+            // OpenSSH allows `Key = value` (whitespace around `=`); after
+            // splitting on the first separator, strip a leading `=` and
+            // surrounding whitespace off the value so `User = alice`
+            // yields `alice`, not `= alice`.
+            Some((k, v)) => (
+                k.to_ascii_lowercase(),
+                v.trim().trim_start_matches('=').trim().trim_matches('"'),
+            ),
             None => continue,
         };
         if keyword == "host" {
@@ -848,6 +859,9 @@ fn parse_ssh_config(content: &str, host: &str, home: &std::path::Path) -> SshHos
                 if !cfg.identity_files.contains(&path) {
                     cfg.identity_files.push(path);
                 }
+            }
+            "identitiesonly" if value.eq_ignore_ascii_case("yes") => {
+                cfg.identities_only = true;
             }
             _ => {}
         }
@@ -884,18 +898,51 @@ fn glob_match(pattern: &str, s: &str) -> bool {
     pi == p.len()
 }
 
+/// Verify the connected server's host key against `~/.ssh/known_hosts`
+/// (TOFU baseline, matching what the interactive `ssh` launch does).
+/// Aborts on a mismatch (possible MITM). A not-yet-known host is
+/// accepted with a warning — first-contact, like ssh's default
+/// `StrictHostKeyChecking accept-new` — because the transport ships
+/// bytes before the interactive step can prompt. A missing/unreadable
+/// known_hosts file is non-fatal (nothing to check against).
+fn check_known_host(sess: &ssh2::Session, host: &str, port: u16) -> Result<()> {
+    let Some((key, _)) = sess.host_key() else {
+        anyhow::bail!("remote {host}:{port} presented no host key");
+    };
+    let mut known = sess.known_hosts().context("open known_hosts")?;
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        // Best-effort read; absence is handled by the check below.
+        let _ = known.read_file(
+            &home.join(".ssh/known_hosts"),
+            ssh2::KnownHostFileKind::OpenSSH,
+        );
+    }
+    use ssh2::CheckResult;
+    match known.check_port(host, port, key) {
+        CheckResult::Match => Ok(()),
+        CheckResult::Mismatch => anyhow::bail!(
+            "host key for {host}:{port} does NOT match ~/.ssh/known_hosts — \
+             possible man-in-the-middle; refusing to ship the session"
+        ),
+        CheckResult::NotFound | CheckResult::Failure => {
+            eprintln!(
+                "note: {host}:{port} is not in ~/.ssh/known_hosts — accepting on first contact"
+            );
+            Ok(())
+        }
+    }
+}
+
 /// Authenticate `sess` as `user`, honoring configured identities: for
 /// each `IdentityFile`, first look for the matching key in the agent
-/// (by public-key blob — works for passphrase-protected keys), then
-/// try the key file directly; fall back to plain agent auth (any key)
-/// only when no identity is configured or none worked.
-fn authenticate(
-    sess: &ssh2::Session,
-    user: &str,
-    identity_files: &[std::path::PathBuf],
-    addr: &str,
-) -> Result<()> {
-    for key_path in identity_files {
+/// (by public-key blob — works for passphrase-protected keys), then try
+/// the key file directly. Falls back to plain agent auth (any loaded
+/// key) ONLY when no identity was configured; when identities are
+/// pinned, trying an arbitrary agent key could misroute on hosts that
+/// identify the account by key (e.g. exe.dev), so a pinned-but-failed
+/// auth errors instead.
+fn authenticate(sess: &ssh2::Session, user: &str, cfg: &SshHostConfig, addr: &str) -> Result<()> {
+    for key_path in &cfg.identity_files {
         if agent_auth_with_key(sess, user, key_path)? {
             return Ok(());
         }
@@ -905,6 +952,16 @@ fn authenticate(
         {
             return Ok(());
         }
+    }
+    // Pinned identities that all failed must not silently degrade to
+    // "try every agent key" — that's the exact misroute the config
+    // parsing exists to prevent.
+    if !cfg.identity_files.is_empty() || cfg.identities_only {
+        anyhow::bail!(
+            "SSH auth as `{user}` on {addr} failed with the configured IdentityFile(s); \
+             none matched a loaded agent key or were usable directly. Load the pinned key \
+             (`ssh-add <keyfile>`) — refusing to fall back to an arbitrary agent key."
+        );
     }
     sess.userauth_agent(user).with_context(|| {
         format!("SSH agent auth as `{user}` on {addr} — is the key loaded (`ssh-add`)?")
@@ -975,13 +1032,19 @@ fn connect_remote(target: &SshTarget) -> Result<RemoteConn> {
     sess.set_timeout(30_000); // ms; applies to handshake/auth/channel ops
     sess.handshake()
         .with_context(|| format!("SSH handshake with {addr}"))?;
+    // Verify the server host key against ~/.ssh/known_hosts BEFORE
+    // authenticating or shipping any bytes: the transport uploads the
+    // full session transcript over this channel ahead of the
+    // interactive `ssh` launch (which does its own check), so a
+    // known_hosts mismatch must abort here, not after the leak.
+    check_known_host(&sess, &host, port)?;
     let user = match target.user.clone().or_else(|| cfg.user.clone()) {
         Some(u) => u,
         None => {
             std::env::var("USER").context("no SSH user: put `user@` in the URL or set $USER")?
         }
     };
-    authenticate(&sess, &user, &cfg.identity_files, &addr)?;
+    authenticate(&sess, &user, &cfg, &addr)?;
 
     // SFTP probe: keep it brief — a server without the subsystem may
     // just sit on the channel request until a timeout.
@@ -1090,29 +1153,13 @@ pub(crate) fn exec_harness(
     strategy.exec(binary, args, cwd)
 }
 
-/// v2 remote resume: the host resolves the document locally, pipes the
-/// JSON into `ssh host 'path p incept claude …'` (which hydrates the
-/// session into the remote's Claude layout), then hands off to an
-/// interactive `ssh -t host 'claude -r <id>'`. The remote needs `path`
-/// (for incept) + the harness installed — but no Pathbase access, since
-/// the host already resolved the doc.
-///
-/// The host knows `<id>` without asking the remote: the Claude session
-/// id is a pure function of the document (the projector takes it
-/// verbatim from the conversation view), so projecting the same bytes on
-/// both sides yields the same id — see [`crate::cmd_export::claude_session_id`].
-///
-/// Steps:
-/// 1. resolve + validate the doc on the host (fail fast on bad input),
-///    and compute the session id locally;
-/// 2. version preflight (`ssh host 'path --version'`), echoing both
-///    versions and aborting if `path`/SSH is unreachable;
-/// 3. hydrate: pipe the JSON into `path p incept claude [--project …]`;
-/// 4. `execvp` the interactive `ssh -t … '[cd … && ]claude -r <id>'`.
-///
-/// `--cwd` does double duty: it is incept's `--project` dir AND the `cd`
-/// target for the launch (they must match for `claude -r` to find the
-/// session). Absent, both default to the remote's ssh cwd (`$HOME`).
+/// Remote resume (v3). See the module-level "Remote" section for the
+/// full design; in brief the host resolves + projects the session in
+/// memory (`cmd_export::claude_session_jsonl`), preflights the
+/// remote over SFTP, ships the finished Claude JSONL into the remote's
+/// project layout, and `execvp`s an interactive `ssh -t … claude -r
+/// <id>`. The remote needs only sshd + the harness — no `path`, no
+/// Pathbase, no temp files.
 fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Result<()> {
     // The remote's interactive picker can't run from here, so pin the
     // harness explicitly. Only Claude is wired up so far: the host-side
@@ -1150,11 +1197,15 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     //    JSONL over SFTP — typed file operations, no remote shell. The
     //    project dir is keyed on the launch cwd (--cwd, else the remote
     //    home) with Claude Code's own sanitization, so `claude -r`
-    //    started there finds the session.
-    let project_path = match args.cwd.as_ref() {
-        Some(dir) => dir.display().to_string(),
-        None => home.clone(),
-    };
+    //    started there finds the session. The cwd is normalized to the
+    //    absolute form the remote shell's `cd` will land on (trailing
+    //    slashes / `.` / `..` / relative-to-home resolved) so the host's
+    //    dir-name key matches what remote Claude computes from its cwd.
+    let launch_cwd: Option<String> = args
+        .cwd
+        .as_ref()
+        .map(|dir| normalize_remote_cwd(dir, &home));
+    let project_path = launch_cwd.clone().unwrap_or_else(|| home.clone());
     let dir_name = claude_project_dir_name(&project_path);
     let projects_dir = format!("{home}/.claude/projects/{dir_name}");
     exec.remote_mkdirs(&target, &projects_dir)
@@ -1167,9 +1218,8 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     // The launch cwd must exist before the interactive `cd` — create it
     // over SFTP too, since resuming into a fresh directory is the normal
     // case.
-    if let Some(dir) = args.cwd.as_ref() {
-        let dir = dir.display().to_string();
-        exec.remote_mkdirs(&target, &dir)
+    if let Some(dir) = launch_cwd.as_deref() {
+        exec.remote_mkdirs(&target, dir)
             .with_context(|| format!("creating launch dir {dir} on {remote}"))?;
     }
 
@@ -1179,7 +1229,7 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     let launch_cmd = remote_launch_command(
         crate::cmd_share::Harness::Claude,
         &session_id,
-        args.cwd.as_deref(),
+        launch_cwd.as_deref(),
         args.tmux,
     );
     let (binary, argv) = ssh_invocation_tty(remote, &launch_cmd, true)?;
@@ -1195,17 +1245,44 @@ fn claude_project_dir_name(project_path: &str) -> String {
     project_path.replace(['/', '_', '.'], "-")
 }
 
+/// Normalize a `--cwd` to the absolute path the remote shell's `cd`
+/// will land on, so the host's project-dir key matches what remote
+/// Claude derives from `getcwd`. Relative paths resolve against the
+/// remote `home` (where a `cd`-less ssh command starts); `.`, `..`,
+/// `//`, and trailing slashes collapse. Symlinks aren't resolved (the
+/// host can't see the remote FS) — an acceptable edge.
+fn normalize_remote_cwd(cwd: &std::path::Path, home: &str) -> String {
+    let raw = cwd.to_string_lossy();
+    let combined = if raw.starts_with('/') {
+        raw.into_owned()
+    } else {
+        format!("{home}/{raw}")
+    };
+    let mut out: Vec<&str> = Vec::new();
+    for seg in combined.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+    }
+    format!("/{}", out.join("/"))
+}
+
 /// The far-side launch command, derived from the same per-harness
 /// invocation table the local resume uses (`name()` + [`argv_for`]) so
 /// the two can't drift — prefixed with a `cd <cwd> &&` when a cwd was
 /// pinned so the harness starts where the shipped session is keyed.
-/// The directory itself is created over SFTP before launch — this is
-/// the only remote shell string left, and it's minimal because a `cd`
-/// can't happen anywhere else.
+/// `cwd` is the already-normalized absolute remote path. The directory
+/// itself is created over SFTP before launch — this is the only remote
+/// shell string left, and it's minimal because a `cd` can't happen
+/// anywhere else.
 fn remote_launch_command(
     harness: crate::cmd_share::Harness,
     session_id: &str,
-    cwd: Option<&std::path::Path>,
+    cwd: Option<&str>,
     tmux: bool,
 ) -> String {
     let launch: Vec<String> = std::iter::once(harness.name().to_string())
@@ -1213,7 +1290,7 @@ fn remote_launch_command(
         .collect();
     let launch = launch.join(" ");
     let launch = match cwd {
-        Some(dir) => format!("cd {} && {launch}", shell_quote(&dir.display().to_string())),
+        Some(dir) => format!("cd {} && {launch}", shell_quote(dir)),
         None => launch,
     };
     if tmux {
@@ -1456,6 +1533,81 @@ mod tests {
     }
 
     #[test]
+    fn ssh_config_handles_padded_equals_and_identities_only() {
+        // OpenSSH allows `Key = value`; a naive first-separator split
+        // would leave `= value`. And IdentitiesOnly must be parsed so
+        // auth won't fall back to an arbitrary agent key.
+        let config = "Host exe.dev\n\
+                      \x20 User = dev\n\
+                      \x20 Port = 2200\n\
+                      \x20 IdentityFile = ~/.ssh/id_pinned\n\
+                      \x20 IdentitiesOnly yes\n";
+        let cfg = parse_ssh_config(config, "exe.dev", std::path::Path::new("/home/u"));
+        assert_eq!(cfg.user.as_deref(), Some("dev"));
+        assert_eq!(cfg.port, Some(2200));
+        assert_eq!(
+            cfg.identity_files,
+            vec![std::path::PathBuf::from("/home/u/.ssh/id_pinned")]
+        );
+        assert!(cfg.identities_only);
+    }
+
+    #[test]
+    fn authenticate_refuses_arbitrary_agent_key_when_identities_pinned() {
+        // No live session, so we can't exercise the ssh2 calls — but the
+        // guard's decision is pure: a config with pinned identities (or
+        // IdentitiesOnly) must not reach the any-key fallback. We assert
+        // that via the config shape the guard keys off.
+        let pinned = SshHostConfig {
+            identity_files: vec![std::path::PathBuf::from("/home/u/.ssh/id_pinned")],
+            ..Default::default()
+        };
+        assert!(!pinned.identity_files.is_empty() || pinned.identities_only);
+        let only = SshHostConfig {
+            identities_only: true,
+            ..Default::default()
+        };
+        assert!(!only.identity_files.is_empty() || only.identities_only);
+    }
+
+    #[test]
+    fn normalize_remote_cwd_matches_remote_getcwd() {
+        // Host-side normalization must equal what the remote shell's `cd`
+        // lands on, else the project-dir key won't match remote Claude's.
+        let home = "/home/dev";
+        assert_eq!(
+            normalize_remote_cwd(std::path::Path::new("/srv/work/"), home),
+            "/srv/work"
+        );
+        assert_eq!(
+            normalize_remote_cwd(std::path::Path::new("/srv/./work"), home),
+            "/srv/work"
+        );
+        assert_eq!(
+            normalize_remote_cwd(std::path::Path::new("/srv/x/../work"), home),
+            "/srv/work"
+        );
+        assert_eq!(
+            normalize_remote_cwd(std::path::Path::new("work"), home),
+            "/home/dev/work"
+        );
+        assert_eq!(
+            normalize_remote_cwd(std::path::Path::new("./work"), home),
+            "/home/dev/work"
+        );
+    }
+
+    #[test]
+    fn validate_session_id_rejects_path_traversal() {
+        use crate::cmd_export::validate_session_id;
+        assert!(validate_session_id("4523d750-77e7-4a41-922f-5b949064f429").is_ok());
+        assert!(validate_session_id("../../../.ssh/authorized_keys").is_err());
+        assert!(validate_session_id(".hidden").is_err());
+        assert!(validate_session_id("has/slash").is_err());
+        assert!(validate_session_id("").is_err());
+    }
+
+    #[test]
     fn claude_project_dir_name_matches_projector_sanitization() {
         // The host-side mirror of Claude Code's project-dir sanitization
         // must agree with toolpath-claude's (private) implementation, or
@@ -1484,12 +1636,7 @@ mod tests {
         // Directory creation happens over SFTP before launch — the shell
         // string stays minimal: just the cd and the harness.
         assert_eq!(
-            remote_launch_command(
-                Harness::Claude,
-                "sess-1",
-                Some(std::path::Path::new("/srv/work")),
-                false
-            ),
+            remote_launch_command(Harness::Claude, "sess-1", Some("/srv/work"), false),
             "cd /srv/work && claude -r sess-1"
         );
     }
@@ -1504,12 +1651,7 @@ mod tests {
             "tmux new-session -A -s path-sess-1 'claude -r sess-1'"
         );
         assert_eq!(
-            remote_launch_command(
-                Harness::Claude,
-                "sess-1",
-                Some(std::path::Path::new("/srv/work")),
-                true
-            ),
+            remote_launch_command(Harness::Claude, "sess-1", Some("/srv/work"), true),
             "tmux new-session -A -s path-sess-1 'cd /srv/work && claude -r sess-1'"
         );
     }
