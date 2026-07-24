@@ -29,7 +29,7 @@ All notable changes to the Toolpath workspace are documented here.
 
 ## Project: drop empty streaming-seed assistant lines — 2026-07-23
 
-- **`toolpath-claude`** (0.12.1): the Claude projector no longer emits
+- **`toolpath-claude`** (0.12.2): the Claude projector no longer emits
   content-empty assistant messages. Claude Code streams a message as several
   JSONL lines — the first an empty "seed" (`text: ""`) superseded by the
   real-text line, both sharing one `message.id`. Projecting that seed as
