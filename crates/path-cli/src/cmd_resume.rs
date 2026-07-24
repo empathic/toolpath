@@ -141,6 +141,30 @@ pub struct ResumeArgs {
     /// resume re-attaches. Requires --remote and tmux on the remote.
     #[arg(long, requires = "remote")]
     pub tmux: bool,
+
+    /// Remote session-persistence backend. Skips the picker. Requires --remote.
+    #[arg(long, value_enum, requires = "remote")]
+    pub persist: Option<PersistBackend>,
+
+    /// Transport for the interactive launch. ssh (default); mosh/et reserved.
+    #[arg(long, value_enum, default_value_t = Transport::Ssh, requires = "remote")]
+    pub via: Transport,
+}
+
+/// Resolve the effective persist backend from `--tmux`/`--persist`,
+/// treating `--tmux` as a deprecated alias for `--persist tmux`.
+/// Errors if both are set.
+fn resolve_persist_flag(args: &ResumeArgs) -> Result<Option<PersistBackend>> {
+    match (args.tmux, args.persist) {
+        (true, Some(_)) => anyhow::bail!(
+            "--tmux is a deprecated alias for --persist tmux; don't combine it with --persist"
+        ),
+        (true, None) => {
+            eprintln!("note: --tmux is deprecated; use --persist tmux");
+            Ok(Some(PersistBackend::Tmux))
+        }
+        (false, p) => Ok(p),
+    }
 }
 
 pub fn run(args: ResumeArgs) -> Result<()> {
@@ -2037,6 +2061,8 @@ mod tests {
             url: None,
             remote: Some("ssh://dev@example.com:2222".to_string()),
             tmux: false,
+            persist: None,
+            via: Transport::Ssh,
         }
     }
 
@@ -2192,6 +2218,8 @@ mod tests {
             url: None,
             remote: None,
             tmux: false,
+            persist: None,
+            via: Transport::Ssh,
         };
 
         let recorder = RecordingExec::default();
@@ -2315,6 +2343,37 @@ mod tests {
     }
 
     #[test]
+    fn resolve_persist_flag_maps_tmux_and_rejects_conflict() {
+        let mut a = ResumeArgs {
+            input: "claude-x".to_string(),
+            cwd: None,
+            harness: None,
+            no_cache: false,
+            force: false,
+            url: None,
+            remote: None,
+            tmux: false,
+            persist: None,
+            via: Transport::Ssh,
+        };
+        a.remote = Some("ssh://h".into());
+        a.tmux = true;
+        assert_eq!(
+            resolve_persist_flag(&a).unwrap(),
+            Some(PersistBackend::Tmux)
+        );
+
+        a.persist = Some(PersistBackend::Dtach);
+        assert!(resolve_persist_flag(&a).is_err()); // both --tmux and --persist
+
+        a.tmux = false;
+        assert_eq!(
+            resolve_persist_flag(&a).unwrap(),
+            Some(PersistBackend::Dtach)
+        );
+    }
+
+    #[test]
     fn resolve_input_file_path() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("doc.json");
@@ -2330,6 +2389,8 @@ mod tests {
             url: None,
             remote: None,
             tmux: false,
+            persist: None,
+            via: Transport::Ssh,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
@@ -2366,6 +2427,8 @@ mod tests {
             url: None,
             remote: None,
             tmux: false,
+            persist: None,
+            via: Transport::Ssh,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
@@ -2429,6 +2492,8 @@ mod tests {
             url: None,
             remote: None,
             tmux: false,
+            persist: None,
+            via: Transport::Ssh,
         };
         let result = resolve_input(&args);
 
@@ -2459,6 +2524,8 @@ mod tests {
             url: None,
             remote: None,
             tmux: false,
+            persist: None,
+            via: Transport::Ssh,
         };
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();

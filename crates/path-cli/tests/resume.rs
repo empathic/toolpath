@@ -8,7 +8,7 @@
 
 #![cfg(not(target_os = "emscripten"))]
 
-use path_cli::cmd_resume::{RecordingExec, ResumeArgs, run_with_strategy};
+use path_cli::cmd_resume::{RecordingExec, ResumeArgs, Transport, run_with_strategy};
 use path_cli::harness::Harness;
 
 mod support;
@@ -267,6 +267,8 @@ fn cache_id_input_loads_and_projects() {
         url: None,
         remote: None,
         tmux: false,
+        persist: None,
+        via: Transport::Ssh,
     };
 
     let recorder = RecordingExec::default();

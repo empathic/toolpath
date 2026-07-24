@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use path_cli::cmd_resume::ResumeArgs;
+use path_cli::cmd_resume::{ResumeArgs, Transport};
 use path_cli::harness::Harness;
 
 /// Process-wide lock for tests that mutate `$HOME`, `$PATH`, or
@@ -205,6 +205,8 @@ pub fn args_explicit(input: PathBuf, cwd: &Path, harness: Harness) -> ResumeArgs
         url: None,
         remote: None,
         tmux: false,
+        persist: None,
+        via: Transport::Ssh,
     }
 }
 
