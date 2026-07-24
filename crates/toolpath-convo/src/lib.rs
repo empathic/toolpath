@@ -321,6 +321,23 @@ pub struct Turn {
     pub file_mutations: Vec<FileMutation>,
 }
 
+impl Turn {
+    /// True when the turn carries no renderable content of its own — no
+    /// visible text (ignoring whitespace), thinking, tool uses,
+    /// delegations, or file mutations. Such turns are streaming "seeds"
+    /// or placeholders that projectors may safely drop. Note this is
+    /// intrinsic to the turn; a caller that also tracks attached events
+    /// (e.g. tool-result entries keyed by parent) must check those
+    /// separately.
+    pub fn is_content_empty(&self) -> bool {
+        self.text.trim().is_empty()
+            && self.thinking.is_none()
+            && self.tool_uses.is_empty()
+            && self.delegations.is_empty()
+            && self.file_mutations.is_empty()
+    }
+}
+
 /// A complete conversation from any provider.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConversationView {
@@ -1152,5 +1169,70 @@ mod tests {
         let json = r#"{"id":"s1","started_at":null,"last_activity":null,"turns":[]}"#;
         let view: ConversationView = serde_json::from_str(json).unwrap();
         assert!(view.events.is_empty());
+    }
+
+    #[test]
+    fn test_turn_is_content_empty() {
+        // Turn has no Default; build a whitespace-only base and clone it.
+        let base = Turn {
+            id: "t1".into(),
+            parent_id: None,
+            group_id: None,
+            role: Role::Assistant,
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            text: "   ".into(), // whitespace-only counts as empty
+            thinking: None,
+            tool_uses: vec![],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            attributed_token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+        };
+        assert!(base.is_content_empty());
+
+        // Any one kind of content makes it non-empty.
+        assert!(
+            !Turn {
+                text: "hi".into(),
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
+        assert!(
+            !Turn {
+                thinking: Some("…".into()),
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
+        assert!(
+            !Turn {
+                tool_uses: vec![ToolInvocation::default()],
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
+        assert!(
+            !Turn {
+                delegations: vec![DelegatedWork {
+                    agent_id: "a".into(),
+                    prompt: "p".into(),
+                    turns: vec![],
+                    result: None,
+                }],
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
+        assert!(
+            !Turn {
+                file_mutations: vec![FileMutation::default()],
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
     }
 }
