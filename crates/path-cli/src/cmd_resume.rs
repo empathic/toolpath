@@ -1296,6 +1296,16 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
         Some(_) => anyhow::bail!("remote resume currently supports only --harness claude"),
     }
 
+    // Validate --via before any remote side effects — mosh/et are reserved
+    // seams that always error; fail here rather than after shipping files
+    // and printing persistence notes.
+    match args.via {
+        Transport::Ssh => {}
+        other => {
+            let _ = launch_invocation(other, remote, "")?;
+        }
+    }
+
     // 1. Resolve + validate locally so a bad document fails on the host,
     //    not deep inside an SSH session — and project the session fully
     //    in memory: the remote never sees the toolpath document, only the
@@ -1316,39 +1326,15 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     }
     eprintln!("remote {remote}: reachable (home {home})");
 
-    // 3. Ship: create the Claude project dir and write the projected
-    //    JSONL over SFTP — typed file operations, no remote shell. The
-    //    project dir is keyed on the launch cwd (--cwd, else the remote
-    //    home) with Claude Code's own sanitization, so `claude -r`
-    //    started there finds the session. The cwd is normalized to the
-    //    absolute form the remote shell's `cd` will land on (trailing
-    //    slashes / `.` / `..` / relative-to-home resolved) so the host's
-    //    dir-name key matches what remote Claude computes from its cwd.
+    // 3. Resolve the persistence backend BEFORE shipping anything — a
+    //    probe failure here must fall back gracefully (never abort a
+    //    resume that previously never needed a libssh2 exec channel), and
+    //    resolving first avoids shipping the session file only to abort
+    //    partway through on a probe error.
     let launch_cwd: Option<String> = args
         .cwd
         .as_ref()
         .map(|dir| normalize_remote_cwd(dir, &home));
-    let project_path = launch_cwd.clone().unwrap_or_else(|| home.clone());
-    let dir_name = claude_project_dir_name(&project_path);
-    let projects_dir = format!("{home}/.claude/projects/{dir_name}");
-    exec.remote_mkdirs(&target, &projects_dir)
-        .with_context(|| format!("creating {projects_dir} on {remote}"))?;
-    let dest = format!("{projects_dir}/{session_id}.jsonl");
-    exec.remote_write(&target, &dest, jsonl.as_bytes())
-        .with_context(|| format!("shipping session file to {remote}:{dest}"))?;
-    eprintln!("Shipped session {session_id} → {remote}:{dest}");
-
-    // The launch cwd must exist before the interactive `cd` — create it
-    // over SFTP too, since resuming into a fresh directory is the normal
-    // case.
-    if let Some(dir) = launch_cwd.as_deref() {
-        exec.remote_mkdirs(&target, dir)
-            .with_context(|| format!("creating launch dir {dir} on {remote}"))?;
-    }
-
-    // 4. Interactive launch of the harness against the shipped session,
-    //    with a real TTY — the one step that stays on the real `ssh`
-    //    binary (it needs the user's terminal and ssh config).
     let backend = match resolve_persist_flag(args)? {
         Some(b) => b,
         None => {
@@ -1356,9 +1342,15 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
                 .iter()
                 .filter_map(|b| b.bin())
                 .collect();
-            let avail = exec
-                .remote_which(&target, &bins)
-                .with_context(|| format!("probing persistence backends on {remote}"))?;
+            // A probe failure (e.g. the remote's exec channel misbehaves)
+            // is not fatal — fall back to no known backends so plain
+            // resume still works.
+            let avail = exec.remote_which(&target, &bins).unwrap_or_else(|e| {
+                eprintln!(
+                    "note: could not probe persistence backends on {remote} ({e}); continuing without persistence"
+                );
+                Default::default()
+            });
             let cands = persist_candidates(&avail);
             let preferred = preferred_backend(&avail);
             if crate::fuzzy::available() {
@@ -1380,6 +1372,33 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
         backend,
         &home,
     );
+
+    // 4. Ship: create the Claude project dir and write the projected
+    //    JSONL over SFTP — typed file operations, no remote shell. The
+    //    project dir is keyed on the launch cwd (--cwd, else the remote
+    //    home) with Claude Code's own sanitization, so `claude -r`
+    //    started there finds the session. The cwd is normalized to the
+    //    absolute form the remote shell's `cd` will land on (trailing
+    //    slashes / `.` / `..` / relative-to-home resolved) so the host's
+    //    dir-name key matches what remote Claude computes from its cwd.
+    let project_path = launch_cwd.clone().unwrap_or_else(|| home.clone());
+    let dir_name = claude_project_dir_name(&project_path);
+    let projects_dir = format!("{home}/.claude/projects/{dir_name}");
+    exec.remote_mkdirs(&target, &projects_dir)
+        .with_context(|| format!("creating {projects_dir} on {remote}"))?;
+    let dest = format!("{projects_dir}/{session_id}.jsonl");
+    exec.remote_write(&target, &dest, jsonl.as_bytes())
+        .with_context(|| format!("shipping session file to {remote}:{dest}"))?;
+    eprintln!("Shipped session {session_id} → {remote}:{dest}");
+
+    // The launch cwd must exist before the interactive `cd` — create it
+    // over SFTP too, since resuming into a fresh directory is the normal
+    // case.
+    if let Some(dir) = launch_cwd.as_deref() {
+        exec.remote_mkdirs(&target, dir)
+            .with_context(|| format!("creating launch dir {dir} on {remote}"))?;
+    }
+
     if let Some((path, body)) = &plan.extra_file {
         if let Some(parent) = std::path::Path::new(path).parent().and_then(|p| p.to_str()) {
             exec.remote_mkdirs(&target, parent)
@@ -1391,6 +1410,10 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     if let Some(note) = &plan.post_note {
         eprintln!("{note}");
     }
+
+    // 5. Interactive launch of the harness against the shipped session,
+    //    with a real TTY — the one step that stays on the real `ssh`
+    //    binary (it needs the user's terminal and ssh config).
     let (binary, argv) = launch_invocation(args.via, remote, &plan.remote_command)?;
     let cwd = std::env::current_dir()?;
     exec_harness(&binary, &argv, &cwd, exec)
@@ -1499,6 +1522,24 @@ struct PersistPlan {
     post_note: Option<String>,
 }
 
+/// Reduce a session id to `[A-Za-z0-9_-]` so it's safe to embed both in a
+/// multiplexer session name and in a remote file path (the zellij layout
+/// file lives at `<home>/.cache/path/zellij-<name>.kdl`). Any character
+/// outside that set — including `/` and `.` (so `..` can't traverse) —
+/// becomes `-`.
+fn sanitize_session_name(session_id: &str) -> String {
+    session_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 fn persist_plan(
     harness: Harness,
     session_id: &str,
@@ -1514,8 +1555,11 @@ fn persist_plan(
         Some(dir) => format!("cd {} && {inner}", shell_quote(dir)),
         None => inner,
     };
-    // Detachable session names can't contain `.`/`:`.
-    let name = format!("path-{}", session_id.replace(['.', ':'], "-"));
+    // Detachable session names can't contain `.`/`:`, and this name also
+    // feeds a remote file path (the zellij layout file), so sanitize down
+    // to a safe charset rather than just stripping `.`/`:` — a crafted
+    // session_id with `/` or `..` must not be able to steer the write.
+    let name = format!("path-{}", sanitize_session_name(session_id));
 
     let mut extra_file = None;
     let mut post_note = None;
@@ -1535,7 +1579,7 @@ fn persist_plan(
             "dtach -A {} -z sh -c {}",
             shell_quote(&format!(
                 "/tmp/path-dtach-{}",
-                session_id.replace(['.', ':'], "-")
+                sanitize_session_name(session_id)
             )),
             shell_single_quote(&inner)
         ),
@@ -1556,8 +1600,7 @@ fn zellij_plan(
     extra: &mut Option<(String, Vec<u8>)>,
 ) -> String {
     let layout_path = format!("{home}/.cache/path/zellij-{name}.kdl");
-    // Single-pane layout that runs INNER via the shell. `close_on_exit`
-    // keeps the pane if the harness exits so output stays visible.
+    // Single-pane layout that runs INNER via the shell.
     let kdl = format!(
         "layout {{\n    pane command=\"sh\" {{\n        args \"-c\" {inner:?}\n    }}\n}}\n"
     );
@@ -2188,6 +2231,73 @@ mod tests {
             "note: {note}"
         );
         assert!(p.extra_file.is_none());
+    }
+
+    #[test]
+    fn persist_plan_sanitizes_session_name() {
+        // A hostile session id must not leak `/` or `..` into the
+        // multiplexer session name or the zellij layout file path.
+        let hostile = "../evil";
+        let tmux = persist_plan(
+            Harness::Claude,
+            hostile,
+            None,
+            PersistBackend::Tmux,
+            "/home/u",
+        );
+        // The session-name slot (the `-s <name>` argument) must contain no
+        // `/` or `..` — unlike the inner harness argv, which legitimately
+        // carries the raw session id as a CLI argument to `claude -r`.
+        let name_arg = tmux
+            .remote_command
+            .split_whitespace()
+            .nth(4)
+            .unwrap_or_default();
+        assert!(
+            !name_arg.contains('/') && !name_arg.contains(".."),
+            "tmux session name leaks traversal/slash: {name_arg}"
+        );
+
+        let dtach = persist_plan(
+            Harness::Claude,
+            hostile,
+            None,
+            PersistBackend::Dtach,
+            "/home/u",
+        );
+        // The socket path is the `-A <path>` argument, third whitespace
+        // token; check just that token, not the whole command (whose
+        // trailing inner argv legitimately carries the raw hostile id).
+        let socket_arg = dtach
+            .remote_command
+            .split_whitespace()
+            .nth(2)
+            .unwrap_or_default();
+        assert!(
+            !socket_arg
+                .trim_start_matches("/tmp/path-dtach-")
+                .contains('/'),
+            "dtach socket path leaks a slash beyond the fixed /tmp/ prefix: {socket_arg}"
+        );
+
+        let zellij = persist_plan(
+            Harness::Claude,
+            hostile,
+            None,
+            PersistBackend::Zellij,
+            "/home/u",
+        );
+        let (layout_path, _) = zellij.extra_file.expect("zellij ships a layout file");
+        assert!(
+            !layout_path
+                .trim_start_matches("/home/u/.cache/path/zellij-")
+                .contains('/'),
+            "zellij layout path leaks a slash beyond the fixed prefix: {layout_path}"
+        );
+        assert!(
+            !layout_path.contains(".."),
+            "zellij layout path leaks traversal: {layout_path}"
+        );
     }
 
     #[test]
