@@ -1544,6 +1544,34 @@ fn shell_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Assemble candidate persist backends for the remote persistence picker.
+/// Returns backends from DISPLAY_ORDER filtered to those whose bin() is
+/// in the available set, plus Plain which is always offered.
+fn persist_candidates(available: &std::collections::BTreeSet<String>) -> Vec<PersistBackend> {
+    PersistBackend::DISPLAY_ORDER
+        .into_iter()
+        .filter(|b| match b.bin() {
+            None => true, // Plain always offered
+            Some(bin) => available.contains(bin),
+        })
+        .collect()
+}
+
+/// Pick the preferred backend from the available set. Priority:
+/// [Tmux, Zellij, Abduco, Dtach], falling back to Plain if none are available.
+fn preferred_backend(available: &std::collections::BTreeSet<String>) -> PersistBackend {
+    const PRIORITY: [PersistBackend; 4] = [
+        PersistBackend::Tmux,
+        PersistBackend::Zellij,
+        PersistBackend::Abduco,
+        PersistBackend::Dtach,
+    ];
+    PRIORITY
+        .into_iter()
+        .find(|b| b.bin().is_some_and(|bin| available.contains(bin)))
+        .unwrap_or(PersistBackend::Plain)
+}
+
 fn looks_like_pathbase_shorthand(s: &str) -> bool {
     // Three non-empty slash-separated segments, none containing whitespace
     // or starting with a dot/slash (which would indicate a relative or
@@ -2835,5 +2863,30 @@ mod tests {
             .unwrap();
         assert!(got.contains("tmux") && got.contains("dtach"));
         assert!(!got.contains("zellij"));
+    }
+
+    #[test]
+    fn persist_candidates_and_preference() {
+        use std::collections::BTreeSet;
+        let avail: BTreeSet<String> = ["dtach", "zellij"].iter().map(|s| s.to_string()).collect();
+        let cands = persist_candidates(&avail);
+        // DISPLAY_ORDER filtered to available + always Plain, in order.
+        assert_eq!(
+            cands,
+            vec![
+                PersistBackend::Zellij,
+                PersistBackend::Dtach,
+                PersistBackend::Plain
+            ]
+        );
+        assert_eq!(preferred_backend(&avail), PersistBackend::Zellij); // tmux absent -> zellij
+
+        let none: BTreeSet<String> = BTreeSet::new();
+        assert_eq!(persist_candidates(&none), vec![PersistBackend::Plain]);
+        assert_eq!(preferred_backend(&none), PersistBackend::Plain);
+
+        let with_tmux: BTreeSet<String> =
+            ["tmux", "shpool"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(preferred_backend(&with_tmux), PersistBackend::Tmux); // shpool never preferred over tmux
     }
 }
