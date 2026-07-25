@@ -448,6 +448,104 @@ fn remote_resume_persist_dtach_records_launch_and_ships() {
     );
 }
 
+/// `--via et` (a reserved transport) must fail on the host BEFORE any
+/// remote side effect — nothing probed, nothing shipped, nothing
+/// launched — so a doomed transport never leaves a half-staged session.
+#[test]
+fn remote_resume_via_et_errors_before_any_remote_touch() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-via-et");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.via = Transport::Et;
+
+    let rec = RecordingExec::with_available(["tmux"]);
+    let err = run_with_strategy(args, &rec).unwrap_err();
+
+    assert!(
+        err.to_string().contains("et is not yet supported"),
+        "actual: {err}"
+    );
+    assert!(rec.homes().is_empty(), "must not probe the remote");
+    assert!(rec.writes().is_empty(), "must not ship anything");
+    assert!(rec.captured().binary.is_empty(), "must not launch");
+}
+
+/// With no `--persist`, `run_remote` probes the remote for available
+/// backends and auto-selects the preferred one (tmux over zellij), then
+/// wraps the launch in it — the session survives disconnects without the
+/// user naming a backend.
+#[test]
+fn remote_resume_auto_selects_preferred_backend_when_persist_omitted() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-auto-persist");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.persist = None; // no explicit backend → probe + auto-select
+
+    let rec = RecordingExec::with_available(["zellij", "tmux"]);
+    run_with_strategy(args, &rec).unwrap();
+
+    // The session file still ships, and the launch wraps in tmux (preferred).
+    assert_eq!(rec.writes().len(), 1, "session file should ship");
+    let cap = rec.captured();
+    assert_eq!(cap.binary, "ssh");
+    assert!(
+        cap.args.iter().any(|a| a.contains("tmux new-session")),
+        "auto-selected launch should wrap in tmux, got {:?}",
+        cap.args
+    );
+}
+
+/// With no `--persist` and no persistence backend installed on the
+/// remote, `run_remote` falls back to a plain launch (`claude -r`) —
+/// still ships and launches, just without a detachable wrapper.
+#[test]
+fn remote_resume_falls_back_to_plain_when_no_backend_available() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-plain-fallback");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.persist = None;
+
+    let rec = RecordingExec::with_available([]); // nothing installed
+    run_with_strategy(args, &rec).unwrap();
+
+    assert_eq!(rec.writes().len(), 1, "session file should still ship");
+    let cap = rec.captured();
+    assert!(
+        cap.args.iter().any(|a| a.contains("claude -r")),
+        "should still launch claude, got {:?}",
+        cap.args
+    );
+    assert!(
+        !cap.args.iter().any(|a| a.contains("tmux new-session")
+            || a.contains("zellij")
+            || a.contains("dtach")
+            || a.contains("abduco")),
+        "no persistence wrapper when none available, got {:?}",
+        cap.args
+    );
+}
+
 /// `--remote` without `--harness` must fail fast on the host with a
 /// clear message: the remote resume runs over a non-interactive SSH
 /// session where the harness picker has no TTY, and the host can't run
