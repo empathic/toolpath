@@ -639,6 +639,14 @@ pub trait ExecStrategy {
     /// `mkdir -p` semantics, existing directories are fine.
     fn remote_mkdirs(&self, target: &SshTarget, dir: &str) -> Result<()>;
 
+    /// Canonicalize an existing remote `path` — resolving symlinks to the
+    /// physical absolute path the remote's `getcwd` reports. Needed
+    /// because Claude Code keys its project dir on the *canonical* cwd,
+    /// so on hosts where e.g. `/tmp` → `/private/tmp` (macOS) a `--cwd`
+    /// through a symlink would otherwise ship the session to a directory
+    /// `claude -r` never looks in. `path` must already exist.
+    fn remote_realpath(&self, target: &SshTarget, path: &str) -> Result<String>;
+
     /// Write `data` to the absolute remote `path`, truncating any
     /// existing file. Parent directories must already exist.
     fn remote_write(&self, target: &SshTarget, path: &str, data: &[u8]) -> Result<()>;
@@ -749,6 +757,33 @@ impl ExecStrategy for RealExec {
                 exec_channel_capture(&conn.sess, &format!("mkdir -p {}", shell_single_quote(dir)))
                     .with_context(|| format!("create remote dir {dir}"))?;
                 Ok(())
+            }
+        })
+    }
+
+    fn remote_realpath(&self, target: &SshTarget, path: &str) -> Result<String> {
+        self.with_conn(target, |conn| match &conn.sftp {
+            // SFTP realpath resolves symlinks + relative components to the
+            // canonical absolute path.
+            Some(sftp) => {
+                let real = sftp
+                    .realpath(std::path::Path::new(path))
+                    .with_context(|| format!("realpath {path} on remote"))?;
+                Ok(real.to_string_lossy().to_string())
+            }
+            // No SFTP subsystem: `cd <path> && pwd -P` gives the physical
+            // (symlink-resolved) directory, matching Claude's getcwd.
+            None => {
+                let out = exec_channel_capture(
+                    &conn.sess,
+                    &format!("cd {} && pwd -P", shell_single_quote(path)),
+                )
+                .with_context(|| format!("realpath {path} on remote"))?;
+                let real = out.trim().to_string();
+                if real.is_empty() {
+                    anyhow::bail!("remote `pwd -P` for {path} returned nothing");
+                }
+                Ok(real)
             }
         })
     }
@@ -1171,6 +1206,8 @@ pub struct RecordingExec {
     inner: std::sync::Mutex<CapturedExec>,
     homes: std::sync::Mutex<Vec<SshTarget>>,
     mkdirs: std::sync::Mutex<Vec<String>>,
+    /// Paths passed to `remote_realpath`, in call order.
+    realpaths: std::sync::Mutex<Vec<String>>,
     /// Written files: (remote path, contents as UTF-8 string).
     writes: std::sync::Mutex<Vec<(String, String)>>,
     /// When true, `remote_home` returns an error — simulates an
@@ -1178,6 +1215,9 @@ pub struct RecordingExec {
     home_fails: bool,
     /// Canned set of binaries `remote_which` reports as present.
     available: std::collections::BTreeSet<String>,
+    /// When set, `remote_realpath` returns this regardless of input —
+    /// simulates a symlinked cwd (e.g. `/tmp` → `/private/tmp`).
+    realpath_as: Option<String>,
 }
 
 impl RecordingExec {
@@ -1198,6 +1238,15 @@ impl RecordingExec {
         }
     }
 
+    /// A recorder whose `remote_realpath` always returns `canonical` —
+    /// simulates a symlinked cwd resolving to a different physical path.
+    pub fn with_realpath(canonical: &str) -> Self {
+        Self {
+            realpath_as: Some(canonical.to_string()),
+            ..Default::default()
+        }
+    }
+
     pub fn captured(&self) -> CapturedExec {
         self.inner.lock().unwrap().clone()
     }
@@ -1210,6 +1259,11 @@ impl RecordingExec {
     /// Every `remote_mkdirs` call, in call order.
     pub fn mkdirs(&self) -> Vec<String> {
         self.mkdirs.lock().unwrap().clone()
+    }
+
+    /// Every `remote_realpath` call, in call order.
+    pub fn realpaths(&self) -> Vec<String> {
+        self.realpaths.lock().unwrap().clone()
     }
 
     /// Every `remote_write` call as `(remote path, contents)`.
@@ -1244,6 +1298,13 @@ impl ExecStrategy for RecordingExec {
     fn remote_mkdirs(&self, _target: &SshTarget, dir: &str) -> Result<()> {
         self.mkdirs.lock().unwrap().push(dir.to_string());
         Ok(())
+    }
+
+    fn remote_realpath(&self, _target: &SshTarget, path: &str) -> Result<String> {
+        // Record the request; return the canned canonical path when set
+        // (simulating a symlink), else identity.
+        self.realpaths.lock().unwrap().push(path.to_string());
+        Ok(self.realpath_as.clone().unwrap_or_else(|| path.to_string()))
     }
 
     fn remote_write(&self, _target: &SshTarget, path: &str, data: &[u8]) -> Result<()> {
@@ -1331,10 +1392,26 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
     //    resume that previously never needed a libssh2 exec channel), and
     //    resolving first avoids shipping the session file only to abort
     //    partway through on a probe error.
-    let launch_cwd: Option<String> = args
-        .cwd
-        .as_ref()
-        .map(|dir| normalize_remote_cwd(dir, &home));
+    // Create + canonicalize the launch cwd up front. Claude keys its
+    // project dir on the *physical* cwd (symlinks resolved), so we mkdir
+    // the requested dir, then realpath it — otherwise a `--cwd` through a
+    // symlink (e.g. macOS `/tmp` → `/private/tmp`) ships the session to a
+    // dir `claude -r` never scans. No `--cwd` → the SFTP-realpath'd home.
+    let launch_cwd: Option<String> = match args.cwd.as_ref() {
+        Some(dir) => {
+            let normalized = normalize_remote_cwd(dir, &home);
+            exec.remote_mkdirs(&target, &normalized)
+                .with_context(|| format!("creating launch dir {normalized} on {remote}"))?;
+            let canonical = exec
+                .remote_realpath(&target, &normalized)
+                .unwrap_or_else(|e| {
+                    eprintln!("note: could not canonicalize {normalized} on {remote} ({e}); using it as-is");
+                    normalized.clone()
+                });
+            Some(canonical)
+        }
+        None => None,
+    };
     let backend = match resolve_persist_flag(args)? {
         Some(b) => b,
         None => {
@@ -1391,13 +1468,7 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
         .with_context(|| format!("shipping session file to {remote}:{dest}"))?;
     eprintln!("Shipped session {session_id} → {remote}:{dest}");
 
-    // The launch cwd must exist before the interactive `cd` — create it
-    // over SFTP too, since resuming into a fresh directory is the normal
-    // case.
-    if let Some(dir) = launch_cwd.as_deref() {
-        exec.remote_mkdirs(&target, dir)
-            .with_context(|| format!("creating launch dir {dir} on {remote}"))?;
-    }
+    // (launch cwd was created + canonicalized before shipping, above.)
 
     if let Some((path, body)) = &plan.extra_file {
         if let Some(parent) = std::path::Path::new(path).parent().and_then(|p| p.to_str()) {

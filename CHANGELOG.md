@@ -22,6 +22,12 @@ All notable changes to the Toolpath workspace are documented here.
   - Reachability over Tailscale, Cloudflare Tunnel, or a bastion hop
     needs no new flag — it rides the existing `~/.ssh/config` `Host`
     alias resolution already documented for `--remote`.
+  - **Symlink-safe `--cwd`**: the remote launch cwd is now canonicalized
+    over SFTP (`remote_realpath`) before keying the shipped project dir,
+    so a `--cwd` through a symlink (e.g. macOS `/tmp` → `/private/tmp`)
+    ships to the *physical* path Claude's `getcwd` reports — previously
+    the session shipped to a dir `claude -r` never scanned and silently
+    failed to resume. Found and fixed by a live end-to-end run.
 
 ## Resume: remote resume over SSH — 2026-07-23
 

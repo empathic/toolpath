@@ -546,6 +546,48 @@ fn remote_resume_falls_back_to_plain_when_no_backend_available() {
     );
 }
 
+/// A `--cwd` through a symlink (e.g. macOS `/tmp` → `/private/tmp`) must
+/// key the shipped project dir on the *canonical* path — otherwise
+/// `claude -r`, which uses the physical cwd, looks in a dir the session
+/// was never shipped to. Regression for the live-verified macOS bug.
+#[test]
+fn remote_resume_ships_to_canonical_cwd_when_symlinked() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-symlink-cwd");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.cwd = Some(std::path::PathBuf::from("/tmp/work")); // logical
+    args.persist = Some(PersistBackend::Plain);
+
+    // Remote reports the physical path (symlink resolved).
+    let rec = RecordingExec::with_realpath("/private/tmp/work");
+    run_with_strategy(args, &rec).unwrap();
+
+    // Session file shipped under the CANONICAL project dir, not the logical one.
+    let (dest, _) = &rec.writes()[0];
+    assert!(
+        dest.contains("/.claude/projects/-private-tmp-work/"),
+        "should ship to canonical project dir, got {dest}"
+    );
+    assert!(
+        !dest.contains("/projects/-tmp-work/"),
+        "must not ship to the logical (symlinked) dir, got {dest}"
+    );
+    // And the launch cd's into the canonical path too.
+    let cap = rec.captured();
+    assert!(
+        cap.args.iter().any(|a| a.contains("cd /private/tmp/work")),
+        "launch should cd into the canonical cwd, got {:?}",
+        cap.args
+    );
+}
+
 /// `--remote` without `--harness` must fail fast on the host with a
 /// clear message: the remote resume runs over a non-interactive SSH
 /// session where the harness picker has no TTY, and the host can't run
