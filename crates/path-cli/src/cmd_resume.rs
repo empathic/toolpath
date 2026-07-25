@@ -83,22 +83,19 @@
 //! ## Session persistence (`--persist <backend>`)
 //!
 //! `--remote` resumes can survive an SSH disconnect by wrapping the
-//! remote launch in a session multiplexer, chosen from six backends
-//! ([`PersistBackend`]): `plain` (no wrapping — dies on disconnect,
-//! always offered), `tmux`, `abduco`, `dtach`, `zellij`, `shpool`. Each
-//! backend maps to one of three launch mechanisms:
-//! 1. **Direct-wrap** (`plain`, `tmux`, `abduco`, `dtach`) — the harness
-//!    command is wrapped inline (e.g. `tmux new-session -A -s path-<id>
-//!    …`); detach/re-run to re-attach.
-//! 2. **Layout-wrap** (`zellij`) — a generated KDL layout drives the
-//!    launch so the harness starts inside a named zellij session/pane.
-//! 3. **Attach-only** (`shpool`) — shpool keeps a persistent remote shell
-//!    running the harness; resume prints the `shpool attach` command for
-//!    the user to run rather than launching it directly.
+//! remote launch in a session holder, chosen from three backends
+//! ([`PersistBackend`]): `tmux` (attach-or-create named session),
+//! `dtach` (`dtach -A <socket> -r winch sh -c '…'` — no daemon,
+//! socket-is-the-API, `-r winch` redraws the self-repainting TUI on
+//! reattach), and `plain` (no wrapping — dies on disconnect, always
+//! offered). The set is deliberately small: `claude -r` reconstructs
+//! the conversation on crash and Claude's TUI repaints itself, so a
+//! heavier terminal-modeling multiplexer (abduco/zellij/shpool were
+//! evaluated) earns nothing for a one-process attach.
 //!
 //! Without `--persist`, a non-TTY invocation picks the best available
-//! backend automatically ([`preferred_backend`]: tmux > zellij > abduco >
-//! dtach > plain); an interactive TTY shows a picker built from
+//! backend automatically ([`preferred_backend`]: tmux > dtach > plain);
+//! an interactive TTY shows a picker built from
 //! [`persist_candidates`] — the remote is probed for installed backends
 //! ([`ExecStrategy::remote_which`]) and only those (plus `plain`) are
 //! offered. `--persist X` skips the picker. `--tmux` is a **deprecated
@@ -1567,13 +1564,7 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
             }
         }
     };
-    let plan = persist_plan(
-        Harness::Claude,
-        &session_id,
-        launch_cwd.as_deref(),
-        backend,
-        &home,
-    );
+    let remote_command = persist_plan(Harness::Claude, &session_id, launch_cwd.as_deref(), backend);
 
     // 4. Ship: create the Claude project dir and write the projected
     //    JSONL over SFTP — typed file operations, no remote shell. The
@@ -1595,22 +1586,10 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
 
     // (launch cwd was created + canonicalized before shipping, above.)
 
-    if let Some((path, body)) = &plan.extra_file {
-        if let Some(parent) = std::path::Path::new(path).parent().and_then(|p| p.to_str()) {
-            exec.remote_mkdirs(&target, parent)
-                .with_context(|| format!("creating {parent} on {remote}"))?;
-        }
-        exec.remote_write(&target, path, body)
-            .with_context(|| format!("shipping {path} to {remote}"))?;
-    }
-    if let Some(note) = &plan.post_note {
-        eprintln!("{note}");
-    }
-
     // 5. Interactive launch of the harness against the shipped session,
     //    with a real TTY — the one step that stays on the real `ssh`
     //    binary (it needs the user's terminal and ssh config).
-    let (binary, argv) = launch_invocation(args.transport, remote, &plan.remote_command)?;
+    let (binary, argv) = launch_invocation(args.transport, remote, &remote_command)?;
     let cwd = std::env::current_dir()?;
     exec_harness(&binary, &argv, &cwd, exec)
 }
@@ -1712,15 +1691,8 @@ fn normalize_remote_cwd(cwd: &std::path::Path, home: &str) -> String {
 /// itself is created over SFTP before launch — this is the only remote
 /// shell string left, and it's minimal because a `cd` can't happen
 /// anywhere else.
-struct PersistPlan {
-    remote_command: String,
-    extra_file: Option<(String, Vec<u8>)>,
-    post_note: Option<String>,
-}
-
-/// Reduce a session id to `[A-Za-z0-9_-]` so it's safe to embed both in a
-/// multiplexer session name and in a remote file path (the zellij layout
-/// file lives at `<home>/.cache/path/zellij-<name>.kdl`). Any character
+/// Reduce a session id to `[A-Za-z0-9_-]` so it's safe to embed in a
+/// multiplexer session name and a dtach socket path. Any character
 /// outside that set — including `/` and `.` (so `..` can't traverse) —
 /// becomes `-`.
 fn sanitize_session_name(session_id: &str) -> String {
@@ -1736,13 +1708,20 @@ fn sanitize_session_name(session_id: &str) -> String {
         .collect()
 }
 
+/// Build the remote command that launches the harness under the chosen
+/// persistence backend. Two backends earn their place for a
+/// single-process `claude -r` attach — `tmux` (tested default,
+/// ubiquitous, introspectable) and `dtach` (no daemon, socket-is-the-API,
+/// `-r winch` so Claude's self-repainting TUI redraws on reattach) —
+/// plus `plain` (no persistence). `claude -r` reconstructs the
+/// conversation on crash, so a heavier terminal-modeling multiplexer
+/// buys nothing here.
 fn persist_plan(
     harness: Harness,
     session_id: &str,
     cwd: Option<&str>,
     backend: PersistBackend,
-    home: &str,
-) -> PersistPlan {
+) -> String {
     let launch: Vec<String> = std::iter::once(harness.name().to_string())
         .chain(argv_for(harness, session_id).iter().map(|a| shell_quote(a)))
         .collect();
@@ -1751,68 +1730,27 @@ fn persist_plan(
         Some(dir) => format!("cd {} && {inner}", shell_quote(dir)),
         None => inner,
     };
-    // Detachable session names can't contain `.`/`:`, and this name also
-    // feeds a remote file path (the zellij layout file), so sanitize down
-    // to a safe charset rather than just stripping `.`/`:` — a crafted
-    // session_id with `/` or `..` must not be able to steer the write.
     let name = format!("path-{}", sanitize_session_name(session_id));
 
-    let mut extra_file = None;
-    let mut post_note = None;
-    let remote_command = match backend {
+    match backend {
         PersistBackend::Plain => inner,
         PersistBackend::Tmux => format!(
             "tmux new-session -A -s {} {}",
             shell_quote(&name),
             shell_single_quote(&inner)
         ),
-        PersistBackend::Abduco => format!(
-            "abduco -A {} sh -c {}",
-            shell_quote(&name),
-            shell_single_quote(&inner)
-        ),
+        // `-A` attach-or-create; `-r winch` sends SIGWINCH on attach so a
+        // full-screen TUI (Claude is Ink-based) repaints itself. The
+        // command runs via `sh -c` as a single arg, so no re-splitting.
         PersistBackend::Dtach => format!(
-            "dtach -A {} -z sh -c {}",
+            "dtach -A {} -r winch sh -c {}",
             shell_quote(&format!(
                 "/tmp/path-dtach-{}",
                 sanitize_session_name(session_id)
             )),
             shell_single_quote(&inner)
         ),
-        PersistBackend::Zellij => zellij_plan(&name, &inner, home, &mut extra_file),
-        PersistBackend::Shpool => shpool_plan(&name, &inner, &mut post_note),
-    };
-    PersistPlan {
-        remote_command,
-        extra_file,
-        post_note,
     }
-}
-
-fn zellij_plan(
-    name: &str,
-    inner: &str,
-    home: &str,
-    extra: &mut Option<(String, Vec<u8>)>,
-) -> String {
-    let layout_path = format!("{home}/.cache/path/zellij-{name}.kdl");
-    // Single-pane layout that runs INNER via the shell.
-    let kdl = format!(
-        "layout {{\n    pane command=\"sh\" {{\n        args \"-c\" {inner:?}\n    }}\n}}\n"
-    );
-    *extra = Some((layout_path.clone(), kdl.into_bytes()));
-    format!(
-        "zellij --session {} --layout {}",
-        shell_quote(name),
-        shell_quote(&layout_path)
-    )
-}
-
-fn shpool_plan(name: &str, inner: &str, note: &mut Option<String>) -> String {
-    *note = Some(format!(
-        "shpool has no command arg — in the persistent shell, run:\n    {inner}"
-    ));
-    format!("shpool attach {}", shell_quote(name))
 }
 
 /// Quote for the remote shell only when needed — plain flags, ids, and
@@ -1922,15 +1860,10 @@ fn persist_candidates(available: &std::collections::BTreeSet<String>) -> Vec<Per
         .collect()
 }
 
-/// Pick the preferred backend from the available set. Priority:
-/// [Tmux, Zellij, Abduco, Dtach], falling back to Plain if none are available.
+/// Pick the preferred backend from the available set: tmux > dtach,
+/// falling back to Plain if neither is installed.
 fn preferred_backend(available: &std::collections::BTreeSet<String>) -> PersistBackend {
-    const PRIORITY: [PersistBackend; 4] = [
-        PersistBackend::Tmux,
-        PersistBackend::Zellij,
-        PersistBackend::Abduco,
-        PersistBackend::Dtach,
-    ];
+    const PRIORITY: [PersistBackend; 2] = [PersistBackend::Tmux, PersistBackend::Dtach];
     PRIORITY
         .into_iter()
         .find(|b| b.bin().is_some_and(|bin| available.contains(bin)))
@@ -1972,17 +1905,17 @@ fn launch_invocation(
     }
 }
 
-/// Remote session-persistence backend for `--remote` resume. See the
-/// design spec: three launch mechanisms (direct-wrap, layout-wrap for
-/// zellij, attach-only for shpool).
+/// Remote session-persistence backend for `--remote` resume. Scoped to
+/// what a single-process `claude -r` attach actually needs: `tmux`
+/// (tested default, ubiquitous, introspectable), `dtach` (no daemon,
+/// socket-is-the-API, `-r winch` redraw), and `plain` (none). `claude
+/// -r` reconstructs the conversation on crash and Claude's TUI repaints
+/// itself, so heavier terminal-modeling multiplexers earn nothing here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum PersistBackend {
     Plain,
     Tmux,
-    Abduco,
     Dtach,
-    Zellij,
-    Shpool,
 }
 
 impl PersistBackend {
@@ -1991,10 +1924,7 @@ impl PersistBackend {
         match self {
             PersistBackend::Plain => None,
             PersistBackend::Tmux => Some("tmux"),
-            PersistBackend::Abduco => Some("abduco"),
             PersistBackend::Dtach => Some("dtach"),
-            PersistBackend::Zellij => Some("zellij"),
-            PersistBackend::Shpool => Some("shpool"),
         }
     }
 
@@ -2002,22 +1932,14 @@ impl PersistBackend {
         match self {
             PersistBackend::Plain => "plain — no persistence; dies on disconnect",
             PersistBackend::Tmux => "tmux — detachable; survives drops, reattachable",
-            PersistBackend::Abduco => "abduco — minimal detach/attach; survives drops",
-            PersistBackend::Dtach => "dtach — tiny detach/attach; survives drops",
-            PersistBackend::Zellij => "zellij — detachable workspace (layout-launched)",
-            PersistBackend::Shpool => {
-                "shpool — persistent shell (attach-only; run the command yourself)"
-            }
+            PersistBackend::Dtach => "dtach — tiny detach/attach; survives drops (-r winch redraw)",
         }
     }
 
-    /// Fixed picker display order.
-    const DISPLAY_ORDER: [PersistBackend; 6] = [
+    /// Fixed picker display / preference order (tmux > dtach > plain).
+    const DISPLAY_ORDER: [PersistBackend; 3] = [
         PersistBackend::Tmux,
-        PersistBackend::Zellij,
-        PersistBackend::Abduco,
         PersistBackend::Dtach,
-        PersistBackend::Shpool,
         PersistBackend::Plain,
     ];
 }
@@ -2369,177 +2291,61 @@ mod tests {
     }
 
     #[test]
-    fn remote_launch_command_derives_from_harness_table() {
-        // Binary + argv come from the same per-harness table the local
-        // resume uses; safe args stay bare so the recipe reads cleanly.
+    fn persist_plan_plain_and_tmux_and_dtach() {
+        let id = "sess-1";
+        // plain: bare command; with cwd, just a cd prefix.
         assert_eq!(
-            persist_plan(
-                Harness::Claude,
-                "sess-1",
-                None,
-                PersistBackend::Plain,
-                "/home/u"
-            )
-            .remote_command,
+            persist_plan(Harness::Claude, id, None, PersistBackend::Plain),
             "claude -r sess-1"
         );
-        // Directory creation happens over SFTP before launch — the shell
-        // string stays minimal: just the cd and the harness.
         assert_eq!(
             persist_plan(
                 Harness::Claude,
-                "sess-1",
+                id,
                 Some("/srv/work"),
-                PersistBackend::Plain,
-                "/home/u"
-            )
-            .remote_command,
+                PersistBackend::Plain
+            ),
             "cd /srv/work && claude -r sess-1"
         );
-    }
-
-    #[test]
-    fn remote_launch_command_tmux_wraps_for_detachable_sessions() {
-        // --tmux: the whole launch runs inside a named tmux session so
-        // it survives SSH disconnects; -A re-attaches on a second run.
+        // tmux: attach-or-create named session wrapping the command.
         assert_eq!(
-            persist_plan(
-                Harness::Claude,
-                "sess-1",
-                None,
-                PersistBackend::Tmux,
-                "/home/u"
-            )
-            .remote_command,
+            persist_plan(Harness::Claude, id, None, PersistBackend::Tmux),
             "tmux new-session -A -s path-sess-1 'claude -r sess-1'"
         );
         assert_eq!(
-            persist_plan(
-                Harness::Claude,
-                "sess-1",
-                Some("/srv/work"),
-                PersistBackend::Tmux,
-                "/home/u"
-            )
-            .remote_command,
-            "tmux new-session -A -s path-sess-1 'cd /srv/work && claude -r sess-1'"
-        );
-    }
-
-    #[test]
-    fn persist_plan_direct_wrap_backends() {
-        let id = "sess-1";
-        let plain = persist_plan(Harness::Claude, id, None, PersistBackend::Plain, "/home/u");
-        assert_eq!(plain.remote_command, "claude -r sess-1");
-        assert!(plain.extra_file.is_none() && plain.post_note.is_none());
-
-        let tmux = persist_plan(
-            Harness::Claude,
-            id,
-            Some("/srv/w"),
-            PersistBackend::Tmux,
-            "/home/u",
-        );
-        assert_eq!(
-            tmux.remote_command,
+            persist_plan(Harness::Claude, id, Some("/srv/w"), PersistBackend::Tmux),
             "tmux new-session -A -s path-sess-1 'cd /srv/w && claude -r sess-1'"
         );
-
-        let abduco = persist_plan(Harness::Claude, id, None, PersistBackend::Abduco, "/home/u");
+        // dtach: attach-or-create on a socket, `-r winch` so the TUI redraws.
         assert_eq!(
-            abduco.remote_command,
-            "abduco -A path-sess-1 sh -c 'claude -r sess-1'"
+            persist_plan(Harness::Claude, id, None, PersistBackend::Dtach),
+            "dtach -A /tmp/path-dtach-sess-1 -r winch sh -c 'claude -r sess-1'"
         );
-
-        let dtach = persist_plan(Harness::Claude, id, None, PersistBackend::Dtach, "/home/u");
-        assert_eq!(
-            dtach.remote_command,
-            "dtach -A /tmp/path-dtach-sess-1 -z sh -c 'claude -r sess-1'"
-        );
-    }
-
-    #[test]
-    fn persist_plan_shpool_attach_only_with_note() {
-        let p = persist_plan(
-            Harness::Claude,
-            "sess-1",
-            Some("/srv/w"),
-            PersistBackend::Shpool,
-            "/home/u",
-        );
-        assert_eq!(p.remote_command, "shpool attach path-sess-1");
-        let note = p.post_note.expect("shpool note");
-        assert!(
-            note.contains("cd /srv/w && claude -r sess-1"),
-            "note: {note}"
-        );
-        assert!(p.extra_file.is_none());
     }
 
     #[test]
     fn persist_plan_sanitizes_session_name() {
-        // A hostile session id must not leak `/` or `..` into the
-        // multiplexer session name or the zellij layout file path.
+        // A hostile session id must not leak `/` or `..` into the tmux
+        // session name or the dtach socket path.
         let hostile = "../evil";
-        let tmux = persist_plan(
-            Harness::Claude,
-            hostile,
-            None,
-            PersistBackend::Tmux,
-            "/home/u",
-        );
-        // The session-name slot (the `-s <name>` argument) must contain no
-        // `/` or `..` — unlike the inner harness argv, which legitimately
-        // carries the raw session id as a CLI argument to `claude -r`.
-        let name_arg = tmux
-            .remote_command
-            .split_whitespace()
-            .nth(4)
-            .unwrap_or_default();
+        let tmux = persist_plan(Harness::Claude, hostile, None, PersistBackend::Tmux);
+        // The `-s <name>` argument (5th token) must carry no `/` or `..` —
+        // unlike the inner harness argv, which legitimately carries the raw
+        // session id as an argument to `claude -r`.
+        let name_arg = tmux.split_whitespace().nth(4).unwrap_or_default();
         assert!(
             !name_arg.contains('/') && !name_arg.contains(".."),
             "tmux session name leaks traversal/slash: {name_arg}"
         );
 
-        let dtach = persist_plan(
-            Harness::Claude,
-            hostile,
-            None,
-            PersistBackend::Dtach,
-            "/home/u",
-        );
-        // The socket path is the `-A <path>` argument, third whitespace
-        // token; check just that token, not the whole command (whose
-        // trailing inner argv legitimately carries the raw hostile id).
-        let socket_arg = dtach
-            .remote_command
-            .split_whitespace()
-            .nth(2)
-            .unwrap_or_default();
+        let dtach = persist_plan(Harness::Claude, hostile, None, PersistBackend::Dtach);
+        // The socket path is the `-A <path>` argument (3rd token).
+        let socket_arg = dtach.split_whitespace().nth(2).unwrap_or_default();
         assert!(
             !socket_arg
                 .trim_start_matches("/tmp/path-dtach-")
                 .contains('/'),
             "dtach socket path leaks a slash beyond the fixed /tmp/ prefix: {socket_arg}"
-        );
-
-        let zellij = persist_plan(
-            Harness::Claude,
-            hostile,
-            None,
-            PersistBackend::Zellij,
-            "/home/u",
-        );
-        let (layout_path, _) = zellij.extra_file.expect("zellij ships a layout file");
-        assert!(
-            !layout_path
-                .trim_start_matches("/home/u/.cache/path/zellij-")
-                .contains('/'),
-            "zellij layout path leaks a slash beyond the fixed prefix: {layout_path}"
-        );
-        assert!(
-            !layout_path.contains(".."),
-            "zellij layout path leaks traversal: {layout_path}"
         );
     }
 
@@ -3293,34 +3099,11 @@ mod tests {
     fn persist_backend_bin_and_order() {
         assert_eq!(PersistBackend::Plain.bin(), None);
         assert_eq!(PersistBackend::Tmux.bin(), Some("tmux"));
-        assert_eq!(PersistBackend::Shpool.bin(), Some("shpool"));
-        // Display order is stable and complete.
-        assert_eq!(PersistBackend::DISPLAY_ORDER.len(), 6);
+        assert_eq!(PersistBackend::Dtach.bin(), Some("dtach"));
+        // Display order is stable and complete (tmux > dtach > plain).
+        assert_eq!(PersistBackend::DISPLAY_ORDER.len(), 3);
         assert_eq!(PersistBackend::DISPLAY_ORDER[0], PersistBackend::Tmux);
         assert!(PersistBackend::Tmux.describe().contains("detach"));
-    }
-
-    #[test]
-    fn persist_plan_zellij_ships_layout() {
-        let p = persist_plan(
-            Harness::Claude,
-            "sess-1",
-            Some("/srv/w"),
-            PersistBackend::Zellij,
-            "/home/u",
-        );
-        assert_eq!(
-            p.remote_command,
-            "zellij --session path-sess-1 --layout /home/u/.cache/path/zellij-path-sess-1.kdl"
-        );
-        let (path, body) = p.extra_file.expect("layout shipped");
-        assert_eq!(path, "/home/u/.cache/path/zellij-path-sess-1.kdl");
-        let body = String::from_utf8(body).unwrap();
-        assert!(
-            body.contains("cd /srv/w && claude -r sess-1"),
-            "body: {body}"
-        );
-        assert!(body.contains("pane"), "must be a KDL layout: {body}");
     }
 
     #[test]
@@ -3343,26 +3126,21 @@ mod tests {
     #[test]
     fn persist_candidates_and_preference() {
         use std::collections::BTreeSet;
-        let avail: BTreeSet<String> = ["dtach", "zellij"].iter().map(|s| s.to_string()).collect();
-        let cands = persist_candidates(&avail);
-        // DISPLAY_ORDER filtered to available + always Plain, in order.
+        // Only dtach installed → [dtach, plain]; dtach preferred.
+        let avail: BTreeSet<String> = ["dtach"].iter().map(|s| s.to_string()).collect();
         assert_eq!(
-            cands,
-            vec![
-                PersistBackend::Zellij,
-                PersistBackend::Dtach,
-                PersistBackend::Plain
-            ]
+            persist_candidates(&avail),
+            vec![PersistBackend::Dtach, PersistBackend::Plain]
         );
-        assert_eq!(preferred_backend(&avail), PersistBackend::Zellij); // tmux absent -> zellij
+        assert_eq!(preferred_backend(&avail), PersistBackend::Dtach);
 
         let none: BTreeSet<String> = BTreeSet::new();
         assert_eq!(persist_candidates(&none), vec![PersistBackend::Plain]);
         assert_eq!(preferred_backend(&none), PersistBackend::Plain);
 
-        let with_tmux: BTreeSet<String> =
-            ["tmux", "shpool"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(preferred_backend(&with_tmux), PersistBackend::Tmux); // shpool never preferred over tmux
+        // tmux always wins when present.
+        let both: BTreeSet<String> = ["tmux", "dtach"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(preferred_backend(&both), PersistBackend::Tmux);
     }
 
     #[test]
@@ -3371,12 +3149,9 @@ mod tests {
         let expected = [
             (Plain, "plain — no persistence; dies on disconnect"),
             (Tmux, "tmux — detachable; survives drops, reattachable"),
-            (Abduco, "abduco — minimal detach/attach; survives drops"),
-            (Dtach, "dtach — tiny detach/attach; survives drops"),
-            (Zellij, "zellij — detachable workspace (layout-launched)"),
             (
-                Shpool,
-                "shpool — persistent shell (attach-only; run the command yourself)",
+                Dtach,
+                "dtach — tiny detach/attach; survives drops (-r winch redraw)",
             ),
         ];
         // DISPLAY_ORDER holds every variant, so matching its length keeps
@@ -3388,7 +3163,6 @@ mod tests {
         );
         for (backend, text) in expected {
             assert_eq!(backend.describe(), text, "describe() for {backend:?}");
-            // Each blurb leads with the backend's own name, lowercased.
             let name = format!("{backend:?}").to_lowercase();
             assert!(
                 backend.describe().starts_with(&name),

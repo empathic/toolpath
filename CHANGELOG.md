@@ -6,16 +6,27 @@ All notable changes to the Toolpath workspace are documented here.
 
 - **`path-cli`** (0.18.0): `path resume --remote` gains `--persist
   <backend>`, generalizing the previous `--tmux`-only detach story into a
-  picker over six backends: `plain`, `tmux`, `abduco`, `dtach`, `zellij`,
-  `shpool`. Three launch mechanisms: direct-wrap (`plain`/`tmux`/`abduco`/
-  `dtach` — the harness command is wrapped inline), layout-wrap (`zellij`
-  — a generated KDL layout drives the launch), and attach-only (`shpool`
-  — a persistent remote shell; resume prints the attach command instead
-  of launching it directly). The remote is probed for installed backends
-  (mirroring the harness picker); `--persist X` skips the picker; a
-  non-TTY invocation auto-picks the best available backend (tmux >
-  zellij > abduco > dtach > plain). `--tmux` is now a **deprecated
-  alias** for `--persist tmux` — combining both flags is an error.
+  picker over three backends: `tmux`, `dtach`, and `plain` (none).
+  `tmux` wraps the launch in an attach-or-create named session; `dtach`
+  uses `dtach -A <socket> -r winch sh -c '…'` (`-r winch` makes Claude's
+  self-repainting TUI redraw on reattach); `plain` is a bare launch. The
+  remote is probed for installed backends; `--persist X` skips the
+  picker; a non-TTY invocation auto-picks the best available (tmux >
+  dtach > plain). `--tmux` is a **deprecated alias** for `--persist
+  tmux` — combining both is an error.
+  - **Why only two real backends.** The job is narrow — hold one
+    `claude -r` PTY across a disconnect — and Claude collapses the usual
+    multiplexer trade-offs: `claude -r` *is* the crash-recovery layer
+    (conversation state lives in Claude Code's session files, not the
+    terminal, so you re-run `-r` rather than reattach to a corpse), and
+    Claude's Ink TUI repaints itself (no server-side terminal model
+    needed). That deletes tmux's two distinguishing wins for this use,
+    leaving `tmux` (tested default, ubiquitous, introspectable) and
+    `dtach` (no daemon, socket-is-the-API, argv-exec so no quoting-class
+    bug). `abduco`/`zellij`/`shpool` were evaluated and cut — they added
+    daemons, KDL layouts, and nesting guards for zero gain here. Both
+    shipped backends are verified live end-to-end (tmux: persistence +
+    real `claude -r` resume; dtach: socket lifecycle + argv fidelity).
   - New `--transport` flag names the carrier protocol for the
     interactive launch stream. One value — `ssh` — implemented and
     default; the flag exists as the extension seam. It selects *carriage
