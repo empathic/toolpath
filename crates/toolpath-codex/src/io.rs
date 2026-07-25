@@ -173,7 +173,11 @@ mod tests {
         let (_t, io) = setup();
         let day = io.resolver().sessions_root().unwrap().join("2026/04/21");
         fs::create_dir_all(&day).unwrap();
-        fs::write(day.join("rollout-2026-04-21T09-00-00-bbb.jsonl"), "not json").unwrap();
+        fs::write(
+            day.join("rollout-2026-04-21T09-00-00-bbb.jsonl"),
+            "not json",
+        )
+        .unwrap();
 
         let ids = io.list_session_ids().unwrap();
         assert_eq!(ids.len(), 2);

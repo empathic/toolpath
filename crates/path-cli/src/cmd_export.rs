@@ -299,6 +299,47 @@ pub(crate) struct PathbaseUploadArgs {
 // projected session id. They are called by `path resume`; the existing
 // `run_<harness>` functions are untouched.
 
+/// Project `path` into a Claude session entirely in memory, returning
+/// `(session_id, jsonl)` without writing anything. The id is
+/// deterministic — the projector takes it verbatim from the document's
+/// conversation view — and the JSONL is byte-identical to what
+/// `p export claude` would write. Used by `path resume --remote` to
+/// ship a ready-to-resume session file to a host with no `path`
+/// installed.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn claude_session_jsonl(path: &toolpath::v1::Path) -> Result<(String, String)> {
+    let conv = build_claude_conversation(path)?;
+    validate_session_id(&conv.session_id)?;
+    let jsonl = serialize_jsonl(&conv)?;
+    Ok((conv.session_id, jsonl))
+}
+
+/// Reject session ids that aren't safe as a single filesystem path
+/// component. The id becomes `<dir>/<id>.jsonl` both locally and (over
+/// SFTP) on a remote host, and `path resume` accepts third-party
+/// Pathbase documents — so an id like `../../../.ssh/authorized_keys`
+/// from a malicious doc would otherwise let the write escape the
+/// session directory. Every real Claude session id is a UUID; this
+/// allows the UUID charset plus a conservative margin.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn validate_session_id(id: &str) -> Result<()> {
+    if id.is_empty() {
+        anyhow::bail!("document projects to an empty Claude session id");
+    }
+    if id.len() > 128
+        || id.starts_with('.')
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
+        anyhow::bail!(
+            "refusing session id `{id}`: it isn't a safe filename component \
+             (expected UUID-like `[A-Za-z0-9_-]`, ≤128 chars, no leading dot)"
+        );
+    }
+    Ok(())
+}
+
 /// Project `path` into a Claude session under `project_dir` and return
 /// the resulting session id.
 #[cfg(not(target_os = "emscripten"))]
@@ -307,6 +348,7 @@ pub(crate) fn project_claude(
     project_dir: &std::path::Path,
 ) -> Result<String> {
     let conv = build_claude_conversation(path)?;
+    validate_session_id(&conv.session_id)?;
     let jsonl = serialize_jsonl(&conv)?;
     write_into_claude_project(&conv, &jsonl, project_dir)?;
     Ok(conv.session_id)
@@ -693,6 +735,9 @@ fn write_into_claude_project(
     jsonl: &str,
     project_dir: &std::path::Path,
 ) -> Result<PathBuf> {
+    // Chokepoint for every local write — the id becomes a filename, so
+    // reject path-traversal ids here (covers `run_claude` too).
+    validate_session_id(&conv.session_id)?;
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
     let project_path = project_dir.to_string_lossy();

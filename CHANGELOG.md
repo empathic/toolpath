@@ -2,6 +2,94 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Resume: remote session-persistence picker + transport seam — 2026-07-24
+
+- **`path-cli`** (0.18.0): `path resume --remote` gains `--persist
+  <backend>`, generalizing the previous `--tmux`-only detach story into a
+  picker over three backends: `tmux`, `dtach`, and `plain` (none).
+  `tmux` wraps the launch in an attach-or-create named session; `dtach`
+  uses `dtach -A <socket> -r winch sh -c '…'` (`-r winch` makes Claude's
+  self-repainting TUI redraw on reattach); `plain` is a bare launch. The
+  remote is probed for installed backends; `--persist X` skips the
+  picker; a non-TTY invocation auto-picks the best available (tmux >
+  dtach > plain). `--tmux` is a **deprecated alias** for `--persist
+  tmux` — combining both is an error.
+  - **Why only two real backends.** The job is narrow — hold one
+    `claude -r` PTY across a disconnect — and Claude collapses the usual
+    multiplexer trade-offs: `claude -r` *is* the crash-recovery layer
+    (conversation state lives in Claude Code's session files, not the
+    terminal, so you re-run `-r` rather than reattach to a corpse), and
+    Claude's Ink TUI repaints itself (no server-side terminal model
+    needed). That deletes tmux's two distinguishing wins for this use,
+    leaving `tmux` (tested default, ubiquitous, introspectable) and
+    `dtach` (no daemon, socket-is-the-API, argv-exec so no quoting-class
+    bug). `abduco`/`zellij`/`shpool` were evaluated and cut — they added
+    daemons, KDL layouts, and nesting guards for zero gain here. Both
+    shipped backends are verified live end-to-end (tmux: persistence +
+    real `claude -r` resume; dtach: socket lifecycle + argv fidelity).
+  - New `--transport` flag names the carrier protocol for the
+    interactive launch stream. One value — `ssh` — implemented and
+    default; the flag exists as the extension seam. It selects *carriage
+    only*, not routing/reachability (`~/.ssh/config`) or credentials.
+  - Reachability over Tailscale, Cloudflare Tunnel, or a bastion hop
+    needs no new flag — it rides the existing `~/.ssh/config` `Host`
+    alias resolution already documented for `--remote`. **The ship now
+    honors it too:** libssh2 dials a raw socket and can't traverse
+    `ProxyJump`/`ProxyCommand`, so when the host declares a proxy (or a
+    direct dial fails), the probe/ship/realpath fall back to the `ssh`
+    CLI (`ssh host 'mkdir -p … && cat > …'`), which honors the full
+    config. Previously such a host launched fine but silently failed at
+    the ship step.
+  - **Symlink-safe `--cwd`**: the remote launch cwd is now canonicalized
+    over SFTP (`remote_realpath`) before keying the shipped project dir,
+    so a `--cwd` through a symlink (e.g. macOS `/tmp` → `/private/tmp`)
+    ships to the *physical* path Claude's `getcwd` reports — previously
+    the session shipped to a dir `claude -r` never scanned and silently
+    failed to resume. Found and fixed by a live end-to-end run.
+
+## Resume: remote resume over SSH — 2026-07-23
+
+- **`path-cli`** (0.17.0): `path resume` gains `--remote
+  ssh://[user@]host[:port]` — resume a session on a remote host. The host
+  resolves the Toolpath document AND projects the session fully in memory,
+  ships the finished harness file to the remote, and launches the harness
+  over an interactive `ssh -t`. The remote needs only sshd + the harness:
+  no `path` installed, no Pathbase access, no temp files.
+  - Transport is typed libssh2 calls (SFTP, with an SCP-protocol +
+    minimal-exec fallback for servers whose SFTP channel won't open) — no
+    composed remote shell strings, same ethos as `git2` over shelling out.
+  - Natively honors the `HostName`/`User`/`Port`/`IdentityFile` subset of
+    `~/.ssh/config` (Host blocks, `*`/`?`/`!` globs, first-value-wins, `~`
+    expansion); configured identities are matched against the SSH agent by
+    public-key blob, so key-pinned hosts (e.g. exe.dev, which identifies
+    the account *by* the key) authenticate as the right account.
+  - `--tmux` wraps the remote launch in `tmux new-session -A -s
+    path-<id> …` for detachable sessions: detach with `ctrl-b d`, re-run
+    the same resume to re-attach.
+  - `--harness` is required with `--remote` and currently must be
+    `claude`; `--cwd` keys the remote project dir and the launch `cd`
+    (both created if missing). Bounded connect/per-op timeouts; one cached
+    connection per target.
+  - New deps: `ssh2`, `base64`.
+
+## Project: drop empty streaming-seed assistant lines — 2026-07-23
+
+- **`toolpath-claude`** (0.12.2): the Claude projector no longer emits
+  content-empty assistant messages. Claude Code streams a message as several
+  JSONL lines — the first an empty "seed" (`text: ""`) superseded by the
+  real-text line, both sharing one `message.id`. Projecting that seed as
+  `content:[{"type":"text","text":""}]` produced an API-invalid message: on the
+  next turn of a *resumed* session Claude replays the whole transcript and
+  Anthropic rejects the empty text block with `400 … text content blocks must
+  be non-empty`, so the resumed session couldn't take a second turn. The
+  projector now skips any assistant turn with no text, thinking, tool-uses,
+  delegations, or file-mutations and re-links the following turn's `parentUuid`
+  to the dropped seed's parent, keeping the uuid chain intact. The group's
+  token total is re-expanded onto the surviving line as before.
+- **`toolpath-convo`** (0.12.0): new `Turn::is_content_empty()` — the
+  "no renderable content of its own" predicate the seed-drop check calls
+  instead of an inline conjunction.
+
 ## One artifact-type layer and per-session imports — 2026-07-16
 
 Groundwork for a cache that fills itself: one enum for artifact

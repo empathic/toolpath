@@ -8,7 +8,9 @@
 
 #![cfg(not(target_os = "emscripten"))]
 
-use path_cli::cmd_resume::{RecordingExec, ResumeArgs, run_with_strategy};
+use path_cli::cmd_resume::{
+    PersistBackend, RecordingExec, ResumeArgs, Transport, run_with_strategy,
+};
 use path_cli::harness::Harness;
 
 mod support;
@@ -265,6 +267,10 @@ fn cache_id_input_loads_and_projects() {
         no_cache: false,
         force: false,
         url: None,
+        remote: None,
+        tmux: false,
+        persist: None,
+        transport: Transport::Ssh,
     };
 
     let recorder = RecordingExec::default();
@@ -349,4 +355,237 @@ fn explicit_harness_not_on_path_errors() {
     let s = err.to_string();
     assert!(s.contains("isn't on PATH"), "actual: {s}");
     assert!(s.contains("claude"), "actual: {s}");
+}
+
+// ── Remote resume over SSH ──────────────────────────────────────────
+
+/// With `--remote <ssh url>`, resume should be dispatched to the remote
+/// host over SSH rather than exec'ing a local harness: the session is
+/// projected locally and the JSONL shipped into the remote's Claude
+/// layout (no `path` on the remote), and the final recorded invocation
+/// must be `ssh -t` targeting the remote host and launching
+/// `claude -r <id>` directly (id computed host-side from the doc).
+#[test]
+fn remote_flag_dispatches_resume_over_ssh() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-remote-int");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://dev@example.com:2222/home/dev/project".to_string());
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(args, &recorder).unwrap();
+
+    // Ship: the locally-projected JSONL is written over SFTP into the
+    // remote's Claude projects layout — typed transport calls, no shell
+    // strings and no `path` on the remote.
+    let writes = recorder.writes();
+    assert_eq!(writes.len(), 1, "exactly one file written");
+    let (dest, body) = &writes[0];
+    assert!(
+        dest.contains(".claude/projects/") && dest.ends_with("resume-remote-int.jsonl"),
+        "file should land in the remote Claude layout, got {dest}"
+    );
+    assert!(
+        body.contains("\"sessionId\":\"resume-remote-int\""),
+        "written bytes should carry the projected JSONL"
+    );
+
+    // Launch: interactive ssh -t running the harness directly.
+    let cap = recorder.captured();
+    assert_eq!(
+        cap.binary, "ssh",
+        "remote resume should exec ssh, not the local harness (got {})",
+        cap.binary
+    );
+    assert!(
+        cap.args.iter().any(|a| a.contains("example.com")),
+        "ssh argv should target the remote host, got {:?}",
+        cap.args
+    );
+    assert!(
+        cap.args
+            .iter()
+            .any(|a| a.contains("claude -r resume-remote-int")),
+        "ssh should launch `claude -r <id>` on the remote, got {:?}",
+        cap.args
+    );
+}
+
+/// With `--persist dtach` pinned explicitly (skipping the probe/picker),
+/// the launch command must be wrapped in `dtach -A /tmp/path-dtach-<id>`
+/// so the remote session survives an SSH disconnect.
+#[test]
+fn remote_resume_persist_dtach_records_launch_and_ships() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-persist-dtach");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.persist = Some(PersistBackend::Dtach);
+
+    let rec = RecordingExec::with_available(["dtach"]);
+    run_with_strategy(args, &rec).unwrap();
+
+    let cap = rec.captured();
+    assert_eq!(cap.binary, "ssh");
+    assert!(
+        cap.args
+            .iter()
+            .any(|a| a.contains("dtach -A /tmp/path-dtach-")),
+        "{:?}",
+        cap.args
+    );
+}
+
+/// With no `--persist`, `run_remote` probes the remote for available
+/// backends and auto-selects the preferred one (tmux over zellij), then
+/// wraps the launch in it — the session survives disconnects without the
+/// user naming a backend.
+#[test]
+fn remote_resume_auto_selects_preferred_backend_when_persist_omitted() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-auto-persist");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.persist = None; // no explicit backend → probe + auto-select
+
+    let rec = RecordingExec::with_available(["zellij", "tmux"]);
+    run_with_strategy(args, &rec).unwrap();
+
+    // The session file still ships, and the launch wraps in tmux (preferred).
+    assert_eq!(rec.writes().len(), 1, "session file should ship");
+    let cap = rec.captured();
+    assert_eq!(cap.binary, "ssh");
+    assert!(
+        cap.args.iter().any(|a| a.contains("tmux new-session")),
+        "auto-selected launch should wrap in tmux, got {:?}",
+        cap.args
+    );
+}
+
+/// With no `--persist` and no persistence backend installed on the
+/// remote, `run_remote` falls back to a plain launch (`claude -r`) —
+/// still ships and launches, just without a detachable wrapper.
+#[test]
+fn remote_resume_falls_back_to_plain_when_no_backend_available() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-plain-fallback");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.persist = None;
+
+    let rec = RecordingExec::with_available([]); // nothing installed
+    run_with_strategy(args, &rec).unwrap();
+
+    assert_eq!(rec.writes().len(), 1, "session file should still ship");
+    let cap = rec.captured();
+    assert!(
+        cap.args.iter().any(|a| a.contains("claude -r")),
+        "should still launch claude, got {:?}",
+        cap.args
+    );
+    assert!(
+        !cap.args.iter().any(|a| a.contains("tmux new-session")
+            || a.contains("zellij")
+            || a.contains("dtach")
+            || a.contains("abduco")),
+        "no persistence wrapper when none available, got {:?}",
+        cap.args
+    );
+}
+
+/// A `--cwd` through a symlink (e.g. macOS `/tmp` → `/private/tmp`) must
+/// key the shipped project dir on the *canonical* path — otherwise
+/// `claude -r`, which uses the physical cwd, looks in a dir the session
+/// was never shipped to. Regression for the live-verified macOS bug.
+#[test]
+fn remote_resume_ships_to_canonical_cwd_when_symlinked() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-symlink-cwd");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://h".to_string());
+    args.cwd = Some(std::path::PathBuf::from("/tmp/work")); // logical
+    args.persist = Some(PersistBackend::Plain);
+
+    // Remote reports the physical path (symlink resolved).
+    let rec = RecordingExec::with_realpath("/private/tmp/work");
+    run_with_strategy(args, &rec).unwrap();
+
+    // Session file shipped under the CANONICAL project dir, not the logical one.
+    let (dest, _) = &rec.writes()[0];
+    assert!(
+        dest.contains("/.claude/projects/-private-tmp-work/"),
+        "should ship to canonical project dir, got {dest}"
+    );
+    assert!(
+        !dest.contains("/projects/-tmp-work/"),
+        "must not ship to the logical (symlinked) dir, got {dest}"
+    );
+    // And the launch cd's into the canonical path too.
+    let cap = rec.captured();
+    assert!(
+        cap.args.iter().any(|a| a.contains("cd /private/tmp/work")),
+        "launch should cd into the canonical cwd, got {:?}",
+        cap.args
+    );
+}
+
+/// `--remote` without `--harness` must fail fast on the host with a
+/// clear message: the remote resume runs over a non-interactive SSH
+/// session where the harness picker has no TTY, and the host can't run
+/// the picker either (it never resolves the doc in v0).
+#[test]
+fn remote_without_harness_errors_before_dispatch() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-remote-nohar");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.harness = None;
+    args.remote = Some("ssh://dev@example.com:2222".to_string());
+
+    let recorder = RecordingExec::default();
+    let err = run_with_strategy(args, &recorder).unwrap_err();
+    let s = err.to_string();
+    assert!(
+        s.contains("--harness"),
+        "error should mention --harness: {s}"
+    );
+    assert!(
+        recorder.captured().binary.is_empty(),
+        "must not dispatch ssh when --harness is missing"
+    );
 }
