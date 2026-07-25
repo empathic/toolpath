@@ -16,9 +16,10 @@ All notable changes to the Toolpath workspace are documented here.
   non-TTY invocation auto-picks the best available backend (tmux >
   zellij > abduco > dtach > plain). `--tmux` is now a **deprecated
   alias** for `--persist tmux` — combining both flags is an error.
-  - New `--via ssh|mosh|et` transport axis carries the persist-wrapped
-    launch command; `ssh` is implemented (the prior default behavior),
-    `mosh` is implemented (owns the TTY; custom SSH port via `--ssh`, remote command via `sh -c`); `et` is a reserved seam that errors "not yet supported".
+  - New `--transport` flag names the carrier protocol for the
+    interactive launch stream. One value — `ssh` — implemented and
+    default; the flag exists as the extension seam. It selects *carriage
+    only*, not routing/reachability (`~/.ssh/config`) or credentials.
   - Reachability over Tailscale, Cloudflare Tunnel, or a bastion hop
     needs no new flag — it rides the existing `~/.ssh/config` `Host`
     alias resolution already documented for `--remote`.

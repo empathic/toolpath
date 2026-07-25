@@ -206,7 +206,7 @@ pub fn args_explicit(input: PathBuf, cwd: &Path, harness: Harness) -> ResumeArgs
         remote: None,
         tmux: false,
         persist: None,
-        via: Transport::Ssh,
+        transport: Transport::Ssh,
     }
 }
 

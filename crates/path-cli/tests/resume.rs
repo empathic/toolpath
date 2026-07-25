@@ -270,7 +270,7 @@ fn cache_id_input_loads_and_projects() {
         remote: None,
         tmux: false,
         persist: None,
-        via: Transport::Ssh,
+        transport: Transport::Ssh,
     };
 
     let recorder = RecordingExec::default();
@@ -448,35 +448,6 @@ fn remote_resume_persist_dtach_records_launch_and_ships() {
     );
 }
 
-/// `--via et` (a reserved transport) must fail on the host BEFORE any
-/// remote side effect — nothing probed, nothing shipped, nothing
-/// launched — so a doomed transport never leaves a half-staged session.
-#[test]
-fn remote_resume_via_et_errors_before_any_remote_touch() {
-    let _env = env_lock();
-    let _home = ScopedHome::new();
-    let _path = ScopedPath::with_binaries(&["ssh", "claude"]);
-    let cwd = tempfile::tempdir().unwrap();
-
-    let path = make_convo_path("agent:claude-code", "claude-code://resume-via-et");
-    let doc_file = write_path_to_temp(cwd.path(), path);
-
-    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
-    args.remote = Some("ssh://h".to_string());
-    args.via = Transport::Et;
-
-    let rec = RecordingExec::with_available(["tmux"]);
-    let err = run_with_strategy(args, &rec).unwrap_err();
-
-    assert!(
-        err.to_string().contains("et is not yet supported"),
-        "actual: {err}"
-    );
-    assert!(rec.homes().is_empty(), "must not probe the remote");
-    assert!(rec.writes().is_empty(), "must not ship anything");
-    assert!(rec.captured().binary.is_empty(), "must not launch");
-}
-
 /// With no `--persist`, `run_remote` probes the remote for available
 /// backends and auto-selects the preferred one (tmux over zellij), then
 /// wraps the launch in it — the session survives disconnects without the
@@ -542,53 +513,6 @@ fn remote_resume_falls_back_to_plain_when_no_backend_available() {
             || a.contains("dtach")
             || a.contains("abduco")),
         "no persistence wrapper when none available, got {:?}",
-        cap.args
-    );
-}
-
-/// `--via mosh` ships over SFTP as usual, then launches the harness with
-/// the `mosh` client (not `ssh`): mosh owns the TTY and takes the command
-/// after `--` via `sh -c`, with a custom SSH port on `--ssh`.
-#[test]
-fn remote_resume_via_mosh_launches_with_mosh_client() {
-    let _env = env_lock();
-    let _home = ScopedHome::new();
-    let _path = ScopedPath::with_binaries(&["ssh", "mosh", "claude"]);
-    let cwd = tempfile::tempdir().unwrap();
-
-    let path = make_convo_path("agent:claude-code", "claude-code://resume-via-mosh");
-    let doc_file = write_path_to_temp(cwd.path(), path);
-
-    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
-    args.remote = Some("ssh://dev@host:2222".to_string());
-    args.via = Transport::Mosh;
-    args.persist = Some(PersistBackend::Plain);
-
-    let rec = RecordingExec::default();
-    run_with_strategy(args, &rec).unwrap();
-
-    // Session still ships over the SFTP transport.
-    assert_eq!(rec.writes().len(), 1, "session file should ship");
-    // Launch uses the mosh client, not ssh.
-    let cap = rec.captured();
-    assert_eq!(
-        cap.binary, "mosh",
-        "should launch via mosh, got {}",
-        cap.binary
-    );
-    assert!(
-        cap.args.iter().any(|a| a == "--ssh=ssh -p 2222"),
-        "custom SSH port should ride --ssh, got {:?}",
-        cap.args
-    );
-    assert!(
-        cap.args.iter().any(|a| a == "dev@host") && cap.args.contains(&"--".to_string()),
-        "should target dev@host after --, got {:?}",
-        cap.args
-    );
-    assert!(
-        cap.args.iter().any(|a| a.contains("claude -r")),
-        "the harness command should ride through, got {:?}",
         cap.args
     );
 }
