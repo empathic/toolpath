@@ -674,12 +674,28 @@ pub struct RealExec {
     conn: std::sync::Mutex<Option<RemoteConn>>,
 }
 
-/// A live authenticated session plus the SFTP channel if the server
-/// offers one (`None` ⇒ SCP/exec fallback).
-struct RemoteConn {
-    key: SshTarget,
-    sess: ssh2::Session,
-    sftp: Option<ssh2::Sftp>,
+/// The transport chosen for a target's file operations.
+enum RemoteConn {
+    /// A live libssh2 session; SFTP channel present unless the server
+    /// lacks the subsystem (`None` ⇒ SCP/exec-channel fallback).
+    Libssh2 {
+        key: SshTarget,
+        sess: ssh2::Session,
+        sftp: Option<ssh2::Sftp>,
+    },
+    /// Shell out to the `ssh` CLI for every op. Used when the host is
+    /// only reachable via a `ProxyJump`/`ProxyCommand` (libssh2 can't
+    /// traverse those) or a direct libssh2 dial failed. The CLI honors
+    /// the full `~/.ssh/config`, so it reaches bastions/tunnels/meshes.
+    Cli { key: SshTarget },
+}
+
+impl RemoteConn {
+    fn key(&self) -> &SshTarget {
+        match self {
+            RemoteConn::Libssh2 { key, .. } | RemoteConn::Cli { key } => key,
+        }
+    }
 }
 
 impl ExecStrategy for RealExec {
@@ -721,23 +737,27 @@ impl ExecStrategy for RealExec {
     }
 
     fn remote_home(&self, target: &SshTarget) -> Result<String> {
-        self.with_conn(target, |conn| match &conn.sftp {
-            Some(sftp) => {
+        self.with_conn(target, |conn| match conn {
+            RemoteConn::Libssh2 {
+                sftp: Some(sftp), ..
+            } => {
                 let home = sftp
                     .realpath(std::path::Path::new("."))
                     .context("resolve remote home directory")?;
                 validate_remote_home(&home.to_string_lossy())
             }
-            None => {
-                let out = exec_channel_capture(&conn.sess, "pwd")?;
-                validate_remote_home(&out)
-            }
+            RemoteConn::Libssh2 {
+                sess, sftp: None, ..
+            } => validate_remote_home(&exec_channel_capture(sess, "pwd")?),
+            RemoteConn::Cli { key } => validate_remote_home(&ssh_cli_capture(key, "pwd")?),
         })
     }
 
     fn remote_mkdirs(&self, target: &SshTarget, dir: &str) -> Result<()> {
-        self.with_conn(target, |conn| match &conn.sftp {
-            Some(sftp) => {
+        self.with_conn(target, |conn| match conn {
+            RemoteConn::Libssh2 {
+                sftp: Some(sftp), ..
+            } => {
                 // Walk the components, creating as we go — `mkdir -p`
                 // semantics.
                 let mut cur = std::path::PathBuf::new();
@@ -754,8 +774,15 @@ impl ExecStrategy for RealExec {
                 }
                 Ok(())
             }
-            None => {
-                exec_channel_capture(&conn.sess, &format!("mkdir -p {}", shell_single_quote(dir)))
+            RemoteConn::Libssh2 {
+                sess, sftp: None, ..
+            } => {
+                exec_channel_capture(sess, &format!("mkdir -p {}", shell_single_quote(dir)))
+                    .with_context(|| format!("create remote dir {dir}"))?;
+                Ok(())
+            }
+            RemoteConn::Cli { key } => {
+                ssh_cli_capture(key, &format!("mkdir -p {}", shell_single_quote(dir)))
                     .with_context(|| format!("create remote dir {dir}"))?;
                 Ok(())
             }
@@ -763,36 +790,40 @@ impl ExecStrategy for RealExec {
     }
 
     fn remote_realpath(&self, target: &SshTarget, path: &str) -> Result<String> {
-        self.with_conn(target, |conn| match &conn.sftp {
-            // SFTP realpath resolves symlinks + relative components to the
-            // canonical absolute path.
-            Some(sftp) => {
-                let real = sftp
+        // `cd <path> && pwd -P` gives the physical (symlink-resolved)
+        // directory, matching Claude's getcwd.
+        let pwd_p = format!("cd {} && pwd -P", shell_single_quote(path));
+        self.with_conn(target, |conn| {
+            let raw = match conn {
+                // SFTP realpath resolves symlinks + relative components.
+                RemoteConn::Libssh2 {
+                    sftp: Some(sftp), ..
+                } => sftp
                     .realpath(std::path::Path::new(path))
-                    .with_context(|| format!("realpath {path} on remote"))?;
-                Ok(real.to_string_lossy().to_string())
+                    .with_context(|| format!("realpath {path} on remote"))?
+                    .to_string_lossy()
+                    .to_string(),
+                RemoteConn::Libssh2 {
+                    sess, sftp: None, ..
+                } => exec_channel_capture(sess, &pwd_p)
+                    .with_context(|| format!("realpath {path} on remote"))?,
+                RemoteConn::Cli { key } => ssh_cli_capture(key, &pwd_p)
+                    .with_context(|| format!("realpath {path} on remote"))?,
+            };
+            let real = raw.trim().to_string();
+            if real.is_empty() {
+                anyhow::bail!("realpath for {path} returned nothing");
             }
-            // No SFTP subsystem: `cd <path> && pwd -P` gives the physical
-            // (symlink-resolved) directory, matching Claude's getcwd.
-            None => {
-                let out = exec_channel_capture(
-                    &conn.sess,
-                    &format!("cd {} && pwd -P", shell_single_quote(path)),
-                )
-                .with_context(|| format!("realpath {path} on remote"))?;
-                let real = out.trim().to_string();
-                if real.is_empty() {
-                    anyhow::bail!("remote `pwd -P` for {path} returned nothing");
-                }
-                Ok(real)
-            }
+            Ok(real)
         })
     }
 
     fn remote_write(&self, target: &SshTarget, path: &str, data: &[u8]) -> Result<()> {
         use std::io::Write;
-        self.with_conn(target, |conn| match &conn.sftp {
-            Some(sftp) => {
+        self.with_conn(target, |conn| match conn {
+            RemoteConn::Libssh2 {
+                sftp: Some(sftp), ..
+            } => {
                 let mut f = sftp
                     .create(std::path::Path::new(path))
                     .with_context(|| format!("create remote file {path}"))?;
@@ -800,11 +831,11 @@ impl ExecStrategy for RealExec {
                     .with_context(|| format!("write remote file {path}"))?;
                 Ok(())
             }
-            None => {
-                // SCP protocol upload — libssh2's scp_send, no external
-                // binary.
-                let mut ch = conn
-                    .sess
+            RemoteConn::Libssh2 {
+                sess, sftp: None, ..
+            } => {
+                // SCP protocol upload — libssh2's scp_send, no external binary.
+                let mut ch = sess
                     .scp_send(std::path::Path::new(path), 0o644, data.len() as u64, None)
                     .with_context(|| format!("open SCP upload to {path}"))?;
                 ch.write_all(data)
@@ -814,6 +845,11 @@ impl ExecStrategy for RealExec {
                 ch.close().context("SCP close")?;
                 ch.wait_close().context("SCP close (wait)")?;
                 Ok(())
+            }
+            RemoteConn::Cli { key } => {
+                // `ssh host 'cat > <path>'` with the bytes on stdin.
+                ssh_cli_pipe(key, &format!("cat > {}", shell_single_quote(path)), data)
+                    .with_context(|| format!("write remote file {path}"))
             }
         })
     }
@@ -838,7 +874,10 @@ impl ExecStrategy for RealExec {
             .collect::<Vec<_>>()
             .join("; ");
         self.with_conn(target, |conn| {
-            let out = exec_channel_capture(&conn.sess, &probe)?;
+            let out = match conn {
+                RemoteConn::Libssh2 { sess, .. } => exec_channel_capture(sess, &probe)?,
+                RemoteConn::Cli { key } => ssh_cli_capture(key, &probe)?,
+            };
             Ok(out
                 .lines()
                 .map(|l| l.trim().to_string())
@@ -858,11 +897,67 @@ impl RealExec {
         f: impl FnOnce(&RemoteConn) -> Result<T>,
     ) -> Result<T> {
         let mut guard = self.conn.lock().unwrap();
-        if guard.as_ref().is_none_or(|c| &c.key != target) {
+        if guard.as_ref().is_none_or(|c| c.key() != target) {
             *guard = Some(connect_remote(target)?);
         }
         f(guard.as_ref().expect("connection just established"))
     }
+}
+
+/// Base `ssh` argv for a non-interactive CLI file op: `[-p <port>]?
+/// <[user@]host>`. Uses the real `ssh` binary so `~/.ssh/config` —
+/// including `ProxyJump`/`ProxyCommand` — is honored.
+fn ssh_cli_base_argv(target: &SshTarget) -> Vec<String> {
+    let mut argv = Vec::new();
+    if let Some(port) = target.port {
+        argv.push("-p".to_string());
+        argv.push(port.to_string());
+    }
+    argv.push(match &target.user {
+        Some(user) => format!("{user}@{}", target.host),
+        None => target.host.clone(),
+    });
+    argv
+}
+
+/// Run `cmd` on the remote via the `ssh` CLI and return its stdout.
+fn ssh_cli_capture(target: &SshTarget, cmd: &str) -> Result<String> {
+    let mut argv = ssh_cli_base_argv(target);
+    argv.push(cmd.to_string());
+    let out = std::process::Command::new("ssh")
+        .args(&argv)
+        .output()
+        .with_context(|| format!("run `ssh … {cmd}`"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "`ssh … {cmd}` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Run `cmd` on the remote via the `ssh` CLI, feeding `data` to its stdin.
+fn ssh_cli_pipe(target: &SshTarget, cmd: &str, data: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut argv = ssh_cli_base_argv(target);
+    argv.push(cmd.to_string());
+    let mut child = std::process::Command::new("ssh")
+        .args(&argv)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("spawn `ssh … {cmd}`"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("ssh stdin unavailable"))?
+        .write_all(data)
+        .context("write to ssh stdin")?;
+    let status = child.wait().context("wait for ssh")?;
+    if !status.success() {
+        anyhow::bail!("`ssh … {cmd}` failed ({status})");
+    }
+    Ok(())
 }
 
 /// Run a one-shot command over a libssh2 exec channel and return its
@@ -933,6 +1028,10 @@ struct SshHostConfig {
     /// configured), auth must use only the configured keys and must not
     /// fall back to trying every agent key.
     identities_only: bool,
+    /// `ProxyJump`/`ProxyCommand` is configured for this host. libssh2
+    /// dials a raw TCP socket and can't traverse a jump/proxy, so the
+    /// SFTP ship must fall back to the `ssh` CLI (which honors them).
+    has_proxy: bool,
 }
 
 /// Load [`SshHostConfig`] for `host` from `~/.ssh/config` (empty config
@@ -999,6 +1098,11 @@ fn parse_ssh_config(content: &str, host: &str, home: &std::path::Path) -> SshHos
             }
             "identitiesonly" if value.eq_ignore_ascii_case("yes") => {
                 cfg.identities_only = true;
+            }
+            "proxyjump" | "proxycommand"
+                if !value.is_empty() && !value.eq_ignore_ascii_case("none") =>
+            {
+                cfg.has_proxy = true;
             }
             _ => {}
         }
@@ -1145,25 +1249,55 @@ fn agent_auth_with_key(
 /// [`authenticate`]), then one SFTP-open attempt — servers without the
 /// subsystem (e.g. exe.dev VMs) get the SCP/exec fallback instead.
 ///
+/// **Proxy/bastion fallback:** libssh2 dials a raw TCP socket and can't
+/// traverse `ProxyJump`/`ProxyCommand`, so if the host's ssh_config
+/// declares a proxy — or a direct dial fails (bastion-only host) — this
+/// returns a [`RemoteConn::Cli`] that shells out to the `ssh` binary
+/// (which honors the full config) for every file op. Without it, a host
+/// reachable only through a broker would launch fine but fail at the
+/// ship step.
+///
 /// `~/.ssh/config` fills the gaps the URL leaves open (HostName, User,
 /// Port, IdentityFile); URL values win. known_hosts is still not
-/// checked — the interactive launch goes through the real `ssh` binary
-/// with the user's full config.
+/// checked on the libssh2 path — the interactive launch goes through the
+/// real `ssh` binary with the user's full config.
 fn connect_remote(target: &SshTarget) -> Result<RemoteConn> {
     use std::net::ToSocketAddrs;
     let cfg = ssh_host_config(&target.host);
+
+    // A proxied host can't be reached by libssh2's raw socket — go
+    // straight to the ssh CLI, which honors ProxyJump/ProxyCommand.
+    if cfg.has_proxy {
+        eprintln!(
+            "note: {} uses a ProxyJump/ProxyCommand in ~/.ssh/config; shipping via the ssh CLI",
+            target.host
+        );
+        return Ok(RemoteConn::Cli {
+            key: target.clone(),
+        });
+    }
+
     let host = cfg.host_name.clone().unwrap_or_else(|| target.host.clone());
     let port = target.port.or(cfg.port).unwrap_or(22);
     let addr = format!("{host}:{port}");
-    // Bounded connect + per-operation timeouts: a wedged remote should
-    // fail with context, never hang the resume silently.
-    let sock = addr
+    // Resolve + bounded connect. A resolve/connect failure on a
+    // config-less host often means it's only reachable through a jump
+    // the ssh CLI knows about — fall back rather than abort.
+    let dialed = addr
         .to_socket_addrs()
-        .with_context(|| format!("resolve {addr}"))?
-        .next()
-        .with_context(|| format!("no address for {addr}"))?;
-    let tcp = std::net::TcpStream::connect_timeout(&sock, std::time::Duration::from_secs(10))
-        .with_context(|| format!("connect to {addr}"))?;
+        .ok()
+        .and_then(|mut a| a.next())
+        .and_then(|sock| {
+            std::net::TcpStream::connect_timeout(&sock, std::time::Duration::from_secs(10)).ok()
+        });
+    let Some(tcp) = dialed else {
+        eprintln!(
+            "note: direct connect to {addr} failed; falling back to the ssh CLI (honors ~/.ssh/config)"
+        );
+        return Ok(RemoteConn::Cli {
+            key: target.clone(),
+        });
+    };
     let mut sess = ssh2::Session::new().context("create SSH session")?;
     sess.set_tcp_stream(tcp);
     sess.set_timeout(30_000); // ms; applies to handshake/auth/channel ops
@@ -1192,7 +1326,7 @@ fn connect_remote(target: &SshTarget) -> Result<RemoteConn> {
         eprintln!("note: remote has no SFTP subsystem — using SCP fallback");
     }
 
-    Ok(RemoteConn {
+    Ok(RemoteConn::Libssh2 {
         key: target.clone(),
         sess,
         sftp,
@@ -2109,6 +2243,57 @@ mod tests {
             vec![std::path::PathBuf::from("/home/u/.ssh/id_pinned")]
         );
         assert!(cfg.identities_only);
+        assert!(!cfg.has_proxy, "no proxy in this config");
+    }
+
+    #[test]
+    fn ssh_config_detects_proxy_jump_and_command() {
+        // libssh2 can't traverse these, so connect_remote must route the
+        // ship through the ssh CLI when either is present for the host.
+        let jump = parse_ssh_config(
+            "Host prod\n  ProxyJump bastion\n",
+            "prod",
+            std::path::Path::new("/h"),
+        );
+        assert!(jump.has_proxy);
+
+        let cmd = parse_ssh_config(
+            "Host prod\n  ProxyCommand cloudflared access ssh --hostname %h\n",
+            "prod",
+            std::path::Path::new("/h"),
+        );
+        assert!(cmd.has_proxy);
+
+        // `ProxyCommand none` / no proxy → direct (libssh2) path.
+        let none = parse_ssh_config(
+            "Host prod\n  ProxyCommand none\n",
+            "prod",
+            std::path::Path::new("/h"),
+        );
+        assert!(!none.has_proxy);
+        let plain = parse_ssh_config("Host prod\n  User x\n", "prod", std::path::Path::new("/h"));
+        assert!(!plain.has_proxy);
+    }
+
+    #[test]
+    fn ssh_cli_base_argv_shape() {
+        // The CLI-fallback file ops invoke `ssh [-p port] [user@]host …`.
+        assert_eq!(
+            ssh_cli_base_argv(&SshTarget {
+                user: Some("dev".into()),
+                host: "h".into(),
+                port: Some(2222)
+            }),
+            vec!["-p".to_string(), "2222".to_string(), "dev@h".to_string()]
+        );
+        assert_eq!(
+            ssh_cli_base_argv(&SshTarget {
+                user: None,
+                host: "alias".into(),
+                port: None
+            }),
+            vec!["alias".to_string()]
+        );
     }
 
     #[test]

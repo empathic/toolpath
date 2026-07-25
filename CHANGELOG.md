@@ -22,7 +22,13 @@ All notable changes to the Toolpath workspace are documented here.
     only*, not routing/reachability (`~/.ssh/config`) or credentials.
   - Reachability over Tailscale, Cloudflare Tunnel, or a bastion hop
     needs no new flag — it rides the existing `~/.ssh/config` `Host`
-    alias resolution already documented for `--remote`.
+    alias resolution already documented for `--remote`. **The ship now
+    honors it too:** libssh2 dials a raw socket and can't traverse
+    `ProxyJump`/`ProxyCommand`, so when the host declares a proxy (or a
+    direct dial fails), the probe/ship/realpath fall back to the `ssh`
+    CLI (`ssh host 'mkdir -p … && cat > …'`), which honors the full
+    config. Previously such a host launched fine but silently failed at
+    the ship step.
   - **Symlink-safe `--cwd`**: the remote launch cwd is now canonicalized
     over SFTP (`remote_realpath`) before keying the shipped project dir,
     so a `--cwd` through a symlink (e.g. macOS `/tmp` → `/private/tmp`)
