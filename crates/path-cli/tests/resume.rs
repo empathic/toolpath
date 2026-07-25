@@ -546,6 +546,53 @@ fn remote_resume_falls_back_to_plain_when_no_backend_available() {
     );
 }
 
+/// `--via mosh` ships over SFTP as usual, then launches the harness with
+/// the `mosh` client (not `ssh`): mosh owns the TTY and takes the command
+/// after `--` via `sh -c`, with a custom SSH port on `--ssh`.
+#[test]
+fn remote_resume_via_mosh_launches_with_mosh_client() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binaries(&["ssh", "mosh", "claude"]);
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:claude-code", "claude-code://resume-via-mosh");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let mut args = args_explicit(doc_file, cwd.path(), Harness::Claude);
+    args.remote = Some("ssh://dev@host:2222".to_string());
+    args.via = Transport::Mosh;
+    args.persist = Some(PersistBackend::Plain);
+
+    let rec = RecordingExec::default();
+    run_with_strategy(args, &rec).unwrap();
+
+    // Session still ships over the SFTP transport.
+    assert_eq!(rec.writes().len(), 1, "session file should ship");
+    // Launch uses the mosh client, not ssh.
+    let cap = rec.captured();
+    assert_eq!(
+        cap.binary, "mosh",
+        "should launch via mosh, got {}",
+        cap.binary
+    );
+    assert!(
+        cap.args.iter().any(|a| a == "--ssh=ssh -p 2222"),
+        "custom SSH port should ride --ssh, got {:?}",
+        cap.args
+    );
+    assert!(
+        cap.args.iter().any(|a| a == "dev@host") && cap.args.contains(&"--".to_string()),
+        "should target dev@host after --, got {:?}",
+        cap.args
+    );
+    assert!(
+        cap.args.iter().any(|a| a.contains("claude -r")),
+        "the harness command should ride through, got {:?}",
+        cap.args
+    );
+}
+
 /// A `--cwd` through a symlink (e.g. macOS `/tmp` → `/private/tmp`) must
 /// key the shipped project dir on the *canonical* path — otherwise
 /// `claude -r`, which uses the physical cwd, looks in a dir the session

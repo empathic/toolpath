@@ -18,7 +18,7 @@ All notable changes to the Toolpath workspace are documented here.
   alias** for `--persist tmux` — combining both flags is an error.
   - New `--via ssh|mosh|et` transport axis carries the persist-wrapped
     launch command; `ssh` is implemented (the prior default behavior),
-    `mosh`/`et` are reserved seams that error "not yet supported".
+    `mosh` is implemented (owns the TTY; custom SSH port via `--ssh`, remote command via `sh -c`); `et` is a reserved seam that errors "not yet supported".
   - Reachability over Tailscale, Cloudflare Tunnel, or a bastion hop
     needs no new flag — it rides the existing `~/.ssh/config` `Host`
     alias resolution already documented for `--remote`.

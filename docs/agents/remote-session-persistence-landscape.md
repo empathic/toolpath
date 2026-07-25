@@ -79,7 +79,7 @@ Keeps one client↔host link alive; does **not** anchor the session server-side.
   transport). Researchy; not dependable yet.
 
 In `path`: `--via` swaps the launch client binary; the persistence wrapping is
-identical. v1 implements only `ssh`; `mosh`/`et` are reserved (seam in place).
+identical. `ssh` and `mosh` are implemented; `et` is reserved (seam in place).
 
 ---
 

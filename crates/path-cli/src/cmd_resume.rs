@@ -109,9 +109,9 @@
 //!
 //! `--via` selects the transport that carries the persist-wrapped
 //! remote command for the interactive launch ([`launch_invocation`]).
-//! `ssh` (the default) is implemented; `mosh` and `et` are reserved
-//! seams that currently error with "not yet supported" — the type is
-//! wired through so a future transport only needs a new match arm.
+//! `ssh` (the default) and `mosh` are implemented; `et` is a reserved
+//! seam that errors with "not yet supported" — the type is wired
+//! through so a future transport only needs a new match arm.
 //!
 //! ## Reachability
 //!
@@ -188,7 +188,7 @@ pub struct ResumeArgs {
     #[arg(long, value_enum, requires = "remote")]
     pub persist: Option<PersistBackend>,
 
-    /// Transport for the interactive launch. ssh (default); mosh/et reserved.
+    /// Transport for the interactive launch. ssh (default) + mosh; et reserved.
     #[arg(long, value_enum, default_value_t = Transport::Ssh, requires = "remote")]
     pub via: Transport,
 }
@@ -1357,7 +1357,7 @@ fn run_remote(args: &ResumeArgs, remote: &str, exec: &dyn ExecStrategy) -> Resul
         Some(_) => anyhow::bail!("remote resume currently supports only --harness claude"),
     }
 
-    // Validate --via before any remote side effects — mosh/et are reserved
+    // Validate --via before any remote side effects — et is a reserved
     // seams that always error; fail here rather than after shipping files
     // and printing persistence notes.
     match args.via {
@@ -1826,8 +1826,8 @@ fn looks_like_pathbase_shorthand(s: &str) -> bool {
             .all(|s| !s.is_empty() && !s.contains(char::is_whitespace))
 }
 
-/// Transport protocol for remote resume. v1 implements only SSH; mosh and ET
-/// are reserved for future use.
+/// Transport protocol for remote resume. ssh + mosh implemented; ET is
+/// reserved for future use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Transport {
     Ssh,
@@ -1836,7 +1836,7 @@ pub enum Transport {
 }
 
 /// Carry the persist-wrapped remote command over the chosen transport.
-/// v1 implements only ssh; mosh/et are reserved (spec: Transport axis).
+/// ssh + mosh implemented; et is reserved (spec: Transport axis).
 fn launch_invocation(
     transport: Transport,
     remote: &str,
@@ -1844,11 +1844,32 @@ fn launch_invocation(
 ) -> Result<(String, Vec<String>)> {
     match transport {
         Transport::Ssh => ssh_invocation_tty(remote, remote_cmd, true),
-        Transport::Mosh => {
-            anyhow::bail!("--via mosh is not yet supported (reserved); use --via ssh")
-        }
+        Transport::Mosh => mosh_invocation(remote, remote_cmd),
         Transport::Et => anyhow::bail!("--via et is not yet supported (reserved); use --via ssh"),
     }
+}
+
+/// Build the `mosh` client invocation. Unlike ssh, mosh owns the TTY
+/// (so no `-t`) and takes the remote command after `--`; it's run via
+/// `sh -c` so compound persist-wrapped commands work. A custom SSH port
+/// rides mosh's `--ssh` handshake override (mosh's own `-p` is the UDP
+/// port range, not the SSH port). User/host/port come from the parsed
+/// URL; a bare alias defers to `~/.ssh/config` via the inner `ssh`.
+fn mosh_invocation(remote: &str, remote_cmd: &str) -> Result<(String, Vec<String>)> {
+    let target = parse_ssh_url(remote)?;
+    let mut argv = Vec::new();
+    if let Some(port) = target.port {
+        argv.push(format!("--ssh=ssh -p {port}"));
+    }
+    argv.push(match &target.user {
+        Some(user) => format!("{user}@{}", target.host),
+        None => target.host.clone(),
+    });
+    argv.push("--".to_string());
+    argv.push("sh".to_string());
+    argv.push("-c".to_string());
+    argv.push(remote_cmd.to_string());
+    Ok(("mosh".to_string(), argv))
 }
 
 /// Remote session-persistence backend for `--remote` resume. See the
@@ -3098,9 +3119,42 @@ mod tests {
             vec!["-t".to_string(), "h".to_string(), "claude -r x".to_string()]
         );
 
-        let err = launch_invocation(Transport::Mosh, "ssh://h", "claude -r x").unwrap_err();
+        // et is still a reserved seam.
+        let err = launch_invocation(Transport::Et, "ssh://h", "x").unwrap_err();
         assert!(err.to_string().contains("not yet supported"), "{err}");
-        assert!(launch_invocation(Transport::Et, "ssh://h", "x").is_err());
+    }
+
+    #[test]
+    fn launch_invocation_mosh_builds_client_command() {
+        // mosh owns the TTY (no `ssh -t`); a custom SSH port rides `--ssh`,
+        // and the compound remote command runs via `sh -c`.
+        let (bin, argv) =
+            launch_invocation(Transport::Mosh, "ssh://dev@h:2222", "cd /x && claude -r y").unwrap();
+        assert_eq!(bin, "mosh");
+        assert_eq!(
+            argv,
+            vec![
+                "--ssh=ssh -p 2222".to_string(),
+                "dev@h".to_string(),
+                "--".to_string(),
+                "sh".to_string(),
+                "-c".to_string(),
+                "cd /x && claude -r y".to_string(),
+            ]
+        );
+
+        // No port → no --ssh override; bare host.
+        let (_bin, argv) = launch_invocation(Transport::Mosh, "ssh://h", "claude -r y").unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "h".to_string(),
+                "--".to_string(),
+                "sh".to_string(),
+                "-c".to_string(),
+                "claude -r y".to_string(),
+            ]
+        );
     }
 
     #[test]
