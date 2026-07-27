@@ -7,12 +7,13 @@ so the writer contract is a *server import* contract, and every constraint
 in it can only be discovered by submitting a fabricated thread and reading
 the rejection.
 
-> **Status: route chosen, live loop NOT yet run.** The projector, CLI
-> wiring, and import seam below are implemented and unit-tested, but no
-> fabricated thread has been submitted to the server yet — that is the
-> piece-03 ⚠ step (fresh ids only, explicit go-ahead required). Until the
-> loop runs, everything in "The import seam" is `[reverse-eng, unexercised]`
-> and the rejection table is empty by construction.
+> **Status: live loop STARTED, L2 BLOCKED.** Two fabricated threads were
+> submitted to the real server under fresh ids (2026-07-27,
+> `0.0.1785170481-ga5b614`). The plain-REST route **returns `201 Created`
+> and creates no thread** — see the rejection table. The real import seam
+> is the Rivet actor gateway, which needs a websocket-token handshake this
+> piece did not budget for. `path resume --harness amp` therefore does not
+> yet produce a resumable thread; the export-to-file path is green.
 
 ## The three-route fork (piece 03, PLAN.md)
 
@@ -65,8 +66,12 @@ the rejection.
    `POST /api/thread-actors/<id>` (mark-imported). Auth is **only**
    `$AMP_API_KEY` — `secrets.json` is never read, and without the variable
    the import is skipped with a warning so no login flow can trigger.
-   Any non-2xx response is surfaced verbatim on stderr and belongs in the
-   rejection table below.
+   **Per rejection 1, a 2xx is not trusted**: the thread is read back
+   through the first-party CLI, and anything short of a successful
+   read-back reports `warning: … the import did not take effect` rather
+   than claiming success. As of today this route always lands in that
+   unverified state — it is retained as the honest, evidence-producing
+   probe, not as a working writer.
 3. A preview banner prints until a projected thread has been verified to
    resume in the real CLI.
 
@@ -76,13 +81,23 @@ the rejection.
 
 ## Import-contract rejections (observed)
 
-**None recorded yet** — the ⚠ live loop has not run. When it does, every
-rejection goes here verbatim, one row per constraint discovered, stamped
-`[observed, <amp version>]`, copilot-style:
-
 | # | Requirement | Verbatim rejection | Status |
 |---|---|---|---|
-| — | *(pending the ⚠ writer probe)* | — | — |
+| 1 | **A 2xx from `POST /api/thread-actors` does not mean the thread exists.** The plain-REST route accepts the whole serialized thread and answers `201 Created`, but no thread is created: reading it back immediately fails. Any writer MUST verify by read-back rather than trusting the status. | `Thread T-019fa541-56d6-7ea2-9f8f-8c0ac4a27470 does not exist.` (from `amp threads export` right after a `201 Created`) | `[observed, 0.0.1785170481-ga5b614]` |
+| 2 | **The real import is not a REST call at all.** It is a Rivet *actor* fetch: the client resolves per-thread actor credentials, opens the actor by id against the gateway, and `fetch`es `/import` on it. A bare HTTPS POST to the documented-looking path cannot reach that handler. | *(no server error — the bundle's own call shape is the evidence)* `.threadActor.get([threadId],{params:{wsToken,transport:"json-rpc"}}).fetch("/import",{method:"POST",body:JSON.stringify({thread:…})})` | `[reverse-eng, 0.0.1785170481-ga5b614]` |
+
+### What row 2 implies for a working writer
+
+The gateway is `<ampURL>/actors` with a **hardcoded public client key as
+HTTP basic-auth password** (baked into the shipped binary; deliberately not
+reproduced here), and each actor call carries a **`wsToken`** obtained from
+a prior credentials exchange (`/api/user-actor-credentials`, returning
+`{poolName, threadId, wsToken, usesThreadActors}`). So a Rust writer must
+reimplement: credentials exchange → gateway actor addressing → the
+RivetKit actor-fetch wire convention → `POST /import`. That is a
+materially larger surface than "post a document", it pins several
+undocumented protocols at once, and it re-mines on every `amp update`
+(builds are timestamped; one bumped mid-recon).
 
 ## Verification recipe (the ⚠ loop)
 

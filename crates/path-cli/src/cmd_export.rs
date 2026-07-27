@@ -690,7 +690,12 @@ fn run_amp(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> 
 /// failures (the local artifact is always written first).
 #[cfg(not(target_os = "emscripten"))]
 enum AmpImportOutcome {
+    /// The server accepted the import AND the thread reads back.
     Imported { base: String },
+    /// The server returned success but the thread does not exist
+    /// afterwards — the request went somewhere, but not into a thread.
+    /// Observed on the REST route; see `writing-compatible.md`.
+    Unverified { base: String, detail: String },
     Skipped { reason: String },
     Failed { detail: String },
 }
@@ -724,6 +729,15 @@ fn write_into_amp_project(export: &toolpath_amp::ThreadExport) -> Result<()> {
     match amp_server_import(export) {
         AmpImportOutcome::Imported { base } => {
             eprintln!("  imported to {base} under the fresh thread id");
+        }
+        AmpImportOutcome::Unverified { base, detail } => {
+            eprintln!("  warning: {base} accepted the request ({detail}) but the thread is NOT");
+            eprintln!(
+                "  readable back — the import did not take effect. `amp threads continue` will fail."
+            );
+            eprintln!(
+                "  (see docs/agents/formats/amp/writing-compatible.md — the REST route is not the real import seam)"
+            );
         }
         AmpImportOutcome::Skipped { reason } => {
             eprintln!(
@@ -818,8 +832,27 @@ fn amp_server_import(export: &toolpath_amp::ThreadExport) -> AmpImportOutcome {
             .json(&serde_json::json!({}))
             .send()
             .await;
-        AmpImportOutcome::Imported { base }
+        // A 2xx is NOT proof of import: the REST route was observed
+        // returning success while creating no thread at all
+        // (`amp threads export` → "Thread <id> does not exist"). Only a
+        // successful read-back counts as imported.
+        if amp_thread_readable(&export.id) {
+            AmpImportOutcome::Imported { base }
+        } else {
+            AmpImportOutcome::Unverified {
+                base,
+                detail: format!("POST {create_url} → {status}"),
+            }
+        }
     })
+}
+
+/// Read-back check: does the server actually know this thread? Uses the
+/// first-party CLI (read-only, inherits its own auth) rather than pinning
+/// another undocumented endpoint.
+#[cfg(not(target_os = "emscripten"))]
+fn amp_thread_readable(thread_id: &str) -> bool {
+    toolpath_amp::AmpConvo::new().read_session(thread_id).is_ok()
 }
 
 /// Project `path` into an opencode session under `project_dir` and return
