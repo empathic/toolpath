@@ -630,32 +630,6 @@ pub enum PatchChange {
     Unknown,
 }
 
-// ── Compaction marker ───────────────────────────────────────────────
-
-/// Payload of a `compacted` rollout line — Codex's context-compaction
-/// boundary marker. The reader treats this payload as a raw `Value` and
-/// consumes only `message` (as the summary); this struct exists so the
-/// projector can emit a well-shaped `compacted` line that re-parses
-/// cleanly. `replacement_history` is the wholesale-replaced prefix Codex
-/// records but we don't reconstruct, and `window_id` (when present)
-/// identifies the context window. Both are emitted as `null`/absent.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CompactedItem {
-    /// The summary text that replaced the condensed prefix. Often empty
-    /// in real captures.
-    #[serde(default)]
-    pub message: String,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement_history: Option<Value>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub window_id: Option<String>,
-
-    #[serde(flatten, skip_serializing_if = "HashMap::is_empty", default)]
-    pub extra: HashMap<String, Value>,
-}
-
 // ── Logical session wrapping ────────────────────────────────────────
 
 /// A parsed session: the sequence of lines plus derived first-line
