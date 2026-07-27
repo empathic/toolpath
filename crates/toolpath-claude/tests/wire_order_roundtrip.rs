@@ -115,16 +115,25 @@ fn caveat_turn_projects_with_is_meta() {
 fn caveat_entry_keeps_is_meta() {
     let convo = ConversationReader::read_conversation(fixture_path("convo-compacted.jsonl"))
         .expect("read fixture");
-    let has_caveat = |c: &toolpath_claude::Conversation| -> Option<ConversationEntry> {
+    let caveats = |c: &toolpath_claude::Conversation| -> Vec<ConversationEntry> {
         c.entries
             .iter()
-            .find(|e| {
+            .filter(|e| {
                 e.extra.get("isMeta") == Some(&serde_json::json!(true)) && e.entry_type == "user"
             })
             .cloned()
+            .collect()
     };
-    let source = has_caveat(&convo).expect("fixture carries an isMeta caveat entry");
-    let projected = project(&convo);
-    let out = has_caveat(&projected).expect("projected stream must keep the isMeta caveat");
-    assert_eq!(source.entry_type, out.entry_type);
+    let source = caveats(&convo);
+    assert_eq!(source.len(), 1, "fixture carries one isMeta caveat entry");
+    let out = caveats(&project(&convo));
+    assert_eq!(
+        out.len(),
+        1,
+        "projected stream must keep exactly one isMeta caveat entry"
+    );
+    assert_eq!(
+        out[0].uuid, source[0].uuid,
+        "the surviving caveat must be the source entry, not a re-minted one"
+    );
 }

@@ -27,6 +27,13 @@
 //! `Role::User` turn. This test covers the complement: the *surrounding*
 //! content — the pre- and post-compact turns and their tool-call pairs —
 //! surviving the derive → project → re-read round-trip intact.
+//!
+//! Known limitation: the fold applies only when a `compact_boundary`
+//! immediately precedes the summary entry. An orphan `isCompactSummary`
+//! entry with no inline boundary — the old-style rotation-chain shape,
+//! where a continuation file opens with the summary alone — surfaces as a
+//! plain user turn, and projecting that turn back to JSONL drops its
+//! `isCompactSummary` and `isVisibleInTranscriptOnly` flags.
 
 use std::path::{Path, PathBuf};
 

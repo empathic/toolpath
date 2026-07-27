@@ -135,6 +135,17 @@ pub(crate) fn merge_turn_usage(slot: &mut Option<TokenUsage>, add: Option<TokenU
     s.cache_write_tokens = sum(s.cache_write_tokens, add.cache_write_tokens);
 }
 
+/// A non-turn stream entry captured during the walk: a generic event or a
+/// typed compaction boundary. Kept in ONE arrival-ordered vec (not one per
+/// kind) so same-watermark entries preserve wire order — copilot 1.0.68
+/// writes a `system.message` re-prime after `session.compaction_complete`
+/// and before the next user turn, and draining events and boundaries from
+/// separate vecs would put that re-prime ahead of the boundary.
+enum Pending {
+    Event(ConversationEvent),
+    Compaction(Compaction),
+}
+
 /// Convert a parsed Copilot [`Session`] into a [`ConversationView`].
 pub fn to_view(session: &Session) -> ConversationView {
     let start = session.start();
@@ -142,13 +153,11 @@ pub fn to_view(session: &Session) -> ConversationView {
 
     let mut turns: Vec<Turn> = Vec::new();
     let mut current: Option<Turn> = None;
-    // Each event is tagged with how many turns precede it in the stream
-    // (flushed turns plus a content-bearing in-progress turn), so the final
-    // `items` assembly can restore the real turn/event interleaving.
-    let mut events: Vec<(usize, ConversationEvent)> = Vec::new();
-    // Compaction boundaries, tagged like events so assembly can put each
-    // between the turns it separates.
-    let mut compactions: Vec<(usize, Compaction)> = Vec::new();
+    // Non-turn entries (events and compaction boundaries) in arrival order,
+    // each tagged with how many turns precede it in the stream (flushed
+    // turns plus a content-bearing in-progress turn), so the final `items`
+    // assembly can restore the real interleaving.
+    let mut pending: Vec<(usize, Pending)> = Vec::new();
     // Copilot reports per-message tokens (`outputTokens`, and — on a projected
     // session — `inputTokens`/cache). We set them per-turn and sum for the
     // session total; `session.shutdown` (when present) is the fallback total.
@@ -275,21 +284,21 @@ pub fn to_view(session: &Session) -> ConversationView {
                 backfill_delegation_result(&mut current, &mut turns, s.id.as_deref(), s.result);
             }
             CopilotEvent::SkillInvoked(p) => {
-                events.push((
+                pending.push((
                     turn_watermark(&turns, &current),
-                    make_event(i, "skill.invoked", &ts, p),
+                    Pending::Event(make_event(i, "skill.invoked", &ts, p)),
                 ));
             }
             CopilotEvent::Hook { kind, payload } => {
-                events.push((
+                pending.push((
                     turn_watermark(&turns, &current),
-                    make_event(i, &kind, &ts, payload),
+                    Pending::Event(make_event(i, &kind, &ts, payload)),
                 ));
             }
             CopilotEvent::Abort(p) => {
-                events.push((
+                pending.push((
                     turn_watermark(&turns, &current),
-                    make_event(i, "abort", &ts, p),
+                    Pending::Event(make_event(i, "abort", &ts, p)),
                 ));
             }
             // Observed at 1.0.68: `session.compaction_start` carries only
@@ -305,17 +314,17 @@ pub fn to_view(session: &Session) -> ConversationView {
             // are copilot bookkeeping outside the closed typed set.
             CopilotEvent::CompactionStart(p) => {
                 flush(&mut turns, &mut current);
-                events.push((
+                pending.push((
                     turn_watermark(&turns, &current),
-                    make_event(i, "session.compaction_start", &ts, p),
+                    Pending::Event(make_event(i, "session.compaction_start", &ts, p)),
                 ));
             }
             CopilotEvent::CompactionComplete(p) => {
                 flush(&mut turns, &mut current);
                 if p.get("success").and_then(Value::as_bool) == Some(true) {
-                    compactions.push((
+                    pending.push((
                         turn_watermark(&turns, &current),
-                        Compaction {
+                        Pending::Compaction(Compaction {
                             // Renumbered by final position during assembly,
                             // alongside turn ids.
                             id: String::new(),
@@ -328,25 +337,25 @@ pub fn to_view(session: &Session) -> ConversationView {
                                 .map(str::to_string),
                             pre_tokens: p.get("preCompactionTokens").and_then(Value::as_u64),
                             kept_from: None,
-                        },
+                        }),
                     ));
                 } else {
-                    events.push((
+                    pending.push((
                         turn_watermark(&turns, &current),
-                        make_event(i, "session.compaction_complete", &ts, p),
+                        Pending::Event(make_event(i, "session.compaction_complete", &ts, p)),
                     ));
                 }
             }
             CopilotEvent::SessionOther { kind, payload } => {
-                events.push((
+                pending.push((
                     turn_watermark(&turns, &current),
-                    make_event(i, &kind, &ts, payload),
+                    Pending::Event(make_event(i, &kind, &ts, payload)),
                 ));
             }
             CopilotEvent::Unknown { kind, payload } => {
-                events.push((
+                pending.push((
                     turn_watermark(&turns, &current),
-                    make_event(i, &kind, &ts, payload),
+                    Pending::Event(make_event(i, &kind, &ts, payload)),
                 ));
             }
         }
@@ -429,25 +438,25 @@ pub fn to_view(session: &Session) -> ConversationView {
         None
     };
 
-    // Merge turns, events, and compaction boundaries into the ordered
-    // `items` stream, restoring the real interleaving from each one's turn
-    // watermark. At an equal watermark events go first: the only same-slot
-    // pairing in the wire format is `compaction_start` (generic event)
-    // immediately followed by its `compaction_complete` (the boundary).
+    // Merge turns and pending entries into the ordered `items` stream,
+    // restoring the real interleaving from each entry's turn watermark.
+    // Watermarks are nondecreasing (the vec is append-only), so a single
+    // forward pass suffices, and same-watermark entries drain in arrival
+    // order — e.g. the `system.message` re-prime that follows a compaction
+    // lands after the boundary, matching the wire.
+    let to_item = |p: Pending| match p {
+        Pending::Event(e) => Item::Event(e),
+        Pending::Compaction(c) => Item::Compaction(c),
+    };
     let mut items: Vec<Item> = Vec::new();
-    let mut ev = events.into_iter().peekable();
-    let mut cp = compactions.into_iter().peekable();
+    let mut pending = pending.into_iter().peekable();
     for (i, t) in turns.into_iter().enumerate() {
-        while ev.peek().is_some_and(|(w, _)| *w <= i) {
-            items.push(Item::Event(ev.next().unwrap().1));
-        }
-        while cp.peek().is_some_and(|(w, _)| *w <= i) {
-            items.push(Item::Compaction(cp.next().unwrap().1));
+        while pending.peek().is_some_and(|(w, _)| *w <= i) {
+            items.push(to_item(pending.next().unwrap().1));
         }
         items.push(Item::Turn(t));
     }
-    items.extend(ev.map(|(_, e)| Item::Event(e)));
-    items.extend(cp.map(|(_, c)| Item::Compaction(c)));
+    items.extend(pending.map(|(_, p)| to_item(p)));
 
     // Stitch the linear parent chain through compaction boundaries: a turn
     // after a boundary parents on the boundary, not on the previous turn,
@@ -1339,6 +1348,87 @@ mod tests {
         assert_eq!(
             post_user.parent_id.as_deref(),
             Some(pre_assistant.id.as_str())
+        );
+    }
+
+    #[test]
+    fn real_fixture_post_compaction_reprime_lands_after_the_boundary() {
+        // copilot 1.0.68 writes a `system.message` re-prime AFTER
+        // `session.compaction_complete` and before the next user turn. All
+        // three share a turn watermark, so the item stream must keep their
+        // arrival order: Turn, Event(compaction_start), Compaction,
+        // Event(system.message), Turn.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/copilot/compacted-real.jsonl");
+        let lines = crate::reader::EventReader::read_lines(&path).expect("read compacted fixture");
+        let session = Session {
+            id: "compacted-real".to_string(),
+            dir_path: path,
+            lines,
+            workspace: None,
+        };
+        let view = to_view(&session);
+        let idx = view
+            .items
+            .iter()
+            .position(|i| matches!(i, Item::Compaction(_)))
+            .expect("one compaction");
+        assert!(
+            matches!(&view.items[idx - 2], Item::Turn(t) if t.text.contains("File contents")),
+            "last pre-compaction assistant turn precedes the pair"
+        );
+        assert!(
+            matches!(&view.items[idx - 1],
+                Item::Event(e) if e.event_type == "session.compaction_start"),
+            "start marker sits immediately before the boundary"
+        );
+        assert!(
+            matches!(&view.items[idx + 1], Item::Event(e) if e.event_type == "system.message"),
+            "the system.message re-prime must land AFTER the boundary, matching wire order"
+        );
+        assert!(
+            matches!(&view.items[idx + 2],
+                Item::Turn(t) if t.role == Role::User && t.text.contains("what is in notes.md")),
+            "next user turn follows the re-prime"
+        );
+    }
+
+    #[test]
+    fn adjacent_compactions_keep_start_boundary_interleaving() {
+        // Two back-to-back compactions share a watermark; the stream must
+        // read E,C,E,C (each start marker with its boundary), not E,E,C,C.
+        let complete = |n: u32| {
+            format!(
+                r#"{{"type":"session.compaction_complete","timestamp":"2026-07-21T22:00:0{n}.000Z","data":{{"success":true,"preCompactionTokens":{n},"summaryContent":"s{n}"}}}}"#
+            )
+        };
+        let body = [
+            r#"{"type":"user.message","data":{"content":"go"}}"#.to_string(),
+            r#"{"type":"session.compaction_start","data":{"conversationTokens":1}}"#.to_string(),
+            complete(1),
+            r#"{"type":"session.compaction_start","data":{"conversationTokens":2}}"#.to_string(),
+            complete(2),
+            r#"{"type":"user.message","data":{"content":"next"}}"#.to_string(),
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        assert_eq!(
+            item_shapes(&view),
+            [
+                "turn:go",
+                "event:session.compaction_start",
+                "compaction:compact0",
+                "event:session.compaction_start",
+                "compaction:compact1",
+                "turn:next"
+            ]
+        );
+        // The parent chain crosses both boundaries in order.
+        let second = view.compactions().nth(1).unwrap();
+        assert_eq!(second.parent_id.as_deref(), Some("compact0"));
+        assert_eq!(
+            view.turns().nth(1).unwrap().parent_id.as_deref(),
+            Some("compact1")
         );
     }
 }

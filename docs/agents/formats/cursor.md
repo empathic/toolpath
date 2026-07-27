@@ -495,9 +495,12 @@ model** — but for a different reason. Gemini persists nothing; Cursor
 persists a boundary *marker* whose content lives server-side. A
 content-less `conversation.compact` (no summary, empty `kept`) would be
 misleading, so `toolpath-cursor` recognizes the `capabilityType: 22`
-bubble (`Bubble::is_summarization`) and **skips it** — emitting neither a
-turn nor a compaction. The marker is documented here for whoever later
-gains access to Cursor's server-side summary payload.
+bubble (`Bubble::is_summarization`) and preserves it as an **opaque
+`summarization` event** — neither a turn nor an `Item::Compaction` —
+keyed by the bubble id, and the projector writes the marker bubble back
+at the same stream position, so the row survives a round-trip. If
+Cursor's server-side summary payload ever becomes locally readable, the
+event can be upgraded to a real compaction.
 
 ## Tool catalogue
 

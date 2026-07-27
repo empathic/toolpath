@@ -172,6 +172,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             .collect()
     };
     let mut seen_event_sources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    let mut seen_compaction_sources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
 
     // Group ids of surviving turns in stream order, so a turn can tell
     // whether it's the last of its message group (message-level token
@@ -603,6 +604,23 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             // compaction resolve to its step via `turn_to_step`, so the DAG
             // is rewired through the boundary.
             Item::Compaction(c) => {
+                // Byte-identical boundary replays are the same source entry
+                // and skip before any resolution, like turns and events — a
+                // Claude continuation file repeats its parent's boundary
+                // verbatim, and comparing resolved steps instead would
+                // rename-keep the replay whenever a splice or rename
+                // intervened, stealing the head and mis-parenting later
+                // turns. Skips before consuming a `compact-NNNN` id slot.
+                if !c.id.is_empty()
+                    && let Ok(source) = serde_json::to_value(c)
+                {
+                    let variants = seen_compaction_sources.entry(c.id.clone()).or_default();
+                    if variants.contains(&source) {
+                        continue;
+                    }
+                    variants.push(source);
+                }
+
                 let step_id = if c.id.is_empty() {
                     compact_idx += 1;
                     format!("compact-{:04}", compact_idx)
@@ -1276,6 +1294,66 @@ mod tests {
         let view = view_with(vec![turn]);
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.steps[0].step.actor, "agent:unknown");
+    }
+
+    #[test]
+    fn test_replayed_boundary_after_splice_is_dropped() {
+        // A byte-identical replay of a boundary whose original was spliced
+        // onto an intervening event (a Claude continuation file repeats its
+        // parent's boundary verbatim; a file-history snapshot sits between
+        // the boundary's parent turn and the boundary). The replay resolves
+        // to different bytes than the spliced original, so a resolved-step
+        // comparison would rename-keep it as `c#2`, steal the head, and
+        // re-point `turn_to_step["c"]` at the ghost — the source-level skip
+        // must drop it before any of that.
+        let a = base_turn("a", Role::User);
+        let e = crate::ConversationEvent {
+            id: String::new(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: None,
+            event_type: "file-history-snapshot".into(),
+            data: HashMap::new(),
+        };
+        let c = Compaction {
+            id: "c".into(),
+            parent_id: Some("a".into()),
+            timestamp: "2026-01-01T00:00:01Z".into(),
+            trigger: None,
+            summary: Some("condensed".into()),
+            pre_tokens: None,
+            kept_from: None,
+        };
+        let replay = c.clone();
+        let mut b = base_turn("b", Role::Assistant);
+        b.parent_id = Some("c".into());
+        let mut d = base_turn("d", Role::Assistant);
+        d.parent_id = Some("b".into());
+
+        let mut view = view_with(vec![a]);
+        view.items.push(Item::Event(e));
+        view.items.push(Item::Compaction(c));
+        view.items.push(Item::Turn(b));
+        view.items.push(Item::Compaction(replay));
+        view.items.push(Item::Turn(d));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["a", "event-0001", "c", "b", "d"],
+            "the replayed boundary is dropped, not renamed-kept"
+        );
+        assert_eq!(
+            path.steps[3].step.parents,
+            vec!["c".to_string()],
+            "b chains onto the real boundary, not a ghost c#2"
+        );
+        let dead = toolpath::v1::query::dead_ends(&path.steps, &path.path.head);
+        assert!(
+            dead.is_empty(),
+            "no false dead ends: {:?}",
+            dead.iter().map(|s| &s.step.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

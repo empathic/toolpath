@@ -544,40 +544,47 @@ fn write_transcript_context(out: &mut String, path: &Path) {
     writeln!(out).unwrap();
 }
 
+/// The step's `change` entry with the given `structural.type`, if any.
+fn change_of_type<'a>(step: &'a Step, change_type: &str) -> Option<&'a ArtifactChange> {
+    step.change
+        .values()
+        .find(|c| c.structural.as_ref().map(|s| s.change_type.as_str()) == Some(change_type))
+}
+
 /// The turn-by-turn transcript body, shared by the single-path and graph
-/// layouts. Walks active (head-ancestry) turns in causal order; abandoned
-/// branches are summarized as a count, event steps are skipped.
+/// layouts. Walks active (head-ancestry) turns and compaction boundaries in
+/// causal order; abandoned branches are summarized as a count, event steps
+/// are skipped.
 fn write_conversation_transcript_body(out: &mut String, path: &Path, options: &RenderOptions) {
     let active = query::ancestors(&path.steps, &path.path.head);
     let sorted = topo_sort(&path.steps);
 
-    let mut turns: Vec<&Step> = Vec::new();
+    let mut transcript: Vec<&Step> = Vec::new();
     let mut omitted = 0usize;
     for &step in &sorted {
-        let is_turn = step.change.values().any(|c| {
-            c.structural.as_ref().map(|s| s.change_type.as_str()) == Some("conversation.append")
-        });
-        if !is_turn {
+        let is_turn = change_of_type(step, "conversation.append").is_some();
+        let is_compaction = change_of_type(step, "conversation.compact").is_some();
+        if !is_turn && !is_compaction {
             continue; // event-only / non-turn steps
         }
         if !active.contains(step.step.id.as_str()) {
-            omitted += 1;
+            if is_turn {
+                omitted += 1;
+            }
             continue;
         }
-        turns.push(step);
+        transcript.push(step);
     }
 
     if options.detail == Detail::Summary {
-        write_compact_transcript(out, &turns);
+        write_compact_transcript(out, &transcript);
     } else {
-        for step in &turns {
-            let append = step
-                .change
-                .values()
-                .find(|c| {
-                    c.structural.as_ref().map(|s| s.change_type.as_str())
-                        == Some("conversation.append")
-                })
+        for step in &transcript {
+            if let Some(compact) = change_of_type(step, "conversation.compact") {
+                write_compaction_boundary(out, compact, options.detail);
+                continue;
+            }
+            let append = change_of_type(step, "conversation.append")
                 .expect("turn step has a conversation.append change");
             let mut files: Vec<(&String, &ArtifactChange)> = step
                 .change
@@ -604,16 +611,20 @@ fn write_conversation_transcript_body(out: &mut String, path: &Path, options: &R
 
 /// Compact transcript: prose only. Turns with text render as speaker lines;
 /// runs of text-less turns collapse into a per-tool breakdown line
-/// (`*tools: Read (3), Write (1)*`). Empty turns produce no output.
-fn write_compact_transcript(out: &mut String, turns: &[&Step]) {
+/// (`*tools: Read (3), Write (1)*`). Compaction boundaries render as a
+/// one-line marker. Empty turns produce no output.
+fn write_compact_transcript(out: &mut String, steps: &[&Step]) {
     // Tool-name counts accumulated since the last speaker line, in first-seen
     // order.
     let mut pending: Vec<(String, usize)> = Vec::new();
 
-    for step in turns {
-        let Some(append) = step.change.values().find(|c| {
-            c.structural.as_ref().map(|s| s.change_type.as_str()) == Some("conversation.append")
-        }) else {
+    for step in steps {
+        if let Some(compact) = change_of_type(step, "conversation.compact") {
+            flush_tool_breakdown(out, &mut pending);
+            write_compaction_boundary(out, compact, Detail::Summary);
+            continue;
+        }
+        let Some(append) = change_of_type(step, "conversation.append") else {
             continue;
         };
         let Some(s) = append.structural.as_ref() else {
@@ -647,6 +658,40 @@ fn write_compact_transcript(out: &mut String, turns: &[&Step]) {
     }
 
     flush_tool_breakdown(out, &mut pending);
+}
+
+/// A `conversation.compact` boundary in the transcript: a marked one-liner
+/// carrying the trigger and pre-compaction token count when present, plus
+/// the summary text quoted at full detail.
+fn write_compaction_boundary(out: &mut String, change: &ArtifactChange, detail: Detail) {
+    let Some(s) = change.structural.as_ref() else {
+        return;
+    };
+    let extra = &s.extra;
+
+    let mut qualifiers: Vec<String> = Vec::new();
+    if let Some(trigger) = extra.get("trigger").and_then(|v| v.as_str()) {
+        qualifiers.push(trigger.to_string());
+    }
+    if let Some(pre) = extra.get("pre_tokens").and_then(|v| v.as_u64()) {
+        qualifiers.push(format!("{pre} tokens before"));
+    }
+    let mut label = String::from("context compacted");
+    if !qualifiers.is_empty() {
+        label.push_str(&format!(" ({})", qualifiers.join(", ")));
+    }
+    writeln!(out, "*\u{2014} {label} \u{2014}*").unwrap();
+    writeln!(out).unwrap();
+
+    if detail == Detail::Full
+        && let Some(summary) = extra.get("summary").and_then(|v| v.as_str())
+        && !summary.trim().is_empty()
+    {
+        for line in summary.lines() {
+            writeln!(out, "> {line}").unwrap();
+        }
+        writeln!(out).unwrap();
+    }
 }
 
 /// Tally each `tool_uses[].name` into `pending` (first-seen order preserved).
@@ -2922,6 +2967,121 @@ mod tests {
         assert!(
             md.contains("1 abandoned turn omitted"),
             "omission note:\n{md}"
+        );
+    }
+
+    fn compacted_session_path() -> Path {
+        let key = "claude-code://sess-1";
+
+        let mut pre = Step::new("u1", "human:user", "2026-01-01T00:00:00Z");
+        pre.change.insert(
+            key.into(),
+            conv_append("user", &[("text", serde_json::json!("start the work"))]),
+        );
+
+        let mut boundary = Step::new("c1", "tool:claude-code", "2026-01-01T00:01:00Z");
+        boundary.step.parents = vec!["u1".into()];
+        boundary.change.insert(
+            key.into(),
+            ArtifactChange {
+                raw: None,
+                structural: Some(StructuralChange {
+                    change_type: "conversation.compact".into(),
+                    extra: std::collections::HashMap::from([
+                        ("trigger".to_string(), serde_json::json!("manual")),
+                        ("pre_tokens".to_string(), serde_json::json!(25450)),
+                        (
+                            "summary".to_string(),
+                            serde_json::json!("Earlier work summarized.\nSecond summary line."),
+                        ),
+                    ]),
+                }),
+            },
+        );
+
+        let mut post = Step::new("u2", "human:user", "2026-01-01T00:02:00Z");
+        post.step.parents = vec!["c1".into()];
+        post.change.insert(
+            key.into(),
+            conv_append("user", &[("text", serde_json::json!("keep going"))]),
+        );
+
+        Path {
+            path: PathIdentity {
+                id: "p1".into(),
+                base: None,
+                head: "u2".into(),
+                graph_ref: None,
+            },
+            steps: vec![pre, boundary, post],
+            meta: Some(PathMeta {
+                kind: Some(toolpath::v1::PATH_KIND_AGENT_CODING_SESSION.into()),
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn compaction_boundary_renders_in_full_transcript() {
+        let md = render_path(
+            &compacted_session_path(),
+            &RenderOptions {
+                detail: Detail::Full,
+                front_matter: false,
+            },
+        );
+        assert!(
+            md.contains("*\u{2014} context compacted (manual, 25450 tokens before) \u{2014}*"),
+            "boundary marker missing:\n{md}"
+        );
+        assert!(
+            md.contains("> Earlier work summarized.") && md.contains("> Second summary line."),
+            "summary not quoted:\n{md}"
+        );
+        // The boundary sits between the turns it separates.
+        let marker = md.find("context compacted").unwrap();
+        assert!(md.find("start the work").unwrap() < marker);
+        assert!(marker < md.find("keep going").unwrap());
+    }
+
+    #[test]
+    fn compaction_boundary_renders_one_liner_in_summary() {
+        let md = render_path(&compacted_session_path(), &RenderOptions::default());
+        assert!(
+            md.contains("*\u{2014} context compacted (manual, 25450 tokens before) \u{2014}*"),
+            "boundary marker missing:\n{md}"
+        );
+        assert!(
+            !md.contains("Earlier work summarized."),
+            "summary text should not render at summary detail:\n{md}"
+        );
+        let marker = md.find("context compacted").unwrap();
+        assert!(md.find("start the work").unwrap() < marker);
+        assert!(marker < md.find("keep going").unwrap());
+    }
+
+    #[test]
+    fn compaction_boundary_without_metadata_renders_bare_marker() {
+        let mut path = compacted_session_path();
+        let boundary = path
+            .steps
+            .iter_mut()
+            .find(|s| s.step.id == "c1")
+            .unwrap()
+            .change
+            .get_mut("claude-code://sess-1")
+            .unwrap();
+        boundary.structural.as_mut().unwrap().extra.clear();
+        let md = render_path(
+            &path,
+            &RenderOptions {
+                detail: Detail::Full,
+                front_matter: false,
+            },
+        );
+        assert!(
+            md.contains("*\u{2014} context compacted \u{2014}*"),
+            "bare marker missing:\n{md}"
         );
     }
 

@@ -225,17 +225,25 @@ fn truncate_output(output: &str, max: usize) -> String {
 /// Resolve Pi's `firstKeptEntryId` anchor to `Compaction.kept_from` — the
 /// id of the oldest turn surviving the boundary.
 ///
-/// Pi's anchor can name a non-turn entry (a `model_change`, a
-/// `thinking_level_change`, a folded tool result); the contract wants a
-/// turn id, so resolution takes the first already-emitted turn whose
-/// source entry sits at-or-after the anchor in the session's entry order.
-/// `None` when the anchor id is unknown or no prior turn sits at-or-after
-/// it (nothing survived verbatim).
+/// An anchor naming an entry that was folded INTO a turn (a toolResult
+/// absorbed by its assistant turn's invocation) resolves to that
+/// containing turn: the surviving result lives there, and rounding
+/// forward to the next turn would drop it from the kept window on
+/// resume. Otherwise Pi's anchor can name a non-turn entry (a
+/// `model_change`, a `thinking_level_change`); the contract wants a turn
+/// id, so resolution takes the first already-emitted turn whose source
+/// entry sits at-or-after the anchor in the session's entry order.
+/// `None` when the anchor id is unknown or no turn resolves (nothing
+/// survived verbatim — e.g. a trailing orphan toolResult).
 fn resolve_kept_from(
     items: &[Item],
     entry_pos: &HashMap<&str, usize>,
+    folded_into: &HashMap<String, String>,
     first_kept_entry_id: &str,
 ) -> Option<String> {
+    if let Some(turn_id) = folded_into.get(first_kept_entry_id) {
+        return Some(turn_id.clone());
+    }
     let anchor = *entry_pos.get(first_kept_entry_id)?;
     items
         .iter()
@@ -299,6 +307,9 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         .collect();
     // Map tool-call id → (item_idx, tool_idx); item_idx indexes an `Item::Turn`.
     let mut tool_call_locs: HashMap<String, (usize, usize)> = HashMap::new();
+    // Entry id of a folded toolResult → id of the turn containing its
+    // invocation, for `resolve_kept_from` anchors that name the result.
+    let mut folded_into: HashMap<String, String> = HashMap::new();
     // Map tool-call id → (item_idx, delegation index) within the turn (if any).
     let mut delegation_locs: HashMap<String, (usize, usize)> = HashMap::new();
     // Per-turn tool-result info: (tool_call_id, content, is_error).
@@ -380,13 +391,14 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 // `fromHook` — pi bookkeeping outside the closed typed set,
                 // deliberately not carried; a projected session resumes
                 // correctly without them.
-                // Pi's `firstKeptEntryId` can name a non-turn entry (e.g. a
-                // discarded `model_change`); resolve it to the first turn
+                // Pi's `firstKeptEntryId` can name a non-turn entry: a
+                // folded toolResult resolves to the turn containing it, a
+                // meta entry (e.g. `model_change`) to the first turn
                 // at-or-after the anchor in entry order — that turn is the
                 // contract's `kept_from`. `None` = nothing survived verbatim.
                 let kept_from = first_kept_entry_id
                     .as_deref()
-                    .and_then(|anchor| resolve_kept_from(&items, &entry_pos, anchor));
+                    .and_then(|anchor| resolve_kept_from(&items, &entry_pos, &folded_into, anchor));
                 items.push(Item::Compaction(Compaction {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
@@ -540,6 +552,11 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                         // claude/gemini/codex/opencode derive treats tool
                         // results, and keeps Pi → Pi idempotent without
                         // smuggling tool_call_id through Turn.extra.
+                        if let Some((turn_idx, _)) = tool_call_locs.get(tool_call_id)
+                            && let Some(Item::Turn(t)) = items.get(*turn_idx)
+                        {
+                            folded_into.insert(base.id.clone(), t.id.clone());
+                        }
                         tool_result_payloads.push((
                             usize::MAX,
                             tool_call_id.clone(),
@@ -1345,6 +1362,98 @@ mod tests {
             .find_map(Item::as_compaction)
             .expect("compaction item");
         assert_eq!(comp.kept_from, None);
+    }
+
+    fn tool_result_entry(id: &str, parent: Option<&str>, call_id: &str) -> Entry {
+        Entry::Message {
+            base: base(id, parent, "t"),
+            message: AgentMessage::ToolResult {
+                tool_call_id: call_id.into(),
+                tool_name: "read".into(),
+                content: vec![ToolResultContent::Text {
+                    text: "result".into(),
+                    extra: HashMap::new(),
+                }],
+                details: None,
+                is_error: false,
+                timestamp: 3,
+                extra: HashMap::new(),
+            },
+            extra: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_anchor_resolves_to_containing_turn() {
+        // The anchor names a toolResult that folded into its assistant
+        // turn's invocation. Rounding forward to the NEXT turn would drop
+        // the assistant turn holding the surviving result from the kept
+        // window; resolution must land on the containing turn instead.
+        let a1 = assistant_entry(
+            "a1",
+            None,
+            vec![ContentBlock::ToolCall {
+                id: "t1".into(),
+                name: "read".into(),
+                arguments: json!({}),
+                extra: HashMap::new(),
+            }],
+            usage(1, 1),
+            StopReason::Known(KnownStopReason::ToolUse),
+            "m",
+        );
+        let tr = tool_result_entry("tr", Some("a1"), "t1");
+        let u2 = user_text_entry("u2", Some("tr"), "next prompt");
+        let comp = Entry::Compaction {
+            base: base("c", Some("u2"), "t"),
+            summary: "sum".into(),
+            first_kept_entry_id: Some("tr".into()),
+            tokens_before: 50,
+            details: None,
+            from_hook: None,
+            extra: HashMap::new(),
+        };
+        let v = session_to_view(&session_from(vec![a1, tr, u2, comp], "/tmp/p"));
+        let c = v
+            .items
+            .iter()
+            .find_map(Item::as_compaction)
+            .expect("compaction item");
+        assert_eq!(
+            c.kept_from.as_deref(),
+            Some("a1"),
+            "the folded toolResult anchor resolves to the containing assistant turn"
+        );
+        assert_eq!(
+            toolpath_convo::expand_kept(&v.items, c),
+            vec!["a1".to_string(), "u2".to_string()],
+            "the kept run keeps the turn holding the surviving tool result"
+        );
+    }
+
+    #[test]
+    fn test_trailing_orphan_tool_result_anchor_degrades_to_none() {
+        // The anchor names a trailing toolResult with no matching tool
+        // call — nothing folds it into a turn and no turn sits at-or-after
+        // it, so nothing survived verbatim.
+        let u1 = user_text_entry("u1", None, "only turn");
+        let tr = tool_result_entry("tr", Some("u1"), "no-such-call");
+        let comp = Entry::Compaction {
+            base: base("c", Some("tr"), "t"),
+            summary: "sum".into(),
+            first_kept_entry_id: Some("tr".into()),
+            tokens_before: 50,
+            details: None,
+            from_hook: None,
+            extra: HashMap::new(),
+        };
+        let v = session_to_view(&session_from(vec![u1, tr, comp], "/tmp/p"));
+        let c = v
+            .items
+            .iter()
+            .find_map(Item::as_compaction)
+            .expect("compaction item");
+        assert_eq!(c.kept_from, None);
     }
 
     #[test]

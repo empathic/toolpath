@@ -16,15 +16,18 @@
 //!    - `token_usage` ← summed across all `step-finish` parts (each
 //!      is a per-step delta). Falls back to the message-level
 //!      `tokens` field if no step-finish parts exist.
-//!    - `extra["opencode"]["snapshots"]` ← ordered list of snapshot
-//!      SHAs from `step-start`/`step-finish`/`snapshot` parts, used
-//!      by the derive layer to fetch file diffs.
-//!    - `extra["opencode"]["patches"]` ← any `patch` parts (their
-//!      `{hash, files}` records).
+//!    - snapshot SHAs from `step-start`/`step-finish`/`snapshot` parts
+//!      drive the snapshot tree↔tree diffs that populate each turn's
+//!      `file_mutations`; `patch` parts contribute their file lists to
+//!      `files_changed`.
 //! 3. A `compaction` part (on either a user or assistant message) emits
 //!    an [`Item::Compaction`] at its position in the ordered item stream,
 //!    parented on the last turn emitted before it. `derive_path` projects
-//!    it to a `conversation.compact` step.
+//!    it to a `conversation.compact` step. The boundary's summary comes
+//!    from the next summary-bearing message: a synthetic user message's
+//!    `summary.body`, or (opencode ≥ 1.17) the next assistant message
+//!    flagged `summary: true` — whose turn is still emitted, since it is
+//!    real assistant output.
 //! 4. Other non-turn parts land in `ConversationView.events`:
 //!    `retry`, `file`, `agent`, unknown types.
 //! 5. `subtask` parts are captured on the turn's `delegations`
@@ -294,12 +297,16 @@ impl<'a> Builder<'a> {
         self.pending_compaction_idx = Some(self.items.len() - 1);
     }
 
-    /// Attach `body` to the most recent compaction boundary still awaiting a
-    /// summary, then clear the pending marker so the next boundary claims its
-    /// own. An orphan summary (no boundary pending) is ignored, matching the
-    /// prior behavior of never surfacing a summary message as a turn.
+    /// Claim the most recent compaction boundary still awaiting a summary:
+    /// attach `body` to it and clear the pending marker so the next boundary
+    /// claims its own. An empty body clears the marker without attaching —
+    /// the boundary stays summary-less and the steal window closes at it
+    /// instead of extending to a later summary message. An orphan summary
+    /// (no boundary pending) is ignored, matching the prior behavior of
+    /// never surfacing a summary message as a turn.
     fn attach_pending_summary(&mut self, body: String) {
         if let Some(idx) = self.pending_compaction_idx.take()
+            && !body.is_empty()
             && let Some(Item::Compaction(c)) = self.items.get_mut(idx)
         {
             c.summary = Some(body);
@@ -400,26 +407,28 @@ impl<'a> Builder<'a> {
         // synthetic user message whose `summary.body` holds the summary text.
         // Pair it with the boundary still awaiting one — whether the body
         // rides on the compaction-bearing message itself or the immediately
-        // following synthetic message.
+        // following synthetic message. Any present body — even an empty
+        // one — claims the pending boundary, so a later summary message
+        // can't steal-attach across an already-consumed boundary.
         let mut hosted_summary = false;
-        if let Some(body) = u
-            .summary
-            .as_ref()
-            .and_then(|s| s.body.as_deref())
-            .filter(|b| !b.is_empty())
-        {
+        if let Some(body) = u.summary.as_ref().and_then(|s| s.body.as_deref()) {
             self.attach_pending_summary(body.to_string());
             hosted_summary = true;
         }
 
-        // Skip an empty user turn when the message carried only a
-        // compaction marker (the common synthetic-boundary case) or only
-        // a summary body — both are synthetic. Later turns whose native
-        // `parent_id` names this message chain onto the item that stands
-        // in for it: the boundary pushed just above, or the last item
-        // before it. Any other empty-text user message (e.g.
-        // attachment-only, with parts but no text) still emits a turn.
-        if text.is_empty() && (hosted_compaction || hosted_summary) {
+        // Skip the turn when the message carries nothing beyond
+        // compaction/summary bookkeeping — no text and no non-marker
+        // parts. Later turns whose native `parent_id` names this message
+        // chain onto the item that stands in for it: the boundary pushed
+        // just above, or the last item before it. A message with real
+        // content (text, or e.g. a file attachment riding next to a
+        // summary body) still emits a turn.
+        let has_content = !text.is_empty()
+            || msg
+                .parts
+                .iter()
+                .any(|p| !matches!(p.data, PartData::Compaction(_) | PartData::Text(_)));
+        if !has_content && (hosted_compaction || hosted_summary) {
             self.msg_redirects
                 .insert(msg.id.clone(), self.last_anchor_id.clone());
             return;
@@ -563,6 +572,15 @@ impl<'a> Builder<'a> {
                     });
                 }
             }
+        }
+
+        // opencode ≥ 1.17 writes the compaction summary as an assistant
+        // message flagged `summary: true` (rather than a synthetic user
+        // message with `summary.body`). Its text is that boundary's
+        // summary; the turn itself is still emitted below — it is real
+        // assistant output (reasoning, tokens) the harness renders.
+        if a.summary == Some(true) {
+            self.attach_pending_summary(text_chunks.join("\n\n"));
         }
 
         // Prefer step-summed tokens over the message-level snapshot —
@@ -1465,6 +1483,118 @@ mod tests {
             compactions[1].summary.as_deref(),
             Some("SECOND compaction summary — distinct and longer"),
             "second boundary keeps ITS OWN summary, not the first's"
+        );
+    }
+
+    #[test]
+    fn empty_summary_body_clears_pending_boundary() {
+        // A summary message with an EMPTY body must close the boundary's
+        // steal window: the boundary stays summary-less, a later summary
+        // message can't attach to it, and the empty message emits no junk
+        // empty-text turn.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,9,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,9);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('mu','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('mc','s',2,2,'{"role":"user","time":{"created":2},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('me','s',3,3,'{"role":"user","time":{"created":3},"agent":"b","model":{"providerID":"p","modelID":"m"},"summary":{"body":""}}'),
+              ('ms','s',4,4,'{"role":"user","time":{"created":4},"agent":"b","model":{"providerID":"p","modelID":"m"},"summary":{"body":"LATE summary"}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('pu','mu','s',1,1,'{"type":"text","text":"do the thing"}'),
+              ('pc','mc','s',2,2,'{"type":"compaction","auto":true,"overflow":false}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+
+        let c = view.compactions().next().expect("boundary present");
+        assert_eq!(
+            c.summary, None,
+            "empty body cleared the slot; the late summary must not steal-attach"
+        );
+        let turn_ids: Vec<&str> = view.turns().map(|t| t.id.as_str()).collect();
+        assert_eq!(
+            turn_ids,
+            vec!["mu"],
+            "neither the empty-body nor the orphan summary message emits a turn"
+        );
+    }
+
+    #[test]
+    fn summary_message_with_file_part_emits_turn() {
+        // A body-bearing user message that also carries a file attachment:
+        // the body attaches to the boundary AND the message still emits a
+        // turn (attachment-only convention), instead of being dropped
+        // wholesale.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,9,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,9);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('mu','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('mc','s',2,2,'{"role":"user","time":{"created":2},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('mf','s',3,3,'{"role":"user","time":{"created":3},"agent":"b","model":{"providerID":"p","modelID":"m"},"summary":{"body":"condensed prefix"}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('pu','mu','s',1,1,'{"type":"text","text":"do the thing"}'),
+              ('pc','mc','s',2,2,'{"type":"compaction","auto":true,"overflow":false}'),
+              ('pf','mf','s',3,3,'{"type":"file","mime":"image/png","url":"file:///tmp/shot.png"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+
+        let c = view.compactions().next().expect("boundary present");
+        assert_eq!(c.summary.as_deref(), Some("condensed prefix"));
+        let mf = view
+            .turns()
+            .find(|t| t.id == "mf")
+            .expect("attachment-bearing summary message still emits a turn");
+        assert_eq!(mf.text, "");
+        assert!(
+            toolpath_convo::testing::check_view_invariants(&view).is_empty(),
+            "invariants must accept the view"
+        );
+    }
+
+    #[test]
+    fn assistant_summary_flag_attaches_to_pending_boundary() {
+        // opencode ≥ 1.17: the compaction summary is the next assistant
+        // message flagged `summary: true`. Its text becomes the boundary's
+        // summary and the assistant turn is still emitted.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,9,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.17.2',1,9);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('mu','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('mc','s',2,2,'{"role":"user","time":{"created":2},"agent":"b","model":{"providerID":"p","modelID":"m"}}'),
+              ('ma','s',3,3,'{"parentID":"mc","role":"assistant","path":{"cwd":"/p","root":"/p"},"modelID":"m","providerID":"p","time":{"created":3},"summary":true}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('pu','mu','s',1,1,'{"type":"text","text":"do the thing"}'),
+              ('pc','mc','s',2,2,'{"type":"compaction","auto":false,"overflow":false}'),
+              ('pa','ma','s',3,3,'{"type":"text","text":"condensed everything so far"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+
+        let c = view.compactions().next().expect("boundary present");
+        assert_eq!(
+            c.summary.as_deref(),
+            Some("condensed everything so far"),
+            "the flagged assistant's text is the boundary summary"
+        );
+        let ma = view
+            .turns()
+            .find(|t| t.id == "ma")
+            .expect("the summary assistant still emits a turn");
+        assert_eq!(ma.role, Role::Assistant);
+        assert_eq!(ma.text, "condensed everything so far");
+        assert!(
+            toolpath_convo::testing::check_view_invariants(&view).is_empty(),
+            "invariants must accept the view"
         );
     }
 

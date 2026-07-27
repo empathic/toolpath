@@ -15,7 +15,7 @@ permalink: /kinds/agent-coding-session/v1.2.0/
 
 A Toolpath path whose `meta.kind` is this URI records an AI coding conversation. It is an ordinary path with the extra structure described here. `head`-ancestry, dead ends, signatures, and `base` all behave as in the [base format](/format/).
 
-Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`), which the provider crates (`toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-opencode`, `toolpath-cursor`, `toolpath-pi`) all call. The field shapes below are therefore exact. The only producer-specific parts are the contents of a tool's `input`, the diff text in a change's `raw`, and the value (not the meaning) of `group_id`.
+Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`), which the provider crates (`toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-opencode`, `toolpath-cursor`, `toolpath-copilot`, `toolpath-pi`) all call. The field shapes below are therefore exact. The only producer-specific parts are the contents of a tool's `input`, the diff text in a change's `raw`, and the value (not the meaning) of `group_id`.
 
 Constraints apply by structural `type`, not by artifact key: a `change` entry is checked only when its `structural.type` is one named here, and extra properties never make a path invalid. [`schema.json`](./schema.json) encodes the rules; apply it alongside the base schema. The URI is immutable. Later revisions ship under a new version URI.
 
@@ -23,7 +23,7 @@ Constraints apply by structural `type`, not by artifact key: a `change` entry is
 
 ## The turn payload
 
-One entry in a turn's `change` map has `structural.type` of `"conversation.append"`. Find it by that type: the artifact key is producer-specific, formed as `<source>://<conversation-id>` from the harness in `meta.source` (e.g. `claude-code://…`, `gemini-cli://…`, `codex://…`, `opencode://…`, `cursor://…`, `pi://…`).
+One entry in a turn's `change` map has `structural.type` of `"conversation.append"`. Find it by that type: the artifact key is producer-specific, formed as `<source>://<conversation-id>` from the harness in `meta.source` (e.g. `claude-code://…`, `gemini-cli://…`, `codex://…`, `opencode://…`, `cursor://…`, `copilot://…`, `pi://…`).
 
 Its `structural` object always carries:
 
@@ -142,11 +142,11 @@ Only `type` is always present. Every other field appears only when the source re
 | `kept`          | array          | ids of the prior turns that survive verbatim into the post-compaction window — always a contiguous parent-chain run, oldest first, whose first element is the anchor (empty = wholesale) |
 | `source_parent` | string \| null | the pre-splice source parent, recorded when derive-splicing rewired the step's `parents` through intervening event steps                                                                 |
 
-A compaction step has no `text`, `role`, or `tool_uses` — it is not a turn. Consumers that only care about the transcript can skip it; consumers reconstructing the source format use it to place the boundary. The `kept` run is the harness-agnostic payload: its first element is the anchor — the oldest surviving turn — and every harness's marker reduces to that anchor (Pi's `firstKeptEntryId`, opencode's `tailStartID`, the start of Claude's preserved tail; Codex keeps none). Each projector renders the run in its own form. Compaction provenance is this closed field set — native detail richer than the contiguous run (like replay-pinned messages) is deliberately not carried, and round-trips are lossy beyond these fields.
+A compaction step has no `text`, `role`, or `tool_uses` — it is not a turn. Consumers that only care about the transcript can skip it; consumers reconstructing the source format use it to place the boundary. The `kept` run is the harness-agnostic payload: its first element is the anchor — the oldest surviving turn — and every harness's marker reduces to that anchor (Pi's `firstKeptEntryId`, opencode's `tailStartID`, the start of Claude's preserved tail; Codex and Copilot keep none). Each projector renders the run in its own form. Compaction provenance is this closed field set — native detail richer than the contiguous run (like replay-pinned messages) is deliberately not carried, and round-trips are lossy beyond these fields.
 
 ## Non-turn entries
 
-Entries that aren't turns (attachments, preamble lines, snapshots, hook results) become steps with `structural.type` of `"conversation.event"`, carrying `entry_type` and sometimes `event_source_id` plus the producer's event data. They exist so a document round-trips back to the source format. They are not part of the transcript.
+Entries that aren't turns (attachments, preamble lines, snapshots, hook results) become steps with `structural.type` of `"conversation.event"`, always carrying `entry_type`, `event_source_id` (the source event's id — for an id-less event, the synthesized step id), and `source_parent` (the resolved source parent; `null` when the event chained by position rather than naming one), plus the producer's event data. They exist so a document round-trips back to the source format. They are not part of the transcript.
 
 ## Actors
 
@@ -162,14 +162,14 @@ Entries that aren't turns (attachments, preamble lines, snapshots, hook results)
 
 ## Path metadata
 
-| Field                | Meaning                                                                                    |
-| -------------------- | ------------------------------------------------------------------------------------------ |
-| `meta.kind`          | this URI                                                                                   |
-| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, `cursor`, or `pi` |
-| `meta.title`         | session title                                                                              |
-| `meta.actors`        | the actor definitions the steps reference                                                  |
-| `meta.files_changed` | file paths touched across the session                                                      |
-| `meta.vcs_remote`    | repository URL, when known                                                                 |
-| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session           |
+| Field                | Meaning                                                                                               |
+| -------------------- | ----------------------------------------------------------------------------------------------------- |
+| `meta.kind`          | this URI                                                                                              |
+| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, `cursor`, `copilot`, or `pi` |
+| `meta.title`         | session title                                                                                         |
+| `meta.actors`        | the actor definitions the steps reference                                                             |
+| `meta.files_changed` | file paths touched across the session                                                                 |
+| `meta.vcs_remote`    | repository URL, when known                                                                            |
+| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session                      |
 
 `files_changed`, `vcs_remote`, and `producer` sit directly under `meta` (they ride `PathMeta`'s flattened `extra`), not under a nested `meta.extra`.

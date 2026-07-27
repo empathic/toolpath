@@ -181,7 +181,7 @@ When Codex compacts mid-session it appends a single `compacted` line to
 the **same rollout file** — no new file, no new session id:
 
 ```json
-{"type":"compacted","payload":{"message":"…summary text…","replacement_history":[…],"window_id":1}}
+{"type":"compacted","payload":{"message":"…summary text…","replacement_history":[…],"window_id":"019f86c9-2b8a-7651-bff3-7914eb125b25"}}
 ```
 
 Per current Codex `main` (`codex-rs/protocol/src/protocol.rs`,

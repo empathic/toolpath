@@ -204,6 +204,25 @@ impl Harness for CopilotHarness {
         };
         Some(toolpath_copilot::to_view(&session))
     }
+    /// Copilot's compacted capture is `compacted-real.jsonl` (not the
+    /// `convo-compacted.jsonl` naming the other harnesses use) — it's the
+    /// same fixture `toolpath-copilot/tests/compacted_real_roundtrip.rs`
+    /// exercises.
+    fn load_compacted_fixture(&self) -> Option<ConversationView> {
+        let path = fixtures_dir().join("copilot/compacted-real.jsonl");
+        if !path.exists() {
+            return None;
+        }
+        let lines = toolpath_copilot::EventReader::read_lines(&path)
+            .expect("copilot compacted fixture parse");
+        let session = toolpath_copilot::Session {
+            id: "compacted-fixture".to_string(),
+            dir_path: path,
+            lines,
+            workspace: None,
+        };
+        Some(toolpath_copilot::to_view(&session))
+    }
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
         let projector = toolpath_copilot::CopilotProjector::new();
         let session = projector

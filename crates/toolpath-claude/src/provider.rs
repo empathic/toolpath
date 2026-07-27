@@ -519,18 +519,16 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // rewrite parents of subsequently absorbed entries.
     let mut last_anchor_uuid: Option<String> = None;
 
-    // Duplicate-uuid stripping, defensive: a compacted session can re-emit
-    // earlier entries with their original uuids (the entries Claude carries
-    // into the post-compaction context). Current 2.1.x in-file compaction
-    // has not been observed writing such a block, and the format docs in
-    // docs/agents/formats/claude-code/ don't describe one, so this guards
-    // the shape rather than documents it. We keep only the FIRST
-    // occurrence of each uuid: the original carries the true lineage, and
-    // a re-emission is a context-window artifact, not provenance.
-    // Stripping must happen here, before
-    // `derive_path` — its dedup skips byte-identical replays, but the
-    // group-total token stamping below (`canonicalize_message_usage`) can
-    // make a replayed copy differ from its original and survive as a
+    // Duplicate-uuid stripping: a compacted session can re-emit earlier
+    // entries with their original uuids, re-parented into a synthetic
+    // linear chain, in the run just before the boundary — observed in long
+    // `[1m]`-context 2.1.x sessions (session-chains.md §Re-emitted messages
+    // with duplicate UUIDs). We keep only the FIRST occurrence of each
+    // uuid: the original carries the true lineage, and a re-emission is a
+    // context-window artifact, not provenance. Stripping must happen here,
+    // before `derive_path` — its dedup skips byte-identical replays, but
+    // the group-total token stamping below (`canonicalize_message_usage`)
+    // can make a replayed copy differ from its original and survive as a
     // renamed step.
     let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
 

@@ -598,6 +598,76 @@ fn projector_reproduces_compaction_item_through_to_view() {
     );
 }
 
+/// Gen-2 stability: derive → extract → derive on the real capture must
+/// reproduce the same document on every iteration. Looped because the
+/// failure mode this pins — hash-order-dependent classification in the
+/// derive layer — only shows up on some map layouts; each iteration
+/// builds fresh maps with fresh hash keys. Pi carries the same pin
+/// (`toolpath-pi/tests/real_fixture_roundtrip.rs`).
+#[test]
+fn real_fixture_derive_extract_derive_is_stable() {
+    let session = load_compacted_fixture_session();
+    let view = to_view(&session);
+    for _ in 0..8 {
+        let gen1 = derive_path(&view, &DeriveConfig::default());
+        let gen2 = derive_path(&extract_conversation(&gen1), &DeriveConfig::default());
+        assert_eq!(
+            serde_json::to_value(&gen1).expect("serialize gen1"),
+            serde_json::to_value(&gen2).expect("serialize gen2"),
+            "derive → extract → derive changed the document"
+        );
+    }
+}
+
+/// opencode 1.17.2 marks the compaction summary as an assistant message
+/// flagged `summary: true`. The flag must survive opencode → toolpath →
+/// opencode: the flagged assistant's text rides `Compaction.summary`, and
+/// the projector re-marks the assistant message whose text it matches.
+#[test]
+fn real_fixture_assistant_summary_flag_survives_projection() {
+    let source = load_compacted_fixture_session();
+    let flagged_texts = |s: &Session| -> Vec<String> {
+        s.messages
+            .iter()
+            .filter(|m| matches!(&m.data, MessageData::Assistant(a) if a.summary == Some(true)))
+            .map(|m| {
+                m.parts
+                    .iter()
+                    .filter_map(|p| match &p.data {
+                        PartData::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            })
+            .collect()
+    };
+    let src_flagged = flagged_texts(&source);
+    assert_eq!(
+        src_flagged.len(),
+        1,
+        "the capture has exactly one summary-flagged assistant message"
+    );
+
+    let view = to_view(&source);
+    assert_eq!(
+        view.compactions().next().and_then(|c| c.summary.as_deref()),
+        Some(src_flagged[0].as_str()),
+        "the flagged assistant's text becomes the boundary summary"
+    );
+
+    let projector = OpencodeProjector::new()
+        .with_directory(source.directory.clone())
+        .with_project_id(source.project_id.clone())
+        .with_version(source.version.clone());
+    let projected: Session = projector.project(&view).expect("project");
+    assert_eq!(
+        flagged_texts(&projected),
+        src_flagged,
+        "exactly the summary assistant keeps `summary: true` after the round-trip"
+    );
+}
+
 #[test]
 fn real_fixture_compaction_and_surrounding_turns_survive_roundtrip() {
     let session = load_compacted_fixture_session();

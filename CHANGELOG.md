@@ -152,11 +152,7 @@ real `/compact`) and validating the resulting artifacts.
   `event_msg`/`context_compacted` marker the TUI renders its "Context
   compacted" row from, and places the opening `turn_context` at its
   native position (after leading system-envelope messages, immediately
-  before the first real prompt). `path resume` now mints a deterministic
-  fresh session id (reusing the source id made imports ambiguous and let
-  the thread-row INSERT OR REPLACE clobber the native session) and
-  titles the registered thread from the first non-envelope user message
-  instead of the `<environment_context>` XML. The 2026-07 payload
+  before the first real prompt). The 2026-07 payload
   (window-id chain, encrypted summary in `replacement_history`, a
   prefix-keep the suffix-anchored contract cannot represent) is
   documented as deliberate loss; the empty `message` now normalizes to
@@ -170,9 +166,8 @@ real `/compact`) and validating the resulting artifacts.
   thinking block real Claude writes, and `path p import claude` /
   `path share` derive with thinking included. Events (attachments,
   system entries) emit inline at their item position instead of
-  regrouping at the end of the file; the caveat entry keeps `isMeta`;
-  the reader stream-parses each line so a mid-write flush boundary
-  (two objects on one physical line) no longer drops entries.
+  regrouping at the end of the file, and the caveat entry keeps
+  `isMeta`.
 - **`toolpath-pi`**: model/thinking state survives resume, verified in
   pi 0.72. `model_change` / `thinking_level_change` / `label` entries
   map to typed `Item::Event`s (previously discarded — a resumed
@@ -293,29 +288,13 @@ Crates bumped: `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
 `toolpath-claude` 0.13.0, `toolpath-gemini` 0.7.0, `toolpath-codex`
 0.7.0, `toolpath-opencode` 0.6.0, `toolpath-cursor` 0.3.0, `toolpath-pi`
 0.7.0, `toolpath-git` 0.7.0, `toolpath-github` 0.7.0, `toolpath-dot`
-0.6.0, `toolpath-md` 0.8.0, `path-cli` 0.16.0, `toolpath-cli` 0.16.0.
+0.6.0, `toolpath-md` 0.8.0, `path-cli` 0.17.0, `toolpath-cli` 0.17.0.
 The four dependents of `toolpath` alone (`git`/`github`/`dot`/`md`) bump
 because their published versions declare `toolpath` ^0.7.0, which would
 resolve a second `toolpath` next to 0.8.0 in a registry build; `path-cli`
 and `toolpath-cli` skip to 0.16.0 because 0.15.0 is already published
 with different content.
 
-## Extract: undo the event splice when rebuilding wire parents — 2026-07-07
-
-- **`toolpath-convo`**: `derive_path` splices events and compactions onto the
-  head's ancestry, which re-parents neighboring steps through event steps —
-  ids that don't exist on the wire (Claude's headerless preamble/snapshot
-  lines carry no `uuid`, so nothing can chain through them).
-  `extract_conversation` now resolves a turn's or compaction's parent past
-  event-derived steps back to the nearest turn/compaction ancestor, so
-  projectors write valid wire chains: a re-exported Claude session's first
-  message keeps `parentUuid: null` instead of naming a synthesized
-  `claude-preamble-N` step, and messages after a snapshot line chain onto
-  the real prior message. Events keep their spliced parents (event-to-event
-  chains are legitimate wire data), and derive re-splices on re-derive, so
-  derive → extract → derive is stable. (Superseded by the items-stream
-  release above: event steps now always stamp `source_parent` and extract
-  restores their source linkage exactly.)
 ## `path p cache sync` — incremental session ingestion — 2026-07-16
 
 Adds `path p cache sync [types…]`, the first step toward a cache that
@@ -496,6 +475,22 @@ session-fingerprint APIs in the provider crates.
   `YYYY/MM/DD` bucket instead of walking the tree. Together these make
   enumerate-then-read (`p import codex --all`) one parse per file.
 
+## Extract: undo the event splice when rebuilding wire parents — 2026-07-07
+
+- **`toolpath-convo`**: `derive_path` splices events and compactions onto the
+  head's ancestry, which re-parents neighboring steps through event steps —
+  ids that don't exist on the wire (Claude's headerless preamble/snapshot
+  lines carry no `uuid`, so nothing can chain through them).
+  `extract_conversation` now resolves a turn's or compaction's parent past
+  event-derived steps back to the nearest turn/compaction ancestor, so
+  projectors write valid wire chains: a re-exported Claude session's first
+  message keeps `parentUuid: null` instead of naming a synthesized
+  `claude-preamble-N` step, and messages after a snapshot line chain onto
+  the real prior message. Events keep their spliced parents (event-to-event
+  chains are legitimate wire data), and derive re-splices on re-derive, so
+  derive → extract → derive is stable. (Superseded by the items-stream
+  release above: event steps now always stamp `source_parent` and extract
+  restores their source linkage exactly.)
 ## Derive: resolve duplicate step ids — 2026-07-01
 
 - **`toolpath-convo`** (0.11.1): `derive_path` now guarantees the derived
@@ -639,6 +634,12 @@ are gone in favor of jaq forms — `path query 'map(select(.dead_end))'` and
 
 ## Conversation items IR + compaction provenance — 2026-06-22
 
+(Original combined design entry, kept for the narrative. The work later
+split: the items stream shipped as the 2026-07-27 entry above, and the
+compaction contract evolved to the anchor-based `kept_from` form in the
+2026-07-16 "Compaction kept contract" entry — where details disagree,
+those entries are current.)
+
 `ConversationView` now exposes a single ordered `items` stream (the new
 `Item` enum) in place of the separate `turns`/`events` lists, giving every
 provider one timeline to populate and every consumer one timeline to walk.
@@ -667,7 +668,8 @@ instead of silently losing the boundary.
   `toolpath-gemini` and `toolpath-cursor` participate in the items IR but
   persist no compaction: Gemini records none, and Cursor's `/summarize`
   writes only a boundary marker (the summary and kept set live server-side
-  and are unrecoverable from local data), so the marker is skipped on read.
+  and are unrecoverable from local data); the marker is preserved as a
+  `summarization` event and round-trips back to a marker bubble.
 - **`agent-coding-session` kind → v1.2.0**: the kind constant is now
   `https://toolpath.net/kinds/agent-coding-session/v1.2.0`, extending
   v1.1.0 (token usage) with the `conversation.compact` step type. The
