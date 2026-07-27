@@ -208,10 +208,10 @@ fn project_view(
     let group_last_idx = group_last_indices(view);
     let group_attributed = groups_with_attribution(view);
 
-    // Walk the full ordered item stream so compaction boundaries land at
-    // their true position between the surrounding turns. Events have no
-    // Codex analog on the return path and are dropped; turns and compactions
-    // both project to rollout lines.
+    // Walk the full ordered item stream. Only turns project to rollout
+    // lines: events carry raw rollout payloads the projector re-derives
+    // from the turns themselves (session_meta, turn_context, token_count),
+    // so they are dropped rather than replayed.
     let mut turn_idx = 0usize;
     for (item_idx, item) in view.items.iter().enumerate() {
         if Some(item_idx) == opening_ctx_at {
