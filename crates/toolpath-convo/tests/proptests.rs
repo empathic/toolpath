@@ -49,16 +49,18 @@ enum Elem {
     /// the shape that made hash-order step classification (the pi kept-run
     /// loss) reachable.
     Turn(u8, Option<u8>, u8, u8),
-    /// (has native id?, parent slot or None)
-    Event(bool, Option<u8>),
+    /// (id slot, parent slot or None). Slot 0 = id-less; 1–3 = `e<slot>`
+    /// (repeats collide, the Claude reused-attachment-uuid shape); 4 = `t0`
+    /// (collides with the turn id pool).
+    Event(u8, Option<u8>),
 }
 
 fn elem() -> impl Strategy<Value = Elem> {
     prop_oneof![
         4 => (0u8..6, proptest::option::of(0u8..8), 0u8..4, 0u8..4)
             .prop_map(|(id, p, kind, muts)| Elem::Turn(id, p, kind, muts)),
-        1 => (any::<bool>(), proptest::option::of(0u8..8))
-            .prop_map(|(has_id, p)| Elem::Event(has_id, p)),
+        1 => (0u8..5, proptest::option::of(0u8..8))
+            .prop_map(|(id_slot, p)| Elem::Event(id_slot, p)),
     ]
 }
 
@@ -78,7 +80,6 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
             }
         })
     };
-    let mut event_n = 0usize;
     for e in elems {
         match e {
             Elem::Turn(id_slot, p, kind, muts) => {
@@ -106,12 +107,11 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
                 items.push(Item::Turn(t));
                 ids.push(id);
             }
-            Elem::Event(has_id, p) => {
-                event_n += 1;
-                let id = if has_id {
-                    format!("e{event_n}")
-                } else {
-                    String::new()
+            Elem::Event(id_slot, p) => {
+                let id = match id_slot {
+                    0 => String::new(),
+                    4 => "t0".to_string(),
+                    s => format!("e{s}"),
                 };
                 let parent = resolve(p, &ids);
                 items.push(Item::Event(ConversationEvent {
@@ -181,37 +181,20 @@ proptest! {
         // The real replay shape (a Claude chain merge): a turn is re-emitted
         // with its original id and parent linkage, after the original —
         // possibly with events/compactions between, but before the next
-        // turn. A copy at such a position resolves to a byte-identical step
-        // and must be dropped without any effect on the derived path.
+        // turn. A copy at such a position is the same source entry and must
+        // be dropped without any effect on the derived path — including when
+        // derive spliced the original onto an intervening event (the
+        // comparison normalizes splice artifacts away before deciding).
         // (A same-id turn with *different* linkage is not a replay; the
         // dedup renames it, which is data-preserving, not a no-op.)
         let base = build_view(elems);
-        let uniquely_idd: Vec<Turn> = {
+        let replayable: Vec<Turn> = {
             let all: Vec<&Turn> = base.turns().collect();
             all.iter()
-                .filter(|t| {
-                    t.parent_id.is_some() && all.iter().filter(|o| o.id == t.id).count() == 1
-                })
+                .filter(|t| all.iter().filter(|o| o.id == t.id).count() == 1)
                 .map(|t| (*t).clone())
                 .collect()
         };
-        // A replay is byte-identical only when the original's step kept its
-        // source linkage verbatim (derive didn't splice or re-anchor it) —
-        // restrict candidates to those.
-        let derived = derive_path(&base, &DeriveConfig::default());
-        let replayable: Vec<Turn> = uniquely_idd
-            .into_iter()
-            .filter(|t| {
-                derived
-                    .steps
-                    .iter()
-                    .find(|s| s.step.id == t.id)
-                    .is_some_and(|s| {
-                        s.step.parents.first() == t.parent_id.as_ref()
-                            && s.step.parents.len() <= 1
-                    })
-            })
-            .collect();
         prop_assume!(!replayable.is_empty());
         let src_turn = replayable[replay_of as usize % replayable.len()].clone();
         let src_pos = base
