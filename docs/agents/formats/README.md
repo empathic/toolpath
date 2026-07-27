@@ -14,6 +14,14 @@ culting.
 
 ## Contents
 
+- **[`amp/`](amp/README.md)** — Amp (ampcode.com), the `amp` CLI.
+  **The odd one out architecturally:** threads are server-authoritative, so
+  nothing under `~/.local/share/amp` or `~/.cache/amp` holds message
+  bodies — reconstruction goes through `amp threads export <id>`, a network
+  fetch. Split into a folder because the two wire shapes (the export
+  document and the Claude-Code-compatible `--stream-json` stream) need
+  separate treatment. Every claim is confidence-tagged and version-pinned;
+  start at [`RECON.md`](amp/RECON.md) for the four gating answers.
 - **[`claude-code/`](claude-code/README.md)** — Claude Code
   (`~/.claude/projects/…` JSONL). Split into focused docs covering
   directory layout, the JSONL line envelope, entry types, the `message`
@@ -54,12 +62,15 @@ The Claude Code reference is the most detailed because it's the
 longest-standing provider and has the most moving parts (JSONL
 envelope variants, session chaining, compaction, sidechains, and the
 loader's own undocumented strictness on what it will accept). Claude
-Code and Copilot CLI get folders; the rest sit in single files because
-their formats are either simpler or sufficiently covered there. The
-Copilot CLI folder is the odd one out on sourcing: it's the only
-reference not yet built on first-hand session samples, so it leans on
-official docs plus reverse-engineering and tags every claim with a
-confidence level.
+Code, Copilot CLI and Amp get folders; the rest sit in single files
+because their formats are either simpler or sufficiently covered
+there. The Copilot CLI folder is the odd one out on sourcing: it's the
+only reference not yet built on first-hand session samples, so it
+leans on official docs plus reverse-engineering and tags every claim
+with a confidence level. The Amp folder is the odd one out on
+architecture: it's the only provider with no local session file at
+all, so its reference documents a CLI-mediated server fetch rather
+than an on-disk layout.
 
 ## Conventions used in these docs
 

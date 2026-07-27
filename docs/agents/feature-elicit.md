@@ -43,12 +43,27 @@ version uses different flags):
 
 | Harness | Invocation | Output landing |
 |---|---|---|
+| Amp | `amp -x "<prompt>" --stream-json --no-archive-after-execute` | **no local file** — recover with `amp threads export <thread-id>`; see below |
 | Claude | `claude -p "<prompt>"` | `~/.claude/projects/<sanitized>/<uuid>.jsonl` |
 | Codex | `codex exec "<prompt>"` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
 | Copilot | `COPILOT_HOME=<isolated> copilot --allow-all -p "<prompt>"` | `<isolated>/session-state/<uuid>/events.jsonl` (isolated home keeps the real session list clean) |
 | Gemini | `gemini -p "<prompt>"` | `~/.gemini/tmp/<slot>/chats/session-*.json` |
 | Pi | `pi -p "<prompt>"` (varies; manual fallback documented below) | `~/.pi/agent/sessions/--<encoded-cwd>--/*.jsonl` |
 | Opencode | `opencode run "<prompt>"` then `path p export opencode` | rows in `opencode.db`, exported to JSON |
+
+Amp needs a different recovery step from every other harness. Its
+threads are **server-authoritative** — the snapshot-diff trick finds
+only `~/.cache/amp/logs/threads/T-<id>.log`, which is telemetry, not a
+transcript. Take the thread id from the `--stream-json` stream's
+`session_id` (or from `amp threads list`) and fetch the real document:
+
+```bash
+amp threads export <thread-id> > test-fixtures/amp/convo.json
+```
+
+Pass `--no-archive-after-execute` or the new thread is archived and
+drops out of `amp threads list`. Full detail:
+[`formats/amp/`](./formats/amp/README.md).
 
 Cursor is **not** in the automated list. The IDE has no scriptable
 chat-panel entry point, and the `cursor-agent` CLI writes its real
