@@ -8,6 +8,7 @@ members = [
     "crates/toolpath-gemini",
     "crates/toolpath-codex",
     "crates/toolpath-copilot",
+    "crates/toolpath-amp",
     "crates/toolpath-opencode",
     "crates/toolpath-cursor",
     "crates/toolpath-dot",
@@ -31,6 +32,7 @@ toolpath-claude = { version = "0.12.1", path = "crates/toolpath-claude", default
 toolpath-gemini = { version = "0.6.1", path = "crates/toolpath-gemini", default-features = false }
 toolpath-codex = { version = "0.6.1", path = "crates/toolpath-codex" }
 toolpath-copilot = { version = "0.1.0", path = "crates/toolpath-copilot" }
+toolpath-amp = { version = "0.1.0", path = "crates/toolpath-amp" }
 toolpath-opencode = { version = "0.5.0", path = "crates/toolpath-opencode" }
 toolpath-cursor = { version = "0.2.0", path = "crates/toolpath-cursor" }
 toolpath-github = { version = "0.6.0", path = "crates/toolpath-github" }

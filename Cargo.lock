@@ -4072,6 +4072,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolpath-amp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "jsonschema",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toolpath",
+ "toolpath-convo",
+]
+
+[[package]]
 name = "toolpath-claude"
 version = "0.12.1"
 dependencies = [
