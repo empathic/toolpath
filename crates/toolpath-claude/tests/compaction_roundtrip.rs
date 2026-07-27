@@ -13,25 +13,27 @@
 //!   - The fixture loads cleanly (no parser crash on `compact_boundary`).
 //!   - Pre-compact user/assistant content survives the round-trip.
 //!   - Post-compact user/assistant content survives the round-trip.
+//!   - The `compact_boundary` marker becomes an inline event in
+//!     `view.items` at its stream position (after the last pre-compact
+//!     turn, before the summary), and holds that position through
+//!     derive → extract with its id and event type intact.
 //!   - The conversation can be re-projected to Claude JSONL and
 //!     re-parsed by `ConversationReader` without error.
 //!
-//! Known limitation (documented, not asserted): the `compact_boundary`
-//! marker entry itself has no `message` field, so the current
-//! provider drops it on the floor going Claude → IR. The synthetic
-//! `isCompactSummary: true` summary entry is currently surfaced as a
-//! plain `Role::User` turn — `toolpath-claude` does not yet recognize
-//! the `isCompactSummary` flag. Both are acceptable losses for "good
-//! UX" today (the compacted summary text still lands in the
-//! transcript), but if/when we tighten this, this test gets
-//! tightened with it.
+//! Known limitation (documented, not asserted): the synthetic
+//! `isCompactSummary: true` summary entry is surfaced as a plain
+//! `Role::User` turn — `toolpath-claude` does not yet recognize the
+//! `isCompactSummary` flag. Acceptable for "good UX" today (the
+//! compacted summary text still lands in the transcript), but if/when
+//! we tighten this, this test gets tightened with it.
 
 use std::path::{Path, PathBuf};
 
 use toolpath::v1::Graph;
 use toolpath_claude::{ClaudeProjector, ConversationReader};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, DeriveConfig, Role, derive_path, extract_conversation,
+    ConversationProjector, ConversationView, DeriveConfig, Item, Role, derive_path,
+    extract_conversation,
 };
 
 fn fixture_path() -> PathBuf {
@@ -73,9 +75,7 @@ fn pre_compact_content_survives_roundtrip() {
     let pre_assistant_text = "I'll start by reading the current auth code.";
 
     assert!(
-        original
-            .turns()
-            .any(|t| t.text.contains(pre_user_text)),
+        original.turns().any(|t| t.text.contains(pre_user_text)),
         "pre-compact user prompt missing from initial view"
     );
     assert!(
@@ -90,9 +90,7 @@ fn pre_compact_content_survives_roundtrip() {
         "pre-compact user prompt dropped after roundtrip"
     );
     assert!(
-        after
-            .turns()
-            .any(|t| t.text.contains(pre_assistant_text)),
+        after.turns().any(|t| t.text.contains(pre_assistant_text)),
         "pre-compact assistant response dropped after roundtrip"
     );
 }
@@ -170,6 +168,42 @@ fn post_compact_tool_call_pairs_survive_roundtrip() {
         .as_ref()
         .expect("result dropped after roundtrip");
     assert_eq!(or.content, ar.content, "tool result content diverged");
+}
+
+#[test]
+fn compact_boundary_event_survives_at_stream_position() {
+    // Events restore their source `parent_id` from the stamped
+    // `source_parent` key, so position among the turns — not resolved step
+    // parents — is the round-trip contract asserted here.
+    let original = load_view();
+    let after = ir_roundtrip(&original);
+
+    for (label, view) in [("initial view", &original), ("extracted view", &after)] {
+        let idx = view
+            .items
+            .iter()
+            .position(|item| matches!(item, Item::Event(e) if e.event_type == "compact_boundary"))
+            .unwrap_or_else(|| panic!("compact_boundary event missing from {label}"));
+
+        let event = view.items[idx].as_event().unwrap();
+        assert_eq!(event.id, "uuid-boundary", "event id diverged in {label}");
+
+        let turns_before = view.items[..idx].iter().filter_map(Item::as_turn).count();
+        assert_eq!(
+            turns_before, 2,
+            "boundary must follow the two pre-compact turns in {label}"
+        );
+
+        let next_turn = view.items[idx + 1..]
+            .iter()
+            .find_map(Item::as_turn)
+            .unwrap_or_else(|| panic!("no turn after the boundary in {label}"));
+        assert!(
+            next_turn.text.contains("[compacted summary]"),
+            "boundary must precede the summary turn in {label}, got {:?}",
+            next_turn.text
+        );
+    }
 }
 
 #[test]

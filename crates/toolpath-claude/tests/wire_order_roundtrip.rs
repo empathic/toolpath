@@ -1,16 +1,29 @@
 //! Wire-level entry-stream fidelity against the real captured session
 //! (`test-fixtures/claude/convo.jsonl`).
 //!
-//! Real Claude interleaves attachments and system entries (turn_duration,
-//! compact boundary) with the turns. The projector used to emit all events
-//! from a trailing pass, which regrouped them at the end of the file — a
-//! resumed session then replayed its entries out of order. These tests pin
-//! the projected stream to the source's shape.
+//! Real Claude interleaves attachment entries with the turns. The projector
+//! used to emit all events from a trailing pass, which regrouped them at
+//! the end of the file — a resumed session then replayed its entries out
+//! of order.
+//!
+//! What is pinned: the `entry_type` sequence of the direct
+//! `to_view` → `project` pipeline matches the source entry for entry
+//! (attachments in place, not regrouped at the end), and caveat user
+//! entries keep `isMeta: true` on projection.
+//!
+//! What is NOT pinned: `parentUuid` values. 11 of the fixture's 45 entries
+//! legitimately diverge — the projector re-synthesizes tool-result carrier
+//! entries under derived uuids (`<turn-uuid>-result-<tool-id>`), so the 10
+//! entries whose source parent was an absorbed carrier point at the
+//! re-synthesized uuid, and the one entry whose source parent was an
+//! attachment is rewired to the preceding turn. Also not pinned: the
+//! derive → extract → project pipeline — only the direct projection is
+//! exercised here.
 
 use std::path::{Path, PathBuf};
 
-use toolpath_convo::ConversationProjector;
 use toolpath_claude::{ClaudeProjector, ConversationReader};
+use toolpath_convo::ConversationProjector;
 
 fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
