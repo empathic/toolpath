@@ -30,7 +30,8 @@
 //!    `Σ token_usage == Σ attributed ==` session total.
 //! 8. Everything else (`task_started`, `task_complete`, `turn_context`,
 //!    `user_message`/`agent_message` duplicates, unknown events) lands
-//!    in `ConversationView.events` as a typed [`ConversationEvent`].
+//!    in `ConversationView.items` as a typed [`ConversationEvent`], at
+//!    its rollout position among the turns.
 
 use std::collections::HashMap;
 
@@ -191,7 +192,10 @@ pub fn to_turn(line_payload: &ResponseItem) -> Option<Turn> {
 struct Builder<'a> {
     session: &'a Session,
     turns: Vec<Turn>,
-    events: Vec<ConversationEvent>,
+    /// Events paired with a turn watermark: the number of turns already
+    /// pushed when the event arrived. Assembly merges the two streams on
+    /// that watermark so `items` preserves the rollout's interleaving.
+    events: Vec<(usize, ConversationEvent)>,
     /// Plaintext reasoning summaries (rare — only in configurations where
     /// OpenAI exposes public reasoning). These land on `Turn.thinking`.
     pending_reasoning_plaintext: Vec<String>,
@@ -230,12 +234,19 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Record an event at the current position in the turn stream. The
+    /// watermark (turns pushed so far) is where the event sits relative to
+    /// the turns when `build` merges the two streams back together.
+    fn push_event(&mut self, event: ConversationEvent) {
+        self.events.push((self.turns.len(), event));
+    }
+
     fn build(mut self) -> ConversationView {
         for line in &self.session.lines {
             match line.item() {
                 RolloutItem::SessionMeta(m) => {
                     self.working_dir = Some(m.cwd.to_string_lossy().to_string());
-                    self.events.push(event_from_raw(
+                    self.push_event(event_from_raw(
                         &line.timestamp,
                         "session_meta",
                         &line.payload,
@@ -250,7 +261,7 @@ impl<'a> Builder<'a> {
                     if !wd.is_empty() {
                         self.working_dir = Some(wd);
                     }
-                    self.events.push(event_from_raw(
+                    self.push_event(event_from_raw(
                         &line.timestamp,
                         "turn_context",
                         &line.payload,
@@ -261,19 +272,16 @@ impl<'a> Builder<'a> {
                     self.handle_event_msg(&line.timestamp, ev, &line.payload)
                 }
                 RolloutItem::SessionState(payload) => {
-                    self.events
-                        .push(event_from_raw(&line.timestamp, "session_state", &payload));
+                    self.push_event(event_from_raw(&line.timestamp, "session_state", &payload));
                 }
                 RolloutItem::Compacted(payload) => {
                     // Context-compaction markers ride as generic events for
                     // now; typed boundary support builds on this in the
                     // compaction-provenance work.
-                    self.events
-                        .push(event_from_raw(&line.timestamp, "compacted", &payload));
+                    self.push_event(event_from_raw(&line.timestamp, "compacted", &payload));
                 }
                 RolloutItem::Unknown { kind, payload } => {
-                    self.events
-                        .push(event_from_raw(&line.timestamp, &kind, &payload));
+                    self.push_event(event_from_raw(&line.timestamp, &kind, &payload));
                 }
             }
         }
@@ -319,10 +327,10 @@ impl<'a> Builder<'a> {
         // Filter empty carrier turns (no text, no thinking, no tool calls).
         // Previously done inside `derive_path_from_view`; moved here so the
         // canonical `derive_path` sees only meaningful turns. We compute a
-        // keep-mask instead of `retain`-ing in place so the buffer indices
-        // recorded for pending compactions stay valid. A turn that carries
-        // token accounting is NOT empty: `finalize_usage` (above) may have
-        // stamped a group's total `token_usage` onto an otherwise-bare
+        // keep-mask instead of `retain`-ing in place so the event watermarks
+        // (which index the unfiltered turn stream) stay valid. A turn that
+        // carries token accounting is NOT empty: `finalize_usage` (above) may
+        // have stamped a group's total `token_usage` onto an otherwise-bare
         // group-final turn, and dropping it would make Σ token_usage < the
         // session total.
         let keep: Vec<bool> = self
@@ -346,8 +354,8 @@ impl<'a> Builder<'a> {
         let mut surviving = 0usize;
         let mut prev: Option<String> = None;
         // Final id of each surviving turn, indexed by its position in
-        // `self.turns`; `None` for dropped turns. Used to resolve a
-        // compaction's `parent_id` back to a real turn step.
+        // `self.turns`; `None` for dropped turns. Seeds the event-id
+        // dedup set below.
         let mut turn_final_id: Vec<Option<String>> = vec![None; self.turns.len()];
         for (idx, t) in self.turns.iter_mut().enumerate() {
             if !keep[idx] {
@@ -373,25 +381,30 @@ impl<'a> Builder<'a> {
         for id in turn_final_id.iter().flatten() {
             seen.insert(id.clone());
         }
-        for (i, e) in self.events.iter_mut().enumerate() {
+        for (i, (_, e)) in self.events.iter_mut().enumerate() {
             if !seen.insert(e.id.clone()) {
                 e.id = format!("{}-{:04}", e.id, i);
                 seen.insert(e.id.clone());
             }
         }
 
-        // Assemble the ordered stream: surviving turns first, then all
-        // events. Keeping events grouped after the turns reproduces the
-        // former layout, so the derived DAG stays a single connected
-        // ancestry.
-        let mut items: Vec<Item> = Vec::with_capacity(self.turns.len() + self.events.len() + 1);
+        // Merge the two streams back into rollout order. An event's
+        // watermark `w` means it arrived after turn `w - 1` and before
+        // turn `w`, so it flushes ahead of turn `w`; events past the last
+        // turn drain at the end. Watermarks are nondecreasing (both vecs
+        // are append-only), so a single forward pass suffices.
+        let mut items: Vec<Item> = Vec::with_capacity(self.turns.len() + self.events.len());
+        let mut events = self.events.into_iter().peekable();
         for (idx, turn) in self.turns.into_iter().enumerate() {
+            while events.peek().is_some_and(|(w, _)| *w <= idx) {
+                items.push(Item::Event(events.next().unwrap().1));
+            }
             if !keep[idx] {
                 continue;
             }
             items.push(Item::Turn(turn));
         }
-        items.extend(self.events.into_iter().map(Item::Event));
+        items.extend(events.map(|(_, e)| Item::Event(e)));
 
         ConversationView {
             id: self.session.id.clone(),
@@ -469,7 +482,7 @@ impl<'a> Builder<'a> {
                 self.attach_tool_output(&out.call_id, &out.output, is_error);
             }
             ResponseItem::Other { kind, payload } => {
-                self.events.push(ConversationEvent {
+                self.push_event(ConversationEvent {
                     id: synthetic_event_id(timestamp, &kind),
                     timestamp: timestamp.to_string(),
                     parent_id: None,
@@ -502,40 +515,34 @@ impl<'a> Builder<'a> {
                         self.attribute_delta(delta);
                     }
                 }
-                self.events
-                    .push(event_from_raw(timestamp, "token_count", raw_payload));
+                self.push_event(event_from_raw(timestamp, "token_count", raw_payload));
             }
             EventMsg::ExecCommandEnd(exec) => {
                 self.apply_exec_command_end(&exec);
-                self.events
-                    .push(event_from_raw(timestamp, "exec_command_end", raw_payload));
+                self.push_event(event_from_raw(timestamp, "exec_command_end", raw_payload));
             }
             EventMsg::PatchApplyEnd(patch) => {
                 self.apply_patch_apply_end(&patch);
-                self.events
-                    .push(event_from_raw(timestamp, "patch_apply_end", raw_payload));
+                self.push_event(event_from_raw(timestamp, "patch_apply_end", raw_payload));
             }
             EventMsg::TaskStarted(payload) => {
                 if let Some(tid) = payload.get("turn_id").and_then(|v| v.as_str()) {
                     self.start_round(tid);
                 }
-                self.events
-                    .push(event_from_raw(timestamp, "task_started", raw_payload));
+                self.push_event(event_from_raw(timestamp, "task_started", raw_payload));
             }
             EventMsg::TaskComplete(_) => {
                 // Round over: anything after the boundary is outside the
                 // round, so the grouping key resets. Totals are computed
                 // once in `finalize_usage`.
                 self.current_round_id = None;
-                self.events
-                    .push(event_from_raw(timestamp, "task_complete", raw_payload));
+                self.push_event(event_from_raw(timestamp, "task_complete", raw_payload));
             }
             EventMsg::AgentMessage(_) | EventMsg::UserMessage(_) => {
-                self.events
-                    .push(event_from_raw(timestamp, ev.kind(), raw_payload));
+                self.push_event(event_from_raw(timestamp, ev.kind(), raw_payload));
             }
             EventMsg::Other { kind, payload } => {
-                self.events.push(event_from_raw(timestamp, &kind, &payload));
+                self.push_event(event_from_raw(timestamp, &kind, &payload));
             }
         }
     }
