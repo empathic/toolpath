@@ -141,7 +141,7 @@ fn project_view(
     // Find the last assistant turn so we can mark it `phase: "final"`.
     // Codex annotates every other assistant turn with `phase: "commentary"`,
     // matching what real rollouts look like. Indexed over the turn stream
-    // (events/compactions don't count), matching `turn_idx` below.
+    // (events don't count), matching `turn_idx` below.
     let last_assistant_idx = view
         .turns()
         .collect::<Vec<_>>()

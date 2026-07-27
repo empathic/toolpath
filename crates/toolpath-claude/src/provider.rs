@@ -410,14 +410,15 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // rewrite parents of subsequently absorbed entries.
     let mut last_anchor_uuid: Option<String> = None;
 
-    // Duplicate-uuid stripping. Real compacted sessions re-emit a block of
-    // earlier tool_use/tool_result entries — reusing their original uuids —
-    // immediately before the boundary: the entries Claude carries into the
-    // post-compaction context. (Observed in captured sessions; the format
-    // docs in docs/agents/formats/claude-code/ don't describe this replay
-    // block.) We keep only the FIRST occurrence of each uuid: the original
-    // carries the true lineage, and the re-emission is a context-window
-    // artifact, not provenance. Stripping must happen here, before
+    // Duplicate-uuid stripping, defensive: a compacted session can re-emit
+    // earlier entries with their original uuids (the entries Claude carries
+    // into the post-compaction context). Current 2.1.x in-file compaction
+    // has not been observed writing such a block, and the format docs in
+    // docs/agents/formats/claude-code/ don't describe one, so this guards
+    // the shape rather than documents it. We keep only the FIRST
+    // occurrence of each uuid: the original carries the true lineage, and
+    // a re-emission is a context-window artifact, not provenance.
+    // Stripping must happen here, before
     // `derive_path` — its dedup skips byte-identical replays, but the
     // group-total token stamping below (`canonicalize_message_usage`) can
     // make a replayed copy differ from its original and survive as a

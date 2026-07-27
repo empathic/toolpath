@@ -13,10 +13,9 @@
 //!
 //! What is NOT pinned: `parentUuid` values. 11 of the fixture's 45 entries
 //! legitimately diverge — the projector re-synthesizes tool-result carrier
-//! entries under derived uuids (`<turn-uuid>-result-<tool-id>`), so the 10
-//! entries whose source parent was an absorbed carrier point at the
-//! re-synthesized uuid, and the one entry whose source parent was an
-//! attachment is rewired to the preceding turn. Also not pinned: the
+//! entries under derived uuids (`<turn-uuid>-result-<tool-id>`): 10 of the
+//! diverged entries point at a re-synthesized carrier uuid, and 1 is
+//! rewired to the preceding turn. Also not pinned: the
 //! derive → extract → project pipeline — only the direct projection is
 //! exercised here.
 
