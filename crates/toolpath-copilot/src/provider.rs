@@ -1118,6 +1118,95 @@ mod tests {
         );
     }
 
+    /// Compact item-stream fingerprint: `turn:<text>` / `event:<type>`.
+    fn item_shapes(view: &ConversationView) -> Vec<String> {
+        view.items
+            .iter()
+            .map(|i| match i {
+                Item::Turn(t) => format!("turn:{}", t.text),
+                Item::Event(e) => format!("event:{}", e.event_type),
+            })
+            .collect()
+    }
 
+    #[test]
+    fn event_after_open_turn_content_lands_after_that_turn() {
+        // The hook fires after the in-progress assistant turn already has
+        // content, so it must sort after that turn and before the next one.
+        let body = [
+            r#"{"type":"user.message","data":{"content":"go"}}"#,
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"assistant.message","data":{"content":"working"}}"#,
+            r#"{"type":"hook.start","data":{"name":"fmt"}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+            r#"{"type":"user.message","data":{"content":"next"}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        assert_eq!(
+            item_shapes(&view),
+            ["turn:go", "turn:working", "event:hook.start", "turn:next"]
+        );
+    }
 
+    #[test]
+    fn event_before_open_turn_content_lands_before_that_turn() {
+        // The hook fires after turn_start but before the turn has any
+        // content, so it must sort ahead of that turn.
+        let body = [
+            r#"{"type":"user.message","data":{"content":"go"}}"#,
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"hook.start","data":{"name":"fmt"}}"#,
+            r#"{"type":"assistant.message","data":{"content":"reply"}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        assert_eq!(
+            item_shapes(&view),
+            ["turn:go", "event:hook.start", "turn:reply"]
+        );
+    }
+
+    #[test]
+    fn leading_and_trailing_events_stay_at_the_ends() {
+        let body = [
+            r#"{"type":"hook.start","data":{"name":"boot"}}"#,
+            r#"{"type":"user.message","data":{"content":"go"}}"#,
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"assistant.message","data":{"content":"reply"}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+            r#"{"type":"skill.invoked","data":{"skill":"x"}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        assert_eq!(
+            item_shapes(&view),
+            [
+                "event:hook.start",
+                "turn:go",
+                "turn:reply",
+                "event:skill.invoked"
+            ]
+        );
+    }
+
+    #[test]
+    fn event_inside_dropped_empty_turn_lands_between_neighbor_turns() {
+        // The assistant turn bracketing the hook never gains content and is
+        // dropped; the event must still land between the surviving turns.
+        let body = [
+            r#"{"type":"user.message","data":{"content":"one"}}"#,
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"hook.start","data":{"name":"fmt"}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+            r#"{"type":"user.message","data":{"content":"two"}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        assert_eq!(
+            item_shapes(&view),
+            ["turn:one", "event:hook.start", "turn:two"]
+        );
+    }
 }

@@ -39,14 +39,20 @@ use crate::types::{
     TOOL_EDIT_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2, ToolFormerData, tool_name_for_id,
 };
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError as ConvoTraitError,
-    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
-    ToolCategory, ToolInvocation, ToolResult, Turn, unified_diff,
+    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError as ConvoTraitError, EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role,
+    SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn, unified_diff,
 };
 
 /// The dispatch family used in `path.meta.source` and
 /// `ConversationView.provider_id`.
 pub const PROVIDER_ID: &str = "cursor";
+
+/// `event_type` for Cursor's `/summarize` marker bubble
+/// (`capabilityType: 22`). The bubble carries no recoverable summary —
+/// that lives server-side — so it rides the item stream as an opaque
+/// event and the projector writes it back verbatim.
+pub const EVENT_SUMMARIZATION: &str = "summarization";
 
 /// Provider for Cursor sessions.
 #[derive(Default)]
@@ -287,7 +293,7 @@ pub fn session_to_view(session: &CursorSession) -> ConversationView {
 
 struct Builder<'a> {
     session: &'a CursorSession,
-    turns: Vec<Turn>,
+    items: Vec<Item>,
     files_changed_order: Vec<String>,
     files_changed_seen: std::collections::HashSet<String>,
     total_usage: TokenUsage,
@@ -298,7 +304,7 @@ impl<'a> Builder<'a> {
     fn new(session: &'a CursorSession) -> Self {
         Self {
             session,
-            turns: Vec::new(),
+            items: Vec::new(),
             files_changed_order: Vec::new(),
             files_changed_seen: std::collections::HashSet::new(),
             total_usage: TokenUsage::default(),
@@ -312,9 +318,14 @@ impl<'a> Builder<'a> {
             // Cursor's `/summarize` boundary marker (capabilityType 22) carries
             // no recoverable summary or kept set — those live server-side, not
             // in the local store — so there's nothing to derive a compaction
-            // from. Skip it rather than surface it as an empty turn. See
+            // from. Preserve it as an opaque event at its stream position so
+            // the projector can write the marker bubble back. See
             // docs/agents/formats/cursor.md.
             if bubble.is_summarization() {
+                self.items.push(Item::Event(summarization_event(
+                    bubble,
+                    prev_turn_id.as_deref(),
+                )));
                 continue;
             }
             let turn = match bubble.kind {
@@ -326,7 +337,7 @@ impl<'a> Builder<'a> {
                 _ => continue,
             };
             prev_turn_id = Some(turn.id.clone());
-            self.turns.push(turn);
+            self.items.push(Item::Turn(turn));
         }
 
         let started_at = self.session.started_at().or_else(|| {
@@ -344,7 +355,7 @@ impl<'a> Builder<'a> {
             id: self.session.id().to_string(),
             started_at,
             last_activity,
-            items: self.turns.into_iter().map(Item::Turn).collect(),
+            items: self.items,
             total_usage: if self.total_usage_set {
                 Some(self.total_usage)
             } else {
@@ -592,6 +603,22 @@ impl<'a> Builder<'a> {
             vcs_branch: None,
             vcs_revision: None,
         })
+    }
+}
+
+/// Lift a `/summarize` marker bubble into an opaque [`ConversationEvent`],
+/// keyed by the bubble id so the projector can restore the exact row.
+fn summarization_event(bubble: &Bubble, parent: Option<&str>) -> ConversationEvent {
+    let mut data = std::collections::HashMap::new();
+    if let Some(ct) = bubble.capability_type {
+        data.insert("capabilityType".to_string(), Value::from(ct));
+    }
+    ConversationEvent {
+        id: bubble.bubble_id.clone(),
+        timestamp: bubble.created_at.clone().unwrap_or_default(),
+        parent_id: parent.map(str::to_string),
+        event_type: EVENT_SUMMARIZATION.to_string(),
+        data,
     }
 }
 
@@ -873,6 +900,53 @@ mod tests {
         assert_eq!(tool.name, "future_thing_v9");
         assert_eq!(tool.category, None);
         assert_eq!(tool.input["x"], 1);
+    }
+
+    #[test]
+    fn summarization_bubble_becomes_event_at_stream_position() {
+        let setup_sql = r#"
+            INSERT INTO cursorDiskKV (key, value) VALUES
+              ('composerData:cz', '{"_v":16,"composerId":"cz","fullConversationHeadersOnly":[{"bubbleId":"u1","type":1},{"bubbleId":"s1","type":2,"grouping":{"isRenderable":true,"capabilityType":22}},{"bubbleId":"u2","type":1}]}'),
+              ('bubbleId:cz:u1', '{"_v":3,"type":1,"bubbleId":"u1","createdAt":"2026-06-01T00:00:00.000Z","text":"first"}'),
+              ('bubbleId:cz:s1', '{"_v":3,"type":2,"bubbleId":"s1","createdAt":"2026-06-01T00:00:01.000Z","text":"","capabilityType":22}'),
+              ('bubbleId:cz:u2', '{"_v":3,"type":1,"bubbleId":"u2","createdAt":"2026-06-01T00:00:02.000Z","text":"after"}');
+        "#;
+        let f = fixture_db(setup_sql);
+        let r = crate::reader::DbReader::open(f.path()).unwrap();
+        let s = r.load_session("cz").unwrap();
+        let view = session_to_view(&s);
+
+        assert_eq!(view.items.len(), 3);
+        assert_eq!(view.items[0].as_turn().unwrap().id, "u1");
+        let ev = view.items[1].as_event().expect("marker preserved as event");
+        assert_eq!(ev.id, "s1");
+        assert_eq!(ev.event_type, EVENT_SUMMARIZATION);
+        assert_eq!(ev.timestamp, "2026-06-01T00:00:01.000Z");
+        assert_eq!(ev.parent_id.as_deref(), Some("u1"));
+        assert_eq!(ev.data["capabilityType"], serde_json::json!(22));
+        let after = view.items[2].as_turn().unwrap();
+        assert_eq!(after.id, "u2");
+        assert_eq!(
+            after.parent_id.as_deref(),
+            Some("u1"),
+            "turn chain skips the marker"
+        );
+    }
+
+    #[test]
+    fn leading_summarization_event_has_no_parent() {
+        let setup_sql = r#"
+            INSERT INTO cursorDiskKV (key, value) VALUES
+              ('composerData:cl', '{"_v":16,"composerId":"cl","fullConversationHeadersOnly":[{"bubbleId":"s1","type":2},{"bubbleId":"u1","type":1}]}'),
+              ('bubbleId:cl:s1', '{"_v":3,"type":2,"bubbleId":"s1","createdAt":"2026-06-01T00:00:00.000Z","text":"","capabilityType":22}'),
+              ('bubbleId:cl:u1', '{"_v":3,"type":1,"bubbleId":"u1","createdAt":"2026-06-01T00:00:01.000Z","text":"hi"}');
+        "#;
+        let f = fixture_db(setup_sql);
+        let r = crate::reader::DbReader::open(f.path()).unwrap();
+        let view = session_to_view(&r.load_session("cl").unwrap());
+        let ev = view.items[0].as_event().unwrap();
+        assert_eq!(ev.parent_id, None);
+        assert!(view.items[1].as_turn().unwrap().parent_id.is_none());
     }
 
     #[test]
