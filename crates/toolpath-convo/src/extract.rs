@@ -211,11 +211,19 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     if let Some(t) = data.remove("event_data_type") {
                         data.insert("type".to_string(), t);
                     }
+                    // Source linkage stamped by derive (`null` = root).
+                    // Documents derived before the key existed fall back to
+                    // the resolved step parents.
+                    let parent_id = match data.remove("source_parent") {
+                        Some(serde_json::Value::String(s)) => Some(s),
+                        Some(_) => None,
+                        None => step.step.parents.first().cloned(),
+                    };
 
                     let event = ConversationEvent {
                         id,
                         timestamp: step.step.timestamp.clone(),
-                        parent_id: step.step.parents.first().cloned(),
+                        parent_id,
                         event_type,
                         data,
                     };
@@ -299,9 +307,9 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
 /// would write wire chains through ids that don't exist on the wire (e.g. a
 /// Claude `parentUuid` naming a synthesized `claude-preamble-0` step).
 ///
-/// Events themselves keep their spliced parents: event-to-event chains are
-/// legitimate wire data (Claude chains consecutive tool-result entries), and
-/// `derive_path` re-splices on the way back in, so the round-trip is stable.
+/// Events restore their own source linkage from the `source_parent` key
+/// derive always stamps on `conversation.event` steps; this walk exists for
+/// turns (stamped only when spliced) and for documents that predate the key.
 /// Restore a turn's or compaction's source parent. Steps whose parents the
 /// derive splice rewired carry the pre-splice parent in `source_parent`
 /// (`null` = root) — read it back verbatim. Documents derived before that
@@ -1542,10 +1550,12 @@ mod tests {
             "walk resolves through the whole event chain"
         );
 
-        // The events keep their spliced chain — event-to-event parents are
-        // legitimate wire data, and re-derive re-splices identically.
+        // The events come back as the roots they were on the wire — the
+        // spliced event-to-event chain is a derive artifact, recorded under
+        // `source_parent` and undone here; re-derive re-splices identically.
         let events: Vec<&ConversationEvent> = view.events().collect();
-        assert_eq!(events[1].parent_id.as_deref(), Some("claude-preamble-0"));
+        assert_eq!(events[0].parent_id, None);
+        assert_eq!(events[1].parent_id, None);
     }
 
 

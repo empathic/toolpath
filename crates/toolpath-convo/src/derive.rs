@@ -132,8 +132,17 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     // parent chain so they land on the head's ancestry instead of dangling
     // as false dead ends — without disturbing genuine branches.
     let mut prev_turn_step: Option<String> = None;
-    let mut prev_anchor_step: Option<String> = None;
     let mut event_steps: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Source bytes of every id-bearing item already walked, keyed by source
+    // id — each entry holds the distinct variants seen under that id. A
+    // byte-identical re-emission (the Claude chain-merge replay shape) is
+    // the same source entry, not a new step, and is skipped before any
+    // resolution: resolved step forms are not comparable across the stream
+    // (splicing rewires `parents`, and parent mappings mutate as colliding
+    // steps rename), but source bytes are.
+    let mut seen_turn_sources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    let mut seen_event_sources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
 
     // Group ids in turn order, so a turn can tell whether it's the last of its
     // message group (message-level token accounting, below).
@@ -142,8 +151,21 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     for item in &view.items {
         match item {
             Item::Turn(turn) => {
+                // The replay still consumes a turn index: `turn_groups` is
+                // keyed by view-turn position, so group accounting for the
+                // turns after it must not shift.
                 let idx = turn_idx;
                 turn_idx += 1;
+
+                if !turn.id.is_empty()
+                    && let Ok(source) = serde_json::to_value(turn)
+                {
+                    let variants = seen_turn_sources.entry(turn.id.clone()).or_default();
+                    if variants.contains(&source) {
+                        continue;
+                    }
+                    variants.push(source);
+                }
 
                 // Step id: use the turn's native id when set so it round-trips
                 // through `extract_conversation`; otherwise synthesize sequentially.
@@ -175,12 +197,8 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 }
 
                 let pre_splice = step.step.parents.first().cloned();
-                step.step.parents = splice_onto_intervening(
-                    step.step.parents,
-                    &prev_turn_step,
-                    &prev_anchor_step,
-                    &last_step_id,
-                );
+                step.step.parents =
+                    splice_onto_intervening(step.step.parents, &prev_turn_step, &last_step_id);
                 let final_parent = step.step.parents.first().cloned();
                 let spliced = final_parent != pre_splice;
                 let onto_event = final_parent
@@ -403,8 +421,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 turn_to_step.insert(turn.id.clone(), final_id.clone());
                 if appended {
                     last_step_id = Some(final_id.clone());
-                    prev_turn_step = Some(final_id.clone());
-                    prev_anchor_step = Some(final_id);
+                    prev_turn_step = Some(final_id);
                 }
             }
 
@@ -417,6 +434,19 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             // without an explicit `parent_id` chains off whatever step came
             // before it.
             Item::Event(event) => {
+                // Skip before consuming an event index, so the `event-NNNN`
+                // ids synthesized for id-less events don't shift when a
+                // replay sits among them.
+                if !event.id.is_empty()
+                    && let Ok(source) = serde_json::to_value(event)
+                {
+                    let variants = seen_event_sources.entry(event.id.clone()).or_default();
+                    if variants.contains(&source) {
+                        continue;
+                    }
+                    variants.push(source);
+                }
+
                 let idx = event_idx;
                 event_idx += 1;
 
@@ -465,6 +495,23 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     "event_source_id".to_string(),
                     serde_json::Value::String(step_id.clone()),
                 );
+                // Source linkage, always recorded (`null` = chained by
+                // position, no named parent). Without it, extract can only
+                // hand back the resolved-and-spliced chain, which erases the
+                // source distinction between an event that named a parent and
+                // one that was positional — two such events with otherwise
+                // equal data would collapse into one on the next derive. The
+                // named form stamps the *resolved* parent (a parent that was
+                // renamed stamps its renamed id, verbatim when unresolvable),
+                // so a re-derive of the extracted view resolves identically.
+                extra.insert(
+                    "source_parent".to_string(),
+                    event.parent_id.as_ref().map_or(serde_json::Value::Null, |pid| {
+                        serde_json::Value::String(
+                            turn_to_step.get(pid).cloned().unwrap_or_else(|| pid.clone()),
+                        )
+                    }),
+                );
 
                 let parents: Vec<String> = event
                     .parent_id
@@ -473,12 +520,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     .or_else(|| last_step_id.clone())
                     .into_iter()
                     .collect();
-                let parents = splice_onto_intervening(
-                    parents,
-                    &prev_turn_step,
-                    &prev_anchor_step,
-                    &last_step_id,
-                );
+                let parents = splice_onto_intervening(parents, &prev_turn_step, &last_step_id);
 
                 let mut step = Step {
                     step: StepIdentity {
@@ -579,12 +621,10 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
 fn splice_onto_intervening(
     mut parents: Vec<String>,
     prev_turn_step: &Option<String>,
-    prev_anchor_step: &Option<String>,
     last_step_id: &Option<String>,
 ) -> Vec<String> {
     let resolved = parents.first().cloned();
-    let chains_onto_prev = resolved == *prev_turn_step
-        || (prev_anchor_step.is_some() && resolved == *prev_anchor_step);
+    let chains_onto_prev = resolved == *prev_turn_step;
     if chains_onto_prev
         && let Some(last) = last_step_id
         && Some(last) != resolved.as_ref()
@@ -638,6 +678,10 @@ fn push_step(
 /// Whether two steps are the same entry — equal once serialized, so dropping
 /// one is lossless. Step doesn't implement `PartialEq`, and serializing only
 /// happens on an actual id collision (rare), so the cost is negligible.
+/// Wire-level replays never reach this comparison: they are recognized at the
+/// source level (`seen_turn_sources`/`seen_event_sources`) before resolution,
+/// because resolved forms are not comparable across the stream — splicing
+/// rewires `parents`, and parent mappings mutate as colliding steps rename.
 fn steps_content_eq(a: &Step, b: &Step) -> bool {
     serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
 }
@@ -1050,6 +1094,99 @@ mod tests {
         assert_eq!(
             conv_change(&path.steps[2]).extra["text"],
             serde_json::json!("replayed")
+        );
+    }
+
+    #[test]
+    fn test_renamed_duplicate_keeps_parent_references_correct() {
+        // Resolving collisions inline (as steps are emitted) — not as a
+        // post-pass — keeps parent references correct: a later turn whose
+        // parent_id matches a renamed duplicate resolves to the RENAMED step,
+        // not the first occurrence that kept the original id.
+        let mut first = base_turn("dup", Role::User);
+        first.text = "original".into();
+        let mut second = base_turn("dup", Role::User); // re-IDed to dup#2
+        second.text = "replayed".into();
+        let mut child = base_turn("child", Role::Assistant);
+        child.parent_id = Some("dup".into());
+        let view = view_with(vec![first, second, child]);
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["dup", "dup#2", "child"]);
+        assert_eq!(
+            path.steps[2].step.parents,
+            vec!["dup#2".to_string()],
+            "child parents on the renamed later duplicate, not the first `dup`"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_event_ids_are_resolved_to_unique_ids() {
+        // The blocking case: Claude Code reuses `uuid` on attachment lines, so
+        // two distinct events arrive with the same id. derive_path must still
+        // yield unique step ids (consumers key on them, e.g. a UNIQUE index).
+        let a = base_turn("t1", Role::User);
+        let mut view = view_with(vec![a]);
+        for v in ["v1", "v2"] {
+            view.items.push(Item::Event(crate::ConversationEvent {
+                id: "evt".into(), // same id, different content
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                parent_id: None,
+                event_type: "attachment".into(),
+                data: std::collections::HashMap::from([("k".to_string(), serde_json::json!(v))]),
+            }));
+        }
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "step ids must be unique: {ids:?}");
+        assert!(
+            ids.contains(&"evt") && ids.contains(&"evt#2"),
+            "both events survive with distinct ids: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn test_replay_of_spliced_turn_is_still_dropped() {
+        // The Claude chain-merge shape: `u1; event; a1(parent u1); replay of
+        // a1`. Deriving splices a1 onto the event (parents = [event], with
+        // `source_parent = u1` stamped), so the replay's bytes no longer
+        // match the stored step verbatim. The comparison must see through
+        // the splice artifacts and drop the replay — otherwise it gets
+        // renamed-kept, becomes the head, and orphans the original turn and
+        // its event as false dead ends.
+        let u1 = base_turn("u1", Role::User);
+        let event = crate::ConversationEvent {
+            id: String::new(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: None,
+            event_type: "attachment".into(),
+            data: std::collections::HashMap::new(),
+        };
+        let mut a1 = base_turn("a1", Role::Assistant);
+        a1.parent_id = Some("u1".into());
+        a1.text = "answer".into();
+        let replay = a1.clone();
+
+        let mut view = view_with(vec![u1]);
+        view.items.push(Item::Event(event));
+        view.items.push(Item::Turn(a1));
+        view.items.push(Item::Turn(replay));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["u1", "event-0001", "a1"],
+            "the byte-identical replay is dropped, not renamed-kept"
+        );
+        assert_eq!(path.path.head, "a1", "the original keeps the head");
+        assert_eq!(
+            path.steps[2].step.parents,
+            vec!["event-0001".to_string()],
+            "the original stays spliced onto the event"
         );
     }
 
