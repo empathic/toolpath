@@ -1,0 +1,165 @@
+{
+  "v": 9,
+  "id": "T-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000",
+  "env": {
+    "initial": {
+      "trees": [{ "uri": "file:///tmp/proj", "displayName": "proj" }],
+      "platform": {
+        "os": "darwin",
+        "client": "VS Code CLI Execute Mode",
+        "clientType": "cli",
+        "clientVersion": "0.0.1785170481-ga5b614",
+        "cpuArchitecture": "arm64"
+      }
+    }
+  },
+  "meta": {
+    "executorType": "local-client",
+    "visibility": "private",
+    "agentMode": "medium"
+  },
+  "title": "Synthetic sample",
+  "created": 1785177254351,
+  "messages": [
+    {
+      "meta": { "sentAt": 1785177255723 },
+      "role": "user",
+      "readAt": null,
+      "content": [{ "type": "text", "text": "add a main and run it" }],
+      "messageId": 1,
+      "protocolMessageID": "M-sample-u1",
+      "protocolMessageVersion": 0
+    },
+    {
+      "role": "assistant",
+      "state": { "type": "complete", "stopReason": "tool_use" },
+      "usage": {
+        "model": "gpt-5.6-sol",
+        "timestamp": "2026-07-27T18:34:20.295Z",
+        "inputTokens": 0,
+        "outputTokens": 42,
+        "maxInputTokens": 272000,
+        "totalInputTokens": 100,
+        "cacheReadInputTokens": 60,
+        "cacheCreationInputTokens": 40
+      },
+      "readAt": null,
+      "content": [
+        { "type": "thinking", "provider": "openai", "thinking": "plan the write" },
+        { "type": "text", "text": "Writing the file." },
+        {
+          "type": "tool_use",
+          "id": "TU-sample-1",
+          "name": "apply_patch",
+          "input": {
+            "patchText": "*** Begin Patch\n*** Add File: a.rs\n+fn main() {}\n*** End Patch"
+          },
+          "complete": true
+        }
+      ],
+      "messageId": 2,
+      "protocolMessageID": "M-sample-a1",
+      "protocolMessageVersion": 1
+    },
+    {
+      "role": "user",
+      "readAt": null,
+      "content": [
+        {
+          "type": "tool_result",
+          "toolUseID": "TU-sample-1",
+          "run": {
+            "result": {
+              "files": [
+                {
+                  "uri": "file:///tmp/proj/a.rs",
+                  "diff": "Index: /tmp/proj/a.rs\n===================================================================\n--- /tmp/proj/a.rs\n+++ /tmp/proj/a.rs\n@@ -0,0 +1,1 @@\n+fn main() {}\n",
+                  "type": "add",
+                  "additions": 1,
+                  "deletions": 0
+                }
+              ],
+              "summary": "add: /tmp/proj/a.rs (+1/-0)"
+            },
+            "status": "done",
+            "progress": {}
+          }
+        }
+      ],
+      "messageId": 3,
+      "protocolMessageID": "M-sample-r1",
+      "protocolMessageVersion": 0
+    },
+    {
+      "role": "assistant",
+      "state": { "type": "complete", "stopReason": "tool_use" },
+      "usage": {
+        "model": "gpt-5.6-sol",
+        "timestamp": "2026-07-27T18:34:24.672Z",
+        "inputTokens": 0,
+        "outputTokens": 21,
+        "maxInputTokens": 272000,
+        "totalInputTokens": 140,
+        "cacheReadInputTokens": 100,
+        "cacheCreationInputTokens": 40
+      },
+      "readAt": null,
+      "content": [
+        { "type": "text", "text": "Running it." },
+        {
+          "type": "tool_use",
+          "id": "TU-sample-2",
+          "name": "shell_command",
+          "input": { "command": "cargo run", "workdir": "/tmp/proj" },
+          "complete": true
+        }
+      ],
+      "messageId": 4,
+      "protocolMessageID": "M-sample-a2",
+      "protocolMessageVersion": 1
+    },
+    {
+      "role": "user",
+      "readAt": null,
+      "content": [
+        {
+          "type": "tool_result",
+          "toolUseID": "TU-sample-2",
+          "run": {
+            "result": { "output": "error: not a cargo project\n", "exitCode": 101 },
+            "status": "done"
+          }
+        }
+      ],
+      "messageId": 5,
+      "protocolMessageID": "M-sample-r2",
+      "protocolMessageVersion": 0
+    },
+    {
+      "role": "assistant",
+      "state": { "type": "complete", "stopReason": "end_turn" },
+      "usage": {
+        "model": "gpt-5.6-sol",
+        "timestamp": "2026-07-27T18:34:28.100Z",
+        "inputTokens": 0,
+        "outputTokens": 7,
+        "maxInputTokens": 272000,
+        "totalInputTokens": 160,
+        "cacheReadInputTokens": 140,
+        "cacheCreationInputTokens": 20
+      },
+      "readAt": null,
+      "content": [
+        { "type": "thinking", "provider": "openai", "thinking": "" },
+        { "type": "text", "text": "The file exists; running it needs a cargo project." }
+      ],
+      "messageId": 6,
+      "protocolMessageID": "M-sample-a3",
+      "protocolMessageVersion": 1
+    }
+  ],
+  "agentMode": "medium",
+  "pinned": false,
+  "openExpiresAt": null,
+  "updatedAt": "2026-07-27T18:35:20.054Z"
+}
