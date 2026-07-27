@@ -9,7 +9,7 @@
   },
   {
     "name": "toolpath-convo",
-    "version": "0.11.1",
+    "version": "0.12.0",
     "description": "Provider-agnostic conversation types, traits, and Toolpath-Path derivation",
     "docs": "https://docs.rs/toolpath-convo",
     "crate": "https://crates.io/crates/toolpath-convo",
@@ -33,7 +33,7 @@
   },
   {
     "name": "toolpath-claude",
-    "version": "0.12.2",
+    "version": "0.13.0",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",
@@ -41,7 +41,7 @@
   },
   {
     "name": "toolpath-gemini",
-    "version": "0.6.1",
+    "version": "0.7.0",
     "description": "Derive from Gemini CLI conversation logs",
     "docs": "https://docs.rs/toolpath-gemini",
     "crate": "https://crates.io/crates/toolpath-gemini",
@@ -49,7 +49,7 @@
   },
   {
     "name": "toolpath-codex",
-    "version": "0.6.1",
+    "version": "0.7.0",
     "description": "Derive from Codex CLI rollout files",
     "docs": "https://docs.rs/toolpath-codex",
     "crate": "https://crates.io/crates/toolpath-codex",
@@ -57,7 +57,7 @@
   },
   {
     "name": "toolpath-copilot",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Derive from GitHub Copilot CLI session logs (preview)",
     "docs": "https://docs.rs/toolpath-copilot",
     "crate": "https://crates.io/crates/toolpath-copilot",
@@ -65,7 +65,7 @@
   },
   {
     "name": "toolpath-opencode",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Derive from opencode SQLite databases",
     "docs": "https://docs.rs/toolpath-opencode",
     "crate": "https://crates.io/crates/toolpath-opencode",
@@ -73,7 +73,7 @@
   },
   {
     "name": "toolpath-pi",
-    "version": "0.6.1",
+    "version": "0.7.0",
     "description": "Derive Toolpath provenance documents from Pi (pi.dev) agent session logs",
     "docs": "https://docs.rs/toolpath-pi",
     "crate": "https://crates.io/crates/toolpath-pi",
@@ -81,7 +81,7 @@
   },
   {
     "name": "toolpath-cursor",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",
     "docs": "https://docs.rs/toolpath-cursor",
     "crate": "https://crates.io/crates/toolpath-cursor",
@@ -113,7 +113,7 @@
   },
   {
     "name": "path-cli",
-    "version": "0.16.1",
+    "version": "0.17.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
@@ -121,7 +121,7 @@
   },
   {
     "name": "toolpath-cli",
-    "version": "0.16.1",
+    "version": "0.17.0",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",
