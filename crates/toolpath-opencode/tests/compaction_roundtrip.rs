@@ -238,8 +238,9 @@ fn projector_emits_session_with_pre_and_post_compact_messages() {
     let projected: Session = projector.project(&after).expect("project");
 
     // The projected session must carry both surrounding user prompts and
-    // both assistant responses (modulo whatever the compaction part
-    // itself becomes — see module-level note).
+    // both assistant responses. The compaction event itself is dropped on
+    // projection (the projector walks turns only), so message counts
+    // exclude it.
     let user_count = projected
         .messages
         .iter()

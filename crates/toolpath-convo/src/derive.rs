@@ -134,38 +134,60 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let mut prev_turn_step: Option<String> = None;
     let mut event_steps: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Source bytes of every id-bearing item already walked, keyed by source
-    // id — each entry holds the distinct variants seen under that id. A
-    // byte-identical re-emission (the Claude chain-merge replay shape) is
-    // the same source entry, not a new step, and is skipped before any
-    // resolution: resolved step forms are not comparable across the stream
-    // (splicing rewires `parents`, and parent mappings mutate as colliding
-    // steps rename), but source bytes are.
-    let mut seen_turn_sources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    // A byte-identical re-emission of an id-bearing item (the Claude
+    // chain-merge replay shape) is the same source entry, not a new step,
+    // and is recognized on source bytes, before any resolution: resolved
+    // step forms are not comparable across the stream (splicing rewires
+    // `parents`, and parent mappings mutate as colliding steps rename),
+    // but source bytes are. Turn replays are identified in a prepass so
+    // every per-turn structure below (`turn_groups`, synthesized
+    // `step-NNNN` ids, group accounting) is built over surviving turns
+    // only — an in-loop skip would still consume a group slot and an id
+    // slot, losing a group-tail usage stamp and shifting later synthesized
+    // ids. Event replays skip in-loop, before consuming an event index.
+    let turn_skip: Vec<bool> = {
+        let mut seen: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+        view.turns()
+            .map(|turn| {
+                if turn.id.is_empty() {
+                    return false;
+                }
+                let Ok(source) = serde_json::to_value(turn) else {
+                    return false;
+                };
+                let variants = seen.entry(turn.id.clone()).or_default();
+                if variants.contains(&source) {
+                    true
+                } else {
+                    variants.push(source);
+                    false
+                }
+            })
+            .collect()
+    };
     let mut seen_event_sources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
 
-    // Group ids in turn order, so a turn can tell whether it's the last of its
-    // message group (message-level token accounting, below).
-    let turn_groups: Vec<Option<String>> = view.turns().map(|t| t.group_id.clone()).collect();
+    // Group ids of surviving turns in stream order, so a turn can tell
+    // whether it's the last of its message group (message-level token
+    // accounting, below).
+    let turn_groups: Vec<Option<String>> = view
+        .turns()
+        .zip(&turn_skip)
+        .filter(|(_, skip)| !**skip)
+        .map(|(t, _)| t.group_id.clone())
+        .collect();
 
+    let mut turn_walk_idx = 0usize;
     for item in &view.items {
         match item {
             Item::Turn(turn) => {
-                // The replay still consumes a turn index: `turn_groups` is
-                // keyed by view-turn position, so group accounting for the
-                // turns after it must not shift.
+                let walked = turn_walk_idx;
+                turn_walk_idx += 1;
+                if turn_skip[walked] {
+                    continue;
+                }
                 let idx = turn_idx;
                 turn_idx += 1;
-
-                if !turn.id.is_empty()
-                    && let Ok(source) = serde_json::to_value(turn)
-                {
-                    let variants = seen_turn_sources.entry(turn.id.clone()).or_default();
-                    if variants.contains(&source) {
-                        continue;
-                    }
-                    variants.push(source);
-                }
 
                 // Step id: use the turn's native id when set so it round-trips
                 // through `extract_conversation`; otherwise synthesize sequentially.
@@ -562,12 +584,12 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     }
 
     // The head is the last emitted step. Use `steps.last()` rather than
-    // `last_step_id`: when the final item is a byte-identical duplicate that
-    // `push_step` drops, `last_step_id` regresses to the earlier step it
-    // collapsed into, which would orphan any real step emitted after that
-    // earlier step (e.g. a `conversation.compact` between a turn and its
-    // replay) as a spurious dead end. The last surviving step keeps the whole
-    // chain on the head's ancestry.
+    // `last_step_id`: when the final item is a duplicate that `push_step`
+    // drops, `last_step_id` regresses to the earlier step it collapsed
+    // into, which would orphan any real step emitted after that earlier
+    // step (e.g. an event between a turn and its replay) as a spurious
+    // dead end. The last surviving step keeps the whole chain on the
+    // head's ancestry.
     let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
 
     // Meta
@@ -1188,6 +1210,53 @@ mod tests {
             vec!["event-0001".to_string()],
             "the original stays spliced onto the event"
         );
+    }
+
+    #[test]
+    fn test_same_group_replay_keeps_group_usage() {
+        // Replays are excluded from `turn_groups` in the prepass, so a
+        // byte-identical same-group replay at the group tail must not eat
+        // the once-per-group token stamp — the original tail still sees
+        // itself as last of its group.
+        let u = base_turn("u1", Role::User);
+        let mut a = base_turn("a1", Role::Assistant);
+        a.group_id = Some("g1".into());
+        a.token_usage = Some(crate::TokenUsage {
+            input_tokens: Some(5),
+            output_tokens: Some(7),
+            ..Default::default()
+        });
+        let replay = a.clone();
+        let mut view = view_with(vec![u, a]);
+        view.items.push(Item::Turn(replay));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["u1", "a1"], "the replay is dropped");
+        assert!(
+            conv_change(&path.steps[1])
+                .extra
+                .contains_key("token_usage"),
+            "group tail keeps its once-per-group usage stamp"
+        );
+    }
+
+    #[test]
+    fn test_replay_does_not_shift_idless_turn_ids() {
+        // A skipped replay must not consume a synthesized-id slot: an
+        // id-less turn after it derives the same `step-NNNN` id as it
+        // would without the replay.
+        let u = base_turn("u1", Role::User);
+        let replay = u.clone();
+        let mut idless = base_turn("", Role::Assistant);
+        idless.text = "reply".into();
+        let mut view = view_with(vec![u]);
+        view.items.push(Item::Turn(replay));
+        view.items.push(Item::Turn(idless));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["u1", "step-0002"]);
     }
 
     #[test]

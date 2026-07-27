@@ -157,9 +157,9 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
-    // Walk the ordered item stream so compaction boundaries land at their
-    // true position (between the turns they separate) — the inverse of the
-    // forward Builder, which reads `compaction` parts in message order.
+    // Walk the ordered item stream. Only turns project to messages;
+    // events (including `part.compaction` boundaries) have no opencode
+    // message form on the return path and are dropped below.
     for item in &view.items {
         match item {
             toolpath_convo::Item::Turn(turn) => match turn.role {
