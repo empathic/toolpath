@@ -46,6 +46,7 @@ toolpath-claude = { workspace = true, features = ["watcher"] }
 toolpath-gemini = { workspace = true, features = ["watcher"] }
 toolpath-codex = { workspace = true }
 toolpath-copilot = { workspace = true }
+toolpath-amp = { workspace = true }
 toolpath-opencode = { workspace = true }
 toolpath-cursor = { workspace = true }
 toolpath-pi = { workspace = true }
@@ -73,6 +74,7 @@ toolpath-claude = { workspace = true }
 toolpath-gemini = { workspace = true }
 toolpath-codex = { workspace = true }
 toolpath-copilot = { workspace = true }
+toolpath-amp = { workspace = true }
 toolpath-pi = { workspace = true }
 
 [features]

@@ -941,6 +941,7 @@ fn derive_session(
         ArtifactType::Codex => crate::derive::derive_codex_session(session),
         ArtifactType::Opencode => crate::derive::derive_opencode_session(session, false),
         ArtifactType::Cursor => crate::derive::derive_cursor_session(session),
+        ArtifactType::Amp => crate::derive::derive_amp_session(session),
         ArtifactType::Git => {
             anyhow::bail!("share only handles agent sessions; git artifacts go through `p import`")
         }

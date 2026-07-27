@@ -2468,6 +2468,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toolpath",
+ "toolpath-amp",
  "toolpath-claude",
  "toolpath-codex",
  "toolpath-convo",

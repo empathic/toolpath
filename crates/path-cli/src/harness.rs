@@ -22,11 +22,12 @@ pub enum Harness {
     Cursor,
     Pi,
     Copilot,
+    Amp,
 }
 
 impl Harness {
     /// Every harness, in presentation order.
-    pub(crate) const ALL: [Harness; 7] = [
+    pub(crate) const ALL: [Harness; 8] = [
         Harness::Claude,
         Harness::Gemini,
         Harness::Codex,
@@ -34,6 +35,7 @@ impl Harness {
         Harness::Cursor,
         Harness::Pi,
         Harness::Copilot,
+        Harness::Amp,
     ];
 
     /// The artifact type this harness's sessions ingest as.
@@ -46,6 +48,7 @@ impl Harness {
             Harness::Cursor => ArtifactType::Cursor,
             Harness::Pi => ArtifactType::Pi,
             Harness::Copilot => ArtifactType::Copilot,
+            Harness::Amp => ArtifactType::Amp,
         }
     }
 
@@ -70,6 +73,7 @@ impl ArtifactType {
             ArtifactType::Cursor => Some(Harness::Cursor),
             ArtifactType::Pi => Some(Harness::Pi),
             ArtifactType::Copilot => Some(Harness::Copilot),
+            ArtifactType::Amp => Some(Harness::Amp),
             ArtifactType::Git => None,
         }
     }
@@ -84,6 +88,11 @@ pub(crate) struct HarnessBundle {
     pub(crate) gemini: Option<toolpath_gemini::GeminiConvo>,
     pub(crate) codex: Option<toolpath_codex::CodexConvo>,
     pub(crate) copilot: Option<toolpath_copilot::CopilotConvo>,
+    // Consumed by `path share`'s gather step starting with piece 02
+    // (the Amp share wiring); registered now so the bundle stays the
+    // one exhaustive list of installed harnesses.
+    #[allow(dead_code)]
+    pub(crate) amp: Option<toolpath_amp::AmpConvo>,
     pub(crate) opencode: Option<toolpath_opencode::OpencodeConvo>,
     pub(crate) cursor: Option<toolpath_cursor::CursorConvo>,
     pub(crate) pi: Option<toolpath_pi::PiConvo>,
@@ -99,6 +108,7 @@ impl HarnessBundle {
             gemini: Some(toolpath_gemini::GeminiConvo::new()),
             codex: Some(toolpath_codex::CodexConvo::new()),
             copilot: Some(toolpath_copilot::CopilotConvo::new()),
+            amp: Some(toolpath_amp::AmpConvo::new()),
             opencode: Some(toolpath_opencode::OpencodeConvo::new()),
             cursor: Some(toolpath_cursor::CursorConvo::new()),
             pi: Some(toolpath_pi::PiConvo::new()),
@@ -138,6 +148,16 @@ pub(crate) fn is_not_found_copilot(err: &toolpath_copilot::ConvoError) -> bool {
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::CopilotDirectoryNotFound(_))
+}
+
+// Consumed by `path share`'s status line starting with piece 02.
+#[allow(dead_code)]
+pub(crate) fn is_not_found_amp(err: &toolpath_amp::ConvoError) -> bool {
+    use toolpath_amp::ConvoError;
+    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, ConvoError::NoHomeDirectory)
+        || matches!(err, ConvoError::AmpDirectoryNotFound(_))
+        || matches!(err, ConvoError::AmpCliNotFound)
 }
 
 pub(crate) fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {

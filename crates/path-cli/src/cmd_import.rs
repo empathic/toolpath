@@ -20,8 +20,8 @@ use crate::artifact::{ArtifactRef, ArtifactType};
 use crate::cache::make_id;
 use crate::cache::write_cached;
 use crate::derive::{
-    DerivedDoc, derive_claude_session_with, derive_codex_session_with, derive_copilot_session_with,
-    derive_gemini_session_with, derive_pi_session_with,
+    DerivedDoc, derive_amp_session_with, derive_claude_session_with, derive_codex_session_with,
+    derive_copilot_session_with, derive_gemini_session_with, derive_pi_session_with,
 };
 #[cfg(not(target_os = "emscripten"))]
 use crate::derive::{derive_cursor_session_with, derive_opencode_session_with, doc_inner_id};
@@ -117,6 +117,18 @@ pub enum ImportSource {
         session: Option<String>,
 
         /// Process all sessions (emits one Path per session)
+        #[arg(long)]
+        all: bool,
+    },
+    /// Import from Amp threads via `amp threads export` (preview)
+    Amp {
+        /// Thread id (`T-…`) or unique prefix (default: interactive
+        /// pick, or most recent when no picker is available)
+        #[arg(short, long)]
+        session: Option<String>,
+
+        /// Process all threads (emits one Path per thread; each thread
+        /// is fetched with its own `amp threads export` call)
         #[arg(long)]
         all: bool,
     },
@@ -283,6 +295,7 @@ fn derive(source: ImportSource) -> Result<Vec<DerivedDoc>> {
         } => derive_gemini(project, session, all),
         ImportSource::Codex { session, all } => derive_codex(session, all),
         ImportSource::Copilot { session, all } => derive_copilot(session, all),
+        ImportSource::Amp { session, all } => derive_amp(session, all),
         ImportSource::Opencode {
             session,
             all,
@@ -1001,6 +1014,114 @@ fn pick_copilot(manager: &toolpath_copilot::CopilotConvo) -> Result<Option<Vec<S
         prompt: "copilot session> ",
         preview: Some("{exe} show --ansi copilot --session {1}"),
         header: Some("pick a Copilot session (TAB = multi-select, Enter = confirm)"),
+        preview_window: "right:60%:wrap-word",
+        tiebreak: "index",
+        multi: true,
+    };
+    let selected = match fuzzy::pick(&lines, &opts)? {
+        fuzzy::PickResult::Selected(v) => v,
+        fuzzy::PickResult::NoMatch | fuzzy::PickResult::Cancelled => Vec::new(),
+    };
+    Ok(Some(parse_single_id(&selected)))
+}
+
+fn derive_amp(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
+    let manager = toolpath_amp::AmpConvo::new();
+
+    let session_ids: Vec<String> = match (session, all) {
+        (Some(s), _) => vec![s],
+        (None, true) => {
+            let ids = manager
+                .io()
+                .list_thread_ids()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            if ids.is_empty() {
+                anyhow::bail!("No Amp threads found (is `amp` installed and logged in?)");
+            }
+            let mut docs = Vec::with_capacity(ids.len());
+            for id in &ids {
+                match derive_amp_session_with(&manager, id) {
+                    Ok(doc) => docs.push(doc),
+                    Err(e) => eprintln!("Warning: skipping thread {}: {e}", id),
+                }
+            }
+            return Ok(docs);
+        }
+        (None, false) => {
+            #[cfg(not(target_os = "emscripten"))]
+            {
+                match pick_amp(&manager)? {
+                    Some(picks) => picks,
+                    None => {
+                        let s = manager
+                            .most_recent_session()
+                            .map_err(|e| anyhow::anyhow!("{}", e))?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "No Amp threads found (is `amp` installed and logged in?)"
+                                )
+                            })?;
+                        return Ok(vec![derive_amp_session_with(&manager, &s.id)?]);
+                    }
+                }
+            }
+            #[cfg(target_os = "emscripten")]
+            {
+                let s = manager
+                    .most_recent_session()
+                    .map_err(|e| anyhow::anyhow!("{}", e))?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("No Amp threads found (is `amp` installed and logged in?)")
+                    })?;
+                return Ok(vec![derive_amp_session_with(&manager, &s.id)?]);
+            }
+        }
+    };
+
+    let mut docs = Vec::with_capacity(session_ids.len());
+    for sid in &session_ids {
+        docs.push(derive_amp_session_with(&manager, sid)?);
+    }
+    Ok(docs)
+}
+
+/// Interactive Amp thread picker. Listing metadata is one `amp threads
+/// export` fetch per thread (Amp has no cheap metadata surface), so this
+/// only triggers when a picker can actually run. The preview command lands
+/// with piece 02 (`show amp`); until then the preview pane may error.
+#[cfg(not(target_os = "emscripten"))]
+fn pick_amp(manager: &toolpath_amp::AmpConvo) -> Result<Option<Vec<String>>> {
+    if !fuzzy::available() {
+        return Ok(None);
+    }
+    let metas = manager
+        .list_sessions()
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    if metas.is_empty() {
+        return Ok(None);
+    }
+    let lines: Vec<String> = metas
+        .iter()
+        .map(|m| {
+            let cwd_short = m.cwd.as_deref().map(project_short);
+            format!(
+                "{}\t{}",
+                tab_safe(&m.id),
+                render_row(
+                    None,
+                    m.last_activity,
+                    &count(m.line_count, "msgs"),
+                    cwd_short.as_deref(),
+                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                ),
+            )
+        })
+        .collect();
+    let opts = fuzzy::PickOptions {
+        with_nth: "2",
+        prompt: "amp thread> ",
+        preview: Some("{exe} show --ansi amp --session {1}"),
+        header: Some("pick an Amp thread (TAB = multi-select, Enter = confirm)"),
         preview_window: "right:60%:wrap-word",
         tiebreak: "index",
         multi: true,

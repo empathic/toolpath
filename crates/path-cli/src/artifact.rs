@@ -23,12 +23,13 @@ pub enum ArtifactType {
     Cursor,
     Pi,
     Copilot,
+    Amp,
     Git,
 }
 
 impl ArtifactType {
     /// Every artifact type, in presentation order.
-    pub(crate) const ALL: [ArtifactType; 8] = [
+    pub(crate) const ALL: [ArtifactType; 9] = [
         ArtifactType::Claude,
         ArtifactType::Gemini,
         ArtifactType::Codex,
@@ -36,6 +37,7 @@ impl ArtifactType {
         ArtifactType::Cursor,
         ArtifactType::Pi,
         ArtifactType::Copilot,
+        ArtifactType::Amp,
         ArtifactType::Git,
     ];
 
@@ -48,6 +50,7 @@ impl ArtifactType {
             ArtifactType::Cursor => "cursor",
             ArtifactType::Pi => "pi",
             ArtifactType::Copilot => "copilot",
+            ArtifactType::Amp => "amp",
             ArtifactType::Git => "git",
         }
     }
@@ -181,6 +184,7 @@ mod type_tests {
         assert!(!ArtifactType::Codex.path_keyed());
         assert!(!ArtifactType::Opencode.path_keyed());
         assert!(!ArtifactType::Cursor.path_keyed());
+        assert!(!ArtifactType::Amp.path_keyed());
         assert!(ArtifactType::Git.path_keyed());
     }
 

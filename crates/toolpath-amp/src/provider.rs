@@ -506,6 +506,14 @@ impl AmpConvo {
         Ok(out)
     }
 
+    pub fn most_recent_session(&self) -> crate::Result<Option<Session>> {
+        let ids = self.io.list_thread_ids()?;
+        match ids.first() {
+            Some(id) => Ok(Some(self.io.read_session(id)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn read_all_sessions(&self) -> crate::Result<Vec<Session>> {
         let ids = self.io.list_thread_ids()?;
         let mut out = Vec::with_capacity(ids.len());

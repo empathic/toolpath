@@ -209,6 +209,28 @@ pub(crate) fn derive_copilot_session_with(
     })
 }
 
+/// Derive a single Amp thread given an explicit thread id (`T-…`).
+pub(crate) fn derive_amp_session(session: &str) -> Result<DerivedDoc> {
+    derive_amp_session_with(&toolpath_amp::AmpConvo::new(), session)
+}
+
+/// [`derive_amp_session`] against a caller-supplied manager.
+pub(crate) fn derive_amp_session_with(
+    manager: &toolpath_amp::AmpConvo,
+    session: &str,
+) -> Result<DerivedDoc> {
+    let config = toolpath_amp::derive::DeriveConfig { project_path: None };
+    let s = manager
+        .read_session(session)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let path = toolpath_amp::derive::derive_path(&s, &config);
+    let cache_id = make_id(ArtifactType::Amp.name(), &path.path.id);
+    Ok(DerivedDoc {
+        cache_id,
+        doc: Graph::from_path(path),
+    })
+}
+
 /// Derive a single opencode session given an explicit session id.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn derive_opencode_session(

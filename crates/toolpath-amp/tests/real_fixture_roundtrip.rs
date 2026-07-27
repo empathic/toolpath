@@ -81,12 +81,18 @@ fn forward_view_matches_source_counts() {
     // File mutations carry the wire's REAL unified diffs.
     let muts: Vec<_> = view.turns.iter().flat_map(|t| &t.file_mutations).collect();
     assert_eq!(muts.len(), 3, "notes.md add + update, count.sh add");
-    assert!(muts.iter().all(|m| m.raw_diff.is_some() && m.tool_id.is_some()));
+    assert!(
+        muts.iter()
+            .all(|m| m.raw_diff.is_some() && m.tool_id.is_some())
+    );
     assert_eq!(view.files_changed, vec!["notes.md", "count.sh"]);
 
     // Thinking: 5 of 12 summaries were non-empty; sealed-empty ones must
     // not surface as Some("").
-    assert_eq!(view.turns.iter().filter(|t| t.thinking.is_some()).count(), 5);
+    assert_eq!(
+        view.turns.iter().filter(|t| t.thinking.is_some()).count(),
+        5
+    );
 
     // Token accounting: clean per-message → Σ = session total.
     let total = view.total_usage.as_ref().unwrap();

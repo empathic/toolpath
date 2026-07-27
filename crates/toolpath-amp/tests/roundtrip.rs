@@ -47,7 +47,10 @@ fn view_shape_matches_source() {
     let total = view.total_usage.as_ref().unwrap();
     assert_eq!(total.output_tokens, Some(42 + 21 + 7));
     assert_eq!(total.cache_read_tokens, Some(60 + 100 + 140));
-    assert_eq!(view.turns[3].thinking, None, "empty summary is not Some(\"\")");
+    assert_eq!(
+        view.turns[3].thinking, None,
+        "empty summary is not Some(\"\")"
+    );
 }
 
 #[test]

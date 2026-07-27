@@ -415,6 +415,7 @@ pub(crate) fn argv_for(harness: Harness, session_id: &str) -> Vec<String> {
             vec![".".into()]
         }
         Harness::Pi => vec!["--session".into(), session_id.into()],
+        Harness::Amp => vec!["threads".into(), "continue".into(), session_id.into()],
     }
 }
 
@@ -467,6 +468,11 @@ pub(crate) fn project_into_harness(
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
         Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
         Harness::Pi => crate::cmd_export::project_pi(path, cwd),
+        // Piece 03: Amp threads are server-authoritative; whether a local
+        // projection can be resumed at all is the deferred writer recon.
+        Harness::Amp => {
+            anyhow::bail!("resuming into Amp is not supported yet (preview)")
+        }
     }
 }
 
