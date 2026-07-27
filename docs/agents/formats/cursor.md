@@ -353,7 +353,7 @@ but the load-bearing ones are:
 | `createdAt` | ISO-8601 string | (Note: composer uses ms; bubbles use ISO. Don't unify the field names.) |
 | `text` | string | Plaintext message body (often `""` on tool-call-only bubbles) |
 | `richText` | string (escaped JSON) | Lexical editor document — the canonical source for user-typed input with formatting |
-| `capabilityType` | int \| null | `15` = tool call/result, `30` = thinking, `null` = plain text |
+| `capabilityType` | int \| null | `15` = tool call/result, `22` = `/summarize` marker (see [below](#the-summarize-marker-capabilitytype-22)), `30` = thinking, `null` = plain text |
 | `conversationState` | string | Cursor-internal turn tag; `"~"` is the most common value observed |
 | `unifiedMode` | int | Composer mode at the time of this bubble (`2` = agent, observed) |
 | `isAgentic` | bool | Whether the bubble was produced under agent mode |
@@ -519,6 +519,30 @@ has many more capability types in the wire format (the `capabilities`
 array on a composer enumerates them — observed numbers include 15, 16,
 19, 21, 23, 24, 32, 33); a robust parser should treat the integer
 opaquely and switch on `name` when present.
+
+### The `/summarize` marker (capabilityType 22)
+
+Running `/summarize` in a composer (Cursor's manual context
+compaction) writes a boundary-marker bubble into the stream:
+`type: 2` (assistant), `text: ""`, `capabilityType: 22`,
+`tokenCount: {0, 0}`, `isAgentic: false`, no `richText`, no
+`modelInfo`, no `toolFormerData`, and — unlike text bubbles — no
+`context` envelope. Its `fullConversationHeadersOnly` entry is
+`{"bubbleId": …, "type": 2, "grouping": {"isRenderable": true,
+"capabilityType": 22}}`. In observed data some marker bubbles exist
+on disk without a manifest entry (the orphan-sweep case); the reader
+appends those by `createdAt`.
+
+The marker carries **no recoverable summary or kept set** — the
+summarized context lives server-side. `toolpath-cursor` therefore
+preserves it as an opaque `ConversationEvent` with
+`event_type: "summarization"` at its stream position (`id` = the
+bubble id, `timestamp` = `createdAt`, `data.capabilityType = 22`,
+`parent_id` = the preceding turn's bubble id), and the projector
+writes the marker bubble back from that event, so a
+cursor → toolpath → cursor round-trip keeps the boundary and
+Cursor's UI renders the session unchanged. Typed compaction support
+would build on this event once the summary content is recoverable.
 
 ### Refreshing the inventory
 
@@ -833,6 +857,7 @@ source. Suggested mapping into `ConversationView` + `toolpath::v1::Path`:
 | `bubbleId` with `type: 1` | `Turn { role: User }` → Step with `actor: "human:user"` |
 | `bubbleId` with `type: 2`, no `toolFormerData`, `capabilityType: null` | `Turn { role: Assistant, model }` → Step with `actor: "agent:<model>"` |
 | `bubbleId` with `capabilityType: 30`, `allThinkingBlocks: [...]` | `Turn.thinking` on the next assistant turn (consistent with other providers) |
+| `bubbleId` with `capabilityType: 22` (`/summarize` marker) | Opaque `ConversationEvent { event_type: "summarization" }` at the same stream position; the projector rebuilds the marker bubble from it |
 | `bubbleId` with `toolFormerData` | `Turn.tool_uses[]` with `tool_call_id = toolFormerData.toolCallId`, `name = toolFormerData.name`, `input = parse(params)`, `result = parse(result)`, `status` mirrored |
 | `toolFormerData.result.{beforeContentId, afterContentId}` (edits) | `ArtifactChange` on the tool-call's turn, with `raw` perspective synthesized from `additionalData.precomputedDiff.lines` and the blob bodies looked up via `composer.content.<hash>` |
 | `toolFormerData.result.{output, exitCode}` (shell) | `Turn.tool_uses[].result` exit/output; `path.meta.extra["cursor"]["sandbox_policy"]` carries the per-command sandbox if needed |
