@@ -13,9 +13,8 @@ use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
 use crate::{
-    ConversationEvent, ConversationView, DelegatedWork,
-    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
-    ToolCategory, ToolInvocation, ToolResult, Turn,
+    ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation, Item,
+    ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Extract a [`ConversationView`] from a toolpath [`Path`] document.
@@ -1437,7 +1436,6 @@ mod tests {
         assert_eq!(events[0].event_type, "unknown");
     }
 
-
     fn bare_turn(id: &str, parent_id: Option<&str>, role: Role, timestamp: &str) -> Turn {
         Turn {
             id: id.into(),
@@ -1557,7 +1555,6 @@ mod tests {
         assert_eq!(events[0].parent_id, None);
         assert_eq!(events[1].parent_id, None);
     }
-
 
     #[test]
     fn test_session_files_changed_recovered_from_meta() {

@@ -506,11 +506,17 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 // so a re-derive of the extracted view resolves identically.
                 extra.insert(
                     "source_parent".to_string(),
-                    event.parent_id.as_ref().map_or(serde_json::Value::Null, |pid| {
-                        serde_json::Value::String(
-                            turn_to_step.get(pid).cloned().unwrap_or_else(|| pid.clone()),
-                        )
-                    }),
+                    event
+                        .parent_id
+                        .as_ref()
+                        .map_or(serde_json::Value::Null, |pid| {
+                            serde_json::Value::String(
+                                turn_to_step
+                                    .get(pid)
+                                    .cloned()
+                                    .unwrap_or_else(|| pid.clone()),
+                            )
+                        }),
                 );
 
                 let parents: Vec<String> = event
@@ -552,7 +558,6 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     last_step_id = Some(final_id);
                 }
             }
-
         }
     }
 
@@ -616,7 +621,6 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         meta: Some(meta),
     }
 }
-
 
 fn splice_onto_intervening(
     mut parents: Vec<String>,
@@ -891,9 +895,7 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolResult,
-    };
+    use crate::{DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolResult};
 
     fn base_turn(id: &str, role: Role) -> Turn {
         Turn {
@@ -1043,7 +1045,6 @@ mod tests {
         assert_eq!(path.steps[0].step.actor, "agent:unknown");
     }
 
-
     #[test]
     fn test_duplicate_id_identical_content_is_dropped() {
         // The same turn id can appear twice with byte-identical content (a
@@ -1065,7 +1066,6 @@ mod tests {
         // that earlier one (here `mid`) stays on the head's ancestry.
         assert_eq!(path.path.head, "mid", "head is the last surviving step");
     }
-
 
     #[test]
     fn test_duplicate_id_different_content_is_renamed() {
@@ -1920,19 +1920,12 @@ mod tests {
         );
     }
 
-
-
-
-
-
     fn dead_end_ids(path: &Path) -> Vec<String> {
         toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
             .iter()
             .map(|s| s.step.id.clone())
             .collect()
     }
-
-
 
     #[test]
     fn test_splice_preserves_genuine_dead_end_branches() {
