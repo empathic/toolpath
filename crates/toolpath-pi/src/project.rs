@@ -22,8 +22,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Item, Result, Role,
-    ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Item, Result, Role, ToolInvocation, Turn,
 };
 
 use crate::reader::PiSession;
@@ -188,7 +187,6 @@ fn pi_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
     None
 }
 
-
 /// Emit the entry (or entries) corresponding to a single turn's role
 /// and content. Most turns produce a single `Entry::Message`; a turn
 /// with assistant-side tool calls that have results produces both the
@@ -252,7 +250,6 @@ fn emit_user(turn: &Turn, entries: &mut Vec<Entry>) {
         extra: HashMap::new(),
     });
 }
-
 
 fn emit_assistant(
     cfg: &PiProjector,
@@ -461,7 +458,6 @@ fn emit_bash_execution(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<E
         extra: HashMap::new(),
     });
 }
-
 
 fn emit_branch_summary(turn: &Turn, bs: &Map<String, Value>, entries: &mut Vec<Entry>) {
     let from_id = bs

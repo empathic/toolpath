@@ -23,8 +23,8 @@
 //!      `{hash, files}` records).
 //! 3. A `compaction` part (on either a user or assistant message) emits
 //!    a generic `part.compaction` event at its position in the item stream,
-//!    parented on the last turn emitted before it. `derive_path` projects
-//!    it to a `conversation.compact` step.
+//!    parented on the last turn emitted before it. `derive_path` carries
+//!    it through as a generic `conversation.event` step.
 //! 4. Other non-turn parts land in `ConversationView.events`:
 //!    `retry`, `file`, `agent`, unknown types.
 //! 5. `subtask` parts are captured on the turn's `delegations`
@@ -43,10 +43,9 @@ use crate::types::{
     SessionMetadata, Tokens, ToolState, UserMessage,
 };
 use toolpath_convo::{
-    ConversationEvent, ConversationMeta, ConversationProvider,
-    ConversationView, ConvoError as ConvoTraitError, DelegatedWork, EnvironmentSnapshot,
-    FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation,
-    ToolResult, Turn,
+    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError as ConvoTraitError, DelegatedWork, EnvironmentSnapshot, FileMutation, Item,
+    ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Provider for opencode sessions.
@@ -174,7 +173,10 @@ struct Builder<'a> {
     /// true position rather than after all turns.
     items: Vec<Item>,
     /// Id of the most recent turn pushed to `items`. A compaction boundary
-    /// parents on this (the last turn before it).
+    /// parents on this (the last turn before it), a user turn takes it as
+    /// its synthesized parent (opencode user rows carry no native
+    /// `parentID`), and a turn-less compaction-host message records it as
+    /// its redirect target.
     last_turn_id: Option<String>,
     files_changed_order: Vec<String>,
     files_changed_seen: std::collections::HashSet<String>,
@@ -188,22 +190,12 @@ struct Builder<'a> {
     /// `before` of the next turn's snapshot pair so intermediate state
     /// captures correctly.
     prev_snapshot_after: Option<String>,
-    /// Items index of the most recently emitted compaction boundary that
-    /// is still awaiting its summary. opencode condenses each compaction's
-    /// pre-boundary prefix into a synthetic summary-bearing user message at
-    /// the boundary; the next such message's `summary.body` is *that*
-    /// compaction's summary. Tracked per-boundary (not session-global) so a
-    /// session with several compactions keeps each one's distinct summary.
-    /// Message ids that emitted no turn (e.g. a user message hosting only
-    /// a compaction part, or a summary-only synthetic message) → the item
-    /// a later turn's native `parent_id` should chain onto instead. A real
-    /// manual `/compact` writes the boundary on its own user message, and
-    /// the next assistant message's `parent_id` names it — without the
-    /// redirect that parent dangles.
+    /// Message ids that emitted no turn (a user message whose only content
+    /// was a compaction part) → the id of the last turn pushed before that
+    /// message. opencode writes the boundary on a synthetic user message,
+    /// and the next assistant message's `parent_id` names it — resolving
+    /// through this map keeps that parent from dangling.
     msg_redirects: HashMap<String, Option<String>>,
-    /// Id of the most recent turn *or* compaction pushed — the redirect
-    /// target for messages that emit no turn.
-    last_anchor_id: Option<String>,
 }
 
 impl<'a> Builder<'a> {
@@ -219,21 +211,17 @@ impl<'a> Builder<'a> {
             snapshot_repo: None,
             prev_snapshot_after: None,
             msg_redirects: HashMap::new(),
-            last_anchor_id: None,
         }
     }
 
-    /// Record a turn, tracking its id for any subsequent compaction's
-    /// `parent_id`.
     fn push_turn(&mut self, turn: Turn) {
         self.last_turn_id = Some(turn.id.clone());
-        self.last_anchor_id = Some(turn.id.clone());
         self.items.push(Item::Turn(turn));
     }
 
     /// Resolve a turn's native parent message id through `msg_redirects`,
     /// so parents pointing at messages that emitted no turn land on the
-    /// item that took their place (usually the compaction boundary).
+    /// last turn pushed before them.
     fn resolve_parent(&self, parent: Option<String>) -> Option<String> {
         match parent {
             Some(p) => match self.msg_redirects.get(&p) {
@@ -285,13 +273,10 @@ impl<'a> Builder<'a> {
             vcs_remote: None,
         });
 
-        // opencode's wire format carries `parentID` on assistant messages
-        // pointing back at the previous user message — that's the natural
-        // chain. User messages legitimately have no parent. Don't
-        // synthesize anything here (would break the matrix idempotence:
-        // user turns would gain a synthetic parent that the projector
-        // can't preserve, causing parent_id graphs to diverge across
-        // iterations).
+        // Assistant turns keep opencode's native `parentID` chain; user
+        // turns get a synthesized parent in `handle_user_message`. That
+        // synthesis is idempotent: re-deriving a projected session walks
+        // the same linear log and resynthesizes the same parents.
 
         // Refresh files_changed so it matches what landed on turns.
         let mut seen = std::collections::HashSet::new();
@@ -347,20 +332,23 @@ impl<'a> Builder<'a> {
         // A compaction marker can ride on a user message (opencode writes a
         // synthetic compaction-bearing user message at the boundary). Emit
         // the boundary in place; it parents on the last turn so far.
+        let mut hosted_compaction = false;
         for p in &msg.parts {
             if let PartData::Compaction(c) = &p.data {
                 self.push_compaction(p, c);
+                hosted_compaction = true;
             }
         }
 
-        // Skip an empty user turn when the message carried only a
-        // compaction marker (the common synthetic-boundary case) or only
-        // a summary body. Later turns whose native `parent_id` names this
-        // message chain onto the item that stands in for it — the
-        // boundary pushed just above, or the last item before it.
-        if text.is_empty() {
+        // A compaction-host user message with no text is synthetic — the
+        // boundary event above stands in for it, so emit no turn and
+        // record a redirect: later turns whose native `parent_id` names
+        // this message chain onto the last turn before the boundary. Any
+        // other empty-text user message (e.g. attachment-only, with parts
+        // but no text) still emits a turn.
+        if text.is_empty() && hosted_compaction {
             self.msg_redirects
-                .insert(msg.id.clone(), self.last_anchor_id.clone());
+                .insert(msg.id.clone(), self.last_turn_id.clone());
             return;
         }
 
@@ -373,10 +361,10 @@ impl<'a> Builder<'a> {
         self.push_turn(Turn {
             id: msg.id.clone(),
             // opencode's native user rows carry no parentID, but the log is
-            // strictly linear — synthesize the previous item as parent so
+            // strictly linear — synthesize the previous turn as parent so
             // the IR turn chain (which derive splicing walks) doesn't
             // break at every user message.
-            parent_id: self.last_anchor_id.clone(),
+            parent_id: self.last_turn_id.clone(),
             group_id: None,
             role: Role::User,
             timestamp: millis_to_iso(msg.time_created),
@@ -1193,7 +1181,117 @@ mod tests {
         assert_eq!(r.content, "exit 1");
     }
 
+    #[test]
+    fn compaction_becomes_event() {
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m1','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"o","modelID":"m"}}'),
+              ('m2','s',2,2,'{"parentID":"m1","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":2}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m1','s',1,1,'{"type":"text","text":"hi"}'),
+              ('p2','m2','s',2,2,'{"type":"compaction","auto":true,"overflow":false}'),
+              ('p3','m2','s',3,3,'{"type":"text","text":"done"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
 
+        assert!(view.events().any(|e| e.event_type == "part.compaction"));
+
+        // In-stream position: the boundary sits between the user turn and
+        // the assistant turn that hosted the part.
+        assert_eq!(view.items.len(), 3);
+        match &view.items[0] {
+            Item::Turn(t) => assert_eq!(t.id, "m1"),
+            other => panic!("expected user turn first, got {other:?}"),
+        }
+        match &view.items[1] {
+            Item::Event(e) => {
+                assert_eq!(e.event_type, "part.compaction");
+                assert_eq!(e.parent_id.as_deref(), Some("m1"));
+            }
+            other => panic!("expected compaction event second, got {other:?}"),
+        }
+        match &view.items[2] {
+            Item::Turn(t) => assert_eq!(t.id, "m2"),
+            other => panic!("expected assistant turn third, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attachment_only_user_message_still_emits_turn() {
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m1','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"o","modelID":"m"}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m1','s',1,1,'{"type":"file","mime":"image/png","url":"file:///tmp/shot.png"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+        let turns: Vec<_> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "");
+    }
+
+    #[test]
+    fn compaction_host_user_message_with_empty_text_emits_no_turn() {
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m1','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"o","modelID":"m"}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m1','s',1,1,'{"type":"compaction","auto":true,"overflow":false}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+        assert_eq!(view.turns().count(), 0);
+        assert!(view.events().any(|e| e.event_type == "part.compaction"));
+    }
+
+    #[test]
+    fn redirect_resolves_assistant_parent_through_suppressed_compaction_host() {
+        // m3 is a synthetic compaction-host user message (no text). m4's
+        // native parentID names m3; the redirect resolves it to m2, the
+        // last turn before the boundary.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m1','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"o","modelID":"m"}}'),
+              ('m2','s',2,2,'{"parentID":"m1","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":2}}'),
+              ('m3','s',3,3,'{"role":"user","time":{"created":3},"agent":"b","model":{"providerID":"o","modelID":"m"}}'),
+              ('m4','s',4,4,'{"parentID":"m3","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":4}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m1','s',1,1,'{"type":"text","text":"hi"}'),
+              ('p2','m2','s',2,2,'{"type":"text","text":"ok"}'),
+              ('p3','m3','s',3,3,'{"type":"compaction","auto":true,"overflow":true}'),
+              ('p4','m4','s',4,4,'{"type":"text","text":"after"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+
+        assert!(view.turns().all(|t| t.id != "m3"));
+        let boundary = view
+            .events()
+            .find(|e| e.event_type == "part.compaction")
+            .expect("compaction event");
+        assert_eq!(boundary.parent_id.as_deref(), Some("m2"));
+        let m4 = view.turns().find(|t| t.id == "m4").expect("m4 turn");
+        assert_eq!(m4.parent_id.as_deref(), Some("m2"));
+    }
 
     #[test]
     fn unknown_part_type_becomes_event() {
@@ -1231,5 +1329,4 @@ mod tests {
         let v = ConversationProvider::load_conversation(&mgr, "", "ses_x").unwrap();
         assert_eq!(v.turns().count(), 2);
     }
-
 }
