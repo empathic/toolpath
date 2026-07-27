@@ -542,6 +542,149 @@ fn export_copilot_to_output_file() {
     assert!(jsonl.contains("hello copilot"), "user prompt round-trips");
 }
 
+// ── Amp (preview) ───────────────────────────────────────────────────
+
+/// Build a sandbox for the Amp CLI surface: a stub `amp` executable that
+/// serves `threads list` / `threads export` from a fixture file, plus a
+/// fake home whose `.local/share/amp` exists. Returns
+/// (sandbox_root, PATH_value, thread_id). Amp threads are
+/// server-authoritative — there is no session directory to lay out — so
+/// isolation means stubbing the binary and overriding `HOME` (the
+/// piece-00 recipe), never touching real Amp state.
+#[cfg(unix)]
+fn amp_home_fixture() -> (tempfile::TempDir, String, String) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let id = "T-019fdemo-aaaa-7bbb-8ccc-ddddeeee0001";
+
+    // Fake home: `.local/share/amp` marks Amp as installed/has-run.
+    std::fs::create_dir_all(root.path().join("home/.local/share/amp")).unwrap();
+
+    // Pre-exported thread document the stub serves.
+    let threads = root.path().join("threads");
+    std::fs::create_dir_all(&threads).unwrap();
+    let body = format!(
+        r#"{{"id":"{id}","v":4,"created":1780000000000,"updatedAt":"2026-07-01T00:00:05.000Z","env":{{"initial":{{"trees":[{{"uri":"file:///tmp/amp-demo"}}],"platform":{{"clientVersion":"0.0.1785170481-ga5b614"}}}}}},"messages":[{{"role":"user","content":[{{"type":"text","text":"hello amp"}}],"meta":{{"sentAt":1780000000000}}}},{{"role":"assistant","content":[{{"type":"text","text":"hi there"}}],"usage":{{"inputTokens":10,"outputTokens":5,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"totalInputTokens":10,"maxInputTokens":272000}}}}]}}"#
+    );
+    std::fs::write(threads.join(format!("{id}.json")), body).unwrap();
+
+    // Stub `amp` binary on PATH.
+    let bin = root.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("amp");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n  \"threads list\") echo '{id}  hello amp  2h ago' ;;\n  \"threads export\") cat '{threads}/'\"$3\"'.json' ;;\n  *) echo \"unexpected: $*\" >&2; exit 1 ;;\nesac\n",
+            threads = threads.display()
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&stub).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&stub, perms).unwrap();
+
+    let path_env = format!("{}:/usr/bin:/bin", bin.display());
+    (root, path_env, id.to_string())
+}
+
+#[test]
+fn import_help_lists_amp() {
+    cmd()
+        .args(["p", "import", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("amp"));
+}
+
+#[test]
+#[cfg(unix)]
+fn import_amp_writes_cache_with_amp_prefix() {
+    let (root, path_env, id) = amp_home_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .args(["p", "import", "amp", "--session", &id])
+        .env("PATH", &path_env)
+        .env("HOME", root.path().join("home"))
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("amp-path-amp-"))
+        .stderr(predicate::str::contains("Imported"));
+    assert!(
+        cfg.path()
+            .join("documents/amp-path-amp-T-019fde.json")
+            .exists()
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn list_amp_tsv_shows_session() {
+    let (root, path_env, id) = amp_home_fixture();
+    cmd()
+        .args(["p", "list", "amp", "--format", "tsv"])
+        .env("PATH", &path_env)
+        .env("HOME", root.path().join("home"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&id))
+        .stdout(predicate::str::contains("hello amp"))
+        .stdout(predicate::str::contains("/tmp/amp-demo"));
+}
+
+#[test]
+#[cfg(unix)]
+fn list_amp_json_reports_source_amp() {
+    let (root, path_env, id) = amp_home_fixture();
+    cmd()
+        .args(["p", "list", "amp", "--format", "json"])
+        .env("PATH", &path_env)
+        .env("HOME", root.path().join("home"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"source\": \"amp\""))
+        .stdout(predicate::str::contains(&id));
+}
+
+#[test]
+#[cfg(unix)]
+fn show_amp_renders_markdown() {
+    let (root, path_env, id) = amp_home_fixture();
+    cmd()
+        .args(["show", "amp", "--session", &id])
+        .env("PATH", &path_env)
+        .env("HOME", root.path().join("home"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Amp session"))
+        .stdout(predicate::str::contains("hello amp"));
+}
+
+#[test]
+#[cfg(unix)]
+fn show_amp_accepts_hidden_project_shim() {
+    // `path share`'s fzf preview template always passes --project; the
+    // amp arm must swallow it.
+    let (root, path_env, id) = amp_home_fixture();
+    cmd()
+        .args([
+            "show",
+            "--ansi",
+            "amp",
+            "--project",
+            "/anywhere",
+            "--session",
+            &id,
+        ])
+        .env("PATH", &path_env)
+        .env("HOME", root.path().join("home"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hello amp"));
+}
+
 #[test]
 fn export_help_lists_claude_and_pathbase() {
     cmd()

@@ -11,8 +11,9 @@ use std::path::PathBuf;
 use crate::artifact::ArtifactType;
 use crate::cmd_export::RepoSpec;
 use crate::harness::{
-    Harness, HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_copilot,
-    is_not_found_cursor, is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
+    Harness, HarnessBundle, is_not_found_amp, is_not_found_claude, is_not_found_codex,
+    is_not_found_copilot, is_not_found_cursor, is_not_found_gemini, is_not_found_opencode,
+    is_not_found_pi,
 };
 
 #[derive(Args, Debug)]
@@ -130,6 +131,11 @@ pub(crate) fn gather_artifacts(
         && let Some(mgr) = &bundle.cursor
     {
         collect_cursor(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+    }
+    if want(ArtifactType::Amp)
+        && let Some(mgr) = &bundle.amp
+    {
+        collect_amp(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
     }
 
     rows.sort_by(|a, b| {
@@ -481,6 +487,52 @@ fn collect_cursor(
     }
 }
 
+fn collect_amp(
+    mgr: &toolpath_amp::AmpConvo,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<ArtifactRow>,
+) {
+    // Amp threads are server-authoritative: listing shells out to
+    // `amp threads list` and each row costs one `amp threads export`
+    // (there is no cheap local metadata surface).
+    let metas = match mgr.list_sessions() {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => return,
+        Err(e) if is_not_found_amp(&e) => return,
+        Err(e) => {
+            eprintln!("warning: amp aggregation failed: {e}");
+            return;
+        }
+    };
+    for m in metas {
+        // Amp stores cwd as `env.initial.trees[0].uri` (file:// stripped).
+        let stored = m.cwd.as_deref().map(std::path::PathBuf::from);
+        if let Some(filter) = project_filter {
+            match &stored {
+                Some(p) if paths_match(p, filter) => {}
+                _ => continue,
+            }
+        }
+        let matches_cwd = stored
+            .as_deref()
+            .map(|p| paths_match(p, canonical_cwd))
+            .unwrap_or(false);
+        out.push(ArtifactRow {
+            artifact_type: ArtifactType::Amp,
+            path: None,
+            cwd: m.cwd,
+            session_id: m.id,
+            title: m
+                .first_user_message
+                .unwrap_or_else(|| "(no prompt)".to_string()),
+            last_activity: m.last_activity,
+            message_count: Some(m.line_count),
+            matches_cwd,
+        });
+    }
+}
+
 pub fn run(args: ShareArgs) -> Result<()> {
     let harness = args.harness.map(|h| h.artifact_type());
 
@@ -630,6 +682,10 @@ fn bail_no_sessions(
         "pi",
         &harness_status_pi(bundle, home.as_deref()),
     ));
+    summary.push_str(&format_status_line(
+        "amp",
+        &harness_status_amp(bundle, home.as_deref()),
+    ));
     eprint!("{summary}");
     anyhow::bail!("no shareable sessions");
 }
@@ -753,6 +809,21 @@ fn harness_status_pi(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> 
     HarnessStatus {
         path: home_relative(&p, home),
         exists: p.exists(),
+    }
+}
+
+fn harness_status_amp(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> HarnessStatus {
+    // Thread content lives server-side; the data dir is only evidence that
+    // Amp is installed and has run here.
+    let Some(mgr) = &bundle.amp else {
+        return HarnessStatus::unresolved();
+    };
+    match mgr.resolver().amp_dir() {
+        Ok(p) => HarnessStatus {
+            path: home_relative(&p, home),
+            exists: p.exists(),
+        },
+        Err(_) => HarnessStatus::unresolved(),
     }
 }
 
@@ -1128,6 +1199,70 @@ mod tests {
         assert!(rows.is_empty());
     }
 
+    fn amp_only_bundle(threads_dir: &Path) -> HarnessBundle {
+        // Amp threads are fetched, not read from a directory — the bundle
+        // gets an AmpConvo whose fetcher serves pre-exported `<id>.json`
+        // files so no `amp` binary is touched.
+        let fetcher = toolpath_amp::DirFetcher::new(threads_dir);
+        HarnessBundle {
+            amp: Some(toolpath_amp::AmpConvo::with_fetcher(std::sync::Arc::new(
+                fetcher,
+            ))),
+            ..Default::default()
+        }
+    }
+
+    fn write_amp_session(threads_dir: &Path, id: &str, cwd: &str) {
+        // Minimal `amp threads export` document: cwd rides
+        // `env.initial.trees[0].uri` as a file:// URI.
+        std::fs::create_dir_all(threads_dir).unwrap();
+        let body = format!(
+            r#"{{"id":"{id}","v":4,"created":1780000000000,"updatedAt":"2026-07-01T00:00:05.000Z","env":{{"initial":{{"trees":[{{"uri":"file://{cwd}"}}],"platform":{{"clientVersion":"0.0.1785170481-ga5b614"}}}}}},"messages":[{{"role":"user","content":[{{"type":"text","text":"hello amp"}}],"meta":{{"sentAt":1780000000000}}}},{{"role":"assistant","content":[{{"type":"text","text":"hi there"}}],"usage":{{"inputTokens":10,"outputTokens":5,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"totalInputTokens":10,"maxInputTokens":272000}}}}]}}"#
+        );
+        std::fs::write(threads_dir.join(format!("{id}.json")), body).unwrap();
+    }
+
+    #[test]
+    fn gather_sessions_includes_amp_rows_with_cwd_match() {
+        let temp = TempDir::new().unwrap();
+        let threads = temp.path().join("threads");
+        write_amp_session(&threads, "T-019fdemo-aaaa", "/work/proj");
+        let bundle = amp_only_bundle(&threads);
+        let rows = gather_artifacts(&bundle, Path::new("/work/proj"), None, None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].artifact_type, ArtifactType::Amp);
+        assert_eq!(rows[0].cwd.as_deref(), Some("/work/proj"));
+        assert_eq!(rows[0].session_id, "T-019fdemo-aaaa");
+        assert_eq!(rows[0].title, "hello amp");
+        assert_eq!(rows[0].message_count, Some(2));
+        assert!(rows[0].matches_cwd);
+    }
+
+    #[test]
+    fn gather_sessions_filters_to_amp() {
+        let temp = TempDir::new().unwrap();
+        let threads = temp.path().join("threads");
+        write_amp_session(&threads, "T-019fdemo-aaaa", "/work/proj");
+        let bundle = amp_only_bundle(&threads);
+        // Filtering to a different harness drops the amp row.
+        let rows = gather_artifacts(
+            &bundle,
+            Path::new("/work/proj"),
+            Some(ArtifactType::Codex),
+            None,
+        );
+        assert!(rows.is_empty());
+        // And filtering to amp keeps it.
+        let rows = gather_artifacts(
+            &bundle,
+            Path::new("/work/proj"),
+            Some(ArtifactType::Amp),
+            None,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].artifact_type, ArtifactType::Amp);
+    }
+
     #[test]
     fn gather_artifacts_ranks_cwd_matches_first() {
         // Two claude sessions: one in cwd (older), one elsewhere (newer).
@@ -1363,6 +1498,7 @@ mod tests {
             harness_status_codex(&bundle, None),
             harness_status_opencode(&bundle, None),
             harness_status_pi(&bundle, None),
+            harness_status_amp(&bundle, None),
         ] {
             assert_eq!(status, HarnessStatus::unresolved());
             assert!(!status.exists);

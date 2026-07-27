@@ -56,6 +56,9 @@ pub enum ListSource {
         #[arg(short, long)]
         project: Option<String>,
     },
+    /// List Amp threads (global, newest first; preview). Each row costs one
+    /// `amp threads export` — Amp has no cheap local metadata surface.
+    Amp {},
     /// List Pi (pi.dev) projects or sessions
     Pi {
         /// Project path — if omitted, lists all projects (pretty) or all
@@ -109,6 +112,7 @@ pub fn run(source: ListSource, format: Option<ListFormat>, json_flag: bool) -> R
         ListSource::Copilot {} => run_copilot(fmt),
         ListSource::Opencode { project } => run_opencode(project, fmt),
         ListSource::Cursor { project } => run_cursor(project, fmt),
+        ListSource::Amp {} => run_amp(fmt),
         ListSource::Pi { project, base } => run_pi(project, base, fmt),
     }
 }
@@ -758,6 +762,81 @@ fn run_copilot(fmt: ListFormat) -> Result<()> {
                     let cwd = m.cwd.clone().unwrap_or_default();
                     println!(
                         "  {} {:>4} lines  {}  {}  {}",
+                        id_short, m.line_count, date, cwd, prompt
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── Amp (preview) ───────────────────────────────────────────────────────────
+
+fn run_amp(fmt: ListFormat) -> Result<()> {
+    let manager = toolpath_amp::AmpConvo::new();
+    let sessions = manager
+        .list_sessions()
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    match fmt {
+        ListFormat::Json => {
+            let items: Vec<serde_json::Value> = sessions
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "id": m.id,
+                        "started_at": m.started_at.map(|t| t.to_rfc3339()),
+                        "last_activity": m.last_activity.map(|t| t.to_rfc3339()),
+                        "cwd": m.cwd,
+                        "cli_version": m.version,
+                        "first_user_message": m.first_user_message,
+                        "line_count": m.line_count,
+                        "dir_path": m.dir_path,
+                    })
+                })
+                .collect();
+            let output = serde_json::json!({
+                "source": "amp",
+                "sessions": items,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        ListFormat::Tsv => {
+            for m in &sessions {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    sanitize_tsv(&m.id),
+                    m.last_activity.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                    m.line_count,
+                    m.cwd.as_deref().map(sanitize_tsv).unwrap_or_default(),
+                    m.first_user_message
+                        .as_deref()
+                        .map(sanitize_tsv)
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        ListFormat::Pretty => {
+            if sessions.is_empty() {
+                println!("No Amp threads found (is `amp` installed and logged in?).");
+            } else {
+                println!("Amp threads:");
+                println!();
+                for m in &sessions {
+                    let date = m
+                        .last_activity
+                        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let prompt = m
+                        .first_user_message
+                        .as_deref()
+                        .map(|s| truncate(s, 60))
+                        .unwrap_or_default();
+                    let id_short: String = m.id.chars().take(10).collect();
+                    let cwd = m.cwd.clone().unwrap_or_default();
+                    println!(
+                        "  {} {:>4} msgs  {}  {}  {}",
                         id_short, m.line_count, date, cwd, prompt
                     );
                 }

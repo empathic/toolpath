@@ -73,6 +73,16 @@ pub enum ShowSource {
         #[arg(long, hide = true)]
         project: Option<std::path::PathBuf>,
     },
+    /// Show an Amp thread as a markdown summary (preview)
+    Amp {
+        /// Thread id (`T-…`)
+        #[arg(short, long)]
+        session: String,
+
+        /// Compatibility shim for the unified `path share` preview template; ignored.
+        #[arg(long, hide = true)]
+        project: Option<std::path::PathBuf>,
+    },
     /// Show a Pi (pi.dev) session as a markdown summary
     Pi {
         /// Project path
@@ -176,6 +186,17 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let cfg = toolpath_cursor::DeriveConfig::default();
             Ok(toolpath_cursor::derive_path(&s, &cfg))
+        }
+        ShowSource::Amp {
+            session,
+            project: _,
+        } => {
+            let manager = toolpath_amp::AmpConvo::new();
+            let s = manager
+                .read_session(&session)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let cfg = toolpath_amp::derive::DeriveConfig { project_path: None };
+            Ok(toolpath_amp::derive::derive_path(&s, &cfg))
         }
         ShowSource::Pi {
             project,

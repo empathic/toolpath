@@ -398,3 +398,122 @@ seam, per PLAN.md Piece 01 as parameterized by piece 00's Q1/Q2 answers.
   which re-classifies to `Shell` — the piece-05 totality/invariant test
   will need to bless or redesign that arm.
 - `AmpProjector` is a refusing stub until piece 03's writer recon.
+
+## Piece 02 — share-wiring, L1 — tag: `amp-m2` — 2026-07-27
+
+### Goal
+
+Full forward CLI surface for Amp (`p list amp`, `show amp`, `path share
+--harness amp`) and the live L1 check: a captured thread shared to Pathbase
+whose page shows the conversation beats at the dossier's token-attribution
+level.
+
+### What was built
+
+- `cmd_list.rs`: `ListSource::Amp` + `run_amp` — json (`"source":"amp"`),
+  tsv (`id·last_activity·line_count·cwd·first_user_message` through
+  `sanitize_tsv`), pretty (`// ── Amp (preview) ──` banner, `msgs` unit
+  since the "line count" is a message count).
+- `cmd_show.rs`: `ShowSource::Amp { session, hidden --project shim }` +
+  `derive_one` arm — the shim is mandatory because share's fzf preview
+  template always passes `--project`.
+- `cmd_share.rs`: `collect_amp` gather block (cwd from
+  `env.initial.trees[0].uri`, `is_not_found_amp` suppression, `warning:
+  amp aggregation failed:` otherwise), `harness_status_amp` +
+  `format_status_line("amp", …)` in the no-sessions summary. The
+  `derive_session` arm already landed with piece 01.
+- `cmd_import.rs`: `pick_amp` doc comment un-hedged (the preview pane is
+  now backed by `show amp`).
+- Tests: 2 gather unit tests + `amp_only_bundle`/`write_amp_session`
+  helpers (written first, red at compile/assert, then wired green);
+  `harness_status_for_empty_bundle_is_unresolved` extended with the amp
+  status; 6 integration tests over `amp_home_fixture`.
+
+### Key decisions (ADR-style)
+
+- **`collect_amp` has no resolver-existence gate.**
+  - _Context:_ every other collector reads local state; Amp's listing
+    shells out (`amp threads list`) and each row costs one `amp threads
+    export` (the N+1 the piece-00 open question flagged; Roger kept the
+    TSV contract).
+  - _Decision:_ follow the copilot template exactly — call
+    `list_sessions()`, suppress `is_not_found_amp` errors (CLI missing,
+    data dir missing, no home), warn on anything else. No pre-check of
+    the data dir before shelling out.
+  - _Rationale:_ `AmpCliNotFound` already covers the "not installed"
+    machine quietly; gating on the data dir would need a combined
+    resolver+fetcher constructor that `AmpConvo` deliberately doesn't
+    have, and would wrongly hide sessions when Amp is installed but its
+    data dir moved. The N+1 cost only bites when amp is installed and
+    logged in — exactly when the rows are wanted.
+  - _Alternatives rejected:_ `resolver().exists()` pre-gate (false
+    negatives, extra constructor surface); caching the listing (piece
+    06+ concern, not L1).
+- **Integration fixture = stub `amp` on `PATH` + fake `HOME`, unix-gated.**
+  - _Context:_ the spawned `path` binary builds `AmpConvo::new()` →
+    `CliFetcher`, so fixture injection must happen at the process
+    boundary; Amp has no session directory to lay out (piece-00 Q1).
+  - _Decision:_ `amp_home_fixture()` writes an executable `amp` shell
+    stub answering `threads list`/`threads export` from a pre-exported
+    JSON file, sets `PATH=<stub>:/usr/bin:/bin` and `HOME=<sandbox>`
+    (the piece-00 isolation recipe), `#[cfg(unix)]` on the stub-needing
+    tests.
+  - _Rationale:_ zero production seams added; exercises the real
+    CliFetcher arg surface; no real Amp state touched.
+  - _Alternatives rejected:_ an env-var fetcher override in production
+    code (a test-only backdoor in shipping code); `#[cfg(windows)]`
+    stub variants (no Windows CI today).
+
+### Deviations from PLAN.md
+
+- **`scripts/test-pathbase-live.sh` was not run to completion** — its
+  precondition hard-requires `path auth status` to be logged in even
+  though its first leg is anonymous. PLAN.md marks the authed check
+  "optional (Roger login) — never a DoD blocker". The anon round-trip
+  was verified directly instead: `p import pathbase <uploaded-url>
+  --no-cache | p render md --detail full` reproduces the beats from the
+  server copy. Follow-up: teach the script an anon-only mode.
+- The "status-unresolved loop" test is an extension of the existing
+  `harness_status_for_empty_bundle_is_unresolved` rather than a new
+  test — same coverage, no duplicate scaffold.
+
+### Tests & verification
+
+- TDD order held: gather tests + status-loop extension written first
+  (red: `harness_status_amp` unresolved symbol / no amp rows), then
+  `collect_amp`/status wiring to green.
+- `cargo test -p path-cli` — 329 unit (24 in cmd_share) + 113
+  integration green; the 6 new integration tests cover import-help,
+  cache write with the `amp-path-amp-` prefix assert, tsv, json
+  `"source":"amp"`, show markdown, and the hidden `--project` shim.
+- Live DoD (amp still `0.0.1785170481-ga5b614`):
+  - `p list amp --format tsv` lists all three captured threads; the
+    feature-elicit row carries cwd + full first prompt.
+  - ⚠ `share --harness amp --session T-019fa4db-… --anon` (Roger's
+    go-ahead in-session) →
+    **https://pathbase.dev/u/anon/pathstash/graphs/6e472e59-6abb-43b3-b20e-a13528f850c2**
+    (23 609 bytes, cached as `amp-path-amp-T-019fa4`). Re-importing that
+    URL and rendering at full detail shows every elicit beat — prompt,
+    thinking quotes, all 11 tool calls with results including the
+    failing `cat`, the `Task` delegation with the quoted sub-agent
+    answer ("11 words") — and a per-message `tokens: X in, Y out, Z
+    cached` line on every assistant turn, i.e. the Q2 "clean
+    per-message" level. **This URL is the artifact Alex reviews against
+    the L1 DoD sentence.**
+  - Reconciliation note for that review: Amp's own UI figure is
+    `cumulativeBilledTokens = Σ(totalInputTokens + outputTokens)`; on
+    this thread our stored counters sum to the same 232 989
+    (0 in + 210 694 cache-read + 20 758 cache-write + 1 537 out) — we
+    store the four real counters and the derived sum stays computable,
+    never stamped (kind v1.1.0).
+- Workspace gates: `just ci` **7/7** (format, shellcheck, clippy, test,
+  doc, examples, site).
+
+### Known limitations / follow-ups
+
+- `path share` (no flags) on an amp-logged-in machine pays the N+1
+  export cost during aggregation; acceptable at current thread counts,
+  revisit if listing grows a cheap metadata surface.
+- `test-pathbase-live.sh` anon-only mode (deviation above).
+- The authed pathstash round-trip remains unexercised (Roger not logged
+  in this session) — optional per plan.

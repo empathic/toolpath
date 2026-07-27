@@ -1087,8 +1087,8 @@ fn derive_amp(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
 
 /// Interactive Amp thread picker. Listing metadata is one `amp threads
 /// export` fetch per thread (Amp has no cheap metadata surface), so this
-/// only triggers when a picker can actually run. The preview command lands
-/// with piece 02 (`show amp`); until then the preview pane may error.
+/// only triggers when a picker can actually run. The preview pane is
+/// backed by `show amp`.
 #[cfg(not(target_os = "emscripten"))]
 fn pick_amp(manager: &toolpath_amp::AmpConvo) -> Result<Option<Vec<String>>> {
     if !fuzzy::available() {
