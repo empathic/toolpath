@@ -53,7 +53,7 @@ No piece starts until the previous piece's gate is green.
 
 | Piece | What it delivers | Done means |
 |---|---|---|
-| 00 format-recon | Run Amp for real (small, private, ≤3 threads), capture a full-featured session, answer the two unknowns, write the format docs + test fixtures | Dossier answers the storage + token questions with version-stamped evidence |
+| 00 format-recon | Run Amp for real (small, private, ≤3 threads), capture a full-featured session using the repo's standard agent-exercise script (`feature-elicit` — per team guidance, the instrument for testing any newly hooked-up agent; adapt minimally if needed), answer the two unknowns, write the format docs + test fixtures | Dossier answers the storage + token questions with version-stamped evidence |
 | 01 derive-crate | `toolpath-amp`: read a session → toolpath Path | `path p import amp` output validates and renders the conversation beats |
 | 02 share-wiring | **Goal 1.** Amp appears in `path share`, list, show, picker | A real Pathbase URL showing beats + tokens; **Alex accepts it** |
 | 03 projector-resume | **Goal 2.** Write sessions back into Amp; `path resume --harness amp` | A projected session resumes in real `amp` and passes the probing question |

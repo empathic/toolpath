@@ -65,7 +65,7 @@ Sequential; each piece's DoD gate must be green (and BUILD_LOG entry written) be
 - [ ] ⚠ Confirm go-ahead; `amp --version`; `amp usage`; `amp threads list` (expect the one install-session thread); record workspace/visibility default. Re-stamp the version everywhere below.
 - [ ] Baseline dir snapshot (`find ~/.local/share/amp ~/.cache/amp ~/.config/amp -type f -exec ls -la {} +` into scratchpad).
 - [ ] ⚠ Trivial capture: `amp -x "Reply with exactly: ok" --stream-json | tee <scratchpad>/trivial-stream.jsonl`; diff dirs; save the new `T-*.log`.
-- [ ] ⚠ Feature-elicit capture: run `docs/agents/feature-elicit.prompt.txt` **verbatim** in one Amp session (interactive TUI if `-x` can't drive it; tee `--stream-json` where applicable; also try `--stream-json-thinking` on the trivial thread only). Diff dirs; archive stream + thread log + any new files.
+- [ ] ⚠ Feature-elicit capture: run `docs/agents/feature-elicit.prompt.txt` **verbatim** in one Amp session (interactive TUI if `-x` can't drive it; tee `--stream-json` where applicable; also try `--stream-json-thinking` on the trivial thread only). Diff dirs; archive stream + thread log + any new files. Team guidance (2026-07-27): this prompt is the standard instrument for exercising/testing a newly hooked-up agent — verbatim where possible; if Amp's surface forces changes, adapt minimally and record every deviation in RECON.md.
 - [ ] Q1: compare the thread log + stream against the web thread page content; grep the log for full message bodies (`onMessageAdded` payloads). State explicitly whether a completed thread is fully reconstructable from this machine after the fact, and from which artifact.
 - [ ] Q2: hunt token fields in stream events, thread log, `session.json`, bundle strings (`strings -n 8 ~/.amp/bin/amp | grep -iE 'tokens?|usage|cost'`), and the web sidebar. Classify per-message vs cumulative vs thread-only vs none. **If "none": stop, escalate to Roger/Alex before writing more docs.**
 - [ ] Q3: test env overrides seen in cli.log/strings (`AMP_LOG_LEVEL`, `AMP_SETTINGS_FILE`, `AMP_API_KEY` are known; probe `XDG_DATA_HOME`/`XDG_CACHE_HOME` and any `AMP_*` dataDir override with `env XDG_DATA_HOME=<tmp> amp threads list`) — the isolated-home story pieces 03/05 need.
@@ -155,6 +155,8 @@ Sequential; each piece's DoD gate must be green (and BUILD_LOG entry written) be
 ---
 
 ## Cross-cutting requirements
+
+`docs/agents/feature-elicit.prompt.txt` is the standard exercise/test instrument for any newly hooked-up agent (team guidance, 2026-07-27): piece 00 uses it to generate the reference capture, and later pieces reuse feature-elicit-shaped sessions as the verification substrate (the piece-03/04/05 probing question — "most-used tool in this session" — keys off exactly this shape). Treat it as a starting point, not a straitjacket: adapt minimally where a harness can't be driven verbatim, and record deviations in the dossier.
 
 Preview labeling exactly like copilot (clap doc comments `(preview)`, Cargo description, README blockquote, CLAUDE.md graph suffix, crates.json, runtime stderr banner until verified). Share uploads carry the full derivation — no egress stripping. No changes to `crates/path-cli/kinds/**` or `site/kinds/**` (kind v1.1.0 is sufficient; only accounting-rule changes would warrant v1.2.0). Emscripten placement decided by piece 00 storage answer (pure JSONL ⇒ both dep blocks like copilot; SQLite ⇒ native-only gating like opencode). Every piece appends its BUILD_LOG entry (ADR decisions, deviations, tests run, open questions) before its tag.
 
