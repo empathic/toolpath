@@ -127,9 +127,7 @@ impl CopilotProjector {
                 toolpath_convo::Item::Turn(turn) => {
                     let ts = iso_or(&turn.timestamp, &base_ts);
                     match &turn.role {
-                        Role::User => {
-                            b.push("user.message", &ts, json!({ "content": turn.text }))
-                        }
+                        Role::User => b.push("user.message", &ts, json!({ "content": turn.text })),
                         Role::System => b.push(
                             "system.message",
                             &ts,

@@ -396,7 +396,8 @@ pub const BUBBLE_TYPE_ASSISTANT: u8 = 2;
 pub const CAPABILITY_TOOL: u32 = 15;
 pub const CAPABILITY_THINKING: u32 = 30;
 /// The `/summarize` boundary marker. The bubble has no recoverable summary or
-/// kept set (those are server-side), so the provider skips it — see
+/// kept set (those are server-side), so the provider preserves it as an opaque
+/// `summarization` event and the projector writes the marker bubble back — see
 /// `docs/agents/formats/cursor.md`.
 pub const CAPABILITY_SUMMARIZATION: u32 = 22;
 
