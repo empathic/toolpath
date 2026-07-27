@@ -1294,6 +1294,37 @@ mod tests {
     }
 
     #[test]
+    fn user_turn_parent_synthesized_from_last_turn() {
+        // User messages carry no parentID on the wire; the provider chains
+        // them onto the last turn pushed. The first user turn stays a root.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m1','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"o","modelID":"m"}}'),
+              ('m2','s',2,2,'{"parentID":"m1","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":2}}'),
+              ('m3','s',3,3,'{"role":"user","time":{"created":3},"agent":"b","model":{"providerID":"o","modelID":"m"}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m1','s',1,1,'{"type":"text","text":"hi"}'),
+              ('p2','m2','s',2,2,'{"type":"text","text":"ok"}'),
+              ('p3','m3','s',3,3,'{"type":"text","text":"next"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+
+        let m1 = view.turns().find(|t| t.id == "m1").expect("m1 turn");
+        assert_eq!(m1.parent_id, None, "first user turn is a root");
+        let m3 = view.turns().find(|t| t.id == "m3").expect("m3 turn");
+        assert_eq!(
+            m3.parent_id.as_deref(),
+            Some("m2"),
+            "later user turn chains onto the last turn pushed"
+        );
+    }
+
+    #[test]
     fn unknown_part_type_becomes_event() {
         let body = r#"
             INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('p','/p',1,2,'[]');
