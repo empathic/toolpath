@@ -266,3 +266,135 @@ All live-`amp` claims carry the stamp `[observed, 0.0.1785170481-ga5b614]`.
 4. **Amp self-updates fast** (a version bump mid-recon). Should we pin a
    version for the duration of the build, or accept churn and lean on the
    value-identity tests as tripwires?
+
+## Piece 01 — derive-crate — tag: `amp-m1` — 2026-07-27
+
+### Goal
+
+`crates/toolpath-amp` forward path (export document → `ConversationView` →
+agent-coding-session v1.1.0 `Path`) plus the minimal `path p import amp`
+seam, per PLAN.md Piece 01 as parameterized by piece 00's Q1/Q2 answers.
+
+### What was built
+
+- `crates/toolpath-amp` 0.1.0 (preview labeling throughout):
+  `error/paths/reader/types/io/provider/project/derive`, README with the
+  ⚠️ blockquote + version anchors, `#![doc = include_str!]`.
+- Wire model (`types.rs`): typed only where the provider needs accessors;
+  everything else — including explicit `null`s (`readAt`, `openExpiresAt`)
+  — rides `#[serde(flatten)]` extras, so parse → serialize is
+  **value-identical** on the whole real capture (asserted whole-document
+  and per-message).
+- Fetch layer (`io.rs`): `ThreadFetcher` trait — `CliFetcher` shells out to
+  `amp threads export <id>` (read-only, inherits the CLI's login);
+  `DirFetcher` reads pre-exported `<id>.json` files (tests/offline).
+  `cargo test` never touches the network.
+- Provider (`provider.rs`): one message → one turn, EXCEPT
+  tool-result-only `user` messages (plumbing; results merged onto the
+  originating invocation by `toolUseID`, no turn emitted) — the real
+  24-message capture derives 13 turns. Linear `push_linked` chaining;
+  verbatim tool names + `tool_category` (exact arms then substring
+  fallback); `Task` → `DelegatedWork` keyed by the `TU-…` id with the
+  result string backfilled; `apply_patch` result `files[]` → per-file
+  `FileMutation` with the wire's real unified diff, relativized against
+  the tree root; errors from `run.result.exitCode != 0` only (never
+  `run.status`).
+- Tokens (per Q2 "clean per-message"): `Turn.token_usage` from the four
+  real counters; `group_id`/`attributed_token_usage` `None`; `breakdowns`
+  omitted; `totalInputTokens`/`maxInputTokens` preserved on the wire
+  struct but never summed; `is_usage_zero → None`; session total =
+  field-wise Σ (real capture: 0 in / 1537 out / 210 694 cache-read /
+  20 758 cache-write).
+- `derive.rs`: wraps `toolpath_convo::derive_path`, title
+  `"Amp session: <8ch>"`; kind-conformance test validates the maximal
+  real-capture path against
+  `crates/path-cli/kinds/agent-coding-session/v1.1.0/schema.json`.
+- Tests: 72 unit + 3 real-fixture + 4 synthetic-roundtrip + 3 doctests.
+  Fixtures: `tests/fixtures/real-session.json` (byte-identical to
+  `test-fixtures/amp/convo.json`) + synthetic `sample-session.json`.
+- CLI seam: `ArtifactType::Amp` (test `ALL` 8→9, `path_keyed` false),
+  `Harness::Amp` (`ALL` 7→8, both mappings, `HarnessBundle.amp`,
+  `is_not_found_amp`), `derive_amp_session{,_with}`,
+  `ImportSource::Amp {session, all}` + `derive_amp` + `pick_amp`.
+  `toolpath-amp` added to both path-cli dep blocks (pure JSON + shell-out
+  → copilot-style placement, no `rusqlite`).
+
+### Key decisions (ADR-style)
+
+- **Crate shape: shell out to `amp threads export` behind an injectable
+  fetcher** (Roger's in-session pick, 2026-07-27, from the piece-00 open
+  question that blocked this piece).
+  - _Context:_ Q1 ruled out a filesystem reader; options were (a) CLI
+    shell-out, (b) reimplementing the HTTP fetch off `secrets.json`, (c)
+    pre-exported files only.
+  - _Decision:_ (a), with `ThreadFetcher` as the seam so tests inject
+    fixtures and piece 02+ can add sources without changing the public
+    surface. `PathResolver` survives but now resolves the *data dir* for
+    existence checks (`with_amp_dir()` kept for injection); errors gained
+    `AmpCliNotFound`/`AmpCliFailed` alongside the PLAN-named trio.
+  - _Rationale:_ first-party command, inherits auth, no credential-file
+    reads, no reverse-engineered endpoint pinning.
+  - _Alternatives rejected:_ (b) fragile against Amp's build-timestamped
+    churn and reads a secrets file; (c) breaks the `p import amp
+    --session <id>` DoD and makes piece-02 list/share manual.
+- **Token layer: implemented exactly the Q2 "clean per-message" pattern.**
+  No new evidence contradicted piece 00: `outputTokens` non-monotonic
+  (117 → 142 → 112 …), the `totalInputTokens = input + cacheRead +
+  cacheCreation` invariant holds on all 12 usage objects, so per-message
+  stamping with field-wise Σ is honest. `maxInputTokens` (272 000
+  capacity) and `totalInputTokens` are wire-preserved for round-tripping
+  but excluded from every spend figure; a test asserts capacity never
+  leaks into totals.
+- **Tool-result-only `user` messages are not turns.** The mapping sketch's
+  "1 message → 1 turn" would emit 11 empty user turns whose only content
+  was already merged onto the assistant's invocations. Precedent: every
+  other provider merges results into the originating turn. The projector
+  (piece 03) can regenerate the carrier messages from
+  `ToolInvocation.result`, and the wire-identity test keeps the source
+  artifact lossless regardless.
+
+### Deviations from PLAN.md
+
+- **Interface reshaping** (anticipated by the piece-00 blocker):
+  `AmpConvo::with_fetcher(Arc<dyn ThreadFetcher>)` instead of a
+  directory-scan surface; `SessionMetadata.dir_path` is `Option<PathBuf>`
+  (no backing file exists for a live fetch); `line_count` = message count.
+  All PLAN-named types/fields otherwise kept.
+- **DoD pipe syntax is stale:** `p render md --input -` errors — `p
+  render` reads stdin when `--input` is *omitted* (only `p merge`/`p
+  incept` accept a literal `-`). Verified with
+  `p import amp … --no-cache --force | p render md --detail full`.
+  CLAUDE.md's claude-import example has the same stale `--input -`.
+- **Picker preview 404s until piece 02** lands `show amp` (noted in
+  `pick_amp`'s doc comment, as the plan anticipated).
+- **`most_recent_session` added to `AmpConvo`** (not in the PLAN interface
+  list) so the no-picker fallback matches the other providers' shape.
+- No format-doc corrections needed: the fixture taught nothing that
+  contradicts the piece-00 dossier (live re-check: `amp --version` still
+  `0.0.1785170481-ga5b614`).
+
+### Tests & verification
+
+- `cargo test -p toolpath-amp` — 82 tests green (72 unit, 7 integration,
+  3 doc).
+- Live DoD: `p import amp --session T-019fa4db-…` →
+  `~/.toolpath/documents/amp-path-amp-T-019fa4.json` (15 steps);
+  `p validate --input <it>` → `Valid: Graph (id: path-amp-T-019fa4, 1
+  path)`; rendered markdown shows the elicit beats — prompt, thinking
+  quotes, all 11 tool calls with results incl. the failing `cat`, the
+  `Task` delegation + quoted sub-agent answer, per-turn token lines.
+  (The live thread's tree URI is the piece-00 capture scratchpad, not the
+  fixture's sanitized `/tmp/amp-elicit` — expected.)
+- Workspace gates: `cargo build/test/clippy --workspace -- -D warnings`
+  green; `just ci` **7/7** (format, shellcheck, clippy, test, doc,
+  examples, site).
+
+### Known limitations / follow-ups
+
+- `p list amp` (piece 02) inherits the N+1 export-per-thread cost — Q2 of
+  the piece-00 open questions is still Roger's call on TSV column
+  relaxation.
+- `native_name` maps `FileRead → shell_command` (Amp has no read tool),
+  which re-classifies to `Shell` — the piece-05 totality/invariant test
+  will need to bless or redesign that arm.
+- `AmpProjector` is a refusing stub until piece 03's writer recon.
