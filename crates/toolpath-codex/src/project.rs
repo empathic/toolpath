@@ -30,13 +30,12 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Item, Result, Role,
-    ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Item, Result, Role, ToolInvocation, Turn,
 };
 
 use crate::types::{
-    ContentPart, CustomToolCall, CustomToolCallOutput, FunctionCall,
-    FunctionCallOutput, Message, Reasoning, RolloutLine, SessionMeta, TurnContext,
+    ContentPart, CustomToolCall, CustomToolCallOutput, FunctionCall, FunctionCallOutput, Message,
+    Reasoning, RolloutLine, SessionMeta, TurnContext,
 };
 
 // ── CodexProjector ───────────────────────────────────────────────────
@@ -381,7 +380,6 @@ fn make_turn_context_line(turn_id: &str, timestamp: &str, cwd: &str, model: &str
 fn codex_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
     None
 }
-
 
 fn emit_turn_lines(
     turn: &Turn,

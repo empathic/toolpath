@@ -195,9 +195,6 @@ pub struct ConversationEvent {
     pub data: HashMap<String, serde_json::Value>,
 }
 
-
-
-
 /// One element of a conversation's ordered stream — a turn or a
 /// non-conversational event. Keeping both in a single ordered `Vec`
 /// preserves their exact interleaving, so `derive_path` ↔
@@ -415,7 +412,6 @@ impl ConversationView {
     pub fn events(&self) -> impl Iterator<Item = &ConversationEvent> {
         self.items.iter().filter_map(Item::as_event)
     }
-
 
     /// Title derived from the first user turn, truncated to `max_len` characters.
     pub fn title(&self, max_len: usize) -> Option<String> {
