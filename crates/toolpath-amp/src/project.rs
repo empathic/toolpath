@@ -1,14 +1,40 @@
 //! Project a provider-agnostic [`ConversationView`] into an Amp thread
 //! export document — the reverse of [`crate::provider::to_view`].
 //!
-//! **Stub.** The real projector is piece 03's deliverable: it opens with the
-//! deferred resume/writer recon (Amp threads are server-authoritative, so
-//! whether a fabricated local record can be resumed at all is an open
-//! question — see `docs/agents/formats/amp/resume-and-sessions.md`). Until
-//! then, projecting returns an error instead of pretending.
+//! ⚠️ **Preview.** Amp threads are server-authoritative (piece-00 Q1: there
+//! is no local thread store to write into), so a projected [`ThreadExport`]
+//! is a *document*, not a resumable session by itself — landing it in Amp
+//! goes through the server-import seam in `path-cli` (`p export amp`,
+//! `path resume --harness amp`). The writer contract is documented in
+//! `docs/agents/formats/amp/writing-compatible.md`.
+//!
+//! Projection rules:
+//!
+//! - **Position-stable ids.** Turn ids are carried through verbatim as
+//!   `protocolMessageID`; synthesized ids (tool-result carrier messages,
+//!   missing tool ids) derive deterministically from position, so projecting
+//!   the same view twice yields byte-identical output.
+//! - **Delegation ids are preserved**: a `Task` invocation keeps its
+//!   `TU-…`/foreign id, so [`toolpath_convo::DelegatedWork::agent_id`]
+//!   pairing survives a round trip.
+//! - **Token re-expansion** is the inverse of the piece-01 drop: the four
+//!   real counters come back verbatim and the derived `totalInputTokens`
+//!   (= input + cacheRead + cacheCreation, the invariant verified on all
+//!   captured usage objects) is regenerated. `maxInputTokens` is capacity,
+//!   not spend — it cannot be reconstructed and is omitted.
+//! - **Tool names are remapped into Amp's native vocabulary** via
+//!   [`crate::provider::native_name`] for foreign tools; Amp-native names
+//!   pass through verbatim.
 
-use crate::types::ThreadExport;
-use toolpath_convo::{ConversationProjector, ConversationView, ConvoError, Result};
+use crate::provider::{native_name, tool_category};
+use crate::types::{
+    Block, KnownBlock, Message, MessageUsage, RunPayload, TextBlock, ThinkingBlock, ThreadExport,
+    ToolResultBlock, ToolUseBlock, strip_file_scheme,
+};
+use serde_json::{Map, Value, json};
+use toolpath_convo::{
+    ConversationProjector, ConversationView, Result, Role, ToolInvocation, Turn,
+};
 
 /// Projects a [`ConversationView`] into an Amp [`ThreadExport`].
 #[derive(Debug, Clone, Default)]
@@ -23,20 +49,784 @@ impl AmpProjector {
 impl ConversationProjector for AmpProjector {
     type Output = ThreadExport;
 
-    fn project(&self, _view: &ConversationView) -> Result<Self::Output> {
-        Err(ConvoError::Provider(
-            "AmpProjector is not implemented yet (piece 03: resume/writer recon pending)".into(),
-        ))
+    fn project(&self, view: &ConversationView) -> Result<Self::Output> {
+        Ok(build(view))
     }
+}
+
+/// The 29-name native vocabulary advertised by `system/init` at
+/// `agentMode: medium` `[observed, 0.0.1785170481-ga5b614]`. Names on this
+/// list pass through the projector verbatim; everything else is remapped by
+/// category.
+const NATIVE_TOOLS: [&str; 29] = [
+    "apply_patch",
+    "clear_schedule",
+    "create_thread",
+    "download_thread_file",
+    "find_thread",
+    "finder",
+    "get_current_user_identity",
+    "get_schedule",
+    "librarian",
+    "list_agent_modes",
+    "list_runners",
+    "load_plugin",
+    "oracle",
+    "painter",
+    "public_artifact_url",
+    "read_thread",
+    "read_web_page",
+    "set_schedule",
+    "shell_command",
+    "shell_command_status",
+    "skill",
+    "Task",
+    "thread_file_url",
+    "thread_interact",
+    "update_schedule",
+    "upload_thread_file",
+    "view_media",
+    "wait_for_threads",
+    "web_search",
+];
+
+fn build(view: &ConversationView) -> ThreadExport {
+    let working_dir = view
+        .base
+        .as_ref()
+        .and_then(|b| b.working_dir.as_deref())
+        .map(strip_file_scheme)
+        .map(str::to_string);
+
+    let mut messages: Vec<Message> = Vec::new();
+    for turn in &view.turns {
+        match &turn.role {
+            Role::Assistant => {
+                messages.push(assistant_message(turn));
+                if let Some(carrier) = tool_result_carrier(turn, &working_dir) {
+                    messages.push(carrier);
+                }
+            }
+            // Amp has only `user`/`assistant` roles; system and
+            // provider-specific roles fold into user messages so the forward
+            // path reproduces them stably.
+            Role::User | Role::System | Role::Other(_) => messages.push(user_message(turn)),
+        }
+    }
+
+    // 1-based integer index, mirroring the wire's `messageId`.
+    for (i, m) in messages.iter_mut().enumerate() {
+        m.message_id = Some(i as u64 + 1);
+    }
+
+    let title = view
+        .turns
+        .iter()
+        .find(|t| t.role == Role::User && !t.text.trim().is_empty())
+        .map(|t| truncate_title(t.text.lines().next().unwrap_or_default()));
+
+    ThreadExport {
+        id: view.id.clone(),
+        v: None,
+        title,
+        created: view.started_at.map(|dt| dt.timestamp_millis()),
+        updated_at: view
+            .last_activity
+            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        env: env_initial(view, &working_dir),
+        meta: None,
+        activated_skills: None,
+        messages,
+        extra: Map::new(),
+    }
+}
+
+fn env_initial(view: &ConversationView, working_dir: &Option<String>) -> Option<Value> {
+    let wd = working_dir.as_deref()?;
+    let display = std::path::Path::new(wd)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| wd.to_string());
+    let client_version = view
+        .producer
+        .as_ref()
+        .and_then(|p| p.version.clone())
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    Some(json!({
+        "initial": {
+            "trees": [{ "uri": format!("file://{wd}"), "displayName": display }],
+            "platform": {
+                "os": std::env::consts::OS,
+                "cpuArchitecture": std::env::consts::ARCH,
+                "client": "toolpath",
+                "clientType": "cli",
+                "clientVersion": client_version,
+                "webBrowser": false,
+            }
+        }
+    }))
+}
+
+fn truncate_title(s: &str) -> String {
+    let s = s.trim();
+    if s.chars().count() <= 64 {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(63).collect();
+        format!("{cut}…")
+    }
+}
+
+// ── Messages ─────────────────────────────────────────────────────────
+
+fn user_message(turn: &Turn) -> Message {
+    let mut extra = Map::new();
+    if let Some(ms) = iso_to_ms(&turn.timestamp) {
+        extra.insert("meta".into(), json!({ "sentAt": ms }));
+    }
+    Message {
+        role: "user".to_string(),
+        content: vec![Block::Known(KnownBlock::Text(TextBlock {
+            text: turn.text.clone(),
+            extra: Map::new(),
+        }))],
+        protocol_message_id: Some(turn.id.clone()),
+        message_id: None,
+        usage: None,
+        extra,
+    }
+}
+
+fn assistant_message(turn: &Turn) -> Message {
+    let mut content: Vec<Block> = Vec::new();
+    if let Some(th) = &turn.thinking
+        && !th.trim().is_empty()
+    {
+        content.push(Block::Known(KnownBlock::Thinking(ThinkingBlock {
+            thinking: th.clone(),
+            provider: None,
+            extra: Map::new(),
+        })));
+    }
+    if !turn.text.is_empty() {
+        content.push(Block::Known(KnownBlock::Text(TextBlock {
+            text: turn.text.clone(),
+            extra: Map::new(),
+        })));
+    }
+    for (i, tu) in turn.tool_uses.iter().enumerate() {
+        let (name, input) = projected_tool(tu);
+        content.push(Block::Known(KnownBlock::ToolUse(ToolUseBlock {
+            id: invocation_id(tu, turn, i),
+            name,
+            input,
+            extra: Map::new(),
+        })));
+    }
+
+    let stop_reason = turn.stop_reason.clone().unwrap_or_else(|| {
+        if turn.tool_uses.is_empty() {
+            "end_turn".to_string()
+        } else {
+            "tool_use".to_string()
+        }
+    });
+    let mut extra = Map::new();
+    extra.insert(
+        "state".into(),
+        json!({ "type": "complete", "stopReason": stop_reason }),
+    );
+
+    Message {
+        role: "assistant".to_string(),
+        content,
+        protocol_message_id: Some(turn.id.clone()),
+        message_id: None,
+        usage: expand_usage(turn),
+        extra,
+    }
+}
+
+/// Deterministic invocation id: the source id when present, else derived
+/// from the owning turn's id + position (stable across projections).
+fn invocation_id(tu: &ToolInvocation, turn: &Turn, index: usize) -> String {
+    if tu.id.is_empty() {
+        format!("TU-{}-{index:02}", turn.id)
+    } else {
+        tu.id.clone()
+    }
+}
+
+/// The tool-result carrier `user` message that follows an assistant message
+/// whose invocations have results — the inverse of the forward path's merge
+/// (which recognizes these as plumbing and re-attaches them by `toolUseID`).
+fn tool_result_carrier(turn: &Turn, working_dir: &Option<String>) -> Option<Message> {
+    let mut blocks: Vec<Block> = Vec::new();
+    for (i, tu) in turn.tool_uses.iter().enumerate() {
+        let Some(result) = &tu.result else { continue };
+        let (name, _) = projected_tool(tu);
+        blocks.push(Block::Known(KnownBlock::ToolResult(ToolResultBlock {
+            tool_use_id: invocation_id(tu, turn, i),
+            run: RunPayload {
+                result: Some(run_result(&name, tu, result, turn, working_dir)),
+                status: Some("done".to_string()),
+                extra: Map::new(),
+            },
+            extra: Map::new(),
+        })));
+    }
+    if blocks.is_empty() {
+        return None;
+    }
+    Some(Message {
+        role: "user".to_string(),
+        content: blocks,
+        // Deterministic, position-derived — the forward path treats this
+        // message as plumbing and never reads its id.
+        protocol_message_id: Some(format!("{}-r", turn.id)),
+        message_id: None,
+        usage: None,
+        extra: Map::new(),
+    })
+}
+
+/// Reconstruct the polymorphic `run.result` shape for a tool, the inverse
+/// of the forward path's `result_content` flattening.
+fn run_result(
+    native: &str,
+    tu: &ToolInvocation,
+    result: &toolpath_convo::ToolResult,
+    turn: &Turn,
+    working_dir: &Option<String>,
+) -> Value {
+    match native {
+        "apply_patch" => {
+            let files: Vec<Value> = turn
+                .file_mutations
+                .iter()
+                .filter(|m| m.tool_id.as_deref() == Some(tu.id.as_str()))
+                .map(|m| {
+                    let abs = absolutize(&m.path, working_dir);
+                    let (adds, dels) = diff_counts(m.raw_diff.as_deref());
+                    json!({
+                        "uri": format!("file://{abs}"),
+                        "diff": m.raw_diff.clone().unwrap_or_default(),
+                        "type": m.operation.clone().unwrap_or_else(|| "update".to_string()),
+                        "additions": adds,
+                        "deletions": dels,
+                    })
+                })
+                .collect();
+            json!({ "files": files, "summary": result.content })
+        }
+        "Task" => Value::String(result.content.clone()),
+        "skill" => json!({ "content": [{ "type": "text", "text": result.content }] }),
+        // shell_command and everything else observed carries stdout+stderr
+        // plus the only real error signal Amp has (`exitCode`).
+        _ => json!({
+            "output": result.content,
+            "exitCode": if result.is_error { 1 } else { 0 },
+        }),
+    }
+}
+
+fn absolutize(path: &str, working_dir: &Option<String>) -> String {
+    if path.starts_with('/') {
+        return path.to_string();
+    }
+    match working_dir {
+        Some(wd) => format!("{}/{path}", wd.trim_end_matches('/')),
+        None => path.to_string(),
+    }
+}
+
+fn diff_counts(diff: Option<&str>) -> (u64, u64) {
+    let Some(diff) = diff else { return (0, 0) };
+    let mut adds = 0;
+    let mut dels = 0;
+    for line in diff.lines() {
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if line.starts_with('+') {
+            adds += 1;
+        } else if line.starts_with('-') {
+            dels += 1;
+        }
+    }
+    (adds, dels)
+}
+
+/// Remap a foreign tool into Amp's native vocabulary; Amp-native names pass
+/// through verbatim, and unclassifiable foreign names are left alone rather
+/// than guessed.
+fn projected_tool(tu: &ToolInvocation) -> (String, Value) {
+    if NATIVE_TOOLS.contains(&tu.name.as_str()) {
+        return (tu.name.clone(), tu.input.clone());
+    }
+    let Some(category) = tu.category.or_else(|| tool_category(&tu.name)) else {
+        return (tu.name.clone(), tu.input.clone());
+    };
+    let native = native_name(category, &tu.input);
+    let input = match (category, native) {
+        // Amp has no read tool; the native equivalent is a shell `cat`.
+        (toolpath_convo::ToolCategory::FileRead, "shell_command") => {
+            match read_target(&tu.input) {
+                Some(path) => json!({ "command": format!("cat {path}") }),
+                None => tu.input.clone(),
+            }
+        }
+        (toolpath_convo::ToolCategory::Shell, "shell_command") => match &tu.input {
+            Value::String(cmd) => json!({ "command": cmd }),
+            v if v.get("command").is_some() => v.clone(),
+            v => v.clone(),
+        },
+        (toolpath_convo::ToolCategory::Delegation, "Task") => {
+            let prompt = tu
+                .input
+                .get("prompt")
+                .or_else(|| tu.input.get("description"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let description = tu
+                .input
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("delegated task");
+            json!({ "prompt": prompt, "description": description })
+        }
+        _ => tu.input.clone(),
+    };
+    (native.to_string(), input)
+}
+
+fn read_target(input: &Value) -> Option<String> {
+    for key in ["file_path", "path", "target_file", "absolute_path", "file"] {
+        if let Some(p) = input.get(key).and_then(Value::as_str) {
+            return Some(p.to_string());
+        }
+    }
+    None
+}
+
+// ── Token re-expansion ───────────────────────────────────────────────
+
+/// Inverse of the piece-01 usage mapping: the four real counters come back
+/// verbatim and the derived `totalInputTokens` is regenerated from the
+/// verified invariant `total = input + cacheRead + cacheCreation`.
+/// `maxInputTokens` (context-window capacity) is not reconstructible and is
+/// omitted. Turns without usage (user turns, zero-usage placeholders decoded
+/// to `None` on the way in) emit no `usage` at all — never zero-filled stubs.
+fn expand_usage(turn: &Turn) -> Option<MessageUsage> {
+    let u = turn.token_usage.as_ref()?;
+    let input_side = [u.input_tokens, u.cache_read_tokens, u.cache_write_tokens];
+    let total_input = if input_side.iter().any(Option::is_some) {
+        Some(
+            input_side
+                .iter()
+                .map(|v| v.unwrap_or(0) as u64)
+                .sum::<u64>(),
+        )
+    } else {
+        None
+    };
+    Some(MessageUsage {
+        model: turn.model.clone(),
+        timestamp: (!turn.timestamp.is_empty()).then(|| turn.timestamp.clone()),
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        cache_read_input_tokens: u.cache_read_tokens,
+        cache_creation_input_tokens: u.cache_write_tokens,
+        max_input_tokens: None,
+        total_input_tokens: total_input,
+        extra: Map::new(),
+    })
+}
+
+fn iso_to_ms(ts: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::to_view;
+    use crate::reader::ExportReader;
+    use crate::types::Session;
+    use serde_json::json;
+    use toolpath_convo::{TokenUsage, ToolCategory, ToolResult};
+
+    const REAL: &str = include_str!("../tests/fixtures/real-session.json");
+
+    fn real_view() -> ConversationView {
+        let export = ExportReader::parse_export_with(REAL, true).unwrap();
+        to_view(&Session::from_export(export))
+    }
+
+    fn reproject(view: &ConversationView) -> ThreadExport {
+        AmpProjector::new().project(view).unwrap()
+    }
 
     #[test]
-    fn stub_refuses_to_project() {
-        let view = ConversationView::default();
-        assert!(AmpProjector::new().project(&view).is_err());
+    fn round_trip_view_equivalence_on_real_fixture() {
+        let v1 = real_view();
+        let export = reproject(&v1);
+        let v2 = to_view(&Session::from_export(export));
+
+        assert_eq!(v1.id, v2.id);
+        assert_eq!(v1.turns.len(), v2.turns.len());
+        for (a, b) in v1.turns.iter().zip(&v2.turns) {
+            assert_eq!(a.id, b.id, "position-stable turn ids");
+            assert_eq!(a.role, b.role);
+            assert_eq!(a.text, b.text);
+            assert_eq!(a.thinking, b.thinking);
+            assert_eq!(a.stop_reason, b.stop_reason);
+            assert_eq!(a.token_usage, b.token_usage, "usage survives re-expansion");
+            assert_eq!(a.tool_uses.len(), b.tool_uses.len());
+            for (ta, tb) in a.tool_uses.iter().zip(&b.tool_uses) {
+                assert_eq!(ta.id, tb.id);
+                assert_eq!(ta.name, tb.name, "native names pass through verbatim");
+                assert_eq!(ta.input, tb.input);
+                let (ra, rb) = (ta.result.as_ref().unwrap(), tb.result.as_ref().unwrap());
+                assert_eq!(ra.content, rb.content);
+                assert_eq!(ra.is_error, rb.is_error);
+            }
+        }
+        assert_eq!(v1.total_usage, v2.total_usage);
+        assert_eq!(v1.files_changed, v2.files_changed);
+    }
+
+    #[test]
+    fn projection_is_position_stable() {
+        let view = real_view();
+        let a = serde_json::to_value(reproject(&view)).unwrap();
+        let b = serde_json::to_value(reproject(&view)).unwrap();
+        assert_eq!(a, b, "same view must project byte-identically");
+    }
+
+    #[test]
+    fn projected_export_reparses_strictly() {
+        let export = reproject(&real_view());
+        let json = serde_json::to_string(&export).unwrap();
+        let back = ExportReader::parse_export_with(&json, true).unwrap();
+        assert_eq!(back.id, export.id);
+        // Every emitted block must be a known type — no Unknown degradation.
+        for m in &back.messages {
+            for b in &m.content {
+                assert!(matches!(b, Block::Known(_)), "unknown block in projection");
+            }
+        }
+    }
+
+    #[test]
+    fn delegation_ids_preserved() {
+        let v1 = real_view();
+        let task_id = v1
+            .turns
+            .iter()
+            .flat_map(|t| &t.tool_uses)
+            .find(|t| t.name == "Task")
+            .unwrap()
+            .id
+            .clone();
+        let v2 = to_view(&Session::from_export(reproject(&v1)));
+        let d = v2
+            .turns
+            .iter()
+            .flat_map(|t| &t.delegations)
+            .next()
+            .expect("delegation survives");
+        assert_eq!(d.agent_id, task_id);
+        assert_eq!(
+            d.result.as_deref(),
+            Some("`notes.md` contains **11 words**.")
+        );
+    }
+
+    #[test]
+    fn token_reexpansion_regenerates_derived_total_only() {
+        let export = reproject(&real_view());
+        let with_usage: Vec<&MessageUsage> =
+            export.messages.iter().filter_map(|m| m.usage.as_ref()).collect();
+        assert_eq!(with_usage.len(), 12, "one usage per assistant message");
+        for u in &with_usage {
+            // The verified invariant, regenerated on the way out.
+            let derived = u.input_tokens.unwrap_or(0) as u64
+                + u.cache_read_input_tokens.unwrap_or(0) as u64
+                + u.cache_creation_input_tokens.unwrap_or(0) as u64;
+            assert_eq!(u.total_input_tokens, Some(derived));
+            // Capacity is not spend and cannot be reconstructed.
+            assert!(u.max_input_tokens.is_none());
+        }
+    }
+
+    #[test]
+    fn usage_free_turns_emit_no_usage_stub() {
+        let export = reproject(&real_view());
+        for m in export.messages.iter().filter(|m| m.role == "user") {
+            assert!(m.usage.is_none(), "user messages never carry usage");
+        }
+    }
+
+    #[test]
+    fn tool_result_carriers_are_plumbing_shaped() {
+        let export = reproject(&real_view());
+        // 13 turns project to 24 messages: 11 invocations regain their
+        // carrier messages (matching the source's 24).
+        assert_eq!(export.messages.len(), 24);
+        let carriers: Vec<&Message> = export
+            .messages
+            .iter()
+            .filter(|m| m.is_tool_result_only())
+            .collect();
+        assert_eq!(carriers.len(), 11);
+        for c in carriers {
+            assert_eq!(c.role, "user");
+        }
+        // messageId is the 1-based position.
+        for (i, m) in export.messages.iter().enumerate() {
+            assert_eq!(m.message_id, Some(i as u64 + 1));
+        }
+    }
+
+    #[test]
+    fn shell_error_signal_round_trips_as_exit_code() {
+        let export = reproject(&real_view());
+        let failing: Vec<i64> = export
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|b| match b {
+                Block::Known(KnownBlock::ToolResult(tr)) => tr
+                    .run
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.get("exitCode"))
+                    .and_then(Value::as_i64),
+                _ => None,
+            })
+            .filter(|c| *c != 0)
+            .collect();
+        assert_eq!(failing, vec![1], "exactly the failing cat, exitCode 1");
+    }
+
+    #[test]
+    fn apply_patch_results_reconstruct_files_with_diffs() {
+        let export = reproject(&real_view());
+        let patch_results: Vec<&Value> = export
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|b| match b {
+                Block::Known(KnownBlock::ToolResult(tr)) => tr.run.result.as_ref(),
+                _ => None,
+            })
+            .filter(|r| r.get("files").is_some())
+            .collect();
+        assert_eq!(patch_results.len(), 3);
+        for r in patch_results {
+            let files = r["files"].as_array().unwrap();
+            assert!(!files.is_empty());
+            for f in files {
+                assert!(f["uri"].as_str().unwrap().starts_with("file:///"));
+                assert!(!f["diff"].as_str().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn envelope_carries_cwd_title_and_times() {
+        let export = reproject(&real_view());
+        assert_eq!(export.working_dir().as_deref(), Some("/tmp/amp-elicit"));
+        assert!(export.title.as_deref().unwrap().starts_with("You're going"));
+        assert!(export.created.is_some());
+        assert!(export.updated_at.is_some());
+        assert_eq!(
+            export.client_version().as_deref(),
+            Some("0.0.1785170481-ga5b614"),
+            "producer version carried into the platform stamp"
+        );
+    }
+
+    // ── Foreign-source remapping ─────────────────────────────────────
+
+    fn foreign_turn(name: &str, input: Value, category: Option<ToolCategory>) -> Turn {
+        Turn {
+            id: "t1".into(),
+            parent_id: None,
+            group_id: None,
+            role: Role::Assistant,
+            timestamp: "2026-07-27T18:00:00.000Z".into(),
+            text: String::new(),
+            thinking: None,
+            tool_uses: vec![ToolInvocation {
+                id: "call-1".into(),
+                name: name.into(),
+                input,
+                result: Some(ToolResult {
+                    content: "ok".into(),
+                    is_error: false,
+                }),
+                category,
+            }],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            attributed_token_usage: None,
+            environment: None,
+            delegations: Vec::new(),
+            file_mutations: Vec::new(),
+        }
+    }
+
+    fn project_single(turn: Turn) -> ThreadExport {
+        let view = ConversationView {
+            id: "T-foreign".into(),
+            turns: vec![turn],
+            ..Default::default()
+        };
+        reproject(&view)
+    }
+
+    fn first_tool(export: &ThreadExport) -> (String, Value) {
+        export
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .find_map(|b| match b {
+                Block::Known(KnownBlock::ToolUse(tu)) => {
+                    Some((tu.name.clone(), tu.input.clone()))
+                }
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn foreign_tools_remap_into_native_vocabulary() {
+        let (name, input) = first_tool(&project_single(foreign_turn(
+            "Bash",
+            json!({"command": "ls"}),
+            Some(ToolCategory::Shell),
+        )));
+        assert_eq!(name, "shell_command");
+        assert_eq!(input["command"], "ls");
+
+        let (name, input) = first_tool(&project_single(foreign_turn(
+            "Read",
+            json!({"file_path": "/tmp/x.rs"}),
+            Some(ToolCategory::FileRead),
+        )));
+        assert_eq!(name, "shell_command", "amp has no read tool");
+        assert_eq!(input["command"], "cat /tmp/x.rs");
+
+        let (name, _) = first_tool(&project_single(foreign_turn(
+            "Edit",
+            json!({"file_path": "/tmp/x.rs", "old_string": "a", "new_string": "b"}),
+            Some(ToolCategory::FileWrite),
+        )));
+        assert_eq!(name, "apply_patch");
+
+        let (name, input) = first_tool(&project_single(foreign_turn(
+            "Agent",
+            json!({"prompt": "count words", "description": "count"}),
+            Some(ToolCategory::Delegation),
+        )));
+        assert_eq!(name, "Task");
+        assert_eq!(input["prompt"], "count words");
+    }
+
+    #[test]
+    fn uncategorized_foreign_names_pass_through_unguessed() {
+        let (name, _) = first_tool(&project_single(foreign_turn(
+            "hologram",
+            json!({"x": 1}),
+            None,
+        )));
+        assert_eq!(name, "hologram");
+    }
+
+    #[test]
+    fn native_name_reclassification_invariant() {
+        // Every projected native name must classify back to the category it
+        // was chosen for — with the one blessed exception: FileRead maps to
+        // `shell_command` (Amp has no read tool), which classifies as Shell.
+        let cases = [
+            (ToolCategory::Shell, json!({}), ToolCategory::Shell),
+            (ToolCategory::FileRead, json!({}), ToolCategory::Shell),
+            (ToolCategory::FileWrite, json!({}), ToolCategory::FileWrite),
+            (ToolCategory::FileSearch, json!({}), ToolCategory::FileSearch),
+            (
+                ToolCategory::Network,
+                json!({"query": "x"}),
+                ToolCategory::Network,
+            ),
+            (
+                ToolCategory::Network,
+                json!({"url": "x"}),
+                ToolCategory::Network,
+            ),
+            (ToolCategory::Delegation, json!({}), ToolCategory::Delegation),
+        ];
+        for (cat, input, expect) in cases {
+            let native = native_name(cat, &input);
+            assert!(
+                NATIVE_TOOLS.contains(&native),
+                "{native} not in the native vocabulary"
+            );
+            assert_eq!(
+                tool_category(native),
+                Some(expect),
+                "reclassification of {native} (from {cat:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_tool_ids_get_position_stable_synthetic_ids() {
+        let mut turn = foreign_turn("Bash", json!({"command": "ls"}), Some(ToolCategory::Shell));
+        turn.tool_uses[0].id = String::new();
+        let export = project_single(turn);
+        let ids: Vec<String> = export
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|b| match b {
+                Block::Known(KnownBlock::ToolUse(tu)) => Some(tu.id.clone()),
+                Block::Known(KnownBlock::ToolResult(tr)) => Some(tr.tool_use_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["TU-t1-00".to_string(), "TU-t1-00".to_string()]);
+    }
+
+    #[test]
+    fn zero_usage_never_reappears_as_stub() {
+        let mut turn = foreign_turn("Bash", json!({"command": "ls"}), Some(ToolCategory::Shell));
+        turn.token_usage = None;
+        let export = project_single(turn);
+        assert!(export.messages[0].usage.is_none());
+    }
+
+    #[test]
+    fn partial_usage_expands_without_fabricating_counters() {
+        let mut turn = foreign_turn("Bash", json!({"command": "ls"}), Some(ToolCategory::Shell));
+        turn.token_usage = Some(TokenUsage {
+            input_tokens: None,
+            output_tokens: Some(42),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            breakdowns: Default::default(),
+        });
+        let export = project_single(turn);
+        let u = export.messages[0].usage.as_ref().unwrap();
+        assert_eq!(u.output_tokens, Some(42));
+        assert_eq!(u.input_tokens, None);
+        assert_eq!(
+            u.total_input_tokens, None,
+            "no input-side counters → no derived total"
+        );
     }
 }

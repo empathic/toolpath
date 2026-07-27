@@ -69,7 +69,11 @@ Every non-trivial claim carries an inline tag:
 6. **[resume-and-sessions.md](resume-and-sessions.md)** — the `amp threads`
    command surface, listing/continuation semantics, and the surface a future
    `AmpProjector` / `path resume` integration would have to match.
-7. **[known-gaps-and-sourcing.md](known-gaps-and-sourcing.md)** — methodology,
+7. **[writing-compatible.md](writing-compatible.md)** — the writer contract:
+   the three-route fork (local fabrication ruled out; server import chosen),
+   what `AmpProjector` emits, the import seam, and the observed-rejection
+   table the ⚠ live loop fills in.
+8. **[known-gaps-and-sourcing.md](known-gaps-and-sourcing.md)** — methodology,
    the full source list, and the unchecked verification checklist.
 
 ## Scope exclusions

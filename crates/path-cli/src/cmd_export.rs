@@ -135,6 +135,27 @@ pub enum ExportTarget {
         #[arg(short, long, conflicts_with = "project")]
         output: Option<PathBuf>,
     },
+    /// Project a toolpath document into an Amp thread (preview)
+    Amp {
+        /// Input: cache id (e.g. `amp-abc`) or path to a toolpath JSON file
+        #[arg(short, long)]
+        input: String,
+
+        /// Target project directory. Amp threads are server-authoritative
+        /// (there is no local thread store), so with this flag the projected
+        /// thread — rooted at this directory, under a fresh `T-…` id — is
+        /// submitted to the Amp server via the reverse-engineered import
+        /// seam, and a local copy lands under `~/.toolpath/amp-projected/`.
+        /// Never touches existing Amp threads.
+        #[arg(short, long)]
+        project: Option<PathBuf>,
+
+        /// Output the projected thread-export document as pretty JSON to
+        /// this file. Mutually exclusive with --project. With neither,
+        /// prints it to stdout.
+        #[arg(short, long, conflicts_with = "project")]
+        output: Option<PathBuf>,
+    },
     /// Project a toolpath document into a Cursor (IDE) composer
     Cursor {
         /// Input: cache id (e.g. `cursor-abc`) or path to a toolpath JSON file
@@ -247,6 +268,11 @@ pub fn run(target: ExportTarget) -> Result<()> {
             project,
             output,
         } => run_copilot(input, project, output),
+        ExportTarget::Amp {
+            input,
+            project,
+            output,
+        } => run_amp(input, project, output),
         ExportTarget::Cursor {
             input,
             project,
@@ -570,6 +596,230 @@ fn register_copilot_session(
 #[cfg(not(target_os = "emscripten"))]
 fn copilot_first_user_message(session: &toolpath_copilot::Session) -> String {
     session.first_user_text().unwrap_or_default()
+}
+
+/// Build an Amp [`ThreadExport`](toolpath_amp::ThreadExport) from `path`,
+/// rooted at `project_dir` with a fresh thread id.
+///
+/// **Preview / ⚠ unverified writer.** Amp threads are server-authoritative
+/// (piece-00 Q1: no local thread store exists), so this document only
+/// becomes resumable once the server accepts it — see
+/// `docs/agents/formats/amp/writing-compatible.md`.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn build_amp_session(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<toolpath_amp::ThreadExport> {
+    use toolpath_convo::ConversationProjector;
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+    let cwd_str = project_dir.to_string_lossy().to_string();
+
+    let mut view = toolpath_convo::extract_conversation(path);
+    // Fresh thread id so we never touch an existing Amp thread. Amp ids are
+    // `T-<uuidv7>` (time-ordered); mint the same shape.
+    view.id = format!("T-{}", uuid::Uuid::now_v7());
+    let base = view.base.get_or_insert_with(Default::default);
+    base.working_dir = Some(cwd_str);
+
+    toolpath_amp::AmpProjector::new()
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))
+}
+
+/// Project `path` into an Amp thread rooted at `project_dir` (writing a
+/// local copy under `~/.toolpath/amp-projected/` and attempting the
+/// server-side import under the freshly-minted id) and return that id.
+/// Only ever creates fresh ids — never touches existing Amp threads.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn project_amp(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+) -> Result<String> {
+    let export = build_amp_session(path, project_dir)?;
+    write_into_amp_project(&export)?;
+    Ok(export.id.clone())
+}
+
+/// `path p export amp` — project a document into an Amp thread (`--project`:
+/// server import under a fresh id), to a file (`--output`), or to stdout.
+fn run_amp(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (input, project, output);
+        anyhow::bail!("'path p export amp' requires a native environment");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let path = load_path_doc(&input)?;
+        match (project, output) {
+            (Some(project_dir), None) => {
+                let id = project_amp(&path, &project_dir)?;
+                eprintln!();
+                eprintln!("Resume with:");
+                eprintln!("  amp threads continue {id}");
+            }
+            (None, out) => {
+                // No target dir: root the thread at cwd and emit the export
+                // document to the file (or stdout) without contacting the
+                // Amp server.
+                let cwd = std::env::current_dir().context("resolve current directory")?;
+                let export = build_amp_session(&path, &cwd)?;
+                let json = serde_json::to_string_pretty(&export)?;
+                match out {
+                    Some(out_path) => {
+                        std::fs::write(&out_path, format!("{json}\n"))
+                            .with_context(|| format!("write {}", out_path.display()))?;
+                        eprintln!(
+                            "Wrote Amp thread export ({} messages) to {}",
+                            export.messages.len(),
+                            out_path.display()
+                        );
+                    }
+                    None => println!("{json}"),
+                }
+            }
+            (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
+        }
+        Ok(())
+    }
+}
+
+/// Outcome of the server-import attempt — surfaced as warnings, never as
+/// failures (the local artifact is always written first).
+#[cfg(not(target_os = "emscripten"))]
+enum AmpImportOutcome {
+    Imported { base: String },
+    Skipped { reason: String },
+    Failed { detail: String },
+}
+
+/// Land a projected thread: write the local artifact (INSERT-only), then
+/// attempt the server-side import, warning — not failing — when the server
+/// leg can't run or rejects the document.
+#[cfg(not(target_os = "emscripten"))]
+fn write_into_amp_project(export: &toolpath_amp::ThreadExport) -> Result<()> {
+    // Local artifact first: the record of exactly what was (or would be)
+    // submitted, and the substrate the writer-contract loop iterates on.
+    let dir = crate::config::config_dir()?.join("amp-projected");
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let artifact = dir.join(format!("{}.json", export.id));
+    let json = serde_json::to_string_pretty(export)?;
+    // INSERT-only: the id was freshly minted, so an existing file means an
+    // id collision — refuse rather than overwrite.
+    use std::io::Write;
+    let mut f = std::fs::File::create_new(&artifact)
+        .with_context(|| format!("create {} (id collision?)", artifact.display()))?;
+    f.write_all(json.as_bytes())
+        .and_then(|_| f.write_all(b"\n"))
+        .with_context(|| format!("write {}", artifact.display()))?;
+
+    eprintln!(
+        "Projected Amp thread {} ({} messages) → {}",
+        export.id,
+        export.messages.len(),
+        artifact.display()
+    );
+    match amp_server_import(export) {
+        AmpImportOutcome::Imported { base } => {
+            eprintln!("  imported to {base} under the fresh thread id");
+        }
+        AmpImportOutcome::Skipped { reason } => {
+            eprintln!(
+                "  warning: server import skipped: {reason} — `amp threads continue` won't find this thread"
+            );
+        }
+        AmpImportOutcome::Failed { detail } => {
+            eprintln!("  warning: server import failed: {detail}");
+            eprintln!(
+                "  (record the verbatim rejection in docs/agents/formats/amp/writing-compatible.md)"
+            );
+        }
+    }
+    eprintln!();
+    eprintln!("⚠️  Preview: resume into Amp is unverified — Amp threads are");
+    eprintln!("    server-authoritative and the import seam is reverse-engineered.");
+    eprintln!("Resume with:  amp threads continue {}", export.id);
+    Ok(())
+}
+
+/// The reverse-engineered server-import seam (`[reverse-eng, unexercised]`
+/// — see `docs/agents/formats/amp/known-gaps-and-sourcing.md` § Server API
+/// surface). Auth comes only from `$AMP_API_KEY` (the CLI's own documented
+/// variable); without it the import is skipped so no login flow is ever
+/// triggered. `$AMP_URL` overrides the base URL, which also gives tests a
+/// hermetic mock target.
+#[cfg(not(target_os = "emscripten"))]
+fn amp_server_import(export: &toolpath_amp::ThreadExport) -> AmpImportOutcome {
+    let Ok(token) = std::env::var("AMP_API_KEY") else {
+        return AmpImportOutcome::Skipped {
+            reason: "AMP_API_KEY is not set (auth is never read from amp's secrets.json)"
+                .to_string(),
+        };
+    };
+    if token.is_empty() {
+        return AmpImportOutcome::Skipped {
+            reason: "AMP_API_KEY is empty".to_string(),
+        };
+    }
+    let base = std::env::var("AMP_URL")
+        .unwrap_or_else(|_| "https://ampcode.com".to_string())
+        .trim_end_matches('/')
+        .to_string();
+
+    let client = match reqwest::Client::builder()
+        .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return AmpImportOutcome::Failed {
+                detail: format!("http client: {e}"),
+            };
+        }
+    };
+
+    // Candidate route from the bundle's own import call: create/ensure the
+    // thread actor, hand it the whole serialized thread, then mark it
+    // imported. 409 (already imported) is tolerated by Amp's own client, so
+    // it is tolerated here too.
+    let body = serde_json::json!({ "thread": export });
+    let create_url = format!("{base}/api/thread-actors");
+    let mark_url = format!("{base}/api/thread-actors/{}", export.id);
+    crate::cmd_pathbase::block_on(async {
+        let resp = client
+            .post(&create_url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await;
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                return AmpImportOutcome::Failed {
+                    detail: format!("POST {create_url}: {e}"),
+                };
+            }
+        };
+        let status = resp.status();
+        if !status.is_success() && status.as_u16() != 409 {
+            let text = resp.text().await.unwrap_or_default();
+            return AmpImportOutcome::Failed {
+                detail: format!("POST {create_url} → {status}: {text}"),
+            };
+        }
+        // Best-effort "mark imported" — its failure message in the bundle
+        // ("Failed to mark thread <id> as imported") suggests it's advisory.
+        let _ = client
+            .post(&mark_url)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({}))
+            .send()
+            .await;
+        AmpImportOutcome::Imported { base }
+    })
 }
 
 /// Project `path` into an opencode session under `project_dir` and return
@@ -3172,6 +3422,61 @@ mod tests {
         assert!(
             claude_projects.exists(),
             "claude projects dir missing under HOME"
+        );
+    }
+
+    #[test]
+    fn project_amp_returns_session_id_and_writes_artifact() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("toolpath");
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let path = make_convo_path("amp://T-original-thread");
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_config = std::env::var_os("TOOLPATH_CONFIG_DIR");
+        let prior_key = std::env::var_os("AMP_API_KEY");
+        unsafe {
+            std::env::set_var("TOOLPATH_CONFIG_DIR", &config);
+            // No key ⇒ the server leg is skipped: this test must never
+            // touch the network (and must still succeed — warn-don't-fail).
+            std::env::remove_var("AMP_API_KEY");
+        }
+        let result = project_amp(&path, &cwd);
+        unsafe {
+            match prior_config {
+                Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
+                None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
+            }
+            match prior_key {
+                Some(v) => std::env::set_var("AMP_API_KEY", v),
+                None => std::env::remove_var("AMP_API_KEY"),
+            }
+        }
+
+        let id = result.expect("project_amp should succeed without a server");
+        assert!(id.starts_with("T-"), "fresh amp-shaped thread id: {id}");
+        assert_ne!(id, "T-original-thread", "id must be freshly minted");
+
+        // The local artifact is the record of what would be imported.
+        let artifact = config.join("amp-projected").join(format!("{id}.json"));
+        assert!(artifact.exists(), "projected artifact missing");
+        let export: toolpath_amp::ThreadExport =
+            serde_json::from_str(&std::fs::read_to_string(&artifact).unwrap()).unwrap();
+        assert_eq!(export.id, id);
+        assert_eq!(export.messages.len(), 1);
+        assert_eq!(
+            export.working_dir().as_deref(),
+            Some(
+                std::fs::canonicalize(&cwd)
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_ref()
+            ),
+            "thread rooted at the resume directory"
         );
     }
 

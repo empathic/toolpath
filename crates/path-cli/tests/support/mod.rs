@@ -70,6 +70,36 @@ impl Drop for ScopedHome {
     }
 }
 
+/// RAII guard that removes an env var for the guard's lifetime,
+/// restoring the prior value on drop. Used to keep tests hermetic when
+/// production code keys behavior off ambient variables (e.g.
+/// `AMP_API_KEY` gating the amp server-import leg).
+pub struct ScopedEnvRemove {
+    key: &'static str,
+    prev: Option<OsString>,
+}
+
+impl ScopedEnvRemove {
+    pub fn new(key: &'static str) -> Self {
+        let prev = std::env::var_os(key);
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self { key, prev }
+    }
+}
+
+impl Drop for ScopedEnvRemove {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 /// RAII guard that prepends a tempdir of fake binaries to `$PATH`.
 pub struct ScopedPath {
     _td: tempfile::TempDir,

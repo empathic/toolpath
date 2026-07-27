@@ -16,8 +16,8 @@
 //! With `--harness X`, `X` is validated against `$PATH` and used.
 //! Without `--harness`, an `fzf` picker shows installed harnesses
 //! with the source harness pre-selected. Source comes from
-//! `path.meta.source` (`claude-code`, `gemini-cli`, `codex`,
-//! `opencode`, `pi`) with actor-string fallback.
+//! `path.meta.source` (`claude-code`, `gemini-cli`, `codex`, `copilot`,
+//! `opencode`, `cursor`, `pi`, `amp`) with actor-string fallback.
 //!
 //! ## Project directory
 //!
@@ -131,6 +131,7 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
             "opencode" => return Some(Harness::Opencode),
             "cursor" => return Some(Harness::Cursor),
             "pi" => return Some(Harness::Pi),
+            "amp" => return Some(Harness::Amp),
             _ => {} // fall through to actor sniffing
         }
     }
@@ -156,6 +157,9 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
         }
         if actor.starts_with("agent:pi") {
             return Some(Harness::Pi);
+        }
+        if actor.starts_with("agent:amp") {
+            return Some(Harness::Amp);
         }
     }
     None
@@ -347,7 +351,7 @@ pub(crate) fn pick_harness(
 
     if installed.is_empty() {
         anyhow::bail!(
-            "no installed harnesses found on PATH; install one of: claude, gemini, codex, opencode, cursor, pi"
+            "no installed harnesses found on PATH; install one of: claude, gemini, codex, copilot, opencode, cursor, pi, amp"
         );
     }
 
@@ -468,11 +472,7 @@ pub(crate) fn project_into_harness(
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
         Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
         Harness::Pi => crate::cmd_export::project_pi(path, cwd),
-        // Piece 03: Amp threads are server-authoritative; whether a local
-        // projection can be resumed at all is the deferred writer recon.
-        Harness::Amp => {
-            anyhow::bail!("resuming into Amp is not supported yet (preview)")
-        }
+        Harness::Amp => crate::cmd_export::project_amp(path, cwd),
     }
 }
 
@@ -682,6 +682,22 @@ mod tests {
     fn infer_source_harness_actor_sniff_pi() {
         let path = make_path_with_actor("agent:pi");
         assert_eq!(infer_source_harness(&path), Some(Harness::Pi));
+    }
+
+    #[test]
+    fn infer_source_harness_meta_source_amp() {
+        let mut path = make_path_with_actor("agent:something-else");
+        path.meta = Some(PathMeta {
+            source: Some("amp".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(infer_source_harness(&path), Some(Harness::Amp));
+    }
+
+    #[test]
+    fn infer_source_harness_actor_sniff_amp() {
+        let path = make_path_with_actor("agent:amp");
+        assert_eq!(infer_source_harness(&path), Some(Harness::Amp));
     }
 
     #[test]
@@ -973,6 +989,16 @@ mod tests {
         assert_eq!(
             argv_for(Harness::Pi, "abc"),
             vec!["--session".to_string(), "abc".to_string()]
+        );
+        // Per the recon: `amp threads continue <id>` [observed for -x;
+        // inferred for the TUI] — see docs/agents/formats/amp/resume-and-sessions.md.
+        assert_eq!(
+            argv_for(Harness::Amp, "T-abc"),
+            vec![
+                "threads".to_string(),
+                "continue".to_string(),
+                "T-abc".to_string()
+            ]
         );
     }
 

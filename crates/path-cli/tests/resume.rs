@@ -142,6 +142,48 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
 }
 
 #[test]
+fn file_input_explicit_amp_projects_and_records_exec() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("amp");
+    // Amp threads are server-authoritative; without AMP_API_KEY the server
+    // leg is skipped (warn-don't-fail), which keeps this test offline. The
+    // guard also protects a developer machine where the key is exported.
+    let _no_key = ScopedEnvRemove::new("AMP_API_KEY");
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:amp", "amp://resume-amp-int");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(args_explicit(doc_file, cwd.path(), Harness::Amp), &recorder).unwrap();
+
+    // Resume argv is `amp threads continue <fresh-T-id>`.
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "amp");
+    assert_eq!(cap.args[0], "threads");
+    assert_eq!(cap.args[1], "continue");
+    assert!(
+        cap.args[2].starts_with("T-"),
+        "fresh amp-shaped thread id, got {:?}",
+        cap.args[2]
+    );
+
+    // Side effect: the projected thread-export artifact was written under
+    // TOOLPATH_CONFIG_DIR/amp-projected/<id>.json (Amp has no local store
+    // of its own to write into — the artifact records what would be
+    // imported server-side).
+    let artifact = std::path::PathBuf::from(std::env::var_os("TOOLPATH_CONFIG_DIR").unwrap())
+        .join("amp-projected")
+        .join(format!("{}.json", cap.args[2]));
+    assert!(
+        artifact.is_file(),
+        "projected amp artifact missing at {}",
+        artifact.display()
+    );
+}
+
+#[test]
 fn file_input_explicit_opencode_projects_and_records_exec() {
     let _env = env_lock();
     let _home = ScopedHome::new();
