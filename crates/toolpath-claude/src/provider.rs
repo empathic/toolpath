@@ -12,9 +12,8 @@ use crate::types::{Conversation, ConversationEntry, Message, MessageContent, Mes
 #[cfg(any(feature = "watcher", test))]
 use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView,
-    ConvoError, DelegatedWork, EnvironmentSnapshot, Item, Role, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn,
+    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
+    EnvironmentSnapshot, Item, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -383,9 +382,6 @@ fn is_compact_boundary(entry: &ConversationEntry) -> bool {
             .unwrap_or(false)
 }
 
-
-
-
 /// Convert a full conversation to a view with cross-entry tool result assembly.
 ///
 /// Tool-result-only user entries are absorbed into the preceding assistant
@@ -414,16 +410,18 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // rewrite parents of subsequently absorbed entries.
     let mut last_anchor_uuid: Option<String> = None;
 
-    // Duplicate-uuid stripping. When Claude compacts, it re-emits a block of
-    // earlier tool_use/tool_result entries — already-seen uuids — that it
-    // "pins" into the post-compaction context, immediately before the
-    // boundary. We keep only the FIRST occurrence of each uuid: the original
+    // Duplicate-uuid stripping. Real compacted sessions re-emit a block of
+    // earlier tool_use/tool_result entries — reusing their original uuids —
+    // immediately before the boundary: the entries Claude carries into the
+    // post-compaction context. (Observed in captured sessions; the format
+    // docs in docs/agents/formats/claude-code/ don't describe this replay
+    // block.) We keep only the FIRST occurrence of each uuid: the original
     // carries the true lineage, and the re-emission is a context-window
     // artifact, not provenance. Stripping must happen here, before
-    // `derive_path` — its step-level dedup compares emitted steps, where
-    // group-total token stamping can make a replayed copy differ from its
-    // original and survive as a rename. The kept provenance is the marked
-    // tail alone — see `compaction_from_boundary`.
+    // `derive_path` — its dedup skips byte-identical replays, but the
+    // group-total token stamping below (`canonicalize_message_usage`) can
+    // make a replayed copy differ from its original and survive as a
+    // renamed step.
     let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     let entries = &convo.entries;
@@ -433,7 +431,10 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
 
         // Strip re-emitted entries: any non-boundary entry whose uuid already
         // appeared earlier in this conversation. Boundary entries are exempt
-        // (their uuid is always unique).
+        // so every compaction marker survives into the item stream — a
+        // continuation file can repeat its parent's boundary verbatim
+        // (session-chains.md §Duplicate compact_boundary), and a
+        // byte-identical copy collapses later, in `derive_path`.
         if !is_compact_boundary(entry)
             && !entry.uuid.is_empty()
             && !seen_uuids.insert(entry.uuid.clone())
@@ -441,7 +442,6 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             i += 1;
             continue;
         }
-
 
         let Some(msg) = &entry.message else {
             // Message-less entries (attachments, snapshots) survive as
@@ -1361,6 +1361,99 @@ mod tests {
         let turns: Vec<&Turn> = view.turns().collect();
         assert_eq!(turns.len(), 2);
         assert!(turns[1].tool_uses[0].result.is_none());
+    }
+
+    fn item_ids(view: &ConversationView) -> Vec<&str> {
+        view.items
+            .iter()
+            .map(|item| match item {
+                Item::Turn(t) => t.id.as_str(),
+                Item::Event(e) => e.id.as_str(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_replayed_duplicate_uuids_are_stripped() {
+        // The compaction replay shape: before the boundary, earlier
+        // tool_use/tool_result entries are re-emitted with their original
+        // uuids. Only the first occurrence of each uuid may reach the item
+        // stream — a surviving replay would duplicate a turn id.
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let assistant = r#"{"uuid":"u2","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading..."},{"type":"tool_use","id":"t1","name":"Read","input":{"path":"a.rs"}}],"stop_reason":"tool_use"}}"#;
+        let carrier = r#"{"uuid":"u3","type":"user","parentUuid":"u2","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file a contents","is_error":false}]}}"#;
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Read a file"}}"#,
+            assistant,
+            carrier,
+            assistant,
+            carrier,
+            r#"{"uuid":"cb-1","type":"compact_boundary","parentUuid":null,"logicalParentUuid":"u3","timestamp":"2024-01-01T00:00:03Z","compactMetadata":{"trigger":"auto","preTokens":180000}}"#,
+            r#"{"uuid":"u4","type":"user","parentUuid":"cb-1","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":"Keep going"}}"#,
+        ];
+        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
+
+        let turn_ids: Vec<&str> = view.turns().map(|t| t.id.as_str()).collect();
+        assert_eq!(
+            turn_ids,
+            vec!["u1", "u2", "u4"],
+            "replayed u2 must be stripped, carriers absorbed"
+        );
+
+        let ids = item_ids(&view);
+        let mut deduped = ids.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(deduped.len(), ids.len(), "duplicate item ids: {ids:?}");
+
+        let result = view
+            .turns()
+            .find(|t| t.id == "u2")
+            .and_then(|t| t.tool_uses[0].result.as_ref())
+            .expect("tool result assembled");
+        assert_eq!(result.content, "file a contents");
+    }
+
+    #[test]
+    fn test_compact_boundary_is_exempt_from_uuid_dedup() {
+        // A continuation file can repeat its parent's compact_boundary
+        // verbatim. Boundary entries bypass the duplicate-uuid strip, so
+        // both copies survive to the item stream (a byte-identical copy
+        // collapses later, in derive_path).
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let boundary = r#"{"uuid":"cb-1","type":"compact_boundary","parentUuid":null,"logicalParentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","compactMetadata":{"trigger":"auto","preTokens":180000}}"#;
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
+            boundary,
+            boundary,
+            r#"{"uuid":"u2","type":"user","parentUuid":"cb-1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":"After compaction"}}"#,
+        ];
+        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
+
+        assert_eq!(item_ids(&view), vec!["u1", "cb-1", "cb-1", "u2"]);
+        let boundaries: Vec<_> = view
+            .events()
+            .filter(|e| e.event_type == "compact_boundary")
+            .collect();
+        assert_eq!(boundaries.len(), 2, "both boundary copies survive to_view");
     }
 
     #[test]

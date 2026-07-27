@@ -12,8 +12,7 @@ use crate::types::{
 use serde_json::json;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result,
-    Role, ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
 
 // ── ClaudeProjector ───────────────────────────────────────────────────
@@ -248,7 +247,6 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
 
     Ok(convo)
 }
-
 
 /// Rebuild a Claude tool-result user entry verbatim from a preserved event.
 ///
