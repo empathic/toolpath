@@ -222,7 +222,6 @@ fn truncate_output(output: &str, max: usize) -> String {
     }
 }
 
-
 /// Resolve an item's parent reference past entries that produced no item
 /// (the session header, `model_change` / `thinking_level_change` / `label`
 /// metadata, folded tool results), walking the entry parent chain up to
@@ -1061,11 +1060,71 @@ mod tests {
         assert_eq!(v.turns().nth(1).unwrap().parent_id.as_deref(), Some("a"));
     }
 
+    #[test]
+    fn test_compaction_produces_system_turn() {
+        let c = Entry::Compaction {
+            base: base("c", None, "t"),
+            summary: "sum".into(),
+            first_kept_entry_id: Some("x".into()),
+            tokens_before: 100,
+            details: None,
+            from_hook: Some(false),
+            extra: HashMap::new(),
+        };
+        let v = session_to_view(&session_from(vec![c], "/tmp/p"));
+        let t = v.turns().next().unwrap();
+        assert_eq!(t.role, Role::System);
+        assert!(t.text.starts_with("Compacted"));
+    }
 
+    #[test]
+    fn test_resolve_item_parent_skips_discarded_entries() {
+        // Entry chain: turn "a" ← model_change "mc1" ← model_change "mc2".
+        // A parent naming "mc2" resolves to "a", the nearest item ancestor.
+        let entry_parents: HashMap<&str, Option<&str>> =
+            [("a", None), ("mc1", Some("a")), ("mc2", Some("mc1"))]
+                .into_iter()
+                .collect();
+        let item_ids: std::collections::HashSet<String> =
+            std::iter::once("a".to_string()).collect();
+        assert_eq!(
+            resolve_item_parent(Some("mc2"), &entry_parents, &item_ids, "sess-1-init"),
+            Some("a".to_string())
+        );
+    }
 
+    #[test]
+    fn test_resolve_item_parent_virtual_root_resolves_to_none() {
+        // Pi writes "<session-id>-init" as the first entry's parentId
+        // without any such entry existing. A chain ending there is rooted.
+        let entry_parents: HashMap<&str, Option<&str>> =
+            std::iter::once(("mc", Some("sess-1-init"))).collect();
+        let item_ids = std::collections::HashSet::new();
+        assert_eq!(
+            resolve_item_parent(
+                Some("sess-1-init"),
+                &entry_parents,
+                &item_ids,
+                "sess-1-init"
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_item_parent(Some("mc"), &entry_parents, &item_ids, "sess-1-init"),
+            None
+        );
+    }
 
-
-
+    #[test]
+    fn test_resolve_item_parent_terminates_on_cycle() {
+        let entry_parents: HashMap<&str, Option<&str>> =
+            [("x", Some("y")), ("y", Some("x"))].into_iter().collect();
+        let item_ids = std::collections::HashSet::new();
+        assert_eq!(
+            resolve_item_parent(Some("x"), &entry_parents, &item_ids, "sess-1-init"),
+            None
+        );
+    }
 
     #[test]
     fn test_branch_summary_produces_system_turn() {
@@ -1368,5 +1427,4 @@ mod tests {
         );
         assert_eq!(v.turns().next().unwrap().text, "body");
     }
-
 }

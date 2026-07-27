@@ -6,14 +6,13 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result,
-    Role, ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
 
 use crate::types::{
-    AssistantMessage, Message, MessageData, MessagePath, MessageTime, ModelRef,
-    Part, PartData, ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange,
-    Tokens, ToolPart, ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
+    AssistantMessage, Message, MessageData, MessagePath, MessageTime, ModelRef, Part, PartData,
+    ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange, Tokens, ToolPart,
+    ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
 };
 
 const DEFAULT_AGENT: &str = "build";
@@ -148,14 +147,6 @@ fn project_view(
     let mut messages: Vec<Message> = Vec::new();
     let mut prev_msg_id: Option<String> = None;
     let mut counter: u32 = 0;
-    // IR turn id → the message id we re-mint for it, so a compaction's kept
-    // tail anchor (an IR turn id) can be rewritten to the id the projected
-    // session actually carries — otherwise `tailStartID` would dangle and the
-    // kept anchor would collapse to `None` on re-read.
-    let mut id_map: HashMap<String, String> = HashMap::new();
-    // Indexes (into `messages`) of boundary messages projected from a
-    // wholesale compaction (`kept_from: None`). Their `tailStartID` is the
-    // first message written after the boundary, patched in once it exists.
 
     let default_provider = cfg
         .default_model_provider
@@ -181,7 +172,6 @@ fn project_view(
                         &default_provider,
                         &default_model,
                     );
-                    id_map.insert(turn.id.clone(), msg.id.clone());
                     prev_msg_id = Some(msg.id.clone());
                     messages.push(msg);
                 }
@@ -199,7 +189,6 @@ fn project_view(
                         &default_provider,
                         &default_model,
                     );
-                    id_map.insert(turn.id.clone(), msg.id.clone());
                     prev_msg_id = Some(msg.id.clone());
                     messages.push(msg);
                 }
@@ -216,7 +205,6 @@ fn project_view(
             }
         }
     }
-
 
     monotonize_times(&mut messages);
 
@@ -344,7 +332,6 @@ fn build_user_message(
         parts,
     }
 }
-
 
 #[allow(clippy::too_many_arguments)]
 fn build_assistant_message(
@@ -867,7 +854,6 @@ mod tests {
         assert!(s.messages.is_empty());
     }
 
-
     #[test]
     fn user_turn_becomes_user_message_with_text_part() {
         let s = OpencodeProjector::default()
@@ -1007,5 +993,111 @@ mod tests {
             MessageData::Assistant(a) => assert_eq!(a.parent_id, user_id),
             _ => panic!("expected assistant"),
         }
+    }
+
+    fn user_msg(id: &str, t: i64) -> Message {
+        Message {
+            id: id.into(),
+            session_id: "s".into(),
+            time_created: t,
+            time_updated: t,
+            data: MessageData::User(UserMessage {
+                time: MessageTime {
+                    created: t,
+                    completed: None,
+                },
+                agent: "build".into(),
+                model: ModelRef {
+                    provider_id: "anthropic".into(),
+                    model_id: "m".into(),
+                    variant: None,
+                },
+                format: None,
+                summary: None,
+                system: None,
+                tools: None,
+                extra: HashMap::new(),
+            }),
+            parts: vec![],
+        }
+    }
+
+    fn assistant_msg(id: &str, t: i64) -> Message {
+        Message {
+            id: id.into(),
+            session_id: "s".into(),
+            time_created: t,
+            time_updated: t,
+            data: MessageData::Assistant(AssistantMessage {
+                parent_id: String::new(),
+                time: MessageTime {
+                    created: t,
+                    completed: Some(t),
+                },
+                error: None,
+                agent: "build".into(),
+                mode: Some("build".into()),
+                model_id: "m".into(),
+                provider_id: "anthropic".into(),
+                path: MessagePath {
+                    cwd: "/p".into(),
+                    root: "/p".into(),
+                },
+                summary: None,
+                cost: 0.0,
+                tokens: Tokens::default(),
+                structured: None,
+                variant: None,
+                finish: None,
+                extra: HashMap::new(),
+            }),
+            parts: vec![],
+        }
+    }
+
+    #[test]
+    fn monotonize_times_bumps_ties_and_regressions() {
+        let mut msgs = vec![
+            user_msg("a", 100),
+            user_msg("b", 100),
+            assistant_msg("c", 50),
+        ];
+        monotonize_times(&mut msgs);
+        let times: Vec<i64> = msgs.iter().map(|m| m.time_created).collect();
+        assert_eq!(times, vec![100, 101, 102]);
+        match &msgs[1].data {
+            MessageData::User(u) => assert_eq!(u.time.created, 101),
+            _ => panic!("expected user"),
+        }
+        match &msgs[2].data {
+            MessageData::Assistant(a) => {
+                assert_eq!(a.time.created, 102);
+                assert_eq!(a.time.completed, Some(102));
+            }
+            _ => panic!("expected assistant"),
+        }
+        assert!(msgs.iter().all(|m| m.time_updated >= m.time_created));
+    }
+
+    #[test]
+    fn monotonize_times_keeps_reader_order_stable() {
+        // The reader orders rows by (time_created, id); ids are arranged
+        // so an unbumped tie would reorder relative to emission order.
+        let mut msgs = vec![user_msg("z", 100), user_msg("a", 100), user_msg("m", 100)];
+        monotonize_times(&mut msgs);
+        let emitted: Vec<String> = msgs.iter().map(|m| m.id.clone()).collect();
+        let mut reread = msgs.clone();
+        reread
+            .sort_by(|x, y| (x.time_created, x.id.as_str()).cmp(&(y.time_created, y.id.as_str())));
+        let reread_ids: Vec<String> = reread.iter().map(|m| m.id.clone()).collect();
+        assert_eq!(reread_ids, emitted);
+    }
+
+    #[test]
+    fn monotonize_times_leaves_increasing_sequence_untouched() {
+        let mut msgs = vec![user_msg("a", 1), user_msg("b", 2)];
+        monotonize_times(&mut msgs);
+        assert_eq!(msgs[0].time_created, 1);
+        assert_eq!(msgs[1].time_created, 2);
     }
 }

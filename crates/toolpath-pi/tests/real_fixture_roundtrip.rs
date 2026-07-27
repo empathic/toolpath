@@ -233,4 +233,3 @@ fn projector_output_is_re_parseable_by_reader() {
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
 }
-
