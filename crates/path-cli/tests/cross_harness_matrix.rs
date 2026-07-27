@@ -509,9 +509,7 @@ mod invariants {
     }
 
     fn meaningful_turns(view: &ConversationView) -> Vec<&Turn> {
-        view.turns()
-            .filter(|t| !is_system_envelope(t))
-            .collect()
+        view.turns().filter(|t| !is_system_envelope(t)).collect()
     }
 
     pub fn turn_count_and_role_sequence(
@@ -1092,7 +1090,11 @@ fn matrix_translation() {
                 h.name()
             )
         });
-        eprintln!("loaded {} fixture: {} turns", h.name(), view.turns().count());
+        eprintln!(
+            "loaded {} fixture: {} turns",
+            h.name(),
+            view.turns().count()
+        );
         sources.push((h.name().to_string(), view));
     }
     run_matrix("matrix (real fixtures)", &sources);

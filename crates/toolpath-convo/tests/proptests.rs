@@ -85,7 +85,11 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
             Elem::Turn(id_slot, p, kind, muts) => {
                 let id = format!("t{id_slot}");
                 let parent = resolve(p, &ids);
-                let role = if kind == 0 { Role::User } else { Role::Assistant };
+                let role = if kind == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                };
                 let text = format!("text-{id_slot}-{kind}");
                 let mut t = turn(&id, parent.as_deref(), role, &text);
                 t.model = match kind {

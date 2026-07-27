@@ -42,9 +42,9 @@ use crate::types::{
 };
 use serde_json::Value;
 use toolpath_convo::{
-    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
-    ConvoError, EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase,
-    TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
+    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Provider for Codex sessions.
@@ -187,7 +187,6 @@ pub fn to_turn(line_payload: &ResponseItem) -> Option<Turn> {
         None
     }
 }
-
 
 struct Builder<'a> {
     session: &'a Session,
@@ -662,7 +661,6 @@ impl<'a> Builder<'a> {
         self.turns.push(turn);
     }
 
-
     fn drain_pending_onto(&mut self, turn: &mut Turn) {
         if turn.role != Role::Assistant {
             return;
@@ -771,7 +769,6 @@ impl<'a> Builder<'a> {
             .or_else(|| self.turns.len().checked_sub(1))
     }
 }
-
 
 // ── Patch → FileMutation conversion ─────────────────────────────────
 
