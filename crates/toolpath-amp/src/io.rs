@@ -87,6 +87,91 @@ impl ThreadFetcher for CliFetcher {
     }
 }
 
+/// Creates and seeds Amp threads — the writer half of [`ThreadFetcher`].
+///
+/// Amp threads are server-authoritative: there is no local store to write
+/// into, and the server's own thread-import path is a Rivet actor call
+/// behind a websocket-token handshake (see
+/// `docs/agents/formats/amp/writing-compatible.md`). What *is* first-party,
+/// documented, and sufficient for resume is this two-step: create an empty
+/// thread server-side, then send it one user message carrying the prior
+/// session's context.
+pub trait ThreadWriter: Send + Sync + std::fmt::Debug {
+    /// Create a fresh, empty thread and return its server-assigned id.
+    /// Only ever creates new threads — never touches existing ones.
+    fn create_thread(&self) -> Result<String>;
+
+    /// Send one user message into a thread. This runs a real agent turn.
+    fn send_message(&self, thread_id: &str, message: &str) -> Result<()>;
+}
+
+/// Production writer: shells out to the `amp` CLI (`threads new`,
+/// `threads continue -x`), inheriting its login exactly like [`CliFetcher`].
+#[derive(Debug, Clone)]
+pub struct CliWriter {
+    bin: PathBuf,
+}
+
+impl Default for CliWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CliWriter {
+    pub fn new() -> Self {
+        Self { bin: "amp".into() }
+    }
+
+    /// Override the binary path (tests point this at a stub script).
+    pub fn with_bin<P: Into<PathBuf>>(mut self, bin: P) -> Self {
+        self.bin = bin.into();
+        self
+    }
+
+    fn run(&self, args: &[&str]) -> Result<String> {
+        let out = std::process::Command::new(&self.bin)
+            .args(args)
+            .output()
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => ConvoError::AmpCliNotFound,
+                _ => ConvoError::Io(e),
+            })?;
+        if !out.status.success() {
+            return Err(ConvoError::AmpCliFailed {
+                command: format!("{} {}", self.bin.display(), args.join(" ")),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+}
+
+impl ThreadWriter for CliWriter {
+    fn create_thread(&self) -> Result<String> {
+        // `amp threads new` prints just the id, and creates the thread
+        // server-side without running a model turn.
+        let out = self.run(&["threads", "new"])?;
+        let id = out
+            .split_whitespace()
+            .find(|t| t.starts_with("T-"))
+            .ok_or_else(|| ConvoError::AmpCliFailed {
+                command: format!("{} threads new", self.bin.display()),
+                stderr: format!("no T-… thread id in output: {}", out.trim()),
+            })?;
+        Ok(id.to_string())
+    }
+
+    fn send_message(&self, thread_id: &str, message: &str) -> Result<()> {
+        // `-x <message>` is the documented execute-mode ingress. The message
+        // rides argv rather than `--stream-json-input` so the invocation
+        // stays a single well-formed command (and stub binaries in tests see
+        // exactly that).
+        self.run(&["threads", "continue", thread_id, "-x", message])?;
+        Ok(())
+    }
+}
+
 /// Test/offline fetcher: reads pre-exported `<id>.json` files from a
 /// directory.
 #[derive(Debug, Clone)]

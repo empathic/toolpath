@@ -36,6 +36,29 @@ use toolpath_convo::{
     ConversationProjector, ConversationView, Result, Role, ToolInvocation, Turn,
 };
 
+/// Build the single user message that rehydrates a prior session into a
+/// fresh Amp thread.
+///
+/// This is how `path resume --harness amp` transfers context, and it is a
+/// **prose transcript, not a native tool-block transcript** — see the
+/// fidelity caveat in `docs/agents/formats/amp/writing-compatible.md`. Amp
+/// exposes no first-party way to inject assistant/tool blocks into a
+/// thread, so the resumed session carries the prior work as narrative the
+/// model reads, which is sufficient for it to answer questions about that
+/// work but is not byte-level provenance.
+pub fn rehydration_prompt(transcript: &str) -> String {
+    format!(
+        "You are resuming a coding session that ran in a different agent. \
+The full transcript of that prior session follows, rendered as Markdown. \
+Read it as your own history: the work described in it has already \
+happened, and any files it changed are already on disk.\n\n\
+Do not redo that work. Acknowledge with exactly `ready` and then wait for \
+my next instruction.\n\n\
+--- BEGIN PRIOR SESSION TRANSCRIPT ---\n\n{transcript}\n\n\
+--- END PRIOR SESSION TRANSCRIPT ---\n"
+    )
+}
+
 /// Projects a [`ConversationView`] into an Amp [`ThreadExport`].
 #[derive(Debug, Clone, Default)]
 pub struct AmpProjector;

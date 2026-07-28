@@ -145,11 +145,22 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
 fn file_input_explicit_amp_projects_and_records_exec() {
     let _env = env_lock();
     let _home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("amp");
-    // Amp threads are server-authoritative; without AMP_API_KEY the server
-    // leg is skipped (warn-don't-fail), which keeps this test offline. The
-    // guard also protects a developer machine where the key is exported.
-    let _no_key = ScopedEnvRemove::new("AMP_API_KEY");
+    // Amp threads are server-authoritative, so projection shells out to the
+    // CLI (`threads new` for a server-assigned id, then `threads continue
+    // -x` to seed context). The stub answers both and records the seeding
+    // invocation, so the real argv surface is exercised without creating a
+    // thread or spending credits.
+    let _path = ScopedPath::with_script(
+        "amp",
+        r#"if [ "$1" = "threads" ] && [ "$2" = "new" ]; then
+  echo T-019fstub-0000-7000-8000-000000000001
+elif [ "$1" = "threads" ] && [ "$2" = "continue" ]; then
+  printf '%s' "$5" > "${AMP_STUB_SEED_FILE:-/dev/null}"
+fi
+exit 0"#,
+    );
+    let seed_file = tempfile::NamedTempFile::new().unwrap();
+    let _seed = ScopedEnvSet::new("AMP_STUB_SEED_FILE", seed_file.path());
     let cwd = tempfile::tempdir().unwrap();
 
     let path = make_convo_path("agent:amp", "amp://resume-amp-int");
@@ -158,21 +169,25 @@ fn file_input_explicit_amp_projects_and_records_exec() {
     let recorder = RecordingExec::default();
     run_with_strategy(args_explicit(doc_file, cwd.path(), Harness::Amp), &recorder).unwrap();
 
-    // Resume argv is `amp threads continue <fresh-T-id>`.
+    // Resume argv is `amp threads continue <server-assigned id>`.
     let cap = recorder.captured();
     assert_eq!(cap.binary, "amp");
     assert_eq!(cap.args[0], "threads");
     assert_eq!(cap.args[1], "continue");
-    assert!(
-        cap.args[2].starts_with("T-"),
-        "fresh amp-shaped thread id, got {:?}",
-        cap.args[2]
+    assert_eq!(
+        cap.args[2], "T-019fstub-0000-7000-8000-000000000001",
+        "resumes the id the server assigned, not a locally minted one"
     );
 
-    // Side effect: the projected thread-export artifact was written under
-    // TOOLPATH_CONFIG_DIR/amp-projected/<id>.json (Amp has no local store
-    // of its own to write into — the artifact records what would be
-    // imported server-side).
+    // The seeding turn carried the prior session's transcript — that is how
+    // context reaches an Amp thread (it has no local store to write into).
+    let seeded = std::fs::read_to_string(seed_file.path()).unwrap();
+    assert!(
+        seeded.contains("BEGIN PRIOR SESSION TRANSCRIPT"),
+        "seeding message missing the rehydration transcript"
+    );
+
+    // The full-fidelity projection is recorded under the live thread id.
     let artifact = std::path::PathBuf::from(std::env::var_os("TOOLPATH_CONFIG_DIR").unwrap())
         .join("amp-projected")
         .join(format!("{}.json", cap.args[2]));

@@ -517,3 +517,137 @@ level.
 - `test-pathbase-live.sh` anon-only mode (deviation above).
 - The authed pathstash round-trip remains unexercised (Roger not logged
   in this session) — optional per plan.
+
+## Piece 03 — projector-resume, L2 — tag: `amp-m3` — 2026-07-28
+
+### Goal
+
+`AmpProjector`, `p export amp`, `path resume --harness amp`, the writer
+contract doc, and `scripts/verify-amp-live.sh` — gated by the deferred
+resume/writer recon, whose outcome picks the route.
+
+### What was built
+
+- `crates/toolpath-amp/src/project.rs` — the real `AmpProjector`
+  (replacing the piece-01 refusing stub): `ConversationView` →
+  `ThreadExport`. Position-stable ids (turn ids pass through as
+  `protocolMessageID`; synthesized ids derive from position, so the same
+  view projects byte-identically), preserved delegation ids, tool-result
+  carrier messages regenerated as the inverse of the forward merge,
+  per-tool `run.result` reconstruction, `native_name` remap for foreign
+  tools with an Amp-native passthrough list, and token re-expansion that
+  regenerates the derived `totalInputTokens` while refusing to invent
+  `maxInputTokens`. Plus `rehydration_prompt`.
+- `crates/toolpath-amp/src/io.rs` — `ThreadWriter` trait + `CliWriter`
+  (`amp threads new`, `amp threads continue -x`), the writer half of
+  `ThreadFetcher`.
+- `crates/path-cli/src/cmd_export.rs` — `ExportTarget::Amp` 3-mode,
+  `build_amp_session`, `project_amp{,_with}` (injectable writer),
+  `amp_rehydration_transcript`, `write_into_amp_project`.
+- `crates/path-cli/src/cmd_resume.rs` — `"amp"` source arm, `agent:amp`
+  sniff, `argv_for` → `["threads","continue",<id>]`,
+  `project_into_harness` arm, stale hint fixed to list all eight harnesses.
+- `scripts/verify-amp-live.sh` (shellcheck-clean),
+  `docs/agents/formats/amp/writing-compatible.md`.
+- Tests: 16 projector unit tests, `project_amp_returns_session_id_and_writes_artifact`
+  (the unit test copilot never had) against a fake writer, the
+  `file_input_explicit_amp_projects_and_records_exec` RecordingExec case
+  driving a scripted `amp` stub, and argv/sniff units.
+
+### Key decisions (ADR-style)
+
+- **Writer route: the first-party CLI two-step, not the reverse-engineered
+  server import.**
+  - _Context:_ PLAN.md offered (a) local-state write, (b) API thread-create,
+    (c) documented infeasibility. (a) died in piece 00 — no local thread
+    store exists. So (b) was the plan of record, aiming at the thread
+    actor's `POST /import` found in the bundle.
+  - _Decision:_ neither. `path resume --harness amp` creates a thread with
+    **`amp threads new`** (server-assigned id, no model turn, free) and
+    seeds it with **`amp threads continue <id> -x <rendered transcript>`**.
+    Both are documented `amp --help` surface.
+  - _Rationale:_ (b) was probed live and **does not work as a REST call**.
+    `POST /api/thread-actors` answers `201 Created` and creates no thread —
+    `amp threads export` immediately after reports "does not exist". The
+    bundle shows why: the real `/import` is a Rivet *actor* fetch behind a
+    wsToken handshake plus a hardcoded gateway client key, so reaching it
+    means reimplementing a credentials exchange and the RivetKit wire
+    convention — several undocumented protocols at once, all re-mined on
+    every `amp update`. The CLI route pins nothing undocumented, fabricates
+    nothing (the thread is server-created and account-owned), and satisfies
+    the piece DoD outright.
+  - _Alternatives rejected:_ **the Rivet gateway client** — materially
+    larger surface, version-volatile, and worth asking Amp for a sanctioned
+    import path before reverse-engineering one; **route (c)** — unnecessary
+    once (b′) verified.
+  - _Cost accepted:_ one execute turn per resume, and a fidelity ceiling
+    (below).
+
+- **Fidelity ceiling: context transfer, not transcript import — stated
+  everywhere rather than glossed.**
+  - _Context:_ the seeded thread holds the prior session as one user
+    message containing a Markdown transcript, not native
+    `tool_use`/`tool_result`/`thinking` blocks. `amp threads export` on a
+    resumed thread will not resemble the source.
+  - _Decision:_ ship it, and say so plainly in `writing-compatible.md`
+    (its own ⚠ section), in the `project.rs` doc comment, and on stderr at
+    resume time ("context transferred (rendered transcript; not native tool
+    blocks)").
+  - _Rationale:_ it delivers what resume is for — the model reasons about
+    the prior work correctly — and the structural projection is not lost:
+    it is written beside the thread and is what `--output` emits. Claiming
+    parity with the claude/copilot/codex projectors would be false.
+
+- **Never report an import as successful on a status code alone.**
+  - _Context:_ the first implementation trusted the REST `2xx` and printed
+    "imported to https://ampcode.com" for a thread that did not exist.
+  - _Decision:_ verify by read-back before claiming success; that
+    discipline survives in the current route (the writer returns the
+    server's own id, and the seeding turn's exit status is checked).
+  - _Rationale:_ a false success claim is worse than a loud failure — it
+    would have shipped a resume that silently resumed nothing.
+
+### Deviations from PLAN.md
+
+- **The route is (b′), not any of the three the plan enumerated** — see the
+  ADR. `writing-compatible.md` documents all of (a)/(b)/(b′) with evidence.
+- **No `--no-archive-after-execute` flag exists** at this version; the
+  verification script does not use it. Threads created by `threads new`
+  (rather than by `-x` on a fresh run) are not auto-archived.
+- **`AMP_API_KEY` is not read by path-cli.** The projector shells out to
+  `amp`, which reads it from the inherited environment. Isolated runs pass
+  it through; a logged-in machine needs nothing.
+- **The verification script drives `p export amp --project`, not
+  `path resume`** — `resume` ends in an `execvp`, and under output capture
+  `amp` auto-enables execute mode and demands a message. Same projection
+  code path, no exec.
+
+### Tests & verification
+
+- `cargo test -p toolpath-amp` — 103 tests (87 unit incl. 16 new projector
+  tests, 7 integration, 3 doc).
+- `cargo test -p path-cli` — lib + 11 resume integration tests green.
+- Live L2 DoD (amp `0.0.1785170481-ga5b614`), both piece-00 captures:
+  - feature-elicit via full `path resume --harness amp` → thread
+    `T-019fa709-…`; probe "In one sentence, what was the most-used tool in
+    this session?" → **"The most-used tool was `shell_command`, invoked six
+    times."** Correct: the capture has exactly 6 `shell_command` calls.
+  - trivial via `bash scripts/verify-amp-live.sh` → thread `T-019fa70b-…`;
+    same probe → **"No tools were used in this session."** Correct.
+- Two dead-end threads were NOT created during the failed REST probes (the
+  route creates nothing), so no cleanup was needed.
+- `just ci` — 7/7.
+
+### Known limitations / follow-ups
+
+- **Fidelity ceiling** (above). Cracking route (b) — or getting a
+  sanctioned import path from Amp — would lift it; worth raising with Alex
+  before anyone reverse-engineers the Rivet gateway.
+- **One execute turn per resume** (a few cents, and a visible "ready"
+  acknowledgement as the thread's first assistant message).
+- **`p export amp --project` and `resume` both need network + login**,
+  unlike every other harness's projector. `--output`/stdout stay offline.
+- The preview banner still says preview; the five hedge sites flip in
+  lockstep in piece 06, which can now cite this verification.
+- `scripts/verify-amp-live.sh` judges the probe answer by eye — it asserts
+  the thread loads and answers, not that the answer is right.

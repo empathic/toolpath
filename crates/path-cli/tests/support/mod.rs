@@ -100,6 +100,34 @@ impl Drop for ScopedEnvRemove {
     }
 }
 
+/// RAII guard that sets an env var for the guard's lifetime, restoring the
+/// prior value on drop.
+pub struct ScopedEnvSet {
+    key: &'static str,
+    prev: Option<OsString>,
+}
+
+impl ScopedEnvSet {
+    pub fn new<V: AsRef<std::ffi::OsStr>>(key: &'static str, value: V) -> Self {
+        let prev = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, prev }
+    }
+}
+
+impl Drop for ScopedEnvSet {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 /// RAII guard that prepends a tempdir of fake binaries to `$PATH`.
 pub struct ScopedPath {
     _td: tempfile::TempDir,
@@ -109,6 +137,24 @@ pub struct ScopedPath {
 impl ScopedPath {
     pub fn with_binary(name: &str) -> Self {
         Self::with_binaries(&[name])
+    }
+
+    /// Like [`Self::with_binary`], but the stub runs `body` instead of
+    /// exiting silently. Used where production code shells out to a harness
+    /// CLI and needs a realistic answer (e.g. `amp threads new` printing a
+    /// thread id).
+    pub fn with_script(name: &str, body: &str) -> Self {
+        let guard = Self::with_binaries(&[name]);
+        let p = guard._td.path().join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = std::fs::metadata(&p).unwrap().permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&p, perm).unwrap();
+        }
+        guard
     }
 
     pub fn with_binaries(names: &[&str]) -> Self {
