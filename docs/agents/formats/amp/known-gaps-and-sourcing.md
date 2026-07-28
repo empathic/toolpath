@@ -52,7 +52,8 @@ that paying off:
 - **`totalInputTokens` is derived**, not cumulative — verified on all 17 usage
   objects across three threads.
 - **`maxInputTokens` is context-window capacity**, never a spend.
-- **Isolation** — XDG variables take precedence over `HOME`; no `AMP_*`
+- **Isolation** — set `HOME` *and* all three XDG vars; each moves a
+  different subset and `XDG_DATA_HOME` alone splits the data dir; no `AMP_*`
   data-dir override exists. [RECON.md Q3](RECON.md#q3--isolation).
 - **Stream envelope** — four Claude-Code-compatible line types.
   [RECON.md Q4](RECON.md#q4--envelope).
@@ -75,10 +76,13 @@ that paying off:
 
 ## Still open
 
-1. **Whether a fabricated thread can be written back.** The gating question
-   for L2/L4. `POST /import` on the thread actor is the lead
-   (see [resume-and-sessions.md](resume-and-sessions.md#2-the-thread-actors-post-import-reverse-eng));
-   entirely unexercised. `[reverse-eng]`
+1. **Whether a *document* can be imported into a thread.** Still open, but
+   no longer gating: L2 is achieved without it via the first-party CLI
+   two-step (see [writing-compatible.md](writing-compatible.md)). The REST
+   route `POST /api/thread-actors` **was** exercised and does not work — it
+   answers `201 Created` and creates no thread. The real `/import` is a
+   Rivet actor fetch behind a wsToken handshake, still unexercised.
+   `[observed + reverse-eng, 0.0.1785170481-ga5b614]`
 2. **Non-`openai` providers.** Every capture ran `agentMode: medium` →
    `gpt-5.6-sol` → `provider: "openai"`. An Anthropic- or Google-backed mode
    would plausibly change the `thinking` block shape (`openAIReasoning` is
@@ -109,8 +113,9 @@ that paying off:
 
 ## Server API surface `[reverse-eng]`
 
-Extracted from the bundle; **none of it was called directly**. Recorded
-because piece 03 will need it if the CLI route proves insufficient.
+Extracted from the bundle. Only `POST /api/thread-actors` was ever called
+directly (piece 03; it returned `201 Created` and created no thread — see
+[writing-compatible.md](writing-compatible.md)). The rest is unexercised.
 
 - **Base URL** `https://ampcode.com/`, overridable by `AMP_URL` `[official]`.
   All HTTP goes through one request builder that attaches

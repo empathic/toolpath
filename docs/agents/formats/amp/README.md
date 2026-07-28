@@ -70,9 +70,10 @@ Every non-trivial claim carries an inline tag:
    command surface, listing/continuation semantics, and the surface a future
    `AmpProjector` / `path resume` integration would have to match.
 7. **[writing-compatible.md](writing-compatible.md)** — the writer contract:
-   the three-route fork (local fabrication ruled out; server import chosen),
-   what `AmpProjector` emits, the import seam, and the observed-rejection
-   table the ⚠ live loop fills in.
+   the route fork (local fabrication and server import both ruled out; the
+   first-party CLI two-step chosen and verified), what `AmpProjector`
+   emits, the writer seam, the fidelity caveat, and the observed-rejection
+   table.
 8. **[known-gaps-and-sourcing.md](known-gaps-and-sourcing.md)** — methodology,
    the full source list, and the unchecked verification checklist.
 

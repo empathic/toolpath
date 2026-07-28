@@ -306,7 +306,7 @@ DelegatedWork, TokenUsage}`. Source paths are into the **export** document.
 | `.total_usage` | Σ over messages | Sum of the four counters; safe because usage is per-message (see [RECON.md Q2](RECON.md#q2--tokens)). |
 | `.files_changed` | `apply_patch` results | `run.result.files[].uri`, first-touch dedup. |
 | `.events` | `.activatedSkills`, `.meta` | Preserve for round-tripping; not turns. |
-| **`Turn`** | one per element of `.messages` | 1 message → 1 turn. |
+| **`Turn`** | one per element of `.messages`, EXCEPT tool-result-only `user` messages | Those are transport plumbing: their results merge onto the originating invocation and no turn is emitted (the 24-message capture yields 13 turns). |
 | `Turn.id` | `.protocolMessageID` | The `M-…` string — stable. **Not** the integer `messageId`. |
 | `.parent_id` | previous message's id | Amp is linear; chain sequentially. |
 | `.group_id` | — | **`None`.** Usage is already per-message; no grouping needed. |

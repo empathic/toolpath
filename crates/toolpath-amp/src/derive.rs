@@ -19,9 +19,16 @@ pub struct DeriveConfig {
 }
 
 /// Derive a [`Path`] from an Amp [`Session`].
+///
+/// The path id and title carry the **whole** thread id, not the shared
+/// helper's 8-character prefix. An Amp id is `T-<uuidv7>`, so those 8
+/// characters are `"T-"` plus only 6 hex digits of the 48-bit millisecond
+/// timestamp — a 2²⁴ ms ≈ 4.7-hour bucket in which every thread collides.
+/// That collision reaches the document id, the title, and (through
+/// `cache::make_id`) the cache filename, where `path share`'s
+/// `force = true` write silently overwrites the earlier thread's document.
 pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
     let view = to_view(session);
-    let prefix: String = view.id.chars().take(8).collect();
     let base_uri = config.project_path.as_ref().map(|p| {
         if p.starts_with('/') {
             format!("file://{}", p)
@@ -31,7 +38,8 @@ pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
     });
     let cfg = toolpath_convo::DeriveConfig {
         base_uri,
-        title: Some(format!("Amp session: {}", prefix)),
+        path_id: Some(format!("path-amp-{}", view.id)),
+        title: Some(format!("Amp session: {}", view.id)),
         ..Default::default()
     };
     toolpath_convo::derive_path(&view, &cfg)
@@ -104,7 +112,37 @@ mod tests {
         assert_eq!(path.path.base.as_ref().unwrap().uri, "file:///tmp/proj");
         assert_eq!(
             path.meta.as_ref().unwrap().title.as_deref(),
-            Some("Amp session: T-0199aa")
+            Some("Amp session: T-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000")
+        );
+    }
+
+    /// Two threads created inside the same ~4.7-hour UUIDv7 window must
+    /// derive distinct path ids. The shared helper's 8-char prefix is
+    /// `"T-"` + 6 hex of the millisecond timestamp, so it cannot tell them
+    /// apart — and the collision propagates to the cache filename, where
+    /// `path share` overwrites with `force = true`.
+    #[test]
+    fn threads_in_the_same_time_bucket_get_distinct_path_ids() {
+        let with_id = |id: &str| {
+            let json = format!(
+                r#"{{"id":"{id}","messages":[{{"role":"user","protocolMessageID":"M-1",
+                    "content":[{{"type":"text","text":"hi"}}]}}]}}"#
+            );
+            derive_path(
+                &Session::from_export(ExportReader::parse_export(&json).unwrap()),
+                &DeriveConfig::default(),
+            )
+        };
+        // Real ids from the capture machine: the trivial thread and the
+        // feature-elicit thread, 3 minutes apart. Both truncate to
+        // "T-019fa4".
+        let a = with_id("T-019fa4d8-e7f1-750a-bf58-553bdf92f0e1");
+        let b = with_id("T-019fa4db-29cf-70c9-8d9b-81524df70e52");
+        assert_ne!(a.path.id, b.path.id, "distinct threads, distinct path ids");
+        assert_ne!(
+            a.meta.as_ref().unwrap().title,
+            b.meta.as_ref().unwrap().title,
+            "distinct threads, distinct titles"
         );
     }
 

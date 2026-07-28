@@ -333,7 +333,7 @@ fn short_body(body: &str) -> String {
 // hand-rolled only because the redeem endpoint isn't in the OpenAPI
 // spec, not because of any HTTP-stack difference.
 
-pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::sync::OnceLock;
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     let rt = RT.get_or_init(|| {

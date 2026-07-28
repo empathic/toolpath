@@ -152,10 +152,17 @@ fn file_input_explicit_amp_projects_and_records_exec() {
     // thread or spending credits.
     let _path = ScopedPath::with_script(
         "amp",
+        // Mirrors the real CLI's contract: `threads new` prints an id, and
+        // `threads continue <id> -x` takes the message on STDIN. A
+        // catch-all rejects anything else, so the stub can't quietly bless
+        // an argv shape the real `amp` would refuse.
         r#"if [ "$1" = "threads" ] && [ "$2" = "new" ]; then
   echo T-019fstub-0000-7000-8000-000000000001
-elif [ "$1" = "threads" ] && [ "$2" = "continue" ]; then
-  printf '%s' "$5" > "${AMP_STUB_SEED_FILE:-/dev/null}"
+elif [ "$1" = "threads" ] && [ "$2" = "continue" ] && [ "$4" = "-x" ]; then
+  cat > "${AMP_STUB_SEED_FILE:-/dev/null}"
+else
+  echo "unexpected amp invocation: $*" >&2
+  exit 1
 fi
 exit 0"#,
     );
@@ -183,7 +190,7 @@ exit 0"#,
     // context reaches an Amp thread (it has no local store to write into).
     let seeded = std::fs::read_to_string(seed_file.path()).unwrap();
     assert!(
-        seeded.contains("BEGIN PRIOR SESSION TRANSCRIPT"),
+        seeded.contains("BEGIN TRANSCRIPT"),
         "seeding message missing the rehydration transcript"
     );
 

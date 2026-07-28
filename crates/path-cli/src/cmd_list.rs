@@ -774,6 +774,22 @@ fn run_copilot(fmt: ListFormat) -> Result<()> {
 // ── Amp (preview) ───────────────────────────────────────────────────────────
 
 fn run_amp(fmt: ListFormat) -> Result<()> {
+    // Amp has no local thread store — every read shells out to the `amp`
+    // CLI, which needs a real process environment.
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = fmt;
+        anyhow::bail!("'path p list amp' requires a native environment with the `amp` CLI");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        run_amp_native(fmt)
+    }
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn run_amp_native(fmt: ListFormat) -> Result<()> {
     let manager = toolpath_amp::AmpConvo::new();
     let sessions = manager
         .list_sessions()

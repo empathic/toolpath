@@ -218,7 +218,18 @@ Running `threads list` under a scrubbed environment
 Adding `XDG_DATA_HOME` / `XDG_CACHE_HOME` / `XDG_CONFIG_HOME` pointing at three
 separate directories moved everything there instead — the isolated `HOME`
 tree gained **no new files**, and each XDG root received its own `amp/`
-subtree. So the precedence is **XDG first, `HOME` fallback**.
+subtree. So for the files this probe covered, the precedence is **XDG
+first, `HOME` fallback**.
+
+> **Correction (piece 03).** That one-line rule over-generalizes. Bundle
+> mining afterwards found Amp's XDG handling is **four independent copies
+> with inconsistent behavior**: the main data/cache module computes
+> `XDG_DATA_HOME` and then never uses it (`~/.local/share` is hard-forced),
+> while the settings/secrets and shell-history modules do honour it. Net
+> effect: `XDG_DATA_HOME` alone **splits** the data dir — `secrets.json`,
+> `device-id.json` and `history.jsonl` move; `session.json` and the
+> oauth/ide/runner/daemon/portal state do not. The recipe below is still
+> safe because it sets `HOME` *and* the XDG vars.
 
 Recipe for the isolated-home story pieces 03/05 need:
 

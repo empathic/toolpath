@@ -614,7 +614,7 @@ fn import_amp_writes_cache_with_amp_prefix() {
         .stderr(predicate::str::contains("Imported"));
     assert!(
         cfg.path()
-            .join("documents/amp-path-amp-T-019fde.json")
+            .join("documents/amp-path-amp-T-019fdemo-aaaa-7bbb-8ccc-ddddeeee0001.json")
             .exists()
     );
 }

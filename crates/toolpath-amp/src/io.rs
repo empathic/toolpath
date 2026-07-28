@@ -15,6 +15,21 @@ use crate::types::{Session, SessionMetadata};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Does this token look like an Amp thread id (`T-<uuidv7>`)?
+///
+/// Stricter than "starts with `T-`", because the id column shares a line
+/// with a free-form title and a title word like `T-shirt` must not be
+/// mistaken for an id. Deliberately does NOT require the body to be pure
+/// hex: the real defense is taking the *last* matching token on the row
+/// (the id is the last column), and demanding hex would silently drop
+/// every thread if Amp ever widened the id alphabet.
+fn looks_like_thread_id(token: &str) -> bool {
+    match token.strip_prefix("T-") {
+        Some(rest) => rest.len() >= 8 && rest.contains('-'),
+        None => false,
+    }
+}
+
 /// Source of thread-export documents.
 pub trait ThreadFetcher: Send + Sync + std::fmt::Debug {
     /// Fetch the export document (raw JSON) for one thread.
@@ -72,15 +87,24 @@ impl ThreadFetcher for CliFetcher {
 
     /// Extract `T-…` ids from `amp threads list` (a human-oriented table
     /// whose exact layout is version-dependent; the id shape is stable).
+    ///
+    /// The Thread ID is the **last** column and the Title is the first, so
+    /// each row's id is the *last* `T-`-prefixed token on the line — taking
+    /// the first would harvest a title like "T-shirt sizing" instead. Ids
+    /// are also required to look like `T-<uuid-ish>` (long, hyphenated) so
+    /// a short title token can't masquerade as one.
     fn list_thread_ids(&self) -> Result<Vec<String>> {
         let out = self.run(&["threads", "list"])?;
         let mut ids = Vec::new();
         for line in out.lines() {
-            for token in line.split_whitespace() {
-                let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
-                if token.starts_with("T-") && token.len() > 2 && !ids.iter().any(|i| i == token) {
-                    ids.push(token.to_string());
-                }
+            let id = line
+                .split_whitespace()
+                .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-'))
+                .rfind(|t| looks_like_thread_id(t));
+            if let Some(id) = id
+                && !ids.iter().any(|i| i == id)
+            {
+                ids.push(id.to_string());
             }
         }
         Ok(ids)
@@ -130,13 +154,39 @@ impl CliWriter {
     }
 
     fn run(&self, args: &[&str]) -> Result<String> {
-        let out = std::process::Command::new(&self.bin)
-            .args(args)
-            .output()
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::NotFound => ConvoError::AmpCliNotFound,
-                _ => ConvoError::Io(e),
-            })?;
+        self.spawn(args, None)
+    }
+
+    fn run_with_stdin(&self, args: &[&str], stdin: &str) -> Result<String> {
+        self.spawn(args, Some(stdin))
+    }
+
+    fn spawn(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
+        use std::io::Write;
+        use std::process::Stdio;
+
+        let mut cmd = std::process::Command::new(&self.bin);
+        cmd.args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            });
+        let mut child = cmd.spawn().map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => ConvoError::AmpCliNotFound,
+            _ => ConvoError::Io(e),
+        })?;
+        if let Some(body) = stdin {
+            child
+                .stdin
+                .take()
+                .expect("stdin piped")
+                .write_all(body.as_bytes())?;
+            // Dropped here, closing the pipe so `amp` sees EOF.
+        }
+        let out = child.wait_with_output()?;
         if !out.status.success() {
             return Err(ConvoError::AmpCliFailed {
                 command: format!("{} {}", self.bin.display(), args.join(" ")),
@@ -163,11 +213,13 @@ impl ThreadWriter for CliWriter {
     }
 
     fn send_message(&self, thread_id: &str, message: &str) -> Result<()> {
-        // `-x <message>` is the documented execute-mode ingress. The message
-        // rides argv rather than `--stream-json-input` so the invocation
-        // stays a single well-formed command (and stub binaries in tests see
-        // exactly that).
-        self.run(&["threads", "continue", thread_id, "-x", message])?;
+        // The message goes over **stdin**, not argv: `amp --help` documents
+        // both forms ("pass a message as an argument… or pipe via stdin"),
+        // and a rendered transcript routinely exceeds the argv ceiling
+        // (1 MB `ARG_MAX` on macOS, 32 KB on Windows) once a session
+        // contains a large diff — which would fail with E2BIG *after* the
+        // thread had already been created.
+        self.run_with_stdin(&["threads", "continue", thread_id, "-x"], message)?;
         Ok(())
     }
 }
@@ -411,17 +463,105 @@ mod tests {
         }
 
         #[test]
+        /// The real layout is Title-first, Thread-ID-last (see
+        /// docs/agents/formats/amp/resume-and-sessions.md), and titles are
+        /// free-form — including titles that begin with `T-`.
         fn cli_fetcher_list_extracts_thread_ids() {
             let t = tempfile::tempdir().unwrap();
             let bin = stub_amp(
                 t.path(),
-                r#"printf 'T-019fa4db-29cf  Filesystem tool exercise  2h ago\nT-019fa111-aaaa  Other thread  1d ago\n'"#,
+                r#"printf 'Title  Last Updated  Visibility  Messages  Thread ID\n'
+printf 'T-shirt sizing rubric  2m ago  Private  1  T-019fa4db-29cf-70c9-8d9b-81524df70e52\n'
+printf 'T-1000-terminator-notes  1d ago  Private  2  T-019fa111-aaaa-7bbb-8ccc-ddddeeee0002\n'"#,
             );
             let f = CliFetcher::new().with_bin(bin);
             assert_eq!(
                 f.list_thread_ids().unwrap(),
-                vec!["T-019fa4db-29cf".to_string(), "T-019fa111-aaaa".to_string()]
+                vec![
+                    "T-019fa4db-29cf-70c9-8d9b-81524df70e52".to_string(),
+                    "T-019fa111-aaaa-7bbb-8ccc-ddddeeee0002".to_string()
+                ],
+                "id comes from the last column; a T- title is not an id"
             );
+        }
+
+        // ── CliWriter ────────────────────────────────────────────────
+
+        #[test]
+        fn cli_writer_create_thread_parses_id() {
+            let t = tempfile::tempdir().unwrap();
+            let bin = stub_amp(t.path(), "echo T-019fa4db-29cf-70c9-8d9b-81524df70e52");
+            let w = CliWriter::new().with_bin(bin);
+            assert_eq!(
+                w.create_thread().unwrap(),
+                "T-019fa4db-29cf-70c9-8d9b-81524df70e52"
+            );
+        }
+
+        /// A non-zero exit must never be reported as success — this is the
+        /// writer that creates server-side state and spends credits.
+        #[test]
+        fn cli_writer_propagates_failure_exit_status() {
+            let t = tempfile::tempdir().unwrap();
+            let bin = stub_amp(t.path(), "echo 'out of credits' >&2; exit 1");
+            let w = CliWriter::new().with_bin(bin);
+            match w.create_thread().unwrap_err() {
+                ConvoError::AmpCliFailed { stderr, .. } => {
+                    assert!(stderr.contains("out of credits"))
+                }
+                other => panic!("expected AmpCliFailed, got {other:?}"),
+            }
+            let t2 = tempfile::tempdir().unwrap();
+            let bin2 = stub_amp(t2.path(), "echo 'rate limited' >&2; exit 1");
+            let w2 = CliWriter::new().with_bin(bin2);
+            match w2.send_message("T-x", "hi").unwrap_err() {
+                ConvoError::AmpCliFailed { stderr, .. } => {
+                    assert!(stderr.contains("rate limited"))
+                }
+                other => panic!("expected AmpCliFailed, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn cli_writer_rejects_output_without_a_thread_id() {
+            let t = tempfile::tempdir().unwrap();
+            let bin = stub_amp(t.path(), "echo 'Created a thread.'");
+            let w = CliWriter::new().with_bin(bin);
+            match w.create_thread().unwrap_err() {
+                ConvoError::AmpCliFailed { stderr, .. } => {
+                    assert!(stderr.contains("no T-"), "actual: {stderr}")
+                }
+                other => panic!("expected AmpCliFailed, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn cli_writer_missing_binary() {
+            let w = CliWriter::new().with_bin("/definitely/not/a/real/amp");
+            assert!(matches!(
+                w.create_thread().unwrap_err(),
+                ConvoError::AmpCliNotFound
+            ));
+        }
+
+        /// The message must travel over stdin, not argv — a rendered
+        /// transcript can exceed ARG_MAX, and that failure would land
+        /// *after* the thread was created.
+        #[test]
+        fn cli_writer_sends_message_over_stdin_not_argv() {
+            let t = tempfile::tempdir().unwrap();
+            let out = t.path().join("seen");
+            let bin = stub_amp(
+                t.path(),
+                &format!("cat > {}\nprintf '%s' \"$*\" > {}.argv", out.display(), out.display()),
+            );
+            let w = CliWriter::new().with_bin(bin);
+            // Comfortably beyond the 1 MB macOS single-arg ceiling.
+            let big = "x".repeat(2 * 1024 * 1024);
+            w.send_message("T-abc", &big).unwrap();
+            assert_eq!(std::fs::read_to_string(&out).unwrap().len(), big.len());
+            let argv = std::fs::read_to_string(format!("{}.argv", out.display())).unwrap();
+            assert_eq!(argv, "threads continue T-abc -x");
         }
     }
 }

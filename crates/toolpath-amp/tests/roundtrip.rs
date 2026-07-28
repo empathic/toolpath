@@ -62,7 +62,7 @@ fn derived_path_round_trips_as_document() {
     );
     assert_eq!(
         path.meta.as_ref().unwrap().title.as_deref(),
-        Some("Amp session: T-0199aa")
+        Some("Amp session: T-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000")
     );
 
     // Serialize → reparse → same shape, single path, connected ancestry.

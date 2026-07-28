@@ -112,6 +112,7 @@ pub fn to_view(session: &Session) -> ConversationView {
                     &mut turns,
                     &tr.tool_use_id,
                     tr.run.result.as_ref(),
+                    tr.run.status.as_deref(),
                     &working_dir,
                 );
             }
@@ -317,20 +318,25 @@ fn attach_tool_result(
     turns: &mut [Turn],
     tool_use_id: &str,
     result: Option<&Value>,
+    status: Option<&str>,
     working_dir: &Option<String>,
 ) {
     for turn in turns.iter_mut().rev() {
+        // Only the *first* result for an invocation counts. A re-emitted
+        // result would otherwise overwrite the original and append its file
+        // mutations a second time.
         let Some(inv) = turn
             .tool_uses
             .iter_mut()
             .rev()
-            .find(|i| i.id == tool_use_id)
+            .find(|i| i.id == tool_use_id && i.result.is_none())
         else {
             continue;
         };
+        let tool_name = inv.name.clone();
         inv.result = Some(ToolResult {
             content: result.map(result_content).unwrap_or_default(),
-            is_error: result.is_some_and(result_is_error),
+            is_error: result.is_some_and(result_is_error) || status == Some("error"),
         });
         if let Some(d) = turn
             .delegations
@@ -340,7 +346,11 @@ fn attach_tool_result(
         {
             d.result = result.and_then(Value::as_str).map(str::to_string);
         }
+        // Keyed on the tool, not on result shape: `finder` also returns a
+        // `files` array, and treating a *search* hit as a file write would
+        // invent mutations that never happened.
         let mutations = result
+            .filter(|_| writes_files(&tool_name))
             .map(|r| mutations_from_result(tool_use_id, r, working_dir))
             .unwrap_or_default();
         turn.file_mutations.extend(mutations);
@@ -384,6 +394,13 @@ fn result_is_error(result: &Value) -> bool {
         .get("exitCode")
         .and_then(Value::as_i64)
         .is_some_and(|c| c != 0)
+}
+
+/// Whether a tool's result may legitimately describe file mutations.
+/// `apply_patch` is Amp's only native writer; the category fallback covers
+/// foreign tool names arriving through a projected document.
+fn writes_files(tool_name: &str) -> bool {
+    tool_category(tool_name) == Some(ToolCategory::FileWrite)
 }
 
 /// `apply_patch` results embed real unified diffs per file.
@@ -506,10 +523,16 @@ impl AmpConvo {
         Ok(out)
     }
 
+    /// The most recently active thread.
+    ///
+    /// Goes through [`Self::list_sessions`], which sorts by `last_activity`,
+    /// rather than trusting fetcher order: `DirFetcher` sorts ids
+    /// ascending, and because Amp ids are UUIDv7 (time-ordered) that puts
+    /// the **oldest** thread first.
     pub fn most_recent_session(&self) -> crate::Result<Option<Session>> {
-        let ids = self.io.list_thread_ids()?;
-        match ids.first() {
-            Some(id) => Ok(Some(self.io.read_session(id)?)),
+        let sessions = self.list_sessions()?;
+        match sessions.first() {
+            Some(m) => Ok(Some(self.io.read_session(&m.id)?)),
             None => Ok(None),
         }
     }

@@ -611,9 +611,12 @@ resume/writer recon, whose outcome picks the route.
 
 - **The route is (b′), not any of the three the plan enumerated** — see the
   ADR. `writing-compatible.md` documents all of (a)/(b)/(b′) with evidence.
-- **No `--no-archive-after-execute` flag exists** at this version; the
-  verification script does not use it. Threads created by `threads new`
-  (rather than by `-x` on a fresh run) are not auto-archived.
+- **The verification script does not pass `--no-archive-after-execute`.**
+  It does not need to: auto-archiving applies to threads a fresh `-x` run
+  creates, and `amp threads new` threads are not auto-archived. (An earlier
+  revision of this entry claimed the flag did not exist — it does, and is
+  documented `[official]` in `session-state.md` and
+  `resume-and-sessions.md`.)
 - **`AMP_API_KEY` is not read by path-cli.** The projector shells out to
   `amp`, which reads it from the inherited environment. Isolated runs pass
   it through; a logged-in machine needs nothing.
@@ -624,8 +627,8 @@ resume/writer recon, whose outcome picks the route.
 
 ### Tests & verification
 
-- `cargo test -p toolpath-amp` — 103 tests (87 unit incl. 16 new projector
-  tests, 7 integration, 3 doc).
+- `cargo test -p toolpath-amp` — 96 tests (87 unit incl. 16 new projector
+  tests, 7 integration, 2 doc).
 - `cargo test -p path-cli` — lib + 11 resume integration tests green.
 - Live L2 DoD (amp `0.0.1785170481-ga5b614`), both piece-00 captures:
   - feature-elicit via full `path resume --harness amp` → thread

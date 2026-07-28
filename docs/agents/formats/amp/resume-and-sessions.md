@@ -104,8 +104,10 @@ amp threads continue <thread-id>
 `[observed]` for the `-x` form; the interactive-TUI form is `[inferred]` from
 the same command shape.
 
-**Whether a *fabricated* thread can be resumed is the open question that gates
-L2/L4** — see below.
+**Resolved in piece 03:** a thread created with `amp threads new` and seeded
+via `amp threads continue <id> -x` resumes normally and carries its context.
+That — not document import — is how `path resume --harness amp` works. See
+[writing-compatible.md](writing-compatible.md).
 
 ## The writer surface
 
@@ -145,12 +147,16 @@ The bundle contains an import call against the per-thread Rivet actor:
 
 with a 409 tolerated (already imported) and a sibling
 `POST /api/thread-actors/<id>` whose failure message is
-`"Failed to mark thread <id> as imported"`. This is the most promising
-route for a real projector: it implies the server accepts a **whole
-serialized thread**, which is exactly what an `AmpProjector` would produce.
+`"Failed to mark thread <id> as imported"`.
 
-Entirely unexercised. Probing it is a piece-03 ⚠ step, against a **fresh**
-thread id only.
+**Probed in piece 03 and rejected as a route.** A plain HTTPS
+`POST /api/thread-actors` answers `201 Created` and creates no thread
+(`amp threads export` immediately after: "does not exist"). The call above
+is not REST — it is a *Rivet actor* fetch, addressed through the gateway
+with a `wsToken` from a prior credentials exchange, so it is unreachable
+without reimplementing that protocol. See
+[writing-compatible.md](writing-compatible.md).
+`[observed, 0.0.1785170481-ga5b614]`
 
 ### 3. Local fabrication — ruled out
 

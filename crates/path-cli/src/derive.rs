@@ -210,7 +210,17 @@ pub(crate) fn derive_copilot_session_with(
 }
 
 /// Derive a single Amp thread given an explicit thread id (`T-…`).
+///
+/// Reads shell out to the `amp` CLI (Amp keeps no local thread store), so
+/// this needs a real process environment.
 pub(crate) fn derive_amp_session(session: &str) -> Result<DerivedDoc> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = session;
+        anyhow::bail!("'path p import amp' requires a native environment with the `amp` CLI");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
     derive_amp_session_with(&toolpath_amp::AmpConvo::new(), session)
 }
 

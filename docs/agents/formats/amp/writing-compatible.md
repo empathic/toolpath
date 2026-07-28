@@ -72,14 +72,25 @@ fidelity — see the caveat below — and one execute turn per resume.
    runs, so this step is free. Only ever creates new threads.
 2. **Record the full-fidelity projection** — the `ThreadExport` document
    lands at `~/.toolpath/amp-projected/<id>.json` (`create_new`,
-   INSERT-only), keyed on the live thread id so the artifact and the thread
-   are the same session. Toolpath-owned directory; Amp-owned state is never
-   created or mutated.
-3. **Seed the context** — `amp threads continue <id> -x <rehydration
-   prompt>`: one execute turn carrying the prior session rendered as a
-   Markdown transcript (`toolpath-md` at full detail, wrapped by
+   INSERT-only, 0700/0600 like the rest of `~/.toolpath`), keyed on the
+   live thread id so the artifact and the thread are the same session.
+   **Existing** Amp threads are never read, written, or mutated — but note
+   that step 1 does create a new thread on the account and step 3 bills a
+   turn against it, and invoking `amp` also writes its own local logs.
+3. **Seed the context** — `amp threads continue <id> -x`, with the
+   rehydration prompt on **stdin** (both forms are documented; stdin avoids
+   the ~1 MB `ARG_MAX` ceiling that a large diff would blow past *after*
+   the thread already existed). The prompt is the prior session rendered as
+   a Markdown transcript (`toolpath-md` at full detail, wrapped by
    `toolpath_amp::rehydration_prompt`, which tells the model the work has
    already happened and to acknowledge rather than redo it).
+
+   The transcript is **untrusted** — it can come from a Pathbase document
+   someone else authored — and it is fed to an agent with shell access, so
+   `rehydration_prompt` fences it with a marker derived from the content
+   itself (lengthened until it cannot occur inside it) and states that the
+   fenced region is data, not instructions. A fixed fence would be
+   forgeable by a document containing the closing marker.
 
 Auth is whatever the `amp` CLI itself uses — the child process inherits the
 environment, so `AMP_API_KEY` works for isolated runs, and a normal

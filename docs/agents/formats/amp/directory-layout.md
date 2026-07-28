@@ -86,12 +86,15 @@ family `[official]`.
 
 ## Relocating any of it
 
-Precedence is **XDG variables first, then `HOME`** — verified by probe, see
-[RECON.md](RECON.md#q3--isolation).
+XDG variables are consulted before `HOME`, but **inconsistently**: Amp
+hand-rolls the lookup in four places and the main data/cache module computes
+`XDG_DATA_HOME` and then ignores it. So `XDG_DATA_HOME` alone **splits** the
+data directory rather than moving it. Always set `HOME` *and* all three XDG
+variables together — see [RECON.md](RECON.md#q3--isolation).
 
 | Variable | Moves |
 | --- | --- |
-| `XDG_DATA_HOME` | → `<value>/amp/` (secrets, device id, session.json, history) |
+| `XDG_DATA_HOME` | → `<value>/amp/` — secrets, device id, history **only**; `session.json` and the oauth/ide/runner/daemon/portal state stay under `$HOME/.local/share/amp/` |
 | `XDG_CACHE_HOME` | → `<value>/amp/logs/` |
 | `XDG_CONFIG_HOME` | → `<value>/amp/` (settings) |
 | `HOME` | fallback root for all three |

@@ -141,12 +141,15 @@ pub enum ExportTarget {
         #[arg(short, long)]
         input: String,
 
-        /// Target project directory. Amp threads are server-authoritative
-        /// (there is no local thread store), so with this flag the projected
-        /// thread — rooted at this directory, under a fresh `T-…` id — is
-        /// submitted to the Amp server via the reverse-engineered import
-        /// seam, and a local copy lands under `~/.toolpath/amp-projected/`.
-        /// Never touches existing Amp threads.
+        /// Target project directory. COSTS MONEY: Amp threads are
+        /// server-authoritative (there is no local thread store), so this
+        /// flag creates a NEW thread on your Amp account with `amp threads
+        /// new` and then runs one billed agent turn to seed it with the
+        /// prior session. Existing threads are never touched. What is
+        /// transferred is a rendered Markdown transcript, not native Amp
+        /// tool blocks; the full-fidelity projection is saved to
+        /// `~/.toolpath/amp-projected/`. Use --output for a dry run that
+        /// contacts nothing.
         #[arg(short, long)]
         project: Option<PathBuf>,
 
@@ -599,11 +602,15 @@ fn copilot_first_user_message(session: &toolpath_copilot::Session) -> String {
 }
 
 /// Build an Amp [`ThreadExport`](toolpath_amp::ThreadExport) from `path`,
-/// rooted at `project_dir` with a fresh thread id.
+/// rooted at `project_dir` with a fresh placeholder thread id.
 ///
-/// **Preview / ⚠ unverified writer.** Amp threads are server-authoritative
-/// (piece-00 Q1: no local thread store exists), so this document only
-/// becomes resumable once the server accepts it — see
+/// This is the **full-fidelity structural projection**, and it is what
+/// `p export amp --output` emits. It is not itself resumable: Amp threads
+/// are server-authoritative and there is no import path for a document, so
+/// [`project_amp`] creates a real thread and seeds it with a rendered
+/// transcript instead, recording this document alongside it. The
+/// placeholder id here is replaced by the server-assigned one whenever a
+/// thread is actually created. See
 /// `docs/agents/formats/amp/writing-compatible.md`.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn build_amp_session(
@@ -667,8 +674,9 @@ fn amp_rehydration_transcript(path: &toolpath::v1::Path) -> String {
     toolpath_amp::rehydration_prompt(&md)
 }
 
-/// `path p export amp` — project a document into an Amp thread (`--project`:
-/// server import under a fresh id), to a file (`--output`), or to stdout.
+/// `path p export amp` — create and seed a fresh Amp thread (`--project`,
+/// costs one billed turn), or emit the projected thread document to a file
+/// (`--output`) or stdout (neither — contacts nothing).
 fn run_amp(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
@@ -738,32 +746,54 @@ fn write_into_amp_project(
     transcript: &str,
     writer: &dyn toolpath_amp::ThreadWriter,
 ) -> Result<String> {
+    // Everything fallible and local happens BEFORE the irreversible
+    // server-side create, so a failure here can't strand an empty thread on
+    // the user's account.
+    let dir = crate::config::config_dir()?.join("amp-projected");
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Projected threads hold whole conversations and diffs — same
+        // sensitivity as ~/.toolpath/documents, so the same 0700/0600.
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let json = serde_json::to_string_pretty(export)?;
+
+    eprintln!(
+        "Creating a new Amp thread and seeding it with {} messages of prior context.",
+        export.messages.len()
+    );
+    eprintln!("  (this runs one billed agent turn on your Amp account)");
     let thread_id = writer
         .create_thread()
         .map_err(|e| anyhow::anyhow!("`amp threads new` failed: {}", e))?;
+    // Print the id immediately: from here on the thread exists, and a later
+    // failure must not leave it unfindable.
+    eprintln!("Created Amp thread {thread_id}");
 
     // Record the full-fidelity projection under the REAL thread id, so the
-    // artifact and the live thread are the same session.
-    let mut record = export.clone();
-    record.id = thread_id.clone();
-    let dir = crate::config::config_dir()?.join("amp-projected");
-    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    // artifact and the live thread are the same session. INSERT-only: the
+    // id is freshly server-assigned, so an existing file would mean a
+    // collision — refuse rather than overwrite.
     let artifact = dir.join(format!("{thread_id}.json"));
-    let json = serde_json::to_string_pretty(&record)?;
-    // INSERT-only: the id is freshly server-assigned, so an existing file
-    // would mean a collision — refuse rather than overwrite.
+    let record = serde_json::to_string_pretty(&{
+        let mut r: serde_json::Value = serde_json::from_str(&json)?;
+        r["id"] = serde_json::Value::String(thread_id.clone());
+        r
+    })?;
     use std::io::Write;
     let mut f = std::fs::File::create_new(&artifact)
         .with_context(|| format!("create {} (id collision?)", artifact.display()))?;
-    f.write_all(json.as_bytes())
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    f.write_all(record.as_bytes())
         .and_then(|_| f.write_all(b"\n"))
         .with_context(|| format!("write {}", artifact.display()))?;
 
-    eprintln!(
-        "Created Amp thread {} — seeding {} messages of prior context…",
-        thread_id,
-        export.messages.len()
-    );
     writer
         .send_message(&thread_id, transcript)
         .map_err(|e| anyhow::anyhow!("seeding thread {}: {}", thread_id, e))?;
@@ -3399,6 +3429,114 @@ mod tests {
         }
     }
 
+    /// A writer that fails the way the real CLI does when the account is
+    /// out of credits or rate limited.
+    #[derive(Debug)]
+    struct FailingAmpWriter {
+        fail_on_create: bool,
+        created: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl toolpath_amp::ThreadWriter for FailingAmpWriter {
+        fn create_thread(&self) -> toolpath_amp::Result<String> {
+            if self.fail_on_create {
+                return Err(toolpath_amp::ConvoError::AmpCliFailed {
+                    command: "amp threads new".into(),
+                    stderr: "out of credits".into(),
+                });
+            }
+            let id = "T-fail-1".to_string();
+            self.created.lock().unwrap().push(id.clone());
+            Ok(id)
+        }
+        fn send_message(&self, _thread_id: &str, _message: &str) -> toolpath_amp::Result<()> {
+            Err(toolpath_amp::ConvoError::AmpCliFailed {
+                command: "amp threads continue".into(),
+                stderr: "rate limited".into(),
+            })
+        }
+    }
+
+    fn with_config_dir<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var_os("TOOLPATH_CONFIG_DIR");
+        unsafe {
+            std::env::set_var("TOOLPATH_CONFIG_DIR", dir);
+        }
+        let out = f();
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
+                None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
+            }
+        }
+        out
+    }
+
+    /// A failure to create must not write an artifact, and a failure to
+    /// seed must surface — never be reported as a successful resume.
+    #[test]
+    fn project_amp_surfaces_writer_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let path = make_convo_path("amp://T-src");
+
+        // 1. create fails → no thread, no artifact, clear error.
+        let config = temp.path().join("cfg1");
+        let w = FailingAmpWriter {
+            fail_on_create: true,
+            created: Default::default(),
+        };
+        let err = with_config_dir(&config, || project_amp_with(&path, &cwd, &w)).unwrap_err();
+        assert!(err.to_string().contains("out of credits"), "{err}");
+        let projected = config.join("amp-projected");
+        assert!(
+            !projected.exists() || std::fs::read_dir(&projected).unwrap().next().is_none(),
+            "no artifact may be recorded when no thread was created"
+        );
+
+        // 2. seeding fails → error names the thread so it can be found.
+        let config2 = temp.path().join("cfg2");
+        let w2 = FailingAmpWriter {
+            fail_on_create: false,
+            created: Default::default(),
+        };
+        let err = with_config_dir(&config2, || project_amp_with(&path, &cwd, &w2)).unwrap_err();
+        let s = err.to_string();
+        assert!(s.contains("rate limited"), "{s}");
+        assert!(s.contains("T-fail-1"), "error must name the created thread: {s}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn projected_amp_artifacts_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("toolpath");
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let writer = FakeAmpWriter::default();
+        let id = with_config_dir(&config, || {
+            project_amp_with(&make_convo_path("amp://T-src"), &cwd, &writer)
+        })
+        .unwrap();
+
+        let dir = config.join("amp-projected");
+        let artifact = dir.join(format!("{id}.json"));
+        // Conversations and diffs — same sensitivity as ~/.toolpath/documents.
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&artifact).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
     #[test]
     fn project_amp_returns_session_id_and_writes_artifact() {
         let temp = tempfile::tempdir().unwrap();
@@ -3436,7 +3574,7 @@ mod tests {
         assert_eq!(sent.len(), 1, "exactly one seeding turn");
         assert_eq!(sent[0].0, id);
         assert!(
-            sent[0].1.contains("BEGIN PRIOR SESSION TRANSCRIPT"),
+            sent[0].1.contains("BEGIN TRANSCRIPT"),
             "seeding message carries the rehydration transcript"
         );
         assert!(

@@ -128,7 +128,7 @@ fn forward_derives_valid_single_path_graph() {
     );
     assert_eq!(
         path.meta.as_ref().unwrap().title.as_deref(),
-        Some("Amp session: T-019fa4")
+        Some("Amp session: T-019fa4db-29cf-70c9-8d9b-81524df70e52")
     );
     let doc = Graph::from_path(path);
     let json = doc.to_json().unwrap();
