@@ -205,6 +205,61 @@ exit 0"#,
     );
 }
 
+// ── Cross-harness: amp source → Claude Code target (L3) ─────────────
+
+#[test]
+fn file_input_amp_source_into_claude_projects_and_records_exec() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+
+    // Amp-sourced doc (amp actor + amp:// artifact key) resumed into Claude
+    // Code. Amp thread ids (`T-…`) are not UUIDs, but the Claude loader
+    // requires a UUIDv4 filename stem (see docs/agents/formats/claude-code/
+    // writing-compatible-jsonl.md), so resume must mint a fresh session id
+    // instead of passing the amp id through.
+    let amp_thread_id = "T-019fa4db-0000-7000-8000-000000000abc";
+    let path = make_convo_path("agent:amp", &format!("amp://{amp_thread_id}"));
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(
+        args_explicit(doc_file, cwd.path(), Harness::Claude),
+        &recorder,
+    )
+    .unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "claude");
+    assert_eq!(cap.args[0], "-r");
+    assert_ne!(
+        cap.args[1], amp_thread_id,
+        "session id must be freshly minted, not the amp thread id"
+    );
+    let session_id = uuid::Uuid::parse_str(&cap.args[1]).expect("resumed session id is a UUID");
+    assert_eq!(
+        session_id.get_version_num(),
+        4,
+        "claude loader requires a UUIDv4 session file stem"
+    );
+
+    // The projected JSONL lands under the scoped $HOME at
+    // ~/.claude/projects/<sanitized-cwd>/<fresh-id>.jsonl.
+    let projects = std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".claude/projects"))
+        .unwrap();
+    let jsonl_name = format!("{}.jsonl", cap.args[1]);
+    let has_session_file = std::fs::read_dir(&projects)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| e.path().join(&jsonl_name).is_file());
+    assert!(
+        has_session_file,
+        "no {jsonl_name} written under claude projects"
+    );
+}
+
 #[test]
 fn file_input_explicit_opencode_projects_and_records_exec() {
     let _env = env_lock();

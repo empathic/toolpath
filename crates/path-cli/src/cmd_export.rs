@@ -335,7 +335,24 @@ pub(crate) fn project_claude(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
 ) -> Result<String> {
-    let conv = build_claude_conversation(path)?;
+    use toolpath_convo::ConversationProjector;
+    let mut view = toolpath_convo::extract_conversation(path);
+    // Fresh session id so we never clobber an existing Claude session — and
+    // because the loader requires a UUIDv4 filename stem, which cross-harness
+    // source ids (e.g. amp's `T-…` thread ids) don't satisfy. See
+    // docs/agents/formats/claude-code/writing-compatible-jsonl.md.
+    view.id = uuid::Uuid::new_v4().to_string();
+    // The IR carries no Anthropic thinking signatures, and the API rejects
+    // unsigned thinking when the resumed session next calls the model
+    // (observed live, Claude Code 2.1.220: `API Error: 400
+    // messages.1.content.0.thinking.signature.str: Input should be a valid
+    // string`). Text and tool history are what resume needs; drop thinking.
+    for turn in &mut view.turns {
+        turn.thinking = None;
+    }
+    let conv = toolpath_claude::ClaudeProjector
+        .project(&view)
+        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
     let jsonl = serialize_jsonl(&conv)?;
     write_into_claude_project(&conv, &jsonl, project_dir)?;
     Ok(conv.session_id)
@@ -3378,9 +3395,12 @@ mod tests {
         let cwd = temp.path().join("proj");
         std::fs::create_dir_all(&cwd).unwrap();
 
-        // Use a deterministic session id embedded in the artifact key.
-        let session_id = "claude-wrapper-test-session";
-        let path = make_convo_path(&format!("claude-code://{}", session_id));
+        // Source session id embedded in the artifact key. Resume projection
+        // must NOT pass it through: the Claude loader requires a UUIDv4
+        // filename stem, and fresh ids guarantee we never clobber an
+        // existing session.
+        let source_id = "claude-wrapper-test-session";
+        let path = make_convo_path(&format!("claude-code://{}", source_id));
 
         let _g = crate::config::TEST_ENV_LOCK
             .lock()
@@ -3398,13 +3418,116 @@ mod tests {
         }
 
         let returned_id = result.expect("project_claude should succeed");
-        assert_eq!(returned_id, session_id);
+        assert_ne!(returned_id, source_id, "session id must be freshly minted");
+        let parsed = uuid::Uuid::parse_str(&returned_id).expect("session id is a UUID");
+        assert_eq!(parsed.get_version_num(), 4, "loader requires UUIDv4 stems");
 
         let claude_projects = fake_home.join(".claude/projects");
         assert!(
             claude_projects.exists(),
             "claude projects dir missing under HOME"
         );
+    }
+
+    #[test]
+    fn project_claude_strips_unsigned_thinking() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        // Cross-harness thinking has no Anthropic signature, and the API
+        // rejects unsigned thinking on resume (observed live, Claude Code
+        // 2.1.220: `API Error: 400 messages.1.content.0.thinking.signature
+        // .str: Input should be a valid string`). Resume projection must
+        // drop thinking parts entirely.
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("role".to_string(), serde_json::json!("assistant"));
+        extra.insert("text".to_string(), serde_json::json!("The answer is 42."));
+        extra.insert(
+            "thinking".to_string(),
+            serde_json::json!("Let me reason about this…"),
+        );
+        let step = toolpath::v1::Step {
+            step: toolpath::v1::StepIdentity {
+                id: "s1".to_string(),
+                parents: vec![],
+                actor: "agent:amp".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+            },
+            change: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(
+                    "amp://T-thinking-strip".to_string(),
+                    toolpath::v1::ArtifactChange {
+                        raw: None,
+                        structural: Some(toolpath::v1::StructuralChange {
+                            change_type: "conversation.append".to_string(),
+                            extra,
+                        }),
+                    },
+                );
+                m
+            },
+            meta: None,
+        };
+        let path = toolpath::v1::Path {
+            path: toolpath::v1::PathIdentity {
+                id: "p1".to_string(),
+                base: None,
+                head: "s1".to_string(),
+                graph_ref: None,
+            },
+            steps: vec![step],
+            meta: None,
+        };
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+        let result = project_claude(&path, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let session_id = result.expect("project_claude should succeed");
+
+        let jsonl_path = walk_for_file(
+            &fake_home.join(".claude/projects"),
+            &format!("{session_id}.jsonl"),
+        )
+        .expect("projected JSONL on disk");
+        let jsonl = std::fs::read_to_string(jsonl_path).unwrap();
+        assert!(
+            !jsonl.contains("\"thinking\""),
+            "resume projection must not emit unsigned thinking parts"
+        );
+        assert!(
+            jsonl.contains("The answer is 42."),
+            "text content must survive the thinking strip"
+        );
+    }
+
+    /// Recursively look for `name` under `root`, returning its path.
+    fn walk_for_file(root: &std::path::Path, name: &str) -> Option<PathBuf> {
+        for e in std::fs::read_dir(root).ok()? {
+            let p = e.ok()?.path();
+            if p.is_dir() {
+                if let Some(found) = walk_for_file(&p, name) {
+                    return Some(found);
+                }
+            } else if p.file_name().and_then(|s| s.to_str()) == Some(name) {
+                return Some(p);
+            }
+        }
+        None
     }
 
     /// Records what the writer was asked to do, without touching Amp.

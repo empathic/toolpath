@@ -108,6 +108,20 @@ synthetic state that includes thinking, consider whether you actually
 need it; constructing a valid signature is not possible without an
 Anthropic-signed source.
 
+**Update (observed, Claude Code 2.1.220):** a `thinking` part whose
+`signature` is `null` is no longer silently dropped — the loader
+accepts the session, but the first model call after resume fails the
+whole turn with:
+
+```
+API Error: 400 messages.1.content.0.thinking.signature.str: Input should be a valid string
+```
+
+Synthesized JSONL should therefore **omit unsigned thinking parts
+entirely** rather than emitting `"signature": null`. This is what
+`path resume --harness claude` does for cross-harness sources (see
+`project_claude` in `crates/path-cli/src/cmd_export.rs`).
+
 ### Assistant entries typically have non-null `model`, `id`, `type`
 
 - `model` — e.g. `"claude-opus-4-6"`.

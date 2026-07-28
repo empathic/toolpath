@@ -654,3 +654,125 @@ resume/writer recon, whose outcome picks the route.
   lockstep in piece 06, which can now cite this verification.
 - `scripts/verify-amp-live.sh` judges the probe answer by eye — it asserts
   the thread loads and answers, not that the answer is right.
+
+## Piece 04 — resume-into-cc, L3 — tag: `amp-m4` — 2026-07-28
+
+### Goal
+
+An Amp-shared toolpath resumes in Claude Code: probing-question pass inside
+a real `claude -r` on the feature-elicit-derived doc, plus the RecordingExec
+test and a fidelity pass on the tool-name mapping.
+
+### What was built
+
+- `crates/path-cli/tests/resume.rs::file_input_amp_source_into_claude_projects_and_records_exec`
+  — amp-actor doc + `Harness::Claude`; asserts the exec is
+  `claude -r <fresh-id>` where the id is a UUIDv4 **different from the amp
+  thread id**, and that `<fresh-id>.jsonl` lands under the scoped
+  `$HOME/.claude/projects/`.
+- `cmd_export::project_claude` (the `path resume` arm; `p export claude` is
+  untouched) now (1) mints a fresh UUIDv4 session id before projection and
+  (2) strips `Turn.thinking` from the view. Two unit tests pin the new
+  contract (`project_claude_returns_session_id_and_writes_jsonl` updated,
+  `project_claude_strips_unsigned_thinking` new).
+- `docs/agents/formats/claude-code/writing-compatible-jsonl.md` — the
+  thinking-signature section now records the 2.1.220 behavior change with
+  the verbatim API error (that doc's own maintenance rule: rules discovered
+  by fixing a bug land in the same change).
+- Fidelity pass on the real capture: **zero `tool_category`/name-mapping
+  fallout**, so `toolpath-amp` needed no changes (evidence below).
+
+### Key decisions (ADR-style)
+
+- **Fresh UUIDv4 mint lives in `project_claude`, not
+  `build_claude_conversation`.**
+  - _Context:_ the Claude loader requires a UUIDv4 filename stem
+    (`writing-compatible-jsonl.md`); amp thread ids (`T-<uuidv7-ish>`) are
+    not UUIDs, so the old source-id passthrough made the live DoD
+    impossible — and was a latent clobber risk for claude→claude resume
+    (same id ⇒ same file under the original project dir).
+  - _Decision:_ mint in the resume wrapper only; `p export claude`
+    keeps passthrough.
+  - _Rationale:_ the Global Constraint names this exact pattern (the
+    copilot `view.id = Uuid::new_v4()` precedent); minting one level down
+    would change `p export claude` behavior, violating additive-only.
+  - _Alternatives rejected:_ passthrough-and-hope (contradicts the writer
+    contract); minting in the shared builder (changes export).
+- **Unsigned thinking is stripped at resume time, not in `ClaudeProjector`.**
+  - _Context:_ live run 1 loaded fine, but the first model call after the
+    probing question failed the whole turn:
+    `API Error: 400 messages.1.content.0.thinking.signature.str: Input
+    should be a valid string` [observed, Claude Code 2.1.220]. The IR
+    carries no Anthropic thinking signatures and they cannot be
+    synthesized. The old doc claim ("unsigned thinking is silently
+    dropped") no longer holds at 2.1.220.
+  - _Decision:_ `project_claude` clears `turn.thinking` before projection;
+    the projector, `p export claude`, and every round-trip test keep
+    emitting thinking.
+  - _Rationale:_ resume is context transfer — text + tool history is what
+    the model reasons over (proven by the probe answer); a projector-level
+    drop would break claude round-trip fidelity and export inspection.
+  - _Alternatives rejected:_ emitting `signature: null` (observed 400);
+    folding thinking into message text (fabricates content the assistant
+    never said).
+- **No `toolpath-amp` changes: the piece's budgeted mapping-fallout fixes
+  turned out unnecessary.** Projecting the real capture yields:
+  `shell_command` → `Bash` with `cmd` → `command` input translation (all 6
+  calls; the failing `cat` keeps `is_error: true`), `apply_patch` →
+  `Write`, `Task` → `Task` (amp's `description`/`prompt` input keys are
+  already Claude-shaped), `skill` → verbatim opaque block (per the
+  piece-00 ADR that `skill` stays uncategorized). Tool-result pairing,
+  `parentUuid` rewrites through synthesized result entries, and Bash-shaped
+  `toolUseResult` blobs all come from the existing cross-harness machinery.
+
+### Deviations from PLAN.md
+
+- **One existing unit test's assertions were updated**
+  (`project_claude_returns_session_id_and_writes_jsonl` pinned the
+  passthrough id — the exact behavior the gap fix removes). Piece 04's
+  "modify only if gaps appear" sanctions the production change; the test
+  update is its unavoidable shadow, noted against the global
+  "existing tests stay untouched" constraint.
+- **The claude-code format doc was touched** (not in the piece's file
+  list) — required by that doc's own keep-in-sync rule.
+- **The live TUI was driven via `expect` + pty** (`path resume` ends in an
+  `execvp` that needs a TTY). Transcripts preserved in the session
+  scratchpad: `live-cc-resume-run1-thinking-400.log` (the verbatim
+  rejection) and `live-cc-resume-run2-pass.log` (the pass).
+
+### Tests & verification
+
+- `cargo test -p path-cli` — 335 unit (+1 net) + 12 resume integration
+  (+1) green; full workspace suite green.
+- Live L3 DoD (Claude Code 2.1.220; input = the piece-02 anon Pathbase
+  URL, resolved from cache; `-C` a scratch dir):
+  - **Run 1** — session `f9cd7980-…` **loaded** in real `claude -r`: the
+    loader tolerated non-UUID entry uuids (`M-…`), foreign event types
+    (`skill.activated`, `thread.meta`), null `message.id`/`type`, null
+    `cwd`, and reported the foreign model ("Session model gpt-5.6-sol
+    could not be restored … using claude-fable-5 instead"). The model call
+    then failed with the verbatim thinking-signature 400 above → fix.
+  - **Run 2** — session `de014653-…`; probe "In one sentence, what was the
+    most-used tool in this session?" → **"Bash was the most-used tool this
+    session, with six calls covering the directory listing, file read,
+    find, rg search, the intentional missing-file failure, and running
+    count.sh."** Correct: the capture has exactly 6 `shell_command` calls
+    and the enumeration matches them call-for-call.
+- `just ci` — **7/7** (format, shellcheck, clippy, test, doc, examples,
+  site).
+
+### Known limitations / follow-ups
+
+- **Thinking does not transfer into Claude** (fidelity ceiling for that
+  channel; text, tool calls, results, and token history all transfer).
+  Signed thinking cannot be synthesized; nothing to lift here.
+- The strip + mint also apply to claude→claude resume — fixing a latent
+  bug (IR-round-tripped thinking lost its signatures, so replay would have
+  400'd identically; same-id projection could clobber the source session).
+- Loader tolerance for foreign event types / non-UUID entry uuids is an
+  observed-at-2.1.220 fact — re-verify on Claude Code bumps.
+- Two live sessions remain under
+  `~/.claude/projects/-private-tmp-…-amp-resume-cc/` (`f9cd7980` dead
+  end, `de014653` verified); safe for Roger to delete.
+- Amp self-updated again (`0.0.1785228716-gedda19`) but no amp code ran in
+  this piece; the doc under test remains stamped `ga5b614`.
