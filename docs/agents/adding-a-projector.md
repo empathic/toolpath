@@ -1,367 +1,430 @@
-# Adding `path p export <harness>` for a new harness
+# Adding a harness: share, resume, and `path p export <harness>`
 
-How to add projection (toolpath document → harness-native session) for
-a harness that already has forward derivation. Distilled from the
-Gemini implementation; should generalize cleanly to Codex, opencode,
-and Pi.
+How to take a harness that has forward derivation (native session →
+`ConversationView` → `Path`) and wire it all the way through the CLI:
+`path share` out, `path resume` back in, and the `path p export <harness>`
+plumbing in between.
 
-The forward path (native → `ConversationView`) is out of scope here —
-we assume a working `Provider` already exists.
+Originally distilled from the Gemini implementation; since exercised by
+Codex, opencode, Pi, Cursor, Copilot, and Amp. The current template to
+crib from is **`toolpath-copilot`** (newest both-directions harness with a
+local session store) — with **`toolpath-amp`** as the worked example of a
+harness whose sessions *don't* live on disk (server-authoritative; the
+"on-disk layout" steps become a CLI-mediated writer instead).
+
+The forward path is out of scope here — we assume a working provider
+crate already exists. Note `to_view` is a **free function** in each
+provider crate (e.g. `toolpath_copilot::provider::to_view`), not a trait
+method.
 
 ## Mental model
 
 ```
-              Provider::to_view          derive_path
+              provider::to_view          derive_path
 native log ─────────────────▶ View ─────────────────▶ Path
                                 ◀───────────────────
 native log ◀─── Projector::project ◀─── extract_conversation
 ```
 
-`ConversationView` is the IR. `derive_path` / `extract_conversation`
-live in `toolpath-convo` and you should not reimplement them. Your job
-is the rightmost arrow.
+`ConversationView` is the IR. `derive_path` / `extract_conversation` live
+in `toolpath-convo` and you should not reimplement them. Your job is the
+rightmost arrow, plus the CLI seams around it.
 
 The IR canonicalizes the *classification* (`ToolCategory`), not the
 *name*. `ToolInvocation.name` is preserved verbatim from the source
 harness; remapping to a target harness's vocabulary happens in the
 projector.
 
+There is **no provider-namespaced escape hatch on `Turn`** — the old
+`Turn.extra["<harness>"]` mechanism was removed. Everything the projector
+needs must live in typed IR fields; provider-specific UI/decoration fields
+are *synthesized* from `args` + results on the way out (see step 2).
+
 ## Prerequisites
 
-Before starting:
-
-- `Provider::to_view` exists and populates `ToolInvocation.category`
+- `provider::to_view` exists and populates `ToolInvocation.category`
   (this is what the projector routes on for cross-harness translation).
-- Provider-specific data that doesn't fit `Turn` lives under
-  `Turn.extra["<harness>"]`. The forward path stashed it there;
-  the projector pulls it back out.
-- The on-disk format is reasonably documented at
-  `docs/agents/formats/<harness>.md`. If not, write that first —
-  the projector is the place where every quirk shows up.
+- The on-disk (or on-server) format is documented under
+  `docs/agents/formats/` — as a single file for well-understood formats
+  (`gemini.md`, `codex.md`, …) or a **directory** for reverse-engineered
+  preview harnesses (`copilot-cli/`, `amp/`), where every claim carries a
+  confidence tag and a version stamp. If it isn't, write that first — the
+  projector is the place where every quirk shows up.
 
 ## Steps
 
-### 1. Reverse-map tool names: `native_name(category, args)`
+### 0. Register the harness in the CLI's enums
+
+Two deliberately parallel enums, both exhaustive — the compiler walks you
+to every seam:
+
+- **`ArtifactType`** (`crates/path-cli/src/artifact.rs`) — the general
+  artifact-source enum. Its `name()` doubles as the **cache-id prefix**
+  (`amp-<inner-id>`, `copilot-<inner-id>`, …) used by `p import`.
+- **`Harness`** (`crates/path-cli/src/harness.rs`) — the harness-only
+  layer that `share`/`resume` `--harness` accept. Extend `Harness::ALL`,
+  both `Harness::artifact_type()` / `ArtifactType::harness()` mappings,
+  `HarnessBundle` (the share-time aggregation struct), and the
+  `is_not_found_<harness>` probe that lets `share` silently skip machines
+  where the harness isn't installed.
+
+Then the import surface: `ImportSource::<Harness> { session, all }` +
+`derive_<harness>` dispatch in `cmd_import.rs`, a `derive_<harness>_session{,_with}`
+helper in `derive.rs` (the `_with` variant takes an injected provider
+manager so tests can point it at fixtures), and a `pick_<harness>` picker
+whose `--preview` template calls `path show <harness>`.
+
+### 1. Reverse-map tool names: `native_name`
 
 In `toolpath-<harness>/src/provider.rs`, alongside the existing
-`tool_category(name)`:
+`tool_category(name)`. Two shapes exist in the codebase:
+
+- **`Option<&'static str>`** (gemini, claude, codex, opencode, pi) —
+  `None` means "no native analog; pass the foreign name through".
+- **Total `&'static str`** (copilot, amp) — every category maps to
+  *something* renderable.
 
 ```rust
-pub fn native_name(category: ToolCategory, args: &Value) -> Option<&'static str> {
+pub fn native_name(category: ToolCategory, args: &Value) -> &'static str {
     match category {
-        ToolCategory::Shell => Some("run_shell_command"),
-        ToolCategory::FileWrite => Some(
-            // Edit-shape vs Write-shape — disambiguate by args.
-            if args.get("old_string").is_some() { "replace" }
-            else { "write_file" }
-        ),
-        ToolCategory::FileRead => Some(if args.get("file_paths").is_some() {
-            "read_many_files"
-        } else if args.get("path").is_some() && args.get("file_path").is_none() {
-            "list_directory"
-        } else {
-            "read_file"
-        }),
-        // ...
+        ToolCategory::Shell => "shell_command",
+        // ToolCategory is too coarse for FileWrite (Edit / Write /
+        // MultiEdit all collapse) — disambiguate by arg shape.
+        ToolCategory::FileWrite => "apply_patch",
+        // …
     }
 }
 ```
 
-`ToolCategory` is too coarse for FileWrite (Edit / Write / MultiEdit
-all collapse) and FileRead (read_file / read_many_files /
-list_directory), so inspect `args` to pick the native name whose arg
-shape best matches the call. The receiving harness's UI keys icons,
-labels, and category routing off these names; getting them wrong means
-calls render as "unknown tool".
+The receiving harness's UI keys icons, labels, and category routing off
+these names; getting them wrong means calls render as "unknown tool".
+**Names, then args**: when the target's UI reads specific arg keys, remap
+the args only if you can fill them honestly (amp synthesizes
+`apply_patch {patchText}` envelopes from foreign FileWrites, `finder
+{query}` from FileSearch patterns); when you can't, pass the foreign name
+and input through untouched rather than emitting a native name wrapping an
+empty shell.
 
 ### 2. Implement the projector
 
 `toolpath-<harness>/src/project.rs`:
 
 ```rust
-pub struct HarnessProjector {
-    pub project_path: Option<String>,
-    // … other config fields the on-disk format needs …
-}
-
 impl ConversationProjector for HarnessProjector {
-    type Output = NativeConversation;
+    type Output = NativeSession;
     fn project(&self, view: &ConversationView) -> Result<Self::Output> {
-        // Walk view.turns → produce native messages.
-        // Walk turn.delegations → produce native sub-agent files (if applicable).
-        // Pull harness-specific data from Turn.extra["<harness>"].
+        // Walk view.turns → native messages.
+        // Walk turn.delegations → native sub-agent records.
     }
 }
 ```
 
-Three things the projector MUST do:
+Things the projector MUST do:
 
-1. **Drop foreign-namespace extras.** When projecting Claude's
-   conversation into Gemini, `Turn.extra["claude"]` is meaningless and
-   pollutes the output JSON. Read only `Turn.extra["<your-harness>"]`;
-   discard everything else. See
-   `toolpath-gemini::project::split_gemini_extras` for the pattern.
-2. **Remap tool names through `category` + `native_name(args)`** when
-   the source name isn't already one of yours. Pass through verbatim
-   when it is, so same-harness round-trips don't churn names.
-3. **Synthesize required UI fields** (description, displayName, render
-   hints, etc.) from `args` + `result.content` when not present in the
-   IR. For Gemini→Gemini round-trips, `Turn.extra["gemini"]` carries
-   the originals; for cross-harness, you have to make them up from
-   what's available. See
-   `toolpath-gemini::project::synthesize_description` for the
-   per-tool-name dispatch and `generic_description_fallback` for the
-   foreign-tool last-resort.
+1. **Remap tool names through `category` + `native_name(args)`** when the
+   source name isn't already one of yours. Pass through verbatim when it
+   is, so same-harness round-trips don't churn names. (Enforced by the
+   cross-harness matrix and each crate's `real_fixture_roundtrip.rs`.)
+2. **Synthesize required UI fields** (description, displayName, render
+   hints, result mirrors) from `args` + `result.content` when the IR has
+   nothing native. See `toolpath-gemini::project::synthesize_description`
+   for per-tool dispatch with a generic fallback.
+3. **Be position-stable**: ids you must invent (tool-result carrier
+   messages, missing tool ids) derive deterministically from position, so
+   projecting the same view twice is byte-identical. Ids the source gave
+   you (turn ids, delegation ids) pass through so pairing survives a
+   round trip.
+4. **Re-expand tokens honestly.** Invert exactly what the forward path
+   folded (gemini un-folds the reasoning breakdown; amp regenerates its
+   derived `totalInputTokens`), and refuse to invent what can't be
+   reconstructed (capacity fields, attribution the source never made).
 
 ### 3. Library/CLI parity for session resolution
 
-If the harness's CLI accepts session identifiers in multiple forms
-(file stem AND inner session ID, for instance), the harness's library
-reader should too — otherwise `path p export <harness>` followed by
-`<harness>cli --resume <uuid>` works but the equivalent library round-
-trip doesn't. See `toolpath-gemini::PathResolver::resolve_main_file`
-for the stem-then-scan-and-match pattern.
+If the harness's CLI accepts session identifiers in multiple forms (file
+stem AND inner session id, for instance), the harness's library reader
+should too — otherwise `path p export <harness>` followed by the CLI's
+resume command works but the equivalent library round-trip doesn't. See
+`toolpath-gemini::PathResolver::resolve_main_file`; the copilot analogue
+honors `COPILOT_HOME` the same way in both.
 
-### 4. Add the CLI variant
+### 4. Add the CLI export variant
 
-In `crates/toolpath-cli/src/cmd_export.rs`:
+In `crates/path-cli/src/cmd_export.rs` (**not** `toolpath-cli` — that is
+a two-line shim), mirror **Copilot's** variant:
 
 ```rust
 pub enum ExportTarget {
-    // existing variants...
+    // …
     Harness {
-        #[arg(short, long)]
-        input: String,
-
-        #[arg(short, long)]
-        project: Option<PathBuf>,
-
-        #[arg(short, long, conflicts_with = "project")]
-        output: Option<PathBuf>,
+        #[arg(short, long)] input: String,
+        #[arg(short, long)] project: Option<PathBuf>,
+        #[arg(short, long, conflicts_with = "project")] output: Option<PathBuf>,
     },
 }
 ```
 
-Three modes (mirror Claude's variant exactly):
+Three modes:
 
-- **`--project DIR`** — write the resume-ready on-disk layout under
-  `~/.<harness>/…` so the harness's CLI invoked from `DIR` can resume
-  it. Bake any cwd-derived metadata (project hashes, working
-  directories) into the projector here.
-- **`--output FILE`** — write the harness's primary file to `FILE`.
-  Multi-file formats land secondary files (sub-agents, attachments)
-  in a sibling location next to it.
-- **Neither** — pretty-print the primary file to stdout. Warn on
-  stderr if a multi-file format would lose data.
+- **`--project DIR`** — write the resume-ready layout (session files +
+  any index/store row the harness's picker reads) so the harness's CLI
+  invoked from `DIR` can resume it.
+- **`--output FILE`** — write the primary artifact to `FILE`; multi-file
+  formats land secondaries next to it with a clear convention.
+- **Neither** — print the primary artifact to stdout.
 
-Refactor projection into a helper (`build_<harness>_conversation`) so
-all three modes share it. The Gemini implementation in `cmd_export.rs`
-is a complete worked example.
+Factor the projection into **`build_<harness>_session`** (pure: doc →
+projected session) and **`project_<harness>`** (build + write + return
+the session id). The split is load-bearing: `path resume` calls
+`project_<harness>` directly in its `project_into_harness` arm, and the
+`--output`/stdout modes stay offline even when `--project` needs network
+(amp) or a database (copilot, opencode, cursor). Give `project_<harness>`
+a unit test that asserts it returns the session id **and** writes the
+artifact — with an injectable writer if the real one touches network.
 
-### 5. Document the on-disk format
+### 5. Wire `path share`
 
-`docs/agents/formats/<harness>.md`. Capture especially the load-
-bearing details the projector tripped over:
+`crates/path-cli/src/cmd_share.rs`:
 
-- Filename conventions enforced by the CLI (Gemini requires `session-`
-  prefix; the CLI filters before opening files).
-- How the CLI's resume command resolves an identifier. Filename stem?
-  Inner session ID? Hash? Multiple paths in priority order?
-- Single-file vs multi-file format, and the relationships between
-  files (Gemini's main file + sibling UUID dir for sub-agents).
-- Required fields for the file to load at all (Gemini's `kind: "main"`
-  is implicitly required by some readers).
-- Round-trip fidelity gotchas (absent vs empty arrays, polymorphic
-  fields, nullable vs absent semantics).
+- **`collect_<harness>`** — gather the harness's sessions into the
+  aggregated picker. Follow the copilot/amp template: call
+  `list_sessions()`, suppress `is_not_found_<harness>` errors quietly
+  (harness not installed), print a `warning: <harness> aggregation
+  failed:` for anything else.
+- **`harness_status_<harness>` + `format_status_line`** — the
+  no-sessions summary line.
+- A `derive_session` arm routing `--harness <h> --session <id>` to the
+  per-session derive helper.
 
-### 6. Tests
+The picker rides `path p list <harness> --format tsv` (single-keyed
+columns: `id · last_activity · count · cwd · first_user_message`, all
+through `sanitize_tsv`) and previews via `path show <harness>`. If share's
+preview template always passes `--project`, give `show <harness>` a
+hidden `--project` shim arg even when it's meaningless for the harness.
 
-Three layers of automated tests, in order of cost:
+### 6. Wire `path resume`
 
-**Projector unit tests** in `project.rs` — cheap, focused. Cover:
-content shape, role mapping, tool-call construction (with and without
-results, errors), foreign-namespace extras dropped, harness-native
-extras preserved, serde round-trip of the projected output through
-the harness's own types.
+`crates/path-cli/src/cmd_resume.rs`:
 
-**Round-trip integration test** in `tests/projection_roundtrip.rs` —
-the contract test. Walk the full chain: `native fixture → to_view →
-derive_path → serialize+reparse Path → extract_conversation → project
-→ native`. Assert field-by-field that the round-trip preserves
-messages, roles, content text, tool calls (name, args, result text,
-error status), thoughts, tokens, sub-agents. The Gemini test file is
-the template.
+- **Source inference**: add the provider id to `infer_source_harness`'s
+  `meta.source` match and an `agent:<harness>` prefix to the actor sniff
+  (the picker pre-selects the source harness).
+- **`argv_for`**: the harness's resume argv (`["--resume", id]`,
+  `["threads", "continue", id]`, …) — a per-harness CLI convention,
+  recorded with its evidence tag in the format doc.
+- **`project_into_harness`**: call `cmd_export::project_<harness>`.
+- **Exec seam**: nothing to add — `ExecStrategy` already abstracts the
+  final `execvp`. Production uses `RealExec`; tests use `RecordingExec`
+  to capture `(binary, args, cwd)` without launching anything.
 
-**CLI integration test** in `cmd_export.rs::tests` — proves the
-`path p export <harness>` command writes a resume-ready file that the
-harness's library reader can open by the same identifier the CLI's
-resume command would use. Isolate `$HOME` to a temp dir.
+Test in `crates/path-cli/tests/resume.rs`: a `RecordingExec` case that
+feeds a file-input doc, points `$HOME`/`$PATH` at a scoped sandbox
+(`ScopedHome` + `ScopedPath::with_binary("<harness>")`, plus a scripted
+stub binary if projection itself shells out), and asserts the exec recipe
+and the on-disk artifacts. Add a **cross-harness** case too (foreign-source
+doc + `--harness <yours>`) — that is where resume earns its keep.
 
-### 7. Live end-to-end verification
+**Fresh identifiers only.** Resume must mint a fresh session id before
+projection when the target's loader constrains id shape (Claude requires
+a UUIDv4 filename stem; amp only resumes server-issued ids) — and even
+when it doesn't, reusing the source id risks clobbering the original
+session on a same-harness resume. Index registration is INSERT-only;
+never create a store the harness owns (`if !db_path.exists()` → warn and
+skip, don't fabricate).
 
-Tests passing is necessary but **not sufficient**. The unit and
-round-trip tests verify the projector against the *intended* contract;
-they don't tell you whether the resulting file actually loads in the
-harness's CLI, whether the receiving model can read its context, or
-whether the output looks like a normal session of that harness rather
-than a foreign-shape one. Three checks worth running before declaring
-the harness done:
+### 7. Document the format — including the writer contract
 
-**A. Run the full pipeline against a real conversation.** Pick a
-non-trivial conversation from another harness (Claude is convenient
-since the source is rich) and pipe it through:
+Single file or directory per the prerequisite above. Beyond the reader's
+reference, projection adds **`writing-compatible.md`**: what a synthesized
+session must satisfy for the harness to load it. Capture especially:
 
-```bash
-# Import a real session into a Path doc
-path p import claude --session <session-uuid> --project /path/to/project
+- Filename/id conventions enforced by the loader (UUID stems, `session-`
+  prefixes, id shapes the server issues).
+- How the resume command resolves an identifier (filename? inner field?
+  index row?).
+- Required fields for the file to load at all, and every observed
+  rejection **verbatim** with a version stamp (see step 9).
+- Round-trip fidelity gotchas (absent vs empty, nullable vs missing,
+  polymorphic result shapes) — and, where fidelity has a ceiling (amp's
+  rendered-transcript resume), say so plainly rather than glossing.
 
-# Or, if not using cache:
-cargo run -q -p path-cli -- p import claude \
-  --project /path/to/project --session <session-uuid> --no-cache --pretty \
-  > /tmp/source.path.json
+### 8. Tests — five layers
 
-# Project into the new harness
-path p export <harness> --input /tmp/source.path.json --project $(pwd)
-```
+In order of cost:
 
-The summary line should report the full message count, not zero or
-some truncated subset.
+1. **Projector unit tests** in `project.rs` — content shape, role
+   mapping, tool-call construction (with/without results, errors),
+   native-name remap, position-stable ids, token re-expansion.
+2. **Round-trip integration test** (`tests/roundtrip.rs` or
+   `projection_roundtrip.rs`) — `native fixture → to_view → derive_path →
+   serialize+reparse → extract_conversation → project → native`,
+   asserted field-by-field. Include a **foreign-source** case (a
+   claude-shaped view through your projector).
+3. **CLI integration test** — `path p export <harness>` writes something
+   the harness's own library reader opens by the same identifier the
+   resume command would use. Isolate `$HOME`.
+4. **A cross-harness matrix row** —
+   `crates/path-cli/tests/cross_harness_matrix.rs`. Implement the
+   harness struct (`name`, `roundtrip`, `load_fixture`,
+   `schema_validates`) over the real fixture at
+   `test-fixtures/<harness>/convo.*` and register it in **both** vectors
+   (sources and targets). This is what catches other-harness fallout:
+   amp's row surfaced a cursor projector bug, not an amp one.
+5. **A real-capture fixture test** (`tests/real_fixture_roundtrip.rs`) —
+   forward invariants against a first-hand capture, projection
+   round-trip fidelity, and **wire-level serde value-identity** (parse →
+   serialize == input, byte-for-byte modulo formatting). The
+   value-identity test is the tripwire that catches schema drift when
+   the harness updates.
 
-**B. Verify the harness's CLI accepts it.** Three things to check:
+The fixture comes from the **feature-elicit pipeline**: run
+`docs/agents/feature-elicit.prompt.txt` through the harness
+(`scripts/capture-elicit-fixtures.sh` automates every driveable harness),
+sanitize per the checklist in `test-fixtures/<harness>/README.md`, and
+commit it as both the crate-local test fixture and the matrix fixture.
+The elicit session exercises shell, file create/edit, search, an
+intentional error, a sub-agent, and reasoning — which is exactly what the
+later probing question keys on.
 
-```bash
-<harness>cli --list-sessions             # session is discoverable
-<harness>cli --resume <session-uuid>     # session loads without error
-# In the resumed session, ask a probing question:
-<harness>cli --resume <uuid> -p "in one sentence, what was the most-used tool in this session?"
-```
+### 9. The writer-contract loop (how `writing-compatible.md` gets written)
 
-The third check is the strongest: if the model gives a specific,
-correct answer, it loaded the context AND parsed the tool-call
-records. If it says "I don't have any prior context" or invents a
-generic answer, the file loaded structurally but the content didn't
-reach the model.
+The loader's real constraints are discovered, not designed. The
+methodology, proven on copilot and amp:
 
-**C. Diff the projected output against a real session of the same
-harness on disk.** This is where slop hides. Find a real session the
-harness wrote itself (`~/.<harness>/.../*.json`) and compare key
-shapes. A small Python analyzer:
+1. **Isolate the harness's state** (`COPILOT_HOME`, or `HOME` + XDG vars
+   per the format doc's isolation recipe) so probing never touches real
+   sessions, and pin auth via env (`AMP_API_KEY`) so no interactive
+   login flow can trigger.
+2. Project a session, invoke the real resume command, and read the
+   rejection.
+3. Fix **exactly one** rejection, record its message **verbatim** with an
+   `[observed, <version>]` stamp in `writing-compatible.md`, repeat.
+4. When it loads: ask the resumed model a **probing question** ("In one
+   sentence, what was the most-used tool in this session?"). A specific,
+   correct answer proves the context reached the model; "I don't have
+   prior context" means the file loaded but the content didn't.
+5. Freeze the loop as `scripts/verify-<harness>-live.sh` (shellcheck-
+   clean, isolated home, loud failure, probe printed for human
+   judgment) so the contract can be re-verified after every harness
+   update.
 
-```python
-import json
-from collections import Counter
+Never report success on a status code alone — verify by read-back (amp's
+REST import answered `201 Created` and created nothing).
 
-real = json.load(open('<path-to-real-session>'))
-inc  = json.load(open('<path-to-projected-session>'))
+### 10. Live end-to-end verification
 
-def stats(c, label):
-    print(f'\n=== {label} ===')
-    print(f'  messages: {len(c["messages"])}')
-    types = Counter(m.get('type') for m in c['messages'])
-    print(f'  types: {dict(types)}')
-    names = Counter(tc['name']
-                    for m in c['messages']
-                    for tc in (m.get('toolCalls') or []))
-    total = sum(names.values())
-    print(f'  tool calls: {total}')
-    for n, k in names.most_common(10):
-        print(f'    {k:4d}  {n}')
-    # decoration coverage
-    for field in ('description', 'displayName', 'resultDisplay',
-                  'renderOutputAsMarkdown'):
-        have = sum(1 for m in c['messages']
-                   for tc in (m.get('toolCalls') or [])
-                   if tc.get(field) is not None)
-        print(f'  {field}: {have}/{total}')
-    # message-level pollution
-    keys = Counter(k for m in c['messages'] for k in m.keys())
-    foreign = [k for k in keys
-               if k not in ('id', 'timestamp', 'type', 'content',
-                            'tokens', 'model', 'toolCalls', 'thoughts')]
-    print(f'  foreign top-level msg fields: {foreign}')
+Tests passing is necessary but **not sufficient**. Before declaring the
+harness done:
 
-stats(real, 'REAL')
-stats(inc, 'INCEPTED')
-```
+**A. Full pipeline on a real conversation** — import a non-trivial
+session from another harness, `path resume <it> --harness <yours> -C
+<dir>` (or `p export --project`), and confirm the summary reports the
+full message count.
 
-Quality signals to compare:
+**B. The probing question in the real CLI** — step 9's loop, run against
+both a small capture and the feature-elicit capture. This is the DoD
+standard: the answer must be specific and correct.
 
-- **Tool name distribution**: are foreign names (e.g. Claude's `Bash`,
-  `Edit`, `Read`) still present in the incepted output, or have they
-  been remapped to the target harness's vocabulary
-  (`run_shell_command`, `replace`, `read_file`)? Anything that didn't
-  remap is either a missing entry in `native_name`, a missing
-  `tool_category` mapping in the source harness, or a tool with no
-  target-harness analog (legitimate, but flag it).
-- **Decoration coverage**: how many tool calls have `description`,
-  `displayName`, `resultDisplay`, `renderOutputAsMarkdown` populated
-  in the real output vs ours? A real session usually has 100% on each.
-  Less than 100% in ours means the synthesizers aren't covering all
-  the tools.
-- **Message-level pollution**: are any foreign-namespace fields
-  (`claude`, `codex`, etc.) appearing as top-level keys on messages?
-  They shouldn't be — that's the foreign-extras leak from pitfall #4.
-- **Tokens shape**: are any fields written as `null` instead of
-  absent? Real sessions tend to omit unknown fields, not null them.
+**C. Compare against a real session of the harness.** Where the harness
+has an on-disk format, diff shapes against a session it wrote itself
+(field coverage, tool-name distribution, no foreign top-level keys, no
+`null`s where real sessions omit). In practice this is now covered by the
+wire value-identity tests plus the live loader loop — but a manual look
+at one real-vs-projected pair still catches "loads, but renders wrong"
+(hunkless diffs rendering flat, decoration fields the UI dispatches on).
 
-When all three of these pass — pipeline produces full output, CLI
-loads and the model engages with the context, and a field-coverage
-diff against real sessions shows no glaring asymmetries — the harness
-is ready to ship. Anything short of all three and you're guessing.
+## Preview labeling and version stamping
+
+A reverse-engineered harness ships as a **preview** in lockstep across:
+the clap doc comments (`(preview)`), the crate `description`
+(`(preview; schema reverse-engineered)`), the crate README blockquote,
+the CLAUDE.md dependency-graph suffix + prose block, and
+`site/_data/crates.json`. Every format claim carries an evidence tag
+(`[observed]`/`[official]`/`[reverse-eng]`/`[inferred]`/`[unverified]`)
+and a version stamp. When live verification lands, flip the hedges to
+"✅ Verified in <harness> <version>" **everywhere at once** — including
+any runtime stderr banner; a banner still claiming "unverified" after
+the verification commit is a bug (copilot shipped exactly that stale
+banner for a while).
+
+## Release bookkeeping
+
+A new harness crate is a new workspace crate: walk the **Versioning and
+release checklist** in `CLAUDE.md` (items 1–11 — workspace `members` +
+`[workspace.dependencies]`, CLAUDE.md, README, `site/_data/crates.json`,
+`site/pages/crates.md`, `scripts/release.sh` tier lists, crate README
+wired via `#![doc = include_str!]`), and bump `path-cli`'s minor version
+for the new subcommands.
 
 ## Pitfalls (real ones we hit)
 
 1. **Filename conventions are load-bearing.** Gemini's CLI filters
    `chats/*.json` by `session-` stem prefix *before* opening any file.
-   Mis-named files are silently invisible to `--resume`. Always check:
-   does the harness's listing tool see the file?
+   The copilot analogue is the `session-store.db` `sessions` row: without
+   it the session exists on disk and `--resume` can't see it. Always
+   check: does the harness's own listing show the projected session?
 2. **Identifier resolution often differs from filesystem layout.**
    Gemini's `--resume <uuid>` matches the inner `sessionId` field, not
-   the filename stem. So a session resumable by UUID may live in a
-   file whose name is unrelated.
-3. **Multi-file formats need a thoughtful `--output` design.** A
-   harness whose session is one main file plus a sibling sub-agent dir
-   can't fit in a single output file. Either accept a directory there,
-   or write the main to the file and put secondaries in a sibling
-   location with a clear convention.
-4. **Foreign-namespace extras silently leak.** If your message type
-   uses `#[serde(flatten)]` on its extras map, anything in
-   `Turn.extra` that isn't your namespace flatlands as a top-level
-   message field. The projector should drop foreign namespaces
-   explicitly.
+   the filename stem. See `copilot-cli/resume-and-sessions.md` for the
+   copilot variant.
+3. **Multi-file formats need a thoughtful `--output` design.** Copilot
+   writes three artifacts across two stores; `--output` emits the
+   primary stream and documents what's elided.
+4. **Never mutate state the harness owns.** Fresh ids, INSERT-only index
+   rows, `create_new` (fail on collision) for filed artifacts, and
+   warn-don't-create when the harness's store is missing. The projector
+   must be incapable of touching an existing session.
 5. **Tool args don't match across harnesses.** Claude's `Edit
-   {file_path, old_string, new_string}` and Gemini's `replace
-   {file_path, old_string, new_string, instruction}` line up; Claude's
-   `Write {file_path, content}` and Gemini's `write_file {file_path,
-   content}` line up. Many other pairs don't. Preserve `args`
-   verbatim, map names not args.
-6. **UI decoration fields feel cosmetic but aren't.** `description`,
-   `displayName`, `renderOutputAsMarkdown`, `resultDisplay` —
-   Gemini-style harnesses populate these on every call. Without them,
-   the receiving CLI shows generic blank-ish entries. Synthesize from
-   args and result text.
-7. **The reader is the next surprise.** The harness's library reader
-   may not resolve identifiers the way its CLI does. Either add the
-   missing path or document the asymmetry. (See `resolve_main_file`
-   in `toolpath-gemini`.)
-8. **Don't trust commit comments about backward-compat fallbacks.**
-   If a comment says "fallback for older `.path` files," verify those
-   files actually exist. If no caller has ever produced the shape the
-   fallback handles, it's dead code with a misleading explanation.
+   {file_path, old_string, new_string}` and Gemini's `replace {…}` line
+   up; many pairs don't. Map names always; reshape args only when the
+   target keys can be filled honestly (see step 1).
+6. **UI decoration fields feel cosmetic but aren't.** Copilot's timeline
+   dispatches on the `toolRequests` mirror; hunkless diffs render flat
+   (`copilot-cli/file-fidelity.md`). Synthesize from args and result
+   text.
+7. **The reader is the next surprise.** The harness's library reader may
+   not resolve identifiers the way its CLI does. Either add the missing
+   path or document the asymmetry.
+8. **Don't trust commit comments about backward-compat fallbacks.** If a
+   comment says "fallback for older files," verify those files actually
+   exist before preserving the branch.
 
-## Concrete: Gemini reference
+## Concrete references
 
-For every step above there's a working, committed reference:
+**Copilot** (local session store, the default template):
 
-- `crates/toolpath-gemini/src/provider.rs` — `tool_category` +
+- `crates/toolpath-copilot/src/provider.rs` — `tool_category` + total
   `native_name`
-- `crates/toolpath-gemini/src/project.rs` — `GeminiProjector`,
-  `split_gemini_extras`, `synthesize_*`
-- `crates/toolpath-gemini/src/paths.rs` — `resolve_main_file` for
-  CLI-parity identifier lookup
-- `crates/toolpath-gemini/tests/projection_roundtrip.rs` — round-trip
-  contract tests
-- `crates/toolpath-cli/src/cmd_export.rs` — the `Gemini` variant,
-  three-mode dispatch, integration tests
-- `docs/agents/formats/gemini.md` — on-disk format including the
-  Session resolution and Round-trip fidelity gotchas sections
+- `crates/toolpath-copilot/src/project.rs` — `CopilotProjector`
+- `crates/path-cli/src/cmd_export.rs` — `build_copilot_session` /
+  `project_copilot` / `write_into_copilot_project` (events.jsonl +
+  workspace.yaml + session-store.db row)
+- `docs/agents/formats/copilot-cli/` — directory-form format reference
+  incl. `writing-compatible.md` (9 verbatim rejections)
+- `scripts/verify-copilot-live.sh` — the frozen live loop
+
+**Amp** (server-authoritative, the no-local-store variant):
+
+- `crates/toolpath-amp/src/io.rs` — `ThreadFetcher`/`ThreadWriter`
+  seams around the first-party CLI
+- `crates/toolpath-amp/src/project.rs` — `AmpProjector` +
+  `rehydration_prompt` (content-derived fence for untrusted transcripts)
+- `crates/path-cli/src/cmd_export.rs` — `build_amp_session` /
+  `project_amp{,_with}` / `write_into_amp_project` (create → file
+  INSERT-only artifact → seed)
+- `docs/agents/formats/amp/writing-compatible.md` — a *server import*
+  contract: routes ruled out with evidence, fidelity ceiling stated
+- `scripts/verify-amp-live.sh`
+
+**Gemini** (the original local multi-file worked example):
+
+- `crates/toolpath-gemini/src/project.rs` — `synthesize_description` and
+  the decoration-field synthesis pattern
+- `crates/toolpath-gemini/src/paths.rs` — `resolve_main_file` CLI-parity
+  lookup
+
+Cross-cutting: `crates/path-cli/src/{artifact.rs,harness.rs}` (enum
+registration), `cmd_share.rs` (`collect_*`), `cmd_resume.rs` (`argv_for`,
+`ExecStrategy`), `tests/cross_harness_matrix.rs` (both vectors),
+`scripts/capture-elicit-fixtures.sh` + `docs/agents/feature-elicit.md`
+(the fixture pipeline).

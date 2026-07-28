@@ -54,6 +54,7 @@ crates/
   toolpath-gemini/    Derive from Gemini CLI conversation logs
   toolpath-codex/     Derive from Codex CLI rollout files
   toolpath-copilot/   Derive from GitHub Copilot CLI session logs (preview)
+  toolpath-amp/       Derive from + project to Amp (ampcode.com) threads (preview)
   toolpath-opencode/  Derive from opencode SQLite databases
   toolpath-cursor/    Derive from Cursor (IDE) state.vscdb bubble store
   toolpath-pi/        Derive from Pi (pi.dev) agent sessions
@@ -239,8 +240,10 @@ The picker leans on two machine-readable surfaces you can also use yourself:
 - `path p list <provider> --format tsv` — one session per line, tab-delimited.
   For project-keyed providers (claude, gemini, pi) the columns are
   `<project>\t<session>\t<iso8601 last_activity>\t<count>\t<first_user_message>`.
-  For single-keyed providers (codex, opencode):
+  For single-keyed providers (codex, copilot, amp, opencode, cursor):
   `<session>\t<iso8601 last_activity>\t<count>\t<cwd>\t<first_user_message>`.
+  (Amp is a preview provider whose threads live server-side — each listed row
+  costs one `amp threads export` behind the scenes.)
   `--format` defaults to `pretty` on a TTY and `tsv` when piped.
 - `path show <provider> --…` — markdown summary for one session (the
   picker's `--preview` command).
@@ -255,7 +258,7 @@ path p list claude --format tsv \
   | xargs -L2 sh -c 'path p import claude --project "$1" --session "$2"' --
 ```
 
-Single-keyed (codex/opencode):
+Single-keyed (codex/copilot/amp/opencode/cursor):
 
 ```bash
 path p list codex --format tsv \

@@ -295,6 +295,35 @@ of the feature-elicit capture.
 | `service_tier` (`"standard"`) | — |
 | — | `model`, `timestamp`, `totalInputTokens` |
 
+### The full `usage` schema `[reverse-eng, ga5b614]`
+
+The bundle's zod schema for `usage` has **nine** keys — one more than any
+capture shows: `{model?, maxInputTokens, inputTokens, outputTokens,
+cacheCreationInputTokens, cacheReadInputTokens, totalInputTokens,
+thinkingBudget?, timestamp?}`. Three facts a capture alone cannot reveal:
+
+- **`thinkingBudget` exists but appeared in none of the captured threads.**
+  It is a *request budget*, not a consumption counter — never sum it, same
+  rule as `maxInputTokens`. Any wire struct must tolerate it (an `Option`,
+  or flattened extras) or the first thread that carries one breaks the
+  value-identity round trip.
+- **Both cache counters are `.nullable()`, not merely optional.** No null
+  was observed, so fixtures can't catch this: decode null *and* absent to
+  `None`, both distinct from a real `0`.
+- **Amp's own UI session total is `cumulativeBilledTokens =
+  Σ(totalInputTokens + outputTokens)` over assistant messages** — a
+  client-side sum that counts cache read + creation as billed. Keep it
+  *computable* from the stored counters (it reconciles field-for-field with
+  the derived documents); never stamp it onto a turn.
+
+Independently confirmed by the same sweep: **no reasoning/thinking token
+counter exists anywhere in the bundle** (zero hits for
+`reasoningTokens`/`thinkingTokens`), which is why the toolpath mapping emits
+no `breakdowns`. The `totalInputTokens = inputTokens + cacheReadInputTokens
++ cacheCreationInputTokens` sum relation is `[observed]` — verified on all
+17 usage objects across the three captured threads (the server computes it;
+no client-side arithmetic exists for it).
+
 ---
 
 ## Mapping sketch to the toolpath IR

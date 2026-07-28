@@ -8,7 +8,9 @@
 //! record (what `p export amp --output` emits, and what is filed beside a
 //! created thread); `path resume --harness amp` transfers context by
 //! creating a thread with the `amp` CLI and seeding it with a rendered
-//! transcript. See `docs/agents/formats/amp/writing-compatible.md`.
+//! transcript — ✅ verified live in amp `0.0.1785170481-ga5b614` (the
+//! resumed model answers probing questions about the prior session
+//! correctly). See `docs/agents/formats/amp/writing-compatible.md`.
 //!
 //! Projection rules:
 //!

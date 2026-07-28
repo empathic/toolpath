@@ -2,8 +2,9 @@
 
 ## Verification methodology
 
-Everything in this folder came from one machine on 2026-07-27, at Amp
-`0.0.1785170481-ga5b614`, via four independent channels:
+Everything in this folder came from one machine on 2026-07-27/28, at Amp
+`0.0.1785170481-ga5b614` (tool-input-shape mining re-run at
+`0.0.1785228716-gedda19` after a self-update), via four independent channels:
 
 1. **Live captures.** Three private threads: a pre-existing install-session
    thread (6 messages), a trivial thread plus one continuation (4 messages),
@@ -102,10 +103,15 @@ that paying off:
 7. **Non-success `result` subtypes** in the stream. Only
    `result/success` seen; error and max-turns variants `[unverified]`.
 8. **The remaining 25 tools.** Only `shell_command`, `apply_patch`, `Task`,
-   and `skill` were exercised. `finder`, `librarian`, `oracle`,
-   `read_web_page`, `web_search` and the thread/schedule/orb families have
-   `[unverified]` input and result shapes — they need a category mapping
-   before piece 05's `native_name` totality test can pass.
+   and `skill` were exercised live. Bundle mining at `gedda19` (piece 05)
+   fixed the **input** shapes for `finder {query}`, `web_search {query}`,
+   and `read_web_page {url}` (`[reverse-eng]`, see
+   [events.md](events.md)); `librarian`, `oracle`, and the
+   thread/schedule/orb families stay `[unverified]`, and **result** shapes
+   for everything unexercised remain unknown.
+8b. **A bundle code path emits `usage` on the stream's `result` line**,
+   which no `--stream-json` capture produced. Unexplained; low priority
+   (the export is canonical either way).
 9. **`amp threads raw`** — 403 for a thread the account owns. Staff-gated?
 10. **Multiplayer / shared / labelled threads** — `sharedGroupIDs`,
     `openExpiresAt`, `workspaceID`, `projectID` were all null/empty in every

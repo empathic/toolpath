@@ -12,6 +12,10 @@ coding agent distributed as `amp`.
 > churn fast — expect drift, and trust the per-thread version anchor over the
 > running binary. See the format reference at
 > [`docs/agents/formats/amp/`](../../docs/agents/formats/amp/README.md).
+> **✅ Resume verified in amp `0.0.1785170481-ga5b614`** (and Claude-Code→amp
+> at `0.0.1785228716-gedda19`): a projected session resumes in the real `amp`
+> CLI and the model answers probing questions about the prior session
+> correctly — with the fidelity ceiling documented below.
 
 ## What it reads
 
@@ -66,3 +70,23 @@ let convo = AmpConvo::with_fetcher(Arc::new(DirFetcher::new("/path/to/exports"))
   commit or branch.
 - **Sub-agents**: `Task` returns a bare string and no child thread is
   created; `DelegatedWork.turns` is always empty.
+
+## What it writes (reverse path)
+
+`AmpProjector` inverts `to_view` into an `amp threads export`-shaped document:
+position-stable ids, preserved delegation ids, token re-expansion (the derived
+`totalInputTokens` is regenerated; capacity is never invented), and foreign
+tool names remapped into Amp's native vocabulary with arg shapes the Amp UI
+renders (`apply_patch {patchText}` synthesis, `finder {query}`,
+`web_search {query}`, …).
+
+Because threads are server-authoritative and Amp accepts no document import
+(the REST-looking route answers `201 Created` and creates nothing), resume
+goes through the first-party CLI: `amp threads new` creates a fresh
+server-side thread and `amp threads continue <id> -x` seeds it with a rendered
+transcript. That is **context transfer, not a native-block import** — the
+resumed model reasons about the prior work correctly (verified live), but
+`amp threads export` on the resumed thread will not resemble the source. The
+full-fidelity projected document is what `path p export amp --output` emits.
+Contract, evidence, and verbatim probe results:
+[`docs/agents/formats/amp/writing-compatible.md`](../../docs/agents/formats/amp/writing-compatible.md).

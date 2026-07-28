@@ -2,6 +2,102 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## New provider: Amp (preview) — 2026-07-28
+
+Adds **`toolpath-amp` 0.1.0**, a both-directions preview provider for
+Amp ([ampcode.com](https://ampcode.com)) threads.
+
+- **Amp threads are server-authoritative** — the per-thread log under
+  `~/.cache/amp/logs/threads/` is content-free telemetry and no other local
+  file holds thread content — so the crate derives from the first-party
+  **`amp threads export <id>`** document, fetched by shelling out to the
+  `amp` CLI (inheriting its login) behind an injectable `ThreadFetcher`
+  (`CliFetcher` live / `DirFetcher` for pre-exported files — `cargo test`
+  never touches the network).
+- Parses the export's Anthropic-shaped message/block model (text, thinking,
+  `tool_use`/`tool_result`) into `toolpath_convo::ConversationView` and hands
+  off to the shared `derive_path`. Tool-result-only `user` messages are
+  transport plumbing: results merge onto the originating invocation (paired by
+  `toolUseID`) and no turn is emitted. `Task` calls become `DelegatedWork`
+  keyed by the `TU-…` id (Amp creates no child thread, so delegated turns stay
+  empty); `apply_patch` results carry per-file **real unified diffs** into the
+  `raw` perspective; errors signal via `run.result.exitCode != 0` only
+  (`run.status` is `"done"` even on failure). Everything the provider doesn't
+  type rides `#[serde(flatten)]` extras, so parse → serialize is
+  **value-identical** on the whole real capture.
+- **Token accounting is the clean per-message pattern** (kind v1.1.0): the
+  four real counters land on `Turn.token_usage` verbatim;
+  `group_id`/`attributed_token_usage` stay `None` and `breakdowns` is omitted
+  (no reasoning counter exists anywhere in Amp). `totalInputTokens` (a derived
+  sum — verified `= input + cacheRead + cacheCreation` on every captured usage
+  object) and `maxInputTokens` (the 272k context-window **capacity**) are
+  wire-preserved but never summed into any spend figure; Amp's own UI total
+  (`cumulativeBilledTokens = Σ(totalInputTokens + outputTokens)`) stays
+  computable from the stored counters, never stamped.
+- **Preview / schema reverse-engineered.** The export schema is undocumented;
+  everything parsed was verified against first-hand captures (recon at
+  `0.0.1785170481-ga5b614`, arg-shape mining at `0.0.1785228716-gedda19`).
+  Amp builds are timestamped and self-update fast, so every claim in the
+  format reference (`docs/agents/formats/amp/`, 9 files, confidence-tagged) is
+  version-stamped, and each thread pins its creating build in
+  `env.initial.platform.clientVersion`. Sanitized fixtures at
+  `test-fixtures/amp/` (export + teed `--stream-json`).
+- Wired into the CLI **both directions**: forward (`path p import/list/show
+  amp`, `path share` — listing costs one `export` per row, since `amp threads
+  list` exposes no cwd/first-message metadata) and reverse via a new
+  `AmpProjector` (`path p export amp`, `path resume --harness amp`).
+  Projection is position-stable (same view → byte-identical output), preserves
+  delegation ids, re-expands the four token counters (regenerating the derived
+  `totalInputTokens`, refusing to invent capacity), and remaps foreign tool
+  names into Amp's native vocabulary with **arg-shape synthesis** the Amp UI
+  can render: FileWrite → `apply_patch {patchText}` (full-content writes
+  become `*** Add File` envelopes; old/new pairs and `edits[]` become
+  `*** Update File` hunks), shell `cmd` → `command`, FileSearch → `finder
+  {query}`, Network → `web_search {query}` / `read_web_page {url}`; when a
+  target key can't be filled honestly the foreign name + input pass through
+  untouched rather than fabricating an empty shell.
+- **The writer contract is a server-import contract**, and the working route
+  is the **first-party CLI two-step**: `amp threads new` (server-assigned
+  fresh id — Amp only resumes ids its own server issued; no model turn, so
+  free) then `amp threads continue <id> -x` with the rendered transcript on
+  stdin. Two routes were ruled out with recorded evidence in
+  `docs/agents/formats/amp/writing-compatible.md`: local fabrication (no
+  store exists to write into) and the REST-looking import (answers
+  `201 Created` and **creates nothing** — read-back fails with the verbatim
+  `Thread T-… does not exist.`; the real `/import` is a Rivet actor fetch
+  behind a wsToken handshake). Consequence, stated everywhere it matters:
+  resume is **context transfer, not a transcript import** — the resumed
+  thread holds the prior session as a rendered Markdown transcript, not
+  native tool blocks. The full-fidelity projection is filed INSERT-only at
+  `~/.toolpath/amp-projected/<thread-id>.json` under the live thread id, and
+  is what `p export amp --output`/stdout emit (offline). The rehydration
+  prompt fences the (untrusted, possibly Pathbase-fetched) transcript with a
+  content-derived marker so a hostile document can't smuggle operator
+  instructions past the fence.
+- **✅ Verified live, all four goal levels.** L1: a captured thread shared
+  anon to Pathbase renders every conversation beat with per-message token
+  lines. L2 (`0.0.1785170481-ga5b614`): `path resume --harness amp` on the
+  feature-elicit capture → the resumed model answers "most-used tool?" with
+  the exactly-correct "`shell_command`, invoked six times";
+  `scripts/verify-amp-live.sh` reruns the loop in an isolated home (`HOME` +
+  all three XDG roots) with `AMP_API_KEY`. L3 (Claude Code 2.1.220): the
+  amp-shared doc resumes in real `claude -r` and enumerates the six shell
+  calls correctly. L4 (`0.0.1785228716-gedda19`): a real 138-step Claude Code
+  session resumes in real `amp` and identifies its most-used tool. Also
+  validated by the cross-harness conformance matrix (16 new amp cells over
+  `test-fixtures/amp/convo.json`) and a foreign-claude round-trip test.
+- Bumps **`path-cli` to 0.17.0** (new `toolpath-amp` dependency, the new
+  subcommands, Amp in `path share`/`path resume`). Resume-side hardening that
+  landed on the way: `path resume … --harness claude` now **mints a fresh
+  UUIDv4 session id** before projection (amp's `T-…` ids aren't UUIDs, and
+  same-id claude→claude projection could clobber the source session) and
+  **strips unsigned thinking** from the projected view — Claude Code 2.1.220
+  rejects replayed thinking without a signature (verbatim 400 recorded in
+  `docs/agents/formats/claude-code/writing-compatible-jsonl.md`); `p export
+  claude` is untouched. `scripts/capture-elicit-fixtures.sh` learned amp
+  (`--stream-json` id capture + `threads export` recovery). The
+  `toolpath-cli` shim follows to 0.17.0.
+
 ## Cursor understands patch envelopes — 2026-07-28
 
 - **`toolpath-cursor`** (0.2.1): the projector now understands

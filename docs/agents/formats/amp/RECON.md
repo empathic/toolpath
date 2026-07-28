@@ -184,9 +184,10 @@ Guard still applies: if every counter in a `usage` object is zero, decode to
 
 > **Which environment variables relocate dataDir/cache?**
 
-**There is no `AMP_*` data-directory override, but `HOME` and the three
-XDG variables each relocate Amp's state independently, with XDG taking
-precedence.** `[observed, 0.0.1785170481-ga5b614]`
+**There is no `AMP_*` data-directory override; `HOME` relocates everything,
+and the three XDG variables are honoured by some state modules but not
+others — so isolation must set `HOME` *and* all three XDG variables
+together** (see the correction below). `[observed, 0.0.1785170481-ga5b614]`
 
 ### Documented `AMP_*` variables `[official]`
 

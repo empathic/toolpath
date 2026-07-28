@@ -955,3 +955,162 @@ resumes in real `amp` and passes the probing question.
   account — archive at will. The imported cache doc
   `claude-path-claude-code-513cf509.json` stays in
   `~/.toolpath/documents/` as normal import behavior.
+
+## Piece 06 — docs-release — tag: `amp-m6` — 2026-07-28
+
+### Goal
+
+Versioning checklist items 1–11 for the amp era, every release-facing doc
+(CLAUDE.md / README / site / CHANGELOG / release.sh), the
+`adding-a-projector.md` refresh from the 30-claim delta table, hedge flips
+justified strictly by what this log proves, and the stale-doc fixes deferred
+from piece 00. Docs/bookkeeping only — no live amp, no behavior changes.
+
+### What was built
+
+- **CLAUDE.md** (all seven planned spots + stale fixes): crate tree, dep
+  graph `(preview)` row, amp preview prose block, cross-deps sentence, test
+  counts (amp `109 unit + 8 integration + 2 doc`; cursor refreshed to 81
+  unit after piece 05's three new tests; path-cli refreshed to `335 unit +
+  115 integration` — all read off a green workspace run, not estimated), the
+  Amp provider bullet, and the harness enumerations in the picker/share/
+  resume bullets brought from five to all eight. Stale-doc fixes: the
+  `Turn.extra` bullet rewritten (`Turn` has no `extra` since `0452f61`;
+  `WatcherEvent::Progress.data` is the only provider-namespaced payload
+  left), the piece-01-flagged `p render md --input -` pipe example, the
+  release tier list (was missing copilot/cursor too), the format-references
+  bullet (cursor.md + the copilot-cli/ and amp/ directories), and an amp
+  line in the import examples.
+- **README.md**: workspace list + the TSV provider doc (single-keyed set is
+  now codex/copilot/amp/opencode/cursor, with amp's N+1 caveat).
+- **site/**: `crates.json` gains the 6-key `toolpath-amp` 0.1.0 entry
+  (preview caveat + verified-live in the role text) and the 0.17.0 bumps;
+  `crates.md` diagram + cross-deps sentence.
+- **scripts/release.sh**: dependency-order comment, `_all_crates`, and
+  **both** tier-2b loops (publish and wait_for_index) gain `toolpath-amp`
+  after `toolpath-copilot`.
+- **CHANGELOG.md**: `## New provider: Amp (preview) — 2026-07-28` covering
+  parse coverage, sourcing posture (version-stamped, confidence-tagged,
+  9-file dossier), both-directions wiring, the writer contract with the
+  verbatim `201`-but-no-thread evidence and the fidelity ceiling, the L1–L4
+  verification record, and the `path-cli` 0.17.0 notes (fresh-UUID mint +
+  unsigned-thinking strip on claude-target resume).
+- **scripts/capture-elicit-fixtures.sh**: `amp` in `ALL_HARNESSES`,
+  `drive_amp()` (`amp -x … --stream-json --no-archive-after-execute`, thread
+  id from the stream's `session_id`, recovery via `amp threads export`,
+  scratch-path stabilization, hand-sanitization reminder), dispatch case.
+- **docs/agents/adding-a-projector.md**: full refresh per
+  `roger-amp-plan/adding-a-projector-delta.md`. Retitled for whole-harness
+  wiring (share + resume + export); `Turn.extra` teaching and the
+  extras-leak pitfall removed (replaced by the never-mutate/fresh-id
+  pitfall); `toolpath-cli` paths fixed; both `native_name` shapes
+  documented; the five test layers (matrix row + real-capture fixture
+  added); new sections for enum registration/cache-id prefixes, share
+  wiring, resume wiring (`argv_for`, `ExecStrategy`/`RecordingExec`), the
+  writer-contract loop, the feature-elicit fixture pipeline, preview
+  labeling/version stamping, and the release-checklist pointer; reference
+  blocks re-pointed at copilot (local-store template) + amp
+  (server-authoritative variant), keeping gemini for the synthesis pattern.
+- **Hedge flips** — justified by pieces 03–05 above: crate README
+  blockquote (+ a new "What it writes" section stating the route and
+  ceiling), `project.rs` module doc, CLAUDE.md, `crates.json` — all cite
+  **✅ verified at `0.0.1785170481-ga5b614`** (CC→amp at
+  `0.0.1785228716-gedda19`). `Cargo.toml` description and clap `(preview)`
+  doc comments stay, matching copilot's post-verification state.
+- **Piece-00 deferred doc debts** (the "next docs touch" items): RECON.md's
+  Q3 headline no longer overstates XDG precedence; events.md gains the full
+  9-key `usage` schema (`thinkingBudget` = request budget, never summed;
+  both cache counters `.nullable()`; `cumulativeBilledTokens` =
+  `Σ(totalInputTokens + outputTokens)` kept computable, never stamped; the
+  no-reasoning-counter confirmation); known-gaps-and-sourcing.md updates
+  (gap 8 partially closed at `gedda19`, the stream-`result`-usage oddity
+  recorded as 8b, the two-date version anchor).
+- **Versions** (checklist items 1–4 per bump): `toolpath-amp` 0.1.0 already
+  held items 1–2 since piece 01 and now has item 3 (crates.json; item 4 is
+  the new-provider CHANGELOG section). `path-cli` 0.16.0 → **0.17.0**
+  (Cargo.toml, workspace deps, crates.json, CHANGELOG, Cargo.lock).
+  `toolpath-cli` shim 0.16.0 → **0.17.0** (own version + `path-cli` dep
+  pin + crates.json).
+
+### Key decisions (ADR-style)
+
+- **The `toolpath-cli` shim bumps in lockstep to 0.17.0.**
+  - _Context:_ the shim pins `path-cli = { version = "0.16.0" }` — a caret
+    requirement that does **not** match 0.17.0.
+  - _Decision:_ bump the shim's own version and its dep pin together with
+    every path-cli minor, as the 0.16.0 pair already implied.
+  - _Rationale:_ a stale pin would strand `cargo install toolpath-cli` on
+    the previous CLI — the one job the shim exists to do.
+  - _Alternatives rejected:_ a loose `>=0.16` requirement (the shim exists
+    to track path-cli exactly; loosening hides drift).
+- **Copilot's stale stderr banner was left in place.**
+  - _Context:_ `cmd_export.rs` still prints "resume into Copilot CLI is
+    unverified" although 1.0.67 verified it — the exact mistake the piece
+    prompt says not to repeat for amp.
+  - _Decision:_ not fixed here; recorded as a follow-up. Amp itself needed
+    no banner flip — piece 03 shipped accurate runtime messaging ("context
+    transferred (rendered transcript; not native tool blocks)") and never
+    claimed unverified, so there was nothing stale to flip on the amp side.
+  - _Rationale:_ the global constraint keeps existing harnesses' CLI
+    surface untouched, and piece 06 is expressly no-behavior-change; a
+    runtime string is surface.
+  - _Alternatives rejected:_ silently fixing it anyway (out of scope, and
+    exactly the kind of unreviewed drift the constraint exists to stop).
+- **Amp slots after copilot in every enumeration** (tree, dep graph,
+  crates.json, release tiers, TSV docs) — groups the two reverse-engineered
+  preview harnesses rather than scattering them; the alternative (append
+  after pi, mirroring `Harness::ALL`'s append order) reads as noise in
+  docs.
+
+### Deviations from PLAN.md
+
+- **"seven agent harnesses"→eight had no literal site.** No file says
+  "seven"; the real staleness was the five-harness enumerations in
+  CLAUDE.md's picker/share/resume bullets (pre-copilot/cursor vintage).
+  Updated to all eight, which is what the instruction meant.
+- **The stderr banner needed no flip** (see the ADR) — the five lockstep
+  sites resolved as four text flips plus one verified-absence check.
+- **Slightly beyond the letter of the scope**, sanctioned by the piece
+  table's "stale-doc fixes": cursor/path-cli test-count refresh, the
+  CLAUDE.md release-tier list, the `--input -` example, and the
+  format-references bullet.
+- **`test-pathbase-live.sh` anon-only mode** (piece 02 follow-up) was NOT
+  done — it is a script behavior change and this piece is docs-only. Still
+  open.
+
+### Tests & verification
+
+- `cargo test --workspace` — green before the version bump (counts
+  extracted for CLAUDE.md: path-cli 335 unit + 115 integration; amp
+  109/8/2; cursor 81/9/1), and again inside `just ci` after it.
+- `shellcheck scripts/*.sh` — clean. `bash -n scripts/release.sh` — clean.
+- `cd site && pnpm run build` — 11 pages, green.
+- `just ci` — **7/7** (format, shellcheck, clippy, test, doc, examples,
+  site).
+- DoD grep: `grep -n amp Cargo.toml site/_data/crates.json
+  scripts/release.sh CHANGELOG.md README.md CLAUDE.md | wc -l` → **100**.
+- Checklist items 1–11 each pointable in the diff: 1–4 via the version
+  bumps above; 5 held since piece 01 (workspace members + deps); 6
+  CLAUDE.md; 7 README; 8 crates.json; 9 crates.md; 10 release.sh; 11 the
+  crate README (wired via `#![doc = include_str!]` since piece 01, extended
+  here).
+
+### Release-readiness statement
+
+The amp era is release-ready. `toolpath-amp` 0.1.0, `path-cli` 0.17.0, and
+the `toolpath-cli` 0.17.0 shim are version-consistent across every
+checklist site; `scripts/release.sh` publishes amp in tier 2b in dependency
+order; all preview labeling is in its verified-state form with nothing
+overclaimed (resume verified at `ga5b614`, CC→amp at `gedda19`, fidelity
+ceiling stated everywhere it matters); and the full gate suite is green.
+Publishing is Roger's call: `just release-check` (dry run), then
+`scripts/release.sh --execute`.
+
+### Known limitations / follow-ups
+
+- **Copilot's stale "unverified" stderr banner** (`cmd_export.rs`) — a
+  one-string factual fix awaiting a piece that may touch copilot surface.
+- `test-pathbase-live.sh` anon-only mode still open (piece 02).
+- `toolpath-md` same-file-edit disambiguation still open (piece 05).
+- `librarian`/`oracle` input shapes and all unexercised result shapes
+  remain `[unverified]` in the dossier.

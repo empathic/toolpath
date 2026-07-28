@@ -28,7 +28,7 @@ if [[ ! -f "$PROMPT_FILE" ]]; then
 fi
 
 PROMPT="$(cat "$PROMPT_FILE")"
-ALL_HARNESSES=(claude codex copilot gemini pi opencode)
+ALL_HARNESSES=(amp claude codex copilot gemini pi opencode)
 SELECTED=("${@:-${ALL_HARNESSES[@]}}")
 
 # Fresh scratch dir per harness so they can't see each other's files.
@@ -76,6 +76,46 @@ dump_log() {
 #
 # Edit the invocation lines if your harness version uses different
 # flags; the driver shape stays the same.
+
+drive_amp() {
+    if ! command -v amp >/dev/null; then
+        echo "amp: SKIP (not on PATH)"; return 0
+    fi
+    local scratch="$SCRATCH_BASE/amp"; mkdir -p "$scratch"; cd "$scratch"
+    echo "amp: running…"
+    # Amp threads are server-authoritative — no local transcript exists, so
+    # the snapshot-diff trick doesn't apply. Tee the --stream-json output to
+    # learn the thread id, then fetch the canonical document with
+    # `amp threads export`. `--no-archive-after-execute` keeps the fresh
+    # thread out of auto-archive so it stays visible in `amp threads list`.
+    # See docs/agents/feature-elicit.md and docs/agents/formats/amp/.
+    local log="$scratch/.stderr.log"
+    local stream="$scratch/.stream.jsonl"
+    if ! amp -x "$PROMPT" --stream-json --no-archive-after-execute \
+        </dev/null > "$stream" 2> "$log"; then
+        echo "amp: FAIL (CLI returned non-zero)"
+        dump_log "$log"
+        return 1
+    fi
+    local thread_id
+    thread_id="$(grep -oE '"session_id":"T-[^"]+"' "$stream" \
+        | head -1 | cut -d'"' -f4)"
+    if [[ -z "$thread_id" ]]; then
+        echo "amp: FAIL (no T-… session_id in the --stream-json output)"; return 1
+    fi
+    mkdir -p "$FIXTURES_ROOT/amp"
+    # The export embeds the scratch path (env.initial.trees); stabilize it.
+    # Review the result by hand before committing — the piece-00 sanitization
+    # checklist (usernames, ids, tokens) lives in test-fixtures/amp/README.md.
+    if ! amp threads export "$thread_id" 2>> "$log" \
+        | sed "s|$scratch|/tmp/elicit-scratch|g" \
+        > "$FIXTURES_ROOT/amp/convo.json"; then
+        echo "amp: FAIL (amp threads export $thread_id failed)"
+        dump_log "$log"
+        return 1
+    fi
+    echo "amp: OK → test-fixtures/amp/convo.json (thread $thread_id)"
+}
 
 drive_claude() {
     if ! command -v claude >/dev/null; then
@@ -289,6 +329,7 @@ ok=0
 fail=0
 for h in "${SELECTED[@]}"; do
     case "$h" in
+        amp)      if drive_amp;      then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
         claude)   if drive_claude;   then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
         codex)    if drive_codex;    then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
         copilot)  if drive_copilot;  then ok=$((ok+1)); else fail=$((fail+1)); fi ;;
