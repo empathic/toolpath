@@ -254,6 +254,11 @@ pub(crate) fn derive_amp_session_with(
     Ok(DerivedDoc {
         cache_id,
         doc: Graph::from_path(path),
+        // Amp threads are server-authoritative: there is no local file to
+        // stat, so no stat-level fingerprint can vouch for freshness and
+        // the manifest doesn't track them (like git). `p import amp` and
+        // `share` re-derive on every invocation.
+        provenance: None,
     })
 }
 

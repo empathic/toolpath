@@ -57,6 +57,12 @@ pub(crate) fn source_for<'a>(
         ArtifactType::Cursor => Some(Box::new(CursorSource(bundle.cursor.as_ref()?))),
         ArtifactType::Pi => Some(Box::new(PiSource(bundle.pi.as_ref()?))),
         ArtifactType::Copilot => Some(Box::new(CopilotSource(bundle.copilot.as_ref()?))),
+        // Amp threads are server-authoritative: enumerating them costs one
+        // `amp threads export` per thread (N+1 remote calls) and there is
+        // no local file to stat-fingerprint, so sync neither discovers nor
+        // freshness-checks them. `p import amp` / `share` are the
+        // ingestion paths.
+        ArtifactType::Amp => None,
         ArtifactType::Git => None,
     }
 }
