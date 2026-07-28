@@ -719,6 +719,7 @@ mod invariants {
     pub fn token_usage_survives(
         before_target: &ConversationView,
         after_target: &ConversationView,
+        target_folds_zeros: bool,
         failures: &mut Vec<String>,
     ) {
         // Harnesses legitimately fold or split turns in translation
@@ -733,17 +734,23 @@ mod invariants {
                 .iter()
                 .filter(|t| matches!(t.role, Role::Assistant))
                 .filter_map(|t| t.token_usage.as_ref())
-                // An explicit zero and an absent counter compare equal:
-                // some wires (pi, opencode) decode 0 as absent, so a
-                // genuine `Some(0)` (amp reports inputTokens: 0 with the
-                // prompt riding the cache counters) cannot survive their
-                // leg — and a zero contributes nothing to any total, so
-                // this is not token loss.
+                // For zero-folding targets ONLY (pi, opencode — their
+                // wires decode 0 as absent), an explicit zero and an
+                // absent counter compare equal: a genuine `Some(0)` (amp
+                // reports inputTokens: 0 with the prompt riding the cache
+                // counters) cannot survive their leg — and a zero
+                // contributes nothing to any total, so this is not token
+                // loss. Every other target is held to strict equality so
+                // a projector that starts dropping genuine zeros trips.
                 .map(|u| {
-                    (
-                        u.input_tokens.filter(|v| *v != 0),
-                        u.output_tokens.filter(|v| *v != 0),
-                    )
+                    let norm = |v: Option<u32>| {
+                        if target_folds_zeros {
+                            v.filter(|v| *v != 0)
+                        } else {
+                            v
+                        }
+                    };
+                    (norm(u.input_tokens), norm(u.output_tokens))
                 })
                 .collect()
         };
@@ -1058,7 +1065,19 @@ fn run_cell(
     invariants::turn_text(&view_first, &view_second, &mut failures);
     invariants::tool_calls(&view_first, &view_second, &mut failures);
     invariants::token_usage(&view_first, &view_second, &mut failures);
-    invariants::token_usage_survives(&view_after_source, &view_first, &mut failures);
+    // pi and opencode decode zero wire counters as absent; cursor's
+    // forward path filters `> 0` because its wire can't distinguish a real
+    // 0 from an unfilled placeholder (provider.rs:433). Only those targets
+    // get the Some(0)≡None normalization — every other leg is held to
+    // strict equality so a projector that starts dropping genuine zeros
+    // (amp reports inputTokens: 0 with the prompt riding the cache
+    // counters) trips the invariant.
+    invariants::token_usage_survives(
+        &view_after_source,
+        &view_first,
+        matches!(target.name(), "pi" | "opencode" | "cursor"),
+        &mut failures,
+    );
     invariants::thinking(&view_first, &view_second, &mut failures);
     invariants::thinking_survives(&view_after_source, &view_first, &mut failures);
     invariants::model_field(&view_first, &view_second, &mut failures);

@@ -8,6 +8,15 @@
 //! Unknown content-block types degrade to [`Block::Unknown`] instead of
 //! erroring, so a schema change degrades gracefully.
 //!
+//! **Scope of the value-identity guarantee:** every *observed* export shape
+//! round-trips value-identically, and so do the documented-nullable cache
+//! counters (explicit `null` preserved via the [`nullable`] adapter), empty
+//! `messages`/`content` arrays, and nulls landing in flatten extras. The
+//! residual, deliberate normalization: an explicit `null` in the remaining
+//! typed scalar fields (`title`, `created`, `updatedAt`, `v`, the non-cache
+//! usage counters, `tool_use.input`) re-serializes as key-absent — pinned by
+//! `residual_null_normalization_is_scoped_and_known`.
+//!
 //! Naming trap (see events.md): the export's `messageId` is a 1-based
 //! **integer index**; the stable string id is `protocolMessageID` (`M-…`).
 
@@ -15,6 +24,34 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
+
+/// Serde adapter for wire fields that are **nullable in Amp's schema**:
+/// distinguishes key-absent (outer `None`) from explicit `null`
+/// (`Some(None)`) so both re-serialize verbatim. Pair with
+/// `#[serde(default, skip_serializing_if = "Option::is_none", with = "nullable")]`.
+mod nullable {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn deserialize<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        Option::<T>::deserialize(d).map(Some)
+    }
+
+    pub fn serialize<S, T>(v: &Option<Option<T>>, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize,
+    {
+        match v {
+            Some(inner) => inner.serialize(s),
+            // Unreachable under skip_serializing_if = "Option::is_none".
+            None => s.serialize_none(),
+        }
+    }
+}
 
 // ── Export document ──────────────────────────────────────────────────
 
@@ -60,8 +97,9 @@ pub struct ThreadExport {
     )]
     pub activated_skills: Option<Value>,
 
-    /// The conversation.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// The conversation. Always serialized — every observed export carries
+    /// the key, and a fresh thread's explicit `[]` must round-trip.
+    #[serde(default)]
     pub messages: Vec<Message>,
 
     /// Everything else on the envelope (`agentMode`, `creatorUserID`,
@@ -105,6 +143,44 @@ impl ThreadExport {
             .map(|dt| dt.with_timezone(&Utc))
     }
 
+    /// Best-effort last activity: the max of every recency signal the
+    /// export carries. The top-level `updatedAt` alone is not trustworthy —
+    /// the real capture shows it frozen at creation time while messages
+    /// continued for another 65 seconds; there the truth lives in
+    /// `meta.lastKnownAgentState.updatedAt` and the last `usage.timestamp`.
+    pub fn last_activity_utc(&self) -> Option<DateTime<Utc>> {
+        let parse = |s: &str| {
+            DateTime::parse_from_rfc3339(s)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        };
+        let mut latest = self.updated_at_utc();
+        let mut consider = |candidate: Option<DateTime<Utc>>| {
+            if let Some(c) = candidate
+                && latest.is_none_or(|l| c > l)
+            {
+                latest = Some(c);
+            }
+        };
+        consider(
+            self.meta
+                .as_ref()
+                .and_then(|m| m.pointer("/lastKnownAgentState/updatedAt"))
+                .and_then(Value::as_str)
+                .and_then(parse),
+        );
+        for m in &self.messages {
+            consider(
+                m.usage
+                    .as_ref()
+                    .and_then(|u| u.timestamp.as_deref())
+                    .and_then(parse),
+            );
+            consider(m.sent_at_ms().and_then(DateTime::from_timestamp_millis));
+        }
+        latest
+    }
+
     /// First non-empty human prompt text. Tool-result `user` messages are
     /// plumbing, not prompts, and never match (they carry no text blocks).
     pub fn first_user_text(&self) -> Option<String> {
@@ -127,7 +203,8 @@ impl ThreadExport {
 pub struct Message {
     pub role: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Always serialized — every observed message carries the key.
+    #[serde(default)]
     pub content: Vec<Block>,
 
     /// The stable `M-<base62>` string id.
@@ -216,19 +293,25 @@ pub struct MessageUsage {
     )]
     pub output_tokens: Option<u32>,
 
+    /// Nullable in Amp's zod schema (see events.md): `Some(None)` is an
+    /// explicit wire `null`, preserved verbatim for round-tripping.
     #[serde(
         rename = "cacheReadInputTokens",
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        with = "nullable"
     )]
-    pub cache_read_input_tokens: Option<u32>,
+    pub cache_read_input_tokens: Option<Option<u32>>,
 
+    /// Nullable in Amp's zod schema (see events.md): `Some(None)` is an
+    /// explicit wire `null`, preserved verbatim for round-tripping.
     #[serde(
         rename = "cacheCreationInputTokens",
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        with = "nullable"
     )]
-    pub cache_creation_input_tokens: Option<u32>,
+    pub cache_creation_input_tokens: Option<Option<u32>>,
 
     /// Context-window capacity. NOT spend.
     #[serde(
@@ -257,8 +340,8 @@ impl MessageUsage {
     pub fn is_usage_zero(&self) -> bool {
         self.input_tokens.unwrap_or(0) == 0
             && self.output_tokens.unwrap_or(0) == 0
-            && self.cache_read_input_tokens.unwrap_or(0) == 0
-            && self.cache_creation_input_tokens.unwrap_or(0) == 0
+            && self.cache_read_input_tokens.flatten().unwrap_or(0) == 0
+            && self.cache_creation_input_tokens.flatten().unwrap_or(0) == 0
     }
 }
 
@@ -301,8 +384,11 @@ pub struct TextBlock {
 /// (`signature` / `openAIReasoning.encryptedContent`, kept in `extra`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingBlock {
-    #[serde(default)]
-    pub thinking: String,
+    /// The visible reasoning summary. `None` when the wire block carries no
+    /// `thinking` key at all; `Some("")` is the observed sealed-reasoning
+    /// empty summary — the two must not be conflated on re-serialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(flatten)]
@@ -316,7 +402,9 @@ pub struct ThinkingBlock {
 pub struct ToolUseBlock {
     pub id: String,
     pub name: String,
-    #[serde(default)]
+    /// Skipped when null so a block without `input` on the wire does not
+    /// materialize an `"input": null` on re-serialize.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
     pub input: Value,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -375,7 +463,7 @@ impl Session {
     }
 
     pub fn last_activity(&self) -> Option<DateTime<Utc>> {
-        self.export.updated_at_utc()
+        self.export.last_activity_utc()
     }
 
     pub fn cwd(&self) -> Option<String> {
@@ -523,8 +611,8 @@ mod tests {
         assert_eq!(u.model.as_deref(), Some("gpt-5.6-sol"));
         assert_eq!(u.input_tokens, Some(0));
         assert_eq!(u.output_tokens, Some(117));
-        assert_eq!(u.cache_read_input_tokens, Some(0));
-        assert_eq!(u.cache_creation_input_tokens, Some(16954));
+        assert_eq!(u.cache_read_input_tokens, Some(Some(0)));
+        assert_eq!(u.cache_creation_input_tokens, Some(Some(16954)));
         assert_eq!(u.max_input_tokens, Some(272000));
         assert_eq!(u.total_input_tokens, Some(16954));
     }
@@ -539,10 +627,18 @@ mod tests {
         assert!(zero.is_usage_zero());
         let real_usage = MessageUsage {
             input_tokens: Some(0),
-            cache_creation_input_tokens: Some(16954),
+            cache_creation_input_tokens: Some(Some(16954)),
             ..Default::default()
         };
         assert!(!real_usage.is_usage_zero());
+        // An explicit wire null is "no measurement", not a zero — but also
+        // not spend.
+        let null_counters = MessageUsage {
+            cache_read_input_tokens: Some(None),
+            cache_creation_input_tokens: Some(None),
+            ..Default::default()
+        };
+        assert!(null_counters.is_usage_zero());
     }
 
     #[test]
@@ -608,7 +704,7 @@ mod tests {
             let Some(Block::Known(KnownBlock::Thinking(t))) = ex.messages[i].content.first() else {
                 panic!("expected thinking block first in message {i}");
             };
-            t.thinking.clone()
+            t.thinking.clone().unwrap_or_default()
         };
         assert!(thinking_of(1).contains("Preparing for tool usage"));
         assert!(thinking_of(7).is_empty()); // sealed reasoning, empty summary
@@ -638,5 +734,70 @@ mod tests {
     fn strip_file_scheme_variants() {
         assert_eq!(strip_file_scheme("file:///tmp/x"), "/tmp/x");
         assert_eq!(strip_file_scheme("/tmp/x"), "/tmp/x");
+    }
+
+    #[test]
+    fn last_activity_prefers_latest_signal() {
+        // The real capture's top-level `updatedAt` is frozen at creation
+        // time (same millisecond as `created`) while activity continued for
+        // another 65s — the real recency signal is the max of the observed
+        // candidates, here `meta.lastKnownAgentState.updatedAt`.
+        let s = Session::from_export(real());
+        let last = s.last_activity().unwrap();
+        assert_eq!(
+            last.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "2026-07-27T18:35:20.054Z"
+        );
+    }
+
+    #[test]
+    fn nullable_cache_counters_round_trip_verbatim() {
+        // Amp's zod schema marks both cache counters `.nullable()` (see
+        // docs/agents/formats/amp/events.md) — an explicit null must
+        // survive the typed model, not normalize to key-absent.
+        let json = r#"{"role":"assistant","usage":{"model":"m","timestamp":"2026-07-27T18:00:00.000Z","inputTokens":1,"outputTokens":2,"cacheReadInputTokens":null,"cacheCreationInputTokens":null},"content":[{"type":"text","text":"hi"}]}"#;
+        let m: Message = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_value(&m).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(json).unwrap());
+    }
+
+    #[test]
+    fn absent_tool_input_does_not_materialize_as_null() {
+        let json = r#"{"type":"tool_use","id":"TU-1","name":"list_runners"}"#;
+        let b: Block = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_value(&b).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(json).unwrap());
+    }
+
+    #[test]
+    fn absent_thinking_text_does_not_materialize_as_empty_string() {
+        let json = r#"{"type":"thinking","provider":"openai"}"#;
+        let b: Block = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_value(&b).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(json).unwrap());
+    }
+
+    #[test]
+    fn explicit_empty_messages_array_round_trips() {
+        // A fresh `amp threads new` thread plausibly exports with
+        // `"messages": []`; the empty array must not vanish.
+        let json = r#"{"id":"T-x","messages":[]}"#;
+        let ex: ThreadExport = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_value(&ex).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(json).unwrap());
+    }
+
+    #[test]
+    fn residual_null_normalization_is_scoped_and_known() {
+        // Tripwire documenting the residual, deliberate normalization:
+        // explicit `null` in typed scalar envelope fields (title, created,
+        // updatedAt, …) normalizes to key-absent on re-serialize. Nulls in
+        // flatten extras and the nullable cache counters are preserved
+        // verbatim. If this assertion starts failing, the scope of the
+        // value-identity claim changed — update the module doc.
+        let json = r#"{"id":"T-x","title":null,"messages":[]}"#;
+        let ex: ThreadExport = serde_json::from_str(json).unwrap();
+        let back = serde_json::to_value(&ex).unwrap();
+        assert_eq!(back, serde_json::json!({"id":"T-x","messages":[]}));
     }
 }

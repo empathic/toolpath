@@ -96,10 +96,42 @@ pub fn native_name(category: ToolCategory, input: &Value) -> &'static str {
     }
 }
 
+/// Scan an export for `Block::Unknown`s whose `"type"` names a *known*
+/// block kind — i.e. a known block that failed its typed parse. That is
+/// schema drift, not a new block type, and it must not be silent: the
+/// derivation would drop the block (a `tool_use` losing its invocation, its
+/// later result orphaning) and produce a tool-less path with no warning.
+/// Returns `(1-based message index, block type)` pairs.
+pub(crate) fn malformed_known_blocks(export: &crate::types::ThreadExport) -> Vec<(usize, String)> {
+    const KNOWN_TYPES: [&str; 4] = ["text", "thinking", "tool_use", "tool_result"];
+    let mut out = Vec::new();
+    for (idx, msg) in export.messages.iter().enumerate() {
+        for block in &msg.content {
+            if let Block::Unknown(v) = block
+                && let Some(t) = v.get("type").and_then(Value::as_str)
+                && KNOWN_TYPES.contains(&t)
+            {
+                out.push((idx + 1, t.to_string()));
+            }
+        }
+    }
+    out
+}
+
 /// Convert an Amp [`Session`] into a [`ConversationView`].
 pub fn to_view(session: &Session) -> ConversationView {
     let ex = &session.export;
+    for (idx, block_type) in malformed_known_blocks(ex) {
+        eprintln!(
+            "Warning: thread {}: message {idx} carries a malformed '{block_type}' block \
+             (schema drift?); it will not appear in the derivation",
+            session.id
+        );
+    }
     let working_dir = ex.working_dir();
+    let created_iso = ex
+        .created_at()
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true));
     let mut turns: Vec<Turn> = Vec::new();
 
     for (idx, msg) in ex.messages.iter().enumerate() {
@@ -120,7 +152,7 @@ pub fn to_view(session: &Session) -> ConversationView {
         if msg.role == "user" && msg.is_tool_result_only() {
             continue; // plumbing, not a turn
         }
-        let turn = build_turn(msg, idx);
+        let turn = build_turn(msg, idx, created_iso.as_deref());
         push_linked(&mut turns, turn);
     }
 
@@ -146,7 +178,11 @@ pub fn to_view(session: &Session) -> ConversationView {
 
     // Non-conversational envelope data, preserved as events.
     let mut events: Vec<ConversationEvent> = Vec::new();
-    let ts = ex.updated_at.clone().unwrap_or_default();
+    let ts = ex
+        .updated_at
+        .clone()
+        .or_else(|| created_iso.clone())
+        .unwrap_or_default();
     if let Some(skills) = ex.activated_skills.as_ref().and_then(Value::as_array) {
         for (i, s) in skills.iter().enumerate() {
             events.push(make_event(
@@ -194,7 +230,7 @@ pub fn to_view(session: &Session) -> ConversationView {
 
 // ── Turn construction ────────────────────────────────────────────────
 
-fn build_turn(msg: &Message, idx: usize) -> Turn {
+fn build_turn(msg: &Message, idx: usize, created_iso: Option<&str>) -> Turn {
     let role = match msg.role.as_str() {
         "user" => Role::User,
         "assistant" => Role::Assistant,
@@ -210,8 +246,10 @@ fn build_turn(msg: &Message, idx: usize) -> Turn {
         match block {
             Block::Known(KnownBlock::Thinking(t)) => {
                 // Empty summaries (sealed reasoning) map to nothing, not "".
-                if !t.thinking.trim().is_empty() {
-                    thinking_parts.push(&t.thinking);
+                if let Some(th) = t.thinking.as_deref()
+                    && !th.trim().is_empty()
+                {
+                    thinking_parts.push(th);
                 }
                 note_start(&mut block_start_ms, &t.extra);
             }
@@ -253,21 +291,24 @@ fn build_turn(msg: &Message, idx: usize) -> Turn {
         Some(TokenUsage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
-            cache_read_tokens: u.cache_read_input_tokens,
-            cache_write_tokens: u.cache_creation_input_tokens,
+            cache_read_tokens: u.cache_read_input_tokens.flatten(),
+            cache_write_tokens: u.cache_creation_input_tokens.flatten(),
             // Amp doesn't itemize reasoning tokens; nothing to break down.
             breakdowns: Default::default(),
         })
     });
 
     // Timestamp: assistant messages carry one on `usage`; user messages on
-    // `meta.sentAt` (epoch ms); block start times are the fallback.
+    // `meta.sentAt` (epoch ms); block start times, then the thread's
+    // creation time, are the fallbacks — an empty timestamp would land
+    // verbatim in `step.timestamp`, violating its date-time format.
     let timestamp = msg
         .usage
         .as_ref()
         .and_then(|u| u.timestamp.clone())
         .or_else(|| msg.sent_at_ms().and_then(ms_to_iso))
         .or_else(|| block_start_ms.and_then(ms_to_iso))
+        .or_else(|| created_iso.map(str::to_string))
         .unwrap_or_default();
 
     Turn {
@@ -442,9 +483,11 @@ fn relativize(path: &str, working_dir: &Option<String>) -> String {
 }
 
 fn merge_usage(slot: &mut Option<TokenUsage>, add: &TokenUsage) {
+    // Saturating: an export document is untrusted input, and a hostile
+    // counter pair must not panic (dev) or wrap (release) the total.
     let sum = |a: Option<u32>, b: Option<u32>| match (a, b) {
         (None, None) => None,
-        (x, y) => Some(x.unwrap_or(0) + y.unwrap_or(0)),
+        (x, y) => Some(x.unwrap_or(0).saturating_add(y.unwrap_or(0))),
     };
     let s = slot.get_or_insert_with(TokenUsage::default);
     s.input_tokens = sum(s.input_tokens, add.input_tokens);
@@ -519,7 +562,10 @@ impl AmpConvo {
                 Err(e) => eprintln!("Warning: failed to read thread {}: {}", id, e),
             }
         }
-        out.sort_by_key(|m| std::cmp::Reverse(m.last_activity));
+        // Descending by recency, with unknown recency (`None`) last — a
+        // thread whose `updatedAt` failed to parse must not outrank every
+        // genuinely recent one (`Reverse(None)` would sort it first).
+        out.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
         Ok(out)
     }
 
@@ -927,6 +973,75 @@ mod tests {
         );
         // Unrecognized object shapes degrade to JSON.
         assert_eq!(result_content(&json!({"weird": 1})), r#"{"weird":1}"#);
+    }
+
+    #[test]
+    fn merge_usage_saturates_instead_of_overflowing() {
+        // An export document is untrusted input: two near-max counters must
+        // not panic (dev profile) or wrap (release) the session total.
+        let big = u32::MAX - 1;
+        let json = format!(
+            r#"{{"id":"T-big","messages":[
+                {{"role":"assistant","usage":{{"outputTokens":{big},"timestamp":"2026-07-27T18:00:00.000Z"}},"content":[{{"type":"text","text":"a"}}]}},
+                {{"role":"assistant","usage":{{"outputTokens":{big},"timestamp":"2026-07-27T18:00:01.000Z"}},"content":[{{"type":"text","text":"b"}}]}}
+            ]}}"#
+        );
+        let view = synthetic(&json);
+        assert_eq!(
+            view.total_usage.as_ref().unwrap().output_tokens,
+            Some(u32::MAX)
+        );
+    }
+
+    #[test]
+    fn malformed_known_type_blocks_are_flagged_not_silent() {
+        // A future Amp build renaming `tool_use.id` must not silently
+        // produce a tool-less derivation — that is exactly the provenance
+        // loss this project exists to prevent.
+        let json = r#"{"id":"T-drift","messages":[{"role":"assistant","content":[
+            {"type":"tool_use","identifier":"TU-1","name":"shell_command","input":{"command":"ls"}},
+            {"type":"hologram","payload":1}]}]}"#;
+        let export = ExportReader::parse_export(json).unwrap();
+        let flagged = malformed_known_blocks(&export);
+        assert_eq!(
+            flagged,
+            vec![(1, "tool_use".to_string())],
+            "renamed id field = malformed known block; hologram = tolerated unknown"
+        );
+    }
+
+    #[test]
+    fn missing_message_timestamps_fall_back_to_thread_creation() {
+        let view = synthetic(
+            r#"{"id":"T-ts","created":1785177254351,"messages":[{"role":"assistant","state":{"type":"complete","stopReason":"end_turn"},"content":[{"type":"text","text":"hi"}]}]}"#,
+        );
+        assert_eq!(view.turns[0].timestamp, "2026-07-27T18:34:14.351Z");
+    }
+
+    #[test]
+    fn threads_with_unknown_recency_rank_last_not_first() {
+        let t = tempfile::tempdir().unwrap();
+        // A bare thread with no recency signal at all…
+        std::fs::write(
+            t.path().join("T-019fa111-aaaa-7bbb-8ccc-ddddeeee0001.json"),
+            r#"{"id":"T-019fa111-aaaa-7bbb-8ccc-ddddeeee0001"}"#,
+        )
+        .unwrap();
+        // …and a real, timestamped one.
+        std::fs::write(
+            t.path().join("T-019fa4db-29cf-70c9-8d9b-81524df70e52.json"),
+            REAL,
+        )
+        .unwrap();
+        let convo = AmpConvo::with_fetcher(Arc::new(crate::io::DirFetcher::new(t.path())));
+        let sessions = convo.list_sessions().unwrap();
+        assert_eq!(
+            sessions.last().unwrap().last_activity,
+            None,
+            "unknown recency sorts last"
+        );
+        let most_recent = convo.most_recent_session().unwrap().unwrap();
+        assert_eq!(most_recent.id, "T-019fa4db-29cf-70c9-8d9b-81524df70e52");
     }
 
     #[test]

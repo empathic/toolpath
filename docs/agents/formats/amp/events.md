@@ -309,7 +309,9 @@ thinkingBudget?, timestamp?}`. Three facts a capture alone cannot reveal:
   value-identity round trip.
 - **Both cache counters are `.nullable()`, not merely optional.** No null
   was observed, so fixtures can't catch this: decode null *and* absent to
-  `None`, both distinct from a real `0`.
+  "no measurement", both distinct from a real `0`. `toolpath-amp` models
+  them as double-`Option` (`Some(None)` = explicit wire null) so a null
+  also survives the value-identity round trip verbatim.
 - **Amp's own UI session total is `cumulativeBilledTokens =
   Σ(totalInputTokens + outputTokens)` over assistant messages** — a
   client-side sum that counts cache read + creation as billed. Keep it
@@ -335,7 +337,7 @@ DelegatedWork, TokenUsage}`. Source paths are into the **export** document.
 | --- | --- | --- |
 | `ConversationView.id` | `.id` | The `T-…` thread id. |
 | `.started_at` | `.created` | Epoch **ms** → `DateTime<Utc>`. |
-| `.last_activity` | `.updatedAt` | Already ISO 8601. |
+| `.last_activity` | max of recency signals | `.updatedAt` alone is untrustworthy — the real capture shows it frozen at creation time; take the max with `meta.lastKnownAgentState.updatedAt`, `usage.timestamp`s, and `meta.sentAt`s. |
 | `.provider_id` | — | Literal `"amp"`. |
 | `.producer` | `.env.initial.platform` | `{name: "amp", version: clientVersion}` — the **thread's** version, not the running binary's. |
 | `.base.working_dir` | `.env.initial.trees[0].uri` | Strip the `file://` scheme. |

@@ -632,19 +632,24 @@ fn copilot_first_user_message(session: &toolpath_copilot::Session) -> String {
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn build_amp_session(
     path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
+    project_dir: Option<&std::path::Path>,
 ) -> Result<toolpath_amp::ThreadExport> {
     use toolpath_convo::ConversationProjector;
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let cwd_str = project_dir.to_string_lossy().to_string();
-
     let mut view = toolpath_convo::extract_conversation(path);
     // Fresh thread id so we never touch an existing Amp thread. Amp ids are
     // `T-<uuidv7>` (time-ordered); mint the same shape.
     view.id = format!("T-{}", uuid::Uuid::now_v7());
-    let base = view.base.get_or_insert_with(Default::default);
-    base.working_dir = Some(cwd_str);
+    if let Some(project_dir) = project_dir {
+        // Rooting at the resume directory: the created thread genuinely
+        // lives there.
+        let project_dir = std::fs::canonicalize(project_dir)
+            .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+        let base = view.base.get_or_insert_with(Default::default);
+        base.working_dir = Some(project_dir.to_string_lossy().to_string());
+    }
+    // No target dir (`--output`/stdout): keep the source view's recorded
+    // working_dir — the offline document must not claim the session ran in
+    // whatever directory the command happened to be typed in.
 
     toolpath_amp::AmpProjector::new()
         .project(&view)
@@ -670,7 +675,7 @@ pub(crate) fn project_amp_with(
     project_dir: &std::path::Path,
     writer: &dyn toolpath_amp::ThreadWriter,
 ) -> Result<String> {
-    let export = build_amp_session(path, project_dir)?;
+    let export = build_amp_session(path, Some(project_dir))?;
     let transcript = amp_rehydration_transcript(path);
     write_into_amp_project(&export, &transcript, writer)
 }
@@ -711,11 +716,10 @@ fn run_amp(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> 
                 project_amp(&path, &project_dir)?;
             }
             (None, out) => {
-                // No target dir: root the thread at cwd and emit the export
-                // document to the file (or stdout) without contacting the
-                // Amp server.
-                let cwd = std::env::current_dir().context("resolve current directory")?;
-                let export = build_amp_session(&path, &cwd)?;
+                // No target dir: emit the export document to the file (or
+                // stdout) without contacting the Amp server, keeping the
+                // source's recorded working_dir as provenance.
+                let export = build_amp_session(&path, None)?;
                 let json = serde_json::to_string_pretty(&export)?;
                 match out {
                     Some(out_path) => {
@@ -868,30 +872,36 @@ fn run_claude(input: String, project: Option<PathBuf>, output: Option<PathBuf>) 
     #[cfg(not(target_os = "emscripten"))]
     {
         let path = load_path_doc(&input)?;
-        let conversation = build_claude_conversation(&path)?;
-        let jsonl = serialize_jsonl(&conversation)?;
 
         match (project, output) {
             (Some(project_dir), None) => {
-                let out_path = write_into_claude_project(&conversation, &jsonl, &project_dir)?;
-                let session_id = &conversation.session_id;
+                // Same projection `path resume` uses: fresh UUIDv4 session
+                // id (the loader rejects non-UUID stems — amp's `T-…`,
+                // opencode's `ses_…`), unsigned thinking stripped, and an
+                // existing session file never clobbered. `--output`/stdout
+                // below stay verbatim: they emit a document, not a
+                // loadable session.
+                let session_id = project_claude(&path, &project_dir)?;
                 eprintln!(
-                    "Exported session {} ({} entries) → {}",
+                    "Exported session {} → {}",
                     session_id,
-                    conversation.preamble.len() + conversation.entries.len(),
-                    out_path.display()
+                    project_dir.display()
                 );
                 eprintln!();
                 eprintln!("Resume with:");
                 eprintln!("  cd {} && claude -r {}", project_dir.display(), session_id);
             }
-            (None, Some(out_path)) => {
-                std::fs::write(&out_path, &jsonl)
-                    .with_context(|| format!("write {}", out_path.display()))?;
-                eprintln!("Wrote {} bytes to {}", jsonl.len(), out_path.display());
-            }
-            (None, None) => {
-                println!("{}", jsonl);
+            (None, out) => {
+                let conversation = build_claude_conversation(&path)?;
+                let jsonl = serialize_jsonl(&conversation)?;
+                match out {
+                    Some(out_path) => {
+                        std::fs::write(&out_path, &jsonl)
+                            .with_context(|| format!("write {}", out_path.display()))?;
+                        eprintln!("Wrote {} bytes to {}", jsonl.len(), out_path.display());
+                    }
+                    None => println!("{}", jsonl),
+                }
             }
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
         }
@@ -3427,6 +3437,58 @@ mod tests {
             claude_projects.exists(),
             "claude projects dir missing under HOME"
         );
+    }
+
+    /// `p export claude --project` must go through the same projection
+    /// `path resume` uses: fresh UUIDv4 stem (the loader rejects non-UUID
+    /// stems — amp's `T-…`, opencode's `ses_…`), thinking stripped, never
+    /// clobbering an existing session file.
+    #[test]
+    fn run_claude_project_arm_routes_through_resume_projection() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+        // Source id shaped like an amp thread id — a stem the Claude
+        // loader rejects.
+        let path = make_convo_path("claude-code://T-019fa4db-29cf-70c9-8d9b-81524df70e52");
+        let input = temp.path().join("doc.json");
+        std::fs::write(
+            &input,
+            toolpath::v1::Graph::from_path(path).to_json().unwrap(),
+        )
+        .unwrap();
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+        let result = run_claude(input.to_string_lossy().to_string(), Some(cwd.clone()), None);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        result.expect("run_claude --project should succeed");
+
+        let projects = fake_home.join(".claude/projects");
+        let mut stems = Vec::new();
+        for dir in std::fs::read_dir(&projects).unwrap().flatten() {
+            for f in std::fs::read_dir(dir.path()).unwrap().flatten() {
+                if f.path().extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                    stems.push(f.path().file_stem().unwrap().to_string_lossy().to_string());
+                }
+            }
+        }
+        assert_eq!(stems.len(), 1, "exactly one projected session");
+        let parsed =
+            uuid::Uuid::parse_str(&stems[0]).expect("stem must be a UUID, not the source's T-… id");
+        assert_eq!(parsed.get_version_num(), 4, "loader requires UUIDv4 stems");
     }
 
     #[test]

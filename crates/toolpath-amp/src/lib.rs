@@ -7,7 +7,9 @@ pub mod reader;
 pub mod types;
 
 pub use error::{ConvoError, Result};
-pub use io::{CliFetcher, CliWriter, ConvoIO, DirFetcher, ThreadFetcher, ThreadWriter};
+pub use io::{
+    CliFetcher, CliWriter, ConvoIO, DirFetcher, ThreadFetcher, ThreadWriter, is_thread_id,
+};
 pub use paths::PathResolver;
 pub use reader::ExportReader;
 pub use types::{Block, KnownBlock, Message, MessageUsage, Session, SessionMetadata, ThreadExport};

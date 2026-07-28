@@ -61,6 +61,10 @@ pub struct ResumeArgs {
     pub cwd: Option<PathBuf>,
 
     /// Pin the resume target. Skips the interactive picker.
+    ///
+    /// Note: resuming into amp COSTS MONEY — amp threads are
+    /// server-authoritative, so resume creates a fresh server-side thread
+    /// and seeds it with one billed agent turn on your Amp account.
     #[arg(long, value_enum)]
     pub harness: Option<Harness>,
 

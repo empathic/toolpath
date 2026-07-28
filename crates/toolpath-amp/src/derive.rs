@@ -240,6 +240,16 @@ mod tests {
     }
 
     #[test]
+    fn empty_thread_derives_no_steps() {
+        // A fresh `amp threads new` thread exports with no messages; pin
+        // that the derivation is empty (path-cli's import guard turns this
+        // into a clear error instead of caching a stepless document).
+        let s = Session::from_export(ExportReader::parse_export(r#"{"id":"T-empty"}"#).unwrap());
+        let path = derive_path(&s, &DeriveConfig::default());
+        assert!(path.steps.is_empty());
+    }
+
+    #[test]
     fn derive_path_actors_populated() {
         let path = derive_path(&real_session(), &DeriveConfig::default());
         let actors = path.meta.as_ref().unwrap().actors.as_ref().unwrap();

@@ -224,16 +224,32 @@ pub(crate) fn derive_amp_session(session: &str) -> Result<DerivedDoc> {
     derive_amp_session_with(&toolpath_amp::AmpConvo::new(), session)
 }
 
+/// Validate an operator-supplied Amp thread id before it reaches the `amp`
+/// subprocess argv (a value starting with `-` would parse as a flag there).
+pub(crate) fn ensure_amp_thread_id(session: &str) -> Result<()> {
+    if !toolpath_amp::is_thread_id(session) {
+        anyhow::bail!(
+            "'{session}' does not look like an Amp thread id (T-<uuid>); \
+             refusing to pass it to the amp CLI"
+        );
+    }
+    Ok(())
+}
+
 /// [`derive_amp_session`] against a caller-supplied manager.
 pub(crate) fn derive_amp_session_with(
     manager: &toolpath_amp::AmpConvo,
     session: &str,
 ) -> Result<DerivedDoc> {
+    ensure_amp_thread_id(session)?;
     let config = toolpath_amp::derive::DeriveConfig { project_path: None };
     let s = manager
         .read_session(session)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let path = toolpath_amp::derive::derive_path(&s, &config);
+    if path.steps.is_empty() {
+        anyhow::bail!("thread {session} has no messages (nothing to import)");
+    }
     let cache_id = make_id(ArtifactType::Amp.name(), &path.path.id);
     Ok(DerivedDoc {
         cache_id,
@@ -514,6 +530,41 @@ mod tests {
     use super::*;
 
     const UUID: &str = "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
+
+    #[test]
+    fn derive_amp_rejects_malformed_thread_ids() {
+        // The id goes straight into the `amp` subprocess argv, where a
+        // leading `-` would parse as a flag.
+        let manager = toolpath_amp::AmpConvo::with_fetcher(std::sync::Arc::new(
+            toolpath_amp::DirFetcher::new("/nonexistent"),
+        ));
+        let err = match derive_amp_session_with(&manager, "--help") {
+            Err(e) => e,
+            Ok(_) => panic!("malformed id must be rejected"),
+        };
+        assert!(err.to_string().contains("thread id"), "actual: {err}");
+    }
+
+    #[test]
+    fn derive_amp_rejects_empty_threads() {
+        // A fresh `amp threads new` thread exports with no messages —
+        // importing it would cache a stepless document.
+        let t = tempfile::tempdir().unwrap();
+        let id = "T-019fa111-aaaa-7bbb-8ccc-ddddeeee0001";
+        std::fs::write(
+            t.path().join(format!("{id}.json")),
+            format!(r#"{{"id":"{id}"}}"#),
+        )
+        .unwrap();
+        let manager = toolpath_amp::AmpConvo::with_fetcher(std::sync::Arc::new(
+            toolpath_amp::DirFetcher::new(t.path()),
+        ));
+        let err = match derive_amp_session_with(&manager, id) {
+            Err(e) => e,
+            Ok(_) => panic!("empty thread must be rejected"),
+        };
+        assert!(err.to_string().contains("no messages"), "actual: {err}");
+    }
 
     #[test]
     fn parse_pathbase_ref_full_url_canonical_form() {

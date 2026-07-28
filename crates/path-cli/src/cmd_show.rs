@@ -191,6 +191,7 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             session,
             project: _,
         } => {
+            crate::derive::ensure_amp_thread_id(&session)?;
             let manager = toolpath_amp::AmpConvo::new();
             let s = manager
                 .read_session(&session)

@@ -180,14 +180,25 @@ fn build(view: &ConversationView) -> ThreadExport {
         .find(|t| t.role == Role::User && !t.text.trim().is_empty())
         .map(|t| truncate_title(t.text.lines().next().unwrap_or_default()));
 
+    // The forward path infers last activity from every recency signal in
+    // the document (envelope `updatedAt`, usage timestamps); the projection
+    // must emit an `updatedAt` consistent with that inference or a second
+    // pass would not be a fixed point. Fall back to the latest turn
+    // timestamp when the view carries no explicit last activity.
+    let last_activity = view.last_activity.or_else(|| {
+        view.turns
+            .iter()
+            .filter_map(|t| chrono::DateTime::parse_from_rfc3339(&t.timestamp).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .max()
+    });
+
     ThreadExport {
         id: view.id.clone(),
         v: None,
         title,
         created: view.started_at.map(|dt| dt.timestamp_millis()),
-        updated_at: view
-            .last_activity
-            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        updated_at: last_activity.map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
         env: env_initial(view, &working_dir),
         meta: None,
         activated_skills: None,
@@ -258,7 +269,7 @@ fn assistant_message(turn: &Turn) -> Message {
         && !th.trim().is_empty()
     {
         content.push(Block::Known(KnownBlock::Thinking(ThinkingBlock {
-            thinking: th.clone(),
+            thinking: Some(th.clone()),
             provider: None,
             extra: Map::new(),
         })));
@@ -657,10 +668,24 @@ fn read_target(input: &Value) -> Option<String> {
 /// verbatim and the derived `totalInputTokens` is regenerated from the
 /// verified invariant `total = input + cacheRead + cacheCreation`.
 /// `maxInputTokens` (context-window capacity) is not reconstructible and is
-/// omitted. Turns without usage (user turns, zero-usage placeholders decoded
-/// to `None` on the way in) emit no `usage` at all — never zero-filled stubs.
+/// omitted. A turn without usage still emits a **counter-free stub** when it
+/// carries `model`/`timestamp` — the amp wire's only slot for them (Claude
+/// nulls `token_usage` on every non-final turn of a message group while
+/// both stay populated). No counters are ever fabricated: the forward path
+/// decodes a counter-free stub back to `token_usage: None`.
 fn expand_usage(turn: &Turn) -> Option<MessageUsage> {
-    let u = turn.token_usage.as_ref()?;
+    let model = turn.model.clone();
+    let timestamp = (!turn.timestamp.is_empty()).then(|| turn.timestamp.clone());
+    let Some(u) = turn.token_usage.as_ref() else {
+        if model.is_none() && timestamp.is_none() {
+            return None;
+        }
+        return Some(MessageUsage {
+            model,
+            timestamp,
+            ..Default::default()
+        });
+    };
     let input_side = [u.input_tokens, u.cache_read_tokens, u.cache_write_tokens];
     let total_input = if input_side.iter().any(Option::is_some) {
         Some(
@@ -673,12 +698,12 @@ fn expand_usage(turn: &Turn) -> Option<MessageUsage> {
         None
     };
     Some(MessageUsage {
-        model: turn.model.clone(),
-        timestamp: (!turn.timestamp.is_empty()).then(|| turn.timestamp.clone()),
+        model,
+        timestamp,
         input_tokens: u.input_tokens,
         output_tokens: u.output_tokens,
-        cache_read_input_tokens: u.cache_read_tokens,
-        cache_creation_input_tokens: u.cache_write_tokens,
+        cache_read_input_tokens: u.cache_read_tokens.map(Some),
+        cache_creation_input_tokens: u.cache_write_tokens.map(Some),
         max_input_tokens: None,
         total_input_tokens: total_input,
         extra: Map::new(),
@@ -888,8 +913,8 @@ mod tests {
         for u in &with_usage {
             // The verified invariant, regenerated on the way out.
             let derived = u.input_tokens.unwrap_or(0) as u64
-                + u.cache_read_input_tokens.unwrap_or(0) as u64
-                + u.cache_creation_input_tokens.unwrap_or(0) as u64;
+                + u.cache_read_input_tokens.flatten().unwrap_or(0) as u64
+                + u.cache_creation_input_tokens.flatten().unwrap_or(0) as u64;
             assert_eq!(u.total_input_tokens, Some(derived));
             // Capacity is not spend and cannot be reconstructed.
             assert!(u.max_input_tokens.is_none());
@@ -1477,11 +1502,51 @@ mod tests {
     }
 
     #[test]
-    fn zero_usage_never_reappears_as_stub() {
+    fn zero_usage_never_reappears_as_counters() {
         let mut turn = foreign_turn("Bash", json!({"command": "ls"}), Some(ToolCategory::Shell));
         turn.token_usage = None;
         let export = project_single(turn);
-        assert!(export.messages[0].usage.is_none());
+        // A counter-free stub may carry model/timestamp (the wire's only
+        // slot for them), but no counter — real or derived — may be
+        // fabricated from a turn that reported none.
+        if let Some(u) = &export.messages[0].usage {
+            assert!(u.input_tokens.is_none());
+            assert!(u.output_tokens.is_none());
+            assert!(u.total_input_tokens.is_none());
+            assert!(u.max_input_tokens.is_none());
+        }
+    }
+
+    /// Claude's forward path deliberately nulls `token_usage` on every
+    /// non-final turn of a message group while keeping `model`/`timestamp`
+    /// populated — and the amp wire's only carrier for those is `usage`.
+    /// A counter-free usage stub must carry them; losing the timestamp
+    /// degrades it to `""` on re-read.
+    #[test]
+    fn model_and_timestamp_survive_turns_without_token_usage() {
+        let mut turn = foreign_turn("Bash", json!({"command": "ls"}), Some(ToolCategory::Shell));
+        turn.token_usage = None;
+        turn.model = Some("claude-opus-5".into());
+        let view = ConversationView {
+            id: "T-g".into(),
+            turns: vec![turn],
+            ..Default::default()
+        };
+        let export = reproject(&view);
+        let u = export.messages[0]
+            .usage
+            .as_ref()
+            .expect("counter-free usage stub carries model/timestamp");
+        assert_eq!(u.model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(u.timestamp.as_deref(), Some("2026-07-27T18:00:00.000Z"));
+        assert!(u.input_tokens.is_none() && u.output_tokens.is_none());
+        assert!(u.total_input_tokens.is_none(), "no counters fabricated");
+        // The forward path decodes the stub losslessly: still no
+        // token_usage, model and timestamp intact.
+        let back = to_view(&Session::from_export(export));
+        assert!(back.turns[0].token_usage.is_none());
+        assert_eq!(back.turns[0].model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(back.turns[0].timestamp, "2026-07-27T18:00:00.000Z");
     }
 
     #[test]

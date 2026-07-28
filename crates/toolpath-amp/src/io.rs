@@ -30,6 +30,14 @@ fn looks_like_thread_id(token: &str) -> bool {
     }
 }
 
+/// Public shape check for Amp thread ids (`T-<uuidv7-ish>`). Callers that
+/// pass an operator-supplied id straight into the `amp` subprocess argv
+/// should validate with this first — a value starting with `-` would parse
+/// as a flag.
+pub fn is_thread_id(token: &str) -> bool {
+    looks_like_thread_id(token)
+}
+
 /// Source of thread-export documents.
 pub trait ThreadFetcher: Send + Sync + std::fmt::Debug {
     /// Fetch the export document (raw JSON) for one thread.
@@ -178,20 +186,32 @@ impl CliWriter {
             std::io::ErrorKind::NotFound => ConvoError::AmpCliNotFound,
             _ => ConvoError::Io(e),
         })?;
-        if let Some(body) = stdin {
-            child
-                .stdin
-                .take()
-                .expect("stdin piped")
-                .write_all(body.as_bytes())?;
-            // Dropped here, closing the pipe so `amp` sees EOF.
-        }
+        // The (multi-MB) body streams in from its own thread while
+        // `wait_with_output` drains stdout/stderr — writing it from this
+        // thread would deadlock as soon as a chatty child fills its stdout
+        // pipe before consuming all of stdin.
+        let feeder = stdin.map(|body| {
+            let mut pipe = child.stdin.take().expect("stdin piped");
+            let body = body.as_bytes().to_vec();
+            std::thread::spawn(move || {
+                pipe.write_all(&body)
+                // Dropped here, closing the pipe so `amp` sees EOF.
+            })
+        });
         let out = child.wait_with_output()?;
+        let fed = feeder.map(|h| h.join().expect("stdin feeder panicked"));
         if !out.status.success() {
+            // The exit status + stderr is the real diagnosis; a write error
+            // (EPIPE into an early-exiting child) is only its symptom and
+            // must not mask it.
             return Err(ConvoError::AmpCliFailed {
                 command: format!("{} {}", self.bin.display(), args.join(" ")),
                 stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
             });
+        }
+        if let Some(Err(e)) = fed {
+            // Exit 0 but the body was never consumed — not a successful send.
+            return Err(ConvoError::Io(e));
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
@@ -200,11 +220,16 @@ impl CliWriter {
 impl ThreadWriter for CliWriter {
     fn create_thread(&self) -> Result<String> {
         // `amp threads new` prints just the id, and creates the thread
-        // server-side without running a model turn.
+        // server-side without running a model turn. This is the one parse
+        // that names irreversible server-side state (the filed artifact and
+        // the `threads continue` target), so it demands the same id shape
+        // and punctuation-trimming as the fetcher's list parser — `Created
+        // T-abc.` must not yield `T-abc.`.
         let out = self.run(&["threads", "new"])?;
         let id = out
             .split_whitespace()
-            .find(|t| t.starts_with("T-"))
+            .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-'))
+            .find(|t| looks_like_thread_id(t))
             .ok_or_else(|| ConvoError::AmpCliFailed {
                 command: format!("{} threads new", self.bin.display()),
                 stderr: format!("no T-… thread id in output: {}", out.trim()),
@@ -236,34 +261,47 @@ impl DirFetcher {
         Self { dir: dir.into() }
     }
 
-    fn path_for(&self, thread_id: &str) -> Option<PathBuf> {
+    fn path_for(&self, thread_id: &str) -> Result<PathBuf> {
         let exact = self.dir.join(format!("{thread_id}.json"));
         if exact.is_file() {
-            return Some(exact);
+            return Ok(exact);
         }
-        // Unique-prefix match on file stems.
-        let mut hit = None;
-        for entry in std::fs::read_dir(&self.dir).ok()?.flatten() {
-            let path = entry.path();
-            let stem = path.file_stem()?.to_str()?.to_string();
+        // Unique-prefix match on file stems. Each failure mode keeps its own
+        // error class: not-found, ambiguous, and I/O (e.g. permissions) are
+        // three different user problems.
+        let entries = match std::fs::read_dir(&self.dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ConvoError::SessionNotFound(thread_id.to_string()));
+            }
+            Err(e) => return Err(ConvoError::Io(e)),
+        };
+        let mut hit: Option<PathBuf> = None;
+        for entry in entries {
+            let path = entry.map_err(ConvoError::Io)?.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
             if path.extension().and_then(|e| e.to_str()) == Some("json")
                 && stem.starts_with(thread_id)
             {
-                if hit.is_some() {
-                    return None; // ambiguous
+                if let Some(prev) = &hit {
+                    return Err(ConvoError::InvalidFormat(format!(
+                        "ambiguous thread id prefix {thread_id}: matches {} and {}",
+                        prev.display(),
+                        path.display()
+                    )));
                 }
-                hit = Some(path.clone());
+                hit = Some(path);
             }
         }
-        hit
+        hit.ok_or_else(|| ConvoError::SessionNotFound(thread_id.to_string()))
     }
 }
 
 impl ThreadFetcher for DirFetcher {
     fn fetch_export(&self, thread_id: &str) -> Result<String> {
-        let path = self
-            .path_for(thread_id)
-            .ok_or_else(|| ConvoError::SessionNotFound(thread_id.to_string()))?;
+        let path = self.path_for(thread_id)?;
         Ok(std::fs::read_to_string(path)?)
     }
 
@@ -395,6 +433,38 @@ mod tests {
     }
 
     #[test]
+    fn dir_fetcher_ambiguous_prefix_is_a_distinct_error() {
+        let t = tempfile::tempdir().unwrap();
+        for suffix in ["0001", "0002"] {
+            std::fs::write(
+                t.path()
+                    .join(format!("T-019fa111-aaaa-7bbb-8ccc-ddddeeee{suffix}.json")),
+                "{}",
+            )
+            .unwrap();
+        }
+        let f = DirFetcher::new(t.path());
+        match f.fetch_export("T-019fa111").unwrap_err() {
+            ConvoError::InvalidFormat(msg) => {
+                assert!(msg.contains("ambiguous"), "actual: {msg}")
+            }
+            other => panic!("ambiguity must not report SessionNotFound, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dir_fetcher_unreadable_dir_reports_io_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(t.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let f = DirFetcher::new(t.path());
+        let err = f.fetch_export("T-x").unwrap_err();
+        std::fs::set_permissions(t.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(err, ConvoError::Io(_)), "got {err:?}");
+    }
+
+    #[test]
     fn convo_io_reads_via_fetcher() {
         let (_t, f) = fixture_dir();
         let io = ConvoIO::new().with_fetcher(Arc::new(f));
@@ -520,6 +590,65 @@ printf 'T-1000-terminator-notes  1d ago  Private  2  T-019fa111-aaaa-7bbb-8ccc-d
                 }
                 other => panic!("expected AmpCliFailed, got {other:?}"),
             }
+        }
+
+        /// An early-exiting child (e.g. auth expired between `threads new`
+        /// and `continue`) must surface its stderr, not a bare `Broken pipe`
+        /// from writing the transcript into a closed stdin.
+        #[test]
+        fn cli_writer_early_exit_reports_stderr_not_broken_pipe() {
+            let t = tempfile::tempdir().unwrap();
+            let bin = stub_amp(t.path(), "echo 'not logged in' >&2; exit 1");
+            let w = CliWriter::new().with_bin(bin);
+            let big = "x".repeat(2 * 1024 * 1024);
+            match w.send_message("T-abc", &big).unwrap_err() {
+                ConvoError::AmpCliFailed { stderr, .. } => {
+                    assert!(stderr.contains("not logged in"), "actual: {stderr}")
+                }
+                other => panic!("expected AmpCliFailed with stderr, got {other:?}"),
+            }
+        }
+
+        /// The child may emit more than a pipe buffer of output before it
+        /// drains stdin (progress logs); writing the multi-MB transcript
+        /// from the parent thread while nobody reads stdout would deadlock.
+        #[test]
+        fn cli_writer_survives_chatty_child_output() {
+            let t = tempfile::tempdir().unwrap();
+            let out = t.path().join("seen");
+            // ~266 KB of stdout BEFORE reading any stdin.
+            let bin = stub_amp(
+                t.path(),
+                &format!(
+                    "i=0; while [ $i -lt 4096 ]; do printf '%064d\\n' $i; i=$((i+1)); done; cat > {}",
+                    out.display()
+                ),
+            );
+            let w = CliWriter::new().with_bin(bin);
+            let big = "y".repeat(2 * 1024 * 1024);
+            w.send_message("T-abc", &big).unwrap();
+            assert_eq!(std::fs::read_to_string(&out).unwrap().len(), big.len());
+        }
+
+        /// The one parse that names irreversible server-side state must be
+        /// as strict as the fetcher's: id-shaped, punctuation-trimmed.
+        #[test]
+        fn cli_writer_create_thread_requires_id_shape_and_trims() {
+            let t = tempfile::tempdir().unwrap();
+            let bin = stub_amp(
+                t.path(),
+                "echo 'Created T-019fa111-aaaa-7bbb-8ccc-ddddeeee0002.'",
+            );
+            let w = CliWriter::new().with_bin(bin);
+            assert_eq!(
+                w.create_thread().unwrap(),
+                "T-019fa111-aaaa-7bbb-8ccc-ddddeeee0002"
+            );
+            // A short `T-…` word is a word, not a thread id.
+            let t2 = tempfile::tempdir().unwrap();
+            let bin2 = stub_amp(t2.path(), "echo 'T-junk output'");
+            let w2 = CliWriter::new().with_bin(bin2);
+            assert!(w2.create_thread().is_err());
         }
 
         #[test]

@@ -34,7 +34,7 @@ _path_bin="${PATH_BIN:-${_repo_root}/target/debug/path}"
 [ -x "${_path_bin}" ] || { echo "path binary not found at ${_path_bin} — cargo build -p path-cli" >&2; exit 1; }
 command -v amp >/dev/null || { echo "amp CLI not on PATH" >&2; exit 1; }
 
-_work="$(mktemp -d -t amp-verify)"
+_work="$(mktemp -d -t amp-verify.XXXXXX)"
 trap 'rm -rf "${_work}"' EXIT
 mkdir -p "${_work}/home" "${_work}/data" "${_work}/cache" "${_work}/config" \
          "${_work}/cwd" "${_work}/cfg"

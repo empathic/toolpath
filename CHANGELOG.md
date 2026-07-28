@@ -97,6 +97,37 @@ Amp ([ampcode.com](https://ampcode.com)) threads.
   claude` is untouched. `scripts/capture-elicit-fixtures.sh` learned amp
   (`--stream-json` id capture + `threads export` recovery). The
   `toolpath-cli` shim follows to 0.17.0.
+- **Hardening from a second adversarial review** (pre-release, folded into
+  0.1.0/0.17.0): the projector now emits a **counter-free usage stub** when a
+  turn carries `model`/`timestamp` but no `token_usage` (Claude nulls usage
+  on non-final turns of a message group; both fields would silently vanish
+  on the claude→amp leg), and emits `updatedAt` from the view's last
+  activity (falling back to the latest turn timestamp) so re-projection
+  stays a fixed point. `CliWriter` feeds stdin from a dedicated thread
+  (a chatty `amp` child could deadlock against a multi-MB transcript) and
+  reports the child's stderr instead of `Broken pipe` when it exits early;
+  `create_thread` parses the server-assigned id with the same strict
+  shape/trim rules as the list parser. The wire model preserves explicit
+  `null` cache counters (double-`Option` — Amp's zod schema marks them
+  `.nullable()`), round-trips empty `messages`/`content` arrays, and no
+  longer materializes `input: null`/`thinking: ""` on blocks that omitted
+  them; the residual scalar-null normalization is pinned by a tripwire test.
+  Tolerant reads now **warn when a known-type block fails its typed parse**
+  (schema drift must not silently produce tool-less derivations);
+  `last_activity` takes the max of all recency signals (the export's
+  top-level `updatedAt` is frozen at creation time in the real capture);
+  unknown-recency threads sort last; missing message timestamps fall back to
+  the thread's creation time; session-total merging saturates instead of
+  overflowing on hostile counters; `DirFetcher` distinguishes
+  ambiguous-prefix and I/O errors from not-found. In `path-cli`:
+  `p export claude --project` now routes through the same fresh-UUID/
+  thinking-strip projection as `path resume` (a `T-…`-stemmed export could
+  never load, and plain `fs::write` could clobber); `p export amp
+  --output`/stdout keeps the source's recorded `working_dir` instead of
+  stamping the invoking shell's cwd; operator-supplied `--session` ids are
+  shape-checked before reaching the `amp` argv; importing an empty thread
+  errors instead of caching a stepless document; resume's `--harness` help
+  states that amp resume costs a billed turn.
 
 ## Cursor understands patch envelopes — 2026-07-28
 
