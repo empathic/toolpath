@@ -206,9 +206,17 @@ Codex-shaped tool surface. Observed input shapes:
 | `apply_patch` | `{patchText}` — Codex-style `*** Begin Patch` envelope | `FileWrite` |
 | `Task` | `{prompt, description}` | `Delegation` |
 | `skill` | `{name}` | — (no category; a guidance loader) |
-| `read_web_page`, `web_search` | `[unverified]` | `Network` |
-| `finder`, `librarian` | `[unverified]` | `FileSearch` (both are search sub-agents) |
+| `read_web_page` | `{url}` — the UI renderer reads exactly `input.url` `[reverse-eng, 0.0.1785228716-gedda19]` | `Network` |
+| `web_search` | `{query}` (alt key `objective`) — the renderer titles "Web Search ⟨query ?? objective⟩" `[reverse-eng, 0.0.1785228716-gedda19]` | `Network` |
+| `finder` | `{query}` — the renderer labels "Searching codebase" with `input.query` as detail `[reverse-eng, 0.0.1785228716-gedda19]` | `FileSearch` |
+| `librarian` | `[unverified]` (search sub-agent, like `finder`) | `FileSearch` |
 | `oracle` | `[unverified]` | `Delegation` |
+
+Generic fallback: for tools without a dedicated renderer, the UI scans the
+input for the first non-empty string among `path`, `filePattern`, `pattern`,
+`query`, `url`, `objective`, `question`, `description`, `prompt` and shows it
+as the row detail `[reverse-eng, 0.0.1785228716-gedda19]` — so even an
+unmapped foreign tool renders usefully if it carries one of those keys.
 
 The executor trace in the local log names the shell tool
 **`async_shell_command`** while the wire name is `shell_command`

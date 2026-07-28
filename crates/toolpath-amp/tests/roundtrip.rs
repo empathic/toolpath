@@ -88,6 +88,189 @@ fn derived_path_round_trips_as_document() {
     );
 }
 
+/// A claude-shaped foreign session (the piece-05 cc-to-amp direction)
+/// projected into an amp export and read back through the forward path:
+/// conversation beats survive, every tool lands on an amp-native name
+/// whose args carry the key amp's UI reads, and the projection is a
+/// fixed point.
+#[test]
+fn foreign_claude_session_round_trips_through_amp() {
+    use serde_json::{Value, json};
+    use toolpath_amp::AmpProjector;
+    use toolpath_convo::{
+        ConversationProjector, ConversationView, ToolInvocation, ToolResult, Turn,
+    };
+
+    let tool = |id: &str, name: &str, input: Value, cat, content: &str, is_error| ToolInvocation {
+        id: id.to_string(),
+        name: name.to_string(),
+        input,
+        result: Some(ToolResult {
+            content: content.to_string(),
+            is_error,
+        }),
+        category: Some(cat),
+    };
+    let turn = |id: &str, role, text: &str, tools: Vec<ToolInvocation>| Turn {
+        id: id.to_string(),
+        parent_id: None,
+        group_id: None,
+        role,
+        timestamp: "2026-07-28T10:00:00.000Z".to_string(),
+        text: text.to_string(),
+        thinking: None,
+        tool_uses: tools,
+        model: None,
+        stop_reason: None,
+        token_usage: None,
+        attributed_token_usage: None,
+        environment: None,
+        delegations: Vec::new(),
+        file_mutations: Vec::new(),
+    };
+
+    let view = ConversationView {
+        id: "T-cc".into(),
+        turns: vec![
+            turn("u1", Role::User, "set up the fixture files", Vec::new()),
+            turn(
+                "a1",
+                Role::Assistant,
+                "Listing, then writing.",
+                vec![
+                    tool(
+                        "c1",
+                        "Bash",
+                        json!({"command": "ls -la"}),
+                        ToolCategory::Shell,
+                        "total 0",
+                        false,
+                    ),
+                    tool(
+                        "c2",
+                        "Write",
+                        json!({"file_path": "/w/notes.md", "content": "scratch\nsecond"}),
+                        ToolCategory::FileWrite,
+                        "wrote /w/notes.md",
+                        false,
+                    ),
+                ],
+            ),
+            turn(
+                "a2",
+                Role::Assistant,
+                "Editing and searching.",
+                vec![
+                    tool(
+                        "c3",
+                        "Edit",
+                        json!({"file_path": "/w/notes.md", "old_string": "scratch",
+                               "new_string": "fixture"}),
+                        ToolCategory::FileWrite,
+                        "edited",
+                        false,
+                    ),
+                    tool(
+                        "c4",
+                        "Grep",
+                        json!({"pattern": "fixture", "path": "/w"}),
+                        ToolCategory::FileSearch,
+                        "notes.md:1:fixture",
+                        false,
+                    ),
+                    tool(
+                        "c5",
+                        "Read",
+                        json!({"file_path": "/w/does-not-exist.txt"}),
+                        ToolCategory::FileRead,
+                        "No such file",
+                        true,
+                    ),
+                    tool(
+                        "c6",
+                        "WebFetch",
+                        json!({"url": "https://e.x/doc", "prompt": "summarize"}),
+                        ToolCategory::Network,
+                        "the doc says hi",
+                        false,
+                    ),
+                ],
+            ),
+            turn("a3", Role::Assistant, "All done.", Vec::new()),
+        ],
+        ..Default::default()
+    };
+
+    let projector = AmpProjector::new();
+    let export = projector.project(&view).expect("project");
+    let back = to_view(&Session::from_export(export.clone()));
+
+    // Beats survive.
+    assert_eq!(back.turns.len(), view.turns.len());
+    for (a, b) in view.turns.iter().zip(&back.turns) {
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.role, b.role);
+        assert_eq!(a.text, b.text);
+    }
+
+    // Every foreign tool landed on an amp-native name with the arg key
+    // amp's UI reads, keeping its id, result, and error flag — and the
+    // native name re-classifies to the category the remap was chosen for.
+    let back_tools: Vec<&ToolInvocation> = back.turns.iter().flat_map(|t| &t.tool_uses).collect();
+    let expect: [(&str, &str, &str, &str, bool); 6] = [
+        ("c1", "shell_command", "command", "total 0", false),
+        ("c2", "apply_patch", "patchText", "wrote /w/notes.md", false),
+        ("c3", "apply_patch", "patchText", "edited", false),
+        ("c4", "finder", "query", "notes.md:1:fixture", false),
+        ("c5", "shell_command", "command", "No such file", true),
+        ("c6", "read_web_page", "url", "the doc says hi", false),
+    ];
+    assert_eq!(back_tools.len(), expect.len());
+    for (id, name, arg_key, content, is_error) in expect {
+        let t = back_tools.iter().find(|t| t.id == id).unwrap();
+        assert_eq!(t.name, name, "{id}");
+        assert!(t.input.get(arg_key).is_some(), "{id}: missing {arg_key}");
+        let r = t.result.as_ref().unwrap();
+        assert_eq!(r.content, content, "{id}");
+        assert_eq!(r.is_error, is_error, "{id}");
+        assert_eq!(
+            t.category,
+            toolpath_amp::tool_category(name),
+            "{id}: category consistent with the projected name"
+        );
+    }
+
+    // The synthesized patches carry the real content.
+    let patch = back_tools.iter().find(|t| t.id == "c2").unwrap();
+    let pt = patch.input["patchText"].as_str().unwrap();
+    assert!(pt.contains("*** Add File: /w/notes.md"));
+    assert!(pt.contains("+scratch\n+second"));
+    let edit = back_tools.iter().find(|t| t.id == "c3").unwrap();
+    let pt = edit.input["patchText"].as_str().unwrap();
+    assert!(pt.contains("*** Update File: /w/notes.md"));
+    assert!(pt.contains("-scratch\n+fixture"));
+
+    // Fixed point at the wire level: projecting the read-back view again
+    // yields a byte-identical export.
+    let export2 = projector.project(&back).expect("re-project");
+    assert_eq!(
+        serde_json::to_value(&export).unwrap(),
+        serde_json::to_value(&export2).unwrap()
+    );
+
+    // And the projected export re-parses strictly (no Unknown blocks).
+    let json = serde_json::to_string(&export).unwrap();
+    let strict = ExportReader::parse_export_with(&json, true).expect("strict re-parse");
+    for m in &strict.messages {
+        for b in &m.content {
+            assert!(
+                matches!(b, toolpath_amp::Block::Known(_)),
+                "unknown block in projection"
+            );
+        }
+    }
+}
+
 #[test]
 fn view_survives_its_own_serde() {
     let view = to_view(&sample_session());

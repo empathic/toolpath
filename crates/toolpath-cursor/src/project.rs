@@ -490,12 +490,72 @@ fn normalize_input_for_cursor(tool_id: u32, input: &Value) -> Value {
         }
     }
     if tool_id == crate::types::TOOL_EDIT_FILE_V2 {
+        // Amp/codex patch tools carry no path key — the file identity
+        // lives inside the `*** Begin Patch` envelope.
+        if !out.contains_key("relativeWorkspacePath")
+            && let Some(path) = obj
+                .get("patchText")
+                .and_then(Value::as_str)
+                .and_then(patch_envelope_file)
+        {
+            out.insert(
+                "relativeWorkspacePath".to_string(),
+                Value::String(path.to_string()),
+            );
+        }
         out.entry("noCodeblock".to_string())
             .or_insert(Value::Bool(true));
         out.entry("cloudAgentEdit".to_string())
             .or_insert(Value::Bool(false));
     }
     Value::Object(out)
+}
+
+/// The target path named by a `*** Begin Patch` envelope (amp's
+/// `apply_patch {patchText}`, codex's free-form V4A body): the first
+/// `*** Add/Update/Delete File:` line.
+fn patch_envelope_file(patch: &str) -> Option<&str> {
+    patch
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("*** Add File: ")
+                .or_else(|| l.strip_prefix("*** Update File: "))
+                .or_else(|| l.strip_prefix("*** Delete File: "))
+        })
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+}
+
+/// Reconstruct (before, after) content from a `*** Begin Patch`
+/// envelope. Unlike [`reconstruct_hunks_from_diff`], envelope hunk
+/// markers are bare `@@` (or `@@ <context>`) with no line numbers, so
+/// every `+`/`-`/space line between the `*** …` framing lines counts.
+fn reconstruct_from_patch_text(patch: &str) -> (String, String) {
+    let mut before = String::new();
+    let mut after = String::new();
+    for raw in patch.lines() {
+        if raw.starts_with("*** ") || raw.starts_with("@@") {
+            continue;
+        }
+        match raw.chars().next() {
+            Some('+') => {
+                after.push_str(&raw[1..]);
+                after.push('\n');
+            }
+            Some('-') => {
+                before.push_str(&raw[1..]);
+                before.push('\n');
+            }
+            Some(' ') => {
+                before.push_str(&raw[1..]);
+                before.push('\n');
+                after.push_str(&raw[1..]);
+                after.push('\n');
+            }
+            _ => continue,
+        }
+    }
+    (before, after)
 }
 
 fn tool_id_and_name(tu: &ToolInvocation) -> (u32, String) {
@@ -544,7 +604,23 @@ fn build_result_payload(
                         register_blob(content_blobs, after_src.as_deref()),
                     )
                 }
-                None => (None, None),
+                // No mutation to blob from (it may not have survived a
+                // cross-harness IR leg) — an amp/codex patch envelope in
+                // the input is the fallback content source.
+                None => match tu.input.get("patchText").and_then(Value::as_str) {
+                    Some(pt) => {
+                        let (b, a) = reconstruct_from_patch_text(pt);
+                        if b.is_empty() && a.is_empty() {
+                            (None, None)
+                        } else {
+                            (
+                                register_blob(content_blobs, Some(&b)),
+                                register_blob(content_blobs, Some(&a)),
+                            )
+                        }
+                    }
+                    None => (None, None),
+                },
             };
             let mut obj = Map::new();
             if let Some(h) = before_hash {
@@ -1401,6 +1477,110 @@ mod tests {
         assert_eq!(
             s.content_blobs.get(after_hash).map(String::as_str),
             Some("real after")
+        );
+    }
+
+    /// Amp and codex write their patch tool with a `*** Begin Patch`
+    /// envelope (`{patchText}` / free-form string) instead of a path
+    /// key. The path must come out of the envelope's `*** … File:` line
+    /// or the edit bubble loses its file identity — and with it the
+    /// forward path's ability to rebuild the mutation.
+    #[test]
+    fn patch_text_input_yields_relative_workspace_path() {
+        let mut t = assistant_turn("a1", "");
+        t.tool_uses = vec![ToolInvocation {
+            id: "tc1".into(),
+            name: "apply_patch".into(),
+            input: json!({"patchText":
+                "*** Begin Patch\n*** Update File: /w/notes.md\n@@\n-scratch\n+fixture\n*** End Patch"}),
+            result: Some(ToolResult {
+                content: "ok".into(),
+                is_error: false,
+            }),
+            category: Some(ToolCategory::FileWrite),
+        }];
+        let s = CursorProjector::new().project(&view_with(vec![t])).unwrap();
+        let tf = s.bubbles[0].tool_former_data.as_ref().unwrap();
+        let params: serde_json::Value = serde_json::from_str(&tf.params).unwrap();
+        assert_eq!(params["relativeWorkspacePath"], "/w/notes.md");
+        assert!(params.get("patchText").is_none(), "foreign key dropped");
+    }
+
+    /// With no [`FileMutation`] to blob from (the mutation may not have
+    /// survived a cross-harness IR leg), the patch envelope itself is
+    /// the content source: hunk lines reconstruct before/after.
+    #[test]
+    fn patch_text_without_mutation_emits_blobs_from_envelope() {
+        let mut t = assistant_turn("a1", "");
+        t.tool_uses = vec![ToolInvocation {
+            id: "tc1".into(),
+            name: "apply_patch".into(),
+            input: json!({"patchText":
+                "*** Begin Patch\n*** Update File: /w/notes.md\n@@\n-scratch\n+fixture\n*** End Patch"}),
+            result: Some(ToolResult {
+                content: "ok".into(),
+                is_error: false,
+            }),
+            category: Some(ToolCategory::FileWrite),
+        }];
+        let s = CursorProjector::new().project(&view_with(vec![t])).unwrap();
+        let tf = s.bubbles[0].tool_former_data.as_ref().unwrap();
+        let result = tf.parse_result().unwrap().unwrap();
+        let before_hash = result["beforeContentId"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("composer.content.");
+        let after_hash = result["afterContentId"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("composer.content.");
+        assert_eq!(
+            s.content_blobs.get(before_hash).map(String::as_str),
+            Some("scratch\n")
+        );
+        assert_eq!(
+            s.content_blobs.get(after_hash).map(String::as_str),
+            Some("fixture\n")
+        );
+    }
+
+    /// `*** Add File` envelopes have no before side; the after blob is
+    /// the added content, so the forward path surfaces it as `content`
+    /// (an add), not as an old/new pair.
+    #[test]
+    fn patch_text_add_file_reconstructs_after_only() {
+        let mut t = assistant_turn("a1", "");
+        t.tool_uses = vec![ToolInvocation {
+            id: "tc1".into(),
+            name: "apply_patch".into(),
+            input: json!({"patchText":
+                "*** Begin Patch\n*** Add File: /w/count.sh\n+echo 1\n+echo 2\n*** End Patch"}),
+            result: Some(ToolResult {
+                content: "ok".into(),
+                is_error: false,
+            }),
+            category: Some(ToolCategory::FileWrite),
+        }];
+        let s = CursorProjector::new().project(&view_with(vec![t])).unwrap();
+        let tf = s.bubbles[0].tool_former_data.as_ref().unwrap();
+        let params: serde_json::Value = serde_json::from_str(&tf.params).unwrap();
+        assert_eq!(params["relativeWorkspacePath"], "/w/count.sh");
+        let result = tf.parse_result().unwrap().unwrap();
+        let before_hash = result["beforeContentId"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("composer.content.");
+        let after_hash = result["afterContentId"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("composer.content.");
+        assert_eq!(
+            s.content_blobs.get(before_hash).map(String::as_str),
+            Some("")
+        );
+        assert_eq!(
+            s.content_blobs.get(after_hash).map(String::as_str),
+            Some("echo 1\necho 2\n")
         );
     }
 }

@@ -347,6 +347,45 @@ impl Harness for CursorHarness {
     }
 }
 
+struct AmpHarness;
+impl Harness for AmpHarness {
+    fn name(&self) -> &'static str {
+        "amp"
+    }
+    fn roundtrip(&self, view: &ConversationView) -> ConversationView {
+        let projector = toolpath_amp::AmpProjector::new();
+        let export = projector.project(view).expect("amp project");
+        toolpath_amp::to_view(&toolpath_amp::Session::from_export(export))
+    }
+    fn load_fixture(&self) -> Option<ConversationView> {
+        // Amp's canonical artifact is a single JSON export document
+        // (`amp threads export`), not JSONL — see
+        // `docs/agents/formats/amp/events.md`.
+        let path = fixtures_dir().join("amp/convo.json");
+        if !path.exists() {
+            return None;
+        }
+        let json = std::fs::read_to_string(&path).expect("amp fixture read");
+        let export =
+            toolpath_amp::ExportReader::parse_export_with(&json, true).expect("amp fixture parse");
+        Some(toolpath_amp::to_view(&toolpath_amp::Session::from_export(
+            export,
+        )))
+    }
+    fn schema_validates(&self, view: &ConversationView) -> Result<(), String> {
+        let projector = toolpath_amp::AmpProjector::new();
+        let export = projector
+            .project(view)
+            .map_err(|e| format!("project: {}", e))?;
+        let json = serde_json::to_string(&export).map_err(|e| format!("serialize: {}", e))?;
+        // Strict mode: every block must parse as a known type, the same
+        // bar the crate's own projection tests hold.
+        toolpath_amp::ExportReader::parse_export_with(&json, true)
+            .map_err(|e| format!("re-read: {}", e))?;
+        Ok(())
+    }
+}
+
 /// Convert opencode's `export` JSON wrapper format into the
 /// `Session` struct shape that `to_view` expects. The wrapper uses
 /// camelCase + nested `info` blocks; the Session uses snake_case +
@@ -694,7 +733,18 @@ mod invariants {
                 .iter()
                 .filter(|t| matches!(t.role, Role::Assistant))
                 .filter_map(|t| t.token_usage.as_ref())
-                .map(|u| (u.input_tokens, u.output_tokens))
+                // An explicit zero and an absent counter compare equal:
+                // some wires (pi, opencode) decode 0 as absent, so a
+                // genuine `Some(0)` (amp reports inputTokens: 0 with the
+                // prompt riding the cache counters) cannot survive their
+                // leg — and a zero contributes nothing to any total, so
+                // this is not token loss.
+                .map(|u| {
+                    (
+                        u.input_tokens.filter(|v| *v != 0),
+                        u.output_tokens.filter(|v| *v != 0),
+                    )
+                })
                 .collect()
         };
         let pre = usage_seq(before_target);
@@ -1030,6 +1080,7 @@ fn run_matrix(label: &str, sources: &[(String, ConversationView)]) {
         Box::new(GeminiHarness),
         Box::new(OpencodeHarness),
         Box::new(CursorHarness),
+        Box::new(AmpHarness),
     ];
     let by_name: BTreeMap<&str, &dyn Harness> =
         harnesses.iter().map(|h| (h.name(), h.as_ref())).collect();
@@ -1081,6 +1132,7 @@ fn all_harnesses() -> Vec<Box<dyn Harness>> {
         Box::new(GeminiHarness),
         Box::new(OpencodeHarness),
         Box::new(CursorHarness),
+        Box::new(AmpHarness),
     ]
 }
 

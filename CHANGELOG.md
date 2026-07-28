@@ -2,6 +2,19 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Cursor understands patch envelopes — 2026-07-28
+
+- **`toolpath-cursor`** (0.2.1): the projector now understands
+  `*** Begin Patch` envelopes (amp's `apply_patch {patchText}`, codex's
+  free-form V4A body) when projecting a foreign FileWrite tool: the
+  target path is read out of the envelope's `*** … File:` line (the
+  edit bubble previously lost its file identity, and with it the
+  forward path's ability to rebuild the mutation), and when no
+  `FileMutation` is available to blob from, before/after content is
+  reconstructed from the envelope's hunk lines. Surfaced by the
+  cross-harness matrix's new amp row (`amp → cursor` was not a fixed
+  point); covered by three new projector unit tests.
+
 ## `path p cache sync` — incremental session ingestion — 2026-07-16
 
 Adds `path p cache sync [types…]`, the first step toward a cache that
@@ -107,6 +120,7 @@ hand.
   extraction the reader uses for `Session.id`'s filename fallback.
   Codex sync enumeration and import provenance stamp ids through it
   instead of a CLI-side copy of the filename convention.
+||||||| parent of 6cba351 (feat(amp): CC→amp projection + cross-harness matrix row)
 
 ## One artifact-type layer and per-session imports — 2026-07-16
 

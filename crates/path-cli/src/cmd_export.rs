@@ -3630,7 +3630,10 @@ mod tests {
         let err = with_config_dir(&config2, || project_amp_with(&path, &cwd, &w2)).unwrap_err();
         let s = err.to_string();
         assert!(s.contains("rate limited"), "{s}");
-        assert!(s.contains("T-fail-1"), "error must name the created thread: {s}");
+        assert!(
+            s.contains("T-fail-1"),
+            "error must name the created thread: {s}"
+        );
     }
 
     #[cfg(unix)]

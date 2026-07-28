@@ -553,7 +553,11 @@ printf 'T-1000-terminator-notes  1d ago  Private  2  T-019fa111-aaaa-7bbb-8ccc-d
             let out = t.path().join("seen");
             let bin = stub_amp(
                 t.path(),
-                &format!("cat > {}\nprintf '%s' \"$*\" > {}.argv", out.display(), out.display()),
+                &format!(
+                    "cat > {}\nprintf '%s' \"$*\" > {}.argv",
+                    out.display(),
+                    out.display()
+                ),
             );
             let w = CliWriter::new().with_bin(bin);
             // Comfortably beyond the 1 MB macOS single-arg ceiling.
