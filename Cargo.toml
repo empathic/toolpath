@@ -13,6 +13,7 @@ members = [
     "crates/toolpath-dot",
     "crates/toolpath-md",
     "crates/toolpath-pi",
+    "crates/toolpath-redact",
     "crates/pathbase-client",
     "crates/path-cli",
 ]
@@ -37,6 +38,7 @@ toolpath-github = { version = "0.6.0", path = "crates/toolpath-github" }
 toolpath-dot = { version = "0.5.0", path = "crates/toolpath-dot" }
 toolpath-md = { version = "0.7.0", path = "crates/toolpath-md" }
 toolpath-pi = { version = "0.6.1", path = "crates/toolpath-pi" }
+toolpath-redact = { version = "0.1.0", path = "crates/toolpath-redact" }
 path-cli = { version = "0.16.0", path = "crates/path-cli" }
 pathbase-client = { version = "0.2.0", path = "crates/pathbase-client" }
 
