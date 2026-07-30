@@ -100,9 +100,12 @@ fn clip_to_line_if_diff(text: &str, shape: FieldShape, span: Range<usize>) -> Ra
         return span;
     }
     let line_start = text[..span.start].rfind('\n').map_or(0, |i| i + 1);
-    let line_end = text[span.end..]
+    // Anchor to the *start*'s line, not the end's: a match already
+    // spanning several lines (gitleaks' PEM rule) would otherwise have its
+    // line-end searched for past all of them, clipping nothing.
+    let line_end = text[span.start..]
         .find('\n')
-        .map_or(text.len(), |i| span.end + i);
+        .map_or(text.len(), |i| span.start + i);
     span.start.max(line_start)..span.end.min(line_end)
 }
 

@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## `path p redact` — plan-then-apply credential redaction — 2026-07-30
+## `path p redact` - plan-then-apply credential redaction - 2026-07-30
 
 Adds `path p redact`, a plumbing command that removes credentials from an
 already-generated toolpath document in place, via a reviewable plan-then-apply

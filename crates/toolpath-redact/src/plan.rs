@@ -258,22 +258,147 @@ pub fn verify(plan: &Plan, path: &mut toolpath::v1::Path) -> crate::Result<()> {
 // ── Plan generation (T8) ───────────────────────────────────────────────
 
 pub fn generate(
-    _path: &toolpath::v1::Path,
-    _detectors: &crate::detect::DetectorSet,
-    _cfg: &crate::RedactConfig,
+    path: &toolpath::v1::Path,
+    detectors: &crate::detect::DetectorSet,
+    cfg: &crate::RedactConfig,
 ) -> Plan {
-    todo!("T8")
+    // This signature is fixed since T0 and cannot return `Result` (T5's own
+    // byte-identity test calls it directly, unwrapped). A failing detector
+    // is a bug in that detector, not a normal outcome, so it surfaces as a
+    // panic here instead of silently degrading to an empty plan;
+    // `generate_checked` propagates the same failure through `Result`.
+    generate_inner(path, detectors, cfg).expect("detector failed while generating a redaction plan")
 }
 
 /// `generate`, plus the egress check: a detector that would send candidate
 /// material off the machine is refused unless the caller allowed it.
 pub fn generate_checked(
-    _path: &toolpath::v1::Path,
-    _detectors: &crate::detect::DetectorSet,
-    _cfg: &crate::RedactConfig,
-    _allow_network: bool,
+    path: &toolpath::v1::Path,
+    detectors: &crate::detect::DetectorSet,
+    cfg: &crate::RedactConfig,
+    allow_network: bool,
 ) -> crate::Result<Plan> {
-    todo!("T8")
+    if !allow_network
+        && let Some(d) = detectors
+            .detectors()
+            .iter()
+            .find(|d| d.egress() == crate::detect::Egress::Network)
+    {
+        return Err(crate::RedactError::NetworkDetectorRefused(
+            d.id().to_string(),
+        ));
+    }
+    generate_inner(path, detectors, cfg)
+}
+
+fn generate_inner(
+    path: &toolpath::v1::Path,
+    detectors: &crate::detect::DetectorSet,
+    cfg: &crate::RedactConfig,
+) -> crate::Result<Plan> {
+    let surfaces = crate::surface::surfaces(path);
+
+    // `SurfaceCursor` needs `&mut Path` (T2 uses the same struct for
+    // writes); `generate` only takes `&Path` since `verify` re-checks
+    // findings against the caller's own document later, so read through a
+    // throwaway clone instead.
+    let mut scratch = path.clone();
+    let cursor = crate::surface::SurfaceCursor { path: &mut scratch };
+
+    // `surfaces()` already visits steps in document order and sorts
+    // artifacts/fields (see its own determinism test), and `detect_all`
+    // returns spans sorted by start - so findings collected in this order
+    // already satisfy the (step, pointer, span start) ordering `finding_id`
+    // relies on, with no extra sort needed here.
+    let mut findings = Vec::new();
+    for s in &surfaces {
+        let Some(text) = cursor.read(&s.step, &s.at) else {
+            continue;
+        };
+        let ctx = context_for(path, &s.step, &s.at);
+        let candidate = crate::detect::Candidate {
+            text: &text,
+            shape: s.shape,
+            at: &s.at,
+            ctx,
+        };
+        for finding in detectors.detect_all(&candidate)? {
+            let action = if finding.score < cfg.threshold {
+                Action::Skip
+            } else {
+                Action::Redact
+            };
+            let context = elide_context(&text, finding.span.clone(), &finding.rule, cfg.reveal);
+            findings.push(PlanFinding {
+                id: String::new(), // assigned below, once findings are in final order
+                step: s.step.clone(),
+                at: s.at.clone(),
+                span: (finding.span.start, finding.span.end),
+                rule: finding.rule,
+                score: finding.score,
+                detector: finding.detector.to_string(),
+                shape: s.shape,
+                context,
+                action,
+                transform: None,
+            });
+        }
+    }
+    for (i, finding) in findings.iter_mut().enumerate() {
+        finding.id = finding_id(i);
+    }
+
+    Ok(Plan {
+        v: 1,
+        document: path.path.id.clone(),
+        generated: cfg.now,
+        detectors: detectors.ids().into_iter().map(String::from).collect(),
+        defaults: PlanDefaults {
+            transform: cfg.mode,
+            threshold: cfg.threshold,
+        },
+        surfaces,
+        findings,
+    })
+}
+
+/// `change_type`/`actor` come from the step and artifact the pointer names.
+/// `tool_name` stays `None`: resolving it would mean re-parsing the same
+/// `tool_uses` JSON `surfaces()` already walked once, and no detector in
+/// this crate reads it yet.
+fn context_for<'a>(
+    path: &'a toolpath::v1::Path,
+    step_id: &str,
+    at: &str,
+) -> crate::detect::Context<'a> {
+    let kind = path.meta.as_ref().and_then(|m| m.kind.as_deref());
+    let Some(step) = path.steps.iter().find(|s| s.step.id == step_id) else {
+        return crate::detect::Context {
+            change_type: "",
+            tool_name: None,
+            actor: "",
+            kind,
+        };
+    };
+    let change_type = artifact_key_from_at(at)
+        .and_then(|key| step.change.get(&key))
+        .and_then(|c| c.structural.as_ref())
+        .map(|s| s.change_type.as_str())
+        .unwrap_or("");
+    crate::detect::Context {
+        change_type,
+        tool_name: None,
+        actor: step.step.actor.as_str(),
+        kind,
+    }
+}
+
+/// Recovers the artifact key a `/change/...` pointer names. Mirrors
+/// `surface::ptr_decode` (private to that module) - decode `~1` before
+/// `~0`, or `~01` round-trips wrong (RFC 6901).
+fn artifact_key_from_at(at: &str) -> Option<String> {
+    let token = at.strip_prefix("/change/")?.split('/').next()?;
+    Some(token.replace("~1", "/").replace("~0", "~"))
 }
 
 #[cfg(test)]
@@ -733,5 +858,258 @@ mod tests {
         let round: Plan = serde_json::from_str(&json).unwrap();
         assert_eq!(plan, round);
         assert_eq!(json, serde_json::to_string(&round).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod plan_gen {
+    use super::*;
+    use crate::detect::{Candidate, Detector, DetectorSet, Egress, Finding, FixedDetector};
+    use chrono::TimeZone;
+    use std::collections::HashMap;
+    use std::ops::Range;
+    use toolpath::v1::{ArtifactChange, Path, PathIdentity, Step, StepIdentity, StructuralChange};
+
+    fn cfg() -> crate::RedactConfig {
+        crate::RedactConfig {
+            threshold: 0.8,
+            mode: Transform::Marker,
+            mode_for: Vec::new(),
+            key: b"test-key".to_vec(),
+            now: Utc.with_ymd_and_hms(2026, 7, 30, 0, 0, 0).unwrap(),
+            drop_signatures: false,
+            reveal: false,
+        }
+    }
+
+    fn f(span: Range<usize>, rule: &str, score: f32) -> Finding {
+        Finding {
+            span,
+            rule: rule.into(),
+            score,
+            detector: "fixed",
+        }
+    }
+
+    /// Matches the literal substring `SECRET-VALUE`, so `fixture_mixed`
+    /// (below) can put a finding on one surface and leave a sibling clean.
+    struct Needle;
+    impl Detector for Needle {
+        fn id(&self) -> &'static str {
+            "needle"
+        }
+        fn detect(&self, c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+            Ok(c.text
+                .match_indices("SECRET-VALUE")
+                .map(|(i, m)| Finding {
+                    span: i..i + m.len(),
+                    rule: "test-secret".into(),
+                    score: 0.95,
+                    detector: "needle",
+                })
+                .collect())
+        }
+    }
+
+    fn detectors() -> DetectorSet {
+        let mut set = DetectorSet::default();
+        set.push(Box::new(Needle));
+        set
+    }
+
+    struct NetworkDetector;
+    impl Detector for NetworkDetector {
+        fn id(&self) -> &'static str {
+            "network"
+        }
+        fn detect(&self, _c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+            Ok(Vec::new())
+        }
+        fn egress(&self) -> Egress {
+            Egress::Network
+        }
+    }
+
+    struct FailingDetector;
+    impl Detector for FailingDetector {
+        fn id(&self) -> &'static str {
+            "failing"
+        }
+        fn detect(&self, _c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+            Err(crate::RedactError::BadPointer("boom".into()))
+        }
+    }
+
+    fn step_with_text(id: &str, artifact: &str, text: &str) -> Step {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "text".to_string(),
+            serde_json::Value::String(text.to_string()),
+        );
+        let mut change = HashMap::new();
+        change.insert(
+            artifact.to_string(),
+            ArtifactChange {
+                raw: None,
+                structural: Some(StructuralChange {
+                    change_type: "conversation.append".to_string(),
+                    extra,
+                }),
+            },
+        );
+        Step {
+            step: StepIdentity {
+                id: id.to_string(),
+                parents: Vec::new(),
+                actor: "human:t".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+            },
+            change,
+            meta: None,
+        }
+    }
+
+    fn path_of(steps: Vec<Step>) -> Path {
+        let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
+        Path {
+            path: PathIdentity {
+                id: "p1".to_string(),
+                base: None,
+                head,
+                graph_ref: None,
+            },
+            steps,
+            meta: None,
+        }
+    }
+
+    /// The artifact key is one byte, so the always-present `/change/a`
+    /// surface (whose text is the key itself) is too short for a `0..20`
+    /// span - only the `text` field can win the merge test below.
+    fn fixture_one_field() -> Path {
+        path_of(vec![step_with_text("s1", "a", "AAAAAAAAAAAAAAAAAAAA")])
+    }
+
+    fn fixture_mixed() -> Path {
+        path_of(vec![
+            step_with_text("s1", "a", "here is a SECRET-VALUE to find"),
+            step_with_text("s2", "b", "nothing interesting here"),
+        ])
+    }
+
+    fn findings_at(plan: &Plan, at: &str) -> usize {
+        plan.findings.iter().filter(|pf| pf.at == at).count()
+    }
+
+    // ── Step 8.1, verbatim ────────────────────────────────────────────────
+
+    #[test]
+    fn surfaces_and_findings_are_both_populated() {
+        let plan = generate(&fixture_mixed(), &detectors(), &cfg());
+        assert!(plan.surfaces.iter().any(|s| findings_at(&plan, &s.at) == 0));
+        assert!(!plan.findings.is_empty());
+    }
+
+    #[test]
+    fn two_detectors_merge_through_one_resolution() {
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FixedDetector(vec![f(0..20, "a", 0.9)])));
+        set.push(Box::new(FixedDetector(vec![f(0..20, "b", 0.5)])));
+        assert_eq!(
+            generate(&fixture_one_field(), &set, &cfg()).findings.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn network_detector_is_refused_without_the_flag() {
+        let mut set = DetectorSet::default();
+        set.push(Box::new(NetworkDetector));
+        assert!(matches!(
+            generate_checked(&fixture_one_field(), &set, &cfg(), false),
+            Err(crate::RedactError::NetworkDetectorRefused(_))
+        ));
+    }
+
+    // ── Coverage a reviewer would demand ────────────────────────────────
+
+    #[test]
+    fn zero_finding_surface_still_appears_in_plan_surfaces() {
+        let plan = generate(&fixture_one_field(), &DetectorSet::default(), &cfg());
+        assert!(!plan.surfaces.is_empty());
+        assert!(plan.findings.is_empty());
+    }
+
+    #[test]
+    fn plan_detectors_lists_the_detector_ids_actually_run() {
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FixedDetector(Vec::new())));
+        set.push(Box::new(Needle));
+        let plan = generate(&fixture_one_field(), &set, &cfg());
+        assert_eq!(
+            plan.detectors,
+            vec!["fixed".to_string(), "needle".to_string()]
+        );
+    }
+
+    #[test]
+    fn score_exactly_at_threshold_is_redact_not_skip() {
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FixedDetector(vec![f(0..20, "boundary", 0.8)])));
+        let plan = generate(&fixture_one_field(), &set, &cfg());
+        assert_eq!(plan.findings[0].action, Action::Redact);
+    }
+
+    #[test]
+    fn score_just_below_threshold_is_skip() {
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FixedDetector(vec![f(0..20, "boundary", 0.799)])));
+        let plan = generate(&fixture_one_field(), &set, &cfg());
+        assert_eq!(plan.findings[0].action, Action::Skip);
+    }
+
+    #[test]
+    fn reveal_flag_propagates_into_generated_context() {
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FixedDetector(vec![f(0..20, "boundary", 0.95)])));
+        let cfg = crate::RedactConfig {
+            reveal: true,
+            ..cfg()
+        };
+        let plan = generate(&fixture_one_field(), &set, &cfg);
+        assert!(plan.findings[0].context.contains("AAAAAAAAAAAAAAAAAAAA"));
+    }
+
+    #[test]
+    fn empty_document_yields_empty_plan_with_configured_id_and_timestamp() {
+        let empty = path_of(Vec::new());
+        let now = Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).unwrap();
+        let cfg = crate::RedactConfig { now, ..cfg() };
+        let plan = generate(&empty, &DetectorSet::default(), &cfg);
+        assert_eq!(plan.document, "p1");
+        assert_eq!(plan.generated, now);
+        assert!(plan.surfaces.is_empty());
+        assert!(plan.findings.is_empty());
+    }
+
+    #[test]
+    fn regenerating_a_plan_yields_byte_identical_json() {
+        let path = fixture_mixed();
+        let set = detectors();
+        let cfg = cfg();
+        let a = generate(&path, &set, &cfg);
+        let b = generate(&path, &set, &cfg);
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap()
+        );
+    }
+
+    #[test]
+    fn detector_error_propagates_through_generate_checked() {
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FailingDetector));
+        let err = generate_checked(&fixture_one_field(), &set, &cfg(), false).unwrap_err();
+        assert!(matches!(err, crate::RedactError::BadPointer(_)));
     }
 }

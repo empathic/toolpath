@@ -337,11 +337,11 @@ if should_publish toolpath-convo; then
 fi
 
 # Tier 2b: satellite crates (depend on tier 1 and/or toolpath-convo)
-for _crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-copilot toolpath-opencode toolpath-cursor toolpath-pi; do
+for _crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-copilot toolpath-opencode toolpath-cursor toolpath-pi toolpath-redact; do
     publish "${_crate}"
 done
 
-for _crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-copilot toolpath-opencode toolpath-cursor toolpath-pi; do
+for _crate in toolpath-git toolpath-github toolpath-dot toolpath-md toolpath-claude toolpath-gemini toolpath-codex toolpath-copilot toolpath-opencode toolpath-cursor toolpath-pi toolpath-redact; do
     if should_publish "${_crate}"; then
         wait_for_index "${_crate}" "$(crate_version "${_crate}")"
     fi

@@ -34,7 +34,8 @@ pub(crate) struct RedactArgs {
 
     #[arg(long, default_values = &["internal"])]
     pub detector: Vec<String>,
-    #[arg(long, default_value_t = 0.8)]
+    /// Minimum score a finding needs before it is redacted (0.0-1.0).
+    #[arg(long, default_value_t = 0.8, value_parser = parse_threshold)]
     pub threshold: f32,
     #[arg(long)]
     pub allow_network_detectors: bool,
@@ -59,27 +60,55 @@ pub(crate) enum TransformArg {
     Partial,
 }
 
+/// Scores are clamped to `0.0..=1.0`, so an out-of-range threshold silently
+/// inverts the command: `-1` redacts everything, `5` and `NaN` redact
+/// nothing. `RangeInclusive::contains` rejects NaN and infinity for free.
+fn parse_threshold(s: &str) -> std::result::Result<f32, String> {
+    let v: f32 = s.parse().map_err(|_| format!("`{s}` is not a number"))?;
+    if !(0.0..=1.0).contains(&v) {
+        return Err(format!("--threshold must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
+}
+
 pub(crate) fn run(args: RedactArgs) -> Result<()> {
+    run_with_picker(args, &RealPicker)
+}
+
+/// The seam the interactive tests inject through. Mirrors
+/// `cmd_resume::run_with_strategy`, which exists for the same reason: the
+/// alternative is a process-global picker override that one test poisons
+/// for the whole binary.
+pub(crate) fn run_with_picker(_args: RedactArgs, _picker: &dyn PickerStrategy) -> Result<()> {
     todo!("T9")
 }
 
 pub(crate) trait PickerStrategy {
+    /// Rows are TSV with the finding id in column 1. Returns the selected
+    /// rows verbatim, the way `fzf` does - not bare ids.
+    ///
+    /// Unused until `run_with_picker` stops being a `todo!()`.
+    #[allow(dead_code)]
     fn pick(&self, rows: &[String]) -> Result<Vec<String>>;
 }
 
 pub(crate) struct RealPicker;
 
 impl PickerStrategy for RealPicker {
-    fn pick(&self, rows: &[String]) -> Result<Vec<String>> {
+    fn pick(&self, _rows: &[String]) -> Result<Vec<String>> {
         todo!("T9")
     }
 }
 
+/// Constructed by the dispatch tests, which arrive with `run_with_picker`.
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) struct RecordingPicker {
     pub selection: Vec<String>,
     pub seen: std::cell::RefCell<Vec<String>>,
 }
 
+#[cfg(test)]
 impl PickerStrategy for RecordingPicker {
     fn pick(&self, rows: &[String]) -> Result<Vec<String>> {
         *self.seen.borrow_mut() = rows.to_vec();
@@ -87,21 +116,23 @@ impl PickerStrategy for RecordingPicker {
     }
 }
 
-/// Helper to parse a "PREDICATE:TRANSFORM" string.
-/// Splits on the LAST `:` so predicates containing `:` still parse.
+/// Splits on the LAST `:` so a predicate containing `:` still parses, e.g.
+/// `detector=exec:/bin/gitleaks:hash`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_mode_for(s: &str) -> Result<(String, TransformArg)> {
     let (pred, transform_str) = s
         .rsplit_once(':')
         .ok_or_else(|| anyhow::anyhow!("--mode-for format is PREDICATE:TRANSFORM, got: {}", s))?;
-
-    let transform = match transform_str {
-        "marker" => TransformArg::Marker,
-        "remove" => TransformArg::Remove,
-        "hash" => TransformArg::Hash,
-        "mask" => TransformArg::Mask,
-        "partial" => TransformArg::Partial,
-        other => anyhow::bail!("unknown transform: {}", other),
-    };
+    if pred.is_empty() {
+        anyhow::bail!(
+            "--mode-for needs a predicate before the transform, got: {}",
+            s
+        );
+    }
+    // Resolved through clap's own value table rather than a second hand-rolled
+    // one, which would silently drift from `TransformArg` as variants are added.
+    let transform = <TransformArg as clap::ValueEnum>::from_str(transform_str, false)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     Ok((pred.to_string(), transform))
 }

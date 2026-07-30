@@ -57,6 +57,11 @@ fn run_ls() -> Result<()> {
 
 fn run_rm(id: &str) -> Result<()> {
     remove_cached(id)?;
+    // The key exists only to keep this document's fingerprints stable
+    // across re-redactions; with the document gone nothing can use it.
+    if let Err(e) = crate::cache::remove_redact_key(id) {
+        eprintln!("warning: redaction key not removed: {e}");
+    }
     // The artifact is still real — downgrade its manifest record to
     // "known, not cached" so the next sync can re-materialize it.
     #[cfg(not(target_os = "emscripten"))]
@@ -192,10 +197,42 @@ fn render_summary(outcomes: &[(ArtifactType, SyncOutcome)], explicit: bool) -> S
         }
         s.push('\n');
     }
+    s.push_str(&render_replay(outcomes));
     if s.is_empty() {
         s.push_str("nothing to sync\n");
     }
     s
+}
+
+/// Redaction replay, across every type in the run. Reappeared skips get
+/// their own clause because they are the one way a replayed document
+/// differs from what the user approved: a hand-picked skip cannot be
+/// replayed against content that has moved, so it comes back.
+#[cfg(not(target_os = "emscripten"))]
+fn render_replay(outcomes: &[(ArtifactType, SyncOutcome)]) -> String {
+    let documents: usize = outcomes.iter().map(|(_, o)| o.re_redacted).sum();
+    if documents == 0 {
+        return String::new();
+    }
+    let reappeared: usize = outcomes.iter().map(|(_, o)| o.reappeared_skips).sum();
+    let mut line = format!("re-redacted {documents} {}", plural(documents, "document"));
+    if reappeared > 0 {
+        line.push_str(&format!(
+            "; {reappeared} previously-skipped {} reappeared",
+            plural(reappeared, "finding")
+        ));
+    }
+    line.push('\n');
+    line
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn plural(n: usize, noun: &str) -> String {
+    if n == 1 {
+        noun.to_string()
+    } else {
+        format!("{noun}s")
+    }
 }
 
 #[cfg(all(test, not(target_os = "emscripten")))]
@@ -237,7 +274,7 @@ mod tests {
                     new: 2,
                     updated: 1,
                     unchanged: 3,
-                    failed: 0,
+                    ..Default::default()
                 },
             ),
             (ArtifactType::Cursor, SyncOutcome::default()),
@@ -255,15 +292,61 @@ mod tests {
         let outcomes = vec![(
             ArtifactType::Codex,
             SyncOutcome {
-                new: 0,
-                updated: 0,
                 unchanged: 1,
                 failed: 2,
+                ..Default::default()
             },
         )];
         let s = render_summary(&outcomes, false);
         assert!(s.contains("2 failed"));
 
         assert_eq!(render_summary(&[], false), "nothing to sync\n");
+    }
+
+    #[test]
+    fn render_summary_reports_replay_across_types() {
+        let outcomes = vec![
+            (
+                ArtifactType::Claude,
+                SyncOutcome {
+                    updated: 2,
+                    re_redacted: 2,
+                    reappeared_skips: 2,
+                    ..Default::default()
+                },
+            ),
+            (
+                ArtifactType::Codex,
+                SyncOutcome {
+                    updated: 1,
+                    re_redacted: 1,
+                    ..Default::default()
+                },
+            ),
+        ];
+        assert!(
+            render_summary(&outcomes, false)
+                .ends_with("re-redacted 3 documents; 2 previously-skipped findings reappeared\n")
+        );
+    }
+
+    #[test]
+    fn render_replay_is_silent_without_replay_and_singular_for_one() {
+        assert_eq!(
+            render_replay(&[(ArtifactType::Claude, SyncOutcome::default())]),
+            ""
+        );
+        let one = vec![(
+            ArtifactType::Claude,
+            SyncOutcome {
+                re_redacted: 1,
+                reappeared_skips: 1,
+                ..Default::default()
+            },
+        )];
+        assert_eq!(
+            render_replay(&one),
+            "re-redacted 1 document; 1 previously-skipped finding reappeared\n"
+        );
     }
 }

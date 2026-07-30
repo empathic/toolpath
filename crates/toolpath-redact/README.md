@@ -48,9 +48,13 @@ A detector that would send candidate material off the machine reports
 ## Vendored ruleset
 
 The built-in detector compiles its rules from a vendored copy of the
-[gitleaks](https://github.com/gitleaks/gitleaks) configuration, used
-under the MIT license.
+gitleaks configuration at `src/internal/gitleaks.toml`.
 
-<!-- upstream commit: TBD -->
+- Upstream: <https://github.com/gitleaks/gitleaks>, `config/gitleaks.toml`
+- Commit: `b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b` (2026-07-22)
+- License: MIT, <https://github.com/gitleaks/gitleaks/blob/master/LICENSE>
 
-See `src/internal/gitleaks.toml` for attribution and version details.
+The copy is kept byte-verbatim so it can be diffed against upstream. Do
+not hand-edit it; rules this crate adds on top live in `internal/rules.rs`
+as `supplemental_rules`, and rules that will not compile under Rust's
+`regex` are listed there too.

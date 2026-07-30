@@ -8,10 +8,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use toolpath::v1::{Graph, PathOrRef};
+use toolpath_redact::{Action, Decision, DetectorSet, RedactConfig, RedactionPolicy};
+
 use super::sources::{self, ArtifactSource};
 use crate::artifact::{ArtifactRef, ArtifactType};
 use crate::cache::write_cached;
 use crate::config::{MANIFEST_FILE_NAME, MANIFEST_LOCK_FILE_NAME, config_dir};
+use crate::derive::DerivedDoc;
 use crate::harness::HarnessBundle;
 
 /// How many manifest writes accumulate before a mid-run checkpoint.
@@ -61,9 +65,19 @@ pub(crate) struct SyncOutcome {
     pub(crate) updated: usize,
     pub(crate) unchanged: usize,
     pub(crate) failed: usize,
+    /// Documents whose stored redaction policy was replayed over the
+    /// re-derived content. A subset of `updated`, tallied separately
+    /// because it answers a different question.
+    pub(crate) re_redacted: usize,
+    /// Findings a previous redaction individually skipped that the
+    /// replayed policy redacts again — a hand-picked skip refers to
+    /// content that has since moved, so it cannot be replayed.
+    pub(crate) reappeared_skips: usize,
 }
 
 impl SyncOutcome {
+    /// Artifacts seen, by disposition. The redaction counters are a
+    /// different axis and are deliberately not summed in.
     pub(crate) fn total(&self) -> usize {
         self.new + self.updated + self.unchanged + self.failed
     }
@@ -119,6 +133,7 @@ pub(crate) fn sync_bundle(
             &artifacts,
             &records,
             observer,
+            build_detectors,
         )?;
         out.push((artifact_type, outcome));
     }
@@ -178,6 +193,7 @@ fn sync_artifacts(
     artifacts: &[ArtifactRef],
     records: &BTreeMap<String, SyncRecord>,
     observer: &mut dyn SyncObserver,
+    detectors: DetectorFactory,
 ) -> Result<SyncOutcome> {
     let mut outcome = SyncOutcome::default();
     // Evaluate the stat gate once per artifact: the pass feeds both the
@@ -190,6 +206,7 @@ fn sync_artifacts(
     observer.begin(artifact_type, pending_total);
     let mut writes: BTreeMap<&'static str, BTreeMap<String, SyncRecord>> = BTreeMap::new();
     let mut unflushed = 0usize;
+    let mut detectors = DetectorCache::new(detectors);
     for (artifact, unchanged) in order {
         if unchanged {
             outcome.unchanged += 1;
@@ -210,8 +227,9 @@ fn sync_artifacts(
             .path
             .clone()
             .or_else(|| existing.and_then(|r| r.path.clone()));
-        match source.derive(artifact) {
-            Ok(derived) => {
+        let policy = existing.and_then(|r| r.redaction.as_ref());
+        match derive_replaying_redaction(source, artifact, policy, &mut detectors) {
+            Ok((derived, replay)) => {
                 // force: sync owns refresh semantics — a re-sync or a
                 // prior manual `p import` of the same session must not
                 // error on the existing cache entry.
@@ -227,8 +245,11 @@ fn sync_artifacts(
                         modified: artifact.modified,
                         size: artifact.size,
                         synced_at: Utc::now(),
+                        redaction: policy.cloned(),
                     },
                 );
+                outcome.re_redacted += replay.documents;
+                outcome.reappeared_skips += replay.reappeared_skips;
                 unflushed += 1;
                 if is_new {
                     outcome.new += 1;
@@ -252,23 +273,254 @@ fn sync_artifacts(
     Ok(outcome)
 }
 
+// ── redaction replay ───────────────────────────────────────────────
+
+/// How replay rebuilds the detectors a stored policy names. A parameter
+/// rather than a direct call so tests drive replay without the vendored
+/// ruleset.
+type DetectorFactory = fn(&[String]) -> Result<DetectorSet>;
+
+/// What one artifact's replay did, for the sync summary.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Replay {
+    documents: usize,
+    reappeared_skips: usize,
+}
+
+/// The detector registry replay resolves policy names against.
+///
+/// Returning `None` fails the artifact rather than replaying with a
+/// weaker detector set than the policy was written for, which would
+/// write back a document missing redactions it had.
+fn detector_named(name: &str) -> Option<Box<dyn toolpath_redact::Detector>> {
+    match name {
+        "internal" => Some(Box::new(toolpath_redact::internal::InternalDetector::new())),
+        _ => None,
+    }
+}
+
+fn build_detectors(names: &[String]) -> Result<DetectorSet> {
+    let mut set = DetectorSet::default();
+    for name in names {
+        let detector = detector_named(name).ok_or_else(|| {
+            anyhow!("no detector named {name:?}; cannot replay this document's redaction")
+        })?;
+        set.push(detector);
+    }
+    Ok(set)
+}
+
+/// One detector set per distinct name list per run. The built-in
+/// detector compiles a few hundred regexes on construction, and a sync
+/// typically replays one policy across many documents.
+struct DetectorCache {
+    build: DetectorFactory,
+    sets: BTreeMap<Vec<String>, DetectorSet>,
+}
+
+impl DetectorCache {
+    fn new(build: DetectorFactory) -> Self {
+        Self {
+            build,
+            sets: BTreeMap::new(),
+        }
+    }
+
+    fn get(&mut self, names: &[String]) -> Result<&DetectorSet> {
+        if !self.sets.contains_key(names) {
+            let set = (self.build)(names)?;
+            self.sets.insert(names.to_vec(), set);
+        }
+        Ok(&self.sets[names])
+    }
+}
+
+/// Derive an artifact, then replay the redaction policy its record
+/// carries.
+///
+/// `is_unchanged` never inspects the document, so a re-derive would
+/// clobber an in-place redaction. Replay the policy before writing.
+/// Either half failing fails the artifact, which leaves the previously
+/// redacted document in place — never an un-redacted one over it.
+fn derive_replaying_redaction(
+    source: &dyn ArtifactSource,
+    artifact: &ArtifactRef,
+    policy: Option<&RedactionPolicy>,
+    detectors: &mut DetectorCache,
+) -> Result<(DerivedDoc, Replay)> {
+    let mut derived = source.derive(artifact)?;
+    let Some(policy) = policy else {
+        return Ok((derived, Replay::default()));
+    };
+    let replay = replay_policy(&derived.cache_id, policy, &mut derived.doc, detectors)?;
+    Ok((derived, replay))
+}
+
+/// Re-redact `doc` under `policy`, counting what a rule-based policy
+/// cannot preserve.
+fn replay_policy(
+    cache_id: &str,
+    policy: &RedactionPolicy,
+    doc: &mut Graph,
+    detectors: &mut DetectorCache,
+) -> Result<Replay> {
+    let key = crate::cache::read_redact_key(&policy.key_id)?.ok_or_else(|| {
+        anyhow!(
+            "redaction key {} is missing; refusing to overwrite the redacted document \
+             with an un-redacted re-derive",
+            policy.key_id
+        )
+    })?;
+    let set = detectors.get(&policy.detectors)?;
+    let decisions = policy_decisions(policy)?;
+    let cfg = replay_config(policy, key);
+    let reappeared_skips = count_reappeared_skips(cache_id, set, &cfg, &decisions);
+
+    for path in doc.paths.iter_mut() {
+        let PathOrRef::Path(path) = path else {
+            continue;
+        };
+        let plan = plan_for(path, set, &cfg, &decisions)?;
+        toolpath_redact::apply(path, &plan, &cfg)?;
+    }
+    Ok(Replay {
+        documents: 1,
+        reappeared_skips,
+    })
+}
+
+fn plan_for(
+    path: &toolpath::v1::Path,
+    set: &DetectorSet,
+    cfg: &RedactConfig,
+    decisions: &[Decision],
+) -> Result<toolpath_redact::Plan> {
+    let mut plan = toolpath_redact::plan::generate_checked(
+        path, set, cfg,
+        // A sync runs unattended, so a detector that would send
+        // candidate material off the machine has nobody to approve it.
+        false,
+    )?;
+    toolpath_redact::plan::apply_decisions(&mut plan, decisions);
+    Ok(plan)
+}
+
+/// Findings the policy would redact that are still present in the
+/// document as it was last redacted: exactly the ones a previous run
+/// skipped by hand. Rule-based decisions replay, so anything the
+/// `reject` predicates cover is excluded here.
+///
+/// Informational only — a document that cannot be read or planned
+/// reports nothing rather than failing an otherwise good replay.
+fn count_reappeared_skips(
+    cache_id: &str,
+    set: &DetectorSet,
+    cfg: &RedactConfig,
+    decisions: &[Decision],
+) -> usize {
+    let Ok(file) = crate::cache::cache_path(cache_id) else {
+        return 0;
+    };
+    let Ok(json) = std::fs::read_to_string(&file) else {
+        return 0;
+    };
+    let Ok(previous) = Graph::from_json(&json) else {
+        return 0;
+    };
+    previous
+        .paths
+        .iter()
+        .filter_map(|p| match p {
+            PathOrRef::Path(path) => plan_for(path, set, cfg, decisions).ok(),
+            PathOrRef::Ref(_) => None,
+        })
+        .map(|plan| {
+            plan.findings
+                .iter()
+                .filter(|f| f.action == Action::Redact)
+                .count()
+        })
+        .sum()
+}
+
+/// The policy's predicates as decisions. `reject` lands last because
+/// [`toolpath_redact::plan::apply_decisions`] lets later decisions win,
+/// so an explicit skip survives a broader accept.
+fn policy_decisions(policy: &RedactionPolicy) -> Result<Vec<Decision>> {
+    let mut out = Vec::with_capacity(policy.accept.len() + policy.reject.len());
+    for (predicates, action) in [
+        (&policy.accept, Action::Redact),
+        (&policy.reject, Action::Skip),
+    ] {
+        for source in predicates {
+            out.push(Decision {
+                predicate: toolpath_redact::parse_predicate(source)?,
+                action,
+                transform: None,
+            });
+        }
+    }
+    Ok(out)
+}
+
+fn replay_config(policy: &RedactionPolicy, key: Vec<u8>) -> RedactConfig {
+    RedactConfig {
+        threshold: policy.threshold,
+        mode: policy.mode,
+        mode_for: policy.mode_for.clone(),
+        key,
+        now: Utc::now(),
+        // Dropping signatures and revealing values both need a human at
+        // the terminal; a signed document fails its replay instead, and
+        // keeps the redacted copy it already has.
+        drop_signatures: false,
+        reveal: false,
+    }
+}
+
+/// Store the policy `path p redact` applied to a cached document, so a
+/// later re-derive replays it. Reports whether any record pointed at
+/// `cache_id`: a document sync does not track (a file input, a github
+/// or pathbase import) has nowhere to keep one, and its redaction will
+/// not survive a re-derive because nothing re-derives it.
+// Called by `path p redact`; drop the allow once that dispatch lands.
+#[allow(dead_code)]
+pub(crate) fn record_redaction_policy(cache_id: &str, policy: &RedactionPolicy) -> Result<bool> {
+    let mut recorded = false;
+    update_manifest(|manifest| {
+        for records in manifest.values_mut() {
+            for rec in records.values_mut() {
+                if rec.cache_id.as_deref() == Some(cache_id) {
+                    rec.redaction = Some(policy.clone());
+                    recorded = true;
+                }
+            }
+        }
+    })?;
+    Ok(recorded)
+}
+
 /// Record an externally-derived cache write (`p import`, `share`) in
 /// the manifest, so sync doesn't re-derive what was just written.
 pub(crate) fn record_artifact(artifact: &ArtifactRef, cache_id: &str) -> Result<()> {
     update_manifest(|manifest| {
-        manifest
+        let records = manifest
             .entry(artifact.artifact_type.name().to_string())
-            .or_default()
-            .insert(
-                artifact.id.clone(),
-                SyncRecord {
-                    path: artifact.path.clone(),
-                    cache_id: Some(cache_id.to_string()),
-                    modified: artifact.modified,
-                    size: artifact.size,
-                    synced_at: Utc::now(),
-                },
-            );
+            .or_default();
+        // Re-importing a session must not drop the redaction policy
+        // guarding it; only `p cache rm` clears that.
+        let redaction = records.get(&artifact.id).and_then(|r| r.redaction.clone());
+        records.insert(
+            artifact.id.clone(),
+            SyncRecord {
+                path: artifact.path.clone(),
+                cache_id: Some(cache_id.to_string()),
+                modified: artifact.modified,
+                size: artifact.size,
+                synced_at: Utc::now(),
+                redaction,
+            },
+        );
     })
 }
 
@@ -326,6 +578,10 @@ pub(crate) fn evict_cache_id(cache_id: &str) -> Result<()> {
             for rec in records.values_mut() {
                 if rec.cache_id.as_deref() == Some(cache_id) {
                     rec.cache_id = None;
+                    // The key goes with the document, and a policy whose
+                    // key is gone can only fail every future sync — so
+                    // the explicit `rm` retires both together.
+                    rec.redaction = None;
                 }
             }
         }
@@ -464,6 +720,143 @@ mod tests {
         doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
     }
 
+    /// A detector named `literal:<prefix>`, so replay wiring is testable
+    /// without the vendored ruleset. Claims the whole alphanumeric run
+    /// starting at the prefix, so one name covers a family of keys the
+    /// way a real rule does.
+    struct LiteralDetector(String);
+
+    impl toolpath_redact::Detector for LiteralDetector {
+        fn id(&self) -> &'static str {
+            "literal"
+        }
+
+        fn detect(
+            &self,
+            c: &toolpath_redact::Candidate<'_>,
+        ) -> toolpath_redact::Result<Vec<toolpath_redact::Finding>> {
+            Ok(c.text
+                .match_indices(&self.0)
+                .map(|(start, m)| {
+                    let tail = &c.text[start + m.len()..];
+                    let run = tail
+                        .find(|ch: char| !ch.is_ascii_alphanumeric())
+                        .unwrap_or(tail.len());
+                    toolpath_redact::Finding {
+                        span: start..start + m.len() + run,
+                        rule: "literal".to_string(),
+                        score: 1.0,
+                        detector: "literal",
+                    }
+                })
+                .collect())
+        }
+    }
+
+    fn literal_detectors(names: &[String]) -> Result<DetectorSet> {
+        let mut set = DetectorSet::default();
+        for name in names {
+            let literal = name
+                .strip_prefix("literal:")
+                .ok_or_else(|| anyhow!("test detector names are literal:<text>, got {name:?}"))?;
+            set.push(Box::new(LiteralDetector(literal.to_string())));
+        }
+        Ok(set)
+    }
+
+    fn literal_policy(secret: &str, key_id: &str) -> RedactionPolicy {
+        policy_with(vec![format!("literal:{secret}")], key_id)
+    }
+
+    fn policy_with(detectors: Vec<String>, key_id: &str) -> RedactionPolicy {
+        RedactionPolicy {
+            detectors,
+            threshold: 0.8,
+            mode: toolpath_redact::Transform::Marker,
+            mode_for: Vec::new(),
+            accept: Vec::new(),
+            reject: Vec::new(),
+            key_id: key_id.to_string(),
+        }
+    }
+
+    /// Sync one type the way `sync_bundle` does, with the test detector
+    /// registry in place of the built-in one.
+    fn sync_claude(bundle: &HarnessBundle) -> SyncOutcome {
+        let source = sources::source_for(bundle, ArtifactType::Claude).unwrap();
+        let artifacts = source.enumerate();
+        let records = load_manifest()
+            .unwrap()
+            .get("claude")
+            .cloned()
+            .unwrap_or_default();
+        sync_artifacts(
+            source.as_ref(),
+            ArtifactType::Claude,
+            &artifacts,
+            &records,
+            &mut (),
+            literal_detectors,
+        )
+        .unwrap()
+    }
+
+    /// What `path p redact` leaves behind: a key, a redacted document,
+    /// and a policy on the artifact's manifest record. `hand` stands in
+    /// for the interactive picker, which can decide a finding the
+    /// policy cannot express.
+    fn redact_cached_with(
+        cache_id: &str,
+        policy: &RedactionPolicy,
+        detectors: DetectorFactory,
+        hand: impl Fn(&mut toolpath_redact::Plan),
+    ) {
+        let key = crate::cache::load_or_create_redact_key(&policy.key_id).unwrap();
+        let file = crate::cache::cache_path(cache_id).unwrap();
+        let mut doc = Graph::from_json(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let set = detectors(&policy.detectors).unwrap();
+        let decisions = policy_decisions(policy).unwrap();
+        let cfg = replay_config(policy, key);
+        for path in doc.paths.iter_mut() {
+            let PathOrRef::Path(path) = path else {
+                continue;
+            };
+            let mut plan = plan_for(path, &set, &cfg, &decisions).unwrap();
+            hand(&mut plan);
+            toolpath_redact::apply(path, &plan, &cfg).unwrap();
+        }
+        write_cached(cache_id, &doc, true).unwrap();
+        assert!(record_redaction_policy(cache_id, policy).unwrap());
+    }
+
+    fn redact_cached(cache_id: &str, policy: &RedactionPolicy) {
+        redact_cached_with(cache_id, policy, literal_detectors, |_| {});
+    }
+
+    fn append_turn(home: &Path, session: &str, text: &str) {
+        let file = home
+            .join(".claude/projects/-test-project")
+            .join(format!("{session}.jsonl"));
+        let mut body = std::fs::read_to_string(&file).unwrap();
+        body.push_str(&format!(
+            r#"{{"type":"user","uuid":"u-{text:.4}","timestamp":"2024-01-02T00:05:00Z","cwd":"/test/project","message":{{"role":"user","content":"{text}"}}}}"#
+        ));
+        body.push('\n');
+        std::fs::write(&file, body).unwrap();
+    }
+
+    /// The cache entry a synced claude session landed at.
+    fn cached_id(session: &str) -> String {
+        load_manifest().unwrap()["claude"][session]
+            .cache_id
+            .clone()
+            .expect("the session is materialized")
+    }
+
+    fn read_cached(cache_id: &str) -> String {
+        std::fs::read_to_string(crate::cache::cache_path(cache_id).unwrap()).unwrap()
+    }
+
     fn make_ref(artifact_type: ArtifactType, id: &str) -> ArtifactRef {
         ArtifactRef {
             artifact_type,
@@ -488,6 +881,7 @@ mod tests {
                     modified: Some("2024-01-02T00:00:01.123456789Z".parse().unwrap()),
                     size: Some(4096),
                     synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
+                    redaction: Some(literal_policy("AKIA", "claude-p1")),
                 },
             );
             save_manifest(&manifest).unwrap();
@@ -663,6 +1057,7 @@ mod tests {
                 &artifacts,
                 &BTreeMap::new(),
                 &mut (),
+                build_detectors,
             )
             .unwrap();
             assert_eq!((outcome.new, outcome.failed), (1, 1));
@@ -745,6 +1140,7 @@ mod tests {
                 &[artifact],
                 &records,
                 &mut (),
+                build_detectors,
             )
             .unwrap();
             assert_eq!((outcome.updated, outcome.unchanged), (1, 0));
@@ -901,6 +1297,235 @@ mod tests {
                 )
                 .is_none()
             );
+        });
+    }
+
+    #[test]
+    fn manifest_without_redaction_field_still_loads() {
+        let json = r#"{"claude":{"sess-1":{"cache_id":"claude-sess-1","synced_at":"2026-01-01T00:00:00Z"}}}"#;
+        assert!(serde_json::from_str::<Manifest>(json).is_ok());
+    }
+
+    #[test]
+    fn unknown_detector_refuses_replay() {
+        assert_eq!(
+            build_detectors(&["internal".to_string()])
+                .map(|set| set.ids())
+                .unwrap_or_default(),
+            vec!["internal"]
+        );
+        let err = build_detectors(&["not-a-detector".to_string()])
+            .err()
+            .expect("no detector is resolvable by that name");
+        assert!(err.to_string().contains("cannot replay"));
+    }
+
+    #[test]
+    fn import_preserves_the_redaction_policy() {
+        with_cfg(|_| {
+            let artifact = make_ref(ArtifactType::Claude, "sess-aaa");
+            record_artifact(&artifact, "claude-sess-aaa").unwrap();
+            record_redaction_policy(
+                "claude-sess-aaa",
+                &literal_policy("AKIA", "claude-sess-aaa"),
+            )
+            .unwrap();
+
+            // A re-import of the same session rewrites the record.
+            record_artifact(&artifact, "claude-sess-aaa").unwrap();
+            assert!(
+                load_manifest().unwrap()["claude"]["sess-aaa"]
+                    .redaction
+                    .is_some(),
+                "an import must not drop the policy guarding the document"
+            );
+        });
+    }
+
+    #[test]
+    fn eviction_retires_the_policy_with_the_document() {
+        with_cfg(|_| {
+            let artifact = make_ref(ArtifactType::Claude, "sess-aaa");
+            record_artifact(&artifact, "claude-sess-aaa").unwrap();
+            record_redaction_policy(
+                "claude-sess-aaa",
+                &literal_policy("AKIA", "claude-sess-aaa"),
+            )
+            .unwrap();
+
+            evict_cache_id("claude-sess-aaa").unwrap();
+            let rec = &load_manifest().unwrap()["claude"]["sess-aaa"];
+            assert!(rec.cache_id.is_none());
+            assert!(
+                rec.redaction.is_none(),
+                "a policy whose key `p cache rm` deleted would fail every future sync"
+            );
+        });
+    }
+
+    #[test]
+    fn record_redaction_policy_reports_untracked_documents() {
+        with_cfg(|_| {
+            assert!(
+                !record_redaction_policy("github-owner-repo-42", &literal_policy("AKIA", "x"))
+                    .unwrap()
+            );
+        });
+    }
+
+    #[test]
+    fn sync_fails_loudly_on_missing_key() {
+        with_cfg(|home| {
+            write_claude_session(
+                home,
+                "-test-project",
+                "sess-1",
+                "key AKIAIOSFODNN7REALKEY here",
+            );
+            let bundle = claude_bundle(home);
+            sync_claude(&bundle);
+            let cache_id = load_manifest().unwrap()["claude"]["sess-1"]
+                .cache_id
+                .clone()
+                .unwrap();
+            let policy = literal_policy("AKIAIOSFODNN7", &cache_id);
+            redact_cached(&cache_id, &policy);
+            let redacted = read_cached(&cache_id);
+
+            // The key is lost behind the CLI's back — an out-of-band
+            // delete, a restored config dir, a half-copied machine.
+            crate::cache::remove_redact_key(&policy.key_id).unwrap();
+            append_turn(home, "sess-1", "another turn");
+
+            let outcome = sync_claude(&bundle);
+            assert_eq!(
+                (outcome.updated, outcome.failed, outcome.re_redacted),
+                (0, 1, 0)
+            );
+            assert_eq!(
+                read_cached(&cache_id),
+                redacted,
+                "an un-redacted re-derive must never land on top of a redacted document"
+            );
+        });
+    }
+
+    #[test]
+    fn sync_skips_redacted_doc_when_source_unchanged() {
+        with_cfg(|home| {
+            write_claude_session(
+                home,
+                "-test-project",
+                "sess-1",
+                "key AKIAIOSFODNN7REALKEY here",
+            );
+            let bundle = claude_bundle(home);
+            sync_claude(&bundle);
+            let cache_id = load_manifest().unwrap()["claude"]["sess-1"]
+                .cache_id
+                .clone()
+                .unwrap();
+            redact_cached(&cache_id, &literal_policy("AKIAIOSFODNN7", &cache_id));
+            let redacted = read_cached(&cache_id);
+
+            let outcome = sync_claude(&bundle);
+            assert_eq!(
+                (outcome.unchanged, outcome.re_redacted),
+                (1, 0),
+                "an untouched source is not re-derived, so there is nothing to replay"
+            );
+            assert_eq!(read_cached(&cache_id), redacted);
+        });
+    }
+
+    #[test]
+    fn sync_reapplies_redaction_after_source_grows() {
+        with_cfg(|home| {
+            write_claude_session(
+                home,
+                "-test-project",
+                "sess-1",
+                "key AKIAIOSFODNN7REALKEY here",
+            );
+            let bundle = claude_bundle(home);
+            sync_claude(&bundle);
+            let cache_id = cached_id("sess-1");
+            redact_cached(&cache_id, &literal_policy("AKIAIOSFODNN7", &cache_id));
+
+            append_turn(home, "sess-1", "another turn with AKIAIOSFODNN7SECONDKEY");
+            let outcome = sync_claude(&bundle);
+            assert_eq!((outcome.updated, outcome.re_redacted), (1, 1));
+
+            let doc = read_cached(&cache_id);
+            assert!(doc.contains("another turn"), "new content must land");
+            assert!(
+                !doc.contains("AKIAIOSFODNN7REALKEY"),
+                "redaction must survive re-derive"
+            );
+            assert!(
+                !doc.contains("AKIAIOSFODNN7SECONDKEY"),
+                "new content must be redacted too"
+            );
+        });
+    }
+
+    #[test]
+    fn sync_reports_reappeared_skips() {
+        with_cfg(|home| {
+            write_claude_session(
+                home,
+                "-test-project",
+                "sess-1",
+                "key AKIAIOSFODNN7REALKEY here",
+            );
+            let bundle = claude_bundle(home);
+            sync_claude(&bundle);
+            append_turn(home, "sess-1", "and AKIAIOSFODNN7SECONDKEY too");
+            sync_claude(&bundle);
+
+            // The user redacted one of the two and skipped the other by
+            // hand — a decision no rule-based policy can express.
+            let cache_id = cached_id("sess-1");
+            let policy = literal_policy("AKIAIOSFODNN7", &cache_id);
+            redact_cached_with(&cache_id, &policy, literal_detectors, |plan| {
+                plan.findings.last_mut().unwrap().action = Action::Skip;
+            });
+            assert!(read_cached(&cache_id).contains("AKIAIOSFODNN7SECONDKEY"));
+
+            append_turn(home, "sess-1", "a third turn");
+            let outcome = sync_claude(&bundle);
+            assert_eq!((outcome.re_redacted, outcome.reappeared_skips), (1, 1));
+            assert!(
+                !read_cached(&cache_id).contains("AKIAIOSFODNN7SECONDKEY"),
+                "a skip that cannot be replayed fails closed: the finding comes back"
+            );
+        });
+    }
+
+    #[test]
+    fn sync_bundle_replays_the_builtin_detector() {
+        with_cfg(|home| {
+            write_claude_session(
+                home,
+                "-test-project",
+                "sess-1",
+                "aws access_key AKIAIOSFODNN7REALKEY",
+            );
+            let bundle = claude_bundle(home);
+            sync_bundle(&bundle, &[ArtifactType::Claude], &mut ()).unwrap();
+            let cache_id = cached_id("sess-1");
+            let policy = policy_with(vec!["internal".to_string()], &cache_id);
+            redact_cached_with(&cache_id, &policy, build_detectors, |_| {});
+            assert!(!read_cached(&cache_id).contains("AKIAIOSFODNN7REALKEY"));
+
+            append_turn(home, "sess-1", "and access_key AKIAZYTQRMLKNPVWXCDE");
+            let (_, outcome) = sync_bundle(&bundle, &[ArtifactType::Claude], &mut ()).unwrap()[0];
+            assert_eq!((outcome.updated, outcome.re_redacted), (1, 1));
+
+            let doc = read_cached(&cache_id);
+            assert!(doc.contains("and access_key"), "new content must land");
+            assert!(!doc.contains("AKIAIOSFODNN7REALKEY"));
+            assert!(!doc.contains("AKIAZYTQRMLKNPVWXCDE"));
         });
     }
 
