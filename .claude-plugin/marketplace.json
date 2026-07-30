@@ -10,7 +10,7 @@
     {
       "name": "path",
       "description": "Slash commands for the Toolpath path CLI: /path:share uploads an agent session to Pathbase, /path:query runs jaq queries over your local session cache. Installs the path binary globally on first use",
-      "version": "0.1.4",
+      "version": "0.2.0",
       "author": {
         "name": "Empathic"
       },
