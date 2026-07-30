@@ -35,7 +35,10 @@ struct RulesFile {
 #[derive(Deserialize)]
 struct RawRule {
     id: String,
-    regex: String,
+    /// Absent on the one rule (`pkcs12-file`) that matches a file's *path*
+    /// rather than its content - out of scope for a text detector, so
+    /// [`load_rules`] drops any rule missing it.
+    regex: Option<String>,
     entropy: Option<f64>,
     #[serde(default)]
     keywords: Vec<String>,
@@ -53,7 +56,20 @@ struct RawAllowlist {
 /// rejects a minority of gitleaks patterns written for Go's RE2 dialect.
 /// Confirmed by `every_vendored_rule_compiles_under_rust_regex` - see that
 /// test for the failure each id below hit.
-pub const EXCLUDED_RULE_IDS: &[(&str, &str)] = &[];
+pub const EXCLUDED_RULE_IDS: &[(&str, &str)] = &[
+    (
+        "generic-api-key",
+        "compiled form exceeds regex's 10 MiB size limit under Rust's (non-backtracking) engine",
+    ),
+    (
+        "pypi-upload-token",
+        "compiled form exceeds regex's 10 MiB size limit under Rust's (non-backtracking) engine",
+    ),
+    (
+        "vault-batch-token",
+        "compiled form exceeds regex's 10 MiB size limit under Rust's (non-backtracking) engine",
+    ),
+];
 
 /// Hand-written rules filling gaps the vendored ruleset leaves open for
 /// this crate's purposes: gitleaks matches a PEM block only with its full
@@ -95,17 +111,19 @@ pub fn load_rules() -> Vec<Rule> {
         .rules
         .into_iter()
         .filter(|r| !EXCLUDED_RULE_IDS.iter().any(|(id, _)| *id == r.id))
-        .map(|r| Rule {
-            id: r.id,
-            regex: r.regex,
-            entropy: r.entropy,
-            keywords: r.keywords,
-            allow: r
-                .allowlists
-                .iter()
-                .flat_map(|a| a.regexes.iter())
-                .filter_map(|re| regex::Regex::new(re).ok())
-                .collect(),
+        .filter_map(|r| {
+            Some(Rule {
+                id: r.id,
+                regex: r.regex?,
+                entropy: r.entropy,
+                keywords: r.keywords,
+                allow: r
+                    .allowlists
+                    .iter()
+                    .flat_map(|a| a.regexes.iter())
+                    .filter_map(|re| regex::Regex::new(re).ok())
+                    .collect(),
+            })
         })
         .collect();
     rules.extend(supplemental_rules());
@@ -119,7 +137,11 @@ mod tests {
     #[test]
     fn every_vendored_rule_compiles_under_rust_regex() {
         let rules = load_rules();
-        assert!(rules.len() >= 200, "expected the full ruleset, got {}", rules.len());
+        assert!(
+            rules.len() >= 200,
+            "expected the full ruleset, got {}",
+            rules.len()
+        );
         for r in &rules {
             regex::Regex::new(&r.regex)
                 .unwrap_or_else(|e| panic!("rule {} failed to compile: {e}", r.id));

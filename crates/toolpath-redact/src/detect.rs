@@ -95,6 +95,12 @@ impl DetectorSet {
 
     /// Run every detector and reconcile their output into one set of
     /// non-overlapping, applicable spans.
+    ///
+    /// ORDERING CONSTRAINT, and getting it wrong publishes a secret: overlap
+    /// resolution is score-blind on length, so a low-scoring container evicts
+    /// a high-scoring finding nested inside it. Threshold BEFORE this runs,
+    /// never after - thresholding the output lets a container that is about
+    /// to be discarded take the survivor down with it.
     pub fn detect_all(&self, c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
         let mut raw = Vec::new();
         for d in &self.0 {
@@ -134,10 +140,14 @@ fn normalise(text: &str, mut findings: Vec<Finding>) -> Vec<Finding> {
             .then(a.detector.cmp(b.detector))
     });
 
-    // Best-first, then keep whatever no winner has already claimed. Resolving
-    // clashes pairwise instead would lose a finding whose only conflict was
-    // itself evicted later: with A over B, B over C and A disjoint from C, C
-    // displaces B and A never comes back.
+    // Best-first: keep whatever no earlier winner has already claimed.
+    // Resolving clashes pairwise instead loses a finding whose only conflict
+    // was itself evicted later - with A overlapping B, B overlapping C, and A
+    // disjoint from C, C displaces B and A never comes back.
+    //
+    // Equal length and equal score break on leftmost, not on rule name: a
+    // rule-name tie-break would let an untrusted detector win contested bytes
+    // by naming its rule `aaa`.
     let mut out: Vec<Finding> = Vec::new();
     for f in findings {
         let claimed = out
@@ -313,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn three_way_overlap_keeps_the_end_a_loser_vacated() {
+    fn three_way_overlap_keeps_the_span_vacated_by_an_evicted_rival() {
         // A-B overlap, B-C overlap, A-C disjoint. C evicts B, which is the
         // only thing that ever contested A, so A must survive.
         let out = detect(
@@ -440,5 +450,51 @@ mod tests {
         assert_eq!(s.ids(), vec!["fixed"]);
         let out = s.detect_all(&cand("abcdefgh")).unwrap();
         assert_eq!(spans(&out), vec![(2, 5)]);
+    }
+
+    // `drops_mid_codepoint_spans` only ever exercises the `end` boundary
+    // check, because its span starts at 0. "é" occupies bytes 0..2, so 1 is
+    // an invalid start and 3 is a valid end.
+    #[test]
+    fn drops_span_starting_mid_codepoint() {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![f(1..3, "x", 0.9)])));
+        assert!(s.detect_all(&cand("é-tail")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn equal_length_equal_score_leftmost_wins() {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![
+            f(4..6, "a", 0.1),
+            f(3..5, "b", 0.1),
+        ])));
+        let out = s.detect_all(&cand("abcdefgh")).unwrap();
+        assert_eq!(spans(&out), vec![(3, 5)]);
+        assert_eq!(out[0].rule, "b");
+    }
+
+    #[test]
+    fn distinct_detectors_break_ties_on_detector_id() {
+        struct Alpha;
+        impl Detector for Alpha {
+            fn id(&self) -> &'static str {
+                "alpha"
+            }
+            fn detect(&self, _c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+                Ok(vec![Finding {
+                    span: 0..4,
+                    rule: "same".into(),
+                    score: 0.5,
+                    detector: "alpha",
+                }])
+            }
+        }
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![f(0..4, "same", 0.5)])));
+        s.push(Box::new(Alpha));
+        let out = s.detect_all(&cand("abcdefgh")).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].detector, "alpha");
     }
 }

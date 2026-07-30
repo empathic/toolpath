@@ -43,6 +43,10 @@ pub(crate) struct SyncRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) size: Option<u64>,
     pub(crate) synced_at: DateTime<Utc>,
+    /// Policy to replay after a re-derive. Rule-based only: individual
+    /// finding ids cannot be replayed against content that has moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) redaction: Option<RedactionPolicy>,
 }
 
 /// The sync manifest: artifact type (`"claude"`, `"codex"`, …) →
