@@ -95,7 +95,350 @@ impl DetectorSet {
 
     /// Run every detector and reconcile their output into one set of
     /// non-overlapping, applicable spans.
-    pub fn detect_all(&self, _c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
-        todo!("T1")
+    pub fn detect_all(&self, c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+        let mut raw = Vec::new();
+        for d in &self.0 {
+            if !d.prefilter(c.text) {
+                continue;
+            }
+            raw.extend(d.detect(c)?);
+        }
+        Ok(normalise(c.text, raw))
+    }
+}
+
+/// Drop what cannot be applied, then resolve overlaps.
+///
+/// Policy from Presidio: identical spans, higher score wins; nested, the
+/// container wins regardless of score. Every comparison ends in a total
+/// order over rule and detector id, so the result cannot depend on the order
+/// detectors were registered in or on any iteration order upstream.
+fn normalise(text: &str, mut findings: Vec<Finding>) -> Vec<Finding> {
+    findings.retain(|f| {
+        // A NaN score is not orderable, and a single non-comparable element
+        // makes the whole sort's outcome depend on input order.
+        !f.score.is_nan()
+            && f.span.start < f.span.end
+            && f.span.end <= text.len()
+            && text.is_char_boundary(f.span.start)
+            && text.is_char_boundary(f.span.end)
+    });
+
+    findings.sort_by(|a, b| {
+        let (a_len, b_len) = (a.span.end - a.span.start, b.span.end - b.span.start);
+        b_len
+            .cmp(&a_len)
+            .then(b.score.total_cmp(&a.score))
+            .then(a.span.start.cmp(&b.span.start))
+            .then(a.rule.cmp(&b.rule))
+            .then(a.detector.cmp(b.detector))
+    });
+
+    // Best-first, then keep whatever no winner has already claimed. Resolving
+    // clashes pairwise instead would lose a finding whose only conflict was
+    // itself evicted later: with A over B, B over C and A disjoint from C, C
+    // displaces B and A never comes back.
+    let mut out: Vec<Finding> = Vec::new();
+    for f in findings {
+        let claimed = out
+            .iter()
+            .any(|o| f.span.start < o.span.end && f.span.end > o.span.start);
+        if !claimed {
+            out.push(f);
+        }
+    }
+
+    out.sort_by_key(|f| f.span.start);
+    out
+}
+
+/// Canned findings, for tests exercising traversal or transform without
+/// depending on regex behaviour.
+pub struct FixedDetector(pub Vec<Finding>);
+
+impl Detector for FixedDetector {
+    fn id(&self) -> &'static str {
+        "fixed"
+    }
+
+    fn detect(&self, _c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+        Ok(self.0.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct HostileDetector(Vec<Finding>);
+    impl Detector for HostileDetector {
+        fn id(&self) -> &'static str {
+            "hostile"
+        }
+        fn detect(&self, _c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn cand(text: &str) -> Candidate<'_> {
+        Candidate {
+            text,
+            shape: FieldShape::Prose,
+            at: "/change/x/structural/extra/text",
+            ctx: Context {
+                change_type: "conversation.append",
+                tool_name: None,
+                actor: "human:t",
+                kind: None,
+            },
+        }
+    }
+
+    fn f(span: Range<usize>, rule: &str, score: f32) -> Finding {
+        Finding {
+            span,
+            rule: rule.into(),
+            score,
+            detector: "hostile",
+        }
+    }
+
+    #[test]
+    fn drops_out_of_range_spans() {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![f(0..999, "x", 0.9)])));
+        assert!(s.detect_all(&cand("short")).unwrap().is_empty());
+    }
+
+    // A reversed range is exactly the hostile input under test, so clippy's
+    // "this range is empty" lint is the wrong call here.
+    #[allow(clippy::reversed_empty_ranges)]
+    #[test]
+    fn drops_reversed_spans() {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![Finding {
+            span: 5..2,
+            rule: "x".into(),
+            score: 0.9,
+            detector: "hostile",
+        }])));
+        assert!(s.detect_all(&cand("abcdefgh")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn drops_mid_codepoint_spans() {
+        // "é" is two bytes; 0..1 splits it.
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![f(0..1, "x", 0.9)])));
+        assert!(s.detect_all(&cand("é-tail")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn identical_spans_higher_score_wins() {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![
+            f(0..4, "low", 0.4),
+            f(0..4, "high", 0.9),
+        ])));
+        let out = s.detect_all(&cand("abcdefgh")).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].rule, "high");
+    }
+
+    #[test]
+    fn nested_span_container_wins_regardless_of_score() {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![
+            f(2..4, "inner", 0.99),
+            f(0..8, "outer", 0.20),
+        ])));
+        let out = s.detect_all(&cand("abcdefgh")).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].rule, "outer");
+    }
+
+    #[test]
+    fn output_is_sorted_and_deterministic() {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![
+            f(6..8, "b", 0.9),
+            f(0..2, "a", 0.9),
+            f(3..5, "c", 0.9),
+        ])));
+        let a = s.detect_all(&cand("abcdefgh")).unwrap();
+        let b = s.detect_all(&cand("abcdefgh")).unwrap();
+        assert_eq!(a, b);
+        assert!(a.windows(2).all(|w| w[0].span.start <= w[1].span.start));
+    }
+
+    #[test]
+    fn prefilter_short_circuits_detect() {
+        struct NeverCalled;
+        impl Detector for NeverCalled {
+            fn id(&self) -> &'static str {
+                "never"
+            }
+            fn prefilter(&self, _t: &str) -> bool {
+                false
+            }
+            fn detect(&self, _c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+                panic!("detect() must not run when prefilter() is false")
+            }
+        }
+        let mut s = DetectorSet::default();
+        s.push(Box::new(NeverCalled));
+        assert!(s.detect_all(&cand("anything")).unwrap().is_empty());
+    }
+
+    const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz";
+
+    fn spans(out: &[Finding]) -> Vec<(usize, usize)> {
+        out.iter().map(|f| (f.span.start, f.span.end)).collect()
+    }
+
+    fn rules(out: &[Finding]) -> Vec<&str> {
+        out.iter().map(|f| f.rule.as_str()).collect()
+    }
+
+    fn detect(text: &str, findings: Vec<Finding>) -> Vec<Finding> {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(findings)));
+        s.detect_all(&cand(text)).unwrap()
+    }
+
+    #[test]
+    fn adjacent_spans_both_survive() {
+        let out = detect("abcdefgh", vec![f(0..4, "a", 0.9), f(4..8, "b", 0.9)]);
+        assert_eq!(spans(&out), vec![(0, 4), (4, 8)]);
+    }
+
+    #[test]
+    fn three_way_overlap_keeps_the_end_a_loser_vacated() {
+        // A-B overlap, B-C overlap, A-C disjoint. C evicts B, which is the
+        // only thing that ever contested A, so A must survive.
+        let out = detect(
+            ALPHABET,
+            vec![f(0..5, "a", 0.5), f(4..9, "b", 0.9), f(8..20, "c", 0.5)],
+        );
+        assert_eq!(spans(&out), vec![(0, 5), (8, 20)]);
+        assert_eq!(rules(&out), vec!["a", "c"]);
+    }
+
+    #[test]
+    fn three_way_overlap_through_one_container() {
+        let out = detect(
+            ALPHABET,
+            vec![f(0..4, "a", 0.9), f(2..12, "b", 0.1), f(10..14, "c", 0.9)],
+        );
+        assert_eq!(spans(&out), vec![(2, 12)]);
+    }
+
+    #[test]
+    fn empty_text_drops_everything() {
+        assert!(detect("", vec![f(0..0, "a", 0.9), f(0..1, "b", 0.9)]).is_empty());
+    }
+
+    #[test]
+    fn span_covering_whole_text_survives() {
+        let out = detect("abcdefgh", vec![f(0..8, "a", 0.9)]);
+        assert_eq!(spans(&out), vec![(0, 8)]);
+    }
+
+    #[test]
+    fn drops_zero_length_spans() {
+        assert!(detect("abcdefgh", vec![f(3..3, "a", 0.9)]).is_empty());
+    }
+
+    #[test]
+    fn drops_nan_scores() {
+        assert!(detect("abcdefgh", vec![f(0..4, "a", f32::NAN)]).is_empty());
+    }
+
+    #[test]
+    fn multibyte_span_on_char_boundaries_survives() {
+        // "héllo": h=0, é=1..3, l=3, l=4, o=5.
+        let out = detect("héllo", vec![f(1..3, "a", 0.9), f(3..6, "b", 0.9)]);
+        assert_eq!(spans(&out), vec![(1, 3), (3, 6)]);
+    }
+
+    #[test]
+    fn detector_error_propagates() {
+        struct Failing;
+        impl Detector for Failing {
+            fn id(&self) -> &'static str {
+                "failing"
+            }
+            fn detect(&self, _c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+                Err(crate::RedactError::BadPointer("boom".into()))
+            }
+        }
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(vec![f(0..4, "a", 0.9)])));
+        s.push(Box::new(Failing));
+        assert!(s.detect_all(&cand("abcdefgh")).is_err());
+    }
+
+    #[test]
+    fn identical_spans_equal_score_break_on_rule() {
+        let out = detect(
+            "abcdefgh",
+            vec![f(0..4, "zeta", 0.5), f(0..4, "alpha", 0.5)],
+        );
+        assert_eq!(rules(&out), vec!["alpha"]);
+    }
+
+    #[test]
+    fn result_is_independent_of_detector_order() {
+        let all = vec![
+            f(0..5, "a", 0.5),
+            f(4..9, "b", 0.9),
+            f(8..20, "c", 0.5),
+            f(2..6, "d", 0.5),
+            f(19..26, "e", 0.7),
+        ];
+        let expected = detect(ALPHABET, all.clone());
+
+        let mut reversed = all.clone();
+        reversed.reverse();
+        assert_eq!(detect(ALPHABET, reversed), expected);
+
+        let mut split = DetectorSet::default();
+        split.push(Box::new(HostileDetector(all[3..].to_vec())));
+        split.push(Box::new(HostileDetector(all[..3].to_vec())));
+        assert_eq!(split.detect_all(&cand(ALPHABET)).unwrap(), expected);
+    }
+
+    #[allow(clippy::reversed_empty_ranges)]
+    #[test]
+    fn output_spans_never_overlap() {
+        let out = detect(
+            ALPHABET,
+            vec![
+                f(0..3, "a", 0.1),
+                f(1..9, "b", 0.2),
+                f(2..4, "c", 0.9),
+                f(8..12, "d", 0.5),
+                f(11..11, "e", 0.5),
+                f(12..26, "g", 0.4),
+                f(25..99, "h", 0.9),
+                f(3..2, "i", 0.9),
+            ],
+        );
+        assert!(out.windows(2).all(|w| w[0].span.end <= w[1].span.start));
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn fixed_detector_reports_its_findings() {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(FixedDetector(vec![Finding {
+            span: 2..5,
+            rule: "canned".into(),
+            score: 1.0,
+            detector: "fixed",
+        }])));
+        assert_eq!(s.ids(), vec!["fixed"]);
+        let out = s.detect_all(&cand("abcdefgh")).unwrap();
+        assert_eq!(spans(&out), vec![(2, 5)]);
     }
 }

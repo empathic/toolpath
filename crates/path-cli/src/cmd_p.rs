@@ -91,6 +91,11 @@ pub enum PCommand {
         #[command(subcommand)]
         op: crate::cmd_p_query::PQueryOp,
     },
+    /// Remove credentials from a Toolpath document via a reviewable plan-then-apply flow
+    Redact {
+        #[command(flatten)]
+        args: crate::cmd_redact::RedactArgs,
+    },
 }
 
 pub fn run(command: PCommand, pretty: bool) -> Result<()> {
@@ -111,5 +116,6 @@ pub fn run(command: PCommand, pretty: bool) -> Result<()> {
         PCommand::Incept { target } => crate::cmd_incept::run(target),
         PCommand::Track { op } => crate::cmd_track::run(op, pretty),
         PCommand::Query { op } => crate::cmd_p_query::run(op, pretty),
+        PCommand::Redact { args } => crate::cmd_redact::run(args),
     }
 }

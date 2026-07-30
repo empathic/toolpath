@@ -49,5 +49,8 @@ A detector that would send candidate material off the machine reports
 
 The built-in detector compiles its rules from a vendored copy of the
 [gitleaks](https://github.com/gitleaks/gitleaks) configuration, used
-under the MIT license. See `src/internal/gitleaks.toml` for the upstream
-commit this copy was taken from.
+under the MIT license.
+
+<!-- upstream commit: TBD -->
+
+See `src/internal/gitleaks.toml` for attribution and version details.

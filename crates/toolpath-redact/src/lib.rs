@@ -9,8 +9,12 @@ pub mod surface;
 pub mod transform;
 
 pub use apply::apply;
-pub use detect::{Candidate, Context, Detector, DetectorSet, Egress, FieldShape, Finding};
-pub use plan::{Action, Plan, PlanFinding, RedactionPolicy};
+pub use detect::{
+    Candidate, Context, Detector, DetectorSet, Egress, FieldShape, Finding, FixedDetector,
+};
+pub use plan::{
+    Action, Cmp, Decision, Plan, PlanFinding, Predicate, RedactionPolicy, parse_predicate,
+};
 pub use surface::{Surface, surfaces};
 pub use transform::{Fingerprint, Transform};
 
@@ -28,6 +32,10 @@ pub enum RedactError {
     BadPointer(String),
     #[error("bad predicate: {0}")]
     BadPredicate(String),
+    /// A third-party detector's own failure. Carries a message rather than
+    /// a source error so the crate can keep advertising no filesystem.
+    #[error("detector {0} failed: {1}")]
+    DetectorFailed(String, String),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }

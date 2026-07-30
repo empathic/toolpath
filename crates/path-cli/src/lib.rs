@@ -17,6 +17,7 @@ mod cmd_p_query;
 mod cmd_pathbase;
 mod cmd_project;
 mod cmd_query;
+mod cmd_redact;
 mod cmd_render;
 #[cfg(not(target_os = "emscripten"))]
 pub mod cmd_resume;
