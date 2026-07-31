@@ -17,6 +17,9 @@ mod cmd_p_query;
 mod cmd_pathbase;
 mod cmd_project;
 mod cmd_query;
+// Resolves detectors and records the replay policy through `sync`,
+// which is itself off for this target.
+#[cfg(not(target_os = "emscripten"))]
 mod cmd_redact;
 mod cmd_render;
 #[cfg(not(target_os = "emscripten"))]
