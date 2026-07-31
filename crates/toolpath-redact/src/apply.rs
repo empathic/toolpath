@@ -1,6 +1,6 @@
 //! Rewriting a document from an approved plan.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::{Value, json};
 
@@ -26,7 +26,14 @@ pub fn apply(
     plan: &Plan,
     cfg: &RedactConfig,
 ) -> Result<RedactReport> {
-    crate::plan::verify(plan, path)?;
+    // An unkeyed `fp` is a truncated SHA-256 of the credential, which a
+    // dictionary attack reverses (EDPB 01/2025 para 88). Refused before any
+    // write, so a caller that forgot the key still holds its document.
+    if cfg.key.is_empty() {
+        return Err(RedactError::EmptyKey);
+    }
+
+    crate::plan::verify(plan, path, &cfg.key)?;
 
     let mut report = RedactReport {
         surfaces_scanned: plan.surfaces.len(),
@@ -43,19 +50,45 @@ pub fn apply(
         return Ok(report);
     }
 
-    report.signatures_dropped = guard_signatures(path, cfg)?;
+    let touched = touched_steps(plan);
+    report.steps_touched = touched.len();
+
+    // Every write below lands in a scratch clone, and the caller's document
+    // is replaced only once the whole plan has applied: an error part-way
+    // through must not leave a half-redacted document behind.
+    let mut work = path.clone();
+    report.signatures_dropped = guard_signatures(&mut work, &touched, cfg)?;
 
     let mut records: BTreeMap<String, BTreeMap<RecordKey, usize>> = BTreeMap::new();
-    let mut touched: BTreeSet<&str> = BTreeSet::new();
+    let mut renames: Renames = HashMap::new();
     {
-        let mut cursor = crate::surface::SurfaceCursor { path: &mut *path };
+        let mut cursor = crate::surface::SurfaceCursor { path: &mut work };
         for ((step, at), group) in group_by_field(plan) {
             let Some(text) = cursor.read(step, at) else {
-                return Err(RedactError::BadPointer(format!("{step}{at}")));
+                return Err(RedactError::BadPointer(format!("{at} on step {step:?}")));
             };
 
+            // Both span guards are preconditions on the whole group, so they
+            // run before the first edit is built: `apply_spans_desc` silently
+            // drops a span an earlier splice invalidated, and by then the
+            // report has already counted a replacement that will not happen.
+            for f in &group {
+                // A zero-width span splices a marker into text that holds no
+                // secret, and an inverted one would panic the slice below; a
+                // plan is hand-editable, so neither can be assumed away. This
+                // also makes the spans orderable for the overlap check.
+                if f.span.0 >= f.span.1 {
+                    return Err(RedactError::PlanMismatch(format!(
+                        "{}: span {}..{} is empty or inverted",
+                        f.id, f.span.0, f.span.1
+                    )));
+                }
+            }
+            reject_overlaps(&group)?;
+
             let mut edits = Vec::with_capacity(group.len());
-            for f in group {
+            let mut entries = Vec::with_capacity(group.len());
+            for f in &group {
                 // A span landing mid-codepoint would panic the slice, so the
                 // bounds check has to happen here and not only in `verify`.
                 let value = text.get(f.span.0..f.span.1).ok_or_else(|| {
@@ -64,58 +97,177 @@ pub fn apply(
                 let fp = Fingerprint::new(&cfg.key, value);
                 let op = resolve_transform(cfg, &f.rule, f.transform);
                 edits.push((f.span.0..f.span.1, apply_transform(op, &f.rule, value, &fp)));
+                entries.push((f.rule.clone(), fp.0, op_name(op)));
 
                 *report.replaced.entry(f.rule.clone()).or_default() += 1;
-                *records
-                    .entry(step.to_string())
-                    .or_default()
+            }
+
+            let new_text = apply_spans_desc(&text, &mut edits);
+            // An artifact key is the identity of the thing that changed, and
+            // `surfaces` skips empty strings: emptying it would leave a key
+            // no later pass could address, named by a `/change/` pointer that
+            // routes nowhere.
+            if new_text.is_empty() && artifact_key_of(at).is_some_and(|(_, is_key)| is_key) {
+                return Err(RedactError::PlanMismatch(format!(
+                    "{at}: redacting the whole artifact key would leave it empty"
+                )));
+            }
+
+            let step_records = records.entry(step.to_string()).or_default();
+            for (rule, fp, op) in entries {
+                *step_records
                     .entry(RecordKey {
                         at: at.to_string(),
-                        rule: f.rule.clone(),
-                        fp: fp.0,
-                        op: op_name(op),
+                        rule,
+                        fp,
+                        op,
                     })
                     .or_default() += 1;
             }
-
-            cursor.write(step, at, &apply_spans_desc(&text, &mut edits))?;
-            touched.insert(step);
+            if let Some((token, true)) = artifact_key_of(at) {
+                renames
+                    .entry(step.to_string())
+                    .or_default()
+                    .insert(token.to_string(), crate::surface::ptr_escape(&new_text));
+            }
+            cursor.write(step, at, &new_text)?;
         }
     }
 
-    // Surfaces outside any step (`path.base`, `meta.vcs_remote`) carry the
-    // empty step id and have no step to be recorded on.
-    touched.remove("");
-    report.steps_touched = touched.len();
-
-    write_step_records(path, &records)?;
-    write_rollup(path, plan, cfg, &report)?;
+    // Surfaces outside any step carry the empty step id and belong to no step
+    // record; they are published on the rollup instead.
+    let path_level = records.remove("").unwrap_or_default();
+    write_step_records(&mut work, &records, &renames)?;
+    write_rollup(&mut work, plan, cfg, &report, &path_level)?;
+    *path = work;
     Ok(report)
+}
+
+/// Artifact keys this pass rewrote: step id -> escaped old key -> escaped new
+/// key. A key group is written after everything beneath it, so the pointers
+/// already recorded under the old key can only be re-pointed once the loop
+/// has finished.
+type Renames = HashMap<String, HashMap<String, String>>;
+
+/// `verify` bounds-checks each span on its own, so two spans that each land
+/// inside the field can still overlap. Splicing them right-to-left leaves
+/// part of the first credential in place while the report claims both were
+/// replaced, which is the same class of hand-edited-plan defect as an empty
+/// or inverted span and is refused in the same place.
+fn reject_overlaps(group: &[&PlanFinding]) -> Result<()> {
+    let mut ordered = group.to_vec();
+    ordered.sort_by_key(|f| f.span);
+    for pair in ordered.windows(2) {
+        if pair[0].span.1 > pair[1].span.0 {
+            return Err(RedactError::PlanMismatch(format!(
+                "{} and {} overlap",
+                pair[0].id, pair[1].id
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The steps the plan rewrites. Surfaces outside any step (`path.base`,
+/// `meta.vcs_remote`) carry the empty step id and belong to no step.
+fn touched_steps(plan: &Plan) -> BTreeSet<&str> {
+    plan.findings
+        .iter()
+        .filter(|f| f.action == Action::Redact && !f.step.is_empty())
+        .map(|f| f.step.as_str())
+        .collect()
 }
 
 /// Every edit to one string has to be spliced in a single right-to-left
 /// pass, so the findings are grouped by the field they land in; applying
 /// them one field-visit at a time would invalidate the offsets of the edits
 /// still pending.
-fn group_by_field(plan: &Plan) -> BTreeMap<(&str, &str), Vec<&PlanFinding>> {
-    let mut out: BTreeMap<(&str, &str), Vec<&PlanFinding>> = BTreeMap::new();
+///
+/// Groups come back with each artifact's own key last within that artifact,
+/// because writing the key renames the map entry and invalidates every
+/// pointer built from the old one. That constraint is a structural fact
+/// about the pointers themselves, so it is read off them rather than off
+/// `plan.surfaces`, which a hand-edited or stale plan need not agree with.
+fn group_by_field(plan: &Plan) -> Vec<((&str, &str), Vec<&PlanFinding>)> {
+    let mut groups: BTreeMap<(&str, &str), Vec<&PlanFinding>> = BTreeMap::new();
     for f in plan.findings.iter().filter(|f| f.action == Action::Redact) {
-        out.entry((f.step.as_str(), f.at.as_str()))
+        groups
+            .entry((f.step.as_str(), f.at.as_str()))
             .or_default()
             .push(f);
+    }
+
+    let mut out: Vec<((&str, &str), Vec<&PlanFinding>)> = groups.into_iter().collect();
+    out.sort_by(|(a, _), (b, _)| write_order(a).cmp(&write_order(b)));
+    out
+}
+
+/// A field's place in the write order: its step, the artifact it sits under,
+/// and last within that artifact whether it *is* that artifact's key.
+fn write_order<'a>(field: &(&'a str, &'a str)) -> (&'a str, Option<&'a str>, bool) {
+    let (step, at) = *field;
+    match artifact_key_of(at) {
+        Some((token, is_key)) => (step, Some(token), is_key),
+        None => (step, None, false),
+    }
+}
+
+/// The escaped artifact key a pointer is built from - the token right after
+/// `/change/` - paired with whether the pointer *is* that key rather than
+/// something beneath it. `None` for the document-level surfaces, which sit
+/// under no artifact. Mirrors `surface::route`'s `/change/` arm.
+fn artifact_key_of(at: &str) -> Option<(&str, bool)> {
+    let rest = at.strip_prefix("/change/")?;
+    let token = rest.split('/').next().unwrap_or(rest);
+    (!token.is_empty()).then_some((token, token.len() == rest.len()))
+}
+
+/// Re-point one recorded pointer at the artifact key this pass renamed it
+/// to. Recording the pointer a finding was found at would publish the old
+/// key - credential and all - in the record sitting next to the document the
+/// credential was just removed from, and dangle besides.
+fn renamed(at: &str, renames: &HashMap<String, String>) -> Option<String> {
+    let (token, _) = artifact_key_of(at)?;
+    let fresh = renames.get(token)?;
+    Some(format!(
+        "/change/{fresh}{}",
+        &at["/change/".len() + token.len()..]
+    ))
+}
+
+/// Apply `renames` to every entry of one step's record. Two entries can only
+/// collide here if two keys renamed alike, which `SurfaceCursor::write`
+/// already refuses; summing is the same merge the map does everywhere else.
+fn rewrite_pointers(
+    entries: BTreeMap<RecordKey, usize>,
+    renames: &HashMap<String, String>,
+) -> BTreeMap<RecordKey, usize> {
+    let mut out: BTreeMap<RecordKey, usize> = BTreeMap::new();
+    for (mut key, n) in entries {
+        if let Some(at) = renamed(&key.at, renames) {
+            key.at = at;
+        }
+        *out.entry(key).or_default() += n;
     }
     out
 }
 
-/// Strip every signature in the document, returning how many there were.
+/// Strip the signatures this pass invalidates, returning how many there
+/// were.
 ///
-/// A signature covers content the pass is about to change, so leaving one in
-/// place would publish a signature that no longer verifies.
-fn guard_signatures(path: &mut toolpath::v1::Path, cfg: &RedactConfig) -> Result<usize> {
+/// The path's own signature covers the whole document, and a touched step's
+/// covers content about to be rewritten. A step the plan never names keeps
+/// its signature: nothing under it changed, so it still verifies.
+fn guard_signatures(
+    path: &mut toolpath::v1::Path,
+    touched: &BTreeSet<&str>,
+    cfg: &RedactConfig,
+) -> Result<usize> {
     let total = path.meta.as_ref().map_or(0, |m| m.signatures.len())
         + path
             .steps
             .iter()
+            .filter(|s| touched.contains(s.step.id.as_str()))
             .filter_map(|s| s.meta.as_ref())
             .map(|m| m.signatures.len())
             .sum::<usize>();
@@ -128,7 +280,11 @@ fn guard_signatures(path: &mut toolpath::v1::Path, cfg: &RedactConfig) -> Result
     if let Some(m) = path.meta.as_mut() {
         m.signatures.clear();
     }
-    for s in &mut path.steps {
+    for s in path
+        .steps
+        .iter_mut()
+        .filter(|s| touched.contains(s.step.id.as_str()))
+    {
         if let Some(m) = s.meta.as_mut() {
             m.signatures.clear();
         }
@@ -159,11 +315,9 @@ fn op_name(t: Transform) -> String {
 fn write_step_records(
     path: &mut toolpath::v1::Path,
     records: &BTreeMap<String, BTreeMap<RecordKey, usize>>,
+    renames: &Renames,
 ) -> Result<()> {
     for (id, fresh) in records {
-        if id.is_empty() {
-            continue;
-        }
         let step = path
             .steps
             .iter_mut()
@@ -174,6 +328,11 @@ fn write_step_records(
         let mut merged = seed_from_existing(meta.extra.get(RECORD_KEY))?;
         for (k, n) in fresh {
             *merged.entry(k.clone()).or_default() += n;
+        }
+        // After merging, so an earlier pass's pointers are re-pointed too:
+        // they were built from the key this pass has just renamed.
+        if let Some(renames) = renames.get(id) {
+            merged = rewrite_pointers(merged, renames);
         }
         meta.extra.insert(RECORD_KEY.into(), record_value(&merged));
     }
@@ -228,18 +387,27 @@ fn check_version(v: &Value) -> Result<()> {
 }
 
 fn record_value(entries: &BTreeMap<RecordKey, usize>) -> Value {
-    let findings: Vec<Value> = entries
-        .iter()
-        .map(|(k, n)| json!({ "rule": k.rule, "at": k.at, "n": n, "fp": k.fp, "op": k.op }))
-        .collect();
-    json!({ "v": RECORD_V, "findings": findings })
+    json!({ "v": RECORD_V, "findings": record_entries(entries) })
 }
 
+fn record_entries(entries: &BTreeMap<RecordKey, usize>) -> Vec<Value> {
+    entries
+        .iter()
+        .map(|(k, n)| json!({ "rule": k.rule, "at": k.at, "n": n, "fp": k.fp, "op": k.op }))
+        .collect()
+}
+
+/// The document-level rollup: what the whole document has had done to it,
+/// across every pass. One accumulation policy throughout - counts sum, name
+/// lists union, finding entries merge by identity - with a single exception,
+/// `flagged`, which names findings still sitting in the document and is
+/// therefore this pass's tally rather than a running total.
 fn write_rollup(
     path: &mut toolpath::v1::Path,
     plan: &Plan,
     cfg: &RedactConfig,
     report: &RedactReport,
+    path_level: &BTreeMap<RecordKey, usize>,
 ) -> Result<()> {
     let previous = path
         .meta
@@ -262,9 +430,19 @@ fn write_rollup(
         })
         .count();
 
-    let replaced = merge_counts(previous.as_ref(), "replaced", &report.replaced);
+    let replaced = merge_counts(previous.as_ref(), "replaced", &report.replaced)?;
     let signatures_dropped =
-        previous_u64(previous.as_ref(), "signatures_dropped") + report.signatures_dropped as u64;
+        previous_u64(previous.as_ref(), "signatures_dropped")? + report.signatures_dropped as u64;
+    let detectors = merge_names(previous.as_ref(), "detectors", &plan.detectors)?;
+
+    // `path.base` and `meta.vcs_remote` sit under no step, so no step record
+    // can name them - and they are exactly where a URI-embedded credential
+    // lives. Without this the pass would leave no `at`, `fp` or `op` for
+    // them at all.
+    let mut findings = seed_from_existing(previous.as_ref())?;
+    for (k, n) in path_level {
+        *findings.entry(k.clone()).or_default() += n;
+    }
 
     let meta = path.meta.get_or_insert_with(Default::default);
     meta.extra.insert(
@@ -273,44 +451,87 @@ fn write_rollup(
             "v": RECORD_V,
             "at": cfg.now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             "tool": concat!("toolpath-redact/", env!("CARGO_PKG_VERSION")),
-            "detectors": plan.detectors,
-            "mode": cfg.mode,
+            "detectors": detectors,
+            // No `mode`: a rollup spanning two passes could only ever name
+            // one of them, and every finding's own `op` already records
+            // exactly what it got.
             "steps_touched": steps_touched,
             "replaced": replaced,
-            // `flagged` names findings still sitting in the document, so it is
-            // this pass's tally and not a running total.
             "flagged": report.flagged,
             "signatures_dropped": signatures_dropped,
+            "findings": record_entries(&findings),
         }),
     );
     Ok(())
 }
 
+/// The three readers below share one rule, the same one `seed_from_existing`
+/// follows: a field the previous rollup never carried starts from nothing,
+/// but a field it carries in a shape this cannot read is a corrupt record,
+/// not a zero. Silently discarding it would make a second pass under-report
+/// what the first one did.
 fn merge_counts(
     previous: Option<&Value>,
     field: &str,
     fresh: &BTreeMap<String, usize>,
-) -> BTreeMap<String, u64> {
-    let mut out: BTreeMap<String, u64> = previous
-        .and_then(|p| p.get(field))
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, v)| v.as_u64().map(|n| (k.clone(), n)))
-                .collect()
-        })
-        .unwrap_or_default();
+) -> Result<BTreeMap<String, u64>> {
+    let mut out: BTreeMap<String, u64> = match previous.and_then(|p| p.get(field)) {
+        None => BTreeMap::new(),
+        Some(Value::Object(m)) => m
+            .iter()
+            .map(|(k, v)| {
+                v.as_u64().map(|n| (k.clone(), n)).ok_or_else(|| {
+                    RedactError::PlanMismatch(format!(
+                        "redaction record {field}.{k} is not a count"
+                    ))
+                })
+            })
+            .collect::<Result<_>>()?,
+        Some(_) => {
+            return Err(RedactError::PlanMismatch(format!(
+                "redaction record {field} is not an object"
+            )));
+        }
+    };
     for (k, n) in fresh {
         *out.entry(k.clone()).or_default() += *n as u64;
     }
-    out
+    Ok(out)
 }
 
-fn previous_u64(previous: Option<&Value>, field: &str) -> u64 {
-    previous
-        .and_then(|p| p.get(field))
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
+/// A union, so the rollup names every detector that has ever run over this
+/// document rather than only the last one's. Sorted, because a union has no
+/// inherent order to preserve.
+fn merge_names(previous: Option<&Value>, field: &str, fresh: &[String]) -> Result<Vec<String>> {
+    let mut out: BTreeSet<String> = match previous.and_then(|p| p.get(field)) {
+        None => BTreeSet::new(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| {
+                v.as_str().map(str::to_owned).ok_or_else(|| {
+                    RedactError::PlanMismatch(format!(
+                        "redaction record {field} holds a non-string"
+                    ))
+                })
+            })
+            .collect::<Result<_>>()?,
+        Some(_) => {
+            return Err(RedactError::PlanMismatch(format!(
+                "redaction record {field} is not an array"
+            )));
+        }
+    };
+    out.extend(fresh.iter().cloned());
+    Ok(out.into_iter().collect())
+}
+
+fn previous_u64(previous: Option<&Value>, field: &str) -> Result<u64> {
+    match previous.and_then(|p| p.get(field)) {
+        None => Ok(0),
+        Some(v) => v.as_u64().ok_or_else(|| {
+            RedactError::PlanMismatch(format!("redaction record {field} is not a count"))
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -347,20 +568,42 @@ mod tests {
     //
     // `plan_for` re-detects against whatever the document currently holds;
     // hard-coded spans would reduce the idempotence test to "the same span
-    // was redacted twice". Both rules match a self-delimiting prefixed
-    // format, which is what keeps a marker, mask, hash or partial output from
-    // being mistaken for a fresh secret on the second pass.
+    // was redacted twice".
 
     static AWS_RE: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"AKIA[0-9A-Z]{16}").unwrap());
     static GH_RE: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap());
 
+    /// A URI password: delimited by what surrounds it rather than by a prefix
+    /// of its own, so a transform's output can look like a fresh credential
+    /// here. The two rules above cannot - no output of `apply` starts `AKIA`
+    /// or `ghp_` - which is why an idempotence test built only on them cannot
+    /// fail whatever `apply` does. Group 1 is the secret, as in `internal`.
+    static URI_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"://[^:/@]+:([^@]+)@").unwrap());
+
+    /// What this crate's own output looks like. Mirrors `internal::marker_re`,
+    /// and for the same reason: without it a second pass redacts the first
+    /// pass's marker. `Hash` is deliberately not in it - a bare digest is
+    /// indistinguishable from a fresh secret (`hash_re_redacts_its_own_output`).
+    static MARKER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\[REDACTED:[^\]\n]*\]|\u{2588}+|\S{1,8}\u{2026}\S{1,8}").unwrap()
+    });
+
     fn mini_scan(text: &str) -> Vec<(Range<usize>, &'static str)> {
+        let markers: Vec<Range<usize>> = MARKER_RE.find_iter(text).map(|m| m.range()).collect();
         let mut out: Vec<(Range<usize>, &'static str)> = AWS_RE
             .find_iter(text)
             .map(|m| (m.range(), "aws-access-key-id"))
             .chain(GH_RE.find_iter(text).map(|m| (m.range(), "github-pat")))
+            .chain(URI_RE.captures_iter(text).map(|c| {
+                (
+                    c.get(1).expect("group 1 always participates").range(),
+                    "uri-credential",
+                )
+            }))
+            .filter(|(r, _)| !markers.iter().any(|m| r.start < m.end && r.end > m.start))
             .collect();
         out.sort_by_key(|(r, _)| r.start);
         out
@@ -402,13 +645,23 @@ mod tests {
             .collect()
     }
 
-    fn finding(s: &Surface, span: Range<usize>, rule: &str, action: Action) -> PlanFinding {
+    /// `text` is the field the span indexes into: `verify` recomputes each
+    /// fingerprint from the document, so a plan built with a placeholder is
+    /// refused before `apply` does anything.
+    fn finding(
+        s: &Surface,
+        text: &str,
+        span: Range<usize>,
+        rule: &str,
+        action: Action,
+    ) -> PlanFinding {
         PlanFinding {
             id: String::new(),
             step: s.step.clone(),
             at: s.at.clone(),
             rule: rule.into(),
             span: (span.start, span.end),
+            fingerprint: crate::transform::Fingerprint::new(&cfg().key, &text[span]).0,
             score: 0.99,
             detector: "fixed".into(),
             shape: s.shape,
@@ -424,7 +677,7 @@ mod tests {
             .flat_map(|(s, text)| {
                 mini_scan(text)
                     .into_iter()
-                    .map(move |(span, rule)| finding(s, span, rule, action))
+                    .map(move |(span, rule)| finding(s, text, span, rule, action))
             })
             .collect()
     }
@@ -571,16 +824,54 @@ mod tests {
         doc(vec![step])
     }
 
-    fn fixture_signed() -> Path {
-        let mut p = fixture_with_secret(AWS_KEY);
-        p.meta.as_mut().unwrap().signatures = vec![Signature {
+    /// `scope` is one of the base schema's five (`author|reviewer|witness|
+    /// ci|release`); a made-up scope would make every document this fixture
+    /// produces invalid for reasons unrelated to redaction.
+    fn signature() -> Signature {
+        Signature {
             signer: "human:alex".into(),
             key: "ssh:SHA256:abc".into(),
-            scope: "path".into(),
+            scope: "author".into(),
             sig: "base64sig".into(),
             timestamp: None,
-        }];
+        }
+    }
+
+    fn fixture_signed() -> Path {
+        let mut p = fixture_with_secret(AWS_KEY);
+        p.meta.as_mut().unwrap().signatures = vec![signature()];
         p
+    }
+
+    fn sign_step(path: &mut Path, id: &str) {
+        let step = path.steps.iter_mut().find(|s| s.step.id == id).unwrap();
+        step.meta.get_or_insert_with(Default::default).signatures = vec![signature()];
+    }
+
+    /// The credential sits in the artifact key itself, so redacting it
+    /// renames the map entry every pointer beneath it is built from.
+    fn fixture_with_secret_in_the_artifact_key(secret: &str, extra: Value) -> Path {
+        let mut step = append_step("turn-0f3a", extra);
+        let change = step.change.remove("claude://sess-abc").unwrap();
+        step.change
+            .insert(format!("claude://sess-{secret}"), change);
+        doc(vec![step])
+    }
+
+    fn fixture_with_secret_in_vcs_remote(secret: &str) -> Path {
+        let mut d = doc(vec![append_step("turn-0f3a", json!({ "text": "clean" }))]);
+        d.meta.as_mut().unwrap().extra.insert(
+            "vcs_remote".into(),
+            json!(format!("https://{secret}@github.com/o/r.git")),
+        );
+        d
+    }
+
+    fn fixture_with_uri_credential() -> Path {
+        doc(vec![append_step(
+            "turn-0f3a",
+            json!({ "text": "DB_PASSWORD_URL=postgres://svc:h0rr1bl3pass@db.internal:5432/prod" }),
+        )])
     }
 
     // ── Inspection helpers ──────────────────────────────────────────────
@@ -684,26 +975,74 @@ mod tests {
 
     #[test]
     fn idempotent_across_all_transforms() {
+        // Driven by `mini_scan`'s URI rule, the one whose secret is delimited
+        // by its surroundings: a rule keyed off a fixed prefix could never see
+        // a transform's output as a fresh credential, so a test built on those
+        // alone cannot fail whatever `apply` does. What keeps these four
+        // stable is that the scan recognises its own markers - `Hash` leaves
+        // nothing to recognise and has its own test below.
         for mode in [
             Transform::Marker,
             Transform::Remove,
-            Transform::Hash,
             Transform::Mask,
             Transform::Partial,
         ] {
             let cfg = RedactConfig { mode, ..cfg() };
-            let mut once = fixture_with_secrets();
+            let mut once = fixture_with_uri_credential();
             let plan = plan_for(&once);
-            apply(&mut once, &plan, &cfg).unwrap();
+            let report = apply(&mut once, &plan, &cfg).unwrap();
+            assert!(
+                !report.replaced.is_empty(),
+                "{mode:?}: nothing was redacted, the test proves nothing"
+            );
+
             let mut twice = once.clone();
             let plan = plan_for(&twice);
             apply(&mut twice, &plan, &cfg).unwrap();
+
             assert_eq!(
                 serde_json::to_string(&once).unwrap(),
                 serde_json::to_string(&twice).unwrap(),
                 "{mode:?} is not idempotent"
             );
         }
+    }
+
+    #[test]
+    fn hash_re_redacts_its_own_output() {
+        // `Hash` emits a bare digest, which no scan can tell from a fresh
+        // credential, so the next pass redacts the digest and the record grows
+        // an entry under a rotated `fp`. A known design gap. The two things
+        // that must hold either way are asserted rather than the inequality:
+        // the credential is still gone, and the growth is what marks the gap
+        // as open.
+        const PASSWORD: &str = "h0rr1bl3pass";
+        let cfg = RedactConfig {
+            mode: Transform::Hash,
+            ..cfg()
+        };
+
+        let mut doc = fixture_with_uri_credential();
+        let plan = plan_for(&doc);
+        apply(&mut doc, &plan, &cfg).unwrap();
+        let once = entry_count(record_of(&doc, "turn-0f3a"));
+
+        let plan = plan_for(&doc);
+        apply(&mut doc, &plan, &cfg).unwrap();
+        let twice = entry_count(record_of(&doc, "turn-0f3a"));
+
+        assert_no_substring(&serde_json::to_string(&doc).unwrap(), PASSWORD, "hash");
+        assert!(
+            twice > once,
+            "the digest was not re-redacted: the gap has closed, retire this test ({once} -> {twice})"
+        );
+    }
+
+    fn entry_count(record: &Value) -> usize {
+        record["findings"]
+            .as_array()
+            .expect("a record always carries a findings array")
+            .len()
     }
 
     #[test]
@@ -737,18 +1076,188 @@ mod tests {
 
     #[test]
     fn audit_record_carries_no_value_substring_or_length() {
-        let secret = "AKIAIOSFODNN7REALKEY";
-        let mut doc = fixture_with_secret(secret);
-        let plan = plan_for(&doc);
-        apply(&mut doc, &plan, &cfg()).unwrap();
-        let rec = serde_json::to_string(record_of(&doc, "turn-0f3a")).unwrap();
-        assert!(!rec.contains(secret));
+        const SECRET: &str = "AKIAIOSFODNN7REALKEY";
+
+        // Three placements, because the record's `at` is a pointer and one of
+        // these builds that pointer out of the credential itself.
+        for (label, mut d, on_a_step) in [
+            ("prose", fixture_with_secret(SECRET), true),
+            (
+                "artifact key",
+                fixture_with_secret_in_the_artifact_key(SECRET, json!({ "text": "clean" })),
+                true,
+            ),
+            (
+                "vcs_remote",
+                fixture_with_secret_in_vcs_remote(SECRET),
+                false,
+            ),
+        ] {
+            let plan = plan_for(&d);
+            apply(&mut d, &plan, &cfg()).unwrap();
+
+            let rollup =
+                serde_json::to_string(&d.meta.as_ref().unwrap().extra[RECORD_KEY]).unwrap();
+            assert_no_substring(&rollup, SECRET, label);
+            if !on_a_step {
+                continue;
+            }
+            let rec = serde_json::to_string(record_of(&d, "turn-0f3a")).unwrap();
+            assert_no_substring(&rec, SECRET, label);
+            // Only the step record: the rollup carries a timestamp, whose year
+            // shares digits with any two-digit length.
+            assert!(!rec.contains(&SECRET.len().to_string()), "{label}: {rec}");
+        }
+    }
+
+    fn assert_no_substring(haystack: &str, secret: &str, label: &str) {
+        assert!(!haystack.contains(secret), "{label}: {haystack}");
         for w in 6..secret.len() {
             for s in secret.as_bytes().windows(w) {
-                assert!(!rec.contains(std::str::from_utf8(s).unwrap()));
+                let sub = std::str::from_utf8(s).unwrap();
+                assert!(!haystack.contains(sub), "{label} leaked {sub}: {haystack}");
             }
         }
-        assert!(!rec.contains(&secret.len().to_string()));
+    }
+
+    #[test]
+    fn redacting_an_artifact_key_and_a_field_beneath_it_both_land() {
+        // Writing the key renames the map entry, so every pointer under the
+        // old key stops resolving: the key has to go last.
+        let mut d = fixture_with_secret_in_the_artifact_key(
+            GH_PAT,
+            json!({ "text": format!("and {AWS_KEY} too") }),
+        );
+        let plan = plan_for(&d);
+        apply(&mut d, &plan, &cfg()).unwrap();
+
+        let key = d.steps[0].change.keys().next().unwrap();
+        assert_eq!(
+            key,
+            &format!("claude://sess-{}", marker(GH_PAT, "github-pat"))
+        );
+        assert_eq!(
+            text_at(&d, "/text"),
+            format!("and {} too", marker(AWS_KEY, "aws-access-key-id"))
+        );
+    }
+
+    #[test]
+    fn every_recorded_pointer_resolves_after_the_pass() {
+        // A record's `at` is built from the artifact key, and this pass
+        // renames that key. Recorded as found, every pointer beneath it both
+        // dangles and republishes the credential - in the audit record sitting
+        // beside the document the credential was just removed from.
+        let mut d = fixture_with_secret_in_the_artifact_key(
+            GH_PAT,
+            json!({ "text": format!("and {AWS_KEY} too") }),
+        );
+        let plan = plan_for(&d);
+        apply(&mut d, &plan, &cfg()).unwrap();
+
+        let recorded = recorded_pointers(&d);
+        assert!(
+            recorded.len() >= 2,
+            "the fixture must record both placements: {recorded:?}"
+        );
+        let mut probe = d.clone();
+        let cursor = SurfaceCursor { path: &mut probe };
+        for (step, at) in &recorded {
+            assert!(
+                cursor.read(step, at).is_some(),
+                "{at:?} on step {step:?} does not resolve after the pass"
+            );
+        }
+
+        let doc = serde_json::to_string(&d).unwrap();
+        assert_no_substring(&doc, GH_PAT, "artifact key");
+        assert_no_substring(&doc, AWS_KEY, "field beneath the artifact key");
+    }
+
+    /// Every `at` this pass recorded, paired with the step it was recorded on
+    /// - the empty id for the rollup's own, which sit under no step.
+    fn recorded_pointers(path: &Path) -> Vec<(String, String)> {
+        fn ats(record: &Value) -> Vec<String> {
+            record["findings"]
+                .as_array()
+                .expect("a record always carries a findings array")
+                .iter()
+                .map(|e| {
+                    e["at"]
+                        .as_str()
+                        .expect("a record entry always carries at")
+                        .to_string()
+                })
+                .collect()
+        }
+        let mut out = Vec::new();
+        for s in &path.steps {
+            if let Some(rec) = s.meta.as_ref().and_then(|m| m.extra.get(RECORD_KEY)) {
+                out.extend(ats(rec).into_iter().map(|at| (s.step.id.clone(), at)));
+            }
+        }
+        if let Some(rec) = path.meta.as_ref().and_then(|m| m.extra.get(RECORD_KEY)) {
+            out.extend(ats(rec).into_iter().map(|at| (String::new(), at)));
+        }
+        out
+    }
+
+    #[test]
+    fn a_mid_loop_failure_leaves_the_document_untouched() {
+        let before = fixture_with_secrets();
+        let mut after = before.clone();
+        let mut plan = plan_for(&before);
+        // The second step's group is reached only after the first step's has
+        // already been written.
+        let late = plan
+            .findings
+            .iter_mut()
+            .find(|f| f.step == "turn-9c21")
+            .unwrap();
+        late.span = (late.span.0, late.span.0);
+
+        assert!(matches!(
+            apply(&mut after, &plan, &cfg()),
+            Err(RedactError::PlanMismatch(_))
+        ));
+        assert_eq!(
+            serde_json::to_string(&before).unwrap(),
+            serde_json::to_string(&after).unwrap()
+        );
+    }
+
+    #[test]
+    fn zero_width_span_is_refused() {
+        let before = fixture_with_secret(AWS_KEY);
+        let mut after = before.clone();
+        let mut plan = plan_for(&before);
+        plan.findings[0].span = (plan.findings[0].span.0, plan.findings[0].span.0);
+        assert!(matches!(
+            apply(&mut after, &plan, &cfg()),
+            Err(RedactError::PlanMismatch(_))
+        ));
+        assert_eq!(
+            serde_json::to_string(&before).unwrap(),
+            serde_json::to_string(&after).unwrap()
+        );
+    }
+
+    #[test]
+    fn empty_key_is_refused() {
+        let before = fixture_with_secret(AWS_KEY);
+        let mut after = before.clone();
+        let cfg = RedactConfig {
+            key: Vec::new(),
+            ..cfg()
+        };
+        let err = apply(&mut after, &plan_for(&before), &cfg).unwrap_err();
+        // The variant, not its wording: the message is for humans and free to
+        // change, the refusal is the contract.
+        assert!(matches!(err, RedactError::EmptyKey), "{err:?}");
+        assert_eq!(
+            serde_json::to_string(&before).unwrap(),
+            serde_json::to_string(&after).unwrap()
+        );
     }
 
     #[test]
@@ -768,7 +1277,7 @@ mod tests {
     }
 
     #[test]
-    fn output_validates_against_both_schemas() {
+    fn record_sits_where_both_schemas_allow_it() {
         // `jsonschema` is not a dev-dependency of this crate and `Cargo.toml`
         // belongs to another track, so this asserts the structural rules the
         // two schemas impose on where the record may sit. T11 runs the real
@@ -822,6 +1331,74 @@ mod tests {
     }
 
     // ── Boundaries ──────────────────────────────────────────────────────
+
+    #[test]
+    fn an_untouched_steps_signature_survives() {
+        let mut d = fixture_with_secrets();
+        sign_step(&mut d, "turn-9c21");
+        // Only the first step's text carries a finding, so the second step's
+        // content - and its signature - still verify.
+        let cfg = RedactConfig {
+            drop_signatures: true,
+            ..cfg()
+        };
+        let plan = plan_for_step(&d, "turn-0f3a");
+        let report = apply(&mut d, &plan, &cfg).unwrap();
+
+        assert_eq!(report.signatures_dropped, 0);
+        let kept = &d.steps[1].meta.as_ref().unwrap().signatures;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].sig, signature().sig);
+    }
+
+    #[test]
+    fn a_touched_steps_signature_is_dropped_and_an_untouched_ones_is_not() {
+        // Both steps signed, one redacted: the signature over rewritten
+        // content cannot still verify, and the signature over content nobody
+        // touched still can. Dropping both would destroy a valid attestation;
+        // dropping neither would leave one that no longer checks out.
+        let mut d = fixture_with_secrets();
+        sign_step(&mut d, "turn-0f3a");
+        sign_step(&mut d, "turn-9c21");
+        let cfg = RedactConfig {
+            drop_signatures: true,
+            ..cfg()
+        };
+        let plan = plan_for_step(&d, "turn-0f3a");
+        let report = apply(&mut d, &plan, &cfg).unwrap();
+
+        assert_eq!(report.signatures_dropped, 1);
+        assert!(
+            d.steps[0].meta.as_ref().unwrap().signatures.is_empty(),
+            "the redacted step's signature no longer covers its content"
+        );
+        assert_eq!(d.steps[1].meta.as_ref().unwrap().signatures.len(), 1);
+    }
+
+    /// A plan naming only `step`'s findings, leaving every other step
+    /// untouched by the pass.
+    fn plan_for_step(path: &Path, step: &str) -> Plan {
+        plan_with(
+            path,
+            surfaces(path),
+            scan_findings(path, Action::Redact)
+                .into_iter()
+                .filter(|f| f.step == step)
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn signed_step_without_a_signed_path_is_also_refused() {
+        let mut d = fixture_with_secret(AWS_KEY);
+        sign_step(&mut d, "turn-0f3a");
+        d.meta.as_mut().unwrap().signatures.clear();
+        let plan = plan_for(&d);
+        assert!(matches!(
+            apply(&mut d, &plan, &cfg()),
+            Err(RedactError::SignedDocument)
+        ));
+    }
 
     #[test]
     fn refused_signed_document_is_left_untouched() {

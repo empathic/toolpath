@@ -189,8 +189,6 @@ pub(crate) fn read_redact_key(key_id: &str) -> Result<Option<Vec<u8>>> {
 /// Written with `create_new`, so two redactions racing the same
 /// document agree on one key instead of each fingerprinting under its
 /// own.
-// Called by `path p redact`; drop the allow once that dispatch lands.
-#[allow(dead_code)]
 pub(crate) fn load_or_create_redact_key(key_id: &str) -> Result<Vec<u8>> {
     use rand::RngCore;
     use std::io::Write;

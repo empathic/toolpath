@@ -30,6 +30,11 @@ pub enum RedactError {
     SignedDocument,
     #[error("pointer {0} does not resolve")]
     BadPointer(String),
+    /// An unkeyed fingerprint is a dictionary attack away from the value
+    /// it stands for (EDPB 01/2025 para 88), so an empty key is refused
+    /// rather than silently downgraded to a bare hash.
+    #[error("redaction key is empty: the fingerprint would be an unkeyed hash of the value")]
+    EmptyKey,
     #[error("bad predicate: {0}")]
     BadPredicate(String),
     /// A third-party detector's own failure. Carries a message rather than

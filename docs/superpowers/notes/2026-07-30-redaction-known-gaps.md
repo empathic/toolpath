@@ -65,14 +65,24 @@ un-redacts everything on the next sync.
 Version skew is enough to trigger it: `Transform` is a plain string enum
 with no unknown-variant fallback.
 
-## 6. Idempotence is unproven for `hash` and `partial`
+## 6. `hash` is not idempotent
 
-`internal::mask_existing_markers` blanks `[REDACTED:…]` and runs of `█`
-before any rule scans, which is what makes redaction reach a fixed point.
-It does **not** cover `Transform::Hash` output (bare 6 hex characters) or
-`Transform::Partial` output (`head…tail`). The idempotence test passes
-because its scanner uses prefixed self-delimiting formats that no
-transform output can reconstitute, so the gap is never exercised.
+`internal::marker_re` recognises `[REDACTED:…]`, runs of `█`, and
+`head…tail`, and any finding whose span intersects one is dropped before
+scoring. That makes `marker`, `remove`, `mask`, and `partial` reach a
+fixed point.
+
+`Transform::Hash` emits bare 6 hex characters, which no scan can
+distinguish from a fresh credential. Each pass re-redacts the previous
+pass's output, rotating the fingerprint and appending an audit entry. It
+matters in production because sync replays `apply` on every re-derive of
+a redacted session, so a `hash`-mode redaction drifts on every
+`p cache sync`.
+
+Pinned by `apply::tests::idempotent_across_all_transforms`, which asserts
+the instability so it cannot change unnoticed. Fixing it needs an
+envelope format for hashed values, which is a design decision nobody has
+made.
 
 ## 7. `share` uploads the un-redacted derivation
 

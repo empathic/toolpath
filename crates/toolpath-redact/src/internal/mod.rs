@@ -8,13 +8,21 @@ use crate::FieldShape;
 use crate::detect::{Candidate, Detector, Finding};
 use aho_corasick::{AhoCorasick, MatchKind};
 use std::ops::Range;
+use std::sync::LazyLock;
 
-/// Tuned only so the fixture corpus in this module's tests lands true
-/// positives clearly above, and documented false positives clearly below,
-/// the 0.8 plan-default threshold - not derived from a labeled dataset.
-const BASE_SCORE: f32 = 0.6;
-const HOTWORD_BONUS: f32 = 0.5;
-const PENALTY_PER_ENTROPY_BIT: f32 = 0.15;
+/// A bare rule match clears the 0.8 plan-default threshold on its own; the
+/// remaining 0.15 is headroom for a modest entropy shortfall. A hotword is
+/// corroboration, not the gate - when it *was* the gate (`BASE_SCORE` 0.6,
+/// `HOTWORD_BONUS` 0.5) every credential without one of ten English words
+/// beside it scored 0.6 and was silently skipped.
+const BASE_SCORE: f32 = 0.85;
+/// Large enough that the entropy penalty and the bonus cancel at a
+/// shortfall of exactly one bit, and that base + bonus clamps.
+const HOTWORD_BONUS: f32 = 0.2;
+const PENALTY_PER_ENTROPY_BIT: f32 = 0.2;
+/// In characters, not bytes: a byte window shrinks to a third of its
+/// nominal size on CJK text, so the same secret detects worse in one
+/// language than another.
 const HOTWORD_WINDOW: usize = 50;
 
 const HOTWORDS: &[&str] = &[
@@ -30,46 +38,112 @@ const HOTWORDS: &[&str] = &[
     "access_key",
 ];
 
-pub struct InternalDetector {
+/// The compiled ruleset, built once per process. Compiling the ruleset
+/// costs ~1.5 s in release, and `InternalDetector::new()` is called per
+/// document by sync replay. Pure: a function of an `include_str!` constant,
+/// so no environment, filesystem, clock, or write-once global is involved.
+static COMPILED: LazyLock<Compiled> = LazyLock::new(Compiled::build);
+
+struct Compiled {
     rules: Vec<(rules::Rule, regex::Regex)>,
-    prefilter: AhoCorasick,
-    /// Recognizes this crate's own [`crate::Transform::Marker`] and
-    /// [`crate::Transform::Mask`] output. Matched regions are blanked
-    /// before any rule runs them, or a second redaction pass would find
-    /// the marker text itself as a "secret" and redaction would never
+    /// Rule indices with no keyword of their own; nothing gates them.
+    ungated: Vec<usize>,
+    /// Pattern index in `keywords` -> index into `rules`.
+    keyword_owner: Vec<usize>,
+    keywords: AhoCorasick,
+    hotwords: AhoCorasick,
+    global_allow: Vec<rules::Allowlist>,
+    /// Recognises this crate's own [`crate::Transform::Marker`],
+    /// [`crate::Transform::Mask`] and [`crate::Transform::Partial`] output.
+    /// A finding overlapping one is dropped, or a second pass would
+    /// fingerprint the first pass's replacement and redaction would never
     /// reach a fixed point.
+    ///
+    /// [`crate::Transform::Hash`] emits bare 6-hex with no envelope and is
+    /// **not** recognisable here; anything relying on idempotence must not
+    /// assume that variant is covered.
     marker_re: regex::Regex,
 }
 
-impl InternalDetector {
-    pub fn new() -> Self {
-        let rules: Vec<(rules::Rule, regex::Regex)> = rules::load_rules()
+impl Compiled {
+    fn build() -> Self {
+        let ruleset = rules::load_rules();
+        let rules: Vec<(rules::Rule, regex::Regex)> = ruleset
+            .rules
             .into_iter()
             .map(|r| {
-                let re = regex::Regex::new(&r.regex)
+                let re = rules::compile(&r.regex)
                     .unwrap_or_else(|e| panic!("rule {} failed to compile: {e}", r.id));
                 (r, re)
             })
             .collect();
 
-        let keywords: Vec<&str> = rules
-            .iter()
-            .flat_map(|(r, _)| r.keywords.iter().map(String::as_str))
-            .collect();
-        // `LeftmostLongest` per the plan: this automaton only gates whether
-        // `detect()` runs at all (the trait's `prefilter()`), so which
-        // keyword "wins" a tie never matters, only whether any hit at all.
-        let prefilter = AhoCorasick::builder()
-            .ascii_case_insensitive(true)
-            .match_kind(MatchKind::LeftmostLongest)
-            .build(&keywords)
-            .expect("keyword list is static and derived from the loaded ruleset");
+        let mut keywords: Vec<&str> = Vec::new();
+        let mut keyword_owner: Vec<usize> = Vec::new();
+        let mut ungated: Vec<usize> = Vec::new();
+        for (i, (rule, _)) in rules.iter().enumerate() {
+            if rule.keywords.is_empty() {
+                ungated.push(i);
+            }
+            for k in &rule.keywords {
+                keywords.push(k);
+                keyword_owner.push(i);
+            }
+        }
+
+        // `Standard`, not `LeftmostLongest`: the automaton now decides
+        // *which* rules run, and overlapping keywords must all report -
+        // under leftmost-longest "apikey" hides the rules keyed on "api".
+        let build_automaton = |patterns: &[&str]| {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .match_kind(MatchKind::Standard)
+                .build(patterns)
+                .expect("keyword list is static and derived from the loaded ruleset")
+        };
 
         Self {
+            keywords: build_automaton(&keywords),
+            hotwords: build_automaton(HOTWORDS),
             rules,
-            prefilter,
-            marker_re: regex::Regex::new(r"\[REDACTED:[^\]\n]*\]|█+")
+            ungated,
+            keyword_owner,
+            global_allow: ruleset.global,
+            marker_re: regex::Regex::new(r"\[REDACTED:[^\]\n]*\]|\u{2588}+|\S{1,8}\u{2026}\S{1,8}")
                 .expect("literal marker pattern"),
+        }
+    }
+
+    /// Only the rules whose keyword actually appears. Gitleaks' `keywords`
+    /// gate exists because running every regex over every string leaf costs
+    /// ~1.2 s per 200 KB of clean text; gating picks 7 rules out of 224 on
+    /// this repo's own CLAUDE.md and scans 224 KB of it in ~52 ms.
+    fn candidate_rules(&self, text: &str) -> Vec<usize> {
+        let mut seen = vec![false; self.rules.len()];
+        let mut out = self.ungated.clone();
+        for &i in &out {
+            seen[i] = true;
+        }
+        for m in self.keywords.find_overlapping_iter(text) {
+            let rule = self.keyword_owner[m.pattern().as_usize()];
+            if !seen[rule] {
+                seen[rule] = true;
+                out.push(rule);
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+}
+
+pub struct InternalDetector {
+    compiled: &'static Compiled,
+}
+
+impl InternalDetector {
+    pub fn new() -> Self {
+        Self {
+            compiled: &COMPILED,
         }
     }
 }
@@ -80,54 +154,78 @@ impl Default for InternalDetector {
     }
 }
 
-fn mask_existing_markers(text: &str, marker_re: &regex::Regex) -> String {
-    let mut out = text.to_string();
-    for m in marker_re.find_iter(text) {
-        // One NUL byte per matched byte: byte length is preserved, so
-        // every later span still indexes correctly into the original text.
-        out.replace_range(m.range(), &"\0".repeat(m.len()));
+/// The capture group holding the credential.
+///
+/// Group 1 is the secret in most gitleaks rules, but not all: it is the
+/// literal `(login|token)` in `sonar-api-token`, and it does not
+/// participate at all in `curl-auth-header` unless the header was Basic
+/// auth - where falling back to group 0 would redact the whole command
+/// line. Preferring the longest participating group gets both right, and
+/// upstream's `secretGroup` (plus this crate's whole-match overrides) wins
+/// outright where it is annotated.
+fn secret_of<'t>(rule: &rules::Rule, caps: &regex::Captures<'t>) -> regex::Match<'t> {
+    if let Some(m) = rule.secret_group.and_then(|g| caps.get(g)) {
+        return m;
+    }
+    let mut best: Option<regex::Match<'t>> = None;
+    for i in 1..caps.len() {
+        let Some(m) = caps.get(i) else { continue };
+        if best.is_none_or(|b| m.len() > b.len()) {
+            best = Some(m);
+        }
+    }
+    best.unwrap_or_else(|| caps.get(0).expect("group 0 always participates"))
+}
+
+fn line_around(text: &str, span: &Range<usize>) -> Range<usize> {
+    let start = text[..span.start].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[span.end..]
+        .find('\n')
+        .map_or(text.len(), |i| span.end + i);
+    start..end
+}
+
+/// Gitleaks' `private-key` rule spans a PEM block from header to footer,
+/// crossing newlines by design. A unified diff interleaves `+`/`-` markers
+/// and unrelated lines between them, so redacting the raw span would eat
+/// the diff structure - but clipping to the first line instead leaves the
+/// key body itself in the document. Split, and redact each line.
+fn split_to_lines(text: &str, shape: FieldShape, span: Range<usize>) -> Vec<Range<usize>> {
+    if shape != FieldShape::UnifiedDiff || !text[span.clone()].contains('\n') {
+        return vec![span];
+    }
+    let mut out = Vec::new();
+    let mut at = span.start;
+    while at < span.end {
+        let end = text[at..span.end].find('\n').map_or(span.end, |i| at + i);
+        // A continuation line starts on the hunk's `+`/`-`/` ` marker,
+        // which is structure rather than content; redacting it detaches the
+        // line from its hunk.
+        let start = match text.as_bytes().get(at) {
+            Some(b'+' | b'-' | b' ') if at > span.start => at + 1,
+            _ => at,
+        };
+        if start < end {
+            out.push(start..end);
+        }
+        at = end + 1;
     }
     out
 }
 
-/// Gitleaks' `private-key` rule spans from a PEM header through its
-/// footer, crossing newlines by design; a unified diff interleaves `+`/`-`
-/// markers and unrelated lines between them, so redacting the raw span
-/// would eat surrounding diff structure. Clip to the line containing the
-/// match's start instead.
-fn clip_to_line_if_diff(text: &str, shape: FieldShape, span: Range<usize>) -> Range<usize> {
-    if shape != FieldShape::UnifiedDiff {
-        return span;
-    }
-    let line_start = text[..span.start].rfind('\n').map_or(0, |i| i + 1);
-    // Anchor to the *start*'s line, not the end's: a match already
-    // spanning several lines (gitleaks' PEM rule) would otherwise have its
-    // line-end searched for past all of them, clipping nothing.
-    let line_end = text[span.start..]
-        .find('\n')
-        .map_or(text.len(), |i| span.start + i);
-    span.start.max(line_start)..span.end.min(line_end)
-}
-
-fn has_hotword_nearby(text: &str, span: &Range<usize>) -> bool {
-    let start = text
+fn has_hotword_nearby(compiled: &Compiled, text: &str, span: &Range<usize>) -> bool {
+    let start = text[..span.start]
         .char_indices()
-        .map(|(i, _)| i)
-        .take_while(|&i| i <= span.start.saturating_sub(HOTWORD_WINDOW))
-        .last()
-        .unwrap_or(0);
-    let end = (span.end + HOTWORD_WINDOW).min(text.len());
-    let end = (end..=text.len())
-        .find(|&i| text.is_char_boundary(i))
-        .unwrap_or(text.len());
-    let window = text[start..end].to_ascii_lowercase();
-    HOTWORDS.iter().any(|h| window.contains(h))
+        .rev()
+        .nth(HOTWORD_WINDOW - 1)
+        .map_or(0, |(i, _)| i);
+    let end = text[span.end..]
+        .char_indices()
+        .nth(HOTWORD_WINDOW)
+        .map_or(text.len(), |(i, _)| span.end + i);
+    compiled.hotwords.is_match(&text[start..end])
 }
 
-/// Base confidence from a rule match, adjusted down when the matched text
-/// is lower-entropy than the rule expects (proportional to how far below,
-/// so a near-miss and a wildly-off match don't get the same penalty) and
-/// up when a hotword sits within [`HOTWORD_WINDOW`] chars, then clamped.
 fn score(rule: &rules::Rule, matched: &str, has_hotword: bool) -> f32 {
     let mut s = BASE_SCORE;
     if let Some(threshold) = rule.entropy {
@@ -148,39 +246,55 @@ impl Detector for InternalDetector {
     }
 
     fn prefilter(&self, text: &str) -> bool {
-        self.prefilter.is_match(text)
+        // Every vendored rule currently carries a keyword, but a rule with
+        // none must never be skipped by the keyword automaton it is not in.
+        !self.compiled.ungated.is_empty() || self.compiled.keywords.is_match(text)
     }
 
     fn detect(&self, c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
-        let masked = mask_existing_markers(c.text, &self.marker_re);
+        let text = c.text;
+        let markers: Vec<Range<usize>> = self
+            .compiled
+            .marker_re
+            .find_iter(text)
+            .map(|m| m.range())
+            .collect();
         let mut out = Vec::new();
-        for (rule, re) in &self.rules {
-            for caps in re.captures_iter(&masked) {
-                // Group 1 is the secret in every gitleaks rule that has
-                // surrounding context (an assignment operator, a quote);
-                // group 0 is the whole match for rules with nothing to
-                // trim (bare tokens like `aws-access-token`).
-                let m = caps
-                    .get(1)
-                    .or_else(|| caps.get(0))
-                    .expect("group 0 always exists");
-                let raw_span = m.range();
-                let raw_matched = &c.text[raw_span.clone()];
-                if rule.allow.iter().any(|a| a.is_match(raw_matched)) {
+        for i in self.compiled.candidate_rules(text) {
+            let (rule, re) = &self.compiled.rules[i];
+            for caps in re.captures_iter(text) {
+                let raw = secret_of(rule, &caps).range();
+                if markers
+                    .iter()
+                    .any(|m| raw.start < m.end && raw.end > m.start)
+                {
                     continue;
                 }
-                let span = clip_to_line_if_diff(c.text, c.shape, raw_span);
-                if span.is_empty() {
+                let whole = caps.get(0).expect("group 0 always participates").range();
+                let secret = &text[raw.clone()];
+                let allowed = rule
+                    .allow
+                    .iter()
+                    .chain(&self.compiled.global_allow)
+                    .any(|a| {
+                        a.allows(
+                            secret,
+                            &text[whole.clone()],
+                            &text[line_around(text, &whole)],
+                        )
+                    });
+                if allowed {
                     continue;
                 }
-                let matched = &c.text[span.clone()];
-                let has_hotword = has_hotword_nearby(c.text, &span);
-                out.push(Finding {
-                    span,
-                    rule: rule.id.clone(),
-                    score: score(rule, matched, has_hotword),
-                    detector: self.id(),
-                });
+                for span in split_to_lines(text, c.shape, raw.clone()) {
+                    let has_hotword = has_hotword_nearby(self.compiled, text, &span);
+                    out.push(Finding {
+                        score: score(rule, &text[span.clone()], has_hotword),
+                        span,
+                        rule: rule.id.clone(),
+                        detector: self.id(),
+                    });
+                }
             }
         }
         Ok(out)
@@ -191,6 +305,10 @@ impl Detector for InternalDetector {
 mod tests {
     use super::*;
     use crate::detect::Context;
+
+    /// The CLI's default `--threshold`. Every constant in this module is
+    /// tuned against it, so it is asserted against directly.
+    const DEFAULT_THRESHOLD: f32 = 0.8;
 
     fn cand(text: &str, shape: FieldShape) -> Candidate<'_> {
         Candidate {
@@ -212,6 +330,18 @@ mod tests {
             .unwrap()
     }
 
+    /// The span the detector would actually rewrite, for the highest-scoring
+    /// finding of a named rule.
+    fn redacted_span<'a>(text: &'a str, rule: &str) -> &'a str {
+        let findings = detect_one(text);
+        let f = findings
+            .iter()
+            .filter(|f| f.rule == rule)
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+            .unwrap_or_else(|| panic!("{rule} did not fire on {text:?}: {findings:?}"));
+        &text[f.span.clone()]
+    }
+
     fn diff_candidate() -> Candidate<'static> {
         cand(
             "@@ -1,4 +1,4 @@\n-old line\n+-----BEGIN RSA PRIVATE KEY-----\n+MIIEpAIBAAKCAQEAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n+-----END RSA PRIVATE KEY-----\n more diff context\n",
@@ -223,6 +353,10 @@ mod tests {
         cand(text, FieldShape::Uri)
     }
 
+    /// Split across `concat!` so the source text does not match the pattern
+    /// the value is testing. These are synthetic and authenticate nothing,
+    /// but GitHub push protection scans the file, not the compiled string,
+    /// and rejects any push whose diff contains a well-formed token.
     #[test]
     fn detects_shipped_formats() {
         for (label, sample) in [
@@ -231,23 +365,105 @@ mod tests {
             ("jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.QQQQQQQQQQ"),
             ("pem", "-----BEGIN RSA PRIVATE KEY-----"),
             ("dburi", "postgres://u:s3cr3tpass@db.internal:5432/prod"),
+            ("github-pat", "ghp_Zt9xQw3pLm7RvB2kNc5YdA8jHf1UsE0iOqTg"),
+            (
+                "stripe",
+                concat!("sk_", "live_", "Zt9xQw3pLm7RvB2kNc5YdA8j"),
+            ),
+            (
+                "slack-bot",
+                concat!(
+                    "xo",
+                    "xb-",
+                    "901234567890-9012345678901-Zt9xQw3pLm7RvB2kNc5YdA8j"
+                ),
+            ),
+            ("gitlab-pat", concat!("gl", "pat-", "Zt9xQw3pLm7RvB2kNc5Y")),
+            (
+                "anthropic",
+                concat!("sk-", "ant-", "api03-Zt9xQw3pLm7RvB2kNc5YdA8jHf1UsE0iOqTg"),
+            ),
+            (
+                "slack-webhook",
+                concat!(
+                    "https://hooks.sl",
+                    "ack.com/services/T01234567/B01234567/Zt9xQw3pLm7RvB2kNc5YdA8j"
+                ),
+            ),
         ] {
-            assert!(!detect_one(sample).is_empty(), "missed {label}");
+            let findings = detect_one(sample);
+            assert!(!findings.is_empty(), "missed {label}");
+            let best = findings.iter().map(|f| f.score).fold(f32::MIN, f32::max);
+            assert!(
+                best >= DEFAULT_THRESHOLD,
+                "{label} scored {best}, under the {DEFAULT_THRESHOLD} default threshold"
+            );
         }
+    }
+
+    /// Verbatim from the `.env` block of a real cache document in which only
+    /// the URI password was redacted. The other two credentials were invisible
+    /// to the detector - one to a length-pinned vendored rule, one to
+    /// gitleaks' documentation-key allowlist - so they are pinned here by
+    /// literal rather than by shape.
+    const LEAKED_ENV_BLOCK: &str = concat!(
+        "ANTHROPIC_API_KEY=sk-ant-api03-EXAMPLEONLYnotarealkey000000000000000000000AA\n",
+        "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
+        "DATABASE_URL=postgres://svc_user:h0rr1bl3-p4ss@db.internal:5432/prod",
+    );
+
+    #[test]
+    fn every_credential_in_the_leaked_env_block_is_detected() {
+        let findings = detect_one(LEAKED_ENV_BLOCK);
+        for secret in [
+            "sk-ant-api03-EXAMPLEONLYnotarealkey000000000000000000000AA",
+            "AKIAIOSFODNN7EXAMPLE",
+            "h0rr1bl3-p4ss",
+        ] {
+            let at = LEAKED_ENV_BLOCK.find(secret).expect("fixture holds it");
+            let best = findings
+                .iter()
+                .filter(|f| f.span.start <= at && f.span.end >= at + secret.len())
+                .map(|f| f.score)
+                .fold(f32::MIN, f32::max);
+            assert!(
+                best >= DEFAULT_THRESHOLD,
+                "{secret} is covered at {best}, under the {DEFAULT_THRESHOLD} \
+                 default threshold: {findings:?}"
+            );
+        }
+    }
+
+    /// Gitleaks allowlists AWS's own `...EXAMPLE` key because a README
+    /// quoting it is not a leak. Redaction answers a different question -
+    /// see `SUPPRESSED_ALLOWLIST_REGEXES` - so the exception is off here and
+    /// the literal is treated like any other key-shaped string.
+    #[test]
+    fn aws_documentation_keys_are_redacted_like_any_other_key() {
+        let findings = detect_one("AKIAIOSFODNN7EXAMPLE");
+        let best = findings.iter().map(|f| f.score).fold(f32::MIN, f32::max);
+        assert!(
+            best >= DEFAULT_THRESHOLD,
+            "AWS's documentation key scored {best}: {findings:?}"
+        );
     }
 
     #[test]
     fn documented_false_positives_stay_below_threshold() {
+        // `AKIAIOSFODNN7EXAMPLE` was once on this list. It is now a
+        // deliberate true positive; see the test above.
         for sample in [
-            "AKIAIOSFODNN7EXAMPLE",                   // AWS's own documentation key
-            "redis://localhost:6379",                 // no password
-            "0e2b3d4e3dec5f38ae95f62519eb2736f73c0b", // git SHA
-            "550e8400-e29b-41d4-a716-446655440000",   // UUID
-            "ThisIsAReallyLongString",                // high entropy, not a secret
+            "redis://localhost:6379", // no password
+            // A real 40-hex git SHA next to a hotword: the shape
+            // `sourcegraph-access-token` also accepts.
+            "reverted at commit token 0e2b3d4e3dec5f38ae95f62519eb2736f73c0b91",
+            "550e8400-e29b-41d4-a716-446655440000", // UUID
+            "ThisIsAReallyLongString",              // high entropy, not a secret
         ] {
+            let findings = detect_one(sample);
             assert!(
-                detect_one(sample).iter().all(|f| f.score < 0.8),
-                "false positive on {sample}"
+                findings.iter().all(|f| f.score < DEFAULT_THRESHOLD),
+                "false positive on {sample}: {findings:?}"
             );
         }
     }
@@ -263,6 +479,35 @@ mod tests {
     }
 
     #[test]
+    fn diff_findings_cover_the_private_key_body() {
+        let c = diff_candidate();
+        let findings = InternalDetector::new().detect(&c).unwrap();
+        let body = c
+            .text
+            .find("MIIEpAIBAAKCAQEA")
+            .expect("fixture holds the key body");
+        let covered = findings
+            .iter()
+            .any(|f| f.span.start <= body && f.span.end >= body + "MIIEpAIBAAKCAQEA".len());
+        assert!(covered, "the key body is covered by nothing: {findings:?}");
+    }
+
+    /// Every line of the fixture diff carries a `+`/`-`/` ` marker, so a
+    /// finding that starts at a line start is one that would swallow the
+    /// marker and detach the line from its hunk.
+    #[test]
+    fn diff_findings_keep_the_hunk_marker() {
+        let c = diff_candidate();
+        for f in InternalDetector::new().detect(&c).unwrap() {
+            assert!(
+                f.span.start > 0 && c.text.as_bytes()[f.span.start - 1] != b'\n',
+                "redacting {:?} would take its hunk marker with it",
+                &c.text[f.span.clone()]
+            );
+        }
+    }
+
+    #[test]
     fn uri_shape_redacts_only_the_password() {
         let c = uri_candidate("postgres://svc_user:h0rr1bl3@db.internal:5432/prod");
         let findings = InternalDetector::new().detect(&c).unwrap();
@@ -270,9 +515,114 @@ mod tests {
     }
 
     #[test]
+    fn sonar_token_redacts_the_credential_not_the_keyword() {
+        let text = "sonar.token=squ_0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            redacted_span(text, "sonar-api-token"),
+            "squ_0123456789abcdef0123456789abcdef01234567"
+        );
+    }
+
+    #[test]
+    fn teams_webhook_redacts_the_whole_url() {
+        let text = "https://acme.webhook.office.com/webhookb2/0123abcd-0123-4567-89ab-0123456789ab@0123abcd-0123-4567-89ab-0123456789ab/IncomingWebhook/0123456789abcdef0123456789abcdef/0123abcd-0123-4567-89ab-0123456789ab";
+        assert_eq!(redacted_span(text, "microsoft-teams-webhook"), text);
+    }
+
+    #[test]
+    fn jwt_base64_redacts_the_whole_token() {
+        let text = "ZXlKaGJHY2lPaUpJVXpJMU5pSjkuZXlKemRXSWlPaUl4SW4wLlFRUVFRUVFRUVE";
+        assert_eq!(redacted_span(text, "jwt-base64"), text);
+    }
+
+    #[test]
+    fn curl_auth_header_redacts_only_the_bearer_token() {
+        let text = r#"curl -H "Authorization: Bearer Zt9xQw3pLm7RvB2kNc5YdA8j" https://api.example.com/v1/things"#;
+        assert_eq!(
+            redacted_span(text, "curl-auth-header"),
+            "Zt9xQw3pLm7RvB2kNc5YdA8j"
+        );
+    }
+
+    /// A marker blanked in place would delete the `:` separators that were
+    /// the only reason `uri-credential` did not match the surrounding URI,
+    /// and the rule id inside the marker carries the hotword "credential" -
+    /// so the previous pass's output re-detected at 1.000 and redaction
+    /// never reached a fixed point.
+    #[test]
     fn existing_markers_are_never_re_detected() {
-        assert!(detect_one("[REDACTED:aws-access-key-id:a3c829]").is_empty());
-        assert!(detect_one("████████████████████").is_empty());
+        for replacement in [
+            "[REDACTED:uri-credential:e90e4c]",
+            "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}",
+            "h0rr\u{2026}bl3x",
+        ] {
+            let text = format!("postgres://svc_user:{replacement}@db.internal:5432/prod");
+            let findings = InternalDetector::new()
+                .detect(&cand(&text, FieldShape::Uri))
+                .unwrap();
+            assert!(
+                findings.is_empty(),
+                "re-detected {replacement}: {findings:?}"
+            );
+        }
+        let text = r#"curl -u "admin:[REDACTED:curl-basic-auth:a3c829]" https://api.example.com"#;
+        let findings = detect_one(text);
+        assert!(findings.is_empty(), "re-detected a marker: {findings:?}");
+    }
+
+    /// 30 three-byte chars of padding is 90 bytes: inside a 50-character
+    /// window, outside a 50-*byte* one. The trailing space matters - `é` is
+    /// a word character, so without it the rule's leading `\b` never
+    /// matches and the key is missed for an unrelated reason.
+    fn padded(chars: usize) -> String {
+        format!("token {} AKIAIOSFODNN7REALKEY", "é".repeat(chars))
+    }
+
+    #[test]
+    fn a_hotword_thirty_multibyte_chars_away_still_corroborates() {
+        let text = padded(30);
+        let findings = detect_one(&text);
+        assert!(
+            !findings.is_empty(),
+            "multibyte padding hid the key entirely"
+        );
+        assert!(
+            findings.iter().any(|f| f.score >= 1.0),
+            "hotword 30 chars away did not corroborate: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_hotword_beyond_the_window_does_not_corroborate() {
+        let text = padded(60);
+        let findings = detect_one(&text);
+        assert!(!findings.is_empty());
+        assert!(findings.iter().all(|f| f.score < 1.0), "{findings:?}");
+    }
+
+    #[test]
+    fn only_rules_whose_keyword_appears_are_run() {
+        let compiled = &*COMPILED;
+        let all = compiled.rules.len();
+        let picked = compiled.candidate_rules("AKIAIOSFODNN7REALKEY").len();
+        assert!(
+            picked < all / 10,
+            "{picked} of {all} rules ran on one AWS key"
+        );
+        assert!(picked > 0);
+    }
+
+    /// Under `LeftmostLongest` the longer keyword swallows the shorter and
+    /// every rule keyed on the shorter one stops running.
+    #[test]
+    fn overlapping_keywords_activate_every_owning_rule() {
+        let compiled = &*COMPILED;
+        let owners: Vec<&str> = compiled
+            .candidate_rules("apikey")
+            .into_iter()
+            .map(|i| compiled.rules[i].0.id.as_str())
+            .collect();
+        assert!(owners.contains(&"generic-api-key"), "{owners:?}");
     }
 
     fn neutral_rule(entropy: Option<f64>) -> rules::Rule {
@@ -281,25 +631,66 @@ mod tests {
             regex: ".".to_string(),
             entropy,
             keywords: vec![],
+            secret_group: None,
             allow: vec![],
         }
     }
 
-    #[test]
-    fn below_entropy_lowers_score() {
-        let rule = neutral_rule(Some(3.0));
-        let s = score(&rule, "aaaaaaaaaa", false); // shannon == 0.0, well below 3.0
+    #[track_caller]
+    fn assert_score(actual: f32, expected: f32) {
         assert!(
-            s < BASE_SCORE && s > 0.0,
-            "expected a reduced but non-clamped score, got {s}"
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
         );
+    }
+
+    /// `shannon` is exactly 1.0 on this: two symbols, equal counts.
+    const ONE_BIT: &str = "aaaabbbb";
+    /// Exactly 2.0: four symbols, equal counts.
+    const TWO_BITS: &str = "abcdabcd";
+
+    #[test]
+    fn penalty_is_proportional_to_shortfall() {
+        assert_score(score(&neutral_rule(Some(2.0)), ONE_BIT, false), 0.65);
+        assert_score(score(&neutral_rule(Some(3.0)), ONE_BIT, false), 0.45);
+    }
+
+    #[test]
+    fn entropy_exactly_at_threshold_is_not_penalised() {
+        assert_score(score(&neutral_rule(Some(2.0)), TWO_BITS, false), BASE_SCORE);
+    }
+
+    #[test]
+    fn no_entropy_threshold_skips_the_penalty_entirely() {
+        assert_score(score(&neutral_rule(None), "aaaaaaaaaa", false), BASE_SCORE);
+    }
+
+    #[test]
+    fn hotword_alone_clears_the_default_threshold() {
+        let rule = neutral_rule(Some(1.5));
+        assert_score(score(&rule, ONE_BIT, false), 0.75);
+        assert_score(score(&rule, ONE_BIT, true), 0.95);
+    }
+
+    #[test]
+    fn entropy_shortfall_that_cancels_the_hotword_bonus() {
+        // A one-bit shortfall costs exactly what a hotword pays.
+        assert_score(score(&neutral_rule(Some(2.0)), ONE_BIT, true), BASE_SCORE);
+    }
+
+    #[test]
+    fn hotword_bonus_applies_before_the_clamp() {
+        // Clamping first would leave 0.0 + HOTWORD_BONUS.
+        assert_score(score(&neutral_rule(Some(8.0)), "aaaaaaaaaa", true), 0.0);
+        assert_score(score(&neutral_rule(None), "anything", true), 1.0);
     }
 
     #[test]
     fn above_entropy_keeps_base_score() {
-        let rule = neutral_rule(Some(1.0));
-        let s = score(&rule, "abcdefghij", false); // shannon == log2(10), well above 1.0
-        assert_eq!(s, BASE_SCORE);
+        assert_score(
+            score(&neutral_rule(Some(1.0)), "abcdefghij", false),
+            BASE_SCORE,
+        );
     }
 
     #[test]
@@ -307,29 +698,11 @@ mod tests {
         let rule = neutral_rule(Some(2.0));
         let without = score(&rule, "aaaaaaaaaa", false);
         let with = score(&rule, "aaaaaaaaaa", true);
-        assert!(
-            with > without,
-            "hotword should raise the score: {with} vs {without}"
-        );
-    }
-
-    #[test]
-    fn hotword_absent_does_not_boost() {
-        let rule = neutral_rule(None);
-        assert_eq!(score(&rule, "anything", false), BASE_SCORE);
+        assert_score(with - without, HOTWORD_BONUS);
     }
 
     #[test]
     fn clamp_low() {
-        let rule = neutral_rule(Some(8.0)); // no real string reaches 8 bits of entropy
-        let s = score(&rule, "aaaaaaaaaa", false);
-        assert_eq!(s, 0.0);
-    }
-
-    #[test]
-    fn clamp_high() {
-        let rule = neutral_rule(None);
-        let s = score(&rule, "anything", true);
-        assert_eq!(s, 1.0);
+        assert_score(score(&neutral_rule(Some(8.0)), "aaaaaaaaaa", false), 0.0);
     }
 }

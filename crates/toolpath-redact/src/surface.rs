@@ -19,17 +19,37 @@ pub struct Surface {
 }
 
 /// Every string in `path` a detector should see, each named by an RFC 6901
-/// pointer relative to its step (`step` is empty for document-level fields).
+/// pointer that resolves against the serialized document: relative to the
+/// step for a step's fields, relative to the document root for the rest
+/// (those carry an empty `step`). An audit record publishes these pointers,
+/// so one that does not resolve is a lie told to whoever reads it.
 ///
 /// The order is part of the contract. Finding ids are positional and a
-/// regenerated plan is compared byte for byte, but `Step::change` and
-/// `StructuralChange::extra` are `HashMap`s whose iteration order is not
-/// stable across runs - so steps keep document order, artifacts sort by key,
-/// and a blind walk sorts object keys.
+/// regenerated plan is compared byte for byte, but `Step::change` and every
+/// `extra` are `HashMap`s whose iteration order is not stable across runs -
+/// so steps keep document order, artifacts sort by key, and every blind walk
+/// sorts object keys.
 ///
 /// An artifact's own key is emitted *after* everything beneath it: writing
 /// that surface renames the map entry, which invalidates every pointer under
 /// the old key, so a caller applying surfaces in order rewrites the key last.
+/// Each typed arm likewise emits its named fields before the blind walk of
+/// the keys it did not consume.
+///
+/// The map is closed by construction, so what it leaves out is as much a
+/// decision as what it names. Deliberately never scanned:
+///
+/// - `/step/*` and `/path/{id,head}` - identity the DAG is keyed on;
+///   rewriting one detaches a step from its parents.
+/// - `/path/graph_ref` - a toolpath-internal link to a sibling document, not
+///   content anyone typed.
+/// - `StructuralChange::type`, `PathMeta::{kind,source}` - closed
+///   vocabularies this format defines, with no room for a user's string.
+/// - `VcsSource::{type,revision,change_id}` and `Ref::rel` - identifiers the
+///   VCS or the format assigns, not the human.
+/// - `{Step,Path}Meta::{actors,signatures}` - identity and integrity
+///   material, which redaction drops wholesale rather than rewrites.
+/// - every non-string leaf - a detector has nothing to span in a number.
 pub fn surfaces(path: &toolpath::v1::Path) -> Vec<Surface> {
     let mut out = Vec::new();
     for step in &path.steps {
@@ -50,13 +70,16 @@ pub fn surfaces(path: &toolpath::v1::Path) -> Vec<Surface> {
                 );
             }
             if let Some(s) = &change.structural {
-                let base = format!("/change/{akey}/structural/extra");
+                // `StructuralChange::extra` is `#[serde(flatten)]`: its keys
+                // sit directly under `structural` in the document, so an
+                // `extra` segment would name a field that is not there.
+                let base = format!("/change/{akey}/structural");
                 match s.change_type.as_str() {
                     "conversation.append" => turn_surfaces(&mut out, sid, &base, &s.extra),
                     "file.write" => file_write_surfaces(&mut out, sid, &base, &s.extra),
-                    // The one place a blind leaf walk is correct: the payload
-                    // is unmodelled provider JSON.
-                    _ => walk_fields(&mut out, sid, &base, &s.extra, FieldShape::OpaqueJson),
+                    // The one place a blind leaf walk is the whole story: the
+                    // payload is unmodelled provider JSON.
+                    _ => residue(&mut out, sid, &base, &s.extra, &[]),
                 }
             }
             push(
@@ -67,6 +90,9 @@ pub fn surfaces(path: &toolpath::v1::Path) -> Vec<Surface> {
                 artifact_key,
             );
         }
+        if let Some(meta) = &step.meta {
+            step_meta_surfaces(&mut out, sid, meta);
+        }
     }
     if let Some(b) = &path.path.base {
         push(
@@ -76,16 +102,82 @@ pub fn surfaces(path: &toolpath::v1::Path) -> Vec<Surface> {
             FieldShape::Uri,
             &b.uri,
         );
+        // A branch name is author-chosen text in a path-shaped field, and a
+        // `ref` is whatever someone tagged the state as.
+        for (key, value) in [("branch", &b.branch), ("ref", &b.ref_str)] {
+            if let Some(v) = value {
+                push(
+                    &mut out,
+                    "",
+                    format!("/path/base/{key}"),
+                    FieldShape::OpaqueJson,
+                    v,
+                );
+            }
+        }
     }
-    if let Some(v) = path
-        .meta
-        .as_ref()
-        .and_then(|m| m.extra.get("vcs_remote"))
-        .and_then(|v| v.as_str())
-    {
-        push(&mut out, "", "/meta/vcs_remote".into(), FieldShape::Uri, v);
+    if let Some(meta) = &path.meta {
+        path_meta_surfaces(&mut out, meta);
     }
     out
+}
+
+/// A path's own metadata. `PathMeta::extra` is `#[serde(flatten)]`, so its
+/// keys sit directly under `/meta` with no segment of their own.
+fn path_meta_surfaces(out: &mut Vec<Surface>, meta: &toolpath::v1::PathMeta) {
+    for (key, value) in [("title", &meta.title), ("intent", &meta.intent)] {
+        if let Some(v) = value {
+            push(out, "", format!("/meta/{key}"), FieldShape::Prose, v);
+        }
+    }
+    for (i, r) in meta.refs.iter().enumerate() {
+        push(
+            out,
+            "",
+            format!("/meta/refs/{i}/href"),
+            FieldShape::Uri,
+            &r.href,
+        );
+    }
+    if let Some(v) = meta.extra.get("vcs_remote") {
+        walk_json(out, "", "/meta/vcs_remote", v, FieldShape::Uri);
+    }
+    // These are byte-identical copies of the `step.change` keys the map
+    // already scans. Redacting the key and leaving the copy here hands the
+    // reader the original back, so it has to be the same value or neither.
+    if let Some(v) = meta.extra.get("files_changed") {
+        walk_json(out, "", "/meta/files_changed", v, FieldShape::Uri);
+    }
+    residue(
+        out,
+        "",
+        "/meta",
+        &meta.extra,
+        &["vcs_remote", "files_changed"],
+    );
+}
+
+/// A step's own metadata. `intent` is the git commit message on a
+/// `p import git` document and the pull-request or review body on a GitHub
+/// one - and since `toolpath-git` emits raw-only changes, on those documents
+/// it is the only prose in the whole path.
+fn step_meta_surfaces(out: &mut Vec<Surface>, step: &str, meta: &toolpath::v1::StepMeta) {
+    if let Some(v) = &meta.intent {
+        push(out, step, "/meta/intent".into(), FieldShape::Prose, v);
+    }
+    for (i, r) in meta.refs.iter().enumerate() {
+        push(
+            out,
+            step,
+            format!("/meta/refs/{i}/href"),
+            FieldShape::Uri,
+            &r.href,
+        );
+    }
+    if let Some(src) = &meta.source {
+        residue(out, step, "/meta/source", &src.extra, &[]);
+    }
+    residue(out, step, "/meta", &meta.extra, &[]);
 }
 
 fn push(out: &mut Vec<Surface>, step: &str, at: String, shape: FieldShape, text: &str) {
@@ -104,11 +196,17 @@ fn push(out: &mut Vec<Surface>, step: &str, at: String, shape: FieldShape, text:
 /// `structural.extra` map, and a delegated turn's JSON object.
 trait Fields {
     fn field(&self, key: &str) -> Option<&Value>;
+    /// Sorted: both backing maps iterate in an order that is not stable
+    /// across runs, and emission order is part of the contract.
+    fn entries(&self) -> Vec<(&str, &Value)>;
 }
 
 impl Fields for HashMap<String, Value> {
     fn field(&self, key: &str) -> Option<&Value> {
         self.get(key)
+    }
+    fn entries(&self) -> Vec<(&str, &Value)> {
+        sorted(self.iter())
     }
 }
 
@@ -116,90 +214,212 @@ impl Fields for serde_json::Map<String, Value> {
     fn field(&self, key: &str) -> Option<&Value> {
         self.get(key)
     }
+    fn entries(&self) -> Vec<(&str, &Value)> {
+        sorted(self.iter())
+    }
 }
 
-/// The `conversation.append` rows of the map. A delegated turn serializes
-/// with the same field names as the extras of the turn that spawned it, so
-/// sub-conversations re-enter here.
-fn turn_surfaces(out: &mut Vec<Surface>, step: &str, at: &str, fields: &dyn Fields) {
-    for key in ["text", "thinking"] {
-        if let Some(s) = fields.field(key).and_then(Value::as_str) {
-            push(out, step, format!("{at}/{key}"), FieldShape::Prose, s);
+/// Every key of `fields` the typed arm above it did not read, walked blind.
+/// The map is a closed list, and a field it does not name is never scanned -
+/// so `environment.vcs_branch`, an MCP server name inside `tool_uses[i].name`,
+/// or a delegated mutation's `path` would ship a secret with nothing to
+/// notice. Emitted after the typed fields, per the emission-order contract.
+fn residue(out: &mut Vec<Surface>, step: &str, at: &str, fields: &dyn Fields, consumed: &[&str]) {
+    for (key, value) in fields.entries() {
+        if consumed.contains(&key) {
+            continue;
         }
-    }
-
-    for (i, tool) in array(fields.field("tool_uses")).iter().enumerate() {
-        if let Some(input) = tool.get("input") {
-            walk_json(
-                out,
-                step,
-                &format!("{at}/tool_uses/{i}/input"),
-                input,
-                FieldShape::ToolInput,
-            );
-        }
-        if let Some(s) = tool.pointer("/result/content").and_then(Value::as_str) {
-            push(
-                out,
-                step,
-                format!("{at}/tool_uses/{i}/result/content"),
-                FieldShape::ToolOutput,
-                s,
-            );
-        }
-    }
-
-    for (i, work) in array(fields.field("delegations")).iter().enumerate() {
-        let at = format!("{at}/delegations/{i}");
-        for key in ["prompt", "result"] {
-            if let Some(s) = work.get(key).and_then(Value::as_str) {
-                push(out, step, format!("{at}/{key}"), FieldShape::Prose, s);
-            }
-        }
-        for (j, turn) in array(work.get("turns")).iter().enumerate() {
-            if let Some(obj) = turn.as_object() {
-                turn_surfaces(out, step, &format!("{at}/turns/{j}"), obj);
-            }
-        }
-    }
-
-    // Only a top-level turn's file mutations get hoisted into sibling
-    // `file.write` changes; a delegated turn carries its own inline, and they
-    // hold the same before/after file content.
-    for (i, mutation) in array(fields.field("file_mutations")).iter().enumerate() {
-        let at = format!("{at}/file_mutations/{i}");
-        if let Some(s) = mutation.get("raw_diff").and_then(Value::as_str) {
-            push(
-                out,
-                step,
-                format!("{at}/raw_diff"),
-                FieldShape::UnifiedDiff,
-                s,
-            );
-        }
-        for key in ["before", "after"] {
-            if let Some(s) = mutation.get(key).and_then(Value::as_str) {
-                push(out, step, format!("{at}/{key}"), FieldShape::FileContent, s);
-            }
-        }
-    }
-
-    if let Some(s) = fields
-        .field("environment")
-        .and_then(|e| e.get("working_dir"))
-        .and_then(Value::as_str)
-    {
-        push(
+        walk_json(
             out,
             step,
-            format!("{at}/environment/working_dir"),
-            FieldShape::Uri,
-            s,
+            &format!("{at}/{}", ptr_escape(key)),
+            value,
+            FieldShape::OpaqueJson,
         );
     }
 }
 
+/// `residue` over a value the caller expected to be an object. A value of
+/// some other shape was not read by the typed arm either, so it goes to the
+/// blind walk whole rather than falling out of the map.
+fn residue_of(
+    out: &mut Vec<Surface>,
+    step: &str,
+    at: &str,
+    value: Option<&Value>,
+    consumed: &[&str],
+) {
+    match value {
+        Some(Value::Object(map)) => residue(out, step, at, map, consumed),
+        Some(other) => walk_json(out, step, at, other, FieldShape::OpaqueJson),
+        None => {}
+    }
+}
+
+/// The array a typed arm expects at `key`, and nothing if it is absent. A
+/// value of another shape is walked blind here for the same reason
+/// `residue_of` does it: the typed arm below will not read it.
+fn typed_array<'a>(
+    out: &mut Vec<Surface>,
+    step: &str,
+    at: &str,
+    fields: &'a dyn Fields,
+    key: &str,
+) -> &'a [Value] {
+    match fields.field(key) {
+        Some(Value::Array(items)) => items,
+        Some(other) => {
+            walk_json(
+                out,
+                step,
+                &format!("{at}/{key}"),
+                other,
+                FieldShape::OpaqueJson,
+            );
+            &[]
+        }
+        None => &[],
+    }
+}
+
+/// The `conversation.append` rows of the map, and - because the two share
+/// enough field names to share an arm - the rows of a delegated turn.
+///
+/// They are not the same object. A top-level turn's extras are assembled
+/// field by field by `toolpath_convo::derive_path`; a delegated turn is a
+/// whole `Turn` handed to `serde_json::to_value`. The delta, all of it in the
+/// delegated direction: `file_mutations` (a top-level turn's are hoisted into
+/// sibling `file.write` changes instead), plus `id`, `parent_id`, `timestamp`
+/// and `model`, and `role` as serde writes the enum (`"Assistant"`, or
+/// externally tagged `{"Other": "tool"}`) rather than the lowercase string
+/// the top level stores. Nothing here reads those by name; the residue walk
+/// at the end covers them, which is exactly why it exists.
+fn turn_surfaces(out: &mut Vec<Surface>, step: &str, at: &str, fields: &dyn Fields) {
+    const CONSUMED: &[&str] = &[
+        "text",
+        "thinking",
+        "tool_uses",
+        "delegations",
+        "file_mutations",
+        "environment",
+    ];
+
+    for key in ["text", "thinking"] {
+        if let Some(v) = fields.field(key) {
+            walk_json(out, step, &format!("{at}/{key}"), v, FieldShape::Prose);
+        }
+    }
+
+    for (i, tool) in typed_array(out, step, at, fields, "tool_uses")
+        .iter()
+        .enumerate()
+    {
+        let at = format!("{at}/tool_uses/{i}");
+        if let Some(input) = tool.get("input") {
+            walk_json(
+                out,
+                step,
+                &format!("{at}/input"),
+                input,
+                FieldShape::ToolInput,
+            );
+        }
+        if let Some(content) = tool.pointer("/result/content") {
+            walk_json(
+                out,
+                step,
+                &format!("{at}/result/content"),
+                content,
+                FieldShape::ToolOutput,
+            );
+        }
+        residue_of(
+            out,
+            step,
+            &format!("{at}/result"),
+            tool.get("result"),
+            &["content"],
+        );
+        // Picks up `name`, which for an MCP call is `mcp__<server>__<tool>` -
+        // and the server half comes from the user's own config.
+        residue_of(out, step, &at, Some(tool), &["input", "result"]);
+    }
+
+    for (i, work) in typed_array(out, step, at, fields, "delegations")
+        .iter()
+        .enumerate()
+    {
+        let at = format!("{at}/delegations/{i}");
+        for key in ["prompt", "result"] {
+            if let Some(v) = work.get(key) {
+                walk_json(out, step, &format!("{at}/{key}"), v, FieldShape::Prose);
+            }
+        }
+        for (j, turn) in array(work.get("turns")).iter().enumerate() {
+            let at = format!("{at}/turns/{j}");
+            match turn.as_object() {
+                Some(obj) => turn_surfaces(out, step, &at, obj),
+                None => walk_json(out, step, &at, turn, FieldShape::OpaqueJson),
+            }
+        }
+        residue_of(out, step, &at, Some(work), &["prompt", "result", "turns"]);
+    }
+
+    // Only a top-level turn's file mutations get hoisted into sibling
+    // `file.write` changes; a delegated turn carries its own inline, and they
+    // hold the same before/after file content. The residue below is what
+    // reaches `path` and `rename_to` on the delegated ones - an entry
+    // carrying only `path` has no typed field at all.
+    for (i, mutation) in typed_array(out, step, at, fields, "file_mutations")
+        .iter()
+        .enumerate()
+    {
+        let at = format!("{at}/file_mutations/{i}");
+        if let Some(v) = mutation.get("raw_diff") {
+            walk_json(
+                out,
+                step,
+                &format!("{at}/raw_diff"),
+                v,
+                FieldShape::UnifiedDiff,
+            );
+        }
+        for key in ["before", "after"] {
+            if let Some(v) = mutation.get(key) {
+                walk_json(
+                    out,
+                    step,
+                    &format!("{at}/{key}"),
+                    v,
+                    FieldShape::FileContent,
+                );
+            }
+        }
+        residue_of(
+            out,
+            step,
+            &at,
+            Some(mutation),
+            &["raw_diff", "before", "after"],
+        );
+    }
+
+    if let Some(env) = fields.field("environment") {
+        let at = format!("{at}/environment");
+        if let Some(v) = env.get("working_dir") {
+            walk_json(out, step, &format!("{at}/working_dir"), v, FieldShape::Uri);
+        }
+        // `vcs_branch` and `vcs_revision` sit right beside `working_dir`, and
+        // a branch name is as author-chosen as a commit message.
+        residue_of(out, step, &at, Some(env), &["working_dir"]);
+    }
+
+    residue(out, step, at, fields, CONSUMED);
+}
+
 /// The `file.write` rows: whole-file states, plus both sides of every edit.
+/// The residue reaches `rename_to`, which is a path exactly like the one
+/// that became this change's artifact key - and that key is scanned.
 fn file_write_surfaces(
     out: &mut Vec<Surface>,
     step: &str,
@@ -207,11 +427,20 @@ fn file_write_surfaces(
     extra: &HashMap<String, Value>,
 ) {
     for key in ["before", "after"] {
-        if let Some(s) = extra.get(key).and_then(Value::as_str) {
-            push(out, step, format!("{at}/{key}"), FieldShape::FileContent, s);
+        if let Some(v) = extra.get(key) {
+            walk_json(
+                out,
+                step,
+                &format!("{at}/{key}"),
+                v,
+                FieldShape::FileContent,
+            );
         }
     }
-    for (i, edit) in array(extra.get("edits")).iter().enumerate() {
+    for (i, edit) in typed_array(out, step, at, extra, "edits")
+        .iter()
+        .enumerate()
+    {
         walk_json(
             out,
             step,
@@ -220,24 +449,7 @@ fn file_write_surfaces(
             FieldShape::FileContent,
         );
     }
-}
-
-fn walk_fields(
-    out: &mut Vec<Surface>,
-    step: &str,
-    at: &str,
-    fields: &HashMap<String, Value>,
-    shape: FieldShape,
-) {
-    for (key, value) in sorted(fields.iter()) {
-        walk_json(
-            out,
-            step,
-            &format!("{at}/{}", ptr_escape(key)),
-            value,
-            shape,
-        );
-    }
+    residue(out, step, at, extra, &["before", "after", "edits"]);
 }
 
 /// Every string leaf under `value`, named by pointer. Non-string scalars are
@@ -274,20 +486,63 @@ fn array(value: Option<&Value>) -> &[Value] {
 }
 
 /// Resolves a `(step, pointer)` pair against a document for reading and
-/// writing. Read and write must resolve identically.
+/// writing.
+///
+/// Read and write resolve identically, with one exception:
+/// [`Route::ArtifactKey`] writes by *renaming* the map entry, so once that
+/// write lands, the pointer it was made at - and every pointer beneath it -
+/// resolves to nothing. That is not a defect to fix here but the reason
+/// `surfaces()` emits an artifact's key after everything under it: a caller
+/// applying surfaces in emission order never reads through a renamed key.
 pub struct SurfaceCursor<'a> {
     pub path: &'a mut toolpath::v1::Path,
 }
 
+/// Which object a pointer is relative to. `/meta/…` names `StepMeta` under a
+/// step and `PathMeta` at the document root - the pointer alone cannot tell
+/// them apart, so read and write must agree on the frame before parsing.
+#[derive(Clone, Copy)]
+enum Scope {
+    Document,
+    Step,
+}
+
+/// An empty step id is the document frame; anything else is a step's.
+fn scope_of(step: &str) -> Scope {
+    if step.is_empty() {
+        Scope::Document
+    } else {
+        Scope::Step
+    }
+}
+
 /// Where a pointer lands, parsed once so read and write cannot drift apart.
 enum Route {
-    BaseUri,
-    MetaExtra(String),
+    /// A typed `Option<String>` slot on the document itself.
+    DocText(DocText),
+    DocRefHref(usize),
+    /// `PathMeta::extra[field]`, plus an RFC 6901 pointer into it (empty when
+    /// the field is itself the string). `extra` is `#[serde(flatten)]`, so
+    /// the pointer carries no `extra` segment.
+    DocMetaExtra {
+        field: String,
+        tail: String,
+    },
+    StepIntent,
+    StepRefHref(usize),
+    /// `StepMeta::source.extra[field]`, flattened the same way.
+    StepSourceExtra {
+        field: String,
+        tail: String,
+    },
+    StepMetaExtra {
+        field: String,
+        tail: String,
+    },
     /// The artifact map key itself. Writing renames the entry.
     ArtifactKey(String),
     Raw(String),
-    /// `structural.extra[field]`, plus an RFC 6901 pointer into it (empty
-    /// when the field is itself the string).
+    /// `StructuralChange::extra[field]`, flattened the same way.
     Extra {
         artifact: String,
         field: String,
@@ -295,12 +550,60 @@ enum Route {
     },
 }
 
-fn route(at: &str) -> Option<Route> {
-    if at == "/path/base/uri" {
-        return Some(Route::BaseUri);
+/// The document's typed string slots, named so read and write share a parse.
+#[derive(Clone, Copy)]
+enum DocText {
+    BaseUri,
+    BaseBranch,
+    BaseRef,
+    MetaTitle,
+    MetaIntent,
+}
+
+fn route(scope: Scope, at: &str) -> Option<Route> {
+    match scope {
+        Scope::Document => route_document(at),
+        Scope::Step => route_step(at),
     }
-    if let Some(key) = at.strip_prefix("/meta/") {
-        return (!key.is_empty() && !key.contains('/')).then(|| Route::MetaExtra(ptr_decode(key)));
+}
+
+fn route_document(at: &str) -> Option<Route> {
+    if let Some(field) = at.strip_prefix("/path/base/") {
+        return match field {
+            "uri" => Some(Route::DocText(DocText::BaseUri)),
+            "branch" => Some(Route::DocText(DocText::BaseBranch)),
+            "ref" => Some(Route::DocText(DocText::BaseRef)),
+            _ => None,
+        };
+    }
+
+    let rest = at.strip_prefix("/meta/")?;
+    match rest {
+        "title" => return Some(Route::DocText(DocText::MetaTitle)),
+        "intent" => return Some(Route::DocText(DocText::MetaIntent)),
+        _ => {}
+    }
+    if let Some(i) = ref_href_index(rest) {
+        return Some(Route::DocRefHref(i));
+    }
+    let (field, tail) = split_field(rest);
+    Some(Route::DocMetaExtra { field, tail })
+}
+
+fn route_step(at: &str) -> Option<Route> {
+    if let Some(rest) = at.strip_prefix("/meta/") {
+        if rest == "intent" {
+            return Some(Route::StepIntent);
+        }
+        if let Some(i) = ref_href_index(rest) {
+            return Some(Route::StepRefHref(i));
+        }
+        if let Some(rest) = rest.strip_prefix("source/") {
+            let (field, tail) = split_field(rest);
+            return Some(Route::StepSourceExtra { field, tail });
+        }
+        let (field, tail) = split_field(rest);
+        return Some(Route::StepMetaExtra { field, tail });
     }
 
     let rest = at.strip_prefix("/change/")?;
@@ -312,16 +615,35 @@ fn route(at: &str) -> Option<Route> {
         return Some(Route::Raw(artifact));
     }
 
-    let rest = rest.strip_prefix("structural/extra/")?;
-    let (field, tail) = match rest.split_once('/') {
-        Some((field, tail)) => (field, format!("/{tail}")),
-        None => (rest, String::new()),
-    };
-    (!field.is_empty()).then(|| Route::Extra {
+    let rest = rest.strip_prefix("structural/")?;
+    let (field, tail) = split_field(rest);
+    Some(Route::Extra {
         artifact,
-        field: ptr_decode(field),
+        field,
         tail,
     })
+}
+
+/// `refs/{i}/href` - the only leaf under `refs` the map names.
+fn ref_href_index(rest: &str) -> Option<usize> {
+    let (index, leaf) = rest.strip_prefix("refs/")?.split_once('/')?;
+    if leaf != "href" {
+        return None;
+    }
+    index.parse().ok()
+}
+
+/// Split a flattened-extras pointer into the map key and an RFC 6901 pointer
+/// into that key's value (empty when the value is itself the string).
+///
+/// An empty key is a key: `{"": "secret"}` is legal JSON, the residue walk
+/// emits a surface for it, and refusing to resolve it here would count that
+/// field as scanned while no detector ever saw it.
+fn split_field(rest: &str) -> (String, String) {
+    match rest.split_once('/') {
+        Some((field, tail)) => (ptr_decode(field), format!("/{tail}")),
+        None => (ptr_decode(rest), String::new()),
+    }
 }
 
 fn find_step<'a>(path: &'a toolpath::v1::Path, id: &str) -> Option<&'a toolpath::v1::Step> {
@@ -335,60 +657,173 @@ fn find_step_mut<'a>(
     path.steps.iter_mut().find(|s| s.step.id == id)
 }
 
+/// The string a `(step, pointer)` pair names, read without the `&mut` a
+/// `SurfaceCursor` demands. Plan generation and `verify` only ever read, and
+/// nothing that only reads should have to clone the document to do it.
+pub fn read_at(path: &toolpath::v1::Path, step: &str, at: &str) -> Option<String> {
+    resolve(path, scope_of(step), find_step(path, step), at)
+}
+
+/// `read_at` with the step already resolved. A caller reading thousands of
+/// surfaces indexes `path.steps` once instead of scanning it per pointer.
+///
+/// `None` means the document frame - the same thing an empty step id means to
+/// `read_at`. A caller holding a step id that does not resolve must reject it
+/// before calling, or a step-relative `/meta/…` silently reads the path's
+/// metadata instead.
+pub fn read_at_in(
+    path: &toolpath::v1::Path,
+    step: Option<&toolpath::v1::Step>,
+    at: &str,
+) -> Option<String> {
+    let scope = match step {
+        Some(_) => Scope::Step,
+        None => Scope::Document,
+    };
+    resolve(path, scope, step, at)
+}
+
+fn resolve(
+    path: &toolpath::v1::Path,
+    scope: Scope,
+    step: Option<&toolpath::v1::Step>,
+    at: &str,
+) -> Option<String> {
+    match route(scope, at)? {
+        Route::DocText(field) => doc_text(path, field).cloned(),
+        Route::DocRefHref(i) => Some(path.meta.as_ref()?.refs.get(i)?.href.clone()),
+        Route::DocMetaExtra { field, tail } => leaf(&path.meta.as_ref()?.extra, &field, &tail),
+        Route::StepIntent => step?.meta.as_ref()?.intent.clone(),
+        Route::StepRefHref(i) => Some(step?.meta.as_ref()?.refs.get(i)?.href.clone()),
+        Route::StepSourceExtra { field, tail } => {
+            leaf(&step?.meta.as_ref()?.source.as_ref()?.extra, &field, &tail)
+        }
+        Route::StepMetaExtra { field, tail } => leaf(&step?.meta.as_ref()?.extra, &field, &tail),
+        Route::ArtifactKey(key) => step?.change.contains_key(&key).then_some(key),
+        Route::Raw(key) => step?.change.get(&key)?.raw.clone(),
+        Route::Extra {
+            artifact,
+            field,
+            tail,
+        } => leaf(
+            &step?.change.get(&artifact)?.structural.as_ref()?.extra,
+            &field,
+            &tail,
+        ),
+    }
+}
+
+/// The document's typed string slots. A `_mut` twin follows; the two must
+/// stay in step, which is why both are one `match` over the same enum.
+fn doc_text(path: &toolpath::v1::Path, field: DocText) -> Option<&String> {
+    match field {
+        DocText::BaseUri => Some(&path.path.base.as_ref()?.uri),
+        DocText::BaseBranch => path.path.base.as_ref()?.branch.as_ref(),
+        DocText::BaseRef => path.path.base.as_ref()?.ref_str.as_ref(),
+        DocText::MetaTitle => path.meta.as_ref()?.title.as_ref(),
+        DocText::MetaIntent => path.meta.as_ref()?.intent.as_ref(),
+    }
+}
+
+fn doc_text_mut(path: &mut toolpath::v1::Path, field: DocText) -> Option<&mut String> {
+    match field {
+        DocText::BaseUri => Some(&mut path.path.base.as_mut()?.uri),
+        DocText::BaseBranch => path.path.base.as_mut()?.branch.as_mut(),
+        DocText::BaseRef => path.path.base.as_mut()?.ref_str.as_mut(),
+        DocText::MetaTitle => path.meta.as_mut()?.title.as_mut(),
+        DocText::MetaIntent => path.meta.as_mut()?.intent.as_mut(),
+    }
+}
+
+/// A flattened-extras leaf: the map key, then the pointer into its value.
+fn leaf(extra: &HashMap<String, Value>, field: &str, tail: &str) -> Option<String> {
+    let value = extra.get(field)?;
+    let leaf = if tail.is_empty() {
+        value
+    } else {
+        value.pointer(tail)?
+    };
+    Some(leaf.as_str()?.to_string())
+}
+
+fn leaf_mut<'a>(
+    extra: &'a mut HashMap<String, Value>,
+    field: &str,
+    tail: &str,
+) -> Option<&'a mut String> {
+    let value = extra.get_mut(field)?;
+    let leaf = if tail.is_empty() {
+        value
+    } else {
+        value.pointer_mut(tail)?
+    };
+    string_slot(leaf)
+}
+
 impl SurfaceCursor<'_> {
     pub fn read(&self, step: &str, at: &str) -> Option<String> {
-        match route(at)? {
-            Route::BaseUri => Some(self.path.path.base.as_ref()?.uri.clone()),
-            Route::MetaExtra(key) => Some(
-                self.path
-                    .meta
-                    .as_ref()?
-                    .extra
-                    .get(&key)?
-                    .as_str()?
-                    .to_string(),
-            ),
-            Route::ArtifactKey(key) => find_step(self.path, step)?
-                .change
-                .contains_key(&key)
-                .then_some(key),
-            Route::Raw(key) => find_step(self.path, step)?.change.get(&key)?.raw.clone(),
-            Route::Extra {
-                artifact,
-                field,
-                tail,
-            } => {
-                let value = find_step(self.path, step)?
-                    .change
-                    .get(&artifact)?
-                    .structural
-                    .as_ref()?
-                    .extra
-                    .get(&field)?;
-                let leaf = if tail.is_empty() {
-                    value
-                } else {
-                    value.pointer(&tail)?
-                };
-                Some(leaf.as_str()?.to_string())
-            }
-        }
+        read_at(self.path, step, at)
     }
 
     pub fn write(&mut self, step: &str, at: &str, value: &str) -> Result<()> {
         let bad = || RedactError::BadPointer(at.to_string());
-        match route(at).ok_or_else(bad)? {
-            Route::BaseUri => {
-                self.path.path.base.as_mut().ok_or_else(bad)?.uri = value.to_string();
+        match route(scope_of(step), at).ok_or_else(bad)? {
+            Route::DocText(field) => {
+                *doc_text_mut(self.path, field).ok_or_else(bad)? = value.to_string();
             }
-            Route::MetaExtra(key) => {
-                let slot = self
-                    .path
+            Route::DocRefHref(i) => {
+                self.path
                     .meta
                     .as_mut()
-                    .and_then(|m| m.extra.get_mut(&key))
+                    .ok_or_else(bad)?
+                    .refs
+                    .get_mut(i)
+                    .ok_or_else(bad)?
+                    .href = value.to_string();
+            }
+            Route::DocMetaExtra { field, tail } => {
+                let extra = &mut self.path.meta.as_mut().ok_or_else(bad)?.extra;
+                *leaf_mut(extra, &field, &tail).ok_or_else(bad)? = value.to_string();
+            }
+            Route::StepIntent => {
+                let meta = find_step_mut(self.path, step)
+                    .ok_or_else(bad)?
+                    .meta
+                    .as_mut()
                     .ok_or_else(bad)?;
-                *string_slot(slot).ok_or_else(bad)? = value.to_string();
+                *meta.intent.as_mut().ok_or_else(bad)? = value.to_string();
+            }
+            Route::StepRefHref(i) => {
+                find_step_mut(self.path, step)
+                    .ok_or_else(bad)?
+                    .meta
+                    .as_mut()
+                    .ok_or_else(bad)?
+                    .refs
+                    .get_mut(i)
+                    .ok_or_else(bad)?
+                    .href = value.to_string();
+            }
+            Route::StepSourceExtra { field, tail } => {
+                let extra = &mut find_step_mut(self.path, step)
+                    .ok_or_else(bad)?
+                    .meta
+                    .as_mut()
+                    .ok_or_else(bad)?
+                    .source
+                    .as_mut()
+                    .ok_or_else(bad)?
+                    .extra;
+                *leaf_mut(extra, &field, &tail).ok_or_else(bad)? = value.to_string();
+            }
+            Route::StepMetaExtra { field, tail } => {
+                let extra = &mut find_step_mut(self.path, step)
+                    .ok_or_else(bad)?
+                    .meta
+                    .as_mut()
+                    .ok_or_else(bad)?
+                    .extra;
+                *leaf_mut(extra, &field, &tail).ok_or_else(bad)? = value.to_string();
             }
             Route::ArtifactKey(key) => {
                 let target = find_step_mut(self.path, step).ok_or_else(bad)?;
@@ -415,7 +850,7 @@ impl SurfaceCursor<'_> {
                 field,
                 tail,
             } => {
-                let slot = find_step_mut(self.path, step)
+                let extra = &mut find_step_mut(self.path, step)
                     .ok_or_else(bad)?
                     .change
                     .get_mut(&artifact)
@@ -423,15 +858,8 @@ impl SurfaceCursor<'_> {
                     .structural
                     .as_mut()
                     .ok_or_else(bad)?
-                    .extra
-                    .get_mut(&field)
-                    .ok_or_else(bad)?;
-                let leaf = if tail.is_empty() {
-                    slot
-                } else {
-                    slot.pointer_mut(&tail).ok_or_else(bad)?
-                };
-                *string_slot(leaf).ok_or_else(bad)? = value.to_string();
+                    .extra;
+                *leaf_mut(extra, &field, &tail).ok_or_else(bad)? = value.to_string();
             }
         }
         Ok(())
@@ -453,7 +881,7 @@ pub fn ptr_escape(token: &str) -> String {
 }
 
 /// Decode `~1` before `~0`, or `~01` round-trips wrong (RFC 6901).
-fn ptr_decode(token: &str) -> String {
+pub(crate) fn ptr_decode(token: &str) -> String {
     token.replace("~1", "/").replace("~0", "~")
 }
 
@@ -461,7 +889,10 @@ fn ptr_decode(token: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-    use toolpath::v1::{ArtifactChange, Base, Path, PathMeta, Step, StructuralChange};
+    use std::collections::BTreeSet;
+    use toolpath::v1::{
+        ArtifactChange, Base, Path, PathMeta, Ref, Step, StepMeta, StructuralChange, VcsSource,
+    };
 
     fn object(value: Value) -> HashMap<String, Value> {
         match value {
@@ -522,7 +953,11 @@ mod tests {
                     "category": "command",
                     "result": {"content": "configured", "is_error": false}
                 }],
-                "environment": {"working_dir": "/Users/alex/work/repo"},
+                "environment": {
+                    "working_dir": "/Users/alex/work/repo",
+                    "vcs_branch": "evan/redact",
+                    "vcs_revision": "7a7c366"
+                },
                 "token_usage": {"input_tokens": 10, "output_tokens": 2}
             }),
         )])
@@ -583,6 +1018,10 @@ mod tests {
                             "raw_diff": "--- a/deploy.sh\n+++ b/deploy.sh\n@@ -1 +1 @@\n-old\n+new\n",
                             "before": "old\n",
                             "after": "new\n"
+                        }, {
+                            // Only `path`: no typed field at all, so this
+                            // entry is the whole test for the residue walk.
+                            "path": "/srv/acme-internal/rotate.sh"
                         }]
                     }]
                 }]
@@ -608,7 +1047,7 @@ mod tests {
     }
 
     /// Every branch of the map in one document, for the whole-surface
-    /// read/write sweeps.
+    /// read/write sweeps and the leaf-coverage proof.
     fn fixture_rich() -> Path {
         let mut path = path_of(vec![
             step_with(
@@ -626,6 +1065,7 @@ mod tests {
                             json!({
                                 "before": "a\n",
                                 "after": "b\n",
+                                "rename_to": "~/acme-internal-notes.md",
                                 "edits": [{"old_string": "a", "new_string": "b", "replace_all": false}]
                             }),
                         ),
@@ -635,9 +1075,38 @@ mod tests {
             fixture_with_delegation().steps.remove(0),
             fixture_unknown_change_type().steps.remove(0),
         ]);
-        path.path.base = Some(Base::vcs("https://alex:tok@github.com/o/r", "abc123"));
+        path.steps[0].meta = Some(StepMeta {
+            intent: Some("rotate the deploy credentials".into()),
+            source: Some(VcsSource {
+                vcs_type: "git".into(),
+                revision: "abc123".into(),
+                change_id: None,
+                extra: object(json!({"author_email": "alex@acme-internal.example"})),
+            }),
+            refs: vec![Ref {
+                rel: "pull-request".into(),
+                href: "https://github.com/o/r/pull/42".into(),
+            }],
+            extra: object(json!({"note": "cherry-picked from the release branch"})),
+            ..StepMeta::default()
+        });
+        path.path.base = Some(Base {
+            uri: "https://alex:tok@github.com/o/r".into(),
+            ref_str: Some("abc123".into()),
+            branch: Some("evan/redact".into()),
+        });
         path.meta = Some(PathMeta {
-            extra: object(json!({"vcs_remote": "https://alex:tok@github.com/o/r.git"})),
+            title: Some("redaction field map".into()),
+            intent: Some("close the coverage gaps".into()),
+            refs: vec![Ref {
+                rel: "self".into(),
+                href: "https://pathbase.dev/o/r/redact".into(),
+            }],
+            extra: object(json!({
+                "vcs_remote": "https://alex:tok@github.com/o/r.git",
+                // Byte-identical to a `step.change` key the map scans.
+                "files_changed": ["~/notes.md", "/srv/acme-internal/rotate.sh"]
+            })),
             ..PathMeta::default()
         });
         path
@@ -645,6 +1114,127 @@ mod tests {
 
     fn ats(path: &Path) -> Vec<String> {
         surfaces(path).into_iter().map(|s| s.at).collect()
+    }
+
+    /// Every non-empty string leaf in `value`, named by absolute pointer.
+    /// Empty ones are excluded because `push` excludes them: there is nothing
+    /// in an empty string for a detector to span.
+    fn string_leaves(value: &Value, at: String, out: &mut Vec<String>) {
+        match value {
+            Value::String(s) => {
+                if !s.is_empty() {
+                    out.push(at);
+                }
+            }
+            Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    string_leaves(item, format!("{at}/{i}"), out);
+                }
+            }
+            Value::Object(map) => {
+                for (key, item) in map {
+                    string_leaves(item, format!("{at}/{}", ptr_escape(key)), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A surface's pointer rebased on the document root - where whoever reads
+    /// the audit record will actually try to follow it.
+    fn absolute(path: &Path, s: &Surface) -> String {
+        match path.steps.iter().position(|st| st.step.id == s.step) {
+            Some(i) => format!("/steps/{i}{}", s.at),
+            None => s.at.clone(),
+        }
+    }
+
+    /// The map is a closed list: a field it does not name is never scanned,
+    /// so a secret there ships and nothing notices. This walks the other
+    /// direction - from the document to the map - so a new field in
+    /// `toolpath` or `toolpath-convo` cannot quietly go unscanned. Every
+    /// exclusion is named below with the reason it is not a candidate.
+    #[test]
+    fn every_string_leaf_in_a_derived_document_is_surfaced_exactly_once() {
+        const EXPECTED_OUT_OF_SCOPE: &[(&str, &str)] = &[
+            ("/path/id", "document identity; plans are keyed on it"),
+            ("/path/head", "names a step id, not content"),
+            ("/steps/0/step/id", "step identity; the DAG is keyed on it"),
+            ("/steps/1/step/id", "step identity; the DAG is keyed on it"),
+            ("/steps/2/step/id", "step identity; the DAG is keyed on it"),
+            ("/steps/0/step/actor", "`type:name`, a closed vocabulary"),
+            ("/steps/1/step/actor", "`type:name`, a closed vocabulary"),
+            ("/steps/2/step/actor", "`type:name`, a closed vocabulary"),
+            ("/steps/0/step/timestamp", "machine-generated ISO 8601"),
+            ("/steps/1/step/timestamp", "machine-generated ISO 8601"),
+            ("/steps/2/step/timestamp", "machine-generated ISO 8601"),
+            (
+                "/steps/0/change/claude:~1~1sess-abc/structural/type",
+                "change type: a vocabulary this format defines",
+            ),
+            (
+                "/steps/0/change/~0~1notes.md/structural/type",
+                "change type: a vocabulary this format defines",
+            ),
+            (
+                "/steps/1/change/claude:~1~1sess-abc/structural/type",
+                "change type: a vocabulary this format defines",
+            ),
+            (
+                "/steps/2/change/claude:~1~1sess-abc/structural/type",
+                "change type: a vocabulary this format defines",
+            ),
+            ("/steps/0/meta/source/type", "VCS name, a closed vocabulary"),
+            (
+                "/steps/0/meta/source/revision",
+                "a commit hash the VCS assigned",
+            ),
+            ("/steps/0/meta/refs/0/rel", "a link relation name"),
+            ("/meta/refs/0/rel", "a link relation name"),
+        ];
+
+        let p = fixture_rich();
+        let doc = serde_json::to_value(&p).unwrap();
+
+        let mut found = Vec::new();
+        string_leaves(&doc, String::new(), &mut found);
+        let leaves: BTreeSet<String> = found.into_iter().collect();
+
+        let scanned: Vec<String> = surfaces(&p).iter().map(|s| absolute(&p, s)).collect();
+        let unique: BTreeSet<String> = scanned.iter().cloned().collect();
+        assert_eq!(
+            unique.len(),
+            scanned.len(),
+            "a field scanned twice is a finding reported twice: {scanned:#?}"
+        );
+
+        let allowed: BTreeSet<&str> = EXPECTED_OUT_OF_SCOPE.iter().map(|(at, _)| *at).collect();
+        for at in &allowed {
+            assert!(
+                leaves.contains(*at),
+                "allowlist entry names nothing in the fixture: {at}"
+            );
+        }
+
+        let missed: Vec<&String> = leaves
+            .difference(&unique)
+            .filter(|a| !allowed.contains(a.as_str()))
+            .collect();
+        assert!(
+            missed.is_empty(),
+            "string leaves no detector will ever see: {missed:#?}"
+        );
+
+        // An artifact key is the one surface that names a map *key*, so it
+        // resolves to the object beneath it rather than to a string.
+        let phantom: Vec<&String> = unique
+            .difference(&leaves)
+            .filter(|a| !doc.pointer(a).is_some_and(Value::is_object))
+            .collect();
+        assert!(
+            phantom.is_empty(),
+            "surfaces whose pointers resolve to nothing: {phantom:#?}"
+        );
     }
 
     #[test]
@@ -669,11 +1259,8 @@ mod tests {
         let p = fixture_conversation_append();
         let all = surfaces(&p);
         let ats: Vec<&str> = all.iter().map(|s| s.at.as_str()).collect();
-        assert!(ats.iter().any(|a| a.ends_with("/structural/extra/text")));
-        assert!(
-            ats.iter()
-                .any(|a| a.ends_with("/structural/extra/thinking"))
-        );
+        assert!(ats.iter().any(|a| a.ends_with("/structural/text")));
+        assert!(ats.iter().any(|a| a.ends_with("/structural/thinking")));
         assert!(ats.iter().any(|a| a.contains("/tool_uses/0/input")));
         assert!(
             ats.iter()
@@ -720,7 +1307,7 @@ mod tests {
         assert!(
             surfaces(&p)
                 .iter()
-                .any(|s| s.at.ends_with("/structural/extra/text"))
+                .any(|s| s.at.ends_with("/structural/text"))
         );
     }
 
@@ -780,8 +1367,168 @@ mod tests {
             )])
         };
         assert_eq!(surfaces(&build()), surfaces(&build()));
-        let once = build();
-        assert_eq!(surfaces(&once), surfaces(&once));
+    }
+
+    /// The emission order in full, over the fixture that exercises every arm.
+    /// Finding ids are positional over this list and a regenerated plan is
+    /// compared byte for byte, so the order is as much a contract as the
+    /// pointers are. One literal pins all of it at once: steps in document
+    /// order, artifacts sorted by key, each artifact's own key after
+    /// everything beneath it, and every typed field ahead of the residue
+    /// walk that follows it.
+    #[test]
+    fn the_emission_order_is_pinned() {
+        const GOLDEN: &[(&str, &str)] = &[
+            ("turn-0f3a", "/change/claude:~1~1sess-abc/structural/text"),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/thinking",
+            ),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/tool_uses/0/input/command",
+            ),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/tool_uses/0/result/content",
+            ),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/tool_uses/0/category",
+            ),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/tool_uses/0/id",
+            ),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/tool_uses/0/name",
+            ),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/environment/working_dir",
+            ),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/environment/vcs_branch",
+            ),
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/environment/vcs_revision",
+            ),
+            ("turn-0f3a", "/change/claude:~1~1sess-abc/structural/role"),
+            ("turn-0f3a", "/change/claude:~1~1sess-abc"),
+            ("turn-0f3a", "/change/~0~1notes.md/raw"),
+            ("turn-0f3a", "/change/~0~1notes.md/structural/before"),
+            ("turn-0f3a", "/change/~0~1notes.md/structural/after"),
+            (
+                "turn-0f3a",
+                "/change/~0~1notes.md/structural/edits/0/new_string",
+            ),
+            (
+                "turn-0f3a",
+                "/change/~0~1notes.md/structural/edits/0/old_string",
+            ),
+            ("turn-0f3a", "/change/~0~1notes.md/structural/rename_to"),
+            ("turn-0f3a", "/change/~0~1notes.md"),
+            ("turn-0f3a", "/meta/intent"),
+            ("turn-0f3a", "/meta/refs/0/href"),
+            ("turn-0f3a", "/meta/source/author_email"),
+            ("turn-0f3a", "/meta/note"),
+            ("turn-deleg", "/change/claude:~1~1sess-abc/structural/text"),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/prompt",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/result",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/text",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/tool_uses/0/input/file_path",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/tool_uses/0/result/content",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/tool_uses/0/id",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/tool_uses/0/name",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/file_mutations/0/raw_diff",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/file_mutations/0/before",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/file_mutations/0/after",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/file_mutations/0/path",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/file_mutations/1/path",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/id",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/role",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/turns/0/timestamp",
+            ),
+            (
+                "turn-deleg",
+                "/change/claude:~1~1sess-abc/structural/delegations/0/agent_id",
+            ),
+            ("turn-deleg", "/change/claude:~1~1sess-abc/structural/role"),
+            ("turn-deleg", "/change/claude:~1~1sess-abc"),
+            ("evt-1", "/change/claude:~1~1sess-abc/structural/data/a~1b"),
+            (
+                "evt-1",
+                "/change/claude:~1~1sess-abc/structural/data/nested/0",
+            ),
+            ("evt-1", "/change/claude:~1~1sess-abc/structural/event_type"),
+            ("evt-1", "/change/claude:~1~1sess-abc"),
+            ("", "/path/base/uri"),
+            ("", "/path/base/branch"),
+            ("", "/path/base/ref"),
+            ("", "/meta/title"),
+            ("", "/meta/intent"),
+            ("", "/meta/refs/0/href"),
+            ("", "/meta/vcs_remote"),
+            ("", "/meta/files_changed/0"),
+            ("", "/meta/files_changed/1"),
+        ];
+
+        let actual: Vec<(String, String)> = surfaces(&fixture_rich())
+            .into_iter()
+            .map(|s| (s.step, s.at))
+            .collect();
+        let expected: Vec<(String, String)> = GOLDEN
+            .iter()
+            .map(|(step, at)| (step.to_string(), at.to_string()))
+            .collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -807,8 +1554,11 @@ mod tests {
             json!({"text": "", "thinking": "kept"}),
         )]);
         let ats = ats(&p);
-        assert!(!ats.iter().any(|a| a.ends_with("/extra/text")), "{ats:?}");
-        assert!(ats.iter().any(|a| a.ends_with("/extra/thinking")));
+        assert!(
+            !ats.iter().any(|a| a.ends_with("/structural/text")),
+            "{ats:?}"
+        );
+        assert!(ats.iter().any(|a| a.ends_with("/structural/thinking")));
     }
 
     #[test]
@@ -820,7 +1570,7 @@ mod tests {
             }]}),
         )]);
         let ats = ats(&p);
-        let leaf = "/change/claude:~1~1sess-abc/structural/extra/tool_uses/0/input";
+        let leaf = "/change/claude:~1~1sess-abc/structural/tool_uses/0/input";
         assert!(ats.contains(&format!("{leaf}/env/AWS_KEY")), "{ats:?}");
         assert!(ats.contains(&format!("{leaf}/argv/0")));
         assert!(!ats.iter().any(|a| a.ends_with("/retries")));
@@ -829,7 +1579,7 @@ mod tests {
     #[test]
     fn blind_walk_escapes_object_keys() {
         let p = fixture_unknown_change_type();
-        let at = "/change/claude:~1~1sess-abc/structural/extra/data/a~1b";
+        let at = "/change/claude:~1~1sess-abc/structural/data/a~1b";
         assert!(ats(&p).contains(&at.to_string()), "{:?}", ats(&p));
 
         let mut p = p;
@@ -844,7 +1594,7 @@ mod tests {
         let mut p = fixture_rich();
         let mut c = SurfaceCursor { path: &mut p };
         assert_eq!(
-            c.read("turn-0f3a", "/change/~0~1notes.md/structural/extra/before")
+            c.read("turn-0f3a", "/change/~0~1notes.md/structural/before")
                 .as_deref(),
             Some("a\n")
         );
@@ -867,17 +1617,106 @@ mod tests {
 
     #[test]
     fn every_surface_reads_back() {
-        let mut p = fixture_rich();
+        // Through `read_at`, not a cursor: plan generation reads every
+        // surface in the document and has no business cloning one to do it.
+        let p = fixture_rich();
         let all = surfaces(&p);
-        assert!(all.len() > 15, "fixture is too thin: {}", all.len());
-        let c = SurfaceCursor { path: &mut p };
+        assert!(all.len() > 40, "fixture is too thin: {}", all.len());
         for s in &all {
             assert!(
-                c.read(&s.step, &s.at).is_some(),
+                read_at(&p, &s.step, &s.at).is_some(),
                 "surface does not resolve: {}",
                 s.at
             );
         }
+    }
+
+    /// The fields the closed map used to leave out. Each carried a real value
+    /// in a captured session and none was ever handed to a detector.
+    #[test]
+    fn the_fields_the_closed_map_used_to_miss_are_scanned() {
+        let p = fixture_rich();
+        let named: BTreeSet<(String, String)> =
+            surfaces(&p).into_iter().map(|s| (s.step, s.at)).collect();
+        let convo = "/change/claude:~1~1sess-abc/structural";
+        for (step, at) in [
+            // Sits beside the `working_dir` the map already scanned; 13
+            // occurrences of a branch name in one real 753-step session.
+            ("turn-0f3a", format!("{convo}/environment/vcs_branch")),
+            ("turn-0f3a", format!("{convo}/environment/vcs_revision")),
+            // A path, exactly like the one that became the artifact key.
+            (
+                "turn-0f3a",
+                "/change/~0~1notes.md/structural/rename_to".into(),
+            ),
+            // `mcp__<server>__<tool>`, and the server half is user config.
+            ("turn-0f3a", format!("{convo}/tool_uses/0/name")),
+            // A delegated mutation carrying only `path` had no typed field
+            // at all, so it produced zero surfaces - while the identical
+            // value at the top level was scanned.
+            (
+                "turn-deleg",
+                format!("{convo}/delegations/0/turns/0/file_mutations/1/path"),
+            ),
+            // The git commit message, and the PR body on a GitHub import.
+            ("turn-0f3a", "/meta/intent".into()),
+            ("turn-0f3a", "/meta/source/author_email".into()),
+            ("turn-0f3a", "/meta/refs/0/href".into()),
+            ("turn-0f3a", "/meta/note".into()),
+            ("", "/path/base/branch".into()),
+            ("", "/path/base/ref".into()),
+            ("", "/meta/title".into()),
+            ("", "/meta/intent".into()),
+            ("", "/meta/refs/0/href".into()),
+            // Byte-identical to a `step.change` key the map does scan, so
+            // redacting only the key leaves the original in the document.
+            ("", "/meta/files_changed/0".into()),
+        ] {
+            assert!(
+                named.contains(&(step.to_string(), at.clone())),
+                "not scanned: {step} {at}"
+            );
+            assert!(
+                read_at(&p, step, &at).is_some(),
+                "scanned but unreadable: {step} {at}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_extra_key_still_resolves() {
+        // `{"": "…"}` is legal JSON and the walk emits a surface for it, so
+        // the pass counts that field as scanned. A route that refused it
+        // would make the count a lie: no detector would ever see the value.
+        let mut p = path_of(vec![append_step(
+            "turn-empty-key",
+            json!({"": "AKIAIOSFODNN7EXAMPLE"}),
+        )]);
+        let at = "/change/claude:~1~1sess-abc/structural/";
+        assert!(ats(&p).contains(&at.to_string()), "{:?}", ats(&p));
+
+        let mut c = SurfaceCursor { path: &mut p };
+        assert_eq!(
+            c.read("turn-empty-key", at).as_deref(),
+            Some("AKIAIOSFODNN7EXAMPLE")
+        );
+        c.write("turn-empty-key", at, "x").unwrap();
+        assert_eq!(c.read("turn-empty-key", at).as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn renaming_an_artifact_key_invalidates_pointers_beneath_it() {
+        // The one place read and write stop agreeing, and the whole reason
+        // `surfaces()` emits an artifact's key after everything under it.
+        let mut p = fixture_file_write();
+        let mut c = SurfaceCursor { path: &mut p };
+        let raw = "/change/src~1config.rs/raw";
+        assert!(c.read("turn-9c21", raw).is_some());
+
+        c.write("turn-9c21", "/change/src~1config.rs", "redacted.rs")
+            .unwrap();
+        assert_eq!(c.read("turn-9c21", raw), None);
+        assert!(c.read("turn-9c21", "/change/redacted.rs/raw").is_some());
     }
 
     #[test]
@@ -898,26 +1737,38 @@ mod tests {
         let mut c = SurfaceCursor { path: &mut p };
         for (step, at) in [
             ("turn-0f3a", "/change/nope~1missing.rs/raw"),
+            ("turn-0f3a", "/change/claude:~1~1sess-abc/structural/nope"),
             (
                 "turn-0f3a",
-                "/change/claude:~1~1sess-abc/structural/extra/nope",
-            ),
-            (
-                "turn-0f3a",
-                "/change/claude:~1~1sess-abc/structural/extra/tool_uses/9/input",
+                "/change/claude:~1~1sess-abc/structural/tool_uses/9/input",
             ),
             // `token_usage` is an object, not a string leaf.
             (
                 "turn-0f3a",
-                "/change/claude:~1~1sess-abc/structural/extra/token_usage",
+                "/change/claude:~1~1sess-abc/structural/token_usage",
             ),
             (
                 "no-such-step",
-                "/change/claude:~1~1sess-abc/structural/extra/text",
+                "/change/claude:~1~1sess-abc/structural/text",
             ),
             ("turn-0f3a", "/step/actor"),
-            ("turn-0f3a", "/change/claude:~1~1sess-abc/structural/text"),
+            // The `extra` segment used to be part of the pointer, and it
+            // named nothing: `StructuralChange::extra` is flattened.
+            (
+                "turn-0f3a",
+                "/change/claude:~1~1sess-abc/structural/extra/text",
+            ),
+            // `type` is `structural`'s one typed sibling, and it is not in
+            // the extras map the pointer resolves against.
+            ("turn-0f3a", "/change/claude:~1~1sess-abc/structural/type"),
             ("", "/meta/not_present"),
+            ("", "/path/base/nope"),
+            ("", "/meta/refs/9/href"),
+            ("", "/meta/refs/0/rel"),
+            // A step-relative `/meta/…` must not fall through to the path's
+            // metadata, whether the step is missing or just has none.
+            ("no-such-step", "/meta/intent"),
+            ("turn-deleg", "/meta/intent"),
         ] {
             assert!(
                 matches!(c.write(step, at, "x"), Err(RedactError::BadPointer(_))),
@@ -941,7 +1792,7 @@ mod tests {
     #[test]
     fn delegated_turns_surface_their_own_shapes() {
         let p = fixture_with_delegation();
-        let base = "/change/claude:~1~1sess-abc/structural/extra/delegations/0";
+        let base = "/change/claude:~1~1sess-abc/structural/delegations/0";
         let by_at: HashMap<String, FieldShape> =
             surfaces(&p).into_iter().map(|s| (s.at, s.shape)).collect();
         for (at, shape) in [
@@ -972,7 +1823,7 @@ mod tests {
     #[test]
     fn file_write_edits_surface_both_sides() {
         let p = fixture_rich();
-        let base = "/change/~0~1notes.md/structural/extra/edits/0";
+        let base = "/change/~0~1notes.md/structural/edits/0";
         let ats = ats(&p);
         assert!(ats.contains(&format!("{base}/old_string")), "{ats:?}");
         assert!(ats.contains(&format!("{base}/new_string")));

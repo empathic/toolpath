@@ -287,6 +287,37 @@ struct Replay {
     reappeared_skips: usize,
 }
 
+/// The spec's bundled network-egress detector id
+/// (`docs/superpowers/specs/2026-07-30-path-redact-command-design.md`). Real
+/// live-credential verification (calling out to the issuing provider to
+/// confirm a candidate secret is still valid) was never built. This stub
+/// exists so `toolpath_redact::plan::generate_checked`'s `Egress::Network`
+/// gate has a real detector to refuse *before* `detect` ever runs — the same
+/// path a working network detector would take. That refusal is what
+/// `--allow-network-detectors` is for; getting past it lands here, in
+/// `detect`, which fails loudly rather than pretending to verify anything.
+struct KeyhogStub;
+
+impl toolpath_redact::Detector for KeyhogStub {
+    fn id(&self) -> &'static str {
+        "keyhog"
+    }
+
+    fn egress(&self) -> toolpath_redact::Egress {
+        toolpath_redact::Egress::Network
+    }
+
+    fn detect(
+        &self,
+        _c: &toolpath_redact::Candidate<'_>,
+    ) -> toolpath_redact::Result<Vec<toolpath_redact::Finding>> {
+        Err(toolpath_redact::RedactError::DetectorFailed(
+            "keyhog".to_string(),
+            "live credential verification was never implemented".to_string(),
+        ))
+    }
+}
+
 /// The detector registry replay resolves policy names against.
 ///
 /// Returning `None` fails the artifact rather than replaying with a
@@ -295,11 +326,12 @@ struct Replay {
 fn detector_named(name: &str) -> Option<Box<dyn toolpath_redact::Detector>> {
     match name {
         "internal" => Some(Box::new(toolpath_redact::internal::InternalDetector::new())),
+        "keyhog" => Some(Box::new(KeyhogStub)),
         _ => None,
     }
 }
 
-fn build_detectors(names: &[String]) -> Result<DetectorSet> {
+pub(crate) fn build_detectors(names: &[String]) -> Result<DetectorSet> {
     let mut set = DetectorSet::default();
     for name in names {
         let detector = detector_named(name).ok_or_else(|| {
@@ -483,8 +515,6 @@ fn replay_config(policy: &RedactionPolicy, key: Vec<u8>) -> RedactConfig {
 /// `cache_id`: a document sync does not track (a file input, a github
 /// or pathbase import) has nowhere to keep one, and its redaction will
 /// not survive a re-derive because nothing re-derives it.
-// Called by `path p redact`; drop the allow once that dispatch lands.
-#[allow(dead_code)]
 pub(crate) fn record_redaction_policy(cache_id: &str, policy: &RedactionPolicy) -> Result<bool> {
     let mut recorded = false;
     update_manifest(|manifest| {

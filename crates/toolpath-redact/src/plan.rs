@@ -23,6 +23,11 @@ pub struct PlanFinding {
     /// Surrounding line with the match replaced by its rule name. Never
     /// the value, never its length, unless `reveal` was set.
     pub context: String,
+    /// Keyed fingerprint of the bytes `span` covered when the plan was
+    /// generated. `verify` recomputes it, which is the only thing standing
+    /// between a mutated document and a marker spliced over the wrong text:
+    /// a same-length edit inside a recorded span leaves every offset valid.
+    pub fingerprint: String,
     pub action: Action,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<Transform>,
@@ -88,6 +93,10 @@ pub struct RedactionPolicy {
     pub key_id: String,
 }
 
+/// Plan format version. `verify` refuses anything else rather than reading a
+/// shape it does not know the invariants of.
+const PLAN_V: u32 = 1;
+
 // ── Plan machinery (T5) ────────────────────────────────────────────────
 
 pub fn parse_predicate(s: &str) -> crate::Result<Predicate> {
@@ -99,11 +108,13 @@ pub fn parse_predicate(s: &str) -> crate::Result<Predicate> {
         (">", Cmp::Gt),
         ("<", Cmp::Lt),
     ] {
+        // The `score` guard is load-bearing, not defensive: without it an
+        // operator character *inside* a value (`at=/change/a>b`) is read as
+        // the predicate's operator.
         if let Some((k, v)) = s.split_once(op)
             && k.trim() == "score"
         {
-            let value: f32 = v.trim().parse().map_err(|_| bad_predicate(s))?;
-            return Ok(Predicate::Score(cmp, value));
+            return Ok(Predicate::Score(cmp, parse_score(s, v)?));
         }
     }
 
@@ -118,7 +129,7 @@ pub fn parse_predicate(s: &str) -> crate::Result<Predicate> {
         "step" => Predicate::Step(v.to_string()),
         "detector" => Predicate::Detector(v.to_string()),
         "at" => Predicate::AtPrefix(v.to_string()),
-        "score" => Predicate::Score(Cmp::Eq, v.parse().map_err(|_| bad_predicate(s))?),
+        "score" => Predicate::Score(Cmp::Eq, parse_score(s, v)?),
         other => {
             return Err(crate::RedactError::BadPredicate(format!(
                 "unknown field {other:?} in {s:?}"
@@ -142,6 +153,21 @@ fn parse_shape(s: &str) -> crate::Result<FieldShape> {
             )));
         }
     })
+}
+
+/// Scores are the same 0.0..=1.0 quantity `--threshold` is, so they get the
+/// same range check. Left open, `score<=inf` silently matches everything,
+/// `score>=nan` silently matches nothing, and neither reads as a mistake in
+/// the output.
+fn parse_score(s: &str, v: &str) -> crate::Result<f32> {
+    let value: f32 = v.trim().parse().map_err(|_| bad_predicate(s))?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(crate::RedactError::BadPredicate(format!(
+            "score must be within 0.0..=1.0, got {} in {s:?}",
+            v.trim()
+        )));
+    }
+    Ok(value)
 }
 
 fn bad_predicate(s: &str) -> crate::RedactError {
@@ -168,15 +194,32 @@ pub fn matches(p: &Predicate, f: &PlanFinding) -> bool {
 
 /// Later decisions override earlier ones, so a caller can express
 /// "redact everything, except this" by ordering.
+///
+/// Action and transform resolve independently. A decision that carries no
+/// transform is not a decision to clear one - nothing in the surface can
+/// express that - so `--mode-for rule=us-ssn:mask --accept score>=0.9` keeps
+/// the mask. Overwriting it would make the run disagree with a replay of the
+/// same policy, which reads the per-rule mode back out of the config.
 pub fn apply_decisions(plan: &mut Plan, decisions: &[Decision]) {
     for finding in &mut plan.findings {
-        if let Some(d) = decisions
+        let mut action = None;
+        let mut transform = None;
+        for d in decisions
             .iter()
             .rev()
-            .find(|d| matches(&d.predicate, finding))
+            .filter(|d| matches(&d.predicate, finding))
         {
-            finding.action = d.action;
-            finding.transform = d.transform;
+            action = action.or(Some(d.action));
+            transform = transform.or(d.transform);
+            if transform.is_some() {
+                break;
+            }
+        }
+        if let Some(action) = action {
+            finding.action = action;
+        }
+        if let Some(transform) = transform {
+            finding.transform = Some(transform);
         }
     }
 }
@@ -187,34 +230,73 @@ pub fn finding_id(index: usize) -> String {
     format!("f{:02}", index + 1)
 }
 
-/// The line around `span` with the match replaced by `<rule>` - never the
+/// How much text either side of the match a reviewer gets. A "line" in a
+/// tool output or a minified file is not a line: an 8 KB newline-free field
+/// otherwise lands in the plan verbatim, carrying whatever else was on it -
+/// including the credentials the detectors missed.
+const CONTEXT_RADIUS: usize = 40;
+
+/// The text around `span` with the match replaced by `<rule>` - never the
 /// value and never anything from which its length can be read, unless
 /// `reveal` was set.
-pub fn elide_context(text: &str, span: std::ops::Range<usize>, rule: &str, reveal: bool) -> String {
-    let line_start = text[..span.start].rfind('\n').map_or(0, |i| i + 1);
+///
+/// Bounded to `CONTEXT_RADIUS` bytes either side, with `…` marking a cut.
+/// `\r` terminates the window along with `\n`: a lone carriage return in a
+/// plan a dry run prints rewinds the terminal over the line before it.
+///
+/// `span` must lie on char boundaries within `text` - `detect::normalise`
+/// drops every finding that does not, and this is only ever called on its
+/// output.
+pub(crate) fn elide_context(
+    text: &str,
+    span: std::ops::Range<usize>,
+    rule: &str,
+    reveal: bool,
+) -> String {
+    let line_start = text[..span.start].rfind(['\n', '\r']).map_or(0, |i| i + 1);
     let line_end = text[span.end..]
-        .find('\n')
+        .find(['\n', '\r'])
         .map_or(text.len(), |i| span.end + i);
+
+    let mut start = line_start.max(span.start.saturating_sub(CONTEXT_RADIUS));
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = line_end.min((span.end + CONTEXT_RADIUS).min(text.len()));
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+
     let replacement = if reveal {
         text[span.start..span.end].to_string()
     } else {
         format!("<{rule}>")
     };
     format!(
-        "{}{replacement}{}",
-        &text[line_start..span.start],
-        &text[span.end..line_end]
+        "{}{}{replacement}{}{}",
+        if start > line_start { "\u{2026}" } else { "" },
+        &text[start..span.start],
+        &text[span.end..end],
+        if end < line_end { "\u{2026}" } else { "" },
     )
 }
 
 /// Refuse a plan that no longer describes this document, naming the first
 /// divergence.
 ///
-/// Takes `path` by `&mut` (rather than the `&Path` the rest of this
-/// function's job would suggest) because `SurfaceCursor` (T2) needs
-/// exclusive access to resolve a pointer to text; `verify` itself never
-/// mutates anything through it.
-pub fn verify(plan: &Plan, path: &mut toolpath::v1::Path) -> crate::Result<()> {
+/// `key` is the redaction key the plan was generated with. Offsets alone
+/// prove nothing: a same-length edit inside a recorded span leaves every
+/// bound valid, and the marker then lands over text nobody detected. So each
+/// finding's fingerprint is recomputed from the bytes actually there now.
+/// Reusing the key means a plan verifies only against the document it was
+/// generated from, by whoever holds that key.
+pub fn verify(plan: &Plan, path: &toolpath::v1::Path, key: &[u8]) -> crate::Result<()> {
+    if plan.v != PLAN_V {
+        return Err(crate::RedactError::PlanMismatch(format!(
+            "plan version {} is not supported (expected {PLAN_V})",
+            plan.v
+        )));
+    }
     if plan.document != path.path.id {
         return Err(crate::RedactError::PlanMismatch(format!(
             "plan targets document {:?}, but path.id is {:?}",
@@ -222,19 +304,29 @@ pub fn verify(plan: &Plan, path: &mut toolpath::v1::Path) -> crate::Result<()> {
         )));
     }
 
-    let step_ids: std::collections::HashSet<String> =
-        path.steps.iter().map(|s| s.step.id.clone()).collect();
+    let steps: std::collections::HashMap<&str, &toolpath::v1::Step> =
+        path.steps.iter().map(|s| (s.step.id.as_str(), s)).collect();
 
-    let cursor = crate::surface::SurfaceCursor { path };
-    for finding in &plan.findings {
-        if !finding.step.is_empty() && !step_ids.contains(&finding.step) {
+    for (i, finding) in plan.findings.iter().enumerate() {
+        // Ids are positional, and `apply` reports by id. A renumbered or
+        // reordered list makes every diagnostic name the wrong finding.
+        let expected = finding_id(i);
+        if finding.id != expected {
+            return Err(crate::RedactError::PlanMismatch(format!(
+                "finding {i} carries id {:?}, but ids are positional and this one is {expected:?}",
+                finding.id
+            )));
+        }
+
+        let step = steps.get(finding.step.as_str()).copied();
+        if !finding.step.is_empty() && step.is_none() {
             return Err(crate::RedactError::PlanMismatch(format!(
                 "{}: step {:?} no longer exists",
                 finding.id, finding.step
             )));
         }
 
-        let current = cursor.read(&finding.step, &finding.at).ok_or_else(|| {
+        let current = crate::surface::read_at_in(path, step, &finding.at).ok_or_else(|| {
             crate::RedactError::PlanMismatch(format!(
                 "{}: {} no longer resolves",
                 finding.id, finding.at
@@ -251,22 +343,34 @@ pub fn verify(plan: &Plan, path: &mut toolpath::v1::Path) -> crate::Result<()> {
                 finding.id, finding.at
             )));
         }
+
+        // An empty or inverted span holds no value to fingerprint. `apply`
+        // refuses both by name, and its diagnostic is the more useful one.
+        if start < end
+            && crate::transform::Fingerprint::new(key, &current[start..end]).0
+                != finding.fingerprint
+        {
+            return Err(crate::RedactError::PlanMismatch(format!(
+                "{}: the text at {} changed since the plan was generated",
+                finding.id, finding.at
+            )));
+        }
     }
     Ok(())
 }
 
 // ── Plan generation (T8) ───────────────────────────────────────────────
 
-pub fn generate(
+/// In-crate convenience over `generate_inner` for tests that supply their own
+/// detectors and treat a detector failure as a bug in the test. Test-only
+/// because it is the panicking form: every shipping caller goes through
+/// `generate_checked`, which also runs the egress check.
+#[cfg(test)]
+pub(crate) fn generate(
     path: &toolpath::v1::Path,
     detectors: &crate::detect::DetectorSet,
     cfg: &crate::RedactConfig,
 ) -> Plan {
-    // This signature is fixed since T0 and cannot return `Result` (T5's own
-    // byte-identity test calls it directly, unwrapped). A failing detector
-    // is a bug in that detector, not a normal outcome, so it surfaces as a
-    // panic here instead of silently degrading to an empty plan;
-    // `generate_checked` propagates the same failure through `Result`.
     generate_inner(path, detectors, cfg).expect("detector failed while generating a redaction plan")
 }
 
@@ -297,43 +401,51 @@ fn generate_inner(
     cfg: &crate::RedactConfig,
 ) -> crate::Result<Plan> {
     let surfaces = crate::surface::surfaces(path);
+    let steps: std::collections::HashMap<&str, &toolpath::v1::Step> =
+        path.steps.iter().map(|s| (s.step.id.as_str(), s)).collect();
+    let kind = path.meta.as_ref().and_then(|m| m.kind.as_deref());
 
-    // `SurfaceCursor` needs `&mut Path` (T2 uses the same struct for
-    // writes); `generate` only takes `&Path` since `verify` re-checks
-    // findings against the caller's own document later, so read through a
-    // throwaway clone instead.
-    let mut scratch = path.clone();
-    let cursor = crate::surface::SurfaceCursor { path: &mut scratch };
-
-    // `surfaces()` already visits steps in document order and sorts
-    // artifacts/fields (see its own determinism test), and `detect_all`
-    // returns spans sorted by start - so findings collected in this order
-    // already satisfy the (step, pointer, span start) ordering `finding_id`
-    // relies on, with no extra sort needed here.
+    // Finding ids are positional over the emission order of `surfaces()`,
+    // which is itself deterministic (see its own determinism test), with each
+    // surface's own findings sorted by span start. Nothing below reorders, so
+    // an id can be assigned at push time.
     let mut findings = Vec::new();
     for s in &surfaces {
-        let Some(text) = cursor.read(&s.step, &s.at) else {
-            continue;
+        let step = steps.get(s.step.as_str()).copied();
+        // `surfaces()` named this field; if it no longer reads, the two
+        // disagree about the document and the pass has silently skipped a
+        // field it is claiming to have scanned.
+        let Some(text) = crate::surface::read_at_in(path, step, &s.at) else {
+            return Err(crate::RedactError::BadPointer(format!(
+                "{}{}",
+                s.step, s.at
+            )));
         };
-        let ctx = context_for(path, &s.step, &s.at);
         let candidate = crate::detect::Candidate {
             text: &text,
             shape: s.shape,
             at: &s.at,
-            ctx,
+            ctx: context_for(kind, step, &s.at),
         };
-        for finding in detectors.detect_all(&candidate)? {
-            let action = if finding.score < cfg.threshold {
-                Action::Skip
-            } else {
-                Action::Redact
-            };
+
+        // Threshold before overlap resolution, never after: see
+        // `detect_all_partitioned`.
+        let (above, below) = detectors.detect_all_partitioned(&candidate, cfg.threshold)?;
+        let mut resolved: Vec<(crate::detect::Finding, Action)> = above
+            .into_iter()
+            .map(|f| (f, Action::Redact))
+            .chain(below.into_iter().map(|f| (f, Action::Skip)))
+            .collect();
+        resolved.sort_by_key(|(f, _)| f.span.start);
+
+        for (finding, action) in resolved {
             let context = elide_context(&text, finding.span.clone(), &finding.rule, cfg.reveal);
             findings.push(PlanFinding {
-                id: String::new(), // assigned below, once findings are in final order
+                id: finding_id(findings.len()),
                 step: s.step.clone(),
                 at: s.at.clone(),
                 span: (finding.span.start, finding.span.end),
+                fingerprint: crate::transform::Fingerprint::new(&cfg.key, &text[finding.span]).0,
                 rule: finding.rule,
                 score: finding.score,
                 detector: finding.detector.to_string(),
@@ -344,12 +456,9 @@ fn generate_inner(
             });
         }
     }
-    for (i, finding) in findings.iter_mut().enumerate() {
-        finding.id = finding_id(i);
-    }
 
     Ok(Plan {
-        v: 1,
+        v: PLAN_V,
         document: path.path.id.clone(),
         generated: cfg.now,
         detectors: detectors.ids().into_iter().map(String::from).collect(),
@@ -362,17 +471,16 @@ fn generate_inner(
     })
 }
 
-/// `change_type`/`actor` come from the step and artifact the pointer names.
-/// `tool_name` stays `None`: resolving it would mean re-parsing the same
-/// `tool_uses` JSON `surfaces()` already walked once, and no detector in
-/// this crate reads it yet.
+/// Everything a detector is told about where its candidate came from.
+/// `Context` is the whole interface a pluggable detector gets, so every
+/// field it declares is resolved: a detector that only fires inside `Bash`
+/// input has no other way to know.
 fn context_for<'a>(
-    path: &'a toolpath::v1::Path,
-    step_id: &str,
+    kind: Option<&'a str>,
+    step: Option<&'a toolpath::v1::Step>,
     at: &str,
 ) -> crate::detect::Context<'a> {
-    let kind = path.meta.as_ref().and_then(|m| m.kind.as_deref());
-    let Some(step) = path.steps.iter().find(|s| s.step.id == step_id) else {
+    let Some(step) = step else {
         return crate::detect::Context {
             change_type: "",
             tool_name: None,
@@ -380,25 +488,52 @@ fn context_for<'a>(
             kind,
         };
     };
-    let change_type = artifact_key_from_at(at)
+    let structural = artifact_key_from_at(at)
         .and_then(|key| step.change.get(&key))
-        .and_then(|c| c.structural.as_ref())
-        .map(|s| s.change_type.as_str())
-        .unwrap_or("");
+        .and_then(|c| c.structural.as_ref());
     crate::detect::Context {
-        change_type,
-        tool_name: None,
+        change_type: structural.map(|s| s.change_type.as_str()).unwrap_or(""),
+        tool_name: structural.and_then(|s| tool_name_at(&s.extra, at)),
         actor: step.step.actor.as_str(),
         kind,
     }
 }
 
-/// Recovers the artifact key a `/change/...` pointer names. Mirrors
-/// `surface::ptr_decode` (private to that module) - decode `~1` before
-/// `~0`, or `~01` round-trips wrong (RFC 6901).
+/// Recovers the artifact key a `/change/...` pointer names.
 fn artifact_key_from_at(at: &str) -> Option<String> {
     let token = at.strip_prefix("/change/")?.split('/').next()?;
-    Some(token.replace("~1", "/").replace("~0", "~"))
+    Some(crate::surface::ptr_decode(token))
+}
+
+/// The tool a `/tool_uses/{i}/…` surface sits under, read back out of the
+/// step's own extras. Delegated turns nest their own `tool_uses`, so the
+/// *last* such segment names the call this pointer belongs to.
+fn tool_name_at<'a>(
+    extra: &'a std::collections::HashMap<String, serde_json::Value>,
+    at: &str,
+) -> Option<&'a str> {
+    const SEG: &str = "tool_uses/";
+
+    // `StructuralChange::extra` is `#[serde(flatten)]`, so its keys sit
+    // directly under `structural` with no `extra` segment of their own.
+    let rest = at
+        .strip_prefix("/change/")?
+        .split_once('/')?
+        .1
+        .strip_prefix("structural/")?;
+    let head = rest
+        .rfind(SEG)
+        .filter(|i| *i == 0 || rest.as_bytes()[i - 1] == b'/')?;
+    let index = rest[head + SEG.len()..].split('/').next()?;
+
+    // `{head}tool_uses/{index}/name`, split the way `surface::route` splits:
+    // the first token is the `extra` key, the rest is a pointer into it.
+    let leaf = format!("{}{SEG}{index}/name", &rest[..head]);
+    let (field, tail) = leaf.split_once('/')?;
+    extra
+        .get(&crate::surface::ptr_decode(field))?
+        .pointer(&format!("/{tail}"))?
+        .as_str()
 }
 
 #[cfg(test)]
@@ -407,23 +542,30 @@ mod tests {
     use std::collections::HashMap;
     use toolpath::v1::{ArtifactChange, Path, PathIdentity, Step, StepIdentity, StructuralChange};
 
+    const TEST_KEY: &[u8] = b"test-key";
+
     fn fixed_now() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-07-30T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc)
     }
 
+    fn fp(value: &str) -> String {
+        crate::transform::Fingerprint::new(TEST_KEY, value).0
+    }
+
     fn sample_finding(id: &str, rule: &str, score: f32) -> PlanFinding {
         PlanFinding {
             id: id.to_string(),
             step: "step-1".to_string(),
-            at: "/change/convo/structural/extra/text".to_string(),
+            at: "/change/convo/structural/text".to_string(),
             rule: rule.to_string(),
             span: (0, 4),
             score,
             detector: "internal".to_string(),
             shape: FieldShape::Prose,
             context: "<rule> context".to_string(),
+            fingerprint: String::new(),
             action: Action::Redact,
             transform: None,
         }
@@ -453,7 +595,7 @@ mod tests {
     }
 
     /// One step whose `conversation.append` text field is `text`, addressable
-    /// at `/change/<artifact_key>/structural/extra/text` - the pointer shape
+    /// at `/change/<artifact_key>/structural/text` - the pointer shape
     /// `surfaces()` (T2) assigns to that field.
     fn fixture_path_with_text(doc_id: &str, step_id: &str, artifact_key: &str, text: &str) -> Path {
         let mut extra = HashMap::new();
@@ -577,6 +719,45 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_finite_and_out_of_range_scores() {
+        // `score>=nan` matches nothing, `score<=inf` matches everything, and
+        // `score>=-1` matches everything. All three read as a filter that did
+        // not work, so none of them may be accepted silently.
+        for s in [
+            "score>=nan",
+            "score<=inf",
+            "score>=-1",
+            "score<=2",
+            "score=-0.5",
+            "score=1.5",
+            "score>inf",
+            "score=nan",
+        ] {
+            assert!(parse_predicate(s).is_err(), "{s:?} should be refused");
+        }
+        assert!(parse_predicate("score>=0").is_ok());
+        assert!(parse_predicate("score<=1").is_ok());
+    }
+
+    #[test]
+    fn an_operator_inside_a_non_score_value_is_not_an_operator() {
+        // Without the `score` guard on the operator split, the `>` inside the
+        // pointer is read as the predicate's operator and `b` as its value.
+        assert_eq!(
+            parse_predicate("at=/change/a>b").unwrap(),
+            Predicate::AtPrefix("/change/a>b".to_string())
+        );
+        assert_eq!(
+            parse_predicate("rule=a<=b").unwrap(),
+            Predicate::Rule("a<=b".to_string())
+        );
+        assert_eq!(
+            parse_predicate("step=x<y").unwrap(),
+            Predicate::Step("x<y".to_string())
+        );
+    }
+
+    #[test]
     fn rejects_unknown_shape_name() {
         assert!(parse_predicate("shape=not-a-shape").is_err());
     }
@@ -639,7 +820,7 @@ mod tests {
         };
 
         assert!(
-            matches(&p, &make("/change/x/structural/extra/text")),
+            matches(&p, &make("/change/x/structural/text")),
             "prefix should match"
         );
         assert!(
@@ -683,6 +864,49 @@ mod tests {
             }],
         );
         assert_eq!(plan.findings[0].transform, Some(Transform::Mask));
+    }
+
+    #[test]
+    fn a_later_decision_without_a_transform_keeps_the_earlier_one() {
+        // `--mode-for rule=us-ssn:mask --accept score>=0.9`. Clearing the
+        // transform here would make the run emit a marker while a replay of
+        // the same policy - which reads the per-rule mode back out of the
+        // config - emits a mask.
+        let mut plan = sample_plan(vec![sample_finding("f01", "us-ssn", 0.95)]);
+        apply_decisions(
+            &mut plan,
+            &[
+                Decision {
+                    predicate: parse_predicate("rule=us-ssn").unwrap(),
+                    action: Action::Redact,
+                    transform: Some(Transform::Mask),
+                },
+                decision("score>=0.9", Action::Redact),
+            ],
+        );
+        assert_eq!(plan.findings[0].action, Action::Redact);
+        assert_eq!(plan.findings[0].transform, Some(Transform::Mask));
+    }
+
+    #[test]
+    fn a_later_decision_with_a_transform_still_replaces_the_earlier_one() {
+        let mut plan = sample_plan(vec![sample_finding("f01", "us-ssn", 0.95)]);
+        apply_decisions(
+            &mut plan,
+            &[
+                Decision {
+                    predicate: parse_predicate("rule=us-ssn").unwrap(),
+                    action: Action::Redact,
+                    transform: Some(Transform::Mask),
+                },
+                Decision {
+                    predicate: parse_predicate("score>=0.9").unwrap(),
+                    action: Action::Redact,
+                    transform: Some(Transform::Hash),
+                },
+            ],
+        );
+        assert_eq!(plan.findings[0].transform, Some(Transform::Hash));
     }
 
     #[test]
@@ -768,6 +992,50 @@ mod tests {
     }
 
     #[test]
+    fn elide_context_truncates_a_long_newline_free_field() {
+        // A minified bundle or a tool's JSON output has no newlines, so the
+        // "line" around a match is the whole field - and it goes into the plan
+        // verbatim, carrying whatever the detectors missed on it.
+        let mut text = "x".repeat(4000);
+        let start = text.len();
+        text.push_str("SECRET");
+        text.push_str(&"y".repeat(4000));
+        assert_eq!(text.len(), 8006);
+
+        let out = elide_context(&text, start..start + 6, "rule", false);
+        assert!(out.len() < 120, "context is unbounded: {} bytes", out.len());
+        assert!(out.starts_with('\u{2026}'), "a cut must be marked: {out}");
+        assert!(out.ends_with('\u{2026}'), "a cut must be marked: {out}");
+        assert!(out.contains("<rule>"));
+    }
+
+    #[test]
+    fn elide_context_does_not_carry_a_carriage_return() {
+        // A lone `\r` in a plan the dry run prints rewinds the terminal over
+        // the line before it, hiding whatever was there.
+        let text = "line one\r\nkey: SECRET\r\nline three";
+        let start = text.find("SECRET").unwrap();
+        let out = elide_context(text, start..start + "SECRET".len(), "rule", false);
+        assert_eq!(out, "key: <rule>");
+        assert!(!out.contains('\r'));
+
+        // Carriage returns alone are a line ending too.
+        let cr_only = "line one\rkey: SECRET\rline three";
+        let start = cr_only.find("SECRET").unwrap();
+        let out = elide_context(cr_only, start..start + "SECRET".len(), "rule", false);
+        assert_eq!(out, "key: <rule>");
+    }
+
+    #[test]
+    fn elide_context_cuts_on_a_char_boundary() {
+        let text = format!("{}SECRET", "é".repeat(200));
+        let start = text.len() - "SECRET".len();
+        let out = elide_context(&text, start..text.len(), "rule", false);
+        assert!(out.starts_with('\u{2026}'));
+        assert!(out.contains('é'), "the cut must not have split a codepoint");
+    }
+
+    #[test]
     fn elide_context_reveal_includes_the_value() {
         let value = "AKIAIOSFODNN7REALKEY";
         let text = format!("key: {value}\n");
@@ -777,33 +1045,59 @@ mod tests {
     }
 
     // ── verify ───────────────────────────────────────────────────────────
-    //
-    // These exercise `verify` through `SurfaceCursor::read` (T2), which is
-    // still `todo!()` as of this writing - see the report for status.
 
-    #[test]
-    fn verify_passes_on_an_unmodified_document() {
-        let text = "hello world, this is prose";
-        let mut path = fixture_path_with_text("doc-1", "step-1", "convo", text);
+    /// A plan naming `world` inside the fixture's prose, fingerprinted with
+    /// `TEST_KEY` - what `generate` would have produced for that document.
+    fn world_plan() -> (String, Plan) {
+        let text = "hello world, this is prose".to_string();
         let start = text.find("world").unwrap();
         let plan = sample_plan(vec![PlanFinding {
             span: (start, start + "world".len()),
+            fingerprint: fp("world"),
             ..sample_finding("f01", "some-rule", 0.9)
         }]);
-        assert!(verify(&plan, &mut path).is_ok());
+        (text, plan)
+    }
+
+    #[test]
+    fn verify_passes_on_an_unmodified_document() {
+        let (text, plan) = world_plan();
+        let path = fixture_path_with_text("doc-1", "step-1", "convo", &text);
+        assert!(verify(&plan, &path, TEST_KEY).is_ok());
+    }
+
+    #[test]
+    fn verify_refuses_a_same_length_in_span_mutation() {
+        // The whole point of verifying: every offset still lands, the step is
+        // still there, the pointer still resolves - and the marker would go
+        // over five bytes nobody detected.
+        let (_, plan) = world_plan();
+        let mutated =
+            fixture_path_with_text("doc-1", "step-1", "convo", "hello MONKE, this is prose");
+        let e = verify(&plan, &mutated, TEST_KEY).unwrap_err().to_string();
+        assert!(e.contains("f01"), "should name the first divergence: {e}");
+    }
+
+    #[test]
+    fn verify_refuses_an_edit_that_shifts_the_span() {
+        let (_, plan) = world_plan();
+        let shifted =
+            fixture_path_with_text("doc-1", "step-1", "convo", "hello  world, this is pros");
+        assert!(verify(&plan, &shifted, TEST_KEY).is_err());
+    }
+
+    #[test]
+    fn verify_refuses_a_plan_fingerprinted_under_another_key() {
+        let (text, plan) = world_plan();
+        let path = fixture_path_with_text("doc-1", "step-1", "convo", &text);
+        assert!(verify(&plan, &path, b"a-different-key").is_err());
     }
 
     #[test]
     fn verify_fails_naming_the_finding_whose_span_no_longer_lands() {
-        let text = "hello world, this is prose";
-        let start = text.find("world").unwrap();
-        let plan = sample_plan(vec![PlanFinding {
-            span: (start, start + "world".len()),
-            ..sample_finding("f01", "some-rule", 0.9)
-        }]);
-
-        let mut mutated = fixture_path_with_text("doc-1", "step-1", "convo", "short");
-        let e = verify(&plan, &mut mutated).unwrap_err().to_string();
+        let (_, plan) = world_plan();
+        let mutated = fixture_path_with_text("doc-1", "step-1", "convo", "short");
+        let e = verify(&plan, &mutated, TEST_KEY).unwrap_err().to_string();
         assert!(e.contains("f01"), "should name the first divergence: {e}");
     }
 
@@ -814,16 +1108,52 @@ mod tests {
             span: (0, 5),
             ..sample_finding("f01", "some-rule", 0.9)
         }]);
-        let mut path = fixture_path_with_text("doc-1", "step-1", "convo", "hello world");
-        let e = verify(&plan, &mut path).unwrap_err().to_string();
+        let path = fixture_path_with_text("doc-1", "step-1", "convo", "hello world");
+        let e = verify(&plan, &path, TEST_KEY).unwrap_err().to_string();
         assert!(e.contains("f01"));
     }
 
     #[test]
     fn verify_fails_when_the_document_id_differs() {
         let plan = sample_plan(vec![]);
-        let mut path = fixture_path_with_text("different-doc", "step-1", "convo", "text");
-        assert!(verify(&plan, &mut path).is_err());
+        let path = fixture_path_with_text("different-doc", "step-1", "convo", "text");
+        assert!(verify(&plan, &path, TEST_KEY).is_err());
+    }
+
+    #[test]
+    fn verify_refuses_an_unrecognised_plan_version() {
+        let (text, mut plan) = world_plan();
+        plan.v = 2;
+        let path = fixture_path_with_text("doc-1", "step-1", "convo", &text);
+        let e = verify(&plan, &path, TEST_KEY).unwrap_err().to_string();
+        assert!(e.contains('2'), "should name the version it refused: {e}");
+    }
+
+    #[test]
+    fn verify_refuses_findings_whose_ids_are_not_positional() {
+        // `apply` reports by id, so a renumbered list makes every diagnostic
+        // - and every `--accept id=…` a reviewer writes - name a different
+        // finding than the one they read.
+        let (text, mut plan) = world_plan();
+        plan.findings[0].id = "f07".to_string();
+        let path = fixture_path_with_text("doc-1", "step-1", "convo", &text);
+        assert!(verify(&plan, &path, TEST_KEY).is_err());
+    }
+
+    #[test]
+    fn verify_tolerates_an_empty_or_inverted_span_for_apply_to_name() {
+        let text = "hello world, this is prose";
+        let path = fixture_path_with_text("doc-1", "step-1", "convo", text);
+        for span in [(6, 6), (11, 6)] {
+            let plan = sample_plan(vec![PlanFinding {
+                span,
+                ..sample_finding("f01", "some-rule", 0.9)
+            }]);
+            assert!(
+                verify(&plan, &path, TEST_KEY).is_ok(),
+                "{span:?} is apply's diagnosis to make, not verify's"
+            );
+        }
     }
 
     // ── serde round-trip ─────────────────────────────────────────────────
@@ -841,7 +1171,7 @@ mod tests {
             },
             surfaces: vec![crate::surface::Surface {
                 step: "step-1".to_string(),
-                at: "/change/convo/structural/extra/text".to_string(),
+                at: "/change/convo/structural/text".to_string(),
                 shape: FieldShape::Prose,
                 bytes: 42,
             }],
@@ -849,6 +1179,7 @@ mod tests {
                 span: (10, 30),
                 score: 0.97,
                 context: "<aws-access-key-id> is the key".to_string(),
+                fingerprint: fp("AKIAIOSFODNN7EXAMPLE"),
                 transform: Some(Transform::Hash),
                 ..sample_finding("f01", "aws-access-key-id", 0.97)
             }],
@@ -940,6 +1271,26 @@ mod plan_gen {
         }
     }
 
+    /// Pointer and resolved tool name, one entry per candidate.
+    type SeenCtx = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+    /// Records what every candidate was shown as. `Context` is the whole of
+    /// what a detector is told about where its text came from, so the only
+    /// place to observe it is inside one.
+    struct CtxSpy(SeenCtx);
+    impl Detector for CtxSpy {
+        fn id(&self) -> &'static str {
+            "ctx-spy"
+        }
+        fn detect(&self, c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((c.at.to_string(), c.ctx.tool_name.map(str::to_owned)));
+            Ok(Vec::new())
+        }
+    }
+
     fn step_with_text(id: &str, artifact: &str, text: &str) -> Step {
         let mut extra = HashMap::new();
         extra.insert(
@@ -999,6 +1350,62 @@ mod plan_gen {
 
     fn findings_at(plan: &Plan, at: &str) -> usize {
         plan.findings.iter().filter(|pf| pf.at == at).count()
+    }
+
+    fn rules_of(plan: &Plan) -> Vec<&str> {
+        plan.findings.iter().map(|f| f.rule.as_str()).collect()
+    }
+
+    /// Several artifacts per step, several `extra` keys each, under a change
+    /// type `surfaces()` has no model for - so both the artifact map's
+    /// iteration order and the blind walk's are exercised.
+    ///
+    /// Built fresh on every call. `HashMap`'s iteration order is seeded per
+    /// instance, so a byte-identity test that compares one document against
+    /// itself cannot see an order leaking into the output.
+    fn fixture_hash_ordered() -> Path {
+        let steps = ["s1", "s2"]
+            .into_iter()
+            .map(|id| {
+                let change = ["zeta", "alpha", "mu", "beta"]
+                    .into_iter()
+                    .map(|artifact| {
+                        let extra = ["omega", "delta", "kappa", "iota", "chi"]
+                            .into_iter()
+                            .map(|key| {
+                                (
+                                    key.to_string(),
+                                    serde_json::Value::String(format!(
+                                        "{key} holds a SECRET-VALUE somewhere"
+                                    )),
+                                )
+                            })
+                            .collect();
+                        (
+                            artifact.to_string(),
+                            ArtifactChange {
+                                raw: None,
+                                structural: Some(StructuralChange {
+                                    change_type: "provider.blob".to_string(),
+                                    extra,
+                                }),
+                            },
+                        )
+                    })
+                    .collect();
+                Step {
+                    step: StepIdentity {
+                        id: id.to_string(),
+                        parents: Vec::new(),
+                        actor: "human:t".to_string(),
+                        timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    },
+                    change,
+                    meta: None,
+                }
+            })
+            .collect();
+        path_of(steps)
     }
 
     // ── Step 8.1, verbatim ────────────────────────────────────────────────
@@ -1094,14 +1501,185 @@ mod plan_gen {
 
     #[test]
     fn regenerating_a_plan_yields_byte_identical_json() {
-        let path = fixture_mixed();
+        // Two separately built fixtures, not one document generated twice: the
+        // `HashMap`s a document is made of are seeded per instance, and only a
+        // second instance can catch that seed reaching the output.
         let set = detectors();
         let cfg = cfg();
-        let a = generate(&path, &set, &cfg);
-        let b = generate(&path, &set, &cfg);
+        let a = generate(&fixture_hash_ordered(), &set, &cfg);
+        let b = generate(&fixture_hash_ordered(), &set, &cfg);
+        assert!(a.findings.len() > 10, "fixture must exercise the ordering");
         assert_eq!(
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
+        );
+    }
+
+    // ── Threshold before overlap resolution (T8) ─────────────────────────
+
+    #[test]
+    fn a_low_score_container_never_evicts_an_above_threshold_finding() {
+        // Overlap resolution is score-blind on length. Resolve first and the
+        // 0.6 whole-line hit wins; threshold afterwards and it is discarded
+        // too - and the key it swallowed ships in the clear, unreported.
+        let text = "prefix AKIAIOSFODNN7REALKEY suffix";
+        assert_eq!(text.len(), 34);
+        let path = path_of(vec![step_with_text("s1", "a", text)]);
+
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FixedDetector(vec![
+            f(0..34, "generic-entropy", 0.6),
+            f(7..27, "aws-access-key-id", 0.99),
+        ])));
+
+        let plan = generate(&path, &set, &cfg());
+        assert_eq!(rules_of(&plan), vec!["aws-access-key-id"]);
+        assert_eq!(plan.findings[0].action, Action::Redact);
+        assert_eq!(plan.findings[0].span, (7, 27));
+    }
+
+    #[test]
+    fn a_sub_threshold_finding_that_contests_nothing_stays_in_the_plan() {
+        // `--accept score>=0.5` has to have something to accept.
+        let path = path_of(vec![step_with_text("s1", "a", "0123456789abcdefghij")]);
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FixedDetector(vec![
+            f(0..5, "certain", 0.99),
+            f(10..15, "unsure", 0.4),
+        ])));
+
+        let plan = generate(&path, &set, &cfg());
+        assert_eq!(rules_of(&plan), vec!["certain", "unsure"]);
+        assert_eq!(plan.findings[0].action, Action::Redact);
+        assert_eq!(plan.findings[1].action, Action::Skip);
+        assert_eq!(plan.findings[0].id, "f01");
+        assert_eq!(plan.findings[1].id, "f02");
+    }
+
+    // ── Coverage the reviewer asked for ─────────────────────────────────
+
+    #[test]
+    fn a_credential_in_path_base_becomes_a_finding_with_an_empty_step() {
+        let mut path = path_of(vec![step_with_text("s1", "a", "nothing to see")]);
+        path.path.base = Some(toolpath::v1::Base {
+            uri: "https://x-token-auth:SECRET-VALUE@example.com/o/r".to_string(),
+            ref_str: None,
+            branch: None,
+        });
+
+        let plan = generate(&path, &detectors(), &cfg());
+        let finding = plan
+            .findings
+            .iter()
+            .find(|f| f.at == "/path/base/uri")
+            .expect("a document-level surface must be scanned like any other");
+        assert_eq!(finding.step, "", "document-level fields belong to no step");
+        assert_eq!(finding.action, Action::Redact);
+    }
+
+    #[test]
+    fn a_plan_always_round_trips_through_json() {
+        // JSON has no infinity: serde writes it as `null`, `score` stops
+        // parsing as an `f32`, and the plan file cannot be read back at all.
+        let mut set = DetectorSet::default();
+        set.push(Box::new(FixedDetector(vec![
+            f(0..10, "infinite", f32::INFINITY),
+            f(10..20, "finite", 0.9),
+        ])));
+
+        let plan = generate(&fixture_one_field(), &set, &cfg());
+        assert_eq!(rules_of(&plan), vec!["finite"]);
+
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(!json.contains("null"), "a score serialised as null: {json}");
+        assert_eq!(serde_json::from_str::<Plan>(&json).unwrap(), plan);
+    }
+
+    #[test]
+    fn a_surface_that_does_not_read_back_is_refused_not_skipped() {
+        // Two steps sharing an id: `surfaces()` names both steps' fields, but
+        // a `(step, pointer)` pair can only resolve to one of them. Skipping
+        // the half that does not read reports those fields as scanned when
+        // nothing ever looked at them.
+        let path = path_of(vec![
+            step_with_text("dup", "a", "first"),
+            step_with_text("dup", "b", "second"),
+        ]);
+        assert!(matches!(
+            generate_checked(&path, &detectors(), &cfg(), false),
+            Err(crate::RedactError::BadPointer(_))
+        ));
+    }
+
+    #[test]
+    fn a_tool_use_surface_carries_the_tool_name() {
+        let spy = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut set = DetectorSet::default();
+        set.push(Box::new(CtxSpy(spy.clone())));
+
+        let mut extra = HashMap::new();
+        extra.insert(
+            "tool_uses".to_string(),
+            serde_json::json!([
+                {"name": "Bash", "input": {"command": "echo hi"}},
+                {"name": "Read", "input": {"file_path": "/etc/hosts"}},
+            ]),
+        );
+        extra.insert(
+            "delegations".to_string(),
+            serde_json::json!([{
+                "turns": [{"tool_uses": [{"name": "Grep", "input": {"pattern": "x"}}]}],
+            }]),
+        );
+        extra.insert(
+            "text".to_string(),
+            serde_json::Value::String("plain prose".to_string()),
+        );
+
+        let mut change = HashMap::new();
+        change.insert(
+            "convo".to_string(),
+            ArtifactChange {
+                raw: None,
+                structural: Some(StructuralChange {
+                    change_type: "conversation.append".to_string(),
+                    extra,
+                }),
+            },
+        );
+        let path = path_of(vec![Step {
+            step: StepIdentity {
+                id: "s1".to_string(),
+                parents: Vec::new(),
+                actor: "agent:claude-code".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+            },
+            change,
+            meta: None,
+        }]);
+
+        generate(&path, &set, &cfg());
+
+        let seen = spy.lock().unwrap();
+        let named = |suffix: &str| -> Option<String> {
+            seen.iter()
+                .find(|(at, _)| at.ends_with(suffix))
+                .and_then(|(_, name)| name.clone())
+        };
+        assert_eq!(named("/tool_uses/0/input/command").as_deref(), Some("Bash"));
+        assert_eq!(
+            named("/tool_uses/1/input/file_path").as_deref(),
+            Some("Read")
+        );
+        assert_eq!(
+            named("/delegations/0/turns/0/tool_uses/0/input/pattern").as_deref(),
+            Some("Grep"),
+            "a delegated turn's own tool_uses name its own calls"
+        );
+        assert_eq!(
+            named("/structural/text"),
+            None,
+            "prose belongs to no tool call"
         );
     }
 

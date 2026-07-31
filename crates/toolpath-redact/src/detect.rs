@@ -100,8 +100,51 @@ impl DetectorSet {
     /// resolution is score-blind on length, so a low-scoring container evicts
     /// a high-scoring finding nested inside it. Threshold BEFORE this runs,
     /// never after - thresholding the output lets a container that is about
-    /// to be discarded take the survivor down with it.
+    /// to be discarded take the survivor down with it. A caller that has a
+    /// threshold wants `detect_all_partitioned`.
     pub fn detect_all(&self, c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
+        Ok(normalise(c.text, self.raw(c)?))
+    }
+
+    /// `detect_all`, split on `threshold`, with overlaps resolved on each
+    /// side separately. Returns `(above, below)`.
+    ///
+    /// This is the ordering constraint on `detect_all` made structural.
+    /// Resolution is score-blind on length, so a whole-line 0.6 generic-entropy
+    /// hit would evict the 0.99 AWS key nested inside it, and thresholding
+    /// afterwards would then discard the container too - publishing the key.
+    /// Resolving the above-threshold set on its own means nothing the caller
+    /// is about to discard can contest it.
+    ///
+    /// `below` is what survives resolution among the sub-threshold findings,
+    /// minus anything overlapping an above-threshold winner: it exists so a
+    /// reviewer can lower the bar after the fact (`--accept score>=0.5`), and
+    /// a row that lost its bytes to a redaction is not offerable.
+    ///
+    /// Each side is sorted by span start, and the union of the two is
+    /// non-overlapping.
+    pub fn detect_all_partitioned(
+        &self,
+        c: &Candidate<'_>,
+        threshold: f32,
+    ) -> crate::Result<(Vec<Finding>, Vec<Finding>)> {
+        let (above, below): (Vec<Finding>, Vec<Finding>) =
+            self.raw(c)?.into_iter().partition(|f| f.score >= threshold);
+
+        let above = normalise(c.text, above);
+        let below = normalise(c.text, below)
+            .into_iter()
+            .filter(|f| {
+                !above
+                    .iter()
+                    .any(|w| f.span.start < w.span.end && f.span.end > w.span.start)
+            })
+            .collect();
+        Ok((above, below))
+    }
+
+    /// Every detector's unreconciled output, in registration order.
+    fn raw(&self, c: &Candidate<'_>) -> crate::Result<Vec<Finding>> {
         let mut raw = Vec::new();
         for d in &self.0 {
             if !d.prefilter(c.text) {
@@ -109,7 +152,7 @@ impl DetectorSet {
             }
             raw.extend(d.detect(c)?);
         }
-        Ok(normalise(c.text, raw))
+        Ok(raw)
     }
 }
 
@@ -122,8 +165,10 @@ impl DetectorSet {
 fn normalise(text: &str, mut findings: Vec<Finding>) -> Vec<Finding> {
     findings.retain(|f| {
         // A NaN score is not orderable, and a single non-comparable element
-        // makes the whole sort's outcome depend on input order.
-        !f.score.is_nan()
+        // makes the whole sort's outcome depend on input order. An infinite
+        // one is orderable but not representable in JSON - serde writes it as
+        // `null`, and the plan file it lands in stops parsing.
+        f.score.is_finite()
             && f.span.start < f.span.end
             && f.span.end <= text.len()
             && text.is_char_boundary(f.span.start)
@@ -362,6 +407,74 @@ mod tests {
     #[test]
     fn drops_nan_scores() {
         assert!(detect("abcdefgh", vec![f(0..4, "a", f32::NAN)]).is_empty());
+    }
+
+    #[test]
+    fn drops_infinite_scores() {
+        assert!(detect("abcdefgh", vec![f(0..4, "a", f32::INFINITY)]).is_empty());
+        assert!(detect("abcdefgh", vec![f(0..4, "a", f32::NEG_INFINITY)]).is_empty());
+    }
+
+    fn partition(
+        text: &str,
+        findings: Vec<Finding>,
+        threshold: f32,
+    ) -> (Vec<Finding>, Vec<Finding>) {
+        let mut s = DetectorSet::default();
+        s.push(Box::new(HostileDetector(findings)));
+        s.detect_all_partitioned(&cand(text), threshold).unwrap()
+    }
+
+    #[test]
+    fn a_sub_threshold_container_does_not_evict_the_finding_nested_in_it() {
+        // What `detect_all` gets wrong: score-blind on length, the 0.6
+        // container wins, and thresholding its output then drops the 0.99
+        // finding along with it.
+        let evicted = detect(
+            ALPHABET,
+            vec![f(0..20, "container", 0.6), f(4..9, "key", 0.99)],
+        );
+        assert_eq!(rules(&evicted), vec!["container"]);
+
+        let (above, below) = partition(
+            ALPHABET,
+            vec![f(0..20, "container", 0.6), f(4..9, "key", 0.99)],
+            0.8,
+        );
+        assert_eq!(rules(&above), vec!["key"]);
+        assert!(
+            below.is_empty(),
+            "the container overlaps a winner: {below:?}"
+        );
+    }
+
+    #[test]
+    fn a_sub_threshold_finding_clear_of_every_winner_survives() {
+        let (above, below) = partition(
+            ALPHABET,
+            vec![f(0..5, "high", 0.9), f(10..15, "low", 0.2)],
+            0.8,
+        );
+        assert_eq!(rules(&above), vec!["high"]);
+        assert_eq!(rules(&below), vec!["low"]);
+    }
+
+    #[test]
+    fn partitioned_output_is_non_overlapping_across_both_sides() {
+        let (above, below) = partition(
+            ALPHABET,
+            vec![
+                f(0..5, "a", 0.9),
+                f(3..8, "b", 0.2),
+                f(9..12, "c", 0.1),
+                f(14..20, "d", 0.95),
+            ],
+            0.8,
+        );
+        let mut all: Vec<Finding> = above.into_iter().chain(below).collect();
+        all.sort_by_key(|f| f.span.start);
+        assert!(all.windows(2).all(|w| w[0].span.end <= w[1].span.start));
+        assert_eq!(rules(&all), vec!["a", "c", "d"]);
     }
 
     #[test]
