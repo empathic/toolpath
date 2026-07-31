@@ -47,9 +47,20 @@ pub struct Surface {
 ///   vocabularies this format defines, with no room for a user's string.
 /// - `VcsSource::{type,revision,change_id}` and `Ref::rel` - identifiers the
 ///   VCS or the format assigns, not the human.
-/// - `{Step,Path}Meta::{actors,signatures}` - identity and integrity
-///   material, which redaction drops wholesale rather than rewrites.
+/// - `{Step,Path}Meta::signatures` - integrity material over the content
+///   this pass rewrites, which `apply` drops wholesale rather than rewrites.
+/// - the `actors` map's own keys, and each definition's `provider`, `model`,
+///   and `keys[i].{type,fingerprint}`. A key is the string `step.actor`
+///   names, and `step.actor` is not rewritten, so renaming one would detach
+///   every step from its actor. `provider` and `model` are the harness and
+///   API vocabularies the derivation reports. A key fingerprint is a digest
+///   of a public key: rewriting it hides nothing and leaves any signature
+///   that survived the pass unverifiable. The rest of a definition *is*
+///   scanned - see `actor_surfaces`.
 /// - every non-string leaf - a detector has nothing to span in a number.
+/// - anything outside the `Path` handed in. A `Graph`'s own `meta` carries a
+///   title, an intent, refs and extras that no call on its member paths can
+///   reach; redacting a graph needs a pass of its own.
 pub fn surfaces(path: &toolpath::v1::Path) -> Vec<Surface> {
     let mut out = Vec::new();
     for step in &path.steps {
@@ -139,6 +150,7 @@ fn path_meta_surfaces(out: &mut Vec<Surface>, meta: &toolpath::v1::PathMeta) {
             &r.href,
         );
     }
+    actor_surfaces(out, "", meta.actors.as_ref());
     if let Some(v) = meta.extra.get("vcs_remote") {
         walk_json(out, "", "/meta/vcs_remote", v, FieldShape::Uri);
     }
@@ -174,10 +186,63 @@ fn step_meta_surfaces(out: &mut Vec<Surface>, step: &str, meta: &toolpath::v1::S
             &r.href,
         );
     }
+    actor_surfaces(out, step, meta.actors.as_ref());
     if let Some(src) = &meta.source {
         residue(out, step, "/meta/source", &src.extra, &[]);
     }
     residue(out, step, "/meta", &meta.extra, &[]);
+}
+
+/// The free text on an actor definition. The rest of the struct is a
+/// vocabulary the tooling assigned, but these are not: `toolpath-git` writes
+/// the committer's real name into `name` and their email address into
+/// `identities[i].id`, and a `keys[i].href` is a URL like any other.
+///
+/// Sorted by actor key: `actors` is a `HashMap` and emission order is part of
+/// the contract.
+fn actor_surfaces(
+    out: &mut Vec<Surface>,
+    step: &str,
+    actors: Option<&HashMap<String, toolpath::v1::ActorDefinition>>,
+) {
+    let Some(actors) = actors else { return };
+    let mut keys: Vec<&String> = actors.keys().collect();
+    keys.sort();
+    for key in keys {
+        let def = &actors[key];
+        let at = format!("/meta/actors/{}", ptr_escape(key));
+        if let Some(v) = &def.name {
+            push(out, step, format!("{at}/name"), FieldShape::Prose, v);
+        }
+        for (i, id) in def.identities.iter().enumerate() {
+            let at = format!("{at}/identities/{i}");
+            push(
+                out,
+                step,
+                format!("{at}/system"),
+                FieldShape::OpaqueJson,
+                &id.system,
+            );
+            push(
+                out,
+                step,
+                format!("{at}/id"),
+                FieldShape::OpaqueJson,
+                &id.id,
+            );
+        }
+        for (i, k) in def.keys.iter().enumerate() {
+            if let Some(href) = &k.href {
+                push(
+                    out,
+                    step,
+                    format!("{at}/keys/{i}/href"),
+                    FieldShape::Uri,
+                    href,
+                );
+            }
+        }
+    }
 }
 
 fn push(out: &mut Vec<Surface>, step: &str, at: String, shape: FieldShape, text: &str) {
@@ -528,8 +593,17 @@ enum Route {
         field: String,
         tail: String,
     },
+    /// `PathMeta::actors[key]`, and which of its strings.
+    DocActor {
+        key: String,
+        field: ActorField,
+    },
     StepIntent,
     StepRefHref(usize),
+    StepActor {
+        key: String,
+        field: ActorField,
+    },
     /// `StepMeta::source.extra[field]`, flattened the same way.
     StepSourceExtra {
         field: String,
@@ -548,6 +622,17 @@ enum Route {
         field: String,
         tail: String,
     },
+}
+
+/// Which string on an `ActorDefinition` a pointer names. The fields left out
+/// are the ones `surfaces()` does not emit, so a pointer at one of them
+/// resolves to nothing - which is what an unnamed field should do.
+#[derive(Clone, Copy)]
+enum ActorField {
+    Name,
+    IdentitySystem(usize),
+    IdentityId(usize),
+    KeyHref(usize),
 }
 
 /// The document's typed string slots, named so read and write share a parse.
@@ -586,6 +671,9 @@ fn route_document(at: &str) -> Option<Route> {
     if let Some(i) = ref_href_index(rest) {
         return Some(Route::DocRefHref(i));
     }
+    if let Some((key, field)) = actor_route(rest) {
+        return Some(Route::DocActor { key, field });
+    }
     let (field, tail) = split_field(rest);
     Some(Route::DocMetaExtra { field, tail })
 }
@@ -597,6 +685,9 @@ fn route_step(at: &str) -> Option<Route> {
         }
         if let Some(i) = ref_href_index(rest) {
             return Some(Route::StepRefHref(i));
+        }
+        if let Some((key, field)) = actor_route(rest) {
+            return Some(Route::StepActor { key, field });
         }
         if let Some(rest) = rest.strip_prefix("source/") {
             let (field, tail) = split_field(rest);
@@ -622,6 +713,27 @@ fn route_step(at: &str) -> Option<Route> {
         field,
         tail,
     })
+}
+
+/// `actors/{key}/…` - the strings the map names on an actor definition. An
+/// actor key is pointer-escaped, so it never holds a literal `/` and the
+/// first split always lands on the key boundary.
+fn actor_route(rest: &str) -> Option<(String, ActorField)> {
+    let (key, rest) = rest.strip_prefix("actors/")?.split_once('/')?;
+    let field = if rest == "name" {
+        ActorField::Name
+    } else {
+        let (list, rest) = rest.split_once('/')?;
+        let (index, leaf) = rest.split_once('/')?;
+        let i = index.parse().ok()?;
+        match (list, leaf) {
+            ("identities", "system") => ActorField::IdentitySystem(i),
+            ("identities", "id") => ActorField::IdentityId(i),
+            ("keys", "href") => ActorField::KeyHref(i),
+            _ => return None,
+        }
+    };
+    Some((ptr_decode(key), field))
 }
 
 /// `refs/{i}/href` - the only leaf under `refs` the map names.
@@ -693,8 +805,14 @@ fn resolve(
         Route::DocText(field) => doc_text(path, field).cloned(),
         Route::DocRefHref(i) => Some(path.meta.as_ref()?.refs.get(i)?.href.clone()),
         Route::DocMetaExtra { field, tail } => leaf(&path.meta.as_ref()?.extra, &field, &tail),
+        Route::DocActor { key, field } => {
+            actor_text(path.meta.as_ref()?.actors.as_ref()?.get(&key)?, field).cloned()
+        }
         Route::StepIntent => step?.meta.as_ref()?.intent.clone(),
         Route::StepRefHref(i) => Some(step?.meta.as_ref()?.refs.get(i)?.href.clone()),
+        Route::StepActor { key, field } => {
+            actor_text(step?.meta.as_ref()?.actors.as_ref()?.get(&key)?, field).cloned()
+        }
         Route::StepSourceExtra { field, tail } => {
             leaf(&step?.meta.as_ref()?.source.as_ref()?.extra, &field, &tail)
         }
@@ -732,6 +850,29 @@ fn doc_text_mut(path: &mut toolpath::v1::Path, field: DocText) -> Option<&mut St
         DocText::BaseRef => path.path.base.as_mut()?.ref_str.as_mut(),
         DocText::MetaTitle => path.meta.as_mut()?.title.as_mut(),
         DocText::MetaIntent => path.meta.as_mut()?.intent.as_mut(),
+    }
+}
+
+/// An actor's named string. A `_mut` twin follows; the two must stay in step,
+/// which is why both are one `match` over the same enum.
+fn actor_text(def: &toolpath::v1::ActorDefinition, field: ActorField) -> Option<&String> {
+    match field {
+        ActorField::Name => def.name.as_ref(),
+        ActorField::IdentitySystem(i) => Some(&def.identities.get(i)?.system),
+        ActorField::IdentityId(i) => Some(&def.identities.get(i)?.id),
+        ActorField::KeyHref(i) => def.keys.get(i)?.href.as_ref(),
+    }
+}
+
+fn actor_text_mut(
+    def: &mut toolpath::v1::ActorDefinition,
+    field: ActorField,
+) -> Option<&mut String> {
+    match field {
+        ActorField::Name => def.name.as_mut(),
+        ActorField::IdentitySystem(i) => Some(&mut def.identities.get_mut(i)?.system),
+        ActorField::IdentityId(i) => Some(&mut def.identities.get_mut(i)?.id),
+        ActorField::KeyHref(i) => def.keys.get_mut(i)?.href.as_mut(),
     }
 }
 
@@ -784,6 +925,30 @@ impl SurfaceCursor<'_> {
             Route::DocMetaExtra { field, tail } => {
                 let extra = &mut self.path.meta.as_mut().ok_or_else(bad)?.extra;
                 *leaf_mut(extra, &field, &tail).ok_or_else(bad)? = value.to_string();
+            }
+            Route::DocActor { key, field } => {
+                let actors = self
+                    .path
+                    .meta
+                    .as_mut()
+                    .ok_or_else(bad)?
+                    .actors
+                    .as_mut()
+                    .ok_or_else(bad)?;
+                let def = actors.get_mut(&key).ok_or_else(bad)?;
+                *actor_text_mut(def, field).ok_or_else(bad)? = value.to_string();
+            }
+            Route::StepActor { key, field } => {
+                let actors = find_step_mut(self.path, step)
+                    .ok_or_else(bad)?
+                    .meta
+                    .as_mut()
+                    .ok_or_else(bad)?
+                    .actors
+                    .as_mut()
+                    .ok_or_else(bad)?;
+                let def = actors.get_mut(&key).ok_or_else(bad)?;
+                *actor_text_mut(def, field).ok_or_else(bad)? = value.to_string();
             }
             Route::StepIntent => {
                 let meta = find_step_mut(self.path, step)
@@ -891,8 +1056,41 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeSet;
     use toolpath::v1::{
-        ArtifactChange, Base, Path, PathMeta, Ref, Step, StepMeta, StructuralChange, VcsSource,
+        ActorDefinition, ArtifactChange, Base, Identity, Key, Path, PathMeta, Ref, Step, StepMeta,
+        StructuralChange, VcsSource,
     };
+
+    /// A `human:` actor as `toolpath-git` writes one: the committer's real
+    /// name and their email address, neither of which is a vocabulary.
+    fn actors() -> HashMap<String, ActorDefinition> {
+        HashMap::from([
+            (
+                "human:alex".to_string(),
+                ActorDefinition {
+                    name: Some("Alex Mercer".into()),
+                    identities: vec![Identity {
+                        system: "email".into(),
+                        id: "alex@acme-internal.example".into(),
+                    }],
+                    keys: vec![Key {
+                        key_type: "ssh-ed25519".into(),
+                        fingerprint: "SHA256:abc".into(),
+                        href: Some("https://alex:tok@keys.acme-internal.example/alex.pub".into()),
+                    }],
+                    ..ActorDefinition::default()
+                },
+            ),
+            (
+                "agent:claude-opus-5".to_string(),
+                ActorDefinition {
+                    name: Some("claude-opus-5".into()),
+                    provider: Some("claude-code".into()),
+                    model: Some("claude-opus-5-20260101".into()),
+                    ..ActorDefinition::default()
+                },
+            ),
+        ])
+    }
 
     fn object(value: Value) -> HashMap<String, Value> {
         match value {
@@ -906,6 +1104,16 @@ mod tests {
         let mut path = Path::new("path-1", None, head);
         path.steps = steps;
         path
+    }
+
+    fn signature() -> toolpath::v1::Signature {
+        toolpath::v1::Signature {
+            signer: "human:alex".into(),
+            key: "SHA256:abc".into(),
+            scope: "path".into(),
+            sig: "MEUCIQDexample".into(),
+            timestamp: Some("2026-07-30T10:00:00Z".into()),
+        }
     }
 
     fn change(change_type: &str, raw: Option<&str>, extra: Value) -> ArtifactChange {
@@ -1075,12 +1283,17 @@ mod tests {
             fixture_with_delegation().steps.remove(0),
             fixture_unknown_change_type().steps.remove(0),
         ]);
+        // A derived document is a chain, and `parents` is a list of strings
+        // the map declines to name. Absent from the fixture, that exclusion
+        // would pass the coverage proof by not being there.
+        path.steps[1].step.parents = vec!["turn-0f3a".into()];
+        path.steps[2].step.parents = vec!["turn-deleg".into()];
         path.steps[0].meta = Some(StepMeta {
             intent: Some("rotate the deploy credentials".into()),
             source: Some(VcsSource {
                 vcs_type: "git".into(),
                 revision: "abc123".into(),
-                change_id: None,
+                change_id: Some("I8473b95934b5732ac55d26311a706c9c2bde9940".into()),
                 extra: object(json!({"author_email": "alex@acme-internal.example"})),
             }),
             refs: vec![Ref {
@@ -1088,15 +1301,19 @@ mod tests {
                 href: "https://github.com/o/r/pull/42".into(),
             }],
             extra: object(json!({"note": "cherry-picked from the release branch"})),
-            ..StepMeta::default()
+            actors: Some(actors()),
+            signatures: vec![signature()],
         });
         path.path.base = Some(Base {
             uri: "https://alex:tok@github.com/o/r".into(),
             ref_str: Some("abc123".into()),
             branch: Some("evan/redact".into()),
         });
+        path.path.graph_ref = Some("toolpath://archive/release-v2".into());
         path.meta = Some(PathMeta {
             title: Some("redaction field map".into()),
+            kind: Some(toolpath::v1::PATH_KIND_AGENT_CODING_SESSION.into()),
+            source: Some("claude-code".into()),
             intent: Some("close the coverage gaps".into()),
             refs: vec![Ref {
                 rel: "self".into(),
@@ -1107,7 +1324,8 @@ mod tests {
                 // Byte-identical to a `step.change` key the map scans.
                 "files_changed": ["~/notes.md", "/srv/acme-internal/rotate.sh"]
             })),
-            ..PathMeta::default()
+            actors: Some(actors()),
+            signatures: vec![signature()],
         });
         path
     }
@@ -1154,11 +1372,23 @@ mod tests {
     /// direction - from the document to the map - so a new field in
     /// `toolpath` or `toolpath-convo` cannot quietly go unscanned. Every
     /// exclusion is named below with the reason it is not a candidate.
+    ///
+    /// This is only as good as `fixture_rich()` is complete, so the fixture
+    /// carries every string-bearing field of the `Path` type tree - including
+    /// the ones the map declines to name. A field the fixture does not carry
+    /// passes here by being absent, which is the failure this test exists to
+    /// prevent.
     #[test]
     fn every_string_leaf_in_a_derived_document_is_surfaced_exactly_once() {
         const EXPECTED_OUT_OF_SCOPE: &[(&str, &str)] = &[
             ("/path/id", "document identity; plans are keyed on it"),
             ("/path/head", "names a step id, not content"),
+            (
+                "/path/graph_ref",
+                "a toolpath-internal link to a sibling document",
+            ),
+            ("/steps/1/step/parents/0", "names a step id, not content"),
+            ("/steps/2/step/parents/0", "names a step id, not content"),
             ("/steps/0/step/id", "step identity; the DAG is keyed on it"),
             ("/steps/1/step/id", "step identity; the DAG is keyed on it"),
             ("/steps/2/step/id", "step identity; the DAG is keyed on it"),
@@ -1191,6 +1421,74 @@ mod tests {
             ),
             ("/steps/0/meta/refs/0/rel", "a link relation name"),
             ("/meta/refs/0/rel", "a link relation name"),
+            (
+                "/meta/actors/agent:claude-opus-5/provider",
+                "the harness name the derivation reports",
+            ),
+            (
+                "/steps/0/meta/actors/agent:claude-opus-5/provider",
+                "the harness name the derivation reports",
+            ),
+            (
+                "/meta/actors/agent:claude-opus-5/model",
+                "a model id the API assigns",
+            ),
+            (
+                "/steps/0/meta/actors/agent:claude-opus-5/model",
+                "a model id the API assigns",
+            ),
+            (
+                "/meta/actors/human:alex/keys/0/type",
+                "a key-algorithm name, a closed vocabulary",
+            ),
+            (
+                "/steps/0/meta/actors/human:alex/keys/0/type",
+                "a key-algorithm name, a closed vocabulary",
+            ),
+            (
+                "/meta/actors/human:alex/keys/0/fingerprint",
+                "a digest of a public key; rewriting hides nothing",
+            ),
+            (
+                "/steps/0/meta/actors/human:alex/keys/0/fingerprint",
+                "a digest of a public key; rewriting hides nothing",
+            ),
+            ("/meta/kind", "a kind URI this format publishes"),
+            ("/meta/source", "the deriving harness, a closed vocabulary"),
+            (
+                "/steps/0/meta/source/change_id",
+                "a change id the VCS assigned",
+            ),
+            // `apply` clears these rather than rewriting them: a signature
+            // over redacted content cannot be repaired, only dropped.
+            ("/meta/signatures/0/signer", "integrity material; dropped"),
+            ("/meta/signatures/0/key", "integrity material; dropped"),
+            ("/meta/signatures/0/scope", "integrity material; dropped"),
+            ("/meta/signatures/0/sig", "integrity material; dropped"),
+            (
+                "/meta/signatures/0/timestamp",
+                "integrity material; dropped",
+            ),
+            (
+                "/steps/0/meta/signatures/0/signer",
+                "integrity material; dropped",
+            ),
+            (
+                "/steps/0/meta/signatures/0/key",
+                "integrity material; dropped",
+            ),
+            (
+                "/steps/0/meta/signatures/0/scope",
+                "integrity material; dropped",
+            ),
+            (
+                "/steps/0/meta/signatures/0/sig",
+                "integrity material; dropped",
+            ),
+            (
+                "/steps/0/meta/signatures/0/timestamp",
+                "integrity material; dropped",
+            ),
         ];
 
         let p = fixture_rich();
@@ -1209,6 +1507,11 @@ mod tests {
         );
 
         let allowed: BTreeSet<&str> = EXPECTED_OUT_OF_SCOPE.iter().map(|(at, _)| *at).collect();
+        assert_eq!(
+            allowed.len(),
+            EXPECTED_OUT_OF_SCOPE.len(),
+            "a duplicated allowlist entry hides how much is excluded"
+        );
         for at in &allowed {
             assert!(
                 leaves.contains(*at),
@@ -1226,10 +1529,25 @@ mod tests {
         );
 
         // An artifact key is the one surface that names a map *key*, so it
-        // resolves to the object beneath it rather than to a string.
+        // resolves to the object beneath it rather than to a string. Nothing
+        // else may: a surface aimed at a subtree reports a whole object as
+        // one scanned field, and no detector can span that.
+        let artifact_key = |at: &str| {
+            let mut segs = at.split('/').skip(1);
+            matches!(
+                (
+                    segs.next(),
+                    segs.next(),
+                    segs.next(),
+                    segs.next(),
+                    segs.next()
+                ),
+                (Some("steps"), Some(_), Some("change"), Some(_), None)
+            ) && doc.pointer(at).is_some_and(Value::is_object)
+        };
         let phantom: Vec<&String> = unique
             .difference(&leaves)
-            .filter(|a| !doc.pointer(a).is_some_and(Value::is_object))
+            .filter(|a| !artifact_key(a))
             .collect();
         assert!(
             phantom.is_empty(),
@@ -1433,6 +1751,11 @@ mod tests {
             ("turn-0f3a", "/change/~0~1notes.md"),
             ("turn-0f3a", "/meta/intent"),
             ("turn-0f3a", "/meta/refs/0/href"),
+            ("turn-0f3a", "/meta/actors/agent:claude-opus-5/name"),
+            ("turn-0f3a", "/meta/actors/human:alex/name"),
+            ("turn-0f3a", "/meta/actors/human:alex/identities/0/system"),
+            ("turn-0f3a", "/meta/actors/human:alex/identities/0/id"),
+            ("turn-0f3a", "/meta/actors/human:alex/keys/0/href"),
             ("turn-0f3a", "/meta/source/author_email"),
             ("turn-0f3a", "/meta/note"),
             ("turn-deleg", "/change/claude:~1~1sess-abc/structural/text"),
@@ -1515,6 +1838,11 @@ mod tests {
             ("", "/meta/title"),
             ("", "/meta/intent"),
             ("", "/meta/refs/0/href"),
+            ("", "/meta/actors/agent:claude-opus-5/name"),
+            ("", "/meta/actors/human:alex/name"),
+            ("", "/meta/actors/human:alex/identities/0/system"),
+            ("", "/meta/actors/human:alex/identities/0/id"),
+            ("", "/meta/actors/human:alex/keys/0/href"),
             ("", "/meta/vcs_remote"),
             ("", "/meta/files_changed/0"),
             ("", "/meta/files_changed/1"),
@@ -1671,6 +1999,17 @@ mod tests {
             // Byte-identical to a `step.change` key the map does scan, so
             // redacting only the key leaves the original in the document.
             ("", "/meta/files_changed/0".into()),
+            // An actor definition was excluded as material redaction "drops
+            // wholesale" - but only `signatures` is ever dropped, so a git
+            // import shipped the committer's name and email unscanned.
+            ("", "/meta/actors/human:alex/name".into()),
+            ("", "/meta/actors/human:alex/identities/0/id".into()),
+            ("", "/meta/actors/human:alex/keys/0/href".into()),
+            ("turn-0f3a", "/meta/actors/human:alex/name".into()),
+            (
+                "turn-0f3a",
+                "/meta/actors/human:alex/identities/0/id".into(),
+            ),
         ] {
             assert!(
                 named.contains(&(step.to_string(), at.clone())),
@@ -1762,6 +2101,18 @@ mod tests {
             // the extras map the pointer resolves against.
             ("turn-0f3a", "/change/claude:~1~1sess-abc/structural/type"),
             ("", "/meta/not_present"),
+            // The actor fields the map deliberately leaves out. An unnamed
+            // field must resolve to nothing, or the pass would report a
+            // surface no detector was ever handed.
+            ("", "/meta/actors/agent:claude-opus-5/model"),
+            ("", "/meta/actors/agent:claude-opus-5/provider"),
+            ("", "/meta/actors/human:alex/keys/0/fingerprint"),
+            ("", "/meta/actors/human:alex/keys/0/type"),
+            ("", "/meta/actors/no-such-actor/name"),
+            ("", "/meta/actors/human:alex/identities/9/id"),
+            ("turn-0f3a", "/meta/actors/agent:claude-opus-5/model"),
+            // `turn-deleg` has no metadata at all, so nothing under it can.
+            ("turn-deleg", "/meta/actors/human:alex/name"),
             ("", "/path/base/nope"),
             ("", "/meta/refs/9/href"),
             ("", "/meta/refs/0/rel"),
