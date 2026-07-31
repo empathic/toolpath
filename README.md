@@ -68,6 +68,7 @@ crates/
   toolpath-opencode/  Derive from opencode SQLite databases
   toolpath-cursor/    Derive from Cursor (IDE) state.vscdb bubble store
   toolpath-pi/        Derive from Pi (pi.dev) agent sessions
+  toolpath-redact/    Detect and redact credentials in Toolpath documents
   toolpath-dot/       Graphviz DOT visualization
   toolpath-md/        Markdown rendering for LLM consumption
   pathbase-client/    Progenitor-derived typed client for the Pathbase HTTP API
@@ -199,6 +200,8 @@ path
       md        [--input FILE] [--output FILE] [--detail summary|full] [--front-matter]
     merge       FILE... [--title TEXT]
     validate    --input FILE
+    redact      --input REF [--dry-run | --plan FILE] [--accept PRED]... [--reject PRED]...
+                [--mode marker|remove|hash|mask|partial] [--threshold N] [--reveal] [--output FILE]
     derive      # stdout-JSON sibling of import (same sources, --no-cache implied)
     project     # narrower file-shaped sibling of export
     incept      # file/stdin-shaped sibling of `export <provider> --project` (claude, cursor)

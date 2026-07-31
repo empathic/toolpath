@@ -1,6 +1,6 @@
 [package]
 name = "path-cli"
-version = "0.16.1"
+version = "0.16.2"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -26,6 +26,7 @@ toolpath = { workspace = true }
 toolpath-git = { workspace = true }
 toolpath-dot = { workspace = true }
 toolpath-md = { workspace = true }
+toolpath-redact = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

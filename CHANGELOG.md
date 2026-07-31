@@ -2,6 +2,40 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## `path p redact` - plan-then-apply credential redaction - 2026-07-30
+
+Adds `path p redact`, a plumbing command that removes credentials from an
+already-generated toolpath document in place, via a reviewable plan-then-apply
+flow with detection behind a swappable trait.
+
+- **`toolpath-redact`** (0.1.0):
+  - Pure function engine with no env vars, no filesystem, no clock, no
+    process globals. Takes a document, plan, and config; returns redacted
+    document and audit report.
+  - Plan-then-apply workflow: `surfaces()` enumerates every string field a
+    credential could hide in; `plan::generate()` runs detectors and produces a
+    reviewable `Plan` with stable ids and elided context; `apply()` rewrites
+    the document. Plans can be decided by predicate, picker, or hand-edited
+    JSON.
+  - Detector trait (`Detector`) lets implementations be pluggable: built-in
+    rule-based detector via vendored gitleaks ruleset, `FixedDetector` for
+    tests, future hook paths for harness-time redaction.
+  - Five transform choices: `marker` (default, survives diffs), `remove`, `hash`,
+    `mask` (length-preserving), `partial` (4 leading/trailing chars,
+    length-leaking). Global and per-rule overrides.
+  - Field map surfaces `Prose`, `ToolInput`, `ToolOutput`, `UnifiedDiff`,
+    `FileContent`, `Uri`, `OpaqueJson`. RFC 6901 pointers to reach any value.
+- **`path-cli`** (0.16.2):
+  - `path p redact --input <ref> [--dry-run|--plan <file>] [--accept|--reject <predicate>]…`
+    redacts cache ids or file paths. Dry run lists every surface (including
+    zero-finding ones) and exits 1 if findings exist. `--plan` lets you
+    review before applying. Predicates on `rule`, `shape`, `step`, `detector`,
+    `at`, `score`. Key storage in `~/.toolpath/redact-keys/<cache-id>` (0600).
+  - Sync integration: `path p cache sync` replays stored `RedactionPolicy` on
+    re-derive, so resuming a redacted session and syncing applies redaction
+    to new turns too. Missing key is a hard error, never a silent new key.
+  - Validation always runs; output validates against base schema and
+    `agent-coding-session` kind schema v1.1.0.
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

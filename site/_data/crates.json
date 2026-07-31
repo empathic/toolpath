@@ -80,6 +80,14 @@
     "role": "Reads Pi (pi.dev) coding-agent session JSONL from `~/.pi/agent/sessions/`, implements `ConversationProvider`, and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Preserves Pi's in-file conversation tree (id/parentId) as a DAG and follows `parentSession` links across files."
   },
   {
+    "name": "toolpath-redact",
+    "version": "0.1.0",
+    "description": "Detect and redact credentials in Toolpath documents",
+    "docs": "https://docs.rs/toolpath-redact",
+    "crate": "https://crates.io/crates/toolpath-redact",
+    "role": "Engine for the `path p redact` command: walks a Path, names every string field a credential could hide in, runs swappable detectors over them, and rewrites approved matches. Plan-then-apply workflow lets users review findings before application; plans can be decided by predicate, picker, or hand-edited JSON. Detection is a trait, so implementations are pluggable (built-in rule-based detector via vendored gitleaks config, FixedDetector for tests, future harness-time hook)."
+  },
+  {
     "name": "toolpath-cursor",
     "version": "0.2.0",
     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",
@@ -113,15 +121,15 @@
   },
   {
     "name": "path-cli",
-    "version": "0.16.1",
+    "version": "0.16.2",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
-    "role": "One binary called `path` that ties everything together. Porcelain at the top level (share, resume, query, show, track, auth); plumbing under `path p \u2026` (import, export, cache, list, render, merge, validate). Pathbase round-trip via `p import pathbase` / `p export pathbase` (authed default \u2192 secret pathstash; anon fallback when not logged in)."
+    "role": "One binary called `path` that ties everything together. Porcelain at the top level (share, resume, query, show, track, auth); plumbing under `path p \u2026` (import, export, cache, list, render, merge, validate, redact). Pathbase round-trip via `p import pathbase` / `p export pathbase` (authed default \u2192 secret pathstash; anon fallback when not logged in)."
   },
   {
     "name": "toolpath-cli",
-    "version": "0.16.1",
+    "version": "0.16.2",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

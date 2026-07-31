@@ -22,6 +22,7 @@ path-cli (binary: path)
  +-- toolpath-opencode -> toolpath, toolpath-convo
  +-- toolpath-pi      -> toolpath, toolpath-convo
  +-- toolpath-cursor  -> toolpath, toolpath-convo
+ +-- toolpath-redact  -> toolpath
  +-- toolpath-dot     -> toolpath
  +-- toolpath-md      -> toolpath
 

@@ -12,6 +12,10 @@ use toolpath::v1::Graph;
 use crate::config::config_dir;
 
 const DOCUMENTS_DIR: &str = "documents";
+const REDACT_KEYS_DIR: &str = "redact-keys";
+/// HMAC-SHA256 block-size-independent; 32 bytes is the digest width and
+/// well past the point where key length stops mattering.
+const REDACT_KEY_LEN: usize = 32;
 
 /// An entry surfaced by `list_cached`.
 #[derive(Debug, Clone)]
@@ -27,11 +31,17 @@ pub(crate) fn cache_dir() -> Result<PathBuf> {
     Ok(config_dir()?.join(DOCUMENTS_DIR))
 }
 
-/// Path for a given cache id (does not check existence).
-pub(crate) fn cache_path(id: &str) -> Result<PathBuf> {
+/// Reject anything that would escape the directory it names a file in.
+fn check_id(id: &str) -> Result<()> {
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.ends_with(".json") {
         bail!("invalid cache id: {id:?}");
     }
+    Ok(())
+}
+
+/// Path for a given cache id (does not check existence).
+pub(crate) fn cache_path(id: &str) -> Result<PathBuf> {
+    check_id(id)?;
     Ok(cache_dir()?.join(format!("{id}.json")))
 }
 
@@ -145,6 +155,92 @@ pub(crate) fn remove_cached(id: &str) -> Result<()> {
     }
     std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
     Ok(())
+}
+
+// ── redaction keys ─────────────────────────────────────────────────
+
+/// Per-document fingerprint keys: `$CONFIG_DIR/redact-keys/<key-id>`.
+pub(crate) fn redact_key_dir() -> Result<PathBuf> {
+    Ok(config_dir()?.join(REDACT_KEYS_DIR))
+}
+
+/// Path of one document's key. Key ids are cache ids, so they are
+/// validated the same way.
+pub(crate) fn redact_key_path(key_id: &str) -> Result<PathBuf> {
+    check_id(key_id)?;
+    Ok(redact_key_dir()?.join(key_id))
+}
+
+/// The stored key, or `None` when this document has no key on disk.
+/// A caller re-redacting a document must treat `None` as an error
+/// rather than minting a fresh key: new key, new fingerprints, and the
+/// document churns on every sync.
+pub(crate) fn read_redact_key(key_id: &str) -> Result<Option<Vec<u8>>> {
+    let path = redact_key_path(key_id)?;
+    match std::fs::read(&path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow!("read {}: {e}", path.display())),
+    }
+}
+
+/// The document's key, generating and persisting one on first use.
+///
+/// Written with `create_new`, so two redactions racing the same
+/// document agree on one key instead of each fingerprinting under its
+/// own.
+pub(crate) fn load_or_create_redact_key(key_id: &str) -> Result<Vec<u8>> {
+    use rand::RngCore;
+    use std::io::Write;
+
+    if let Some(existing) = read_redact_key(key_id)? {
+        return Ok(existing);
+    }
+
+    let dir = redact_key_dir()?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+
+    let mut key = vec![0u8; REDACT_KEY_LEN];
+    rand::rng().fill_bytes(&mut key);
+
+    let path = redact_key_path(key_id)?;
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return read_redact_key(key_id)?
+                .ok_or_else(|| anyhow!("redaction key {key_id} vanished during creation"));
+        }
+        Err(e) => return Err(anyhow!("open {}: {e}", path.display())),
+    };
+    file.write_all(&key)
+        .with_context(|| format!("write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("chmod 0600 {}", path.display()))?;
+    }
+    Ok(key)
+}
+
+/// Drop a document's key. Absent is not an error: `p cache rm` runs
+/// against documents that were never redacted.
+pub(crate) fn remove_redact_key(key_id: &str) -> Result<()> {
+    let path = redact_key_path(key_id)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(anyhow!("remove {}: {e}", path.display())),
+    }
 }
 
 /// Build a cache id for a given source + inner id.
@@ -289,6 +385,63 @@ mod tests {
             let p = write_cached("claude-abc", &sample_doc(), false).unwrap();
             let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
+        });
+    }
+
+    #[test]
+    fn redact_key_is_created_once_and_reused() {
+        with_cfg(|_| {
+            assert!(read_redact_key("claude-abc").unwrap().is_none());
+            let first = load_or_create_redact_key("claude-abc").unwrap();
+            assert_eq!(first.len(), REDACT_KEY_LEN);
+            assert_eq!(load_or_create_redact_key("claude-abc").unwrap(), first);
+            assert_eq!(read_redact_key("claude-abc").unwrap().unwrap(), first);
+        });
+    }
+
+    #[test]
+    fn redact_keys_differ_per_document() {
+        with_cfg(|_| {
+            let a = load_or_create_redact_key("claude-a").unwrap();
+            let b = load_or_create_redact_key("claude-b").unwrap();
+            assert_ne!(a, b);
+        });
+    }
+
+    #[test]
+    fn removing_a_redact_key_is_idempotent() {
+        with_cfg(|_| {
+            load_or_create_redact_key("claude-abc").unwrap();
+            remove_redact_key("claude-abc").unwrap();
+            assert!(read_redact_key("claude-abc").unwrap().is_none());
+            remove_redact_key("claude-abc").unwrap();
+        });
+    }
+
+    #[test]
+    fn redact_key_path_rejects_traversal() {
+        assert!(redact_key_path("../../etc/passwd").is_err());
+        assert!(redact_key_path("").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn redact_key_is_0600_in_a_0700_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        with_cfg(|_| {
+            load_or_create_redact_key("claude-abc").unwrap();
+            let key_mode = std::fs::metadata(redact_key_path("claude-abc").unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(key_mode, 0o600);
+            let dir_mode = std::fs::metadata(redact_key_dir().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dir_mode, 0o700);
         });
     }
 
