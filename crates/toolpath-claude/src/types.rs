@@ -97,7 +97,11 @@ pub enum ContentPart {
     },
     Thinking {
         thinking: String,
-        #[serde(default)]
+        // Serialized as absent when None: the Anthropic API rejects
+        // `"signature": null` outright (400), while an absent signature just
+        // means the thinking block is dropped on resume — see
+        // docs/agents/formats/claude-code/writing-compatible-jsonl.md.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
     ToolUse {
@@ -729,6 +733,27 @@ mod tests {
             signature: None,
         };
         assert_eq!(part.summary(), "[thinking]");
+    }
+
+    #[test]
+    fn test_thinking_none_signature_serializes_absent() {
+        let part = ContentPart::Thinking {
+            thinking: "deep thought".to_string(),
+            signature: None,
+        };
+        let json = serde_json::to_value(&part).unwrap();
+        assert!(
+            json.get("signature").is_none(),
+            "None signature must serialize as an absent key, not null: the \
+             API 400s on `\"signature\": null` but tolerates absence"
+        );
+
+        let signed = ContentPart::Thinking {
+            thinking: "deep thought".to_string(),
+            signature: Some("sig123".to_string()),
+        };
+        let json = serde_json::to_value(&signed).unwrap();
+        assert_eq!(json.get("signature").unwrap(), "sig123");
     }
 
     #[test]

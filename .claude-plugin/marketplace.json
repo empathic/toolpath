@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "toolpath",
+  "version": "0.1.0",
+  "description": "Toolpath — provenance for AI coding sessions. Share agent sessions to Pathbase and query your local session history via the path CLI",
+  "owner": {
+    "name": "Empathic"
+  },
+  "plugins": [
+    {
+      "name": "path",
+      "description": "Slash commands for the Toolpath path CLI: /path:share uploads an agent session to Pathbase, /path:query runs jaq queries over your local session cache. Installs the path binary globally on first use",
+      "version": "0.1.4",
+      "author": {
+        "name": "Empathic"
+      },
+      "source": "./plugins/claude-code",
+      "category": "productivity"
+    }
+  ]
+}

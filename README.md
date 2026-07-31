@@ -40,6 +40,17 @@ cargo install path-cli
 
 Both install a binary called `path`.
 
+Claude Code users can skip the manual install entirely — the Toolpath plugin
+bundles the CLI (downloaded and installed globally on first use) and adds
+`/path:share` and `/path:query` slash commands:
+
+```
+/plugin marketplace add empathic/toolpath
+/plugin install path@toolpath
+```
+
+See [plugins/claude-code](plugins/claude-code/) for details.
+
 > The older `toolpath-cli` crate name still works — `cargo install toolpath-cli` is now a thin shim that pulls in `path-cli` and installs the same binary. New users should reach for `path-cli` directly; the shim will eventually be retired.
 
 ## Workspace

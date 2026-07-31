@@ -8,7 +8,7 @@
 # Usage:
 #   scripts/quality_gates.sh [--verbose] [[-]gate ...]
 #
-# Gates: format, shellcheck, clippy, test, doc, examples, site
+# Gates: format, shellcheck, clippy, test, doc, examples, plugin, site
 # No args runs all gates. Prefix with - to exclude a gate.
 #
 # Options:
@@ -43,7 +43,7 @@ trap 'rm -rf "${_tmpdir}"' EXIT
 # All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
 # run_gate; shellcheck can't see the call sites and flags them as unused.
 
-_all_gates=(format shellcheck clippy test doc examples site)
+_all_gates=(format shellcheck clippy test doc examples plugin site)
 
 # shellcheck disable=SC2329
 gate_format() {
@@ -60,7 +60,7 @@ gate_shellcheck() {
         echo "shellcheck not found on PATH; install it (e.g. \`brew install shellcheck\`)" >&2
         return 1
     fi
-    shellcheck "${_root}"/scripts/*.sh 2>&1
+    shellcheck "${_root}"/scripts/*.sh "${_root}"/plugins/*/scripts/*.sh 2>&1
 }
 
 # shellcheck disable=SC2329
@@ -87,6 +87,11 @@ gate_examples() {
         fi
     done
     return "${_failed}"
+}
+
+# shellcheck disable=SC2329
+gate_plugin() {
+    "${_root}/scripts/test-plugin.sh" 2>&1
 }
 
 # shellcheck disable=SC2329

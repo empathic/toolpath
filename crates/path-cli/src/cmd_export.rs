@@ -684,7 +684,11 @@ fn serialize_jsonl(conv: &toolpath_claude::Conversation) -> Result<String> {
     for entry in &conv.entries {
         lines.push(serde_json::to_string(entry)?);
     }
-    Ok(lines.join("\n"))
+    // Trailing newline matters: Claude Code appends to this file on resume,
+    // and without it the first appended entry lands on the last line.
+    let mut out = lines.join("\n");
+    out.push('\n');
+    Ok(out)
 }
 
 #[cfg(not(target_os = "emscripten"))]

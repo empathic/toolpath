@@ -25,7 +25,7 @@ flow with detection behind a swappable trait.
     length-leaking). Global and per-rule overrides.
   - Field map surfaces `Prose`, `ToolInput`, `ToolOutput`, `UnifiedDiff`,
     `FileContent`, `Uri`, `OpaqueJson`. RFC 6901 pointers to reach any value.
-- **`path-cli`** (0.17.0):
+- **`path-cli`** (0.16.2):
   - `path p redact --input <ref> [--dry-run|--plan <file>] [--accept|--reject <predicate>]…`
     redacts cache ids or file paths. Dry run lists every surface (including
     zero-finding ones) and exits 1 if findings exist. `--plan` lets you
@@ -36,6 +36,61 @@ flow with detection behind a swappable trait.
     to new turns too. Missing key is a hard error, never a silent new key.
   - Validation always runs; output validates against base schema and
     `agent-coding-session` kind schema v1.1.0.
+## Projected Claude sessions are resumable again — 2026-07-30
+
+Two fixes found by live-resuming a projected session against the real
+API. Together they broke resume for most projected sessions.
+
+- **`toolpath-claude`** (0.12.2): `ContentPart::Thinking` serializes a
+  `None` signature as an **absent key** instead of `"signature": null`.
+  The Anthropic API rejects a null signature outright
+  (`400 …thinking.signature.str: Input should be a valid string`), so
+  any projected session containing thinking blocks — most real agent
+  sessions — failed on the first message after resume. An absent
+  signature is tolerated: the thinking block is dropped on replay, per
+  the documented writer contract in
+  `docs/agents/formats/claude-code/writing-compatible-jsonl.md`. Real
+  signatures still round-trip untouched.
+- **`path-cli`** (0.16.1): the Claude JSONL export now ends
+  with a trailing newline. Claude Code appends to the projected file on
+  resume, and without one the first appended entry landed on the same
+  line as the last projected entry, corrupting the JSONL.
+
+## Claude Code plugin — `/path:share` and `/path:query` — 2026-07-29
+
+Adds a Claude Code plugin so users get the `path` CLI without a manual
+install: `/plugin marketplace add empathic/toolpath`, then
+`/plugin install path@toolpath`.
+
+- **`.claude-plugin/marketplace.json`** (marketplace `toolpath`) +
+  **`plugins/claude-code/`** (plugin `path` 0.1.4). Future harness
+  integrations land as siblings under `plugins/`.
+- Two slash commands: `/path:share` uploads an agent session to Pathbase
+  (defaults to the current conversation, identified exactly via
+  `$CLAUDE_CODE_SESSION_ID`; takes a session hint, `--harness`, and the
+  `share` pass-through flags) and `/path:query` answers questions about
+  the local session cache, translating plain English into jaq filters.
+  Session listings are fetched lazily as tool output, never embedded in
+  the command context: eager embedding re-injects old session titles as
+  prompt text, where the harness re-expands `@path` file mentions.
+- No committed binaries: both commands run through
+  `plugins/claude-code/scripts/ensure-path.sh`, which prefers an
+  existing Toolpath install, else downloads the latest GitHub release
+  (sha256-verified, same logic as `install.sh`) and installs globally to
+  `~/.local/bin` (`~/.toolpath/bin` when a foreign `path` binary claims
+  the name). Warns when the resolved CLI predates the plugin's
+  `MIN_VERSION`.
+- Command docs encode two discovered constraints: inline `!` context
+  commands and model-issued Bash must avoid `$PWD` (Claude Code's
+  permission checker rejects non-statically-analyzable commands — the
+  `sessions` helper mode exists for this), and `--project` must be
+  absolute (path-cli does not canonicalize relative values; `.` silently
+  matches nothing).
+- Tests: `scripts/test-plugin.sh` — manifest consistency plus offline
+  bootstrap tests against a stubbed curl/release (resolution order, exec
+  and sessions modes, min-version warning, clean install, foreign-name
+  fallback, checksum rejection) — wired into `quality_gates.sh` as the
+  new `plugin` gate; plugin shell scripts join the shellcheck gate.
 
 ## `path p cache sync` — incremental session ingestion — 2026-07-16
 
