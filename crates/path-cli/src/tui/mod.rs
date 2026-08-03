@@ -99,6 +99,13 @@ impl Drop for PanicHookGuard {
 struct TermGuard {
     terminal: Terminal<CrosstermBackend<Stderr>>,
     fullscreen: bool,
+    /// Per-guard restore latch. The global [`NEEDS_RESTORE`] flag
+    /// arbitrates with the panic hook; this one keeps an
+    /// already-restored guard's `Drop` from tearing down a *newer*
+    /// terminal after a layout-driven recreate (`guard = TermGuard::
+    /// new(..)` drops the old guard after the new one armed the
+    /// global flag).
+    restored: bool,
 }
 
 impl TermGuard {
@@ -125,10 +132,15 @@ impl TermGuard {
         Ok(Self {
             terminal,
             fullscreen,
+            restored: false,
         })
     }
 
     fn restore(&mut self) {
+        if self.restored {
+            return;
+        }
+        self.restored = true;
         if !NEEDS_RESTORE.swap(false, Ordering::SeqCst) {
             return;
         }
