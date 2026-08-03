@@ -5,9 +5,13 @@
 //! picker takes over the alternate screen so the preview has room.
 //! [`choose_layout`] is the single decision point.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 
-use super::preview::{PaneSize, PreviewWindow, Side};
+use super::preview::{PaneSize, PreviewWindow, Side, WrapMode};
 use super::state::AppState;
 
 /// Overall layout preference. `Adaptive` (the default) picks inline
@@ -218,9 +222,159 @@ fn split_preview(area: Rect, side: Side, size: PaneSize) -> (Rect, Rect) {
     }
 }
 
+/// What the preview pane should show this frame. The event loop
+/// derives it from the scheduler cache; render just paints it.
+pub(super) struct PreviewView<'a> {
+    /// Pane title: `"preview"` or `"preview (loading…)"`.
+    pub title: &'a str,
+    pub body: PreviewBody<'a>,
+}
+
+pub(super) enum PreviewBody<'a> {
+    /// A finished preview (possibly kept from the previous selection
+    /// while a newer one derives).
+    Text(&'a Text<'static>),
+    /// Nothing to show yet.
+    Placeholder,
+    /// The preview command failed; the first stderr line.
+    Error(&'a str),
+}
+
+/// Paint one frame. `preview` is ignored unless `mode` has a preview
+/// pane.
+pub(super) fn draw(
+    frame: &mut Frame<'_>,
+    state: &AppState,
+    mode: LayoutMode,
+    preview: Option<&PreviewView<'_>>,
+) {
+    let areas = compute_areas(state, mode, frame.area());
+    if let (Some(area), Some(text)) = (areas.header, state.header.as_deref()) {
+        frame.render_widget(Paragraph::new(text).style(Style::new().dim()), area);
+    }
+    render_list(frame, areas.list, state);
+    render_status(frame, areas.status, state);
+    render_input(frame, areas.input, state);
+    if let (Some(area), Some(view)) = (areas.preview, preview) {
+        render_preview(frame, area, state, view);
+    }
+}
+
+/// The match list with its marker gutter: `>` on the highlighted row,
+/// `*` on marked rows, matched chars in bold.
+fn render_list(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let height = area.height as usize;
+    if height == 0 {
+        return;
+    }
+    // Stateless scroll: keep the highlighted row visible.
+    let offset = (state.selected + 1).saturating_sub(height);
+    let mut lines: Vec<Line<'_>> = Vec::with_capacity(height);
+    for (i, entry) in state.matches.iter().enumerate().skip(offset).take(height) {
+        let row = &state.rows[entry.row];
+        let is_selected = i == state.selected;
+        let is_marked = state.marked.contains(&entry.row);
+        let mut spans: Vec<Span<'_>> = Vec::new();
+        spans.push(if is_selected {
+            Span::styled("> ", Style::new().bold())
+        } else {
+            Span::raw("  ")
+        });
+        spans.push(if is_marked {
+            Span::styled("* ", Style::new().bold())
+        } else {
+            Span::raw("  ")
+        });
+        spans.extend(highlight_spans(&row.display, &entry.indices, is_selected));
+        lines.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Split `display` into styled spans: matched char positions render
+/// bold (on top of the selected-row style).
+fn highlight_spans<'a>(display: &'a str, indices: &[u32], selected: bool) -> Vec<Span<'a>> {
+    let base = if selected {
+        Style::new().bold()
+    } else {
+        Style::new()
+    };
+    let hilite = base.bold().underlined();
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut run_hilited = false;
+    for (ci, ch) in display.chars().enumerate() {
+        let hit = indices.binary_search(&(ci as u32)).is_ok();
+        if hit != run_hilited && !run.is_empty() {
+            spans.push(Span::styled(
+                std::mem::take(&mut run),
+                if run_hilited { hilite } else { base },
+            ));
+        }
+        run_hilited = hit;
+        run.push(ch);
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(run, if run_hilited { hilite } else { base }));
+    }
+    spans
+}
+
+/// Right-aligned dim status: `N/M` match count plus the mark count
+/// when any rows are marked.
+fn render_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let mut status = format!("{}/{}", state.matches.len(), state.rows.len());
+    if !state.marked.is_empty() {
+        status.push_str(&format!(" · {} marked", state.marked.len()));
+    }
+    frame.render_widget(
+        Paragraph::new(status)
+            .style(Style::new().dim())
+            .right_aligned(),
+        area,
+    );
+}
+
+/// The prompt + query input line, with the terminal cursor parked at
+/// the edit position.
+fn render_input(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let line = Line::from(vec![
+        Span::styled(state.prompt.clone(), Style::new().bold()),
+        Span::raw(state.query.clone()),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+    let prompt_cols = state.prompt.chars().count() as u16;
+    let cursor_cols = state.query[..state.cursor].chars().count() as u16;
+    let x = (area.x + prompt_cols + cursor_cols).min(area.right().saturating_sub(1));
+    frame.set_cursor_position((x, area.y));
+}
+
+/// The preview pane: a titled block around the preview text, a dim
+/// placeholder, or a dim-red error line.
+fn render_preview(frame: &mut Frame<'_>, area: Rect, state: &AppState, view: &PreviewView<'_>) {
+    let block = Block::bordered().title(view.title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let paragraph = match view.body {
+        PreviewBody::Text(text) => Paragraph::new(text.clone()),
+        PreviewBody::Placeholder => Paragraph::new("deriving preview…").style(Style::new().dim()),
+        PreviewBody::Error(line) => Paragraph::new(line).style(Style::new().dim().fg(Color::Red)),
+    };
+    let paragraph = match state.preview_window.wrap {
+        WrapMode::NoWrap => paragraph,
+        WrapMode::Wrap | WrapMode::WrapWord => paragraph.wrap(Wrap { trim: false }),
+    };
+    frame.render_widget(paragraph.scroll((state.preview_scroll, 0)), inner);
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::InputEvent;
+    use super::super::matcher::{Row, parse_field_spec};
+    use super::super::state::handle_event;
     use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn window(side: Side) -> PreviewWindow {
         PreviewWindow {
@@ -343,5 +497,156 @@ mod tests {
             30,
         );
         assert_eq!(mode, LayoutMode::Fullscreen);
+    }
+
+    // ── Frame snapshots ──────────────────────────────────────────────
+
+    fn plain_state(lines: &[&str], with_nth: &str, multi: bool) -> AppState {
+        let spec = parse_field_spec(with_nth).unwrap();
+        let rows: Vec<Row> = lines.iter().map(|l| Row::new(l, &spec)).collect();
+        AppState::new(rows, multi, "> ", None, None)
+    }
+
+    fn preview_state(lines: &[&str], side: Side) -> AppState {
+        let spec = parse_field_spec("2..").unwrap();
+        let rows: Vec<Row> = lines.iter().map(|l| Row::new(l, &spec)).collect();
+        AppState::new(rows, false, "> ", None, Some(window(side)))
+    }
+
+    /// Render one frame at (w, h) and snapshot the buffer.
+    fn render_frame(
+        state: &AppState,
+        preview: Option<&PreviewView<'_>>,
+        w: u16,
+        h: u16,
+    ) -> Terminal<TestBackend> {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let mode = choose_layout(state);
+        terminal.draw(|f| draw(f, state, mode, preview)).unwrap();
+        terminal
+    }
+
+    #[test]
+    fn snapshot_inline_empty_query() {
+        let mut state = plain_state(&["first row", "second row", "third row"], "1..", false);
+        state.term_w = 40;
+        state.term_h = 24;
+        // Inline viewport: the backend is exactly the viewport's size.
+        let LayoutMode::Inline { height } = choose_layout(&state) else {
+            panic!("expected inline layout");
+        };
+        let terminal = render_frame(&state, None, 40, height);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn snapshot_inline_filtered_highlights() {
+        let mut state = plain_state(&["alpha work", "beta work", "gamma play"], "1..", false);
+        state.term_w = 40;
+        state.term_h = 24;
+        for c in "work".chars() {
+            handle_event(&mut state, InputEvent::Char(c));
+        }
+        let LayoutMode::Inline { height } = choose_layout(&state) else {
+            panic!("expected inline layout");
+        };
+        let terminal = render_frame(&state, None, 40, height);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn snapshot_multi_marked_rows() {
+        let mut state = plain_state(&["one", "two", "three"], "1..", true);
+        state.term_w = 40;
+        state.term_h = 24;
+        handle_event(&mut state, InputEvent::Tab); // mark "one", advance
+        handle_event(&mut state, InputEvent::Tab); // mark "two", advance
+        let LayoutMode::Inline { height } = choose_layout(&state) else {
+            panic!("expected inline layout");
+        };
+        let terminal = render_frame(&state, None, 40, height);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn snapshot_no_match_status_line() {
+        let mut state = plain_state(&["alpha", "beta"], "1..", false);
+        state.term_w = 40;
+        state.term_h = 24;
+        for c in "zzz".chars() {
+            handle_event(&mut state, InputEvent::Char(c));
+        }
+        let LayoutMode::Inline { height } = choose_layout(&state) else {
+            panic!("expected inline layout");
+        };
+        let terminal = render_frame(&state, None, 40, height);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn snapshot_fullscreen_side_preview_ready() {
+        let mut state = preview_state(
+            &[
+                "s1\t2026-08-01 10:00 first session",
+                "s2\t2026-08-02 11:00 second session",
+            ],
+            Side::Right,
+        );
+        state.term_w = 120;
+        state.term_h = 16;
+        let text = Text::raw("# Session\n\nrendered preview body");
+        let view = PreviewView {
+            title: "preview",
+            body: PreviewBody::Text(&text),
+        };
+        let terminal = render_frame(&state, Some(&view), 120, 16);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn snapshot_fullscreen_stacked_narrow() {
+        let mut state = preview_state(
+            &[
+                "s1\t2026-08-01 10:00 first session",
+                "s2\t2026-08-02 11:00 second session",
+            ],
+            Side::Right,
+        );
+        // Below the side-by-side threshold: the right: spec stacks.
+        state.term_w = 60;
+        state.term_h = 18;
+        let text = Text::raw("stacked preview body");
+        let view = PreviewView {
+            title: "preview",
+            body: PreviewBody::Text(&text),
+        };
+        let terminal = render_frame(&state, Some(&view), 60, 18);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn snapshot_preview_loading_placeholder() {
+        let mut state = preview_state(&["s1\tonly session"], Side::Up);
+        state.term_w = 60;
+        state.term_h = 14;
+        let view = PreviewView {
+            title: "preview (loading…)",
+            body: PreviewBody::Placeholder,
+        };
+        let terminal = render_frame(&state, Some(&view), 60, 14);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn snapshot_preview_error_pane() {
+        let mut state = preview_state(&["s1\tonly session"], Side::Up);
+        state.term_w = 60;
+        state.term_h = 14;
+        let view = PreviewView {
+            title: "preview",
+            body: PreviewBody::Error("error: session file unreadable"),
+        };
+        let terminal = render_frame(&state, Some(&view), 60, 14);
+        insta::assert_snapshot!(terminal.backend());
     }
 }

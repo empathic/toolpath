@@ -1,0 +1,9 @@
+---
+source: crates/path-cli/src/tui/render.rs
+expression: terminal.backend()
+---
+">   first row                           "
+"    second row                          "
+"    third row                           "
+"                                     3/3"
+">                                       "

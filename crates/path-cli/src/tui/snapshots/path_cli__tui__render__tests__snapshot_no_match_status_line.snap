@@ -1,0 +1,8 @@
+---
+source: crates/path-cli/src/tui/render.rs
+expression: terminal.backend()
+---
+"                                        "
+"                                        "
+"                                     0/2"
+"> zzz                                   "
