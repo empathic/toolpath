@@ -14,10 +14,6 @@
 //! returns [`crate::fuzzy::PickResult`] exactly like the external fzf
 //! backend.
 
-// Removed when fuzzy.rs switches its embedded backend to this module
-// (the module is dark until then, and `-D warnings` would reject it).
-#![allow(dead_code)]
-
 mod matcher;
 mod preview;
 mod render;

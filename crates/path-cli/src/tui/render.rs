@@ -21,7 +21,13 @@ use super::state::AppState;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LayoutPref {
     Adaptive,
+    /// Force the inline viewport. No production caller constructs the
+    /// forced variants yet — they exist for a future layout flag (and
+    /// the ladder tests exercise them).
+    #[allow(dead_code)]
     Inline,
+    /// Force the fullscreen alternate screen.
+    #[allow(dead_code)]
     Fullscreen,
 }
 

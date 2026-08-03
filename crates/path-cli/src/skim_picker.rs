@@ -6,6 +6,9 @@
 //! about, and its `{1}`, `{2}` preview-placeholder syntax matches fzf's,
 //! so the existing preview commands (`path show ...`) work unchanged.
 #![cfg(not(target_os = "emscripten"))]
+// The native picker (crate::tui) replaced this backend; the module is
+// deleted in the next commit — the allow keeps this one green.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use std::io::Cursor;

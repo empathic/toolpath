@@ -14,15 +14,17 @@
 //!
 //! Two backends, selected at runtime:
 //!
-//! - **External `fzf`** (preferred when on `PATH`). Users keep their
-//!   own fzf config and keybindings.
-//! - **Embedded skim** (Rust fzf-clone, compiled in unless the
-//!   `embedded-picker` feature is disabled). Same `{1}`/`{2}` preview
-//!   placeholder grammar and the same `--with-nth`/`--tiebreak`
-//!   notation, so existing call sites work unchanged.
+//! - **Native picker** (`crates/path-cli/src/tui/`, compiled in unless
+//!   the `embedded-picker` feature is disabled). First-party ratatui
+//!   picker: adaptive inline/fullscreen layouts, debounced async
+//!   previews, fzf-style query operators. Honors the same `{1}`/`{2}`
+//!   preview placeholder grammar and `--with-nth`/`--tiebreak`
+//!   notation, so all call sites work with either backend.
+//! - **External `fzf`** (escape hatch, forced via `--picker fzf`).
+//!   Users keep their own fzf config and keybindings.
 //!
 //! When neither backend can run (no TTY, or no external fzf with the
-//! embedded picker disabled at build time), callers fall through to the
+//! native picker disabled at build time), callers fall through to the
 //! documented manual recipe printed by [`print_recipe`].
 #![cfg(not(target_os = "emscripten"))]
 
@@ -35,24 +37,26 @@ use std::sync::OnceLock;
 /// Backend override for the interactive fuzzy picker, set once at CLI
 /// startup via the global `--picker` flag and read by [`pick`].
 ///
-/// `Auto` (the default) preserves the historical behavior: external
-/// `fzf` if on `PATH`, embedded skim otherwise. `Fzf` and `Skim` are
+/// `Auto` (the default) prefers the native picker and falls back to
+/// external `fzf` when it isn't compiled in. `Fzf` and `Native` are
 /// strict — they error out rather than silently using the other backend.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum Picker {
-    /// Pick whichever backend is available; prefer the embedded skim
-    /// picker and fall back to external `fzf` when skim isn't compiled
-    /// in. When external `fzf` is also on `PATH`, a one-time hint is
+    /// Pick whichever backend is available; prefer the native picker
+    /// and fall back to external `fzf` when it isn't compiled in.
+    /// When external `fzf` is also on `PATH`, a one-time hint is
     /// printed to stderr advising `--picker fzf` for users who want
     /// their fzf config / keybindings.
     #[default]
     Auto,
     /// Force the external `fzf` binary. Errors if it isn't on `PATH`.
     Fzf,
-    /// Force the embedded skim picker. Errors if path-cli was built
-    /// with `--no-default-features`.
-    Skim,
+    /// Force the built-in native picker. Errors if path-cli was built
+    /// with `--no-default-features`. `skim` is accepted as a hidden
+    /// alias for the backend this one replaced.
+    #[value(alias = "skim")]
+    Native,
 }
 
 static PICKER_OVERRIDE: OnceLock<Picker> = OnceLock::new();
@@ -62,7 +66,29 @@ static PICKER_OVERRIDE: OnceLock<Picker> = OnceLock::new();
 /// value wins, so library callers can't accidentally override the
 /// user's explicit choice mid-run.
 pub fn set_picker_override(picker: Picker) {
+    if picker == Picker::Native && args_used_skim_alias(std::env::args()) {
+        eprintln!(
+            "note: `--picker skim` is now the native picker; the skim backend was removed in 0.17"
+        );
+    }
     let _ = PICKER_OVERRIDE.set(picker);
+}
+
+/// Detect whether the user literally typed the `skim` alias — clap
+/// resolves aliases before we see the parsed value, so the raw args
+/// are the only place the spelling survives.
+fn args_used_skim_alias<I: IntoIterator<Item = String>>(args: I) -> bool {
+    let mut prev_was_picker_flag = false;
+    for arg in args {
+        if prev_was_picker_flag && arg == "skim" {
+            return true;
+        }
+        prev_was_picker_flag = arg == "--picker";
+        if arg == "--picker=skim" {
+            return true;
+        }
+    }
+    false
 }
 
 fn current_picker() -> Picker {
@@ -82,14 +108,14 @@ pub fn available() -> bool {
 }
 
 /// True when the external `fzf` binary is on `PATH`. Used by [`pick`]
-/// to decide between the external picker and the embedded skim
-/// fallback, and to tailor the manual-recipe message.
+/// to decide between the native picker and the external fallback, and
+/// to tailor the manual-recipe message.
 pub fn external_fzf_available() -> bool {
     which("fzf").is_some()
 }
 
-/// True when the embedded skim picker was compiled in. Always `true`
-/// in the default build; `false` under `--no-default-features`.
+/// True when the native picker was compiled in. Always `true` in the
+/// default build; `false` under `--no-default-features`.
 #[cfg(feature = "embedded-picker")]
 pub const fn embedded_picker_available() -> bool {
     true
@@ -379,17 +405,17 @@ pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
         Picker::Fzf => {
             if !external_fzf_available() {
                 anyhow::bail!(
-                    "`--picker fzf` requested but `fzf` isn't on PATH; install it or pass `--picker auto`/`skim`"
+                    "`--picker fzf` requested but `fzf` isn't on PATH; install it or pass `--picker auto`/`native`"
                 );
             }
             pick_external(lines, opts)
         }
-        Picker::Skim => pick_embedded(lines, opts),
+        Picker::Native => pick_embedded(lines, opts),
         Picker::Auto => {
-            // Skim is the default: it's compiled in, behaves
-            // consistently across versions, and we control its option
-            // surface. Fall back to external fzf only when skim is
-            // unavailable (e.g. `--no-default-features` builds).
+            // The native picker is the default: it's compiled in,
+            // behaves consistently across versions, and we control its
+            // whole surface. Fall back to external fzf only when it
+            // isn't compiled in (`--no-default-features` builds).
             if embedded_picker_available() {
                 if external_fzf_available() {
                     hint_external_fzf_available();
@@ -417,18 +443,18 @@ fn hint_external_fzf_available() {
     }
 }
 
-/// Invoke the embedded skim picker. Compiled-out under
+/// Invoke the native picker. Compiled-out under
 /// `--no-default-features`, in which case calling this returns a clear
 /// error rather than the cryptic "no backend" surface.
 #[cfg(feature = "embedded-picker")]
 fn pick_embedded(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
-    crate::skim_picker::pick(lines, opts)
+    crate::tui::pick(lines, opts)
 }
 
 #[cfg(not(feature = "embedded-picker"))]
 fn pick_embedded(_lines: &[String], _opts: &PickOptions<'_>) -> Result<PickResult> {
     anyhow::bail!(
-        "embedded skim picker isn't compiled in (built with `--no-default-features`); install `fzf` and pass `--picker fzf` or rebuild with the default `embedded-picker` feature"
+        "the native picker isn't compiled in (built with `--no-default-features`); install `fzf` and pass `--picker fzf` or rebuild with the default `embedded-picker` feature"
     )
 }
 
@@ -768,6 +794,30 @@ mod tests {
         let out = render_row(None, Some(jan_first()), "  17 msgs", None, raw);
         assert!(out.ends_with("/biko do the thing"), "got: {out}");
         assert!(!out.contains("<command-"));
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn skim_alias_detected_in_both_flag_spellings() {
+        assert!(args_used_skim_alias(args(&[
+            "path", "--picker", "skim", "share"
+        ])));
+        assert!(args_used_skim_alias(args(&[
+            "path",
+            "--picker=skim",
+            "share"
+        ])));
+    }
+
+    #[test]
+    fn skim_alias_not_detected_for_native_or_unrelated_args() {
+        assert!(!args_used_skim_alias(args(&["path", "--picker", "native"])));
+        assert!(!args_used_skim_alias(args(&["path", "--picker", "fzf"])));
+        // "skim" as a positional (not following --picker) doesn't count.
+        assert!(!args_used_skim_alias(args(&["path", "query", "skim"])));
     }
 
     #[test]
