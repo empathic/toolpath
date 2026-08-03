@@ -874,7 +874,7 @@ fn share_explicit(
 ///
 /// The display column is space-padded rather than tab-separated so the
 /// columns line up consistently across pickers — terminal tab stops
-/// produce ugly variable gaps in both fzf and skim.
+/// produce ugly variable gaps in both backends.
 fn format_picker_row(row: &ArtifactRow) -> String {
     let key = row
         .path

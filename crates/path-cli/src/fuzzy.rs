@@ -396,10 +396,9 @@ pub enum PickResult {
 
 /// Run the fuzzy picker with the supplied lines and options. Honors
 /// the global `--picker` override; defaults to `Auto`, which prefers
-/// the external `fzf` binary when it's on `PATH` (so users keep their
-/// own fzf config / keybindings) and falls back to the embedded skim
-/// picker otherwise. Errors out only when the requested backend isn't
-/// available — callers should check [`available`] first.
+/// the native picker and falls back to external `fzf` only when the
+/// native picker isn't compiled in. Errors out only when the requested
+/// backend isn't available — callers should check [`available`] first.
 pub fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResult> {
     match current_picker() {
         Picker::Fzf => {
@@ -582,7 +581,7 @@ pub fn pick_external(lines: &[String], opts: &PickOptions<'_>) -> Result<PickRes
 }
 
 /// Options for a picker invocation. Field names mirror fzf's flags;
-/// the embedded skim backend maps them onto its equivalents.
+/// the native picker parses the same notation onto its own types.
 pub struct PickOptions<'a> {
     /// Visible columns in fzf's notation, e.g. `2..` to hide col 1.
     pub with_nth: &'a str,
