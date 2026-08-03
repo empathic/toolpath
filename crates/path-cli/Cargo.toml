@@ -67,6 +67,12 @@ skim = { version = "4.7", default-features = false, features = ["frizbee"], opti
 # crate directly to build a tab regex. Skim already pulls `regex` in
 # transitively, so this just makes it explicit.
 regex = { version = "1", optional = true }
+# Native picker (crates/path-cli/src/tui/) — same `embedded-picker`
+# feature gate. Versions pinned to what the lockfile already carries.
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.29", optional = true }
+nucleo-matcher = { version = "0.3", optional = true }
+ansi-to-tui = { version = "8", optional = true }
 
 [target.'cfg(target_os = "emscripten")'.dependencies]
 toolpath-claude = { workspace = true }
@@ -82,7 +88,14 @@ vendored-openssl = ["git2/vendored-openssl"]
 # `path p import` work in interactive flows even when external `fzf`
 # isn't on PATH. Adds ~2 MB to the release binary; turn off
 # (`--no-default-features`) for the minimal build.
-embedded-picker = ["dep:skim", "dep:regex"]
+embedded-picker = [
+    "dep:skim",
+    "dep:regex",
+    "dep:ratatui",
+    "dep:crossterm",
+    "dep:nucleo-matcher",
+    "dep:ansi-to-tui",
+]
 
 [dev-dependencies]
 assert_cmd = "2"

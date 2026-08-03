@@ -2225,6 +2225,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nucleo-matcher"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+dependencies = [
+ "memchr",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2443,10 +2453,12 @@ dependencies = [
 name = "path-cli"
 version = "0.16.1"
 dependencies = [
+ "ansi-to-tui",
  "anyhow",
  "assert_cmd",
  "chrono",
  "clap",
+ "crossterm",
  "git2",
  "hex",
  "insta",
@@ -2454,9 +2466,11 @@ dependencies = [
  "jaq-json",
  "jaq-std",
  "jsonschema",
+ "nucleo-matcher",
  "pathbase-client",
  "predicates",
  "rand 0.9.4",
+ "ratatui",
  "regex",
  "reqwest",
  "rusqlite",
