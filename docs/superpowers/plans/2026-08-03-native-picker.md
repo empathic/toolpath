@@ -76,4 +76,42 @@
 
 ## Self-Review Notes
 
-(Recorded during implementation; deviations from the spec land here.)
+Deviations from the spec, found against the real code:
+
+- **`pty_smoke_esc_exits_130` drives `path share --anon`, not `p import
+  claude`.** `cmd_import` deliberately treats a picker cancel as an
+  empty selection and exits 0 — that is its pre-existing contract with
+  the external fzf backend, and the call sites must work unchanged.
+  `share` is the surface whose cancel contract is `exit(130)`, so the
+  PTY test pins it there. (`--anon` keeps the auth preflight off the
+  network; Esc fires before any upload.)
+- **`spawn_preview_job` reads pipes instead of literal
+  `wait_with_output`.** The `Child` must sit in the kill slot *while*
+  its output is being read so a superseding spawn can kill it;
+  `wait_with_output` consumes the child and would defeat the slot. The
+  worker reads stdout on itself and stderr on a helper thread (pipe-
+  deadlock safe), then reaps through the slot — taking the child back
+  only if it is still its own (a superseder kills + reaps otherwise,
+  and the stale worker sends nothing).
+- **Terminal recreation on mode change is narrower than the spec's
+  wording.** Crossing inline<->fullscreen (or an inline height change)
+  drops + recreates the terminal; a side<->stacked flip stays on the
+  same alternate screen and just recomputes pane areas on the next
+  draw — recreating there would flash the alt screen for no benefit.
+- **The one-time `--picker skim` note scans raw process args.** clap
+  resolves value aliases before the parsed value is visible, so the
+  literal spelling only survives in `std::env::args()`.
+- **The PTY accept test asserts on stable output shapes** (a
+  `claude-*` cache doc exists + the `Imported …` summary) rather than
+  a specific cache id: the derive shortens the session id (first 8
+  chars) when shaping `claude-path-claude-code-<short>`.
+- `PickResult` gained `Debug/Clone/PartialEq/Eq` derives so state
+  tests can assert on it directly.
+- The ansi-to-tui sample test snapshots via `assert_debug_snapshot`
+  (ratatui `Text` has no `Display`).
+- Failed previews are cached like successes so a broken preview
+  command isn't re-run on every selection bounce (UX choice within the
+  spec's "errors never crash the picker").
+- Version-slot note: in-flight PRs #138/#145 also claim `path-cli`
+  0.17.0 — proceeded with 0.17.0 as instructed; whichever lands last
+  rebases its CHANGELOG H2 + version slots.
