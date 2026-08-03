@@ -358,6 +358,7 @@ pub(crate) fn shell_quote(s: &str) -> String {
 /// non-zero exit on cancel can match on `Cancelled`; callers that just
 /// want the picked lines treat both `NoMatch` and `Cancelled` as "empty
 /// selection".
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickResult {
     /// Picker exited cleanly with at least one selected line.
     Selected(Vec<String>),

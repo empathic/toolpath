@@ -299,7 +299,11 @@ fn run_preview_command(command: &str, pane: (u16, u16), slot: &KillSlot) -> Opti
         .spawn();
     let mut child = match spawned {
         Ok(c) => c,
-        Err(e) => return Some(PreviewContent::Failed(format!("failed to spawn preview: {e}"))),
+        Err(e) => {
+            return Some(PreviewContent::Failed(format!(
+                "failed to spawn preview: {e}"
+            )));
+        }
     };
     let child_id = child.id();
     let mut stdout_pipe = child.stdout.take();
@@ -426,10 +430,7 @@ mod tests {
         // Order tolerance: same tokens shuffled parse identically.
         assert_eq!(parse_preview_window("wrap-word:up:60%"), w);
         // Absolute line counts parse as lines, not percent.
-        assert_eq!(
-            parse_preview_window("down:15").size,
-            PaneSize::Lines(15),
-        );
+        assert_eq!(parse_preview_window("down:15").size, PaneSize::Lines(15),);
     }
 
     #[test]
