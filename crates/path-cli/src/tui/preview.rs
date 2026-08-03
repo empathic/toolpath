@@ -241,8 +241,9 @@ pub(super) fn new_kill_slot() -> KillSlot {
     Arc::new(Mutex::new(None))
 }
 
-/// Kill and reap whatever child currently occupies the slot.
-fn supersede(slot: &KillSlot) {
+/// Kill and reap whatever child currently occupies the slot. Called
+/// when a newer preview supersedes a running one, and on picker exit.
+pub(super) fn kill_current(slot: &KillSlot) {
     let prev = slot.lock().expect("kill slot poisoned").take();
     if let Some(mut child) = prev {
         let _ = child.kill();
@@ -263,7 +264,7 @@ pub(super) fn spawn_preview_job(
     tx: Sender<PreviewMsg>,
     slot: KillSlot,
 ) {
-    supersede(&slot);
+    kill_current(&slot);
     std::thread::spawn(move || {
         if let Some(content) = run_preview_command(&command, pane, &slot) {
             // Receiver gone means the picker already exited — fine.
