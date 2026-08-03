@@ -96,10 +96,10 @@ fn current_picker() -> Picker {
 }
 
 /// Returns true when an interactive picker can actually run: stdin and
-/// stderr are TTYs *and* at least one backend is available (external
-/// `fzf` on `PATH`, or the embedded skim picker compiled in). Callers
-/// use this as a guard before invoking [`pick`]; on `false` they print
-/// the manual recipe via [`print_recipe`].
+/// stderr are TTYs *and* at least one backend is available (the native
+/// picker compiled in, or external `fzf` on `PATH`). Callers use this
+/// as a guard before invoking [`pick`]; on `false` they print the
+/// manual recipe via [`print_recipe`].
 pub fn available() -> bool {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return false;
