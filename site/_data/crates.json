@@ -121,7 +121,7 @@
   },
   {
     "name": "toolpath-cli",
-    "version": "0.16.1",
+    "version": "0.17.0",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

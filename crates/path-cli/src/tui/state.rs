@@ -213,23 +213,23 @@ pub(super) fn handle_event(state: &mut AppState, ev: InputEvent) -> Option<PickR
         InputEvent::PageUp => state.move_selection(-(state.page_rows as isize)),
         InputEvent::PageDown => state.move_selection(state.page_rows as isize),
         InputEvent::Tab => {
-            if state.multi {
-                if let Some(row) = state.current_row() {
-                    if !state.marked.remove(&row) {
-                        state.marked.insert(row);
-                    }
-                    state.move_selection(1);
+            if state.multi
+                && let Some(row) = state.current_row()
+            {
+                if !state.marked.remove(&row) {
+                    state.marked.insert(row);
                 }
+                state.move_selection(1);
             }
         }
         InputEvent::BackTab => {
-            if state.multi {
-                if let Some(row) = state.current_row() {
-                    if !state.marked.remove(&row) {
-                        state.marked.insert(row);
-                    }
-                    state.move_selection(-1);
+            if state.multi
+                && let Some(row) = state.current_row()
+            {
+                if !state.marked.remove(&row) {
+                    state.marked.insert(row);
                 }
+                state.move_selection(-1);
             }
         }
         InputEvent::Enter => {

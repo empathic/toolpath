@@ -65,16 +65,18 @@ fn emergency_restore() {
     }
 }
 
+/// A shareable panic hook, as [`std::panic::take_hook`] returns it.
+type PanicHook = Arc<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync>;
+
 /// Scoped panic hook: `take_hook` -> install a restore-first wrapper,
 /// then put the previous hook back on clean drop.
 struct PanicHookGuard {
-    prev: Option<Arc<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync>>,
+    prev: Option<PanicHook>,
 }
 
 impl PanicHookGuard {
     fn install() -> Self {
-        let prev: Arc<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync> =
-            Arc::from(std::panic::take_hook());
+        let prev: PanicHook = Arc::from(std::panic::take_hook());
         let in_hook = prev.clone();
         std::panic::set_hook(Box::new(move |info| {
             emergency_restore();
