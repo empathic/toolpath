@@ -92,3 +92,7 @@ assert_cmd = "2"
 predicates = "3"
 insta = { workspace = true }
 toolpath-convo = { workspace = true }
+# PTY harness for the opt-in (#[ignore]) native-picker smoke tests in
+# tests/picker_pty.rs — the only way to exercise the real TTY event
+# loop end to end.
+portable-pty = "0.9"
