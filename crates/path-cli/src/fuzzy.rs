@@ -342,9 +342,11 @@ pub(crate) fn substitute_exe_placeholder(preview: &str) -> String {
     preview.replace("{exe}", &exe)
 }
 
-/// Single-quote a path for embedding in a `/bin/sh -c` command line.
-/// Any embedded single-quote becomes `'\''` so the path survives intact.
-fn shell_quote(s: &str) -> String {
+/// Single-quote a value for embedding in a `/bin/sh -c` command line.
+/// Any embedded single-quote becomes `'\''` so the value survives
+/// intact. Used for the `{exe}` substitution here and the `{1}`..`{n}`
+/// field substitutions in the native picker's preview pipeline.
+pub(crate) fn shell_quote(s: &str) -> String {
     let escaped = s.replace('\'', "'\\''");
     format!("'{escaped}'")
 }

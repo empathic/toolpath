@@ -19,3 +19,4 @@
 #![allow(dead_code)]
 
 mod matcher;
+mod preview;
