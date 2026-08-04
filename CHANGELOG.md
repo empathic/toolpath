@@ -18,6 +18,19 @@ upcoming bare `resume` picker — into a minute-plus silent stall.
   method: a first prompt buried past the head budget reports as
   `None`, and `line_count` counts non-empty lines rather than
   successfully parsed ones.
+## The share picker gathers harnesses in parallel — 2026-08-04
+
+The unified session picker (`path share`, and bare `path resume` once
+it lands) enumerated the seven providers one after another, so the
+slowest scan — a big codex or claude history — stacked on top of all
+the others before anything appeared.
+
+- **path-cli** (0.16.2): `gather_artifacts` runs the provider scans in
+  scoped threads, making pre-picker wall time max-of-providers instead
+  of sum-of-providers. Claude scans inline on the calling thread (its
+  chain-index cache is single-threaded); everything else fans out.
+  Row concatenation keeps the old provider order, so ranking
+  tie-breaks are unchanged.
 
 ## Projected Claude sessions are resumable again — 2026-07-30
 
