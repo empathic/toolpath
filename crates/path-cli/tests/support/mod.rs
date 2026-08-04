@@ -27,11 +27,20 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// RAII guard that pins `$HOME` and `$TOOLPATH_CONFIG_DIR` to a tempdir.
+/// RAII guard that pins `$HOME`, `$TOOLPATH_CONFIG_DIR`,
+/// `$XDG_DATA_HOME`, and `$COPILOT_HOME` to a tempdir. `XDG_DATA_HOME`
+/// is pinned because the opencode provider resolves its database
+/// through it before falling back to `~/.local/share`; `COPILOT_HOME`
+/// because the copilot provider honors it as a full root override
+/// before falling back to `~/.copilot` — without the pins, bare-resume
+/// aggregation would leak the developer's real sessions into gather
+/// results.
 pub struct ScopedHome {
     _td: tempfile::TempDir,
     prev_home: Option<OsString>,
     prev_config: Option<OsString>,
+    prev_xdg_data: Option<OsString>,
+    prev_copilot_home: Option<OsString>,
 }
 
 impl ScopedHome {
@@ -39,14 +48,20 @@ impl ScopedHome {
         let td = tempfile::tempdir().unwrap();
         let prev_home = std::env::var_os("HOME");
         let prev_config = std::env::var_os("TOOLPATH_CONFIG_DIR");
+        let prev_xdg_data = std::env::var_os("XDG_DATA_HOME");
+        let prev_copilot_home = std::env::var_os("COPILOT_HOME");
         unsafe {
             std::env::set_var("HOME", td.path());
             std::env::set_var("TOOLPATH_CONFIG_DIR", td.path().join(".toolpath"));
+            std::env::set_var("XDG_DATA_HOME", td.path().join(".local/share"));
+            std::env::set_var("COPILOT_HOME", td.path().join(".copilot"));
         }
         Self {
             _td: td,
             prev_home,
             prev_config,
+            prev_xdg_data,
+            prev_copilot_home,
         }
     }
 
@@ -65,6 +80,14 @@ impl Drop for ScopedHome {
             match &self.prev_config {
                 Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
                 None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
+            }
+            match &self.prev_xdg_data {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+            match &self.prev_copilot_home {
+                Some(v) => std::env::set_var("COPILOT_HOME", v),
+                None => std::env::remove_var("COPILOT_HOME"),
             }
         }
     }
@@ -181,13 +204,85 @@ pub fn write_path_to_temp(dir: &Path, path: toolpath::v1::Path) -> PathBuf {
 /// Construct `ResumeArgs` for a file-input + explicit-harness test.
 pub fn args_explicit(input: PathBuf, cwd: &Path, harness: Harness) -> ResumeArgs {
     ResumeArgs {
-        input: input.to_string_lossy().to_string(),
+        input: Some(input.to_string_lossy().to_string()),
         cwd: Some(cwd.to_path_buf()),
         harness: Some(harness),
-        no_cache: false,
-        force: false,
-        url: None,
+        ..Default::default()
     }
+}
+
+/// Write a minimal Claude Code session fixture under
+/// `<home>/.claude/projects/<project_slug>/<session>.jsonl` (one user
+/// prompt + one assistant reply), modeled on `cmd_share`'s unit-test
+/// fixture. The recorded `cwd` becomes the row's project path when the
+/// slug unsanitizes to it (e.g. slug `-test-project` → `/test/project`).
+pub fn write_claude_session(home: &Path, project_slug: &str, session: &str, prompt: &str) {
+    let project_dir = home.join(".claude/projects").join(project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let cwd = project_slug.replace('-', "/");
+    let user = format!(
+        r#"{{"type":"user","uuid":"u-{session}","timestamp":"2026-01-02T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"{prompt}"}}}}"#
+    );
+    let asst = format!(
+        r#"{{"type":"assistant","uuid":"a-{session}","timestamp":"2026-01-02T00:00:01Z","message":{{"role":"assistant","content":"hi"}}}}"#
+    );
+    std::fs::write(
+        project_dir.join(format!("{session}.jsonl")),
+        format!("{user}\n{asst}\n"),
+    )
+    .unwrap();
+}
+
+/// Write a minimal Codex rollout fixture under
+/// `<home>/.codex/sessions/2026/05/07/rollout-…-<id>.jsonl` with the
+/// given recorded `cwd`, modeled on `cmd_share`'s unit-test fixture.
+/// `id` must be UUID-shaped (the artifact id comes from the filename
+/// stem's trailing UUID).
+pub fn write_codex_session(home: &Path, id: &str, cwd: &str) {
+    write_codex_session_at(home, id, cwd, "2026-05-07T00:00");
+}
+
+/// [`write_codex_session`] with control over the embedded timestamps.
+/// `stamp` is minute-precision RFC 3339 without seconds or zone — e.g.
+/// `2026-05-07T00:00` — so a single fixture's three lines get
+/// `:00`/`:01`/`:02` seconds and callers can order whole fixtures
+/// relative to each other. Codex's listed `last_activity` is the max
+/// embedded JSONL timestamp, so distinct stamps give a deterministic
+/// recency ordering.
+pub fn write_codex_session_at(home: &Path, id: &str, cwd: &str, stamp: &str) {
+    let dir = home.join(".codex/sessions/2026/05/07");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file_stamp = stamp.replace(':', "-");
+    let file = dir.join(format!("rollout-{file_stamp}-00-{id}.jsonl"));
+    let meta = format!(
+        r#"{{"timestamp":"{stamp}:00Z","type":"session_meta","payload":{{"id":"{id}","timestamp":"{stamp}:00Z","cwd":"{cwd}","originator":"codex-tui","cli_version":"test","source":"cli","model_provider":"openai"}}}}"#
+    );
+    let user = format!(
+        r#"{{"timestamp":"{stamp}:01Z","type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"hi"}}]}}}}"#
+    );
+    let asst = format!(
+        r#"{{"timestamp":"{stamp}:02Z","type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"hello"}}]}}}}"#
+    );
+    std::fs::write(file, format!("{meta}\n{user}\n{asst}\n")).unwrap();
+}
+
+/// Recursively collect every file under `root` with the given extension.
+pub fn files_with_ext(root: &Path, ext: &str) -> Vec<PathBuf> {
+    fn walk(p: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+        if !p.exists() {
+            return;
+        }
+        if p.is_dir() {
+            for e in std::fs::read_dir(p).unwrap() {
+                walk(&e.unwrap().path(), ext, out);
+            }
+        } else if p.extension().and_then(|s| s.to_str()) == Some(ext) {
+            out.push(p.to_path_buf());
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, ext, &mut out);
+    out
 }
 
 /// Recursively walk `root` looking for a file with the given extension.

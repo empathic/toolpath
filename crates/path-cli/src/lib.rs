@@ -87,7 +87,9 @@ enum Commands {
         args: cmd_share::ShareArgs,
     },
     /// Resume an agent session into the chosen harness, projecting the
-    /// document and exec'ing the harness's resume command.
+    /// document and exec'ing the harness's resume command. With no
+    /// input, picks a session interactively across all installed
+    /// harnesses.
     #[cfg(not(target_os = "emscripten"))]
     Resume {
         #[command(flatten)]
