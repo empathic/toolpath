@@ -45,8 +45,12 @@ impl Row {
     }
 }
 
-/// One row's match result. `indices` are *char* positions into
-/// [`Row::display`] (sorted, deduped) for highlight rendering.
+/// One row's match result. `indices` are *grapheme* positions into
+/// [`Row::display`] (sorted, deduped) as reported by nucleo — its
+/// haystacks are built by grapheme segmentation, one index per
+/// grapheme — so highlight rendering must segment identically
+/// (codepoint positions drift after multi-codepoint clusters like
+/// emoji ZWJ sequences).
 #[derive(Debug, Clone)]
 pub(super) struct MatchEntry {
     pub row: usize,
@@ -322,9 +326,26 @@ mod tests {
         assert!(out.iter().all(|e| e.row != 0));
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|e| !e.indices.is_empty()));
-        // Equal-quality matches tie-break by row (input) order.
+        // Sorted best-first.
+        assert!(out.windows(2).all(|w| w[0].score >= w[1].score));
+    }
+
+    #[test]
+    fn rematch_equal_scores_tiebreak_by_input_order() {
+        // Two rows with IDENTICAL display text: their scores are
+        // guaranteed equal, so the ordering below can only come from
+        // the row-ascending tiebreak (`tiebreak=index` contract).
+        let spec = parse_field_spec("1..").unwrap();
+        let rows: Vec<Row> = ["share codex session", "share codex session"]
+            .iter()
+            .map(|l| Row::new(l, &spec))
+            .collect();
+        let mut m = NucleoMatcher::new(&rows);
+        let out = m.rematch("share");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].score, out[1].score);
         let rows_in_order: Vec<usize> = out.iter().map(|e| e.row).collect();
-        assert!(rows_in_order == vec![1, 2] || rows_in_order == vec![2, 1]);
+        assert_eq!(rows_in_order, vec![0, 1]);
     }
 
     #[test]

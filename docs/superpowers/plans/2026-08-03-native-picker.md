@@ -115,3 +115,36 @@ Deviations from the spec, found against the real code:
 - Version-slot note: in-flight PRs #138/#145 also claim `path-cli`
   0.17.0 — proceeded with 0.17.0 as instructed; whichever lands last
   rebases its CHANGELOG H2 + version slots.
+
+### Review fixes
+
+Adversarial-review findings, fixed in one follow-up commit:
+
+- **Grapheme-correct highlights (major).** nucleo builds haystacks by
+  grapheme segmentation, so `MatchEntry.indices` are grapheme
+  positions; `highlight_spans` enumerated `chars()`, landing bold runs
+  inside multi-codepoint clusters (emoji ZWJ). Now iterates
+  `graphemes(true)` (new direct dep `unicode-segmentation`, already in
+  the tree), with a span-level unit test plus a buffer style test
+  asserting the underline covers exactly the matched text on an
+  emoji-ZWJ-prefixed row.
+- **`TermGuard::new` no longer leaks raw mode:** a terminal-creation
+  failure after `enable_raw_mode` succeeded now runs the emergency
+  restore before returning the error (initial entry and the mid-loop
+  recreate path).
+- **Kill-slot park is replace-and-kill, reap is generation-keyed:** a
+  supersede racing the park could leak an un-killed child until CLI
+  exit, and the pid-equality reap check was ABA-unsafe under pid
+  reuse.
+- **Tiebreak test made honest:** the accepts-both-orders `||` hedge is
+  gone — a presence/score test plus a dedicated identical-display-text
+  test pinning row-ascending order.
+- **Style-level render assertions added** (TestBackend cell styles) —
+  text-only snapshots could not catch a highlighting regression.
+- **Inline exit parks the cursor at the viewport origin, column 0** —
+  `Terminal::clear` preserves the pre-clear cursor position, which
+  left shell output resuming mid-viewport.
+- **Previews no longer spawn while the pane is hidden** (Ctrl-O);
+  re-showing re-arms the scheduler for the current row so the pane
+  fills promptly.
+- Spec `Status:` updated to `implemented`.

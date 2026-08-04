@@ -232,10 +232,13 @@ pub(super) fn substitute_placeholders(template: &str, fields: &[String], origina
     out
 }
 
-/// Shared handle to the currently running preview child, if any.
+/// Shared handle to the currently running preview child, if any,
+/// keyed by the generation of the [`SpawnRequest`] that spawned it.
 /// Superseding spawns kill it best-effort so at most one preview
-/// command runs at a time.
-pub(super) type KillSlot = Arc<Mutex<Option<Child>>>;
+/// command runs at a time. The generation key — unique per spawn —
+/// makes the reap check ABA-safe where a pid comparison would not be
+/// (the OS can reuse a pid).
+pub(super) type KillSlot = Arc<Mutex<Option<(u64, Child)>>>;
 
 pub(super) fn new_kill_slot() -> KillSlot {
     Arc::new(Mutex::new(None))
@@ -245,7 +248,7 @@ pub(super) fn new_kill_slot() -> KillSlot {
 /// when a newer preview supersedes a running one, and on picker exit.
 pub(super) fn kill_current(slot: &KillSlot) {
     let prev = slot.lock().expect("kill slot poisoned").take();
-    if let Some(mut child) = prev {
+    if let Some((_, mut child)) = prev {
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -266,7 +269,7 @@ pub(super) fn spawn_preview_job(
 ) {
     kill_current(&slot);
     std::thread::spawn(move || {
-        if let Some(content) = run_preview_command(&command, pane, &slot) {
+        if let Some(content) = run_preview_command(&command, pane, req.generation, &slot) {
             // Receiver gone means the picker already exited — fine.
             let _ = tx.send(PreviewMsg {
                 generation: req.generation,
@@ -280,7 +283,13 @@ pub(super) fn spawn_preview_job(
 /// Run one preview command to completion. Returns `None` when the
 /// child was superseded mid-run (a newer spawn killed and reaped it) —
 /// its output is stale by definition and no message should be sent.
-fn run_preview_command(command: &str, pane: (u16, u16), slot: &KillSlot) -> Option<PreviewContent> {
+/// `generation` keys this spawn's slot entry for the reap check.
+fn run_preview_command(
+    command: &str,
+    pane: (u16, u16),
+    generation: u64,
+    slot: &KillSlot,
+) -> Option<PreviewContent> {
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.arg("/C").arg(command);
@@ -306,13 +315,22 @@ fn run_preview_command(command: &str, pane: (u16, u16), slot: &KillSlot) -> Opti
             )));
         }
     };
-    let child_id = child.id();
     let mut stdout_pipe = child.stdout.take();
     let mut stderr_pipe = child.stderr.take();
 
     // Park the child in the kill slot so a superseding spawn can kill
-    // it while we block on its output.
-    *slot.lock().expect("kill slot poisoned") = Some(child);
+    // it while we block on its output. Replace-and-kill: if a
+    // superseding spawn's `kill_current` ran BEFORE this park (the
+    // slot was empty, so it killed nothing), whatever we displace here
+    // is that stale child — kill and reap it now instead of leaking a
+    // zombie until CLI exit.
+    {
+        let mut guard = slot.lock().expect("kill slot poisoned");
+        if let Some((_, mut old)) = guard.replace((generation, child)) {
+            let _ = old.kill();
+            let _ = old.wait();
+        }
+    }
 
     // Drain stderr on a helper thread to avoid a pipe-buffer deadlock
     // when a preview command is chatty on both streams.
@@ -329,13 +347,16 @@ fn run_preview_command(command: &str, pane: (u16, u16), slot: &KillSlot) -> Opti
     }
     let stderr = stderr_handle.join().unwrap_or_default();
 
-    // Reap: only if the slot still holds *our* child. If a newer spawn
-    // superseded us it already killed and reaped it, and our output is
-    // stale.
+    // Reap: only if the slot still holds *our* spawn, keyed by
+    // generation (unique per spawn — pid equality would be ABA-unsafe
+    // under pid reuse). If a newer spawn superseded us it already
+    // killed and reaped our child, and our output is stale.
     let ours = {
         let mut guard = slot.lock().expect("kill slot poisoned");
         match guard.as_ref() {
-            Some(c) if c.id() == child_id => guard.take(),
+            Some((slot_generation, _)) if *slot_generation == generation => {
+                guard.take().map(|(_, child)| child)
+            }
             _ => None,
         }
     };

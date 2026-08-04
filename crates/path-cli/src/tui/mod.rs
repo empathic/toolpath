@@ -114,28 +114,45 @@ impl TermGuard {
     fn new(mode: LayoutMode) -> Result<Self> {
         let fullscreen = mode.is_fullscreen();
         enable_raw_mode().context("enable raw mode")?;
+        // Arm the restore flags BEFORE building the terminal: any
+        // failure past this point (terminal creation, entering the
+        // alternate screen) must undo raw mode — and leave the alt
+        // screen best-effort — before the error propagates, or the
+        // shell is left stuck in raw mode. This covers both the
+        // initial entry and the mid-loop recreate path.
         NEEDS_RESTORE.store(true, Ordering::SeqCst);
         RESTORE_FULLSCREEN.store(fullscreen, Ordering::SeqCst);
+        match Self::build(mode) {
+            Ok(terminal) => Ok(Self {
+                terminal,
+                fullscreen,
+                restored: false,
+            }),
+            Err(err) => {
+                emergency_restore();
+                Err(err)
+            }
+        }
+    }
+
+    /// Build the mode's terminal. Failures after [`enable_raw_mode`]
+    /// succeeded are cleaned up by [`TermGuard::new`].
+    fn build(mode: LayoutMode) -> Result<Terminal<CrosstermBackend<Stderr>>> {
         let backend = CrosstermBackend::new(std::io::stderr());
-        let terminal = match mode {
+        match mode {
             LayoutMode::Inline { height } => Terminal::with_options(
                 backend,
                 TerminalOptions {
                     viewport: Viewport::Inline(height),
                 },
             )
-            .context("create inline terminal")?,
+            .context("create inline terminal"),
             _ => {
                 crossterm::execute!(std::io::stderr(), EnterAlternateScreen)
                     .context("enter alternate screen")?;
-                Terminal::new(backend).context("create fullscreen terminal")?
+                Terminal::new(backend).context("create fullscreen terminal")
             }
-        };
-        Ok(Self {
-            terminal,
-            fullscreen,
-            restored: false,
-        })
+        }
     }
 
     fn restore(&mut self) {
@@ -149,7 +166,15 @@ impl TermGuard {
         if !self.fullscreen {
             // Clear the inline viewport region so the shell prompt
             // continues where the picker sat, without stale rows.
+            let origin_y = self.terminal.get_frame().area().y;
             let _ = self.terminal.clear();
+            // `Terminal::clear` preserves the pre-clear cursor position
+            // — wherever the last draw parked it (the query input line,
+            // mid-viewport). Park the cursor at the viewport's origin,
+            // column 0, so post-picker shell output resumes at the
+            // top-left of where the picker sat — no viewport-height
+            // gap, no indent.
+            let _ = crossterm::execute!(std::io::stderr(), crossterm::cursor::MoveTo(0, origin_y));
         }
         let _ = disable_raw_mode();
         if self.fullscreen {
@@ -192,8 +217,12 @@ pub(crate) fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResul
     // Row whose Ready text the pane last showed — kept on cache misses
     // so the pane doesn't blank while the next preview derives.
     let mut shown_row: Option<usize> = None;
+    // Pane visibility last tick — a hidden->shown flip (Ctrl-O)
+    // re-arms the scheduler for the current row.
+    let mut preview_was_visible = state.preview_visible;
 
     if template.is_some()
+        && state.preview_visible
         && let Some(row) = state.current_row()
     {
         scheduler.on_selection_change(row, Instant::now());
@@ -251,10 +280,17 @@ pub(crate) fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResul
             guard.terminal.autoresize().context("autoresize terminal")?;
         }
 
-        if let Some(template) = template.as_deref() {
+        // Preview scheduling runs only while the pane is actually
+        // visible — a hidden pane (Ctrl-O) must not spawn preview
+        // commands for rows nobody can see.
+        if let Some(template) = template.as_deref()
+            && state.preview_visible
+        {
             let now = Instant::now();
             let current = state.current_row();
-            if current != last_row {
+            // Re-arm on selection change, and on a hidden->shown flip
+            // so the pane fills promptly after Ctrl-O re-shows it.
+            if current != last_row || !preview_was_visible {
                 if let Some(row) = current {
                     scheduler.on_selection_change(row, now);
                 }
@@ -274,6 +310,7 @@ pub(crate) fn pick(lines: &[String], opts: &PickOptions<'_>) -> Result<PickResul
                 preview::spawn_preview_job(req, command, pane, tx.clone(), kill_slot.clone());
             }
         }
+        preview_was_visible = state.preview_visible;
     };
 
     guard.restore();

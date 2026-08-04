@@ -1,6 +1,6 @@
 # Native ratatui picker — design
 
-**Status:** approved design, implementing
+**Status:** implemented
 **Date:** 2026-08-03
 
 ## Intent

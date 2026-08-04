@@ -10,6 +10,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph, Wrap};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::preview::{PaneSize, PreviewWindow, Side, WrapMode};
 use super::state::AppState;
@@ -297,8 +298,14 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Split `display` into styled spans: matched char positions render
-/// bold (on top of the selected-row style).
+/// Split `display` into styled spans: matched grapheme positions
+/// render bold+underlined (on top of the selected-row style).
+///
+/// `indices` are GRAPHEME positions as reported by nucleo (its
+/// haystacks segment by grapheme), so the iteration here must segment
+/// identically — enumerating `chars()` would land highlights inside
+/// multi-codepoint clusters (emoji ZWJ sequences) instead of on the
+/// matched text.
 fn highlight_spans<'a>(display: &'a str, indices: &[u32], selected: bool) -> Vec<Span<'a>> {
     let base = if selected {
         Style::new().bold()
@@ -309,8 +316,8 @@ fn highlight_spans<'a>(display: &'a str, indices: &[u32], selected: bool) -> Vec
     let mut spans = Vec::new();
     let mut run = String::new();
     let mut run_hilited = false;
-    for (ci, ch) in display.chars().enumerate() {
-        let hit = indices.binary_search(&(ci as u32)).is_ok();
+    for (gi, grapheme) in display.graphemes(true).enumerate() {
+        let hit = indices.binary_search(&(gi as u32)).is_ok();
         if hit != run_hilited && !run.is_empty() {
             spans.push(Span::styled(
                 std::mem::take(&mut run),
@@ -318,7 +325,7 @@ fn highlight_spans<'a>(display: &'a str, indices: &[u32], selected: bool) -> Vec
             ));
         }
         run_hilited = hit;
-        run.push(ch);
+        run.push_str(grapheme);
     }
     if !run.is_empty() {
         spans.push(Span::styled(run, if run_hilited { hilite } else { base }));
@@ -641,6 +648,95 @@ mod tests {
         };
         let terminal = render_frame(&state, Some(&view), 60, 14);
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    // ── Highlight styling ────────────────────────────────────────────
+
+    #[test]
+    fn highlight_spans_treats_indices_as_grapheme_positions() {
+        use ratatui::style::Modifier;
+        // "👩‍👩‍👦 fix parser" segments as [👩‍👩‍👦][ ][f][i][x][ ][p]… — the
+        // emoji ZWJ sequence is ONE grapheme (5 codepoints), so nucleo
+        // reports "fix" at grapheme positions 2..=4. Codepoint
+        // enumeration would place those indices inside the emoji.
+        let spans = highlight_spans(
+            "\u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f466} fix parser",
+            &[2, 3, 4],
+            false,
+        );
+        let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "\u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f466} ",
+                "fix",
+                " parser"
+            ]
+        );
+        assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert!(!spans[0].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert!(!spans[2].style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    /// Style-level assertion on the rendered buffer (snapshots capture
+    /// text only): the highlight modifiers land on exactly the matched
+    /// text of an emoji-ZWJ-prefixed row, and not on its neighbors.
+    #[test]
+    fn emoji_row_highlight_styles_cover_exactly_the_matched_text() {
+        use ratatui::style::Modifier;
+        let mut state = plain_state(
+            &[
+                "\u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f466} fix parser",
+                "unrelated row",
+            ],
+            "1..",
+            false,
+        );
+        state.term_w = 40;
+        state.term_h = 24;
+        for c in "fix".chars() {
+            handle_event(&mut state, InputEvent::Char(c));
+        }
+        let LayoutMode::Inline { height } = choose_layout(&state) else {
+            panic!("expected inline layout");
+        };
+        let terminal = render_frame(&state, None, 40, height);
+        let buffer = terminal.backend().buffer();
+        // Row 0 is the (selected) matched row. Collect its cells.
+        let cells: Vec<(String, Style)> = (0..buffer.area().width)
+            .map(|x| {
+                let cell = &buffer[(x, 0)];
+                (cell.symbol().to_string(), cell.style())
+            })
+            .collect();
+        // The underlined cells spell exactly the matched text.
+        let underlined: String = cells
+            .iter()
+            .filter(|(_, style)| style.add_modifier.contains(Modifier::UNDERLINED))
+            .map(|(symbol, _)| symbol.as_str())
+            .collect();
+        assert_eq!(underlined, "fix");
+        // Matched cells carry the full highlight (bold + underline)…
+        let f_style = cells
+            .iter()
+            .find(|(symbol, _)| symbol == "f")
+            .map(|(_, style)| *style)
+            .expect("matched 'f' cell present");
+        assert!(f_style.add_modifier.contains(Modifier::BOLD));
+        assert!(f_style.add_modifier.contains(Modifier::UNDERLINED));
+        // …while the adjacent unmatched cells (the emoji grapheme and
+        // the first char of "parser") do not carry the underline.
+        for neighbor in ["\u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f466}", "p"] {
+            let style = cells
+                .iter()
+                .find(|(symbol, _)| symbol == neighbor)
+                .map(|(_, style)| *style)
+                .unwrap_or_else(|| panic!("cell {neighbor:?} present"));
+            assert!(
+                !style.add_modifier.contains(Modifier::UNDERLINED),
+                "unmatched {neighbor:?} must not be underlined"
+            );
+        }
     }
 
     #[test]
