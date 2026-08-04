@@ -13,6 +13,8 @@ pub(crate) const CONFIG_DIR_ENV: &str = "TOOLPATH_CONFIG_DIR";
 
 /// The artifact manifest under the config dir (see `sync::engine`).
 pub(crate) const MANIFEST_FILE_NAME: &str = "manifest.json";
+/// The picker listing cache under the config dir (see `listing_cache`).
+pub(crate) const LISTING_CACHE_FILE_NAME: &str = "listing-cache.json";
 /// Sibling advisory lock serializing manifest writers. A separate
 /// file because the manifest itself is replaced by rename on every
 /// write, which would drop any lock held on it.

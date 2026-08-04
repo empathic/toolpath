@@ -34,6 +34,7 @@ mod fuzzy;
 pub mod harness;
 mod io;
 mod kinds;
+mod listing_cache;
 mod query;
 mod schema;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
