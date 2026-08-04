@@ -2,6 +2,41 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Warm picker opens are effectively instant — 2026-08-04
+
+The session picker (`path share`, and bare `path resume` once #154
+lands) re-scanned every session file on every open just to rebuild the
+same row metadata. Now a stat-stamp listing cache remembers each row
+next to the same mtime+size fingerprint the sync manifest uses, so a
+gather where nothing changed does stat-level enumeration and no
+session reads at all.
+
+- **path-cli** (0.16.3): `gather_artifacts` consults
+  `~/.toolpath/listing-cache.json` for the three expensive providers —
+  claude (keyed by chain head, whole-chain stamp, so appends after a
+  rotation still invalidate), codex, and opencode — and re-scans only
+  new or changed sessions. Rows rebuilt from cache are field-for-field
+  identical to a fresh scan (`matches_cwd` is recomputed per gather,
+  never cached); artifacts deleted upstream drop out of both picker
+  and cache. The file is a pure cache: corrupt or missing content
+  means a normal full scan, never an error. gemini / pi / copilot /
+  cursor already scan in well under a second and stay on the direct
+  path.
+
+## The share picker gathers harnesses in parallel — 2026-08-04
+
+The unified session picker (`path share`, and bare `path resume` once
+it lands) enumerated the seven providers one after another, so the
+slowest scan — a big codex or claude history — stacked on top of all
+the others before anything appeared.
+
+- **path-cli** (0.16.2): `gather_artifacts` runs the provider scans in
+  scoped threads, making pre-picker wall time max-of-providers instead
+  of sum-of-providers. Claude scans inline on the calling thread (its
+  chain-index cache is single-threaded); everything else fans out.
+  Row concatenation keeps the old provider order, so ranking
+  tie-breaks are unchanged.
+
 ## Codex session listing no longer parses every byte — 2026-08-04
 
 Listing Codex sessions read every rollout file end to end through
@@ -18,20 +53,6 @@ upcoming bare `resume` picker — into a minute-plus silent stall.
   method: a first prompt buried past the head budget reports as
   `None`, and `line_count` counts non-empty lines rather than
   successfully parsed ones.
-## The share picker gathers harnesses in parallel — 2026-08-04
-
-The unified session picker (`path share`, and bare `path resume` once
-it lands) enumerated the seven providers one after another, so the
-slowest scan — a big codex or claude history — stacked on top of all
-the others before anything appeared.
-
-- **path-cli** (0.16.2): `gather_artifacts` runs the provider scans in
-  scoped threads, making pre-picker wall time max-of-providers instead
-  of sum-of-providers. Claude scans inline on the calling thread (its
-  chain-index cache is single-threaded); everything else fans out.
-  Row concatenation keeps the old provider order, so ranking
-  tie-breaks are unchanged.
-
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real
