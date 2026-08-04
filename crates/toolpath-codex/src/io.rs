@@ -78,21 +78,134 @@ impl ConvoIO {
         RolloutReader::read_session(path)
     }
 
-    /// Cheap per-file metadata: parses the session_meta line + walks
-    /// the file for first/last timestamps.
+    /// Cheap per-file metadata: a single streaming pass that
+    /// JSON-parses only the head of the file (session_meta, first
+    /// timestamps, first user prompt all live there in this
+    /// append-only log) plus the final line (last timestamp), and
+    /// otherwise just counts lines. Multi-gigabyte session trees made
+    /// the previous parse-every-line approach a minute-plus stall in
+    /// every session-listing surface (`p list codex`, `share`, bare
+    /// `resume`).
+    ///
+    /// Bounded-head consequences, deliberate: `first_user_message` is
+    /// `None` if the first prompt appears after the head budget, and
+    /// `line_count` counts non-empty lines (unparseable ones
+    /// included) rather than successfully parsed ones.
     pub fn read_metadata<P: AsRef<std::path::Path>>(&self, path: P) -> Result<SessionMetadata> {
-        let path = path.as_ref();
-        // Full parse is simplest; rollout files are small (typical
-        // session 200-300 KB). If that becomes a bottleneck we'd peek
-        // the first line plus `stat` for mtime.
-        let session = RolloutReader::read_session(path)?;
+        use crate::types::{ResponseItem, RolloutLine};
+        use std::io::BufRead;
 
-        let meta_line = session.items().find_map(|item| match item {
-            RolloutItem::SessionMeta(m) => Some(m),
-            _ => None,
+        // Parse at most this many non-empty head lines looking for
+        // session_meta / timestamps / the first user prompt. Real
+        // sessions surface the prompt within the first dozen lines
+        // (after session_meta, turn_context, and injected context).
+        const HEAD_PARSE_BUDGET: usize = 100;
+
+        let path = path.as_ref();
+        if !path.exists() {
+            return Err(crate::error::ConvoError::SessionNotFound(
+                path.display().to_string(),
+            ));
+        }
+
+        let file = std::fs::File::open(path)?;
+        let mut reader = std::io::BufReader::with_capacity(1 << 20, file);
+        let mut raw = String::new();
+        let mut last_nonempty = String::new();
+
+        let mut line_count = 0usize;
+        let mut head_parsed = 0usize;
+        let mut first_line_meta_id: Option<String> = None;
+        let mut meta: Option<Box<crate::types::SessionMeta>> = None;
+        let mut started_at = None;
+        let mut last_ts = None;
+        let mut first_user: Option<String> = None;
+        let mut first_user_fallback: Option<String> = None;
+
+        loop {
+            raw.clear();
+            match reader.read_line(&mut raw) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!(
+                        "Warning: IO error reading {} after line {}: {}",
+                        path.display(),
+                        line_count,
+                        e
+                    );
+                    break;
+                }
+            }
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            line_count += 1;
+
+            let still_hunting = meta.is_none() || started_at.is_none() || first_user.is_none();
+            if still_hunting && head_parsed < HEAD_PARSE_BUDGET {
+                head_parsed += 1;
+                if let Ok(line) = serde_json::from_str::<RolloutLine>(trimmed) {
+                    if let Some(ts) = line.parsed_timestamp() {
+                        if started_at.is_none_or(|s| ts < s) {
+                            started_at = Some(ts);
+                        }
+                        if last_ts.is_none_or(|l| ts > l) {
+                            last_ts = Some(ts);
+                        }
+                    }
+                    if line_count == 1 && line.kind == "session_meta" {
+                        first_line_meta_id = line
+                            .payload
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                    }
+                    if first_user.is_none()
+                        && line.kind == "event_msg"
+                        && line.payload.get("type").and_then(|v| v.as_str()) == Some("user_message")
+                        && let Some(msg) = line.payload.get("message").and_then(|v| v.as_str())
+                        && !msg.is_empty()
+                    {
+                        first_user = Some(msg.to_string());
+                    }
+                    match line.item() {
+                        RolloutItem::SessionMeta(m) if meta.is_none() => meta = Some(m),
+                        RolloutItem::ResponseItem(ResponseItem::Message(m))
+                            if m.role == "user" && first_user_fallback.is_none() =>
+                        {
+                            let t = m.text();
+                            if !t.is_empty() {
+                                first_user_fallback = Some(t);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            std::mem::swap(&mut last_nonempty, &mut raw);
+        }
+
+        // The tail line carries the newest timestamp in an
+        // append-only log; parse just that one.
+        if let Ok(line) = serde_json::from_str::<RolloutLine>(last_nonempty.trim())
+            && let Some(ts) = line.parsed_timestamp()
+            && last_ts.is_none_or(|l| ts > l)
+        {
+            last_ts = Some(ts);
+        }
+
+        // Same id rule as RolloutReader::derive_session_id: the first
+        // line's session_meta payload wins, else the filename stem.
+        let id = first_line_meta_id.unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(|stem| crate::paths::session_id_from_stem(stem).to_string())
+                .unwrap_or_else(|| "unknown".to_string())
         });
 
-        let (cwd, cli_version, git_branch, git_commit) = match &meta_line {
+        let (cwd, cli_version, git_branch, git_commit) = match &meta {
             Some(m) => (
                 Some(m.cwd.clone()),
                 Some(m.cli_version.clone()),
@@ -103,16 +216,16 @@ impl ConvoIO {
         };
 
         Ok(SessionMetadata {
-            id: session.id.clone(),
-            file_path: session.file_path.clone(),
-            started_at: session.started_at(),
-            last_activity: session.last_activity(),
+            id,
+            file_path: path.to_path_buf(),
+            started_at,
+            last_activity: last_ts,
             cwd,
             cli_version,
-            first_user_message: session.first_user_text(),
+            first_user_message: first_user.or(first_user_fallback),
             git_branch,
             git_commit,
-            line_count: session.lines.len(),
+            line_count,
         })
     }
 
@@ -173,7 +286,11 @@ mod tests {
         let (_t, io) = setup();
         let day = io.resolver().sessions_root().unwrap().join("2026/04/21");
         fs::create_dir_all(&day).unwrap();
-        fs::write(day.join("rollout-2026-04-21T09-00-00-bbb.jsonl"), "not json").unwrap();
+        fs::write(
+            day.join("rollout-2026-04-21T09-00-00-bbb.jsonl"),
+            "not json",
+        )
+        .unwrap();
 
         let ids = io.list_session_ids().unwrap();
         assert_eq!(ids.len(), 2);
@@ -219,5 +336,95 @@ mod tests {
         fs::create_dir_all(&codex).unwrap();
         let io = ConvoIO::with_resolver(PathResolver::new().with_codex_dir(&codex));
         assert!(io.list_sessions().unwrap().is_empty());
+    }
+
+    /// Write a rollout body into the fixture tree and return its path.
+    fn write_rollout(io: &ConvoIO, name: &str, body: &str) -> PathBuf {
+        let day = io.resolver().sessions_root().unwrap().join("2026/04/22");
+        fs::create_dir_all(&day).unwrap();
+        let path = day.join(name);
+        fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn metadata_last_activity_comes_from_tail_line() {
+        let (_t, io) = setup();
+        let body = [
+            r#"{"timestamp":"2026-04-22T10:00:00.000Z","type":"session_meta","payload":{"id":"019dtail-bbb","cwd":"/tmp/p","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#,
+            r#"{"timestamp":"2026-04-22T10:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"first prompt"}}"#,
+            r#"{"timestamp":"2026-04-22T11:30:00.000Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        .join("\n");
+        let path = write_rollout(&io, "rollout-2026-04-22T10-00-00-019dtail-bbb.jsonl", &body);
+        let m = io.read_metadata(&path).unwrap();
+        assert_eq!(m.id, "019dtail-bbb");
+        assert_eq!(
+            m.started_at
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "2026-04-22T10:00:00Z"
+        );
+        assert_eq!(
+            m.last_activity
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "2026-04-22T11:30:00Z"
+        );
+        assert_eq!(m.first_user_message.as_deref(), Some("first prompt"));
+    }
+
+    /// line_count counts non-empty lines; blank and unparseable lines
+    /// don't abort the scan (the count deliberately includes junk —
+    /// it approximates message_count, nothing more).
+    #[test]
+    fn metadata_line_count_counts_nonempty_lines_tolerantly() {
+        let (_t, io) = setup();
+        let body = [
+            r#"{"timestamp":"2026-04-22T10:00:00.000Z","type":"session_meta","payload":{"id":"019djunk-ccc","cwd":"/tmp/p","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#,
+            "",
+            r#"{"not json"#,
+            r#"{"timestamp":"2026-04-22T10:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"hi"}}"#,
+        ]
+        .join("\n");
+        let path = write_rollout(&io, "rollout-2026-04-22T10-00-00-019djunk-ccc.jsonl", &body);
+        let m = io.read_metadata(&path).unwrap();
+        assert_eq!(m.line_count, 3);
+        assert_eq!(m.first_user_message.as_deref(), Some("hi"));
+    }
+
+    /// The head-parse budget bounds the prompt hunt: a first user
+    /// message buried past the budget yields None rather than a full
+    /// parse of the file.
+    #[test]
+    fn metadata_first_user_none_beyond_head_budget() {
+        let (_t, io) = setup();
+        let mut lines = vec![
+            r#"{"timestamp":"2026-04-22T10:00:00.000Z","type":"session_meta","payload":{"id":"019ddeep-ddd","cwd":"/tmp/p","originator":"codex-tui","cli_version":"0.118.0","source":"cli"}}"#.to_string(),
+        ];
+        for i in 0..150 {
+            lines.push(format!(
+                r#"{{"timestamp":"2026-04-22T10:00:01.000Z","type":"event_msg","payload":{{"type":"task_started","n":{i}}}}}"#
+            ));
+        }
+        lines.push(
+            r#"{"timestamp":"2026-04-22T10:05:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"buried"}}"#.to_string(),
+        );
+        let path = write_rollout(
+            &io,
+            "rollout-2026-04-22T10-00-00-019ddeep-ddd.jsonl",
+            &lines.join("\n"),
+        );
+        let m = io.read_metadata(&path).unwrap();
+        assert_eq!(m.first_user_message, None);
+        assert_eq!(m.line_count, 152);
+        // The tail line still supplies last_activity even though the
+        // head budget was exhausted long before it.
+        assert_eq!(
+            m.last_activity
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "2026-04-22T10:05:00Z"
+        );
     }
 }

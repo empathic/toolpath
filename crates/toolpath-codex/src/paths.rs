@@ -141,7 +141,10 @@ impl PathResolver {
     /// isn't stem-shaped or the file isn't at its dated path (the caller
     /// falls back to the tree walk).
     fn rollout_file_for_stem(&self, session_id: &str) -> Result<Option<PathBuf>> {
-        let Some(date) = session_id.strip_prefix("rollout-").and_then(|r| r.get(..10)) else {
+        let Some(date) = session_id
+            .strip_prefix("rollout-")
+            .and_then(|r| r.get(..10))
+        else {
             return Ok(None);
         };
         let parts: Vec<&str> = date.split('-').collect();
