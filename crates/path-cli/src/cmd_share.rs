@@ -1791,6 +1791,67 @@ mod tests {
         assert_eq!(warm_all.len(), 3);
     }
 
+    /// Synthetic cold-vs-warm timing over a few hundred sessions. Not
+    /// a correctness gate — run manually with
+    /// `cargo test -p path-cli --release bench_listing_cache -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing benchmark, run manually with --nocapture"]
+    fn bench_listing_cache_cold_vs_warm() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        let claude_dir = home.join(".claude");
+        let codex_dir = home.join(".codex");
+        // 200 codex rollouts padded with filler turns + 100 claude
+        // sessions across 10 projects.
+        for i in 0..200 {
+            let id = format!("00000000-0000-0000-0000-0000000{i:05}");
+            write_codex_session(&codex_dir, &id, "/work/proj");
+            let file = codex_dir.join(format!(
+                "sessions/2026/05/07/rollout-2026-05-07T00-00-00-{id}.jsonl"
+            ));
+            let filler: String = (0..200)
+                .map(|n| format!(
+                    r#"{{"timestamp":"2026-05-07T00:01:{:02}Z","type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"turn {n} pad pad pad pad pad pad pad pad pad pad pad pad"}}]}}}}{}"#,
+                    n % 60, "\n"
+                ))
+                .collect();
+            let mut body = std::fs::read_to_string(&file).unwrap();
+            body.push_str(&filler);
+            std::fs::write(&file, body).unwrap();
+        }
+        for p in 0..10 {
+            for s in 0..10 {
+                write_claude_session_at(
+                    &claude_dir,
+                    &format!("-proj-{p}"),
+                    &format!("sess-{p}-{s}"),
+                    "benchmark prompt",
+                    &format!("2024-01-{:02}", s + 1),
+                );
+            }
+        }
+
+        let t0 = std::time::Instant::now();
+        let cold = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/work/proj"),
+            None,
+            None,
+        );
+        let cold_t = t0.elapsed();
+        let t1 = std::time::Instant::now();
+        let warm = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/work/proj"),
+            None,
+            None,
+        );
+        let warm_t = t1.elapsed();
+        assert_eq!(warm, cold);
+        assert_eq!(cold.len(), 300);
+        println!("cold gather: {cold_t:?}, warm gather: {warm_t:?} (300 sessions)");
+    }
+
     #[test]
     #[cfg(unix)]
     fn paths_match_canonicalizes_through_symlink() {
