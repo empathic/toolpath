@@ -50,15 +50,36 @@ pub(crate) fn source_for<'a>(
     t: ArtifactType,
 ) -> Option<Box<dyn ArtifactSource + 'a>> {
     match t {
-        ArtifactType::Claude => Some(Box::new(ClaudeSource(bundle.claude.as_ref()?))),
+        ArtifactType::Claude => Some(Box::new(claude_source(bundle.claude.as_ref()?))),
         ArtifactType::Gemini => Some(Box::new(GeminiSource(bundle.gemini.as_ref()?))),
-        ArtifactType::Codex => Some(Box::new(CodexSource(bundle.codex.as_ref()?))),
-        ArtifactType::Opencode => Some(Box::new(OpencodeSource(bundle.opencode.as_ref()?))),
+        ArtifactType::Codex => Some(Box::new(codex_source(bundle.codex.as_ref()?))),
+        ArtifactType::Opencode => Some(Box::new(opencode_source(bundle.opencode.as_ref()?))),
         ArtifactType::Cursor => Some(Box::new(CursorSource(bundle.cursor.as_ref()?))),
         ArtifactType::Pi => Some(Box::new(PiSource(bundle.pi.as_ref()?))),
         ArtifactType::Copilot => Some(Box::new(CopilotSource(bundle.copilot.as_ref()?))),
         ArtifactType::Git => None,
     }
+}
+
+// Per-manager constructors for the providers whose enumeration is also
+// consumed outside the sync engine (the listing cache behind
+// `gather_artifacts` partitions picker rows by these stamps). Exposed
+// so that reuse goes through the one enumeration path instead of a
+// re-implementation.
+
+/// Claude's [`ArtifactSource`] over a single manager.
+pub(crate) fn claude_source(mgr: &toolpath_claude::ClaudeConvo) -> impl ArtifactSource + '_ {
+    ClaudeSource(mgr)
+}
+
+/// Codex's [`ArtifactSource`] over a single manager.
+pub(crate) fn codex_source(mgr: &toolpath_codex::CodexConvo) -> impl ArtifactSource + '_ {
+    CodexSource(mgr)
+}
+
+/// opencode's [`ArtifactSource`] over a single manager.
+pub(crate) fn opencode_source(mgr: &toolpath_opencode::OpencodeConvo) -> impl ArtifactSource + '_ {
+    OpencodeSource(mgr)
 }
 
 /// The project path a path-keyed artifact was enumerated under.
