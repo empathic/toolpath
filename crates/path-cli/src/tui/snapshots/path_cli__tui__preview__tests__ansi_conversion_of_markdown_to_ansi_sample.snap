@@ -1,0 +1,8 @@
+---
+source: crates/path-cli/src/tui/preview.rs
+expression: text
+---
+Text::from_iter([
+    Line::from(Span::from("Title").bold()),
+    Line::from(Span::from("bold").fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold().not_dim().not_italic().not_underlined().not_slow_blink().not_rapid_blink().not_reversed().not_hidden().not_crossed_out()),
+])

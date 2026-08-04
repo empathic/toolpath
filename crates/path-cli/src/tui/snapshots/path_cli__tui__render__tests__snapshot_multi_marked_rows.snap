@@ -1,0 +1,9 @@
+---
+source: crates/path-cli/src/tui/render.rs
+expression: terminal.backend()
+---
+"  * one                                 "
+"  * two                                 "
+">   three                               "
+"                          3/3 · 2 marked"
+">                                       "

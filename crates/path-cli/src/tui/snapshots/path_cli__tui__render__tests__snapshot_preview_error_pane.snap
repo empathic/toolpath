@@ -1,0 +1,18 @@
+---
+source: crates/path-cli/src/tui/render.rs
+expression: terminal.backend()
+---
+"┌preview───────────────────────────────────────────────────┐"
+"│error: session file unreadable                            │"
+"│                                                          │"
+"│                                                          │"
+"│                                                          │"
+"│                                                          │"
+"│                                                          │"
+"└──────────────────────────────────────────────────────────┘"
+">   only session                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                         1/1"
+">                                                           "

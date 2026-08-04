@@ -229,19 +229,24 @@ topic. TAB selects multiple — the result is a `Graph`. `path share` and
 
 Two backends, selected at runtime:
 
-- **External `fzf`** is preferred when it's on `$PATH` (so your fzf
-  config and keybindings keep working).
-- **Embedded `skim`** (Rust fzf-clone) is shipped in the default build
-  and used when `fzf` isn't installed. Same `{1}`/`{2}` preview
-  placeholders, same column-selection grammar — visually similar UX.
-  Build with `--no-default-features` to drop it for a ~2 MB smaller
-  binary; without either backend the CLI prints a manual recipe.
+- **Native picker** (built-in, the default). A first-party ratatui
+  picker: preview-less pickers open a small Atuin-style inline
+  viewport under your prompt; preview-bearing pickers go fullscreen
+  with an async, debounced preview pane. Queries support fzf-style
+  operators (space = AND, `'exact`, `^prefix`, `!negate`). It renders
+  on stderr, so piped stdout stays clean. Build with
+  `--no-default-features` to drop it for a smaller binary.
+- **External `fzf`** as the escape hatch (so your fzf config and
+  keybindings keep working): force it with `--picker fzf`, and it's
+  the automatic fallback when the native picker is compiled out.
 
-Use the global `--picker auto|fzf|skim` flag to force a backend
-(default `auto`):
+Without either backend the CLI prints a manual recipe.
+
+Use the global `--picker auto|fzf|native` flag to force a backend
+(default `auto`; `skim` is accepted as a legacy alias for `native`):
 
 ```bash
-path --picker skim share              # use embedded skim even with fzf on PATH
+path --picker native share            # use the built-in picker even with fzf on PATH
 path --picker fzf p import claude     # error out if fzf isn't installed
 ```
 

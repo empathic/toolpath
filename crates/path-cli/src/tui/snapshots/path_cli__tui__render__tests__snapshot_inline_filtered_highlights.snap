@@ -1,0 +1,9 @@
+---
+source: crates/path-cli/src/tui/render.rs
+expression: terminal.backend()
+---
+">   alpha work                          "
+"    beta work                           "
+"                                        "
+"                                     2/3"
+"> work                                  "

@@ -2,6 +2,37 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## The built-in picker is now native — Atuin-style session selection — 2026-08-03
+
+The embedded picker behind `path share` / `path resume` /
+`path p import <provider>` is no longer skim: it's a first-party
+ratatui implementation at `crates/path-cli/src/tui/`, built for exactly
+the picking Toolpath does. All picker call sites keep working
+unchanged; the external `fzf` backend is untouched as the escape hatch.
+
+- **`path-cli`** (0.17.0): native picker backend on ratatui 0.30 +
+  nucleo-matcher, rendering on stderr so piped stdout stays clean.
+  Adaptive layouts: preview-less pickers open a small Atuin-style
+  inline viewport under the prompt; preview-bearing pickers take the
+  alternate screen, side-by-side when the terminal is wide enough and
+  stacked when it isn't.
+- Previews run async off the event loop (no tokio): a 100 ms debounce
+  coalesces held-down arrows, results are cached per row, a stale
+  preview never overwrites a newer one, and superseded preview
+  commands are killed. Failures render in-pane instead of crashing
+  the picker.
+- Queries get fzf-style operators via nucleo: space-separated words
+  AND together, plus `'exact`, `^prefix`, and `!negate`. Matching runs
+  over the visible columns only, exactly like `--with-nth`.
+- `--picker native` replaces `--picker skim` (`skim` survives as a
+  hidden alias with a one-time stderr note); `auto` still prefers the
+  built-in backend and falls back to external `fzf` when the
+  `embedded-picker` feature is compiled out.
+- The skim dependency is gone (the `embedded-picker` feature now pulls
+  `ratatui`/`crossterm`/`nucleo-matcher`/`ansi-to-tui`), and opt-in
+  PTY smoke tests (`cargo test -p path-cli --test picker_pty --
+  --ignored`) drive the real binary end to end.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

@@ -36,10 +36,10 @@ mod io;
 mod kinds;
 mod query;
 mod schema;
-#[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
-mod skim_picker;
 mod sync;
 mod term;
+#[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
+mod tui;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -57,10 +57,11 @@ struct Cli {
 
     /// Backend for the interactive fuzzy picker used by `share`,
     /// `resume`, and `p import <provider>`. `auto` (default) uses the
-    /// embedded skim picker and falls back to external `fzf` only when
-    /// skim isn't compiled in; a hint is printed if `fzf` is also on
-    /// PATH. `fzf`/`skim` force one backend and error if it isn't
-    /// available.
+    /// built-in native picker and falls back to external `fzf` only
+    /// when the native picker isn't compiled in; a hint is printed if
+    /// `fzf` is also on PATH. `fzf`/`native` force one backend and
+    /// error if it isn't available (`skim` is a legacy alias for
+    /// `native`).
     #[cfg(not(target_os = "emscripten"))]
     #[arg(long, global = true, value_enum, default_value_t = fuzzy::Picker::Auto)]
     picker: fuzzy::Picker,
