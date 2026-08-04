@@ -49,7 +49,7 @@
   },
   {
     "name": "toolpath-codex",
-    "version": "0.6.2",
+    "version": "0.6.3",
     "description": "Derive from Codex CLI rollout files",
     "docs": "https://docs.rs/toolpath-codex",
     "crate": "https://crates.io/crates/toolpath-codex",
@@ -113,7 +113,7 @@
   },
   {
     "name": "path-cli",
-    "version": "0.16.3",
+    "version": "0.17.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",

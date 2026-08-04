@@ -2,6 +2,40 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Bare `path resume` — one picker from any session to any harness — 2026-08-03
+
+`path resume` with no argument now opens a cross-harness session
+picker: every session from every installed harness (Claude Code,
+Gemini CLI, Codex, Copilot, opencode, Cursor, Pi), ranked with the
+current project's sessions first — pick one, pick a target harness,
+and you're back in the conversation. Previously resume always required
+an explicit input (URL, file, or cache id); the local "resume that
+session I ran earlier, maybe in a different harness" loop needed a
+`share`-shaped detour or a manual `p import`.
+
+- **path-cli** (0.17.0): the bare picker is recency-first — it
+  hydrates only the newest 100 sessions across every harness, so it
+  opens in milliseconds regardless of history size. Codex candidates
+  rank stat-only by mtime; each hydrates from the listing cache when
+  its stamp matches (instant, message count included) or via one
+  streaming read that is then cached, so counts appear everywhere and
+  only new/changed sessions ever pay a read. A tail row ("N older
+  sessions — load everything") runs the full sweep on demand, and
+  `--project` always sweeps fully since its matches may be old.
+  (`toolpath-codex` 0.6.3 also gains an O(1) head+tail `peek_metadata`
+  for count-free peeking.) It reuses `share`'s aggregation and picker rows,
+  then flows into the existing harness-picker → project → exec
+  pipeline. New bare-mode flags:
+  `--from <harness>` narrows the session picker to one harness
+  (the resume target is still `--harness` / the harness picker) and
+  `--project <path>` narrows it to one project directory, mirroring
+  `share --project`. Cache policy mirrors `share`: derived docs are
+  written through to the cache and recorded in the sync manifest by
+  default, with a freshness fast path that skips re-deriving unchanged
+  sessions (`--force` re-derives, `--no-cache` stays in-memory).
+  Closes #110. The session picker sits behind a new
+  `cmd_resume::SessionPicker` seam (`FixedPicker` test double),
+  mirroring `ExecStrategy`, and `ResumeArgs` now implements `Default`.
 ## Warm picker opens are effectively instant — 2026-08-04
 
 The session picker (`path share`, and bare `path resume` once #154
@@ -36,7 +70,6 @@ the others before anything appeared.
   chain-index cache is single-threaded); everything else fans out.
   Row concatenation keeps the old provider order, so ranking
   tie-breaks are unchanged.
-
 ## Codex session listing no longer parses every byte — 2026-08-04
 
 Listing Codex sessions read every rollout file end to end through
@@ -53,6 +86,7 @@ upcoming bare `resume` picker — into a minute-plus silent stall.
   method: a first prompt buried past the head budget reports as
   `None`, and `line_count` counts non-empty lines rather than
   successfully parsed ones.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

@@ -11,6 +11,18 @@
 //! 3. Existing file path → read directly.
 //! 4. Otherwise treated as a cache id under `~/.toolpath/documents/`.
 //!
+//! ## Bare mode
+//!
+//! With no `<input>` at all, [`run_bare`] opens a cross-harness
+//! session picker (reusing `path share`'s aggregation and picker
+//! rows), derives the picked session (write-through cache, mirroring
+//! share; a manifest-fresh cache entry short-circuits the derive),
+//! then flows into the same harness-picker → project → exec pipeline.
+//! `--from` narrows the session picker to one harness; `--project`
+//! narrows it to one project directory. The picker is mockable via
+//! [`SessionPicker`] ([`FixedPicker`] in tests), mirroring
+//! [`ExecStrategy`].
+//!
 //! ## Harness selection
 //!
 //! With `--harness X`, `X` is validated against `$PATH` and used.
@@ -46,13 +58,15 @@ use std::path::PathBuf;
 
 use crate::harness::Harness;
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct ResumeArgs {
     /// Toolpath document to resume from. Accepted shapes: a Pathbase
     /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
     /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
-    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
-    pub input: String,
+    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`). Omit
+    /// entirely to pick a session interactively across all installed
+    /// harnesses.
+    pub input: Option<String>,
 
     /// Working directory to run the resumed harness from. Defaults to
     /// the current shell cwd. The on-disk projection is keyed on this
@@ -64,20 +78,36 @@ pub struct ResumeArgs {
     #[arg(long, value_enum)]
     pub harness: Option<Harness>,
 
+    /// Bare mode only: show only this harness's sessions in the
+    /// session picker. The resume target is still --harness / the
+    /// harness picker.
+    #[arg(long, value_enum, conflicts_with = "input")]
+    pub from: Option<Harness>,
+
+    /// Bare mode only: show only sessions tied to this project
+    /// directory (mirrors path share --project).
+    #[arg(long, conflicts_with = "input")]
+    pub project: Option<PathBuf>,
+
     /// Skip the cache entirely when fetching from Pathbase: don't read
     /// an existing entry, don't write the fetched body. Useful for
     /// ephemeral environments where you don't want the cache to grow.
+    /// In bare mode: derive the picked session in-memory only, without
+    /// probing or writing the cache.
     #[arg(long)]
     pub no_cache: bool,
 
     /// Force a re-fetch from Pathbase even if a cache entry exists,
     /// overwriting it with the new bytes. Default behavior is to use
-    /// the cached doc on hit and never round-trip.
+    /// the cached doc on hit and never round-trip. In bare mode: skip
+    /// the cache freshness probe and always re-derive the picked
+    /// session.
     #[arg(long)]
     pub force: bool,
 
     /// Pathbase server URL. Falls back to the stored session's URL,
-    /// then `$PATHBASE_URL`, then `https://pathbase.dev`.
+    /// then `$PATHBASE_URL`, then `https://pathbase.dev`. Inert in
+    /// bare mode, which never fetches from Pathbase.
     #[arg(long)]
     pub url: Option<String>,
 }
@@ -89,6 +119,10 @@ pub fn run(args: ResumeArgs) -> Result<()> {
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
+    if args.input.is_none() {
+        return run_bare(&args, exec, &FuzzySessionPicker);
+    }
+
     let (graph, source_harness) = resolve_input(&args)?;
     let path = ensure_path_with_agent(&graph)?;
 
@@ -116,6 +150,372 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
 }
 
 use toolpath::v1::{Graph, Path as TPath, PathOrRef};
+
+// ── bare mode: cross-harness session picker ─────────────────────────
+
+/// Outcome of a session-picker invocation, index-based so the caller
+/// keeps working with its own `ArtifactRow`s instead of re-parsing
+/// picker lines.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PickChoice {
+    /// The row at this index in the offered lines was picked.
+    Index(usize),
+    /// User pressed Esc / Ctrl-C / Ctrl-D.
+    Cancelled,
+    /// Picker exited cleanly with nothing matched / nothing selected.
+    NoMatch,
+}
+
+/// Pluggable session picker for bare `path resume`, mirroring
+/// [`ExecStrategy`]: production uses [`FuzzySessionPicker`] (the same
+/// fzf/skim backend `path share` uses), tests use [`FixedPicker`].
+pub trait SessionPicker {
+    /// Whether an interactive pick can run at all (TTY + backend).
+    fn available(&self) -> bool {
+        true
+    }
+    fn pick(&self, lines: &[String], header: &str) -> Result<PickChoice>;
+}
+
+/// Production picker: share-identical fzf/skim invocation over the
+/// 5-col TSV rows from `cmd_share::format_picker_row`.
+pub struct FuzzySessionPicker;
+
+impl SessionPicker for FuzzySessionPicker {
+    fn available(&self) -> bool {
+        crate::fuzzy::available()
+    }
+
+    fn pick(&self, lines: &[String], header: &str) -> Result<PickChoice> {
+        let opts = crate::fuzzy::PickOptions {
+            with_nth: "4",
+            prompt: "resume> ",
+            preview: Some("{exe} show --ansi {1} --project {2} --session {3}"),
+            preview_window: "up:60%:wrap-word",
+            header: Some(header),
+            tiebreak: "index",
+            multi: false,
+        };
+        match crate::fuzzy::pick(lines, &opts)? {
+            crate::fuzzy::PickResult::Selected(rows) => match rows.into_iter().next() {
+                Some(line) => Ok(PickChoice::Index(index_of_selected(lines, &line)?)),
+                // Selected with an empty payload should not happen (the
+                // picker exits 0 only when a row was confirmed); treat
+                // it like no-match for safety, as share does.
+                None => Ok(PickChoice::NoMatch),
+            },
+            crate::fuzzy::PickResult::NoMatch => Ok(PickChoice::NoMatch),
+            crate::fuzzy::PickResult::Cancelled => Ok(PickChoice::Cancelled),
+        }
+    }
+}
+
+/// Map the line the picker returned back to its index in the offered
+/// lines. Plain line equality is safe: columns 1-3 (harness, key,
+/// session id) make every row unique.
+fn index_of_selected(lines: &[String], selected: &str) -> Result<usize> {
+    lines
+        .iter()
+        .position(|l| l == selected)
+        .ok_or_else(|| anyhow::anyhow!("picker returned an unrecognized row: {selected}"))
+}
+
+/// Scripted picker for tests: returns a fixed [`PickChoice`] and
+/// records the lines it was offered. Public like [`RecordingExec`] so
+/// integration tests can drive [`run_bare`] without a TTY.
+pub struct FixedPicker {
+    /// Choices consumed one per `pick` call; the final entry repeats
+    /// forever so single-choice pickers behave identically across
+    /// multiple rounds.
+    choices: std::sync::Mutex<std::collections::VecDeque<PickChoice>>,
+    available: bool,
+    offered: std::sync::Mutex<Vec<Vec<String>>>,
+}
+
+impl FixedPicker {
+    /// Picker that selects the row at `index`.
+    pub fn select(index: usize) -> Self {
+        Self::new(vec![PickChoice::Index(index)], true)
+    }
+
+    /// Picker that answers successive `pick` calls with successive
+    /// choices; the last choice repeats if calls outnumber choices.
+    pub fn sequence(choices: Vec<PickChoice>) -> Self {
+        Self::new(choices, true)
+    }
+
+    /// Picker that reports a user cancel.
+    pub fn cancelled() -> Self {
+        Self::new(vec![PickChoice::Cancelled], true)
+    }
+
+    /// Picker that reports no match.
+    pub fn no_match() -> Self {
+        Self::new(vec![PickChoice::NoMatch], true)
+    }
+
+    /// Picker whose `available()` is false (no TTY / no backend).
+    pub fn offline() -> Self {
+        Self::new(vec![PickChoice::NoMatch], false)
+    }
+
+    fn new(choices: Vec<PickChoice>, available: bool) -> Self {
+        Self {
+            choices: std::sync::Mutex::new(choices.into_iter().collect()),
+            available,
+            offered: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Every line offered across all `pick` calls, flattened in call
+    /// order.
+    pub fn offered(&self) -> Vec<String> {
+        self.offered.lock().unwrap().concat()
+    }
+
+    /// The lines offered to each `pick` call, one entry per call.
+    pub fn offered_calls(&self) -> Vec<Vec<String>> {
+        self.offered.lock().unwrap().clone()
+    }
+}
+
+impl SessionPicker for FixedPicker {
+    fn available(&self) -> bool {
+        self.available
+    }
+
+    fn pick(&self, lines: &[String], _header: &str) -> Result<PickChoice> {
+        self.offered.lock().unwrap().push(lines.to_vec());
+        let mut choices = self.choices.lock().unwrap();
+        Ok(if choices.len() > 1 {
+            choices.pop_front().expect("non-empty choice queue")
+        } else {
+            choices.front().copied().unwrap_or(PickChoice::NoMatch)
+        })
+    }
+}
+
+/// How many sessions the recency-first bare picker hydrates up front.
+const RECENT_LIMIT: usize = 100;
+
+/// Outcome of one session-picker round, distinguishing a real row
+/// from the synthetic "N older sessions" tail row.
+enum Picked {
+    Row(usize),
+    Tail,
+    Cancelled,
+    NoMatch,
+}
+
+/// Run one picker round over `rows`. When `older` is Some(n), a tail
+/// row advertising the n unhydrated older sessions is appended; the
+/// tail is recognized by position, not by parsing the line back.
+fn pick_session_round(
+    picker: &dyn SessionPicker,
+    rows: &[crate::cmd_share::ArtifactRow],
+    header: &str,
+    older: Option<usize>,
+) -> Result<Picked> {
+    let mut lines: Vec<String> = rows
+        .iter()
+        .map(crate::cmd_share::format_picker_row)
+        .collect();
+    if let Some(n) = older {
+        // Shape matches the real 5-col TSV rows so with_nth/preview
+        // substitution stay well-formed; cols 1-3 are inert
+        // placeholders no provider name collides with.
+        lines.push(format!(
+            "_older\t-\t-\t\u{2026}  {n} older sessions \u{2014} load everything\t-"
+        ));
+    }
+    match picker.pick(&lines, header)? {
+        PickChoice::Index(i) if older.is_some() && i == rows.len() => Ok(Picked::Tail),
+        PickChoice::Index(i) if i < rows.len() => Ok(Picked::Row(i)),
+        PickChoice::Index(i) => anyhow::bail!("picker returned out-of-range index {i}"),
+        PickChoice::Cancelled => Ok(Picked::Cancelled),
+        PickChoice::NoMatch => Ok(Picked::NoMatch),
+    }
+}
+
+/// The full cross-harness sweep: every session from every harness,
+/// with the pre-gather notice (big trees take a beat). Returns None
+/// for a quiet no-match exit; Esc/Ctrl-C exits 130 directly.
+fn pick_from_full_sweep(
+    args: &ResumeArgs,
+    picker: &dyn SessionPicker,
+    bundle: &crate::harness::HarnessBundle,
+    cwd: &std::path::Path,
+    harness_filter: Option<crate::artifact::ArtifactType>,
+) -> Result<Option<crate::cmd_share::ArtifactRow>> {
+    eprintln!("Gathering sessions from installed harnesses...");
+    let rows =
+        crate::cmd_share::gather_artifacts(bundle, cwd, harness_filter, args.project.as_deref());
+    if rows.is_empty() {
+        // With a --from filter, the generic all-harness status table
+        // would be misleading (other harnesses may have sessions) —
+        // name the filter instead.
+        if let Some(from) = args.from {
+            anyhow::bail!(
+                "no {} sessions found; drop --from to see sessions from other harnesses",
+                from.name()
+            );
+        }
+        crate::cmd_share::bail_no_sessions(bundle, args.project.as_deref(), "resumable")?;
+        anyhow::bail!("no resumable sessions");
+    }
+    match pick_session_round(picker, &rows, "pick a session to resume", None)? {
+        Picked::Row(i) => Ok(Some(rows[i].clone())),
+        Picked::Tail => anyhow::bail!("picker returned the tail row, but none was offered"),
+        Picked::Cancelled => std::process::exit(130),
+        Picked::NoMatch => Ok(None),
+    }
+}
+
+/// Bare `path resume`: no `<input>` — recency-first picker across all
+/// installed harnesses (reusing `path share`'s aggregation), derive
+/// the pick (write-through cache, mirroring share), then flow into the
+/// existing harness-picker → project → exec pipeline.
+pub fn run_bare(
+    args: &ResumeArgs,
+    exec: &dyn ExecStrategy,
+    picker: &dyn SessionPicker,
+) -> Result<()> {
+    // Interactivity guard first — before gathering anything.
+    if !picker.available() {
+        anyhow::bail!(
+            "no input provided and no TTY for interactive selection; pass an <input> (URL, file, or cache id), or rerun in a terminal"
+        );
+    }
+
+    // Validate a pinned target now so the user doesn't pick a session
+    // only to hit a missing binary. With `arg = Some`, `pick_harness`
+    // only validates PATH and returns — the same call re-runs cheaply
+    // after the derive.
+    if let Some(h) = args.harness {
+        pick_harness(Some(h), None, None)?;
+    }
+
+    let cwd = match args.cwd.as_ref() {
+        Some(p) => {
+            std::fs::canonicalize(p).with_context(|| format!("resolve cwd path {}", p.display()))?
+        }
+        None => std::env::current_dir()?,
+    };
+
+    let bundle = crate::harness::HarnessBundle::from_environment();
+    let harness_filter = args.from.map(|h| h.artifact_type());
+
+    // Recency-first: hydrate only the newest RECENT_LIMIT sessions
+    // across every harness (codex by stat-sort + O(1) peeks), so the
+    // picker opens in milliseconds regardless of history size. A tail
+    // row surfaces however many older sessions exist; picking it (or
+    // passing --project, whose matches may be arbitrarily old) runs
+    // the full sweep. Ranking is identical in both views.
+    let picked: Option<crate::cmd_share::ArtifactRow> = if args.project.is_some() {
+        pick_from_full_sweep(args, picker, &bundle, &cwd, harness_filter)?
+    } else {
+        let recent = crate::cmd_share::gather_recent(&bundle, &cwd, harness_filter, RECENT_LIMIT);
+        if recent.rows.is_empty() {
+            pick_from_full_sweep(args, picker, &bundle, &cwd, harness_filter)?
+        } else {
+            match pick_session_round(
+                picker,
+                &recent.rows,
+                "pick a session to resume",
+                Some(recent.older).filter(|n| *n > 0),
+            )? {
+                Picked::Row(i) => Some(recent.rows[i].clone()),
+                Picked::Tail => pick_from_full_sweep(args, picker, &bundle, &cwd, harness_filter)?,
+                // Esc / Ctrl-C: deliberate user cancel — exit 130 like share.
+                Picked::Cancelled => std::process::exit(130),
+                // No row matched the query — quiet exit, no extra noise.
+                Picked::NoMatch => None,
+            }
+        }
+    };
+    let Some(row) = picked else {
+        return Ok(());
+    };
+    let row = &row;
+    // Same cleanup share applies to its picker rows — strip Claude's
+    // slash-command/local-command XML envelopes from the raw title.
+    eprintln!(
+        "Picked {} session {:?}",
+        row.artifact_type.name(),
+        crate::fuzzy::clean_for_picker_display(&row.title)
+    );
+
+    let graph = load_or_derive_session_doc(&bundle, row, args)?;
+    let path = ensure_path_with_agent(&graph)?;
+
+    let source = row
+        .artifact_type
+        .harness()
+        .or_else(|| infer_source_harness(path));
+    let target = pick_harness(args.harness, source, None)?;
+    eprintln!(
+        "Picked harness: {}{}",
+        target.name(),
+        if Some(target) == source {
+            " (source)"
+        } else {
+            ""
+        }
+    );
+
+    let session_id = project_into_harness(path, target, &cwd)?;
+    let (binary, argv) = invocation_for(target, &session_id, &cwd);
+    exec_harness(&binary, &argv, &cwd, exec)
+}
+
+/// Turn a picked session row into a toolpath `Graph`, write-through
+/// caching by default like `share`: a manifest-fresh cache entry is
+/// loaded directly (skipped with `--force`); otherwise the session is
+/// derived and, unless `--no-cache`, cached + recorded in the sync
+/// manifest.
+fn load_or_derive_session_doc(
+    bundle: &crate::harness::HarnessBundle,
+    row: &crate::cmd_share::ArtifactRow,
+    args: &ResumeArgs,
+) -> Result<Graph> {
+    // Path-keyed providers (claude/gemini/pi) key derives by project
+    // path; for cwd-keyed ones `row.path` is `None` — exactly how
+    // `share_explicit` passes it.
+    let project = row.path.as_deref();
+
+    if !args.no_cache
+        && !args.force
+        && let Some(cache_id) =
+            crate::sync::fresh_cache_id(bundle, row.artifact_type, project, &row.session_id)
+    {
+        let doc_path = crate::cache::cache_path(&cache_id)?;
+        let json = std::fs::read_to_string(&doc_path)
+            .with_context(|| format!("read {}", doc_path.display()))?;
+        eprintln!(
+            "Cache is current for {} session {cache_id}; resuming without re-deriving",
+            row.artifact_type.name()
+        );
+        return Graph::from_json(&json)
+            .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e));
+    }
+
+    let derived = crate::cmd_share::derive_session(row.artifact_type, project, &row.session_id)?;
+    if !args.no_cache {
+        let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        if let Some(stub) = &derived.provenance
+            && let Err(e) = crate::sync::record_artifact(stub, &derived.cache_id)
+        {
+            eprintln!("warning: sync manifest not updated: {e}");
+        }
+        eprintln!(
+            "Cached {} session → {} ({})",
+            row.artifact_type.name(),
+            derived.cache_id,
+            path.display()
+        );
+    }
+    Ok(derived.doc)
+}
 
 /// Read a path's source harness from `meta.source` (set by
 /// `toolpath-convo::derive_path` to the provider id), falling back to
@@ -197,7 +597,10 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
 /// plus the source harness inferred from its single inline path (if
 /// any). See spec § "Input resolution" for the order.
 pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>)> {
-    let raw = args.input.as_str();
+    let raw = args
+        .input
+        .as_deref()
+        .expect("resolve_input requires input — bare mode is handled by run_bare");
 
     enum Shape<'a> {
         PathbaseUrl(&'a str),
@@ -601,12 +1004,10 @@ mod tests {
         std::fs::write(&doc_file, graph.to_json().unwrap()).unwrap();
 
         let args = ResumeArgs {
-            input: doc_file.to_string_lossy().to_string(),
+            input: Some(doc_file.to_string_lossy().to_string()),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         };
 
         let recorder = RecordingExec::default();
@@ -737,12 +1138,8 @@ mod tests {
         std::fs::write(&p, graph.to_json().unwrap()).unwrap();
 
         let args = ResumeArgs {
-            input: p.to_string_lossy().to_string(),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            input: Some(p.to_string_lossy().to_string()),
+            ..Default::default()
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
@@ -768,15 +1165,12 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 200 OK", body_static);
 
         let args = ResumeArgs {
-            input: format!(
+            input: Some(format!(
                 "{}/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
                 server.base()
-            ),
-            cwd: None,
-            harness: None,
+            )),
             no_cache: true, // skip cache write in tests
-            force: false,
-            url: None,
+            ..Default::default()
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
@@ -829,15 +1223,11 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 500 Internal Server Error", "boom");
 
         let args = ResumeArgs {
-            input: format!(
+            input: Some(format!(
                 "{}/u/alex/repos/pathstash/graphs/{FIXTURE_UUID}",
                 server.base()
-            ),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            )),
+            ..Default::default()
         };
         let result = resolve_input(&args);
 
@@ -860,12 +1250,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let args = ResumeArgs {
-            input: "definitely/not/a/real/cache/id".to_string(),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            input: Some("definitely/not/a/real/cache/id".to_string()),
+            ..Default::default()
         };
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();
@@ -1054,6 +1440,19 @@ mod tests {
                 prev,
             }
         }
+
+        /// Replaces `PATH` with an empty tempdir — no binaries at all.
+        fn empty() -> Self {
+            let bin_dir = fake_path_with(&[]);
+            let prev = std::env::var_os("PATH");
+            unsafe {
+                std::env::set_var("PATH", bin_dir.path());
+            }
+            Self {
+                _bin_dir: bin_dir,
+                prev,
+            }
+        }
     }
 
     impl Drop for ScopedPathForResume {
@@ -1092,6 +1491,105 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ── bare mode ───────────────────────────────────────────────────
+
+    /// Local wrapper so clap's parse rules for `ResumeArgs` (positional
+    /// optionality, conflicts) can be exercised without the full CLI.
+    #[derive(clap::Parser, Debug)]
+    struct TestCli {
+        #[command(flatten)]
+        args: ResumeArgs,
+    }
+
+    #[test]
+    fn bare_args_input_is_optional() {
+        use clap::Parser;
+        let cli = TestCli::try_parse_from(["path-resume"]).unwrap();
+        assert!(cli.args.input.is_none());
+
+        let cli = TestCli::try_parse_from(["path-resume", "some-input"]).unwrap();
+        assert_eq!(cli.args.input.as_deref(), Some("some-input"));
+    }
+
+    #[test]
+    fn from_conflicts_with_input() {
+        use clap::Parser;
+        let err =
+            TestCli::try_parse_from(["path-resume", "some-input", "--from", "claude"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn project_conflicts_with_input() {
+        use clap::Parser;
+        let err = TestCli::try_parse_from(["path-resume", "some-input", "--project", "/tmp/p"])
+            .unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn index_of_selected_maps_line_back_to_row() {
+        let lines = vec![
+            "claude\t/p\tsess-a\tdisplay a\ttitle a".to_string(),
+            "codex\t/q\tsess-b\tdisplay b\ttitle b".to_string(),
+        ];
+        assert_eq!(index_of_selected(&lines, &lines[0]).unwrap(), 0);
+        assert_eq!(index_of_selected(&lines, &lines[1]).unwrap(), 1);
+    }
+
+    #[test]
+    fn index_of_selected_unknown_line_errors() {
+        let lines = vec!["claude\t/p\tsess-a\tdisplay\ttitle".to_string()];
+        let err = index_of_selected(&lines, "not-a-row").unwrap_err();
+        assert!(
+            err.to_string().contains("unrecognized row"),
+            "actual: {err}"
+        );
+    }
+
+    #[test]
+    fn fixed_picker_records_offered_lines() {
+        let picker = FixedPicker::select(1);
+        let lines = vec!["row a".to_string(), "row b".to_string()];
+        let choice = picker.pick(&lines, "header").unwrap();
+        assert_eq!(choice, PickChoice::Index(1));
+        assert_eq!(picker.offered(), lines);
+    }
+
+    #[test]
+    fn run_bare_offline_picker_errors_with_no_tty_text() {
+        let args = ResumeArgs::default();
+        let recorder = RecordingExec::default();
+        let err = run_bare(&args, &recorder, &FixedPicker::offline()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "no input provided and no TTY for interactive selection; pass an <input> (URL, file, or cache id), or rerun in a terminal"
+        );
+    }
+
+    #[test]
+    fn run_bare_unavailable_target_harness_errors_before_picking() {
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _path_guard = ScopedPathForResume::empty();
+        let args = ResumeArgs {
+            harness: Some(Harness::Claude),
+            ..Default::default()
+        };
+        let recorder = RecordingExec::default();
+        let picker = FixedPicker::select(0);
+        let err = run_bare(&args, &recorder, &picker).unwrap_err();
+        assert!(
+            err.to_string().contains("`claude` isn't on PATH"),
+            "actual: {err}"
+        );
+        assert!(
+            picker.offered().is_empty(),
+            "target validation must precede the session picker"
+        );
     }
 
     #[test]

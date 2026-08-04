@@ -208,6 +208,212 @@ pub(crate) fn gather_artifacts(
     rows
 }
 
+/// Result of a recency-bounded gather: the newest `limit` sessions
+/// across every harness (fully hydrated rows), plus how many older
+/// sessions exist beyond them.
+pub(crate) struct RecentRows {
+    pub(crate) rows: Vec<ArtifactRow>,
+    pub(crate) older: usize,
+}
+
+/// Like [`gather_artifacts`] but bounded: hydrate metadata only for
+/// roughly the newest `limit` sessions, so the picker opens in
+/// milliseconds regardless of history size. Codex — whose full scan is
+/// seconds of raw I/O on big trees — is enumerated stat-only (file
+/// mtimes), and only its newest `limit` rollouts get an O(1) head+tail
+/// peek ([`toolpath_codex::ConvoIO::peek_metadata`]); its rows carry
+/// `message_count: None`. The other providers' listings are already
+/// cheap and run in full, in parallel. The merged result is ranked
+/// exactly like [`gather_artifacts`] (cwd-matches first, then newest)
+/// and truncated to `limit`; everything not shown is counted in
+/// `older` so callers can offer a "load everything" affordance.
+pub(crate) fn gather_recent(
+    bundle: &HarnessBundle,
+    cwd: &std::path::Path,
+    harness_filter: Option<ArtifactType>,
+    limit: usize,
+) -> RecentRows {
+    let canonical_cwd = canonicalize_or_self(cwd);
+    let want = |h: ArtifactType| harness_filter.is_none_or(|f| f == h);
+
+    let mut listing_cache = ListingCache::load();
+    let claude_cache = listing_cache.section(ArtifactType::Claude);
+    let codex_cache = listing_cache.section(ArtifactType::Codex);
+    let opencode_cache = listing_cache.section(ArtifactType::Opencode);
+
+    let mut rows = Vec::new();
+    let mut refreshed: Vec<(ArtifactType, ProviderListings)> = Vec::new();
+    let mut codex_recent: (Vec<ArtifactRow>, usize) = (Vec::new(), 0);
+    let cwd_ref = &canonical_cwd;
+    type CollectOutput = (Vec<ArtifactRow>, Option<(ArtifactType, ProviderListings)>);
+    std::thread::scope(|s| {
+        let mut handles: Vec<std::thread::ScopedJoinHandle<'_, CollectOutput>> = Vec::new();
+
+        macro_rules! spawn_collect {
+            ($ty:expr, $mgr:expr, $collect:ident) => {
+                if want($ty)
+                    && let Some(mgr) = $mgr
+                {
+                    handles.push(s.spawn(move || {
+                        let mut out = Vec::new();
+                        $collect(mgr, cwd_ref, None, &mut out);
+                        (out, None)
+                    }));
+                }
+            };
+        }
+
+        let codex_handle = if want(ArtifactType::Codex)
+            && let Some(mgr) = &bundle.codex
+        {
+            let cache = &codex_cache;
+            Some(s.spawn(move || collect_codex_recent(mgr, cwd_ref, limit, cache)))
+        } else {
+            None
+        };
+
+        spawn_collect!(ArtifactType::Gemini, &bundle.gemini, collect_gemini);
+        spawn_collect!(ArtifactType::Pi, &bundle.pi, collect_pi);
+        spawn_collect!(ArtifactType::Copilot, &bundle.copilot, collect_copilot);
+        if want(ArtifactType::Opencode)
+            && let Some(mgr) = &bundle.opencode
+        {
+            let cache = &opencode_cache;
+            handles.push(s.spawn(move || {
+                let mut out = Vec::new();
+                let fresh = collect_opencode(mgr, cwd_ref, None, cache, &mut out);
+                (out, Some((ArtifactType::Opencode, fresh)))
+            }));
+        }
+        spawn_collect!(ArtifactType::Cursor, &bundle.cursor, collect_cursor);
+
+        if want(ArtifactType::Claude)
+            && let Some(mgr) = &bundle.claude
+        {
+            let fresh = collect_claude(mgr, cwd_ref, None, &claude_cache, &mut rows);
+            refreshed.push((ArtifactType::Claude, fresh));
+        }
+
+        for handle in handles {
+            match handle.join() {
+                Ok((out, section)) => {
+                    rows.extend(out);
+                    if let Some(section) = section {
+                        refreshed.push(section);
+                    }
+                }
+                Err(_) => eprintln!("warning: a session collector panicked; its rows are skipped"),
+            }
+        }
+        if let Some(h) = codex_handle {
+            match h.join() {
+                Ok((r, older, fresh)) => {
+                    codex_recent = (r, older);
+                    refreshed.push((ArtifactType::Codex, fresh));
+                }
+                Err(_) => eprintln!("warning: the codex collector panicked; its rows are skipped"),
+            }
+        }
+    });
+
+    for (artifact_type, fresh) in refreshed {
+        listing_cache.replace_section(artifact_type, fresh);
+    }
+    listing_cache.save_if_dirty();
+
+    let (codex_rows, codex_older) = codex_recent;
+    rows.extend(codex_rows);
+    rows.sort_by(|a, b| {
+        b.matches_cwd
+            .cmp(&a.matches_cwd)
+            .then_with(|| b.last_activity.cmp(&a.last_activity))
+    });
+    let cut = rows.len().saturating_sub(limit);
+    rows.truncate(limit);
+    RecentRows {
+        rows,
+        older: cut + codex_older,
+    }
+}
+
+/// Codex arm of [`gather_recent`]: enumerate stat-only, rank by
+/// modified time, and hydrate only the newest `limit` rollouts —
+/// from the listing cache when the stamp matches (instant, count
+/// included), else one full streaming `read_metadata` whose result is
+/// cached against the file stamp. Entries beyond the limit carry
+/// their existing cache records forward untouched (a stale stamp
+/// re-hydrates whenever the artifact next surfaces); ids no longer
+/// enumerated drop out.
+fn collect_codex_recent(
+    mgr: &toolpath_codex::CodexConvo,
+    canonical_cwd: &std::path::Path,
+    limit: usize,
+    cache: &ProviderListings,
+) -> (Vec<ArtifactRow>, usize, ProviderListings) {
+    let mut refs = codex_source(mgr).enumerate();
+    refs.sort_by(|a, b| b.modified.cmp(&a.modified));
+    let older = refs.len().saturating_sub(limit);
+
+    // One lazy directory walk maps session id -> rollout path for the
+    // misses (same trick as the full-sweep collector).
+    let mut files: Option<std::collections::HashMap<String, PathBuf>> = None;
+
+    let mut fresh = ProviderListings::new();
+    let mut rows = Vec::with_capacity(limit.min(refs.len()));
+    for (i, r) in refs.iter().enumerate() {
+        if i >= limit {
+            // Not hydrated this round: keep whatever the cache knew.
+            if let Some(entry) = cache.get(&r.id) {
+                fresh.insert(r.id.clone(), entry.clone());
+            }
+            continue;
+        }
+        let row = match cache.get(&r.id) {
+            Some(entry) if entry.matches(r) => Some(row_from_cached(
+                ArtifactType::Codex,
+                &entry.row,
+                canonical_cwd,
+            )),
+            _ => {
+                let files = files.get_or_insert_with(|| {
+                    mgr.io()
+                        .list_rollout_files()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|p| {
+                            let stem = p.file_stem()?.to_str()?;
+                            Some((toolpath_codex::session_id_from_stem(stem).to_string(), p))
+                        })
+                        .collect()
+                });
+                match files.get(&r.id) {
+                    Some(file) => match mgr.io().read_metadata(file) {
+                        Ok(m) => Some(codex_row(m, canonical_cwd)),
+                        Err(e) => {
+                            eprintln!("Warning: failed to read {}: {e}", file.display());
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            }
+        };
+        if let Some(row) = row {
+            fresh.insert(
+                r.id.clone(),
+                CachedListing {
+                    modified: r.modified,
+                    size: r.size,
+                    row: cached_from_row(&row),
+                },
+            );
+            rows.push(row);
+        }
+    }
+    rows.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    (rows, older, fresh)
+}
+
 fn canonicalize_or_self(p: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
@@ -760,7 +966,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
     let rows = gather_artifacts(&bundle, &cwd, harness, project_filter);
 
     if rows.is_empty() {
-        return bail_no_sessions(&bundle, project_filter);
+        return bail_no_sessions(&bundle, project_filter, "shareable");
     }
 
     if !crate::fuzzy::available() {
@@ -833,9 +1039,13 @@ pub fn run(args: ShareArgs) -> Result<()> {
     share_explicit(h, &session, &explicit, auth, base_url)
 }
 
-fn bail_no_sessions(
+/// Error out with a per-harness status table explaining why no agent
+/// sessions were found. `adjective` names the caller's verb space —
+/// share passes "shareable", bare `resume` passes "resumable".
+pub(crate) fn bail_no_sessions(
     bundle: &HarnessBundle,
     project_filter: Option<&std::path::Path>,
+    adjective: &str,
 ) -> Result<()> {
     if let Some(p) = project_filter {
         anyhow::bail!(
@@ -877,7 +1087,7 @@ fn bail_no_sessions(
         &harness_status_pi(bundle, home.as_deref()),
     ));
     eprint!("{summary}");
-    anyhow::bail!("no shareable sessions");
+    anyhow::bail!("no {adjective} sessions");
 }
 
 /// Cross-platform `$HOME` lookup matching the providers' internal helpers.
@@ -1121,7 +1331,7 @@ fn share_explicit(
 /// The display column is space-padded rather than tab-separated so the
 /// columns line up consistently across pickers — terminal tab stops
 /// produce ugly variable gaps in both fzf and skim.
-fn format_picker_row(row: &ArtifactRow) -> String {
+pub(crate) fn format_picker_row(row: &ArtifactRow) -> String {
     let key = row
         .path
         .clone()
@@ -1168,7 +1378,7 @@ fn parse_picker_row(line: &str) -> Option<(ArtifactType, String, String, String)
 
 use crate::fuzzy::{clean_for_picker_display, count, project_short, render_row, tab_safe};
 
-fn derive_session(
+pub(crate) fn derive_session(
     harness: ArtifactType,
     project: Option<&str>,
     session: &str,
