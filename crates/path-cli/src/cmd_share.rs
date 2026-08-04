@@ -8,12 +8,14 @@ use chrono::{DateTime, Utc};
 use clap::Args;
 use std::path::PathBuf;
 
-use crate::artifact::ArtifactType;
+use crate::artifact::{ArtifactRef, ArtifactType};
 use crate::cmd_export::RepoSpec;
 use crate::harness::{
-    Harness, HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_copilot,
-    is_not_found_cursor, is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
+    Harness, HarnessBundle, is_not_found_copilot, is_not_found_cursor, is_not_found_gemini,
+    is_not_found_pi,
 };
+use crate::listing_cache::{CachedListing, CachedRow, ListingCache, ProviderListings};
+use crate::sync::sources::{ArtifactSource, claude_source, codex_source, opencode_source};
 
 #[derive(Args, Debug)]
 pub struct ShareArgs {
@@ -61,7 +63,7 @@ pub struct ShareArgs {
 
 /// One artifact surfaced by a provider — today always an agent session.
 /// Rows feed both the unified `share` picker and `p cache sync`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ArtifactRow {
     pub(crate) artifact_type: ArtifactType,
     /// Project path for keyed providers; `None` for codex/opencode.
@@ -95,6 +97,17 @@ pub(crate) fn gather_artifacts(
 
     let want = |h: ArtifactType| harness_filter.is_none_or(|f| f == h);
 
+    // The listing cache: rows for artifacts whose stat stamp is
+    // unchanged since the last gather are rebuilt from cached fields
+    // instead of re-scanned. Loaded once here; the cache-backed
+    // collectors (claude/codex/opencode — the expensive scans) each
+    // take their section and return a refreshed one, written back
+    // after the fan-out only if something actually changed.
+    let mut listing_cache = ListingCache::load();
+    let claude_cache = listing_cache.section(ArtifactType::Claude);
+    let codex_cache = listing_cache.section(ArtifactType::Codex);
+    let opencode_cache = listing_cache.section(ArtifactType::Opencode);
+
     // Enumerate providers concurrently: each is an independent
     // read-only scan of its own on-disk tree, and the slowest (a big
     // codex or claude history) otherwise serializes behind the rest.
@@ -105,10 +118,12 @@ pub(crate) fn gather_artifacts(
     // the old sequential provider order, so the stable sort's
     // tie-breaking matches the previous behavior exactly.
     let mut rows = Vec::new();
+    let mut refreshed: Vec<(ArtifactType, ProviderListings)> = Vec::new();
     let cwd_ref = &canonical_cwd;
     let project_ref = canonical_project.as_deref();
+    type CollectOutput = (Vec<ArtifactRow>, Option<(ArtifactType, ProviderListings)>);
     std::thread::scope(|s| {
-        let mut handles = Vec::new();
+        let mut handles: Vec<std::thread::ScopedJoinHandle<'_, CollectOutput>> = Vec::new();
 
         macro_rules! spawn_collect {
             ($ty:expr, $mgr:expr, $collect:ident) => {
@@ -118,7 +133,22 @@ pub(crate) fn gather_artifacts(
                     handles.push(s.spawn(move || {
                         let mut out = Vec::new();
                         $collect(mgr, cwd_ref, project_ref, &mut out);
-                        out
+                        (out, None)
+                    }));
+                }
+            };
+        }
+
+        macro_rules! spawn_collect_cached {
+            ($ty:expr, $mgr:expr, $collect:ident, $cache:expr) => {
+                if want($ty)
+                    && let Some(mgr) = $mgr
+                {
+                    let cache = $cache;
+                    handles.push(s.spawn(move || {
+                        let mut out = Vec::new();
+                        let fresh = $collect(mgr, cwd_ref, project_ref, cache, &mut out);
+                        (out, Some(($ty, fresh)))
                     }));
                 }
             };
@@ -126,27 +156,49 @@ pub(crate) fn gather_artifacts(
 
         spawn_collect!(ArtifactType::Gemini, &bundle.gemini, collect_gemini);
         spawn_collect!(ArtifactType::Pi, &bundle.pi, collect_pi);
-        spawn_collect!(ArtifactType::Codex, &bundle.codex, collect_codex);
+        spawn_collect_cached!(
+            ArtifactType::Codex,
+            &bundle.codex,
+            collect_codex,
+            &codex_cache
+        );
         spawn_collect!(ArtifactType::Copilot, &bundle.copilot, collect_copilot);
-        spawn_collect!(ArtifactType::Opencode, &bundle.opencode, collect_opencode);
+        spawn_collect_cached!(
+            ArtifactType::Opencode,
+            &bundle.opencode,
+            collect_opencode,
+            &opencode_cache
+        );
         spawn_collect!(ArtifactType::Cursor, &bundle.cursor, collect_cursor);
 
         if want(ArtifactType::Claude)
             && let Some(mgr) = &bundle.claude
         {
-            collect_claude(mgr, cwd_ref, project_ref, &mut rows);
+            let fresh = collect_claude(mgr, cwd_ref, project_ref, &claude_cache, &mut rows);
+            refreshed.push((ArtifactType::Claude, fresh));
         }
 
         for handle in handles {
             match handle.join() {
-                Ok(out) => rows.extend(out),
+                Ok((out, section)) => {
+                    rows.extend(out);
+                    if let Some(section) = section {
+                        refreshed.push(section);
+                    }
+                }
                 // A panicking collector degrades to "that provider is
                 // missing from the picker", matching how collector-level
-                // errors already warn-and-continue.
+                // errors already warn-and-continue. Its cache section is
+                // left untouched.
                 Err(_) => eprintln!("warning: a session collector panicked; its rows are skipped"),
             }
         }
     });
+
+    for (artifact_type, fresh) in refreshed {
+        listing_cache.replace_section(artifact_type, fresh);
+    }
+    listing_cache.save_if_dirty();
 
     rows.sort_by(|a, b| {
         b.matches_cwd
@@ -164,50 +216,190 @@ fn paths_match(a: &std::path::Path, b: &std::path::Path) -> bool {
     canonicalize_or_self(a) == canonicalize_or_self(b)
 }
 
+// ── stat-stamp listing cache plumbing ──────────────────────────────
+//
+// The expensive providers (claude/codex/opencode) collect through
+// `collect_with_cache`: enumerate stat-level `ArtifactRef`s via the
+// same `ArtifactSource` machinery sync uses, rebuild rows from the
+// listing cache for every artifact whose stamp still matches, and run
+// the real metadata scan only for what is new or changed. See
+// `docs/superpowers/specs/2026-08-04-listing-cache-design.md`.
+
+/// How a provider's fresh scan orders its rows — reproduced on
+/// cache-backed gathers so a warm gather's output is field-for-field
+/// identical to a cold one, ties included.
+enum ListingOrder {
+    /// claude (and the other project-keyed providers): projects in
+    /// enumeration order, sessions within each project by descending
+    /// last activity.
+    ByActivityWithinPathRuns,
+    /// codex/opencode: descending last activity across the provider.
+    ByActivity,
+}
+
+/// Stable-sort `rows[start..]` by descending last activity — the same
+/// ordering (`sort_by_key(Reverse(last_activity))`, `None` last) every
+/// provider's fresh listing applies.
+fn sort_rows_by_activity(rows: &mut [ArtifactRow], start: usize) {
+    rows[start..].sort_by_key(|r| std::cmp::Reverse(r.last_activity));
+}
+
+/// Rebuild a picker row from cached fields. `matches_cwd` is
+/// deliberately not cached — it depends on the caller's cwd — so it is
+/// recomputed here from the cached `path`/`cwd` with the same
+/// canonicalized matching the fresh scans use.
+fn row_from_cached(
+    artifact_type: ArtifactType,
+    cached: &CachedRow,
+    canonical_cwd: &std::path::Path,
+) -> ArtifactRow {
+    let key = cached.path.as_deref().or(cached.cwd.as_deref());
+    let matches_cwd = key.is_some_and(|k| paths_match(std::path::Path::new(k), canonical_cwd));
+    ArtifactRow {
+        artifact_type,
+        path: cached.path.clone(),
+        cwd: cached.cwd.clone(),
+        session_id: cached.session_id.clone(),
+        title: cached.title.clone(),
+        last_activity: cached.last_activity,
+        message_count: cached.message_count,
+        matches_cwd,
+    }
+}
+
+/// The cacheable complement of [`row_from_cached`].
+fn cached_from_row(row: &ArtifactRow) -> CachedRow {
+    CachedRow {
+        path: row.path.clone(),
+        cwd: row.cwd.clone(),
+        session_id: row.session_id.clone(),
+        title: row.title.clone(),
+        last_activity: row.last_activity,
+        message_count: row.message_count,
+    }
+}
+
+/// Whether `row` survives the `--project` filter: its project (keyed
+/// providers) or recorded cwd canonicalizes to the filter path. Rows
+/// with neither are dropped under a filter, exactly like the fresh
+/// scans. Applied after cache reconstruction — the cache itself is
+/// filter-agnostic.
+fn row_passes_project_filter(row: &ArtifactRow, project_filter: Option<&std::path::Path>) -> bool {
+    let Some(filter) = project_filter else {
+        return true;
+    };
+    let key = row.path.as_deref().or(row.cwd.as_deref());
+    key.is_some_and(|k| paths_match(std::path::Path::new(k), filter))
+}
+
+/// The shared cache-backed collection loop: walk the enumerated refs
+/// in listing order, rebuild rows from the cache on a stamp hit, call
+/// `scan_miss` otherwise (a `None` means the scan failed — warned by
+/// the provider closure — and the artifact is neither listed nor
+/// cached, so the next gather retries it). Returns the refreshed
+/// section, which contains exactly the enumerated artifacts —
+/// anything that vanished upstream drops out, matching sync's
+/// self-heal semantics.
+#[allow(clippy::too_many_arguments)]
+fn collect_with_cache(
+    artifact_type: ArtifactType,
+    refs: &[ArtifactRef],
+    cache: &ProviderListings,
+    order: ListingOrder,
+    mut scan_miss: impl FnMut(&ArtifactRef) -> Option<ArtifactRow>,
+    canonical_cwd: &std::path::Path,
+    project_filter: Option<&std::path::Path>,
+    out: &mut Vec<ArtifactRow>,
+) -> ProviderListings {
+    let mut fresh = ProviderListings::new();
+    let mut rows: Vec<ArtifactRow> = Vec::with_capacity(refs.len());
+    let mut run_start = 0usize;
+    let mut prev_path: Option<&Option<String>> = None;
+    for r in refs {
+        // Project-keyed enumerations are project-major; close each
+        // run with the within-project activity sort the fresh scan
+        // applies per project.
+        if matches!(order, ListingOrder::ByActivityWithinPathRuns)
+            && prev_path.is_some_and(|p| p != &r.path)
+        {
+            sort_rows_by_activity(&mut rows, run_start);
+            run_start = rows.len();
+        }
+        prev_path = Some(&r.path);
+        let row = match cache.get(&r.id) {
+            Some(entry) if entry.matches(r) => {
+                Some(row_from_cached(artifact_type, &entry.row, canonical_cwd))
+            }
+            _ => scan_miss(r),
+        };
+        if let Some(row) = row {
+            fresh.insert(
+                r.id.clone(),
+                CachedListing {
+                    modified: r.modified,
+                    size: r.size,
+                    row: cached_from_row(&row),
+                },
+            );
+            rows.push(row);
+        }
+    }
+    // Final run — for `ByActivity` this is the whole provider.
+    sort_rows_by_activity(&mut rows, run_start);
+    out.extend(
+        rows.into_iter()
+            .filter(|r| row_passes_project_filter(r, project_filter)),
+    );
+    fresh
+}
+
 fn collect_claude(
     mgr: &toolpath_claude::ClaudeConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
+    cache: &ProviderListings,
     out: &mut Vec<ArtifactRow>,
-) {
-    let projects = match mgr.list_projects() {
-        Ok(ps) if !ps.is_empty() => ps,
-        Ok(_) => return,
-        Err(e) if is_not_found_claude(&e) => return,
-        Err(e) => {
-            eprintln!("warning: claude aggregation failed: {e}");
-            return;
-        }
-    };
-    for project in projects {
-        let project_path = std::path::Path::new(&project);
-        if let Some(filter) = project_filter
-            && !paths_match(project_path, filter)
-        {
-            continue;
-        }
-        let metas = match mgr.list_conversation_metadata(&project) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("warning: claude project {project} failed: {e}");
-                continue;
+) -> ProviderListings {
+    // Chain heads with whole-chain stamps (`claude_chain_stamp`): an
+    // append to any segment of a chain invalidates the head's entry.
+    let refs = claude_source(mgr).enumerate();
+    collect_with_cache(
+        ArtifactType::Claude,
+        &refs,
+        cache,
+        ListingOrder::ByActivityWithinPathRuns,
+        |r| {
+            let project = r.path.as_deref()?;
+            match mgr.read_conversation_metadata(project, &r.id) {
+                Ok(m) => Some(claude_row(m, canonical_cwd)),
+                Err(e) => {
+                    eprintln!("Warning: Failed to read metadata for {}: {e}", r.id);
+                    None
+                }
             }
-        };
-        let matches_cwd = paths_match(project_path, canonical_cwd);
-        for m in metas {
-            out.push(ArtifactRow {
-                artifact_type: ArtifactType::Claude,
-                path: Some(m.project_path),
-                cwd: None,
-                session_id: m.session_id,
-                title: m
-                    .first_user_message
-                    .unwrap_or_else(|| "(no prompt)".to_string()),
-                last_activity: m.last_activity,
-                message_count: Some(m.message_count),
-                matches_cwd,
-            });
-        }
+        },
+        canonical_cwd,
+        project_filter,
+        out,
+    )
+}
+
+fn claude_row(
+    m: toolpath_claude::ConversationMetadata,
+    canonical_cwd: &std::path::Path,
+) -> ArtifactRow {
+    let matches_cwd = paths_match(std::path::Path::new(&m.project_path), canonical_cwd);
+    ArtifactRow {
+        artifact_type: ArtifactType::Claude,
+        path: Some(m.project_path),
+        cwd: None,
+        session_id: m.session_id,
+        title: m
+            .first_user_message
+            .unwrap_or_else(|| "(no prompt)".to_string()),
+        last_activity: m.last_activity,
+        message_count: Some(m.message_count),
+        matches_cwd,
     }
 }
 
@@ -322,45 +514,64 @@ fn collect_codex(
     mgr: &toolpath_codex::CodexConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
+    cache: &ProviderListings,
     out: &mut Vec<ArtifactRow>,
-) {
-    let metas = match mgr.list_sessions() {
-        Ok(m) if !m.is_empty() => m,
-        Ok(_) => return,
-        Err(e) if is_not_found_codex(&e) => return,
-        Err(e) => {
-            eprintln!("warning: codex aggregation failed: {e}");
-            return;
-        }
-    };
-    for m in metas {
-        let cwd_str = m.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
-        if let Some(filter) = project_filter {
-            let stored = match cwd_str.as_deref() {
-                Some(s) => std::path::PathBuf::from(s),
-                None => continue,
-            };
-            if !paths_match(&stored, filter) {
-                continue;
+) -> ProviderListings {
+    let refs = codex_source(mgr).enumerate();
+    // One lazy directory walk maps session id → rollout path for the
+    // misses; a per-miss `find_rollout_file` would re-walk the whole
+    // date-bucketed tree every time.
+    let mut files: Option<std::collections::HashMap<String, PathBuf>> = None;
+    collect_with_cache(
+        ArtifactType::Codex,
+        &refs,
+        cache,
+        ListingOrder::ByActivity,
+        |r| {
+            let files = files.get_or_insert_with(|| {
+                mgr.io()
+                    .list_rollout_files()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|p| {
+                        let stem = p.file_stem()?.to_str()?;
+                        Some((toolpath_codex::session_id_from_stem(stem).to_string(), p))
+                    })
+                    .collect()
+            });
+            let file = files.get(&r.id)?;
+            match mgr.io().read_metadata(file) {
+                Ok(m) => Some(codex_row(m, canonical_cwd)),
+                Err(e) => {
+                    eprintln!("Warning: failed to read {}: {e}", file.display());
+                    None
+                }
             }
-        }
-        let matches_cwd = m
-            .cwd
-            .as_deref()
-            .map(|p| paths_match(p, canonical_cwd))
-            .unwrap_or(false);
-        out.push(ArtifactRow {
-            artifact_type: ArtifactType::Codex,
-            path: None,
-            cwd: cwd_str,
-            session_id: m.id,
-            title: m
-                .first_user_message
-                .unwrap_or_else(|| "(no prompt)".to_string()),
-            last_activity: m.last_activity,
-            message_count: Some(m.line_count),
-            matches_cwd,
-        });
+        },
+        canonical_cwd,
+        project_filter,
+        out,
+    )
+}
+
+fn codex_row(m: toolpath_codex::SessionMetadata, canonical_cwd: &std::path::Path) -> ArtifactRow {
+    let cwd_str = m.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
+    let matches_cwd = m
+        .cwd
+        .as_deref()
+        .map(|p| paths_match(p, canonical_cwd))
+        .unwrap_or(false);
+    ArtifactRow {
+        artifact_type: ArtifactType::Codex,
+        path: None,
+        cwd: cwd_str,
+        session_id: m.id,
+        title: m
+            .first_user_message
+            .unwrap_or_else(|| "(no prompt)".to_string()),
+        last_activity: m.last_activity,
+        message_count: Some(m.line_count),
+        matches_cwd,
     }
 }
 
@@ -411,40 +622,59 @@ fn collect_opencode(
     mgr: &toolpath_opencode::OpencodeConvo,
     canonical_cwd: &std::path::Path,
     project_filter: Option<&std::path::Path>,
+    cache: &ProviderListings,
     out: &mut Vec<ArtifactRow>,
-) {
-    let metas = match mgr.io().list_session_metadata(None) {
-        Ok(m) if !m.is_empty() => m,
-        Ok(_) => return,
-        Err(e) if is_not_found_opencode(&e) => return,
-        Err(e) => {
-            eprintln!("warning: opencode aggregation failed: {e}");
-            return;
-        }
+) -> ProviderListings {
+    let refs = opencode_source(mgr).enumerate();
+    // opencode metadata is one DB pass over every session (it loads
+    // each session's messages), so the first miss triggers the full
+    // scan once and later misses read from it. A fully-warm gather
+    // never opens the message tables at all.
+    let mut metas: Option<std::collections::HashMap<String, ArtifactRow>> = None;
+    collect_with_cache(
+        ArtifactType::Opencode,
+        &refs,
+        cache,
+        ListingOrder::ByActivity,
+        |r| {
+            let metas = metas.get_or_insert_with(|| match mgr.io().list_session_metadata(None) {
+                Ok(ms) => ms
+                    .into_iter()
+                    .map(|m| (m.id.clone(), opencode_row(m, canonical_cwd)))
+                    .collect(),
+                Err(e) => {
+                    eprintln!("warning: opencode aggregation failed: {e}");
+                    std::collections::HashMap::new()
+                }
+            });
+            metas.get(&r.id).cloned()
+        },
+        canonical_cwd,
+        project_filter,
+        out,
+    )
+}
+
+fn opencode_row(
+    m: toolpath_opencode::SessionMetadata,
+    canonical_cwd: &std::path::Path,
+) -> ArtifactRow {
+    let matches_cwd = paths_match(&m.directory, canonical_cwd);
+    let cwd_str = m.directory.to_string_lossy().into_owned();
+    let title = match (&m.first_user_message, m.title.is_empty()) {
+        (Some(s), _) if !s.is_empty() => s.clone(),
+        (_, false) => m.title.clone(),
+        _ => "(no prompt)".to_string(),
     };
-    for m in metas {
-        if let Some(filter) = project_filter
-            && !paths_match(&m.directory, filter)
-        {
-            continue;
-        }
-        let matches_cwd = paths_match(&m.directory, canonical_cwd);
-        let cwd_str = m.directory.to_string_lossy().into_owned();
-        let title = match (&m.first_user_message, m.title.is_empty()) {
-            (Some(s), _) if !s.is_empty() => s.clone(),
-            (_, false) => m.title.clone(),
-            _ => "(no prompt)".to_string(),
-        };
-        out.push(ArtifactRow {
-            artifact_type: ArtifactType::Opencode,
-            path: None,
-            cwd: Some(cwd_str),
-            session_id: m.id,
-            title,
-            last_activity: m.last_activity,
-            message_count: Some(m.message_count),
-            matches_cwd,
-        });
+    ArtifactRow {
+        artifact_type: ArtifactType::Opencode,
+        path: None,
+        cwd: Some(cwd_str),
+        session_id: m.id,
+        title,
+        last_activity: m.last_activity,
+        message_count: Some(m.message_count),
+        matches_cwd,
     }
 }
 
@@ -970,14 +1200,81 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
+    /// Pin `$TOOLPATH_CONFIG_DIR` to a tempdir for the guard's
+    /// lifetime, so gathers read and write a scratch listing cache
+    /// instead of the developer's real `~/.toolpath`. Holds the shared
+    /// env lock to serialize with other env-mutating tests.
+    struct ScopedConfigDir {
+        temp: TempDir,
+        prev: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    fn scoped_config_dir() -> ScopedConfigDir {
+        let lock = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = TempDir::new().unwrap();
+        let prev = std::env::var_os(crate::config::CONFIG_DIR_ENV);
+        unsafe {
+            std::env::set_var(crate::config::CONFIG_DIR_ENV, temp.path().join(".toolpath"));
+        }
+        ScopedConfigDir {
+            temp,
+            prev,
+            _lock: lock,
+        }
+    }
+
+    impl ScopedConfigDir {
+        /// The tempdir root, for provider fixtures that should live
+        /// and die with the pinned config dir.
+        fn root(&self) -> &Path {
+            self.temp.path()
+        }
+
+        fn listing_cache_file(&self) -> std::path::PathBuf {
+            self.temp
+                .path()
+                .join(".toolpath")
+                .join(crate::config::LISTING_CACHE_FILE_NAME)
+        }
+    }
+
+    impl Drop for ScopedConfigDir {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var(crate::config::CONFIG_DIR_ENV, v),
+                    None => std::env::remove_var(crate::config::CONFIG_DIR_ENV),
+                }
+            }
+        }
+    }
+
     fn write_claude_session(claude_dir: &Path, project_slug: &str, session: &str, prompt: &str) {
+        write_claude_session_at(claude_dir, project_slug, session, prompt, "2024-01-02");
+    }
+
+    /// Like [`write_claude_session`] but with a caller-chosen day, so
+    /// sibling fixtures get distinct `last_activity` values. (Rows with
+    /// identical timestamps tie-break on claude's chain-head
+    /// enumeration order, which is not stable run to run — true before
+    /// the listing cache too.)
+    fn write_claude_session_at(
+        claude_dir: &Path,
+        project_slug: &str,
+        session: &str,
+        prompt: &str,
+        day: &str,
+    ) {
         let project_dir = claude_dir.join("projects").join(project_slug);
         std::fs::create_dir_all(&project_dir).unwrap();
         let user = format!(
-            r#"{{"type":"user","uuid":"u-{session}","timestamp":"2024-01-02T00:00:00Z","cwd":"/test/project","message":{{"role":"user","content":"{prompt}"}}}}"#
+            r#"{{"type":"user","uuid":"u-{session}","timestamp":"{day}T00:00:00Z","cwd":"/test/project","message":{{"role":"user","content":"{prompt}"}}}}"#
         );
         let asst = format!(
-            r#"{{"type":"assistant","uuid":"a-{session}","timestamp":"2024-01-02T00:00:01Z","message":{{"role":"assistant","content":"hi"}}}}"#
+            r#"{{"type":"assistant","uuid":"a-{session}","timestamp":"{day}T00:00:01Z","message":{{"role":"assistant","content":"hi"}}}}"#
         );
         std::fs::write(
             project_dir.join(format!("{session}.jsonl")),
@@ -998,6 +1295,7 @@ mod tests {
 
     #[test]
     fn gather_artifacts_includes_claude_rows_for_a_project() {
+        let _cfg = scoped_config_dir();
         let temp = TempDir::new().unwrap();
         write_claude_session(
             &temp.path().join(".claude"),
@@ -1018,6 +1316,7 @@ mod tests {
 
     #[test]
     fn gather_artifacts_marks_non_matching_project_rows() {
+        let _cfg = scoped_config_dir();
         let temp = TempDir::new().unwrap();
         write_claude_session(
             &temp.path().join(".claude"),
@@ -1035,6 +1334,7 @@ mod tests {
 
     #[test]
     fn gather_artifacts_skips_harness_with_no_home_dir() {
+        let _cfg = scoped_config_dir();
         // Empty bundle => no rows, no panic.
         let bundle = HarnessBundle::default();
         let rows = gather_artifacts(&bundle, Path::new("/anywhere"), None, None);
@@ -1043,6 +1343,7 @@ mod tests {
 
     #[test]
     fn gather_artifacts_filters_by_harness() {
+        let _cfg = scoped_config_dir();
         let temp = TempDir::new().unwrap();
         write_claude_session(
             &temp.path().join(".claude"),
@@ -1080,6 +1381,7 @@ mod tests {
 
     #[test]
     fn gather_artifacts_includes_codex_rows_with_cwd_match() {
+        let _cfg = scoped_config_dir();
         let temp = TempDir::new().unwrap();
         write_codex_session(
             &temp.path().join(".codex"),
@@ -1118,6 +1420,7 @@ mod tests {
 
     #[test]
     fn gather_sessions_includes_copilot_rows_with_cwd_match() {
+        let _cfg = scoped_config_dir();
         let temp = TempDir::new().unwrap();
         write_copilot_session(&temp.path().join(".copilot"), "sess-aa", "/work/proj");
         let bundle = copilot_only_bundle(temp.path());
@@ -1130,6 +1433,7 @@ mod tests {
 
     #[test]
     fn gather_sessions_filters_to_copilot() {
+        let _cfg = scoped_config_dir();
         let temp = TempDir::new().unwrap();
         write_copilot_session(&temp.path().join(".copilot"), "sess-aa", "/work/proj");
         let bundle = copilot_only_bundle(temp.path());
@@ -1145,6 +1449,7 @@ mod tests {
 
     #[test]
     fn gather_artifacts_ranks_cwd_matches_first() {
+        let _cfg = scoped_config_dir();
         // Two claude sessions: one in cwd (older), one elsewhere (newer).
         // Despite the elsewhere row being newer, the cwd-match must come first.
         let temp = TempDir::new().unwrap();
@@ -1166,6 +1471,324 @@ mod tests {
         assert_eq!(rows[0].session_id, "in-cwd-session");
         assert!(rows[0].matches_cwd);
         assert!(!rows[1].matches_cwd);
+    }
+
+    // ── listing cache ──────────────────────────────────────────────
+
+    /// A bundle with both cache-backed file providers: two claude
+    /// sessions in one project plus one codex rollout.
+    fn claude_codex_bundle(home: &Path) -> HarnessBundle {
+        let claude_dir = home.join(".claude");
+        let codex_dir = home.join(".codex");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        HarnessBundle {
+            claude: Some(toolpath_claude::ClaudeConvo::with_resolver(
+                toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir),
+            )),
+            codex: Some(toolpath_codex::CodexConvo::with_resolver(
+                toolpath_codex::PathResolver::new().with_codex_dir(&codex_dir),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn write_cache_fixtures(home: &Path) {
+        write_claude_session(
+            &home.join(".claude"),
+            "-test-project",
+            "sess-aaa",
+            "First topic",
+        );
+        write_claude_session_at(
+            &home.join(".claude"),
+            "-test-project",
+            "sess-bbb",
+            "Second topic",
+            "2024-01-03",
+        );
+        write_codex_session(
+            &home.join(".codex"),
+            "00000000-0000-0000-0000-0000000000aa",
+            "/work/proj",
+        );
+    }
+
+    fn append_line(file: &Path, line: &str) {
+        let mut body = std::fs::read_to_string(file).unwrap();
+        body.push_str(line);
+        body.push('\n');
+        std::fs::write(file, body).unwrap();
+    }
+
+    #[test]
+    fn warm_gather_reproduces_cold_gather_rows() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        write_cache_fixtures(home);
+
+        // Cold: nothing cached, everything scanned.
+        let cold = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+        assert_eq!(cold.len(), 3);
+        assert!(
+            cfg.listing_cache_file().exists(),
+            "cold gather must write the listing cache"
+        );
+
+        // Warm, through a fresh bundle (new managers, like a new CLI
+        // invocation): rows must be field-for-field identical.
+        let warm = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+        assert_eq!(warm, cold);
+
+        // And the warm pass replaced nothing: sections carry one entry
+        // per artifact.
+        let cache = ListingCache::load();
+        assert_eq!(cache.section(ArtifactType::Claude).len(), 2);
+        assert_eq!(cache.section(ArtifactType::Codex).len(), 1);
+    }
+
+    #[test]
+    fn warm_gather_reads_rows_from_the_listing_cache() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        write_cache_fixtures(home);
+        gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+
+        // Tamper with a cached title while the source stamps stay
+        // put. A stamp hit must surface the cached row verbatim —
+        // proof the warm path reads the cache instead of re-scanning.
+        let file = cfg.listing_cache_file();
+        let json = std::fs::read_to_string(&file).unwrap();
+        assert!(json.contains("First topic"));
+        std::fs::write(&file, json.replace("First topic", "From the cache")).unwrap();
+
+        let warm = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+        assert!(
+            warm.iter()
+                .any(|r| r.session_id == "sess-aaa" && r.title == "From the cache"),
+            "stamp-matched rows must come from the cache"
+        );
+    }
+
+    #[test]
+    fn appended_claude_session_invalidates_its_cached_row() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        write_cache_fixtures(home);
+        let cold = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+        let cold_row = cold.iter().find(|r| r.session_id == "sess-aaa").unwrap();
+        assert_eq!(cold_row.message_count, Some(2));
+
+        // The session continues: a later user turn bumps the file's
+        // mtime and size, so the chain stamp no longer matches.
+        append_line(
+            &home.join(".claude/projects/-test-project/sess-aaa.jsonl"),
+            r#"{"type":"user","uuid":"u-2","timestamp":"2024-01-02T00:05:00Z","cwd":"/test/project","message":{"role":"user","content":"And another thing"}}"#,
+        );
+
+        let warm = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+        let row = warm.iter().find(|r| r.session_id == "sess-aaa").unwrap();
+        assert_eq!(
+            row.message_count,
+            Some(3),
+            "changed session must be re-scanned"
+        );
+        // The untouched sibling still matches its cold row.
+        assert_eq!(
+            warm.iter().find(|r| r.session_id == "sess-bbb"),
+            cold.iter().find(|r| r.session_id == "sess-bbb"),
+        );
+    }
+
+    #[test]
+    fn rotated_claude_chain_invalidates_under_its_head_id() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        write_claude_session(&home.join(".claude"), "-test-project", "sess-aaa", "Topic");
+        let bundle = || claude_codex_bundle(home);
+        let cold = gather_artifacts(&bundle(), Path::new("/test/project"), None, None);
+        assert_eq!(cold.len(), 1);
+        assert_eq!(cold[0].message_count, Some(2));
+
+        // The session rotates: appends land in a successor file whose
+        // first entry bridges back to sess-aaa. The chain keeps the
+        // head id; the whole-chain stamp must invalidate the entry
+        // even though sess-aaa.jsonl itself never changed.
+        std::fs::write(
+            home.join(".claude/projects/-test-project/sess-ccc.jsonl"),
+            concat!(
+                r#"{"type":"user","uuid":"u-b0","timestamp":"2024-01-02T01:00:00Z","sessionId":"sess-aaa","cwd":"/test/project","message":{"role":"user","content":"bridge"}}"#,
+                "\n",
+                r#"{"type":"user","uuid":"u-b1","timestamp":"2024-01-02T01:00:01Z","sessionId":"sess-ccc","cwd":"/test/project","message":{"role":"user","content":"after rotation"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let warm = gather_artifacts(&bundle(), Path::new("/test/project"), None, None);
+        assert_eq!(warm.len(), 1, "successor segments are not separate rows");
+        assert_eq!(warm[0].session_id, "sess-aaa");
+        assert!(
+            warm[0].message_count.unwrap() > 2,
+            "post-rotation turns must reach the row"
+        );
+        let cache = ListingCache::load();
+        let section = cache.section(ArtifactType::Claude);
+        assert!(section.contains_key("sess-aaa"));
+        assert!(
+            !section.contains_key("sess-ccc"),
+            "cache keys by chain head id"
+        );
+    }
+
+    #[test]
+    fn appended_codex_rollout_invalidates_its_cached_row() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        write_cache_fixtures(home);
+        let cold = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/work/proj"),
+            None,
+            None,
+        );
+        let cold_row = cold
+            .iter()
+            .find(|r| r.artifact_type == ArtifactType::Codex)
+            .unwrap();
+        assert_eq!(cold_row.message_count, Some(2));
+
+        append_line(
+            &home.join(
+                ".codex/sessions/2026/05/07/rollout-2026-05-07T00-00-00-00000000-0000-0000-0000-0000000000aa.jsonl",
+            ),
+            r#"{"timestamp":"2026-05-07T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#,
+        );
+
+        let warm = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/work/proj"),
+            None,
+            None,
+        );
+        let row = warm
+            .iter()
+            .find(|r| r.artifact_type == ArtifactType::Codex)
+            .unwrap();
+        assert_eq!(row.message_count, Some(3));
+    }
+
+    #[test]
+    fn deleted_artifact_drops_row_and_cache_entry() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        write_cache_fixtures(home);
+        gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+        assert_eq!(ListingCache::load().section(ArtifactType::Codex).len(), 1);
+
+        // The rollout vanishes upstream. Enumeration is authoritative:
+        // no row, and the stale cache entry self-heals away.
+        std::fs::remove_file(home.join(
+            ".codex/sessions/2026/05/07/rollout-2026-05-07T00-00-00-00000000-0000-0000-0000-0000000000aa.jsonl",
+        ))
+        .unwrap();
+
+        let warm = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+        assert!(
+            warm.iter().all(|r| r.artifact_type != ArtifactType::Codex),
+            "deleted artifacts must not produce rows"
+        );
+        assert!(
+            ListingCache::load().section(ArtifactType::Codex).is_empty(),
+            "deleted artifacts must drop out of the cache"
+        );
+    }
+
+    #[test]
+    fn corrupt_listing_cache_falls_back_to_fresh_scan() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        write_cache_fixtures(home);
+        let cold = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+
+        std::fs::write(cfg.listing_cache_file(), "definitely not json").unwrap();
+        let rows = gather_artifacts(
+            &claude_codex_bundle(home),
+            Path::new("/test/project"),
+            None,
+            None,
+        );
+        assert_eq!(rows, cold, "a corrupt cache must never block the picker");
+    }
+
+    #[test]
+    fn project_filter_applies_to_cached_rows() {
+        let cfg = scoped_config_dir();
+        let home = cfg.root();
+        write_cache_fixtures(home);
+        let bundle = || claude_codex_bundle(home);
+        let cwd = Path::new("/test/project");
+
+        // A filtered cold gather still warms the cache for everyone
+        // (the filter is applied after reconstruction, not baked in).
+        let cold_filtered = gather_artifacts(&bundle(), cwd, None, Some(Path::new("/work/proj")));
+        assert_eq!(cold_filtered.len(), 1);
+        assert_eq!(cold_filtered[0].artifact_type, ArtifactType::Codex);
+        let cache = ListingCache::load();
+        assert_eq!(cache.section(ArtifactType::Claude).len(), 2);
+        assert_eq!(cache.section(ArtifactType::Codex).len(), 1);
+
+        // Warm filtered gathers reproduce the cold filtered rows, and
+        // an unfiltered warm gather surfaces everything from cache.
+        let warm_filtered = gather_artifacts(&bundle(), cwd, None, Some(Path::new("/work/proj")));
+        assert_eq!(warm_filtered, cold_filtered);
+        let warm_all = gather_artifacts(&bundle(), cwd, None, None);
+        assert_eq!(warm_all.len(), 3);
     }
 
     #[test]

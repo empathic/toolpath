@@ -68,8 +68,12 @@ alongside the stamp.
 Byte-identical warm-vs-cold ordering relies on the enumeration listing
 artifacts in the same relative order as the metadata scan (it does:
 both walk the same directory listings / run the same `ORDER BY`).
-Rows with *identical* `last_activity` inside one provider are ordered
-by that shared listing order, so ties resolve the same on both paths.
+Rows with *identical* `last_activity` inside one provider tie-break on
+that listing order — which for claude (chain-head map iteration) is
+not stable run to run. That nondeterminism predates the listing cache:
+the old full scan sorted the same unstable input. Equal-timestamp ties
+may therefore order differently between *any* two gathers, warm or
+cold; the row *set* and the ranking contract are unaffected.
 
 ## Alternatives considered
 
