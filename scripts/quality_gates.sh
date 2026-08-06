@@ -47,11 +47,16 @@ _all_gates=(format shellcheck clippy test doc examples plugin site)
 
 # shellcheck disable=SC2329
 gate_format() {
+    # Both checks always run so one pass reports every formatting problem, and
+    # either failing fails the gate — the gate's status must not be just the
+    # last command's.
+    local _failed=0
     echo "--- cargo fmt ---"
-    cargo fmt --all --manifest-path "${_root}/Cargo.toml" --check 2>&1
+    cargo fmt --all --manifest-path "${_root}/Cargo.toml" --check 2>&1 || _failed=1
     echo "--- prettier ---"
-    cd "${_root}/site" || return 1
-    npx --yes prettier --check --no-color "**/*.{md,css,json,js}" 2>&1
+    # Subshell: gates run in this shell, so a bare `cd` would leak to the rest.
+    (cd "${_root}/site" && npx --yes prettier --check --no-color "**/*.{md,css,json,js}" 2>&1) || _failed=1
+    return "${_failed}"
 }
 
 # shellcheck disable=SC2329
@@ -101,7 +106,7 @@ gate_site() {
     # (notably, every new worktree). Without it the build fails with
     # `sh: eleventy: command not found` and a stale "did you mean to install?"
     # warning that doesn't say which directory.
-    cd "${_root}/site" && pnpm install --frozen-lockfile 2>&1 && pnpm run build 2>&1
+    (cd "${_root}/site" && pnpm install --frozen-lockfile 2>&1 && pnpm run build 2>&1)
 }
 
 # ── Runner ────────────────────────────────────────────────────────────────────

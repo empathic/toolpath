@@ -6,6 +6,13 @@ _wasm_js="${_root}/site/wasm/path.js"
 _wasm_bin="${_root}/site/wasm/path.wasm"
 _emsdk_dir="${_root}/local/emsdk"
 
+# The single source of truth for the emscripten toolchain: this script installs
+# it and the deploy workflow keys its emsdk cache on the file's hash, so a bump
+# here invalidates the cache instead of silently reusing another compiler.
+# `latest` is not usable as a pin — emscripten's wasm exception-handling ABI
+# has broken this build across releases.
+_emsdk_version="$(tr -d '[:space:]' < "${_root}/.emsdk-version")"
+
 # --- Parse flags --------------------------------------------------------------
 # --if-changed   Skip build if outputs are newer than all Rust sources
 # --dev          Use dev profile (fast incremental builds, no LTO/strip)
@@ -48,9 +55,23 @@ fi
 
 # --- Ensure emsdk is available ------------------------------------------------
 
+# Warns rather than fails on a mismatch: developer machines carry their own
+# emscripten, and refusing to build there would be worse than a link error the
+# warning already explains.
+warn_unless_pinned() {
+  local _active
+  _active="$(emcc -dumpversion 2>/dev/null || true)"
+
+  if [ "${_active}" != "${_emsdk_version}" ]; then
+    echo "wasm: WARNING active emscripten is ${_active:-unknown}, pinned is ${_emsdk_version} (.emsdk-version)" >&2
+    echo "wasm: WARNING link errors about __cpp_exception or _Unwind_* mean this skew" >&2
+  fi
+}
+
 ensure_emsdk() {
   # Already on PATH?
   if command -v emcc &>/dev/null; then
+    warn_unless_pinned
     return 0
   fi
 
@@ -59,16 +80,18 @@ ensure_emsdk() {
     echo "wasm: Activating local emsdk..."
     # shellcheck source=/dev/null
     source "${_emsdk_dir}/emsdk_env.sh" 2>/dev/null
+    warn_unless_pinned
     return 0
   fi
 
   # Bootstrap: clone + install + activate
-  echo "wasm: Installing emsdk to target/emsdk (one-time)..."
+  echo "wasm: Installing emsdk ${_emsdk_version} to local/emsdk (one-time)..."
   git clone --depth 1 https://github.com/emscripten-core/emsdk.git "${_emsdk_dir}"
-  "${_emsdk_dir}/emsdk" install latest
-  "${_emsdk_dir}/emsdk" activate latest
+  "${_emsdk_dir}/emsdk" install "${_emsdk_version}"
+  "${_emsdk_dir}/emsdk" activate "${_emsdk_version}"
   # shellcheck source=/dev/null
   source "${_emsdk_dir}/emsdk_env.sh" 2>/dev/null
+  warn_unless_pinned
 }
 
 ensure_emsdk

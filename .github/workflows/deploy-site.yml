@@ -62,11 +62,14 @@ jobs:
           key: cargo-wasm-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-wasm-
 
+      # Keyed on the pin, not a constant: a cache miss re-installs the same
+      # emscripten instead of silently picking up whatever `latest` resolves to
+      # that day, and bumping .emsdk-version invalidates the cache.
       - name: Cache emsdk
         uses: actions/cache@v4
         with:
           path: local/emsdk
-          key: emsdk-latest
+          key: emsdk-${{ hashFiles('.emsdk-version') }}
 
       - name: Build wasm
         run: scripts/build-wasm.sh
