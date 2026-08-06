@@ -835,13 +835,19 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&meta).unwrap();
-        assert!(
-            json.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.1.0""#)
-        );
+        assert!(json.contains(&format!(r#""kind":"{PATH_KIND_AGENT_CODING_SESSION}""#)));
         let parsed: PathMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.kind.as_deref(), Some(PATH_KIND_AGENT_CODING_SESSION));
+    }
+
+    /// The one test that spells the current kind URI out literally: every
+    /// other test goes through the constant, so a typo in the constant would
+    /// otherwise self-validate.
+    #[test]
+    fn test_path_kind_constant_spells_current_uri() {
         assert_eq!(
-            parsed.kind.as_deref(),
-            Some("https://toolpath.net/kinds/agent-coding-session/v1.1.0")
+            PATH_KIND_AGENT_CODING_SESSION,
+            "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
         );
     }
 

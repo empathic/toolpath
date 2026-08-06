@@ -473,23 +473,25 @@ fn raw_unescapes_string_content() {
 
 #[test]
 fn kind_lists_bundled_kinds() {
-    cmd()
-        .arg("kind")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("agent-coding-session"))
-        .stdout(predicate::str::contains("v1.1.0"));
+    let mut assert = cmd().arg("kind").assert().success();
+    for k in path_cli::kinds::BUNDLED_KINDS {
+        assert = assert
+            .stdout(predicate::str::contains(k.name))
+            .stdout(predicate::str::contains(k.version));
+    }
 }
 
 #[test]
 fn kind_prints_newest_schema() {
+    let newest = path_cli::kinds::resolve("agent-coding-session").expect("bundled");
     cmd()
         .args(["kind", "agent-coding-session"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "kinds/agent-coding-session/v1.1.0/schema.json",
-        ));
+        .stdout(predicate::str::contains(format!(
+            "kinds/{}/{}/schema.json",
+            newest.name, newest.version
+        )));
 }
 
 #[test]
