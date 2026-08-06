@@ -3,7 +3,8 @@
 //! The binary ships a copy of every kind spec it knows about so that
 //! `path kind` and `path query --kind` work offline. [`BUNDLED_KINDS`] is the
 //! single source of truth for which `(name, version)` specs are baked in;
-//! [`crate::schema`] (kind-aware validation) and the query layer both read it.
+//! the `schema` module (kind-aware validation) and the query layer both read
+//! it.
 //!
 //! A `meta.kind` value is a semver-versioned URI of the form
 //! `…/kinds/<name>/v<major>.<minor>.<patch>`. A [`KindSelector`] matches a
@@ -196,6 +197,54 @@ mod tests {
         }
     }
 
+    /// Registration glue and schema internals must move together: each
+    /// entry's URI, its schema's `$id` and `meta.kind` const, and the
+    /// `kinds/<name>/<version>/` directory the schema is included from must
+    /// all name the same version, and the newest bundled URI must be the one
+    /// production stamps on derived paths.
+    #[test]
+    fn bundled_kinds_are_internally_consistent() {
+        for k in BUNDLED_KINDS {
+            let ctx = format!("{}/{}", k.name, k.version);
+            let schema: serde_json::Value =
+                serde_json::from_str(k.schema).expect("bundled schema is valid JSON");
+            assert_eq!(
+                schema["$id"],
+                serde_json::json!(format!("{}/schema.json", k.uri)),
+                "{ctx}: schema `$id` must be the entry URI plus `/schema.json`"
+            );
+            assert_eq!(
+                schema["properties"]["meta"]["properties"]["kind"]["const"],
+                serde_json::json!(k.uri),
+                "{ctx}: schema's `meta.kind` const must equal the entry URI"
+            );
+            let (name, ver) = parse_kind_uri(k.uri).expect("bundled URI parses");
+            assert_eq!(name, k.name, "{ctx}: URI name segment");
+            assert_eq!(
+                format!("v{}.{}.{}", ver.major, ver.minor, ver.patch),
+                k.version,
+                "{ctx}: URI version segment"
+            );
+            // `schema` is a compile-time include; require it byte-identical
+            // to the file in the directory named by `version`, so the include
+            // path can't point at a different version than the entry claims.
+            let on_disk = std::fs::read_to_string(format!(
+                "{}/kinds/{}/{}/schema.json",
+                env!("CARGO_MANIFEST_DIR"),
+                k.name,
+                k.version
+            ))
+            .expect("schema file exists under kinds/<name>/<version>/");
+            assert_eq!(
+                on_disk, k.schema,
+                "{ctx}: bundled schema must be included from its version directory"
+            );
+        }
+
+        let newest = BUNDLED_KINDS.last().expect("at least one bundled kind");
+        assert_eq!(newest.uri, toolpath::v1::PATH_KIND_AGENT_CODING_SESSION);
+    }
+
     #[test]
     fn parse_uri_extracts_name_and_version() {
         let (name, ver) =
@@ -256,7 +305,7 @@ mod tests {
     #[test]
     fn resolve_picks_newest_for_bare_name() {
         let k = resolve("agent-coding-session").expect("bundled");
-        assert_eq!(k.version, "v1.1.0");
+        assert_eq!(k.uri, toolpath::v1::PATH_KIND_AGENT_CODING_SESSION);
     }
 
     #[test]

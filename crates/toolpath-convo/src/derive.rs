@@ -863,9 +863,7 @@ mod tests {
         );
         // ...and survives a JSON round-trip.
         let json = serde_json::to_string(&path).unwrap();
-        assert!(
-            json.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.1.0""#)
-        );
+        assert!(json.contains(&format!(r#""kind":"{PATH_KIND_AGENT_CODING_SESSION}""#)));
     }
 
     #[test]
@@ -1100,9 +1098,15 @@ mod tests {
             "derive_path must stamp the agent-coding-session kind"
         );
 
-        let schema_src = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../path-cli/kinds/agent-coding-session/v1.1.0/schema.json"
+        // Validate against the schema for the version the constant names, so
+        // this test tracks the current kind without a spelled-out version.
+        let version = PATH_KIND_AGENT_CODING_SESSION
+            .rsplit('/')
+            .next()
+            .expect("kind URI has a version segment");
+        let schema_src = std::fs::read_to_string(format!(
+            "{}/../path-cli/kinds/agent-coding-session/{version}/schema.json",
+            env!("CARGO_MANIFEST_DIR")
         ))
         .expect("read kind schema");
         let schema: serde_json::Value = serde_json::from_str(&schema_src).unwrap();

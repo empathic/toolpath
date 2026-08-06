@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn newest_version_resolves_and_is_json() {
         let k = kinds::resolve("agent-coding-session").unwrap();
-        assert_eq!(k.version, "v1.1.0");
+        assert_eq!(k.uri, toolpath::v1::PATH_KIND_AGENT_CODING_SESSION);
         let _: serde_json::Value =
             serde_json::from_str(k.schema).expect("bundled schema is valid JSON");
     }

@@ -222,7 +222,7 @@ mod tests {
         validate(&doc).expect("base is optional on path identity");
     }
 
-    const ACS_KIND: &str = "https://toolpath.net/kinds/agent-coding-session/v1.1.0";
+    const ACS_KIND: &str = toolpath::v1::PATH_KIND_AGENT_CODING_SESSION;
 
     fn acs_graph(append: serde_json::Value) -> serde_json::Value {
         json!({

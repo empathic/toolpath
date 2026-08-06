@@ -1249,9 +1249,10 @@ mod tests {
             }),
         };
         let jsonl = p.to_jsonl_string().unwrap();
-        assert!(
-            jsonl.contains(r#""kind":"https://toolpath.net/kinds/agent-coding-session/v1.1.0""#)
-        );
+        assert!(jsonl.contains(&format!(
+            r#""kind":"{}""#,
+            crate::v1::PATH_KIND_AGENT_CODING_SESSION
+        )));
         let back = Path::from_jsonl_str(&jsonl).unwrap();
         assert_eq!(canonical_json(&p), canonical_json(&back));
     }
@@ -1259,14 +1260,14 @@ mod tests {
     #[test]
     fn path_meta_line_can_set_kind() {
         let patch = PathMetaPatch {
-            kind: Some("https://toolpath.net/kinds/agent-coding-session/v1.1.0".into()),
+            kind: Some(crate::v1::PATH_KIND_AGENT_CODING_SESSION.into()),
             ..Default::default()
         };
         let mut meta = PathMeta::default();
         apply_meta_patch(&mut meta, patch);
         assert_eq!(
             meta.kind.as_deref(),
-            Some("https://toolpath.net/kinds/agent-coding-session/v1.1.0")
+            Some(crate::v1::PATH_KIND_AGENT_CODING_SESSION)
         );
     }
 
