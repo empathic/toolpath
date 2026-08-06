@@ -288,8 +288,14 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Model is attributed via the step actor (`agent:{model}`).
-    let model = model_from_actor(&step.step.actor);
+    // Model: prefer the payload's own `model` (kind v1.2.0 — the append is
+    // self-describing), falling back to the step actor (`agent:{model}`) for
+    // documents produced before the payload carried it.
+    let model = extra
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| model_from_actor(&step.step.actor));
 
     let stop_reason = extra
         .get("stop_reason")
@@ -729,6 +735,30 @@ mod tests {
 
         let view = extract_conversation(&path);
         assert_eq!(view.turns[0].group_id.as_deref(), Some("msg_01abc"));
+    }
+
+    #[test]
+    fn test_payload_model_preferred_over_actor() {
+        // The payload's `model` (kind v1.2.0) wins even when the actor
+        // string doesn't follow the `agent:<model>` convention.
+        let path = make_path(vec![make_step(
+            "step-001",
+            "agent:unknown",
+            "2026-01-01T00:00:00Z",
+            vec![],
+            vec![(
+                "claude-code://sess-1",
+                "conversation.append",
+                extras(&[
+                    ("role", serde_json::json!("assistant")),
+                    ("text", serde_json::json!("")),
+                    ("model", serde_json::json!("claude-opus-4-8")),
+                ]),
+            )],
+        )]);
+
+        let view = extract_conversation(&path);
+        assert_eq!(view.turns[0].model.as_deref(), Some("claude-opus-4-8"));
     }
 
     #[test]
