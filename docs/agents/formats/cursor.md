@@ -827,11 +827,11 @@ source. Suggested mapping into `ConversationView` + `toolpath::v1::Path`:
 | `composerData.composerId` | `ConversationView.id`, `path.id = path-cursor-<first-8>` |
 | `composerData.name` / `subtitle` | `path.meta.title` (with `subtitle` falling back when `name` is missing) |
 | `composerData.createdAt` | `Turn.timestamp` on the first user turn, `path.meta.created_at` |
-| `composerData.modelConfig.modelName` | Default `Turn.model`; per-bubble `modelInfo.modelName` wins |
+| `composerData.modelConfig.modelName` | Default model name on `Turn.author`; per-bubble `modelInfo.modelName` wins |
 | `composerData.agentBackend` (`"cursor-agent"`) | `path.meta.source = "cursor"` + `path.meta.extra["cursor"]["backend"]` |
 | `workspaceIdentifier.uri.fsPath` | `Turn.environment.working_dir`, `path.base.uri` |
 | `bubbleId` with `type: 1` | `Turn { role: User }` → Step with `actor: "human:user"` |
-| `bubbleId` with `type: 2`, no `toolFormerData`, `capabilityType: null` | `Turn { role: Assistant, model }` → Step with `actor: "agent:<model>"` |
+| `bubbleId` with `type: 2`, no `toolFormerData`, `capabilityType: null` | `Turn { role: Assistant, author: agent(model) }` → Step with `actor: "agent:<model>"` |
 | `bubbleId` with `capabilityType: 30`, `allThinkingBlocks: [...]` | `Turn.thinking` on the next assistant turn (consistent with other providers) |
 | `bubbleId` with `toolFormerData` | `Turn.tool_uses[]` with `tool_call_id = toolFormerData.toolCallId`, `name = toolFormerData.name`, `input = parse(params)`, `result = parse(result)`, `status` mirrored |
 | `toolFormerData.result.{beforeContentId, afterContentId}` (edits) | `ArtifactChange` on the tool-call's turn, with `raw` perspective synthesized from `additionalData.precomputedDiff.lines` and the blob bodies looked up via `composer.content.<hash>` |

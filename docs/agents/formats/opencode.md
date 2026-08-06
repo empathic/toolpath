@@ -688,7 +688,7 @@ Minimum viable mapping, if we follow the Pi-style approach (build a
 | `session.directory` + `project.worktree` | `Turn.environment.working_dir`, `path.base.uri` |
 | `project.id` (first-root-commit SHA) | `path.base.ref_str` (stable-enough) |
 | User `message` | `Turn { role: User }` |
-| Assistant `message` | `Turn { role: Assistant, model: modelID }` |
+| Assistant `message` | `Turn { role: Assistant, author: agent(modelID) }` |
 | `user.system` | `Turn { role: System }` or `ConversationEvent` |
 | `reasoning` part | `Turn.thinking` (plaintext — safe to render) |
 | `text` part | appended to `Turn.text` |

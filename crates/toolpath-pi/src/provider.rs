@@ -19,11 +19,22 @@ use crate::types::{
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use toolpath_convo::actor;
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
+    Actor, ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
     EnvironmentSnapshot, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult,
     Turn,
 };
+
+/// This crate's provider id — `ConversationView::provider_id`, and the tool
+/// actor a turn Pi wrote itself is attributed to.
+pub(crate) const PROVIDER_ID: &str = "pi";
+
+/// Pi itself, as an actor: compactions, branch summaries, bash runs and
+/// custom entries are the harness speaking, not a model reply.
+fn harness() -> Actor {
+    actor::harness(PROVIDER_ID)
+}
 
 // ── Classification helpers ───────────────────────────────────────────
 
@@ -260,7 +271,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     text: format!("Compacted (summary): {}", summary),
                     thinking: None,
                     tool_uses: vec![],
-                    model: None,
+                    author: harness(),
                     stop_reason: None,
                     token_usage: None,
                     attributed_token_usage: None,
@@ -280,7 +291,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     text: format!("Branch summary: {}", summary),
                     thinking: None,
                     tool_uses: vec![],
-                    model: None,
+                    author: harness(),
                     stop_reason: None,
                     token_usage: None,
                     attributed_token_usage: None,
@@ -300,7 +311,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     text: String::new(),
                     thinking: None,
                     tool_uses: vec![],
-                    model: None,
+                    author: harness(),
                     stop_reason: None,
                     token_usage: None,
                     attributed_token_usage: None,
@@ -325,7 +336,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     text: extract_user_text(content),
                     thinking: None,
                     tool_uses: vec![],
-                    model: None,
+                    author: harness(),
                     stop_reason: None,
                     token_usage: None,
                     attributed_token_usage: None,
@@ -456,16 +467,23 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     }
                 }
 
+                let author = match &role {
+                    Role::User => actor::generic_human(),
+                    Role::Assistant => actor::agent(model.as_deref()),
+                    // Bash runs, custom entries and summaries are Pi
+                    // speaking, not a model reply.
+                    Role::System | Role::Other(_) => harness(),
+                };
                 turns.push(Turn {
                     id: base.id.clone(),
                     parent_id: base.parent_id.clone(),
                     group_id: None,
                     role,
+                    author,
                     timestamp: base.timestamp.clone(),
                     text,
                     thinking,
                     tool_uses,
-                    model,
                     stop_reason: stop_reason_s,
                     token_usage,
                     attributed_token_usage: None,
@@ -558,7 +576,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         last_activity,
         turns,
         total_usage,
-        provider_id: Some("pi".to_string()),
+        provider_id: Some(PROVIDER_ID.to_string()),
         files_changed,
         session_ids,
         events: vec![],
@@ -811,7 +829,7 @@ mod tests {
         );
         let v = session_to_view(&session_from(vec![entry], "/tmp/p"));
         assert_eq!(v.turns[0].role, Role::Assistant);
-        assert_eq!(v.turns[0].model.as_deref(), Some("claude-opus"));
+        assert_eq!(actor::model_name(&v.turns[0].author), Some("claude-opus"));
         assert_eq!(v.turns[0].stop_reason.as_deref(), Some("stop"));
         let u = v.turns[0].token_usage.as_ref().unwrap();
         assert_eq!(u.input_tokens, Some(10));

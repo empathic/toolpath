@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use serde_json::{Map, Value};
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, DelegatedWork, Result, Role, TokenUsage,
     ToolCategory, ToolInvocation, Turn,
@@ -148,7 +149,7 @@ fn turn_to_message(turn: &Turn) -> GeminiMessage {
         content: build_content(turn),
         thoughts: build_thoughts(turn, &gemini_extras),
         tokens: build_tokens(turn, &gemini_extras),
-        model: turn.model.clone(),
+        model: actor::model_name(&turn.author).map(str::to_string),
         tool_calls: build_tool_calls(turn, &gemini_extras),
         extra: msg_extras,
     }
@@ -605,7 +606,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::generic_human(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -625,7 +626,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: Some("gemini-3-flash-preview".into()),
+            author: actor::agent(Some("gemini-3-flash-preview")),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,

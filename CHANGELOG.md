@@ -2,6 +2,109 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Turns record their author, and the actor grammar moves to the kind that defines it — 2026-08-06
+
+An agent coding session attributes every step to an actor: `human:alex`,
+`agent:gpt-5.5`, `tool:claude-code`. Until now `toolpath-convo` built those
+strings with `format!` and read them back with a hand-rolled parser, and no
+type held the shape they had to take.
+
+A real misattribution grew in that gap. The deriver inferred a turn's actor
+from its role plus a model name: assistant plus a model name meant a model
+reply. That worked until a harness wrote an assistant message itself — an API
+error, a rate-limit notice, a timeout — with no model call behind it. Some
+harnesses record a placeholder where the model name goes, and `derive_path`
+took it at face value: the step landed on an `agent:` actor naming a string
+that is not a model, and `meta.actors` described the harness as if it were
+one. `agent:<model>` never meant that.
+
+Fixing it needed a type for the actor reference, and that type belongs to
+whoever defines the shape. The base format does not: `step.actor` is an
+opaque string, and `toolpath` neither parses nor validates it. The
+`agent-coding-session` kind is what constrains an actor to a `prefix:id`
+reference, so the type expressing that constraint lives with the deriver that
+implements the kind. Other producers — `toolpath-git` and friends — keep
+naming actors by their own convention, unenforced, with no dependency on the
+conversation crate.
+
+- **`toolpath-convo`** (0.12.0): `Turn.author` is an `Actor` and replaces
+  `Turn.model`. `role` keeps its own meaning: where the turn sits in the
+  conversation. The two were never the same question, and a harness notice is
+  the case that separates them — it occupies the assistant slot without being
+  model output.
+
+  The `actor` module now holds both the reference type and the conventions
+  built on it. `Actor` is a prefix and an id, each non-empty and drawn from
+  `[A-Za-z0-9_.-]`. Within that, the prefix set is **open**: `human`, `agent`
+  and `tool` are the prefixes *this deriver* attributes turns to, not a closed
+  vocabulary, so `ci:github-actions` and `bot:dependabot` are equally valid
+  references and the type gives none of them special meaning.
+  `Actor::new(prefix, id)` validates and returns `ParseActorError` on anything
+  the grammar cannot render back; `Display` and `FromStr` are the only
+  implementation of the grammar, and serde uses them, so an `Actor` on the
+  wire is the actor string. Every valid suffix-free reference parses and
+  renders back unchanged, and every `Actor` renders a reference that parses
+  back to itself. The `/`-delimited sub-actor suffix
+  (`agent:claude-code/tool:Write`, `tool:rustfmt/1.5.0`) is split off and
+  dropped on parse, as before; `Actor::split_sub_actor` exposes the split for
+  callers that need it.
+
+  Alongside it: the `human:user` placeholder this deriver emits for an unnamed
+  person, and the `agent:unknown` placeholder the `agent-coding-session` kind
+  spec defines for "a model ran, unnamed". Constructors (`generic_human`,
+  `human`, `unnamed_agent`, `agent`, `harness`) are total: a name the grammar
+  cannot carry is no name at all and falls back to the placeholder, which
+  keeps every derived actor string renderable and schema-valid whatever a
+  session file holds. Readers (`is_human`, `is_agent`, `is_tool`,
+  `model_name`) answer the questions the deriver actually asks of an actor.
+
+  `derive_path` now attributes a step by rendering its turn's author, with no
+  role matching and no string building of its own, and `extract_conversation`
+  recovers the author by parsing the actor back — so derive → extract → derive
+  is stable and the grammar lives in exactly one place. Harness-authored turns
+  take `tool:<provider>` — the actor system turns and provider-specific roles
+  already take — instead of an `agent:` actor, which is the misattribution
+  this fixes. `agent:unknown` still means "a model ran, unnamed": distinct
+  from "no model was involved". Because a tool actor is always named, each
+  provider now supplies its own provider id when it builds a harness-authored
+  turn, rather than leaving the deriver to fill it in.
+
+  `meta.actors` records a `provider` only for the actors this derivation mints
+  itself. An actor the source supplied under some other prefix —
+  `ci:github-actions`, or anything else the open prefix set allows — is
+  described by name alone: the deriver does not know where it came from, and
+  naming the harness there would assert provenance it cannot know.
+
+  One consequence of the open prefix set shows up on the way back in:
+  `extract_conversation` used to collapse any actor whose prefix was not
+  `human`, `agent` or `tool` to `agent:unknown`, because nothing could hold
+  it. It now reads such an actor back as itself, so a document written by
+  something with its own prefix survives derive → extract → derive instead of
+  being relabelled. Roles are unaffected — only the three prefixes this crate
+  attributes turns to map to a `Role`, and anything else still lands in
+  `Role::Other` carrying its reference.
+
+  Turns reach disk nested in a step's `delegations` payload, so `author` also
+  accepts the bare model name that older documents carry in its place; the two
+  are told apart by parsing, since a model name is not a valid actor
+  reference. Minor bump — replacing a public field on `Turn` is breaking.
+- **`toolpath-claude`** (0.13.0): maps Claude Code's placeholder model to the
+  harness's own tool actor and every other assistant message to an agent
+  actor, so the placeholder no longer reaches the IR. It is one harness's
+  format detail and stays owned by the crate that reads that format; other
+  providers set an author from whatever their own format gives them. The
+  projector writes the placeholder back when it reserializes a
+  harness-authored turn, so a session survives the round trip. Minor bump —
+  the crate now pins `toolpath-convo` 0.12.
+
+`toolpath` is untouched: no new type, no version bump, and no claim about
+actor strings that it did not already make. No schema change either — this is
+a deriver fix and a representation change, valid under the existing
+`agent-coding-session` kind, and the base schema is unchanged. Derived
+documents are byte-identical to those the previous release produced, apart
+from the misattributed harness turns this fixes — checked by deriving every
+checked-in harness fixture on both trees and diffing the canonicalized JSON.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

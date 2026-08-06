@@ -11,18 +11,48 @@ use crate::ClaudeConvo;
 use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
 #[cfg(any(feature = "watcher", test))]
 use toolpath_convo::WatcherEvent;
+use toolpath_convo::actor;
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
+    Actor, ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
     EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
+
+/// The placeholder Claude Code writes to `message.model` on assistant
+/// messages it generated itself — API errors, rate-limit notices, timeouts —
+/// where no model ran. It is a marker, not a model identifier, so it maps to
+/// the harness's own tool actor and never into a model name.
+pub(crate) const SYNTHETIC_MODEL: &str = "<synthetic>";
+
+/// This crate's provider id — `ConversationView::provider_id`, and the tool
+/// actor a harness-authored turn is attributed to.
+pub(crate) const PROVIDER_ID: &str = "claude-code";
+
+/// The harness itself, as an actor.
+fn harness() -> Actor {
+    actor::harness(PROVIDER_ID)
+}
 
 fn claude_role_to_role(role: &MessageRole) -> Role {
     match role {
         MessageRole::User => Role::User,
         MessageRole::Assistant => Role::Assistant,
         MessageRole::System => Role::System,
+    }
+}
+
+/// Who wrote a message. An assistant message carrying the harness
+/// placeholder in place of a model is the harness speaking, so it is
+/// attributed to the harness rather than to a model that never ran.
+fn claude_author(msg: &Message) -> Actor {
+    match msg.role {
+        MessageRole::User => actor::generic_human(),
+        MessageRole::System => harness(),
+        MessageRole::Assistant => match msg.model.as_deref() {
+            Some(SYNTHETIC_MODEL) => harness(),
+            _ => actor::agent(msg.model.as_deref()),
+        },
     }
 }
 
@@ -129,11 +159,11 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         // (sum_usage, derive_path) counts a message group once.
         group_id: msg.id.clone(),
         role: claude_role_to_role(&msg.role),
+        author: claude_author(msg),
         timestamp: entry.timestamp.clone(),
         text,
         thinking,
         tool_uses,
-        model: msg.model.clone(),
         stop_reason: msg.stop_reason.clone(),
         token_usage,
         attributed_token_usage: None,
@@ -444,7 +474,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         last_activity: convo.last_activity,
         turns,
         total_usage,
-        provider_id: Some("claude-code".into()),
+        provider_id: Some(PROVIDER_ID.into()),
         files_changed,
         session_ids: vec![],
         events,
@@ -860,7 +890,7 @@ mod tests {
             text: String::new(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::unnamed_agent(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -1061,7 +1091,10 @@ mod tests {
         let result = view.turns[1].tool_uses[0].result.as_ref().unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("fn main()"));
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(
+            actor::model_name(&view.turns[1].author),
+            Some("claude-opus-4-6")
+        );
         assert_eq!(view.turns[1].stop_reason.as_deref(), Some("tool_use"));
         assert_eq!(view.turns[1].parent_id.as_deref(), Some("uuid-1"));
 
@@ -1251,6 +1284,42 @@ mod tests {
         assert_eq!(turn.id, "u1");
         assert_eq!(turn.text, "hello");
         assert_eq!(turn.role, Role::User);
+    }
+
+    #[test]
+    fn test_to_turn_attributes_a_placeholder_model_to_the_harness() {
+        // The placeholder marks a message the harness produced itself; it
+        // is not a model identifier, so the turn is authored by the harness
+        // and no model name reaches the IR.
+        let entry: ConversationEntry = serde_json::from_str(&format!(
+            r#"{{"uuid":"u1","type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{{"role":"assistant","model":"{SYNTHETIC_MODEL}","content":[{{"type":"text","text":"API Error: Connection reset"}}]}}}}"#
+        ))
+        .unwrap();
+        let turn = to_turn(&entry).unwrap();
+        assert_eq!(turn.author, harness());
+        assert_eq!(actor::model_name(&turn.author), None);
+        // The message keeps its place in the transcript.
+        assert_eq!(turn.role, Role::Assistant);
+    }
+
+    #[test]
+    fn test_to_turn_keeps_a_real_model_as_the_author() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"on it"}]}}"#,
+        )
+        .unwrap();
+        let turn = to_turn(&entry).unwrap();
+        assert_eq!(turn.author, actor::agent(Some("claude-opus-4-8")));
+    }
+
+    #[test]
+    fn test_to_turn_without_a_recorded_model_is_still_a_model_call() {
+        let entry: ConversationEntry = serde_json::from_str(
+            r#"{"uuid":"u1","type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}"#,
+        )
+        .unwrap();
+        let turn = to_turn(&entry).unwrap();
+        assert_eq!(turn.author, actor::unnamed_agent());
     }
 
     #[test]
@@ -1454,7 +1523,7 @@ mod tests {
                     category: Some(ToolCategory::FileWrite),
                 },
             ],
-            model: None,
+            author: actor::unnamed_agent(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,

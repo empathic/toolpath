@@ -12,8 +12,9 @@
 use crate::GeminiConvo;
 use crate::types::{ChatFile, Conversation, GeminiMessage, GeminiRole, Thought, Tokens, ToolCall};
 use serde_json::Value;
+use toolpath_convo::actor;
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
+    Actor, ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
     EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
@@ -25,6 +26,20 @@ fn gemini_role_to_role(role: &GeminiRole) -> Role {
         GeminiRole::Gemini => Role::Assistant,
         GeminiRole::Info => Role::System,
         GeminiRole::Other(s) => Role::Other(s.clone()),
+    }
+}
+
+/// This crate's provider id — `ConversationView::provider_id`, and the tool
+/// actor a turn the CLI wrote itself is attributed to.
+pub(crate) const PROVIDER_ID: &str = "gemini-cli";
+
+/// Who wrote a message. Gemini CLI names a model only on model replies;
+/// `info` and provider-specific roles are the CLI speaking for itself.
+fn gemini_author(role: &GeminiRole, model: Option<String>) -> Actor {
+    match role {
+        GeminiRole::User => actor::generic_human(),
+        GeminiRole::Gemini => actor::agent(model.as_deref()),
+        GeminiRole::Info | GeminiRole::Other(_) => actor::harness(PROVIDER_ID),
     }
 }
 
@@ -116,11 +131,11 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
         parent_id: None,
         group_id: None,
         role: gemini_role_to_role(&msg.role),
+        author: gemini_author(&msg.role, msg.model.clone()),
         timestamp: msg.timestamp.clone(),
         text,
         thinking,
         tool_uses,
-        model: msg.model.clone(),
         stop_reason: None,
         token_usage,
         attributed_token_usage: None,
@@ -463,7 +478,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         last_activity: convo.last_activity,
         turns,
         total_usage,
-        provider_id: Some("gemini-cli".into()),
+        provider_id: Some(PROVIDER_ID.into()),
         files_changed,
         session_ids: vec![],
         events: vec![],
@@ -719,7 +734,7 @@ mod tests {
         assert_eq!(view.turns[1].role, Role::Assistant);
         assert_eq!(view.turns[1].text, "I'll delegate.");
         assert_eq!(
-            view.turns[1].model.as_deref(),
+            actor::model_name(&view.turns[1].author),
             Some("gemini-3-flash-preview")
         );
     }

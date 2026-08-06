@@ -38,6 +38,7 @@ use crate::types::{
     AssistantMessage, Message, MessageData, Part, PartData, Session, SessionMetadata, Tokens,
     ToolState, UserMessage,
 };
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
     ConvoError as ConvoTraitError, DelegatedWork, EnvironmentSnapshot, FileMutation, ProducerInfo,
@@ -292,7 +293,7 @@ impl<'a> Builder<'a> {
             text,
             thinking: None,
             tool_uses: Vec::new(),
-            model: None,
+            author: actor::generic_human(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -457,6 +458,11 @@ impl<'a> Builder<'a> {
             },
             group_id: None,
             role: Role::Assistant,
+            author: actor::agent(if a.model_id.is_empty() {
+                None
+            } else {
+                Some(&a.model_id)
+            }),
             timestamp: millis_to_iso(msg.time_created),
             text: text_chunks.join("\n\n"),
             thinking: if thinking_chunks.is_empty() {
@@ -465,11 +471,6 @@ impl<'a> Builder<'a> {
                 Some(thinking_chunks.join("\n\n"))
             },
             tool_uses,
-            model: if a.model_id.is_empty() {
-                None
-            } else {
-                Some(a.model_id.clone())
-            },
             stop_reason: stop_reason.or_else(|| a.finish.clone()),
             token_usage,
             attributed_token_usage: None,

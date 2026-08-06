@@ -14,8 +14,10 @@ Write your conversation analysis once, swap providers without changing a line.
 
 | Type | What it represents |
 |---|---|
-| `Turn` | A single conversational turn (text, thinking, tool uses, model, tokens, environment, delegations) |
-| `Role` | Who produced the turn: `User`, `Assistant`, `System`, `Other(String)` |
+| `Turn` | A single conversational turn (text, thinking, tool uses, author, tokens, environment, delegations) |
+| `Role` | Where the turn sits in the conversation: `User`, `Assistant`, `System`, `Other(String)` |
+| `Actor` | Who produced the turn's content — a `prefix:id` reference, with each segment drawn from `[A-Za-z0-9_.-]` and the prefix set left open. `Turn.author` holds one, and a derived step's `actor` string is that value rendered |
+| `actor` (module) | Where `Actor` is defined, plus this deriver's conventions on top of it: the `human:` / `agent:` / `tool:` prefixes, the `human:user` and `agent:unknown` placeholders, and constructors (`generic_human`, `human`, `unnamed_agent`, `agent`, `harness`) and readers (`is_human`, `is_agent`, `is_tool`, `model_name`) built on them |
 | `ConversationView` | A complete conversation: ordered turns, timestamps, aggregate usage, files changed |
 | `ConversationMeta` | Lightweight metadata (no turns loaded) |
 | `ToolInvocation` | A tool call within a turn, with optional `ToolCategory` classification |
@@ -25,6 +27,13 @@ Write your conversation analysis once, swap providers without changing a line.
 | `EnvironmentSnapshot` | Working directory and VCS branch/revision at time of a turn |
 | `DelegatedWork` | A sub-agent delegation: prompt, nested turns, result |
 | `WatcherEvent` | A `Turn` (new), `TurnUpdated` (enriched with tool results), or `Progress` event — with `as_turn()`, `as_progress()`, `is_update()`, `turn_id()` helpers for ergonomic dispatch |
+
+The actor shape is this layer's, not the format's: `toolpath` treats a step's
+`actor` as an opaque string and asserts nothing about it. `prefix:id` is what
+the `agent-coding-session` path kind constrains an actor to, and `Actor` is
+that constraint as this crate implements it — which is why the type lives here
+rather than in the base crate. Producers of other kinds of path name their
+actors however they like.
 
 **Traits** define how providers expose their data:
 

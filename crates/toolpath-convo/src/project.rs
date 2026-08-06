@@ -154,16 +154,21 @@ mod tests {
     }
 
     fn make_turn(id: &str, role: Role, text: &str) -> Turn {
+        let author = match &role {
+            Role::User => crate::actor::generic_human(),
+            Role::Assistant => crate::actor::unnamed_agent(),
+            Role::System | Role::Other(_) => crate::actor::harness("test-provider"),
+        };
         Turn {
             id: id.into(),
             parent_id: None,
             group_id: None,
             role,
+            author,
             timestamp: "2026-01-01T00:00:00Z".into(),
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -363,7 +368,7 @@ mod tests {
                         category: None,
                     },
                 ],
-                model: None,
+                author: crate::actor::unnamed_agent(),
                 stop_reason: None,
                 token_usage: None,
                 attributed_token_usage: None,
@@ -421,7 +426,7 @@ mod tests {
                     text: "turn 1".into(),
                     thinking: None,
                     tool_uses: vec![],
-                    model: None,
+                    author: crate::actor::unnamed_agent(),
                     stop_reason: None,
                     token_usage: Some(TokenUsage {
                         input_tokens: Some(100),
@@ -444,7 +449,7 @@ mod tests {
                     text: "turn 2".into(),
                     thinking: None,
                     tool_uses: vec![],
-                    model: None,
+                    author: crate::actor::unnamed_agent(),
                     stop_reason: None,
                     token_usage: Some(TokenUsage {
                         input_tokens: Some(200),

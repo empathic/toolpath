@@ -5,12 +5,14 @@
 //! reads a Claude JSONL conversation into a provider-agnostic view,
 //! `ClaudeProjector` serializes that view back into the Claude wire format.
 
+use crate::provider::SYNTHETIC_MODEL;
 use crate::types::{
     ContentPart, Conversation, ConversationEntry, Message, MessageContent, MessageRole,
     ToolResultContent, Usage,
 };
 use serde_json::json;
 use std::collections::HashMap;
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
@@ -367,6 +369,16 @@ fn user_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
     }
 }
 
+/// What belongs in `message.model` for an assistant entry: the model that
+/// ran, or — for a message the harness produced itself — the placeholder
+/// Claude Code writes in that slot, so a session survives the round trip.
+fn model_field(turn: &Turn) -> Option<String> {
+    if actor::is_tool(&turn.author) {
+        return Some(SYNTHETIC_MODEL.to_string());
+    }
+    actor::model_name(&turn.author).map(str::to_string)
+}
+
 /// Build a `ConversationEntry` for an assistant turn. `wire_usage` is the
 /// usage to write on the JSONL line: the IR carries a message's total only
 /// on the group's final turn, but real Claude Code repeats `message.usage`
@@ -401,7 +413,7 @@ fn assistant_turn_to_entry_with_usage(
         message: Some(Message {
             role: MessageRole::Assistant,
             content: Some(content),
-            model: turn.model.clone(),
+            model: model_field(turn),
             id: turn.group_id.clone(),
             message_type: None,
             stop_reason: turn.stop_reason.clone(),
@@ -1041,7 +1053,7 @@ mod tests {
             text: text.to_string(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::generic_human(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -1061,7 +1073,7 @@ mod tests {
             text: text.to_string(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::unnamed_agent(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -1421,7 +1433,7 @@ mod tests {
     #[test]
     fn test_stop_reason_and_model_preserved() {
         let mut turn = assistant_turn("a1", "Done.");
-        turn.model = Some("claude-opus-4-6".to_string());
+        turn.author = actor::agent(Some("claude-opus-4-6"));
         turn.stop_reason = Some("end_turn".to_string());
 
         let view = make_view("sess-1", vec![turn]);
