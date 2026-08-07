@@ -2,6 +2,44 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Model on the turn payload + kind v1.2.0 — 2026-08-03
+
+Derived agent-coding-session documents never wrote the model into the
+`conversation.append` structural payload: it rode only the step actor
+string (`agent:<model>`) and `meta.actors[…].model`, so consumers
+reading `structural.model` got null and had to parse the actor string
+(reported by Pathbase, whose stats view grouped every token under
+"(unknown)").
+
+Kind `agent-coding-session` **v1.2.0** adds an optional `model` to the
+turn payload — the model that produced the turn, verbatim from the
+source. The append is now self-describing about attribution.
+
+- The shared `toolpath_convo::derive_path` emits `model` when
+  `Turn.model` is set, which covers all seven providers (claude,
+  gemini, codex, opencode, cursor, pi, copilot) — they derive through
+  it.
+- When the source records no model, the key is **omitted entirely** —
+  the `agent:unknown` actor sentinel never appears in the payload.
+- The actor string and `meta.actors` are unchanged; the payload `model`
+  is the same value they attribute.
+- Compat: the field is additive and optional, so v1.2.0 documents are
+  structurally valid v1.1.0 documents; the new version exists so
+  consumers can rely on the payload carrying the model when the source
+  records one. `PATH_KIND_AGENT_CODING_SESSION` now points at v1.2.0;
+  `…_V1_1_0` and `…_V1_0_0` name the superseded URIs. `path p validate`
+  bundles all three schemas; `path kind` resolves the bare name to
+  v1.2.0.
+
+Crates bumped (every crate that depends on `toolpath`, matching the
+v1.1.0 precedent since the emitted kind URI changes): `toolpath` 0.8.0,
+`toolpath-convo` 0.12.0, `toolpath-git` 0.7.0, `toolpath-github` 0.7.0,
+`toolpath-claude` 0.13.0, `toolpath-gemini` 0.7.0, `toolpath-codex`
+0.7.0, `toolpath-copilot` 0.2.0, `toolpath-opencode` 0.6.0,
+`toolpath-cursor` 0.3.0, `toolpath-pi` 0.7.0, `toolpath-dot` 0.6.0,
+`toolpath-md` 0.8.0, `path-cli` 0.17.0, `toolpath-cli` 0.17.0.
+`pathbase-client` is unaffected.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

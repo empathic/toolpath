@@ -158,6 +158,16 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             );
         }
 
+        // The model rides the payload itself (as well as the actor string /
+        // `meta.actors`), so the append is self-describing. Omitted when the
+        // source records none — never a sentinel string.
+        if let Some(model) = &turn.model {
+            extra.insert(
+                "model".to_string(),
+                serde_json::Value::String(model.clone()),
+            );
+        }
+
         if config.include_tool_uses && !turn.tool_uses.is_empty() {
             let arr: Vec<serde_json::Value> = turn
                 .tool_uses
@@ -945,11 +955,28 @@ mod tests {
     }
 
     #[test]
+    fn test_assistant_model_in_append_payload() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.model = Some("claude-opus-4-8".into());
+        let view = view_with(vec![turn]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        let sc = conv_change(&path.steps[0]);
+        assert_eq!(
+            sc.extra.get("model"),
+            Some(&serde_json::json!("claude-opus-4-8"))
+        );
+    }
+
+    #[test]
     fn test_assistant_without_model() {
         let turn = base_turn("t1", Role::Assistant);
         let view = view_with(vec![turn]);
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.steps[0].step.actor, "agent:unknown");
+        // No model recorded → no `model` key at all; the `agent:unknown`
+        // actor sentinel never leaks into the payload.
+        let sc = conv_change(&path.steps[0]);
+        assert!(!sc.extra.contains_key("model"));
     }
 
     #[test]
