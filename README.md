@@ -125,9 +125,23 @@ path p export pathbase --input claude-<session-id>
 # (full URL or bare `<owner>/<repo>/<slug>` triple)
 path p import pathbase https://pathbase.dev/alex/pathstash/path-pr-42
 
+# Send shares somewhere else instead. Designate it once, and bare
+# `path share` goes there from then on.
+path auth default ~/Dropbox/toolpath-traces   # a folder — no credentials needed
+path auth default s3://my-bucket/traces       # or a bucket
+path auth s3 login                            # credentials, if the bucket needs them
+path share                                    # → wherever you pointed it
+path auth default                             # what's in effect, and why
+
+# Override for one call, without changing the default
+path share --to /tmp/scratch
+path share --to pathbase
+
 # Resume a Toolpath document into your coding agent of choice (interactive
 # harness picker; project the session and exec the harness's resume command)
 path resume https://pathbase.dev/alex/pathstash/path-pr-42
+path resume s3://my-bucket/traces/claude-<session-id>.json
+path resume ~/Dropbox/toolpath-traces/claude-<session-id>.json
 path resume claude-<session-id> --harness claude -C /path/to/project
 
 # Query the whole local cache with a jaq (jq) filter over wrapped steps

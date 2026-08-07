@@ -1,11 +1,14 @@
 use anyhow::{Result, anyhow};
-use clap::Subcommand;
+use clap::{Args, Subcommand};
+use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::cmd_pathbase::{
     StoredSession, api_logout, api_me, api_redeem, clear_session, credentials_path, load_session,
     prompt_line, resolve_url, store_session,
 };
+use crate::store::{self, S3Settings};
+use crate::target::{self, Target};
 
 #[derive(Subcommand, Debug)]
 pub enum AuthOp {
@@ -25,16 +28,143 @@ pub enum AuthOp {
     Status,
     /// Verify the stored session against the server and print the current user
     Whoami,
+    /// Set (or show) where `path share` uploads by default: `pathbase`,
+    /// an S3 bucket (`s3://bucket/prefix`), or a folder (`~/traces`)
+    Default {
+        /// The target to make default. Omit to print the current one.
+        #[arg(index = 1)]
+        target: Option<String>,
+
+        /// Forget the configured default, falling back to Pathbase
+        #[arg(long, conflicts_with = "target")]
+        clear: bool,
+    },
+    /// Store S3 credentials once, so `s3://` share and resume targets
+    /// need none on the command line. A folder target needs no
+    /// credentials and so never needs this.
+    S3 {
+        #[command(subcommand)]
+        op: S3Op,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum S3Op {
+    /// Store S3 credentials and connection settings.
+    ///
+    /// Only the fields you pass are updated; the rest keep their stored
+    /// values, so `path auth s3 login --region eu-west-1` is a valid
+    /// tweak. Run interactively with no flags and it prompts, without
+    /// echoing the secret.
+    ///
+    /// This does not set *where* shares go — that's `path auth default`
+    /// — so one stored credential serves any number of buckets.
+    #[command(alias = "set")]
+    Login {
+        #[command(flatten)]
+        args: S3LoginArgs,
+    },
+    /// Show the S3 settings in effect, with secrets redacted and
+    /// environment-supplied values marked
+    Status,
+    /// Forget the stored S3 settings
+    #[command(alias = "clear")]
+    Logout,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct S3LoginArgs {
+    /// AWS region (default: us-east-1)
+    #[arg(long)]
+    pub region: Option<String>,
+
+    /// Endpoint URL for an S3-compatible service (R2, MinIO, Ceph).
+    /// Omit for real AWS S3.
+    #[arg(long)]
+    pub endpoint: Option<String>,
+
+    #[arg(long)]
+    pub access_key_id: Option<String>,
+
+    /// Secret access key. Prefer omitting this so it's prompted for
+    /// rather than landing in your shell history.
+    #[arg(long)]
+    pub secret_access_key: Option<String>,
+
+    /// Session token for temporary (STS / assumed-role) credentials
+    #[arg(long)]
+    pub session_token: Option<String>,
+
+    /// Address the bucket as `bucket.host/key` instead of `host/bucket/key`
+    #[arg(long)]
+    pub virtual_hosted_style: bool,
 }
 
 pub fn run(op: AuthOp) -> Result<()> {
-    let path = credentials_path()?;
     match op {
-        AuthOp::Login { url, code } => login(&path, url, code),
-        AuthOp::Logout => logout(&path),
-        AuthOp::Status => status(&path),
-        AuthOp::Whoami => whoami(&path),
+        AuthOp::S3 { op } => run_s3(op),
+        AuthOp::Default { target, clear } => default_target(target, clear),
+        other => {
+            let path = credentials_path()?;
+            match other {
+                AuthOp::Login { url, code } => login(&path, url, code),
+                AuthOp::Logout => logout(&path),
+                AuthOp::Status => status(&path),
+                AuthOp::Whoami => whoami(&path),
+                AuthOp::S3 { .. } | AuthOp::Default { .. } => unreachable!("handled above"),
+            }
+        }
     }
+}
+
+// ── Default share target ────────────────────────────────────────────────
+
+fn default_target(spec: Option<String>, clear: bool) -> Result<()> {
+    if clear {
+        let path = target::clear_default()?;
+        println!("Default share target cleared ({}).", path.display());
+        println!("`path share` now uploads to Pathbase.");
+        return Ok(());
+    }
+
+    let Some(spec) = spec else {
+        return print_default_target();
+    };
+
+    let parsed = Target::parse(&spec)?;
+    let path = target::set_default(&parsed)?;
+    println!("Default share target set to {parsed}");
+    println!("  stored in: {}", path.display());
+    if let Target::Object(dest) = &parsed
+        && !dest.is_local()
+        && store::effective_settings()?.access_key_id.is_none()
+    {
+        println!(
+            "  note: no S3 credentials stored yet — run `path auth s3 login`, \
+             or rely on the AWS credential chain."
+        );
+    }
+    Ok(())
+}
+
+/// Answer "where does my next share go?" in one command, including why.
+fn print_default_target() -> Result<()> {
+    let (stored, path) = target::default_target()?;
+    match &stored {
+        Some(t) => println!("Default share target: {t} (from {})", path.display()),
+        None => println!("No default share target configured."),
+    }
+    // The stored value isn't the whole story — an env var or the
+    // built-in fallback may be what actually applies right now.
+    println!("In effect now: {}", target::describe_effective()?);
+    if stored.is_none() {
+        println!();
+        println!("Set one with:");
+        println!("  path auth default s3://my-bucket/traces");
+        println!("  path auth default ~/Dropbox/toolpath   # a folder needs no credentials");
+        println!("  path auth default pathbase");
+    }
+    Ok(())
 }
 
 fn login(path: &Path, url: Option<String>, code_arg: Option<String>) -> Result<()> {
@@ -111,6 +241,188 @@ fn status(path: &Path) -> Result<()> {
             Ok(())
         }
     }
+}
+
+// ── S3 ──────────────────────────────────────────────────────────────────
+
+fn run_s3(op: S3Op) -> Result<()> {
+    let path = store::config_path()?;
+    match op {
+        S3Op::Login { args } => s3_login(&path, args),
+        S3Op::Status => s3_status(&path),
+        S3Op::Logout => s3_logout(&path),
+    }
+}
+
+/// Merge `args` into whatever is already stored, prompting for the
+/// essentials when nothing was passed and we have a terminal.
+///
+/// Merge rather than replace: partial updates are the common case
+/// (rotating a key, switching endpoint), and a replace would silently
+/// drop the fields the user didn't repeat.
+fn s3_login(path: &Path, args: S3LoginArgs) -> Result<()> {
+    let mut cfg = store::load_stored(path)?.unwrap_or_default();
+    let had_settings = cfg != S3Settings::default();
+
+    let set = |slot: &mut Option<String>, value: Option<String>| {
+        if let Some(v) = value
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
+            *slot = Some(v);
+        }
+    };
+    set(&mut cfg.region, args.region);
+    set(&mut cfg.endpoint, args.endpoint);
+    set(&mut cfg.access_key_id, args.access_key_id);
+    set(&mut cfg.secret_access_key, args.secret_access_key);
+    set(&mut cfg.session_token, args.session_token);
+    if args.virtual_hosted_style {
+        cfg.virtual_hosted_style = Some(true);
+    }
+
+    if std::io::stdin().is_terminal() && !had_settings {
+        prompt_missing(&mut cfg)?;
+    }
+
+    if cfg == S3Settings::default() {
+        anyhow::bail!(
+            "Nothing to store. Pass at least one setting (e.g. \
+             `path auth s3 login --access-key-id AKIA… --secret-access-key …`), \
+             or run this from a terminal to be prompted."
+        );
+    }
+
+    store::store(path, &cfg)?;
+    println!("S3 settings saved to {}", path.display());
+    // Everything printed here was just written, so nothing is `(env)`.
+    print_settings(&cfg, &cfg);
+    suggest_default_target()?;
+    Ok(())
+}
+
+/// First-time interactive setup. Skipped when settings already exist,
+/// so a targeted `--region` update doesn't re-interrogate the user
+/// about credentials they already stored.
+fn prompt_missing(cfg: &mut S3Settings) -> Result<()> {
+    println!("Store S3 credentials for `s3://` share and resume targets.");
+    println!("Leave a field blank to skip it (credentials can come from the AWS environment).");
+    println!();
+
+    if cfg.region.is_none() {
+        let v = prompt_line(&format!("Region [{}]: ", store::DEFAULT_REGION))?;
+        cfg.region = Some(v).filter(|v| !v.is_empty());
+    }
+    if cfg.endpoint.is_none() {
+        let v = prompt_line("Endpoint URL (blank for AWS): ")?;
+        cfg.endpoint = Some(v).filter(|v| !v.is_empty());
+    }
+    if cfg.access_key_id.is_none() {
+        let v = prompt_line("Access key id (blank to use the AWS environment): ")?;
+        cfg.access_key_id = Some(v).filter(|v| !v.is_empty());
+    }
+    if cfg.access_key_id.is_some() && cfg.secret_access_key.is_none() {
+        let v = rpassword::prompt_password("Secret access key: ")?;
+        cfg.secret_access_key = Some(v.trim().to_string()).filter(|v| !v.is_empty());
+    }
+    Ok(())
+}
+
+/// Credentials alone don't make `path share` go to S3 — the target
+/// does. Close that gap in the same breath rather than letting the user
+/// discover it on their next share.
+fn suggest_default_target() -> Result<()> {
+    if target::default_target()?.0.is_some() {
+        return Ok(());
+    }
+    println!();
+    println!("`path share` still uploads to Pathbase. To make S3 the default:");
+    println!("  path auth default s3://my-bucket/traces");
+    Ok(())
+}
+
+fn s3_status(path: &Path) -> Result<()> {
+    let stored = store::load_stored(path)?;
+    let effective = store::effective_settings()?;
+
+    match &stored {
+        Some(_) => println!("S3 settings in {}", path.display()),
+        None => println!("No stored S3 settings ({} does not exist).", path.display()),
+    }
+    if effective == S3Settings::default() {
+        println!("Run `path auth s3 login` to store some.");
+    } else {
+        print_settings(&effective, &stored.unwrap_or_default());
+    }
+    println!("Share target: {}", target::describe_effective()?);
+    Ok(())
+}
+
+fn s3_logout(path: &Path) -> Result<()> {
+    if store::load_stored(path)?.is_none() {
+        println!("No stored S3 settings.");
+        return Ok(());
+    }
+    store::clear(path)?;
+    println!("S3 settings cleared.");
+    Ok(())
+}
+
+/// Print `effective`, tagging any field that `stored` didn't supply as
+/// `(env)` — otherwise "where did this endpoint come from?" is a guess.
+fn print_settings(effective: &S3Settings, stored: &S3Settings) {
+    let line = |label: &str, value: Option<&str>, from_store: bool| {
+        if let Some(v) = value {
+            let origin = if from_store { "" } else { " (env)" };
+            // Width matches the longest label so the values line up.
+            println!("  {:<19}{v}{origin}", format!("{label}:"));
+        }
+    };
+    line(
+        "region",
+        effective.region.as_deref(),
+        stored.region.is_some(),
+    );
+    line(
+        "endpoint",
+        effective.endpoint.as_deref(),
+        stored.endpoint.is_some(),
+    );
+    line(
+        "access key id",
+        effective.access_key_id.as_deref(),
+        stored.access_key_id.is_some(),
+    );
+    line(
+        "secret access key",
+        effective
+            .secret_access_key
+            .as_deref()
+            .map(redact)
+            .as_deref(),
+        stored.secret_access_key.is_some(),
+    );
+    line(
+        "session token",
+        effective.session_token.as_deref().map(redact).as_deref(),
+        stored.session_token.is_some(),
+    );
+    if effective.access_key_id.is_none() {
+        println!("  credentials: none stored — falling back to the AWS credential chain");
+    }
+}
+
+/// Show enough of a secret to recognize which one it is, and no more.
+fn redact(secret: &str) -> String {
+    let tail: String = secret
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("****{tail}")
 }
 
 fn whoami(path: &Path) -> Result<()> {

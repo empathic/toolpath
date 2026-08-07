@@ -193,6 +193,25 @@ pub enum ExportTarget {
         #[arg(long)]
         public: bool,
     },
+    /// Upload a toolpath document to object storage: an S3 bucket, an
+    /// S3-compatible endpoint, or a plain folder.
+    ///
+    /// S3 credentials come from `path auth s3 login`, with the AWS
+    /// environment as the fallback; a folder needs none. The object
+    /// lands at `<prefix>/<cache-id>.json`, and the printed location is
+    /// what `path resume` takes.
+    #[command(alias = "s3")]
+    Object {
+        /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+        #[arg(short, long)]
+        input: String,
+
+        /// Destination: `s3://bucket/prefix`, or a folder (`~/traces`,
+        /// `file:///srv/traces`). Defaults to the target from
+        /// `path auth default`.
+        #[arg(long, value_name = "DESTINATION")]
+        to: Option<String>,
+    },
 }
 
 /// `owner/name` pair for `--repo`.
@@ -267,6 +286,7 @@ pub fn run(target: ExportTarget) -> Result<()> {
             name,
             public,
         }),
+        ExportTarget::Object { input, to } => run_object(input, to),
     }
 }
 
@@ -1852,6 +1872,50 @@ fn write_cursor_to_stdout(session: &toolpath_cursor::CursorSession) -> Result<()
     let json = serde_json::to_string_pretty(session)?;
     println!("{}", json);
     Ok(())
+}
+
+// ── Object storage ────────────────────────────────────────────────────
+
+fn run_object(input: String, to: Option<String>) -> Result<()> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (input, to);
+        anyhow::bail!("'path p export object' requires a native environment with network access");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let file = cache_ref(&input)?;
+        let body = std::fs::read_to_string(&file)
+            .with_context(|| format!("Failed to read {}", file.display()))?;
+
+        // Share the porcelain's target resolution so `p export object`
+        // with no `--to` writes where `path share` would.
+        let dest = match crate::target::resolve(to.as_deref())?.0 {
+            crate::target::Target::Object(d) => d,
+            crate::target::Target::Pathbase => anyhow::bail!(
+                "the configured share target is Pathbase, not object storage. \
+                 Pass `--to s3://bucket/prefix` (or a folder), or use \
+                 `path p export pathbase`."
+            ),
+        };
+        let settings = crate::store::effective_settings()?;
+
+        // The object is named for the cache id, not the input string —
+        // `--input ./some/file.json` and `--input claude-abc` naming the
+        // same document should land on the same key.
+        let cache_id = file
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| input.clone());
+
+        let uri = dest.uri_for(&cache_id);
+        uri.put(&settings, body.as_bytes())?;
+        println!("{uri}");
+        eprintln!("Uploaded {} bytes → {uri}", body.len());
+        eprintln!("Resume it with: path resume {uri}");
+        Ok(())
+    }
 }
 
 // ── Pathbase ──────────────────────────────────────────────────────────

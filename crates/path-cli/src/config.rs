@@ -29,6 +29,52 @@ pub(crate) fn config_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(CONFIG_DIR_NAME))
 }
 
+/// Write `value` as pretty JSON to a user-private file: the parent
+/// directory is created `0700` and the file itself `0600`.
+///
+/// Every credential-bearing blob under the config dir goes through
+/// here (Pathbase sessions, S3 settings) so the permissions story is
+/// stated once instead of re-derived per call site.
+pub(crate) fn write_private_json<T: serde::Serialize>(
+    path: &std::path::Path,
+    value: &T,
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("config path has no parent: {}", path.display()))?;
+    std::fs::create_dir_all(parent).map_err(|e| anyhow!("create {}: {e}", parent.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+    }
+
+    let payload = serde_json::to_string_pretty(value)?;
+    std::fs::write(path, payload).map_err(|e| anyhow!("write {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| anyhow!("chmod 0600 {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Read a JSON blob written by [`write_private_json`]. A missing or
+/// empty file is `Ok(None)` — "not configured", not an error.
+pub(crate) fn read_private_json<T: serde::de::DeserializeOwned>(
+    path: &std::path::Path,
+) -> Result<Option<T>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) if s.trim().is_empty() => Ok(None),
+        Ok(s) => Ok(Some(
+            serde_json::from_str(&s).map_err(|e| anyhow!("decode {}: {e}", path.display()))?,
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow!("read {}: {e}", path.display())),
+    }
+}
+
 /// Shared lock for tests that manipulate `$TOOLPATH_CONFIG_DIR`. Every
 /// test module that calls `set_var` / `remove_var` on this env var should
 /// grab this lock first, otherwise parallel tests race and clobber each

@@ -38,7 +38,11 @@ mod query;
 mod schema;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
+#[cfg(not(target_os = "emscripten"))]
+mod store;
 mod sync;
+#[cfg(not(target_os = "emscripten"))]
+mod target;
 mod term;
 
 use anyhow::Result;
@@ -79,7 +83,8 @@ enum Commands {
         #[arg(long)]
         ansi: bool,
     },
-    /// Share an agent session to Pathbase via an interactive picker
+    /// Share an agent session via an interactive picker — to Pathbase,
+    /// an S3 bucket, or a folder (see `path auth default`)
     #[cfg(not(target_os = "emscripten"))]
     Share {
         #[command(flatten)]
@@ -104,7 +109,8 @@ enum Commands {
         #[command(flatten)]
         args: cmd_kind::KindArgs,
     },
-    /// Manage Pathbase credentials for trace uploads
+    /// Manage where shares go (`auth default`) and the credentials to
+    /// get there: Pathbase, or S3 under `auth s3`
     #[cfg(not(target_os = "emscripten"))]
     Auth {
         #[command(subcommand)]

@@ -7,9 +7,13 @@
 //! `<input>` is resolved in this order:
 //! 1. `https://` / `http://` URL → fetched via `pathbase-client`,
 //!    cached unless `--no-cache`.
-//! 2. `owner/repo/slug` shorthand → same Pathbase fetch flow.
-//! 3. Existing file path → read directly.
-//! 4. Otherwise treated as a cache id under `~/.toolpath/documents/`.
+//! 2. `s3://` / `s3a://` / `file://` / `memory://` URL → fetched from
+//!    object storage (the inverse of `path share --to`), cached the same
+//!    way. A plain path to a shared folder lands in case 4 and is read
+//!    directly, which is the same document either way.
+//! 3. `owner/repo/slug` shorthand → same Pathbase fetch flow.
+//! 4. Existing file path → read directly.
+//! 5. Otherwise treated as a cache id under `~/.toolpath/documents/`.
 //!
 //! ## Harness selection
 //!
@@ -49,9 +53,10 @@ use crate::harness::Harness;
 #[derive(Args, Debug)]
 pub struct ResumeArgs {
     /// Toolpath document to resume from. Accepted shapes: a Pathbase
-    /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
-    /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
-    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
+    /// URL (`https://host/owner/repo/slug`), an object-storage URL
+    /// (`s3://bucket/key.json`, `file:///dir/key.json`), a bare Pathbase
+    /// shorthand (`owner/repo/slug`), a path to a local toolpath JSON
+    /// file, or a cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
     pub input: String,
 
     /// Working directory to run the resumed harness from. Defaults to
@@ -193,6 +198,42 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
     Ok(path)
 }
 
+/// Fetch a remote document, preferring an existing cache entry.
+///
+/// `--force` skips the probe and re-fetches; `--no-cache` skips both the
+/// probe AND the post-fetch write (still useful for ephemeral
+/// environments). Callers supply the cache id up front because every
+/// remote shape can compute it from the reference alone — that's what
+/// makes the cache hit free of a round trip.
+fn fetch_cached(
+    raw: &str,
+    cache_id: &str,
+    args: &ResumeArgs,
+    fetch: impl FnOnce() -> Result<crate::derive::DerivedDoc>,
+) -> Result<Graph> {
+    if !args.force
+        && !args.no_cache
+        && let Ok(cache_path) = crate::cache::cache_path(cache_id)
+        && cache_path.exists()
+    {
+        let json = std::fs::read_to_string(&cache_path)
+            .with_context(|| format!("read {}", cache_path.display()))?;
+        eprintln!("Resolved {raw} → {cache_id} (cached)");
+        return Graph::from_json(&json)
+            .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e));
+    }
+
+    let derived = fetch()?;
+    if !args.no_cache {
+        // force=true here: we either short-circuited above (cache miss)
+        // or the user explicitly passed --force, and either way we want
+        // the new bytes to land.
+        crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        eprintln!("Resolved {raw} → {}", derived.cache_id);
+    }
+    Ok(derived.doc)
+}
+
 /// Resolve the user-supplied `<input>` argument into a parsed `Graph`
 /// plus the source harness inferred from its single inline path (if
 /// any). See spec § "Input resolution" for the order.
@@ -202,12 +243,15 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
     enum Shape<'a> {
         PathbaseUrl(&'a str),
         PathbaseShorthand(&'a str),
+        ObjectStore(&'a str),
         FilePath(&'a str),
         CacheId(&'a str),
     }
 
     let shape = if raw.starts_with("http://") || raw.starts_with("https://") {
         Shape::PathbaseUrl(raw)
+    } else if crate::store::looks_like_object_uri(raw) {
+        Shape::ObjectStore(raw)
     } else if looks_like_pathbase_shorthand(raw) {
         Shape::PathbaseShorthand(raw)
     } else if std::path::Path::new(raw).is_file() {
@@ -218,34 +262,21 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
 
     let graph: Graph = match shape {
         Shape::PathbaseUrl(u) | Shape::PathbaseShorthand(u) => {
-            // Probe the local cache before going to the network. The cache
-            // id is purely a function of the parsed (owner, repo, id), so
-            // we can compute it without fetching. `--force` skips the probe
-            // and re-fetches; `--no-cache` skips both the probe AND the
-            // post-fetch write (still useful for ephemeral environments).
+            // The cache id is purely a function of the parsed (owner,
+            // repo, id), so we can probe the cache without fetching.
             let (_, ref_) = crate::derive::parse_pathbase_ref(u, args.url.as_deref())?;
             let cache_id = crate::cache::pathbase_cache_id(&ref_.owner, &ref_.repo, &ref_.id);
-            if !args.force
-                && !args.no_cache
-                && let Ok(cache_path) = crate::cache::cache_path(&cache_id)
-                && cache_path.exists()
-            {
-                let json = std::fs::read_to_string(&cache_path)
-                    .with_context(|| format!("read {}", cache_path.display()))?;
-                eprintln!("Resolved {} → {} (cached)", raw, cache_id);
-                Graph::from_json(&json)
-                    .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e))?
-            } else {
-                let derived = crate::derive::pathbase_fetch_to_doc(u, args.url.as_deref())?;
-                if !args.no_cache {
-                    // force=true here: we either short-circuited above
-                    // (cache miss) or the user explicitly passed --force,
-                    // and either way we want the new bytes to land.
-                    crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
-                    eprintln!("Resolved {} → {}", raw, derived.cache_id);
-                }
-                derived.doc
-            }
+            fetch_cached(raw, &cache_id, args, || {
+                crate::derive::pathbase_fetch_to_doc(u, args.url.as_deref())
+            })?
+        }
+        Shape::ObjectStore(u) => {
+            // Same shape as Pathbase: the cache id falls out of the URI
+            // alone, so an already-downloaded object costs no request.
+            let cache_id = crate::store::ObjectUri::parse(u)?.cache_id();
+            fetch_cached(raw, &cache_id, args, || {
+                crate::derive::object_fetch_to_doc(u)
+            })?
         }
         Shape::FilePath(p) => {
             let json = std::fs::read_to_string(p).with_context(|| format!("read {}", p))?;

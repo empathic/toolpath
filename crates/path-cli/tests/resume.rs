@@ -275,6 +275,158 @@ fn cache_id_input_loads_and_projects() {
     assert_eq!(cap.args[0], "-r");
 }
 
+// ── Object-storage input ────────────────────────────────────────────
+//
+// `file://` exercises the same `object_store` path an `s3://` bucket
+// takes, so these cover the S3 resume flow without a network.
+
+/// Write `graph` into `bucket` as `<name>.json` and return its URL.
+fn seed_object(bucket: &std::path::Path, name: &str, graph: &toolpath::v1::Graph) -> String {
+    std::fs::write(
+        bucket.join(format!("{name}.json")),
+        graph.to_json().unwrap(),
+    )
+    .unwrap();
+    format!("file://{}/{name}.json", bucket.display())
+}
+
+#[test]
+fn object_store_input_downloads_projects_and_caches() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+    let bucket = tempfile::tempdir().unwrap();
+
+    let graph = toolpath::v1::Graph::from_path(make_convo_path(
+        "agent:claude-code",
+        "claude-code://resume-s3-int",
+    ));
+    let uri = seed_object(bucket.path(), "claude-abc", &graph);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(
+        ResumeArgs {
+            input: uri,
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(Harness::Claude),
+            no_cache: false,
+            force: false,
+            url: None,
+        },
+        &recorder,
+    )
+    .unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "claude");
+    assert_eq!(cap.args[0], "-r");
+
+    // The download is cached, so a second resume costs no fetch.
+    let documents = std::path::PathBuf::from(std::env::var_os("TOOLPATH_CONFIG_DIR").unwrap())
+        .join("documents");
+    let cached: Vec<String> = std::fs::read_dir(&documents)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(cached.len(), 1, "expected one cached doc, got {cached:?}");
+    assert!(
+        cached[0].ends_with("claude-abc.json"),
+        "unexpected cache id: {cached:?}"
+    );
+}
+
+#[test]
+fn object_store_input_with_no_cache_leaves_the_cache_empty() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+    let bucket = tempfile::tempdir().unwrap();
+
+    let graph = toolpath::v1::Graph::from_path(make_convo_path(
+        "agent:claude-code",
+        "claude-code://resume-s3-nocache",
+    ));
+    let uri = seed_object(bucket.path(), "claude-nocache", &graph);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(
+        ResumeArgs {
+            input: uri,
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(Harness::Claude),
+            no_cache: true,
+            force: false,
+            url: None,
+        },
+        &recorder,
+    )
+    .unwrap();
+
+    assert_eq!(recorder.captured().binary, "claude");
+    let documents = std::path::PathBuf::from(std::env::var_os("TOOLPATH_CONFIG_DIR").unwrap())
+        .join("documents");
+    assert!(
+        !documents.exists() || std::fs::read_dir(&documents).unwrap().next().is_none(),
+        "--no-cache must not write the cache"
+    );
+}
+
+#[test]
+fn object_store_input_prefers_the_cache_over_a_refetch() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+    let bucket = tempfile::tempdir().unwrap();
+
+    let graph = toolpath::v1::Graph::from_path(make_convo_path(
+        "agent:claude-code",
+        "claude-code://resume-s3-cached",
+    ));
+    let uri = seed_object(bucket.path(), "claude-cached", &graph);
+
+    let args = || ResumeArgs {
+        input: uri.clone(),
+        cwd: Some(cwd.path().to_path_buf()),
+        harness: Some(Harness::Claude),
+        no_cache: false,
+        force: false,
+        url: None,
+    };
+    run_with_strategy(args(), &RecordingExec::default()).unwrap();
+
+    // Delete the object: a cache hit must not need it any more.
+    std::fs::remove_file(bucket.path().join("claude-cached.json")).unwrap();
+    let recorder = RecordingExec::default();
+    run_with_strategy(args(), &recorder).unwrap();
+    assert_eq!(recorder.captured().binary, "claude");
+}
+
+#[test]
+fn missing_object_reports_not_found() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+    let bucket = tempfile::tempdir().unwrap();
+
+    let err = run_with_strategy(
+        ResumeArgs {
+            input: format!("file://{}/absent.json", bucket.path().display()),
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(Harness::Claude),
+            no_cache: false,
+            force: false,
+            url: None,
+        },
+        &RecordingExec::default(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("not found"), "actual: {err}");
+}
+
 // ── Rejection cases ─────────────────────────────────────────────────
 
 #[test]

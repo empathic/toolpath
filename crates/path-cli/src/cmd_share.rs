@@ -54,9 +54,133 @@ pub struct ShareArgs {
     #[arg(long)]
     pub project: Option<PathBuf>,
 
+    /// Where to upload, overriding the configured default.
+    ///
+    /// One of: `pathbase`; an S3 bucket (`s3://bucket/prefix`, or an
+    /// S3-compatible endpoint configured via `path auth s3 login`); or
+    /// a folder (`~/traces`, `/srv/traces`, `file:///srv/traces`),
+    /// which needs no credentials at all. A value with no scheme is a
+    /// local path — spell a bucket `s3://…`.
+    ///
+    /// Without this flag the target comes from `$TOOLPATH_SHARE_TARGET`,
+    /// then `path auth default`, then Pathbase. For object storage the
+    /// document lands at `<prefix>/<cache-id>.json`, and the printed
+    /// location is what `path resume` takes.
+    #[arg(long, value_name = "TARGET")]
+    pub to: Option<String>,
+
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
+}
+
+/// Where a share uploads to, with everything needed to get it there.
+///
+/// Resolved once in [`run`] — before the picker and before any derive —
+/// so a missing credential or an unparseable destination fails in
+/// milliseconds instead of after the user has picked a session and paid
+/// for a derivation.
+enum ShareTarget {
+    Pathbase {
+        auth: crate::cmd_pathbase::AuthMode,
+        base_url: String,
+        upload: crate::cmd_export::PathbaseUploadArgs,
+    },
+    Object {
+        dest: crate::store::Destination,
+        settings: crate::store::S3Settings,
+    },
+}
+
+impl ShareTarget {
+    /// Human-readable destination, for the picker header.
+    fn describe(&self) -> String {
+        match self {
+            ShareTarget::Pathbase { base_url, .. } => base_url.clone(),
+            ShareTarget::Object { dest, .. } => dest.to_string(),
+        }
+    }
+
+    /// Send `body` (the document JSON for `cache_id`) to the target.
+    fn upload(self, body: &str, cache_id: &str, summary: &str) -> Result<()> {
+        match self {
+            ShareTarget::Pathbase {
+                auth,
+                base_url,
+                upload,
+            } => crate::cmd_export::run_pathbase_inner(auth, base_url, upload, body, summary),
+            ShareTarget::Object { dest, settings } => {
+                let uri = dest.uri_for(cache_id);
+                uri.put(&settings, body.as_bytes())?;
+                println!("{uri}");
+                eprintln!("Uploaded {summary} → {uri}");
+                eprintln!("Resume it with: path resume {uri}");
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Decide *where* this share goes. Pure: no network, no credential
+/// probe, no filesystem beyond reading the config — so it can run
+/// first, before the harness scan and the picker, and a typo'd target
+/// fails instantly instead of after the user has picked a session.
+fn plan_target(args: &ShareArgs) -> Result<(crate::target::Target, crate::target::Origin)> {
+    // The Pathbase-only flags are a statement of intent strong enough
+    // to override an object-storage default — and to be an error when
+    // paired with an explicit object `--to`.
+    let pathbase_flags = args.anon
+        || args.repo.is_some()
+        || args.public
+        || args.url.is_some()
+        || args.name.is_some();
+    let resolved = crate::target::resolve(args.to.as_deref())?;
+    crate::target::apply_pathbase_flags(resolved, pathbase_flags)
+}
+
+/// Turn a planned target into one we can upload through: load S3
+/// settings, or probe Pathbase credentials. This is the part that can
+/// touch the network, so it runs only once we know there's something to
+/// upload.
+fn open_target(
+    args: &ShareArgs,
+    planned: (crate::target::Target, crate::target::Origin),
+) -> Result<ShareTarget> {
+    let (target, origin) = planned;
+    match target {
+        crate::target::Target::Object(dest) => {
+            let settings = crate::store::effective_settings()?;
+            crate::target::check_reachable(
+                &crate::target::Target::Object(dest.clone()),
+                &settings,
+            )?;
+            if origin != crate::target::Origin::Flag {
+                // The destination wasn't typed on this command line, so
+                // say where it came from before uploading to it.
+                eprintln!("Sharing to {dest} ({})", origin.describe());
+            }
+            Ok(ShareTarget::Object { dest, settings })
+        }
+        crate::target::Target::Pathbase => {
+            let upload = crate::cmd_export::PathbaseUploadArgs {
+                url: args.url.clone(),
+                anon: args.anon,
+                repo: args.repo.clone(),
+                name: args.name.clone(),
+                public: args.public,
+            };
+            let base_url = crate::cmd_export::resolve_upload_base_url(&upload);
+            // `needs_auth` decides whether preflight can fall back to
+            // anon on credential failure.
+            let needs_auth = upload.repo.is_some() || upload.public || upload.name.is_some();
+            let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload.anon, needs_auth)?;
+            Ok(ShareTarget::Pathbase {
+                auth,
+                base_url,
+                upload,
+            })
+        }
+    }
 }
 
 /// One artifact surfaced by a provider — today always an agent session.
@@ -488,24 +612,17 @@ pub fn run(args: ShareArgs) -> Result<()> {
         anyhow::bail!("--session requires --harness");
     }
 
-    // Build upload args + base URL once and reuse for both the explicit
-    // path and the picker path. `needs_auth` decides whether preflight
-    // can fall back to anon on credential failure.
-    let upload_args = crate::cmd_export::PathbaseUploadArgs {
-        url: args.url.clone(),
-        anon: args.anon,
-        repo: args.repo.clone(),
-        name: args.name.clone(),
-        public: args.public,
-    };
-    let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
-    let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some();
+    // Decide where this is going before doing anything else. A bad
+    // `--to`, or Pathbase flags aimed at an object target, should cost
+    // nothing to discover — not a harness scan, and certainly not a
+    // session pick.
+    let planned = plan_target(&args)?;
 
     if let (Some(h), Some(session)) = (harness, &args.session) {
-        // Explicit-args: validate creds before derive so a credential
-        // failure doesn't waste the derive/cache work.
-        let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
-        return share_explicit(h, session.as_str(), &args, auth, base_url);
+        // Explicit-args: probe credentials before derive so a
+        // credential failure doesn't waste the derive/cache work.
+        let target = open_target(&args, planned)?;
+        return share_explicit(h, session.as_str(), &args, target);
     }
 
     let cwd = std::env::current_dir()?;
@@ -528,14 +645,18 @@ pub fn run(args: ShareArgs) -> Result<()> {
         anyhow::bail!("fzf unavailable; run `path import <harness>` then `path export pathbase`");
     }
 
-    // We have rows AND fzf available — now validate credentials before
-    // making the user pick a session. If preflight returns Anon (either
-    // explicit --anon, no creds + no auth flags, or auth probe failed
-    // and fell back), the picker still fires with that knowledge baked in.
-    let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
+    // We have rows AND fzf available — now probe credentials, before
+    // making the user pick a session. For Pathbase, if preflight
+    // returns Anon (either explicit --anon, no creds + no auth flags, or
+    // auth probe failed and fell back), the picker still fires with that
+    // knowledge baked in.
+    let target = open_target(&args, planned)?;
 
     let lines: Vec<String> = rows.iter().map(format_picker_row).collect();
-    let header = format!("share an agent session (Enter = upload to {base_url})");
+    let header = format!(
+        "share an agent session (Enter = upload to {})",
+        target.describe()
+    );
     let opts = crate::fuzzy::PickOptions {
         with_nth: "4",
         prompt: "share> ",
@@ -578,13 +699,14 @@ pub fn run(args: ShareArgs) -> Result<()> {
         } else {
             None
         },
+        to: args.to.clone(),
         no_cache: args.no_cache,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
     // thing. `{:?}` adds the surrounding quotes per the spec.
     eprintln!("Picked {} session {:?}", h.name(), title);
-    share_explicit(h, &session, &explicit, auth, base_url)
+    share_explicit(h, &session, &explicit, target)
 }
 
 fn bail_no_sessions(
@@ -789,8 +911,7 @@ fn share_explicit(
     harness: ArtifactType,
     session: &str,
     args: &ShareArgs,
-    auth: crate::cmd_pathbase::AuthMode,
-    base_url: String,
+    target: ShareTarget,
 ) -> Result<()> {
     let project = match (harness.path_keyed(), args.project.as_ref()) {
         (true, Some(p)) => Some(p.to_string_lossy().into_owned()),
@@ -820,14 +941,7 @@ fn share_explicit(
             harness.name()
         );
         let summary = format!("{} session {}", harness.name(), cache_id);
-        let upload = crate::cmd_export::PathbaseUploadArgs {
-            url: args.url.clone(),
-            anon: args.anon,
-            repo: args.repo.clone(),
-            name: args.name.clone(),
-            public: args.public,
-        };
-        return crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary);
+        return target.upload(&body, &cache_id, &summary);
     }
 
     let derived = derive_session(harness, project.as_deref(), session)?;
@@ -856,14 +970,7 @@ fn share_explicit(
     }
 
     let body = derived.doc.to_json()?;
-    let upload = crate::cmd_export::PathbaseUploadArgs {
-        url: args.url.clone(),
-        anon: args.anon,
-        repo: args.repo.clone(),
-        name: args.name.clone(),
-        public: args.public,
-    };
-    crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary)
+    target.upload(&body, &derived.cache_id, &summary)
 }
 
 /// Build the TSV line fed to the picker. Three hidden parser-only
@@ -1366,5 +1473,161 @@ mod tests {
             assert_eq!(status, HarnessStatus::unresolved());
             assert!(!status.exists);
         }
+    }
+
+    // ── Share target ─────────────────────────────────────────────────
+
+    fn share_args_to(dest: Option<&str>) -> ShareArgs {
+        ShareArgs {
+            url: None,
+            anon: false,
+            repo: None,
+            name: None,
+            public: false,
+            harness: None,
+            session: None,
+            project: None,
+            to: dest.map(str::to_string),
+            no_cache: false,
+        }
+    }
+
+    /// Pin `$TOOLPATH_CONFIG_DIR` at an empty tempdir and clear the
+    /// share-target env var, so resolution can't pick up the
+    /// developer's real configuration.
+    fn with_empty_config<R>(f: impl FnOnce(&Path) -> R) -> R {
+        use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
+        let temp = TempDir::new().unwrap();
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_dir = std::env::var_os(CONFIG_DIR_ENV);
+        let prev_target = std::env::var_os(crate::target::TARGET_ENV);
+        unsafe {
+            std::env::set_var(CONFIG_DIR_ENV, temp.path());
+            std::env::remove_var(crate::target::TARGET_ENV);
+        }
+        let out = f(temp.path());
+        unsafe {
+            match prev_dir {
+                Some(v) => std::env::set_var(CONFIG_DIR_ENV, v),
+                None => std::env::remove_var(CONFIG_DIR_ENV),
+            }
+            match prev_target {
+                Some(v) => std::env::set_var(crate::target::TARGET_ENV, v),
+                None => std::env::remove_var(crate::target::TARGET_ENV),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_folder_to_flag_routes_the_share_to_object_storage() {
+        let folder = TempDir::new().unwrap();
+        let dest = folder.path().to_string_lossy().into_owned();
+        let target = with_empty_config(|_| {
+            open_target(
+                &share_args_to(Some(&dest)),
+                plan_target(&share_args_to(Some(&dest))).unwrap(),
+            )
+            .unwrap()
+        });
+        assert!(matches!(target, ShareTarget::Object { .. }));
+        assert_eq!(target.describe(), dest);
+    }
+
+    #[test]
+    fn an_object_target_uploads_the_body_under_the_cache_id() {
+        let folder = TempDir::new().unwrap();
+        let dest = format!("{}/traces", folder.path().display());
+        let target = with_empty_config(|_| {
+            open_target(
+                &share_args_to(Some(&dest)),
+                plan_target(&share_args_to(Some(&dest))).unwrap(),
+            )
+            .unwrap()
+        });
+
+        let body = r#"{"graph":{"id":"g"},"paths":[]}"#;
+        target.upload(body, "claude-abc", "claude session").unwrap();
+
+        let written = folder.path().join("traces/claude-abc.json");
+        assert_eq!(std::fs::read_to_string(written).unwrap(), body);
+    }
+
+    #[test]
+    fn no_flag_and_no_default_still_means_pathbase() {
+        let target = with_empty_config(|_| {
+            open_target(
+                &share_args_to(None),
+                plan_target(&share_args_to(None)).unwrap(),
+            )
+            .unwrap()
+        });
+        assert!(matches!(target, ShareTarget::Pathbase { .. }));
+    }
+
+    #[test]
+    fn a_configured_default_routes_a_bare_share() {
+        let folder = TempDir::new().unwrap();
+        let dest = folder.path().to_string_lossy().into_owned();
+        let target = with_empty_config(|_| {
+            crate::target::set_default(&crate::target::Target::parse(&dest).unwrap()).unwrap();
+            open_target(
+                &share_args_to(None),
+                plan_target(&share_args_to(None)).unwrap(),
+            )
+            .unwrap()
+        });
+        assert!(matches!(target, ShareTarget::Object { .. }));
+        assert_eq!(target.describe(), dest);
+    }
+
+    #[test]
+    fn pathbase_flags_beat_an_object_default() {
+        let folder = TempDir::new().unwrap();
+        let dest = folder.path().to_string_lossy().into_owned();
+        let target = with_empty_config(|_| {
+            crate::target::set_default(&crate::target::Target::parse(&dest).unwrap()).unwrap();
+            let args = ShareArgs {
+                anon: true,
+                ..share_args_to(None)
+            };
+            open_target(&args, plan_target(&args).unwrap()).unwrap()
+        });
+        assert!(
+            matches!(target, ShareTarget::Pathbase { .. }),
+            "--anon is a Pathbase-only option and must win over an S3 default"
+        );
+    }
+
+    #[test]
+    fn pathbase_flags_with_an_explicit_object_to_is_an_error() {
+        let folder = TempDir::new().unwrap();
+        let dest = folder.path().to_string_lossy().into_owned();
+        let err = with_empty_config(|_| {
+            let args = ShareArgs {
+                public: true,
+                ..share_args_to(Some(&dest))
+            };
+            match plan_target(&args) {
+                Err(e) => e.to_string(),
+                Ok(_) => panic!("--public with an object --to must be rejected"),
+            }
+        });
+        assert!(err.contains("--to pathbase"), "{err}");
+    }
+
+    #[test]
+    fn to_pathbase_forces_pathbase_over_an_object_default() {
+        let folder = TempDir::new().unwrap();
+        let dest = folder.path().to_string_lossy().into_owned();
+        let target = with_empty_config(|_| {
+            crate::target::set_default(&crate::target::Target::parse(&dest).unwrap()).unwrap();
+            open_target(
+                &share_args_to(Some("pathbase")),
+                plan_target(&share_args_to(Some("pathbase"))).unwrap(),
+            )
+            .unwrap()
+        });
+        assert!(matches!(target, ShareTarget::Pathbase { .. }));
     }
 }

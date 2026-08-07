@@ -2,6 +2,73 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Share and resume anywhere: S3, a folder, or Pathbase — 2026-08-07
+
+**`path-cli`** (0.17.0) makes the share destination configurable. Bare
+`path share` still goes to Pathbase by default, but it can now be
+pointed at an S3 bucket or a plain folder once, and stay there.
+
+**Designating a target.** `path auth default <target>` sets it, and
+`path auth default` with no argument prints what's in effect and why:
+
+```
+path auth default ~/Dropbox/toolpath-traces   # a folder — no credentials needed
+path auth default s3://my-bucket/traces
+path auth default pathbase                     # switch back
+path auth default --clear
+```
+
+The value is stored as `default_target` in `~/.toolpath/config.json` —
+one place, so "where does my next share go?" has one answer. A
+scheme-less value is a **local path**; spell a bucket `s3://…`. Folder
+targets are stored as `file://` URLs, so a stored default can't drift
+with the working directory, but they're displayed and printed as plain
+paths. Resolution order: `--to`, then `$TOOLPATH_SHARE_TARGET`, then
+the stored default, then Pathbase.
+
+Nothing is inferred from which credentials happen to exist: a share
+that silently changes destination is a data-egress bug, not a
+convenience. The one guard is at the bottom of the order — if S3
+credentials are stored, no Pathbase session exists, and no default is
+set, `path share` refuses rather than falling through to the
+*anonymous public* Pathbase endpoint.
+
+**Per-call override.** `path share --to <target>` takes the same three
+forms. The Pathbase-only flags (`--anon`, `--repo`, `--public`,
+`--url`, `--name`) select Pathbase on their own, overriding an object
+default; combining one with an explicit object `--to` is an error
+rather than a silent resolution. The target is resolved before the
+harness scan and the picker, so a typo costs nothing to discover.
+
+**Resume.** `path resume s3://bucket/key.json` is the inverse — a new
+input shape alongside Pathbase URLs, shorthands, file paths, and cache
+ids, caching downloads under an `s3-<bucket>-<key>` id so `--force` and
+`--no-cache` behave exactly as they do for Pathbase. A document shared
+to a folder is resumed with its plain path, which already worked.
+
+**S3 credentials.** `path auth s3 login` stores region, endpoint,
+addressing style, and credentials at `~/.toolpath/s3.json` (0600) —
+connection only, deliberately not a destination, so one stored
+credential serves any number of buckets. It merges rather than
+replaces, so `path auth s3 login --region eu-west-1` is a valid tweak;
+run it bare in a terminal and it prompts, without echoing the secret.
+`path auth s3 status` prints the settings in effect with secrets
+redacted and environment-supplied values marked `(env)`. Stored values
+win over the environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_ENDPOINT_URL_S3`); with
+neither, the AWS credential chain still applies, so an EC2 instance
+role needs no configuration at all.
+
+**Plumbing.** `path p export object --input <ref> [--to DEST]` and
+`path p import object <uri>`, both aliased `s3`. With no `--to`,
+export writes wherever `path share` would.
+
+Transport is the `object_store` crate, so one code path covers AWS S3,
+any S3-compatible endpoint (R2, MinIO, Ceph, B2 — point `--endpoint` at
+it), and `file://` for a folder. The folder backend is what the tests
+round-trip against, so share and resume are exercised end-to-end
+without a network or a mock HTTP server.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

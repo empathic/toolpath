@@ -333,7 +333,10 @@ fn short_body(body: &str) -> String {
 // hand-rolled only because the redeem endpoint isn't in the OpenAPI
 // spec, not because of any HTTP-stack difference.
 
-fn block_on<F: std::future::Future>(f: F) -> F::Output {
+/// Shared with the `s3` module, which drives the equally-async
+/// `object_store` client: one runtime for every async client the CLI
+/// tunnels into.
+pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::sync::OnceLock;
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     let rt = RT.get_or_init(|| {
@@ -659,36 +662,11 @@ pub(crate) fn credentials_path() -> Result<PathBuf> {
 }
 
 pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("credentials path has no parent: {}", path.display()))?;
-    std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-    }
-
-    let payload = serde_json::to_string_pretty(s)?;
-    std::fs::write(path, payload).with_context(|| format!("write {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("chmod 0600 {}", path.display()))?;
-    }
-    Ok(())
+    crate::config::write_private_json(path, s)
 }
 
 pub(crate) fn load_session(path: &Path) -> Result<Option<StoredSession>> {
-    match std::fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => Ok(None),
-        Ok(s) => Ok(Some(serde_json::from_str(&s).with_context(|| {
-            format!("decode credentials at {}", path.display())
-        })?)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(anyhow!("read {}: {e}", path.display())),
-    }
+    crate::config::read_private_json(path)
 }
 
 pub(crate) fn clear_session(path: &Path) -> Result<()> {

@@ -113,15 +113,15 @@
   },
   {
     "name": "path-cli",
-    "version": "0.16.1",
+    "version": "0.17.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
-    "role": "One binary called `path` that ties everything together. Porcelain at the top level (share, resume, query, show, track, auth); plumbing under `path p \u2026` (import, export, cache, list, render, merge, validate). Pathbase round-trip via `p import pathbase` / `p export pathbase` (authed default \u2192 secret pathstash; anon fallback when not logged in)."
+    "role": "One binary called `path` that ties everything together. Porcelain at the top level (share, resume, query, show, track, auth); plumbing under `path p \u2026` (import, export, cache, list, render, merge, validate). Pathbase round-trip via `p import pathbase` / `p export pathbase` (authed default \u2192 secret pathstash; anon fallback when not logged in). Share targets are configurable: `path auth default <bucket-url|folder|pathbase>` points `share` at an S3 bucket, an S3-compatible endpoint, or a plain folder; `resume` takes the location back."
   },
   {
     "name": "toolpath-cli",
-    "version": "0.16.1",
+    "version": "0.17.0",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

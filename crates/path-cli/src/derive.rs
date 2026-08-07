@@ -352,6 +352,28 @@ pub(crate) fn derive_pi_session_with(
     })
 }
 
+/// Download a toolpath document from object storage (`s3://bucket/key`,
+/// `file:///dir/doc.json`) and parse it. The counterpart to
+/// `path share --s3`; used by `path p import s3` and `path resume
+/// s3://…`.
+///
+/// `provenance` is `None` for the same reason Pathbase downloads leave
+/// it unset: the sync manifest tracks local artifact sources, and a
+/// remote object isn't one.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn object_fetch_to_doc(target: &str) -> Result<DerivedDoc> {
+    let uri = crate::store::ObjectUri::parse(target)?;
+    let cfg = crate::store::effective_settings()?;
+    let body = uri.get(&cfg)?;
+    let doc = Graph::from_json(&body)
+        .map_err(|e| anyhow::anyhow!("{uri} is not a toolpath document: {e}"))?;
+    Ok(DerivedDoc {
+        cache_id: uri.cache_id(),
+        doc,
+        provenance: None,
+    })
+}
+
 /// Fetch a Pathbase ref (`https://host/u/owner/repos/repo/graphs/<uuid>`
 /// URL or bare `owner/repo/<uuid>` triple) and parse it as a toolpath
 /// document. Used by `path import pathbase` and `path resume <url>`.
