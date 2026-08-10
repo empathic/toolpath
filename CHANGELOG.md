@@ -2,6 +2,23 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Codex session listing no longer parses every byte — 2026-08-04
+
+Listing Codex sessions read every rollout file end to end through
+serde. On a real multi-gigabyte `~/.codex/sessions` tree that turned
+every listing surface — `p list codex`, the `share` picker, and the
+upcoming bare `resume` picker — into a minute-plus silent stall.
+
+- **toolpath-codex** (0.6.2): `read_metadata` becomes a single
+  streaming pass. It JSON-parses only a bounded head (session_meta,
+  first timestamps, the first user prompt — all of which live at the
+  top of this append-only log) plus the final line (newest timestamp),
+  and otherwise just counts lines. A 3.9 GB / 421-session tree drops
+  from ~80 s to raw-I/O speed. Deliberate trades, documented on the
+  method: a first prompt buried past the head budget reports as
+  `None`, and `line_count` counts non-empty lines rather than
+  successfully parsed ones.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real
