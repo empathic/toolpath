@@ -90,47 +90,63 @@ pub(crate) fn gather_artifacts(
     harness_filter: Option<ArtifactType>,
     project_filter: Option<&std::path::Path>,
 ) -> Vec<ArtifactRow> {
-    let mut rows = Vec::new();
     let canonical_cwd = canonicalize_or_self(cwd);
     let canonical_project = project_filter.map(canonicalize_or_self);
 
     let want = |h: ArtifactType| harness_filter.is_none_or(|f| f == h);
 
-    if want(ArtifactType::Claude)
-        && let Some(mgr) = &bundle.claude
-    {
-        collect_claude(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
-    }
-    if want(ArtifactType::Gemini)
-        && let Some(mgr) = &bundle.gemini
-    {
-        collect_gemini(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
-    }
-    if want(ArtifactType::Pi)
-        && let Some(mgr) = &bundle.pi
-    {
-        collect_pi(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
-    }
-    if want(ArtifactType::Codex)
-        && let Some(mgr) = &bundle.codex
-    {
-        collect_codex(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
-    }
-    if want(ArtifactType::Copilot)
-        && let Some(mgr) = &bundle.copilot
-    {
-        collect_copilot(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
-    }
-    if want(ArtifactType::Opencode)
-        && let Some(mgr) = &bundle.opencode
-    {
-        collect_opencode(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
-    }
-    if want(ArtifactType::Cursor)
-        && let Some(mgr) = &bundle.cursor
-    {
-        collect_cursor(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
-    }
+    // Enumerate providers concurrently: each is an independent
+    // read-only scan of its own on-disk tree, and the slowest (a big
+    // codex or claude history) otherwise serializes behind the rest.
+    // Wall time becomes max-of-providers instead of sum. Claude is the
+    // one provider that can't cross threads (`ClaudeConvo` caches its
+    // chain index in a `RefCell`), so it scans inline on this thread
+    // while the rest run in scoped threads. Concatenation happens in
+    // the old sequential provider order, so the stable sort's
+    // tie-breaking matches the previous behavior exactly.
+    let mut rows = Vec::new();
+    let cwd_ref = &canonical_cwd;
+    let project_ref = canonical_project.as_deref();
+    std::thread::scope(|s| {
+        let mut handles = Vec::new();
+
+        macro_rules! spawn_collect {
+            ($ty:expr, $mgr:expr, $collect:ident) => {
+                if want($ty)
+                    && let Some(mgr) = $mgr
+                {
+                    handles.push(s.spawn(move || {
+                        let mut out = Vec::new();
+                        $collect(mgr, cwd_ref, project_ref, &mut out);
+                        out
+                    }));
+                }
+            };
+        }
+
+        spawn_collect!(ArtifactType::Gemini, &bundle.gemini, collect_gemini);
+        spawn_collect!(ArtifactType::Pi, &bundle.pi, collect_pi);
+        spawn_collect!(ArtifactType::Codex, &bundle.codex, collect_codex);
+        spawn_collect!(ArtifactType::Copilot, &bundle.copilot, collect_copilot);
+        spawn_collect!(ArtifactType::Opencode, &bundle.opencode, collect_opencode);
+        spawn_collect!(ArtifactType::Cursor, &bundle.cursor, collect_cursor);
+
+        if want(ArtifactType::Claude)
+            && let Some(mgr) = &bundle.claude
+        {
+            collect_claude(mgr, cwd_ref, project_ref, &mut rows);
+        }
+
+        for handle in handles {
+            match handle.join() {
+                Ok(out) => rows.extend(out),
+                // A panicking collector degrades to "that provider is
+                // missing from the picker", matching how collector-level
+                // errors already warn-and-continue.
+                Err(_) => eprintln!("warning: a session collector panicked; its rows are skipped"),
+            }
+        }
+    });
 
     rows.sort_by(|a, b| {
         b.matches_cwd
