@@ -22,10 +22,16 @@ const DB_FILE: &str = "opencode.db";
 const LOG_SUBDIR: &str = "log";
 
 /// Builder-style resolver over the opencode data directory.
+///
+/// All environment reads happen in [`PathResolver::new`]; a
+/// constructed resolver's answers never change, even if the
+/// environment does.
 #[derive(Debug, Clone)]
 pub struct PathResolver {
     home_dir: Option<PathBuf>,
     data_dir: Option<PathBuf>,
+    /// `$XDG_DATA_HOME` as captured at construction.
+    xdg_data_home: Option<PathBuf>,
 }
 
 impl Default for PathResolver {
@@ -39,6 +45,7 @@ impl PathResolver {
         Self {
             home_dir: home_dir(),
             data_dir: None,
+            xdg_data_home: std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
         }
     }
 
@@ -62,12 +69,8 @@ impl PathResolver {
         if let Some(d) = &self.data_dir {
             return Ok(d.clone());
         }
-        // XDG_DATA_HOME fallback logic mirroring the `xdg-basedir` crate.
-        if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
-            let p = PathBuf::from(xdg).join("opencode");
-            if !p.as_os_str().is_empty() {
-                return Ok(p);
-            }
+        if let Some(xdg) = &self.xdg_data_home {
+            return Ok(xdg.join("opencode"));
         }
         Ok(self.home_dir()?.join(".local/share/opencode"))
     }
@@ -141,8 +144,55 @@ pub(crate) fn sha1_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::fs;
+    use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
+
+    /// The process environment is global state shared by every test
+    /// thread, so all tests that read or write `XDG_DATA_HOME` must
+    /// serialize on this lock (via [`XdgVarGuard`]).
+    static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Holds `TEST_ENV_LOCK` for its lifetime and restores the
+    /// original `XDG_DATA_HOME` on drop (including on panic).
+    struct XdgVarGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved: Option<OsString>,
+    }
+
+    impl XdgVarGuard {
+        fn lock() -> Self {
+            let lock = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            Self {
+                _lock: lock,
+                saved: std::env::var_os("XDG_DATA_HOME"),
+            }
+        }
+
+        fn set(&self, value: &str) {
+            // SAFETY: exclusive env access — every env-touching test
+            // in this binary holds TEST_ENV_LOCK, which we hold.
+            unsafe { std::env::set_var("XDG_DATA_HOME", value) }
+        }
+
+        fn unset(&self) {
+            // SAFETY: as in `set`.
+            unsafe { std::env::remove_var("XDG_DATA_HOME") }
+        }
+    }
+
+    impl Drop for XdgVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: as in `set` — the lock is released after this.
+            unsafe {
+                match self.saved.take() {
+                    Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                    None => std::env::remove_var("XDG_DATA_HOME"),
+                }
+            }
+        }
+    }
 
     fn setup() -> (TempDir, PathResolver) {
         let temp = TempDir::new().unwrap();
@@ -156,12 +206,44 @@ mod tests {
 
     #[test]
     fn data_dir_defaults_to_home_when_no_xdg() {
+        let env = XdgVarGuard::lock();
+        env.unset();
         let temp = TempDir::new().unwrap();
-        // SAFETY: tests that mutate env vars serialize via the lock in
-        // src/reader.rs tests; the direct test below doesn't mutate.
         let r = PathResolver::new().with_home(temp.path());
         let d = r.data_dir().unwrap();
         assert!(d.ends_with(".local/share/opencode"), "got {:?}", d);
+    }
+
+    #[test]
+    fn data_dir_captures_xdg_at_construction() {
+        let env = XdgVarGuard::lock();
+        env.set("/xdg/at/construction");
+        let r = PathResolver::new();
+        assert_eq!(
+            r.data_dir().unwrap(),
+            PathBuf::from("/xdg/at/construction/opencode")
+        );
+        // Changing the environment after construction must not
+        // change the resolver's answers.
+        env.set("/changed/later");
+        assert_eq!(
+            r.data_dir().unwrap(),
+            PathBuf::from("/xdg/at/construction/opencode")
+        );
+    }
+
+    #[test]
+    fn with_home_is_not_overridden_by_later_xdg() {
+        let env = XdgVarGuard::lock();
+        env.unset();
+        let r = PathResolver::new().with_home("/pinned/home");
+        // A caller who pinned home must not silently resolve into a
+        // data dir taken from env set after construction.
+        env.set("/sneaky/xdg");
+        assert_eq!(
+            r.data_dir().unwrap(),
+            PathBuf::from("/pinned/home/.local/share/opencode")
+        );
     }
 
     #[test]
