@@ -767,7 +767,7 @@ mod invariants {
         }
     }
 
-    pub fn model_field(
+    pub fn author_field(
         original: &ConversationView,
         final_: &ConversationView,
         failures: &mut Vec<String>,
@@ -775,10 +775,10 @@ mod invariants {
         let o = meaningful_turns(original);
         let f = meaningful_turns(final_);
         for (i, (a, b)) in o.iter().zip(f.iter()).enumerate() {
-            if a.model != b.model {
+            if a.author != b.author {
                 failures.push(format!(
-                    "model at turn {} diverged: first={:?} second={:?}",
-                    i, a.model, b.model
+                    "author at turn {} diverged: first={:?} second={:?}",
+                    i, a.author, b.author
                 ));
             }
         }
@@ -1011,7 +1011,7 @@ fn run_cell(
     invariants::token_usage_survives(&view_after_source, &view_first, &mut failures);
     invariants::thinking(&view_first, &view_second, &mut failures);
     invariants::thinking_survives(&view_after_source, &view_first, &mut failures);
-    invariants::model_field(&view_first, &view_second, &mut failures);
+    invariants::author_field(&view_first, &view_second, &mut failures);
     invariants::stop_reason(&view_first, &view_second, &mut failures);
     invariants::parent_id_graph(&view_first, &view_second, &mut failures);
     invariants::environment(&view_first, &view_second, &mut failures);

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, FileMutation, Result, Role,
     ToolInvocation, Turn,
@@ -289,8 +290,7 @@ fn build_bubble(turn: &Turn, content_blobs: &mut HashMap<String, String>) -> Bub
     let model_info = if is_tool_bubble {
         None
     } else {
-        turn.model
-            .as_deref()
+        actor::model_name(&turn.author)
             .filter(|m| !m.is_empty())
             .map(|m| ModelInfo {
                 model_name: Some(m.to_string()),
@@ -918,7 +918,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::generic_human(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -942,7 +942,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: Some("claude-opus-4-7".into()),
+            author: actor::agent(Some("claude-opus-4-7")),
             stop_reason: None,
             token_usage: Some(TokenUsage {
                 input_tokens: Some(10),

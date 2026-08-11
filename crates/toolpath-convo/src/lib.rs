@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+pub mod actor;
 pub mod derive;
 pub mod extract;
 pub mod project;
@@ -10,6 +11,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+
+/// The actor reference an agent coding session writes, re-exported so
+/// conversation code has one place to name it. `Turn.author` is an [`Actor`],
+/// and a derived step's `actor` string is that value rendered. The base
+/// format leaves `step.actor` opaque; the grammar, prefixes and placeholders
+/// this deriver commits to live in [`actor`].
+pub use crate::actor::{Actor, ParseActorError};
 
 // ── Error ────────────────────────────────────────────────────────────
 
@@ -52,6 +60,30 @@ impl std::fmt::Display for Role {
             Role::Other(s) => write!(f, "{}", s),
         }
     }
+}
+
+/// Read [`Turn::author`], accepting the field a turn carried before
+/// authorship was modeled.
+///
+/// `Turn` reaches disk nested inside [`DelegatedWork::turns`], which is
+/// serialized wholesale into a derived path's `delegations` payload, so
+/// documents written earlier are still read back. Those turns carry a bare
+/// model name (or `null`) where the actor reference now sits; that is exactly
+/// what an agent with — or without — a recorded name means. The role those
+/// turns record is unaffected and still deserializes as itself.
+///
+/// The two forms are told apart by parsing: a model name is not a valid actor
+/// reference. That is exact for every model name any provider records — none
+/// contains a `:` — and misreads only a legacy name spelled like an actor
+/// reference, which no provider produces.
+fn de_author<'de, D>(deserializer: D) -> std::result::Result<Actor, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Option::<String>::deserialize(deserializer)? {
+        None => actor::unnamed_agent(),
+        Some(s) => s.parse().unwrap_or_else(|_| actor::agent(Some(&s))),
+    })
 }
 
 /// Token usage for a single turn.
@@ -263,8 +295,16 @@ pub struct Turn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
 
-    /// Who produced this turn.
+    /// The turn's position in the conversation.
     pub role: Role,
+
+    /// Who produced the turn's content — a person, a model, or the harness
+    /// itself ([`actor::harness`], named for the provider). Independent of
+    /// [`Turn::role`]: a harness notice occupies the assistant slot without
+    /// being model output. This is the actor the derived step is attributed
+    /// to.
+    #[serde(alias = "model", deserialize_with = "de_author")]
+    pub author: Actor,
 
     /// When this turn occurred (ISO 8601).
     pub timestamp: String,
@@ -277,9 +317,6 @@ pub struct Turn {
 
     /// Tool invocations in this turn.
     pub tool_uses: Vec<ToolInvocation>,
-
-    /// Model identifier (e.g. "claude-opus-4-6", "gpt-4o").
-    pub model: Option<String>,
 
     /// Why the turn ended (e.g. "end_turn", "tool_use", "max_tokens").
     pub stop_reason: Option<String>,
@@ -583,7 +620,7 @@ mod tests {
                     text: "Fix the authentication bug in login.rs".into(),
                     thinking: None,
                     tool_uses: vec![],
-                    model: None,
+                    author: actor::generic_human(),
                     stop_reason: None,
                     token_usage: None,
                     attributed_token_usage: None,
@@ -609,7 +646,7 @@ mod tests {
                         }),
                         category: Some(ToolCategory::FileRead),
                     }],
-                    model: Some("claude-opus-4-6".into()),
+                    author: actor::agent(Some("claude-opus-4-6")),
                     stop_reason: Some("end_turn".into()),
                     token_usage: Some(TokenUsage {
                         input_tokens: Some(100),
@@ -632,7 +669,7 @@ mod tests {
                     text: "Thanks!".into(),
                     thinking: None,
                     tool_uses: vec![],
-                    model: None,
+                    author: actor::generic_human(),
                     stop_reason: None,
                     token_usage: None,
                     attributed_token_usage: None,
@@ -734,7 +771,10 @@ mod tests {
         let json = serde_json::to_string(turn).unwrap();
         let back: Turn = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, "t2");
-        assert_eq!(back.model, Some("claude-opus-4-6".into()));
+        assert_eq!(
+            crate::actor::model_name(&back.author),
+            Some("claude-opus-4-6")
+        );
         assert_eq!(back.tool_uses.len(), 1);
         assert_eq!(back.tool_uses[0].name, "Read");
         assert!(back.tool_uses[0].result.is_some());
@@ -972,7 +1012,7 @@ mod tests {
             text: "Delegating...".into(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::unnamed_agent(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,

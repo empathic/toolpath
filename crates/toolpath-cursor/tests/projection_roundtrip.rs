@@ -12,6 +12,7 @@
 use rusqlite::Connection;
 use tempfile::TempDir;
 use toolpath::v1::{Graph, Path};
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, DeriveConfig, derive_path, extract_conversation,
 };
@@ -239,7 +240,7 @@ fn projector_accepts_foreign_view_shape() {
                 text: "rename main".into(),
                 thinking: None,
                 tool_uses: vec![],
-                model: None,
+                author: actor::generic_human(),
                 stop_reason: None,
                 token_usage: None,
                 attributed_token_usage: None,
@@ -268,7 +269,7 @@ fn projector_accepts_foreign_view_shape() {
                     }),
                     category: Some(ToolCategory::FileWrite),
                 }],
-                model: Some("claude-opus-4-7".into()),
+                author: actor::agent(Some("claude-opus-4-7")),
                 stop_reason: Some("end_turn".into()),
                 token_usage: Some(TokenUsage {
                     input_tokens: Some(20),

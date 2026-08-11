@@ -40,11 +40,16 @@ use crate::types::{
     Session, TokenCountInfo,
 };
 use serde_json::Value;
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationEvent, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
     EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
     ToolInvocation, ToolResult, Turn,
 };
+
+/// This crate's provider id — `ConversationView::provider_id`, and the tool
+/// actor a turn the CLI wrote itself is attributed to.
+pub(crate) const PROVIDER_ID: &str = "codex";
 
 /// Provider for Codex sessions.
 #[derive(Debug, Clone, Default)]
@@ -362,7 +367,7 @@ impl<'a> Builder<'a> {
             } else {
                 None
             },
-            provider_id: Some("codex".into()),
+            provider_id: Some(PROVIDER_ID.into()),
             files_changed: self.files_changed_order,
             session_ids: vec![],
             events: self.events,
@@ -818,15 +823,15 @@ fn message_to_turn(
         parent_id: None,
         group_id: None,
         role: role.clone(),
+        author: match &role {
+            Role::User => actor::generic_human(),
+            Role::Assistant => actor::agent(model),
+            Role::System | Role::Other(_) => actor::harness(PROVIDER_ID),
+        },
         timestamp: timestamp.to_string(),
         text,
         thinking: None,
         tool_uses: Vec::new(),
-        model: if role == Role::Assistant {
-            model.map(str::to_string)
-        } else {
-            None
-        },
         stop_reason: None,
         token_usage: None,
         attributed_token_usage: None,
@@ -846,11 +851,11 @@ fn synthetic_assistant_turn(
         parent_id: None,
         group_id: None,
         role: Role::Assistant,
+        author: actor::agent(model),
         timestamp: timestamp.to_string(),
         text: String::new(),
         thinking: None,
         tool_uses: Vec::new(),
-        model: model.map(str::to_string),
         stop_reason: None,
         token_usage: None,
         attributed_token_usage: None,
@@ -1089,7 +1094,7 @@ mod tests {
         assert_eq!(view.turns[0].text, "please do a thing");
         assert_eq!(view.turns[1].role, Role::Assistant);
         assert_eq!(view.turns[1].text, "working on it");
-        assert_eq!(view.turns[1].model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(actor::model_name(&view.turns[1].author), Some("gpt-5.4"));
     }
 
     /// Two API rounds. Codex's `token_count` events carry cumulative

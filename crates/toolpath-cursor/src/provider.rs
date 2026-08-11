@@ -38,6 +38,7 @@ use crate::types::{
     BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, CursorSession, CursorSessionMetadata,
     TOOL_EDIT_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2, ToolFormerData, tool_name_for_id,
 };
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError as ConvoTraitError,
     EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
@@ -373,7 +374,7 @@ impl<'a> Builder<'a> {
             text: bubble.text.clone(),
             thinking: None,
             tool_uses: Vec::new(),
-            model: None,
+            author: actor::generic_human(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -464,7 +465,7 @@ impl<'a> Builder<'a> {
             text: bubble.text.clone(),
             thinking,
             tool_uses,
-            model,
+            author: actor::agent(model.as_deref()),
             stop_reason: None,
             token_usage,
             attributed_token_usage: None,
@@ -755,7 +756,10 @@ mod tests {
 
         assert_eq!(view.turns[1].role, Role::Assistant);
         assert_eq!(view.turns[1].text, "hi back");
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(
+            actor::model_name(&view.turns[1].author),
+            Some("claude-opus-4-7")
+        );
         assert_eq!(
             view.turns[1].token_usage.as_ref().unwrap().input_tokens,
             Some(10)

@@ -848,10 +848,10 @@ The mapping below is what the provider actually emits. Source:
 | `session_meta.cwd` | `Turn.environment.working_dir`, `path.base.uri` |
 | `session_meta.git.commit_hash` | `path.base.ref_str` |
 | `session_meta` (full) | `path.meta.extra["codex"]` (originator, cli_version, model_provider, git block, forked_from_id) |
-| `turn_context.model` | `Turn.model` on subsequent assistant turns |
+| `turn_context.model` | `Turn.author` model name on subsequent assistant turns |
 | `turn_context` (full) | `ConversationEvent` (round-trip preservation) |
 | `message` role `user` | `Turn { role: User }` → Step with `actor: "human:user"` |
-| `message` role `assistant` | `Turn { role: Assistant, model }` → Step with `actor: "agent:<model>"` |
+| `message` role `assistant` | `Turn { role: Assistant, author: agent(model) }` → Step with `actor: "agent:<model>"` |
 | `message` role `developer` | `Turn { role: System }` → Step with `actor: "tool:codex"` |
 | `reasoning.encrypted_content` | `Turn.extra["codex"]["reasoning_encrypted"]` (**not** `Turn.thinking` — it would render as ciphertext) |
 | `reasoning.summary[].text` / `reasoning.content[].text` (plaintext) | `Turn.thinking` on the next assistant turn |

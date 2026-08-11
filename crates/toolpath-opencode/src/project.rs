@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde_json::{Map, Value};
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
@@ -314,9 +315,8 @@ fn build_assistant_message(
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| default_provider.to_string());
-    let model_id = turn
-        .model
-        .clone()
+    let model_id = actor::model_name(&turn.author)
+        .map(str::to_string)
         .or_else(|| {
             extras
                 .as_ref()
@@ -760,7 +760,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::generic_human(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -780,7 +780,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: Some("claude-sonnet-4-6".into()),
+            author: actor::agent(Some("claude-sonnet-4-6")),
             stop_reason: Some("stop".into()),
             token_usage: None,
             attributed_token_usage: None,

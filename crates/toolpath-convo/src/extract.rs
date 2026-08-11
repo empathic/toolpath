@@ -13,7 +13,7 @@ use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
 use crate::{
-    ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation,
+    Actor, ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation,
     ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
@@ -288,8 +288,8 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Model is attributed via the step actor (`agent:{model}`).
-    let model = model_from_actor(&step.step.actor);
+    // Authorship is attributed via the step actor.
+    let author = author_from_actor(&step.step.actor);
 
     let stop_reason = extra
         .get("stop_reason")
@@ -320,11 +320,11 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         parent_id,
         group_id,
         role,
+        author,
         timestamp: step.step.timestamp.clone(),
         text,
         thinking,
         tool_uses,
-        model,
         stop_reason,
         token_usage,
         attributed_token_usage,
@@ -492,41 +492,35 @@ fn parse_role(s: &str) -> Role {
     }
 }
 
-/// Pull the model name out of a step actor string like `agent:claude-opus-4-7`.
+/// Recover a turn's author from its step actor string — the inverse of the
+/// attribution the deriver writes, so derive → extract → derive is stable.
 ///
-/// Conventions:
-/// - `agent:{model}` → `Some("{model}")` (the standard attribution shape)
-/// - `agent:{model}/tool:…` → model is the part before the `/` (Claude's
-///   sub-actor style; only appears on non-turn tool steps, but handled for
-///   robustness)
-/// - `agent:unknown` → `None` — "unknown" is the sentinel the deriver writes
-///   when the source has no model
-/// - anything else (`human:…`, `system:…`, empty) → `None`
-fn model_from_actor(actor: &str) -> Option<String> {
-    let rest = actor.strip_prefix("agent:")?;
-    let model = match rest.split_once('/') {
-        Some((m, _)) => m,
-        None => rest,
-    };
-    if model.is_empty() || model == "unknown" {
-        None
-    } else {
-        Some(model.to_string())
-    }
+/// [`Actor`] reads the reference, whatever the prefix, and drops the sub-actor
+/// suffix of the form `agent:{model}/tool:…` (which only appears on non-turn
+/// tool steps, but is handled for robustness).
+///
+/// A string that is not an actor reference at all — no prefix, an empty
+/// segment, characters outside the grammar — decodes to an unnamed agent,
+/// which is what an actor of no recognizable shape has always meant here.
+fn author_from_actor(actor: &str) -> Actor {
+    actor
+        .parse()
+        .unwrap_or_else(|_| crate::actor::unnamed_agent())
 }
 
 fn role_from_actor(actor: &str) -> Role {
-    if actor.contains("/tool:") {
+    let (base, sub) = Actor::split_sub_actor(actor);
+    if matches!(sub.map(str::parse::<Actor>), Some(Ok(ref a)) if crate::actor::is_tool(a)) {
         // Tool step — shouldn't be a turn, but if it is, treat as Other.
-        Role::Other("tool".to_string())
-    } else if actor.starts_with("human:") {
-        Role::User
-    } else if actor.starts_with("agent:") {
-        Role::Assistant
-    } else if actor.starts_with("tool:") {
-        Role::System
-    } else {
-        Role::Other(actor.to_string())
+        return Role::Other("tool".to_string());
+    }
+    // Only the prefixes this crate attributes turns to map to a role; any
+    // other actor is something else's, and keeps its reference as the label.
+    match base.parse::<Actor>() {
+        Ok(a) if crate::actor::is_human(&a) => Role::User,
+        Ok(a) if crate::actor::is_agent(&a) => Role::Assistant,
+        Ok(a) if crate::actor::is_tool(&a) => Role::System,
+        _ => Role::Other(actor.to_string()),
     }
 }
 
@@ -545,30 +539,134 @@ mod tests {
     use std::collections::HashMap;
     use toolpath::v1::{ArtifactChange, PathIdentity, StructuralChange};
 
+    fn agent(name: &str) -> Actor {
+        crate::actor::agent(Some(name))
+    }
+
     #[test]
-    fn test_model_from_actor_variants() {
+    fn test_author_from_actor_variants() {
+        // The generic user and a named one.
         assert_eq!(
-            model_from_actor("agent:claude-opus-4-7"),
-            Some("claude-opus-4-7".to_string())
+            author_from_actor("human:user"),
+            crate::actor::generic_human()
         );
         assert_eq!(
-            model_from_actor("agent:gemini-3-flash-preview"),
-            Some("gemini-3-flash-preview".to_string())
+            author_from_actor("human:ada"),
+            crate::actor::human(Some("ada"))
         );
-        // Sub-actor form (Claude tool steps): model is the part before "/".
+        // Model calls, named and not.
         assert_eq!(
-            model_from_actor("agent:claude-code/tool:Write"),
-            Some("claude-code".to_string())
+            author_from_actor("agent:claude-opus-4-7"),
+            agent("claude-opus-4-7")
         );
-        // `unknown` is the deriver's sentinel for "no model"; decode to None.
-        assert_eq!(model_from_actor("agent:unknown"), None);
-        // Non-agent actors carry no model.
-        assert_eq!(model_from_actor("human:user"), None);
-        assert_eq!(model_from_actor("system:gemini-cli"), None);
-        assert_eq!(model_from_actor("tool:rustfmt"), None);
-        // Malformed / empty.
-        assert_eq!(model_from_actor(""), None);
-        assert_eq!(model_from_actor("agent:"), None);
+        assert_eq!(
+            author_from_actor("agent:gemini-3-flash-preview"),
+            agent("gemini-3-flash-preview")
+        );
+        assert_eq!(
+            author_from_actor("agent:unknown"),
+            crate::actor::unnamed_agent()
+        );
+        // Sub-actor form (tool steps): model is the part before "/".
+        assert_eq!(
+            author_from_actor("agent:claude-code/tool:Write"),
+            agent("claude-code")
+        );
+        // The harness itself.
+        assert_eq!(
+            author_from_actor("tool:gemini-cli"),
+            crate::actor::harness("gemini-cli")
+        );
+        // The grammar is open, so a prefix this crate has no convention for
+        // still reads back as the actor it is.
+        assert_eq!(
+            author_from_actor("system:gemini-cli").to_string(),
+            "system:gemini-cli"
+        );
+        // Anything that is not an actor reference reads as an unnamed agent.
+        assert_eq!(author_from_actor(""), crate::actor::unnamed_agent());
+        assert_eq!(author_from_actor("agent:"), crate::actor::unnamed_agent());
+        assert_eq!(author_from_actor("tool:"), crate::actor::unnamed_agent());
+        assert_eq!(
+            author_from_actor("no-prefix"),
+            crate::actor::unnamed_agent()
+        );
+    }
+
+    #[test]
+    fn test_role_from_actor_variants() {
+        assert_eq!(role_from_actor("human:alex"), Role::User);
+        assert_eq!(role_from_actor("agent:claude-opus-4-7"), Role::Assistant);
+        assert_eq!(role_from_actor("tool:pi"), Role::System);
+        // A sub-actor naming a tool is a tool step, not a turn.
+        assert_eq!(
+            role_from_actor("agent:claude-code/tool:Write"),
+            Role::Other("tool".to_string())
+        );
+        // A non-tool suffix qualifies the actor and doesn't change its kind.
+        assert_eq!(role_from_actor("tool:rustfmt/1.5.0"), Role::System);
+        assert_eq!(
+            role_from_actor("ci:github-actions"),
+            Role::Other("ci:github-actions".to_string())
+        );
+    }
+
+    #[test]
+    fn test_author_survives_derive_extract_derive() {
+        use crate::{ConversationView, DeriveConfig, derive_path};
+
+        let base = |id: &str, role: Role, author: Actor| Turn {
+            id: id.to_string(),
+            parent_id: None,
+            group_id: None,
+            role,
+            author,
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            text: "t".to_string(),
+            thinking: None,
+            tool_uses: vec![],
+            stop_reason: None,
+            token_usage: None,
+            attributed_token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+        };
+
+        let view = ConversationView {
+            id: "s1".to_string(),
+            provider_id: Some("pi".to_string()),
+            turns: vec![
+                base("t1", Role::User, crate::actor::generic_human()),
+                base("t2", Role::Assistant, agent("claude-opus-4-7")),
+                base("t3", Role::Assistant, crate::actor::unnamed_agent()),
+                // The harness speaking in the assistant slot.
+                base("t4", Role::Assistant, crate::actor::harness("pi")),
+                base("t5", Role::System, crate::actor::harness("pi")),
+            ],
+            ..Default::default()
+        };
+
+        let first = derive_path(&view, &DeriveConfig::default());
+        let back = extract_conversation(&first);
+        let second = derive_path(&back, &DeriveConfig::default());
+
+        let actors =
+            |p: &Path| -> Vec<String> { p.steps.iter().map(|s| s.step.actor.clone()).collect() };
+        assert_eq!(
+            actors(&first),
+            vec![
+                "human:user",
+                "agent:claude-opus-4-7",
+                "agent:unknown",
+                "tool:pi",
+                "tool:pi",
+            ]
+        );
+        assert_eq!(actors(&first), actors(&second));
+        // Roles ride in the payload and are unaffected by attribution.
+        assert_eq!(back.turns[3].role, Role::Assistant);
+        assert_eq!(back.turns[4].role, Role::System);
     }
 
     fn make_path(steps: Vec<Step>) -> Path {
@@ -706,7 +804,10 @@ mod tests {
         assert_eq!(view.turns[0].id, "step-002");
         assert_eq!(view.turns[1].role, Role::Assistant);
         assert_eq!(view.turns[1].text, "I'll fix that.");
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(
+            crate::actor::model_name(&view.turns[1].author),
+            Some("claude-opus-4-6")
+        );
     }
 
     #[test]

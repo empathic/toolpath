@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
@@ -125,7 +126,11 @@ fn project_view(
     let model = cfg
         .model
         .clone()
-        .or_else(|| view.turns.iter().find_map(|t| t.model.clone()))
+        .or_else(|| {
+            view.turns
+                .iter()
+                .find_map(|t| actor::model_name(&t.author).map(str::to_string))
+        })
         .unwrap_or_else(|| "unknown".to_string());
 
     let session_timestamp = view
@@ -719,7 +724,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::generic_human(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -739,7 +744,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: Some("gpt-5.4".into()),
+            author: actor::agent(Some("gpt-5.4")),
             stop_reason: Some("stop".into()),
             token_usage: Some(TokenUsage {
                 input_tokens: Some(100),

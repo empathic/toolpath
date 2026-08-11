@@ -14,6 +14,7 @@ use crate::provider::native_name;
 use crate::types::{EventLine, Session, Workspace};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, Result, Role, TokenUsage, ToolInvocation, Turn,
 };
@@ -208,7 +209,7 @@ impl CopilotProjector {
         data.insert("content".into(), json!(turn.text));
         data.insert("turnId".into(), json!(turn_id));
         data.insert("messageId".into(), json!(message_id));
-        if let Some(m) = &turn.model {
+        if let Some(m) = actor::model_name(&turn.author) {
             data.insert("model".into(), json!(m));
         }
         if let Some(th) = &turn.thinking {
@@ -697,7 +698,10 @@ mod tests {
         assert_eq!(view2.turns[1].text, "listing");
         // Thinking + model + per-turn tokens survive.
         assert_eq!(view2.turns[1].thinking.as_deref(), Some("think"));
-        assert_eq!(view2.turns[1].model.as_deref(), Some("claude-haiku-4.5"));
+        assert_eq!(
+            actor::model_name(&view2.turns[1].author),
+            Some("claude-haiku-4.5")
+        );
         assert_eq!(
             view2.turns[1].token_usage.as_ref().unwrap().output_tokens,
             Some(42)
@@ -783,7 +787,7 @@ mod tests {
                 }),
                 category: Some(ToolCategory::Shell),
             }],
-            model: None,
+            author: actor::unnamed_agent(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -837,7 +841,7 @@ mod tests {
                 text: String::new(),
                 thinking: None,
                 tool_uses: vec![tool],
-                model: None,
+                author: actor::unnamed_agent(),
                 stop_reason: None,
                 token_usage: None,
                 attributed_token_usage: None,
@@ -988,7 +992,7 @@ mod tests {
                     json!({"file_path": "/p/b.rs", "offset": 10, "limit": 5}),
                 ),
             ],
-            model: None,
+            author: actor::unnamed_agent(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -1053,7 +1057,7 @@ mod tests {
                 }),
                 category: Some(ToolCategory::Shell),
             }],
-            model: None,
+            author: actor::unnamed_agent(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,

@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
@@ -393,7 +394,9 @@ fn emit_assistant(
                 .clone()
                 .unwrap_or_else(|| "anthropic".to_string())
         });
-    let model = turn.model.clone().unwrap_or_default();
+    let model = actor::model_name(&turn.author)
+        .unwrap_or_default()
+        .to_string();
     let usage = build_usage(turn);
     let stop_reason = parse_stop_reason(turn.stop_reason.as_deref(), pi.get("stopReason"));
     let error_message = pi
@@ -766,7 +769,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
+            author: actor::generic_human(),
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -786,7 +789,7 @@ mod tests {
             text: text.into(),
             thinking: None,
             tool_uses: vec![],
-            model: Some("claude-sonnet-4-5".into()),
+            author: actor::agent(Some("claude-sonnet-4-5")),
             stop_reason: Some("stop".into()),
             token_usage: Some(TokenUsage {
                 input_tokens: Some(100),

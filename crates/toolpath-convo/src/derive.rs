@@ -13,7 +13,7 @@ use toolpath::v1::{
     PathMeta, Step, StepIdentity, StructuralChange,
 };
 
-use crate::{ConversationView, Role, ToolCategory, ToolInvocation, Turn};
+use crate::{Actor, ConversationView, ToolCategory, ToolInvocation, actor};
 
 /// Configuration for [`derive_path`].
 #[derive(Debug, Clone)]
@@ -117,8 +117,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             turn.id.clone()
         };
 
-        let actor = actor_for_turn(turn, provider);
-        record_actor(&mut actors, &actor, turn, provider, view);
+        // Attribution is the turn's author, rendered. `role` plays no part: a
+        // harness notice sitting in the assistant slot is still the harness
+        // speaking.
+        let actor = turn.author.to_string();
+        record_actor(&mut actors, &actor, &turn.author, provider);
 
         let mut step = Step {
             step: StepIdentity {
@@ -352,14 +355,10 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         } else {
             event.id.clone()
         };
-        let actor = format!("tool:{}", provider);
-        actors
-            .entry(actor.clone())
-            .or_insert_with(|| ActorDefinition {
-                name: Some(provider.to_string()),
-                provider: Some(provider.to_string()),
-                ..Default::default()
-            });
+        // Events are the harness's own record-keeping, not a turn by anyone.
+        let author = actor::harness(provider);
+        let actor = author.to_string();
+        record_actor(&mut actors, &actor, &author, provider);
 
         // event.data is flattened into StructuralChange.extra. Strip keys
         // that collide with the typed fields on StructuralChange itself —
@@ -516,49 +515,30 @@ fn serde_value_eq(a: &Step, b: &Step) -> bool {
     serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
 }
 
-fn actor_for_turn(turn: &Turn, provider: &str) -> String {
-    match &turn.role {
-        Role::User => "human:user".to_string(),
-        Role::Assistant => {
-            let model = turn.model.as_deref().unwrap_or("unknown");
-            format!("agent:{}", model)
-        }
-        Role::System => format!("tool:{}", provider),
-        Role::Other(_) => format!("tool:{}", provider),
-    }
-}
-
+/// Describe `actor` in `meta.actors`, unless it is already described.
+///
+/// `name` is the actor's id segment — the same value the actor string was
+/// rendered from. Only an agent carries a model, and `provider` is recorded
+/// only for the actors this derivation mints itself: an actor reference the
+/// source supplied under some other prefix has provenance this crate does
+/// not know.
 fn record_actor(
     actors: &mut HashMap<String, ActorDefinition>,
     actor: &str,
-    turn: &Turn,
+    author: &Actor,
     provider: &str,
-    _view: &ConversationView,
 ) {
     if actors.contains_key(actor) {
         return;
     }
-    let def = if let Some(rest) = actor.strip_prefix("agent:") {
-        ActorDefinition {
-            name: Some(rest.to_string()),
-            provider: Some(provider.to_string()),
-            model: turn.model.clone(),
-            identities: vec![],
-            keys: vec![],
-        }
-    } else if let Some(rest) = actor.strip_prefix("human:") {
-        ActorDefinition {
-            name: Some(rest.to_string()),
-            ..Default::default()
-        }
-    } else {
-        let name = actor.split_once(':').map(|x| x.1).unwrap_or("").to_string();
-        ActorDefinition {
-            name: Some(name),
-            provider: Some(provider.to_string()),
-            ..Default::default()
-        }
+    let mut def = ActorDefinition {
+        name: Some(author.id().to_string()),
+        ..Default::default()
     };
+    if actor::is_agent(author) || actor::is_tool(author) {
+        def.provider = Some(provider.to_string());
+        def.model = actor::model_name(author).map(str::to_string);
+    }
     actors.insert(actor.to_string(), def);
 }
 
@@ -715,19 +695,28 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolInvocation, ToolResult};
+    use crate::{
+        DelegatedWork, EnvironmentSnapshot, Role, TokenUsage, ToolInvocation, ToolResult, Turn,
+    };
 
     fn base_turn(id: &str, role: Role) -> Turn {
+        // The mapping every provider applies when its format carries no
+        // authorship signal beyond the role.
+        let author = match &role {
+            Role::User => actor::generic_human(),
+            Role::Assistant => actor::unnamed_agent(),
+            Role::System | Role::Other(_) => actor::harness("pi"),
+        };
         Turn {
             id: id.to_string(),
             parent_id: None,
             group_id: None,
             role,
+            author,
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             text: String::new(),
             thinking: None,
             tool_uses: vec![],
-            model: None,
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
@@ -877,7 +866,7 @@ mod tests {
             BTreeMap::from([("reasoning".to_string(), 450u32)]),
         );
         let mut turn = base_turn("t1", Role::Assistant);
-        turn.model = Some("claude-opus-4-7".into());
+        turn.author = actor::agent(Some("claude-opus-4-7"));
         turn.token_usage = Some(TokenUsage {
             input_tokens: Some(100),
             output_tokens: Some(900),
@@ -938,18 +927,113 @@ mod tests {
     #[test]
     fn test_single_assistant_turn() {
         let mut turn = base_turn("t1", Role::Assistant);
-        turn.model = Some("claude-opus-4-7".into());
+        turn.author = actor::agent(Some("claude-opus-4-7"));
         let view = view_with(vec![turn]);
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.steps[0].step.actor, "agent:claude-opus-4-7");
     }
 
     #[test]
-    fn test_assistant_without_model() {
+    fn test_model_author_without_a_name() {
         let turn = base_turn("t1", Role::Assistant);
+        assert_eq!(turn.author, actor::unnamed_agent());
         let view = view_with(vec![turn]);
         let path = derive_path(&view, &DeriveConfig::default());
+        // "A model ran but the source didn't name it" is its own outcome,
+        // distinct from "no model was involved".
         assert_eq!(path.steps[0].step.actor, "agent:unknown");
+    }
+
+    #[test]
+    fn test_named_human_author() {
+        let mut turn = base_turn("t1", Role::User);
+        turn.author = actor::human(Some("ada"));
+        let view = view_with(vec![turn]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[0].step.actor, "human:ada");
+
+        let actors = path.meta.as_ref().unwrap().actors.as_ref().unwrap();
+        assert_eq!(actors["human:ada"].name.as_deref(), Some("ada"));
+    }
+
+    #[test]
+    fn test_named_harness_author() {
+        let mut turn = base_turn("t1", Role::System);
+        turn.author = actor::harness("some-gateway");
+        let view = view_with(vec![turn]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[0].step.actor, "tool:some-gateway");
+    }
+
+    #[test]
+    fn test_harness_authored_assistant_turn_is_attributed_to_the_harness() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.author = actor::harness("pi");
+        let view = view_with(vec![turn]);
+        let path = derive_path(&view, &DeriveConfig::default());
+
+        // The harness wrote the message; no model produced it.
+        assert_eq!(path.steps[0].step.actor, "tool:pi");
+        // Only attribution changes — the message keeps the assistant slot.
+        assert_eq!(
+            conv_change(&path.steps[0]).extra["role"],
+            serde_json::json!("assistant")
+        );
+
+        let actors = path.meta.as_ref().unwrap().actors.as_ref().unwrap();
+        let actor = &actors["tool:pi"];
+        assert_eq!(actor.provider.as_deref(), Some("pi"));
+        assert_eq!(actor.model, None);
+    }
+
+    #[test]
+    fn test_attribution_does_not_consult_the_role() {
+        // A harness-authored turn takes the harness actor wherever it sits
+        // in the conversation, and a model-authored one takes the model
+        // actor even outside the assistant slot.
+        let mut harness = base_turn("t1", Role::User);
+        harness.author = actor::harness("pi");
+        let mut model = base_turn("t2", Role::Other("tool".into()));
+        model.author = actor::agent(Some("claude-opus-4-8"));
+
+        let view = view_with(vec![harness, model]);
+        let path = derive_path(&view, &DeriveConfig::default());
+
+        assert_eq!(path.steps[0].step.actor, "tool:pi");
+        assert_eq!(path.steps[1].step.actor, "agent:claude-opus-4-8");
+    }
+
+    #[test]
+    fn test_author_round_trips_through_serde() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.author = actor::harness("pi");
+        let json = serde_json::to_value(&turn).unwrap();
+        // The author is written as the actor string it renders to, which is
+        // the same string the step it derives to carries.
+        assert_eq!(json["author"], serde_json::json!("tool:pi"));
+        let back: Turn = serde_json::from_value(json).unwrap();
+        assert_eq!(back.author, actor::harness("pi"));
+    }
+
+    #[test]
+    fn test_author_reads_the_model_field_of_older_documents() {
+        // Turns reach disk nested in a step's `delegations` payload, so
+        // documents written before authorship was modeled are still read.
+        let turn = base_turn("t1", Role::Assistant);
+        let mut json = serde_json::to_value(&turn).unwrap();
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("author");
+        obj.insert("model".into(), serde_json::json!("claude-opus-4-7"));
+        let back: Turn = serde_json::from_value(json).unwrap();
+        assert_eq!(back.author, actor::agent(Some("claude-opus-4-7")));
+        assert_eq!(back.role, Role::Assistant);
+
+        let mut json = serde_json::to_value(&turn).unwrap();
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("author");
+        obj.insert("model".into(), serde_json::Value::Null);
+        let back: Turn = serde_json::from_value(json).unwrap();
+        assert_eq!(back.author, actor::unnamed_agent());
     }
 
     #[test]
@@ -973,7 +1057,7 @@ mod tests {
         let t1 = base_turn("t1", Role::User);
         let mut t2 = base_turn("t2", Role::Assistant);
         t2.parent_id = Some("t1".into());
-        t2.model = Some("m".into());
+        t2.author = actor::agent(Some("m"));
         let view = view_with(vec![t1, t2]);
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.steps[1].step.parents, vec!["t1".to_string()]);
@@ -984,11 +1068,17 @@ mod tests {
         let user = base_turn("t1", Role::User);
         let mut assistant = base_turn("t2", Role::Assistant);
         assistant.parent_id = Some("t1".into());
-        assistant.model = Some("gpt-5.5".into());
+        assistant.author = actor::agent(Some("gpt-5.5"));
         let system = base_turn("t3", Role::System);
         let other = base_turn("t4", Role::Other("bash".into()));
+        // A source name the actor grammar cannot carry: the constructor
+        // falls back to the placeholder rather than emitting a reference
+        // the schema would reject.
+        let mut unnameable = base_turn("t5", Role::Assistant);
+        unnameable.author = actor::agent(Some("vendor/model:v2"));
+        assert_eq!(unnameable.author.to_string(), "agent:unknown");
 
-        let mut view = view_with(vec![user, assistant, system, other]);
+        let mut view = view_with(vec![user, assistant, system, other, unnameable]);
         view.events.push(crate::ConversationEvent {
             id: "e1".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
@@ -1028,7 +1118,7 @@ mod tests {
         let mut assistant = base_turn("t2", Role::Assistant);
         assistant.parent_id = Some("t1".into());
         assistant.group_id = Some("msg_t2".into());
-        assistant.model = Some("gpt-5.5".into());
+        assistant.author = actor::agent(Some("gpt-5.5"));
         assistant.text = "on it".into();
         assistant.thinking = Some("plan the edit".into());
         assistant.stop_reason = Some("tool_use".into());
@@ -1494,7 +1584,7 @@ mod tests {
     fn test_actors_in_meta() {
         let u = base_turn("t1", Role::User);
         let mut a = base_turn("t2", Role::Assistant);
-        a.model = Some("claude-opus-4-7".into());
+        a.author = actor::agent(Some("claude-opus-4-7"));
         let view = view_with(vec![u, a]);
         let path = derive_path(&view, &DeriveConfig::default());
         let actors = path.meta.unwrap().actors.unwrap();
@@ -1505,6 +1595,19 @@ mod tests {
         assert_eq!(agent.model.as_deref(), Some("claude-opus-4-7"));
         let human = &actors["human:user"];
         assert_eq!(human.name.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn test_foreign_prefix_actor_gets_no_fabricated_provenance() {
+        let mut t = base_turn("t1", Role::User);
+        t.author = Actor::new("dog", "sparky").unwrap();
+        let view = view_with(vec![t]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        let actors = path.meta.unwrap().actors.unwrap();
+        let dog = &actors["dog:sparky"];
+        assert_eq!(dog.name.as_deref(), Some("sparky"));
+        assert_eq!(dog.provider, None, "the deriver did not mint this actor");
+        assert_eq!(dog.model, None);
     }
 
     #[test]
@@ -1692,7 +1795,7 @@ mod tests {
         });
         let mut t2 = base_turn("t2", Role::Assistant);
         t2.parent_id = Some("t1".into());
-        t2.model = Some("m".into());
+        t2.author = actor::agent(Some("m"));
         t2.tool_uses = vec![fw_tool(
             "Write",
             "tu1",

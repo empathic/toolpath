@@ -33,7 +33,7 @@ with content-blob lookup) and maps it to Toolpath documents.
 | Cursor source | Toolpath destination |
 |---|---|
 | `composerData.composerId` | `ConversationView.id`, `path.id = path-cursor-<first-8>` |
-| `composerData.modelConfig.modelName` | Default `Turn.model` |
+| `composerData.modelConfig.modelName` | Default `Turn.author` model name |
 | `composerData.name` | `path.meta.title` |
 | `composerHeader.workspaceIdentifier.uri.fsPath` | `path.base.uri` (as `file://…`) |
 | `composerData.agentBackend` (`"cursor-agent"`) | `producer.name` (`"cursor"`) |
@@ -46,7 +46,7 @@ with content-blob lookup) and maps it to Toolpath documents.
 | `toolFormerData.tool == 40` (read_file_v2) | `ToolCategory::FileRead` |
 | `toolFormerData.tool == 42` (glob_file_search) | `ToolCategory::FileSearch` |
 | `bubble.tokenCount` | `Turn.token_usage` |
-| `bubble.modelInfo.modelName` | `Turn.model` (overrides composer default) |
+| `bubble.modelInfo.modelName` | `Turn.author` model name (overrides composer default) |
 | Unknown `toolFormerData.tool` ids | preserved as `ToolInvocation { category: None }` — `name` + `input` still carry the call |
 
 Provider-specific UI metadata (`checkpointId`, `requestId`,

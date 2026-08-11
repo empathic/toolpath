@@ -10,6 +10,7 @@ use crate::paths::PathResolver;
 use crate::types::{CopilotEvent, Session};
 use serde_json::Value;
 use std::collections::HashMap;
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationEvent, ConversationView, DelegatedWork, FileMutation, ProducerInfo, Role,
     SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
@@ -178,7 +179,7 @@ pub fn to_view(session: &Session) -> ConversationView {
                 flush(&mut turns, &mut current);
                 seq += 1;
                 let mut t = empty_turn(format!("a{seq}"), Role::Assistant, ts);
-                t.model = default_model.clone();
+                t.author = actor::agent(default_model.as_deref());
                 current = Some(t);
             }
             CopilotEvent::AssistantMessage(m) => {
@@ -195,8 +196,8 @@ pub fn to_view(session: &Session) -> ConversationView {
                         None => cur.thinking = Some(r.clone()),
                     }
                 }
-                if cur.model.is_none() {
-                    cur.model = m.model.clone().or_else(|| default_model.clone());
+                if actor::model_name(&cur.author).is_none() {
+                    cur.author = actor::agent(m.model.as_deref().or(default_model.as_deref()));
                 }
             }
             CopilotEvent::AssistantTurnEnd => {
@@ -383,16 +384,21 @@ pub fn to_view(session: &Session) -> ConversationView {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn empty_turn(id: String, role: Role, timestamp: String) -> Turn {
+    let author = match &role {
+        Role::User => actor::generic_human(),
+        Role::Assistant => actor::unnamed_agent(),
+        Role::System | Role::Other(_) => actor::harness(PROVIDER_ID),
+    };
     Turn {
         id,
         parent_id: None,
         group_id: None,
         role,
+        author,
         timestamp,
         text: String::new(),
         thinking: None,
         tool_uses: Vec::new(),
-        model: None,
         stop_reason: None,
         token_usage: None,
         attributed_token_usage: None,
@@ -411,7 +417,7 @@ fn ensure_assistant<'a>(
     if current.is_none() {
         *seq += 1;
         let mut t = empty_turn(format!("a{seq}"), Role::Assistant, ts.to_string());
-        t.model = model.clone();
+        t.author = actor::agent(model.as_deref());
         *current = Some(t);
     }
     current.as_mut().unwrap()

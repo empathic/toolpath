@@ -25,6 +25,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde_json::Value;
+use toolpath_convo::actor;
 use toolpath_convo::{
     ConversationProjector, ConversationView, EnvironmentSnapshot, ProducerInfo, Role, SessionBase,
     ToolInvocation, Turn,
@@ -273,6 +274,10 @@ fn view_from_jsonl(
             id: turn_id.clone(),
             parent_id: prev_id.clone(),
             group_id: None,
+            author: match &role {
+                Role::User => actor::generic_human(),
+                _ => actor::unnamed_agent(),
+            },
             role,
             // Synthesize plausible monotonic timestamps; the
             // transcript carries no real ones.
@@ -280,7 +285,6 @@ fn view_from_jsonl(
             text,
             thinking: None,
             tool_uses,
-            model: None,
             stop_reason: None,
             token_usage: None,
             attributed_token_usage: None,
