@@ -64,7 +64,7 @@ fn write_doc(dir: &Path) -> std::path::PathBuf {
     p
 }
 
-// ── path auth default ───────────────────────────────────────────────
+// ── path target ───────────────────────────────────────────────
 
 #[test]
 fn a_folder_can_be_designated_as_the_share_target() {
@@ -73,11 +73,11 @@ fn a_folder_can_be_designated_as_the_share_target() {
     let folder_str = folder.path().to_string_lossy().into_owned();
 
     cmd(config.path())
-        .args(["auth", "default", &folder_str])
+        .args(["target", &folder_str])
         .assert()
         .success()
         .stdout(predicate::str::contains(format!(
-            "Default share target set to {folder_str}"
+            "Share target set to {folder_str}"
         )))
         // A folder needs no credentials, so nothing should nag about them.
         .stdout(predicate::str::contains("credentials").not());
@@ -87,51 +87,126 @@ fn a_folder_can_be_designated_as_the_share_target() {
     assert!(raw.contains("file://"), "{raw}");
     // …but reported back as the path the user typed.
     cmd(config.path())
-        .args(["auth", "default"])
+        .args(["target"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&folder_str))
         .stdout(predicate::str::contains("configured default"));
 }
 
-#[test]
-fn a_bucket_url_can_be_designated_as_the_share_target() {
-    let config = tempfile::tempdir().unwrap();
-    cmd(config.path())
-        .args(["auth", "default", "s3://my-bucket/traces"])
+/// Point the CLI at an endpoint nothing is listening on, so
+/// verification fails deterministically and offline.
+fn unreachable_s3(config: &Path) {
+    cmd(config)
+        .args(["auth", "s3", "login"])
+        .args(["--endpoint", "http://127.0.0.1:1"])
+        .args(["--access-key-id", "AK", "--secret-access-key", "SK"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("s3://my-bucket/traces"))
-        // No credentials stored yet, and S3 needs them — say so.
-        .stdout(predicate::str::contains("path auth s3 login"));
+        .success();
 }
 
 #[test]
-fn auth_default_with_no_argument_explains_the_options() {
+fn a_bucket_that_cant_be_written_to_is_refused_at_configuration_time() {
+    // The whole point of checking here: a target is set once and used
+    // many times, so a wrong one must not survive to cost a session
+    // pick and a derivation later.
     let config = tempfile::tempdir().unwrap();
+    unreachable_s3(config.path());
+
     cmd(config.path())
-        .args(["auth", "default"])
+        .args(["target", "s3://my-bucket/traces"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "can't write to s3://my-bucket/traces",
+        ))
+        .stderr(predicate::str::contains("--no-verify"))
+        // object_store's retry epilogue is not an answer to anything.
+        .stderr(predicate::str::contains("max_retries").not());
+
+    assert!(
+        !config.path().join("config.json").exists(),
+        "a target that failed verification must not be stored"
+    );
+}
+
+#[test]
+fn no_verify_stores_an_unchecked_target() {
+    let config = tempfile::tempdir().unwrap();
+    unreachable_s3(config.path());
+
+    cmd(config.path())
+        .args(["target", "s3://my-bucket/traces", "--no-verify"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No default share target"))
+        .stdout(predicate::str::contains("(not verified)"));
+
+    let raw = std::fs::read_to_string(config.path().join("config.json")).unwrap();
+    assert!(raw.contains("s3://my-bucket/traces"), "{raw}");
+}
+
+#[test]
+fn designating_a_folder_creates_it_and_leaves_no_probe_behind() {
+    // Verification is a real write, so it proves the folder is usable
+    // and makes it exist — and cleans up after itself.
+    let config = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let folder = parent.path().join("brand/new/traces");
+
+    cmd(config.path())
+        .args(["target", &folder.to_string_lossy()])
+        .assert()
+        .success();
+
+    assert!(folder.is_dir(), "the folder should exist after designation");
+    let leftovers: Vec<String> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(leftovers.is_empty(), "probe not cleaned up: {leftovers:?}");
+}
+
+#[test]
+fn an_unwritable_folder_is_refused_at_configuration_time() {
+    let config = tempfile::tempdir().unwrap();
+    // A file, not a directory: nothing can be written underneath it.
+    let blocker = tempfile::tempdir().unwrap();
+    let occupied = blocker.path().join("a-file");
+    std::fs::write(&occupied, "not a directory").unwrap();
+
+    cmd(config.path())
+        .args(["target", &occupied.join("traces").to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("can't write to"));
+}
+
+#[test]
+fn target_with_no_argument_explains_the_options() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["target"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No share target"))
         .stdout(predicate::str::contains("In effect now: pathbase"))
-        .stdout(predicate::str::contains("path auth default ~/"));
+        .stdout(predicate::str::contains("path target ~/"));
 }
 
 #[test]
-fn auth_default_clear_falls_back_to_pathbase() {
+fn target_clear_falls_back_to_pathbase() {
     let config = tempfile::tempdir().unwrap();
     cmd(config.path())
-        .args(["auth", "default", "s3://my-bucket/traces"])
+        .args(["target", "s3://my-bucket/traces", "--no-verify"])
         .assert()
         .success();
     cmd(config.path())
-        .args(["auth", "default", "--clear"])
+        .args(["target", "--clear"])
         .assert()
         .success()
         .stdout(predicate::str::contains("uploads to Pathbase"));
     cmd(config.path())
-        .args(["auth", "default"])
+        .args(["target"])
         .assert()
         .success()
         .stdout(predicate::str::contains("In effect now: pathbase"));
@@ -141,11 +216,11 @@ fn auth_default_clear_falls_back_to_pathbase() {
 fn the_env_var_overrides_the_stored_default() {
     let config = tempfile::tempdir().unwrap();
     cmd(config.path())
-        .args(["auth", "default", "s3://stored/x"])
+        .args(["target", "s3://stored/x", "--no-verify"])
         .assert()
         .success();
     cmd(config.path())
-        .args(["auth", "default"])
+        .args(["target"])
         .env("TOOLPATH_SHARE_TARGET", "s3://from-env/y")
         .assert()
         .success()
@@ -162,7 +237,7 @@ fn a_scheme_less_target_is_a_folder_not_a_bucket() {
     let config = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();
     cmd(config.path())
-        .args(["auth", "default", &folder.path().to_string_lossy()])
+        .args(["target", &folder.path().to_string_lossy()])
         .assert()
         .success();
     let raw = std::fs::read_to_string(config.path().join("config.json")).unwrap();
@@ -177,7 +252,7 @@ fn a_scheme_less_target_is_a_folder_not_a_bucket() {
 fn an_unsupported_scheme_is_rejected() {
     let config = tempfile::tempdir().unwrap();
     cmd(config.path())
-        .args(["auth", "default", "gs://bucket/x"])
+        .args(["target", "gs://bucket/x"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("s3://"));
@@ -205,7 +280,7 @@ fn auth_s3_login_stores_status_shows_and_logout_clears() {
         .success()
         .stdout(predicate::str::contains("S3 settings saved"))
         // Credentials alone don't redirect `path share` — say so.
-        .stdout(predicate::str::contains("path auth default"));
+        .stdout(predicate::str::contains("path target"));
 
     let stored = config.path().join("s3.json");
     assert!(stored.is_file(), "s3.json not written");
@@ -297,7 +372,7 @@ fn s3_credentials_without_a_default_refuse_to_publish_anonymously() {
         .args(["p", "export", "object", "--input", doc.to_str().unwrap()])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("path auth default"));
+        .stderr(predicate::str::contains("path target"));
 }
 
 // ── p export object / p import object ───────────────────────────────
@@ -319,8 +394,13 @@ fn export_then_import_round_trips_through_a_folder() {
         .unwrap()
         .trim()
         .to_string();
-    assert!(uri.ends_with("/doc.json"), "unexpected location: {uri}");
-    assert!(folder.path().join("doc.json").is_file());
+    // Legible name: date and topic lead, cache id trails. The fixture
+    // is a 2026-01-01 session whose first prompt is "hello".
+    assert!(
+        uri.ends_with("/2026-01-01-hello-doc.json"),
+        "unexpected location: {uri}"
+    );
+    assert!(folder.path().join("2026-01-01-hello-doc.json").is_file());
 
     cmd(config.path())
         .args(["p", "import", "object", &format!("file://{uri}")])
@@ -349,7 +429,7 @@ fn the_s3_subcommand_alias_still_works() {
         .args(["--to", &folder.path().to_string_lossy()])
         .assert()
         .success();
-    assert!(folder.path().join("doc.json").is_file());
+    assert!(folder.path().join("2026-01-01-hello-doc.json").is_file());
 }
 
 #[test]
@@ -360,11 +440,7 @@ fn export_object_uses_the_configured_default_target() {
     let doc = write_doc(work.path());
 
     cmd(config.path())
-        .args([
-            "auth",
-            "default",
-            &format!("{}/traces", folder.path().display()),
-        ])
+        .args(["target", &format!("{}/traces", folder.path().display())])
         .assert()
         .success();
 
@@ -372,9 +448,16 @@ fn export_object_uses_the_configured_default_target() {
         .args(["p", "export", "object", "--input", doc.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("/traces/doc.json"));
+        .stdout(predicate::str::contains(
+            "/traces/2026-01-01-hello-doc.json",
+        ));
 
-    assert!(folder.path().join("traces/doc.json").is_file());
+    assert!(
+        folder
+            .path()
+            .join("traces/2026-01-01-hello-doc.json")
+            .is_file()
+    );
 }
 
 #[test]
@@ -384,7 +467,7 @@ fn export_object_with_a_pathbase_default_says_so() {
     let doc = write_doc(work.path());
 
     cmd(config.path())
-        .args(["auth", "default", "pathbase"])
+        .args(["target", "pathbase"])
         .assert()
         .success();
 
@@ -431,6 +514,66 @@ fn import_object_rejects_a_non_toolpath_object() {
 }
 
 // ── path share ──────────────────────────────────────────────────────
+
+#[test]
+fn a_shared_object_keeps_its_name_when_the_session_is_re_shared() {
+    // Re-sharing must overwrite its own object, not leave a trail of
+    // near-duplicates — the reason every part of the name is a pure
+    // function of the document.
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    for _ in 0..2 {
+        cmd(config.path())
+            .args(["p", "export", "object"])
+            .args(["--input", doc.to_str().unwrap()])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert()
+            .success();
+    }
+
+    let objects: Vec<String> = std::fs::read_dir(folder.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(objects, vec!["2026-01-01-hello-doc.json".to_string()]);
+}
+
+#[test]
+fn a_bare_relative_target_is_rejected_rather_than_creating_a_folder() {
+    // The trap: a bucket name typed from memory becomes ./my-bucket
+    // under the cwd, and the share reports success.
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .current_dir(work.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", "my-bucket/traces"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("s3://my-bucket/traces"))
+        .stderr(predicate::str::contains("./my-bucket/traces"));
+
+    assert!(
+        !work.path().join("my-bucket").exists(),
+        "a rejected target must not leave a directory behind"
+    );
+}
+
+#[test]
+fn target_rejects_a_bare_relative_value_too() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["target", "my-bucket/traces"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("s3://my-bucket/traces"));
+}
 
 #[test]
 fn share_rejects_pathbase_flags_alongside_an_object_target() {

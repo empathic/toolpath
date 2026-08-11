@@ -8,7 +8,7 @@ use crate::cmd_pathbase::{
     prompt_line, resolve_url, store_session,
 };
 use crate::store::{self, S3Settings};
-use crate::target::{self, Target};
+use crate::target;
 
 #[derive(Subcommand, Debug)]
 pub enum AuthOp {
@@ -28,17 +28,6 @@ pub enum AuthOp {
     Status,
     /// Verify the stored session against the server and print the current user
     Whoami,
-    /// Set (or show) where `path share` uploads by default: `pathbase`,
-    /// an S3 bucket (`s3://bucket/prefix`), or a folder (`~/traces`)
-    Default {
-        /// The target to make default. Omit to print the current one.
-        #[arg(index = 1)]
-        target: Option<String>,
-
-        /// Forget the configured default, falling back to Pathbase
-        #[arg(long, conflicts_with = "target")]
-        clear: bool,
-    },
     /// Store S3 credentials once, so `s3://` share and resume targets
     /// need none on the command line. A folder target needs no
     /// credentials and so never needs this.
@@ -57,7 +46,7 @@ pub enum S3Op {
     /// tweak. Run interactively with no flags and it prompts, without
     /// echoing the secret.
     ///
-    /// This does not set *where* shares go — that's `path auth default`
+    /// This does not set *where* shares go — that's `path target`
     /// — so one stored credential serves any number of buckets.
     #[command(alias = "set")]
     Login {
@@ -103,7 +92,6 @@ pub struct S3LoginArgs {
 pub fn run(op: AuthOp) -> Result<()> {
     match op {
         AuthOp::S3 { op } => run_s3(op),
-        AuthOp::Default { target, clear } => default_target(target, clear),
         other => {
             let path = credentials_path()?;
             match other {
@@ -111,60 +99,10 @@ pub fn run(op: AuthOp) -> Result<()> {
                 AuthOp::Logout => logout(&path),
                 AuthOp::Status => status(&path),
                 AuthOp::Whoami => whoami(&path),
-                AuthOp::S3 { .. } | AuthOp::Default { .. } => unreachable!("handled above"),
+                AuthOp::S3 { .. } => unreachable!("handled above"),
             }
         }
     }
-}
-
-// ── Default share target ────────────────────────────────────────────────
-
-fn default_target(spec: Option<String>, clear: bool) -> Result<()> {
-    if clear {
-        let path = target::clear_default()?;
-        println!("Default share target cleared ({}).", path.display());
-        println!("`path share` now uploads to Pathbase.");
-        return Ok(());
-    }
-
-    let Some(spec) = spec else {
-        return print_default_target();
-    };
-
-    let parsed = Target::parse(&spec)?;
-    let path = target::set_default(&parsed)?;
-    println!("Default share target set to {parsed}");
-    println!("  stored in: {}", path.display());
-    if let Target::Object(dest) = &parsed
-        && !dest.is_local()
-        && store::effective_settings()?.access_key_id.is_none()
-    {
-        println!(
-            "  note: no S3 credentials stored yet — run `path auth s3 login`, \
-             or rely on the AWS credential chain."
-        );
-    }
-    Ok(())
-}
-
-/// Answer "where does my next share go?" in one command, including why.
-fn print_default_target() -> Result<()> {
-    let (stored, path) = target::default_target()?;
-    match &stored {
-        Some(t) => println!("Default share target: {t} (from {})", path.display()),
-        None => println!("No default share target configured."),
-    }
-    // The stored value isn't the whole story — an env var or the
-    // built-in fallback may be what actually applies right now.
-    println!("In effect now: {}", target::describe_effective()?);
-    if stored.is_none() {
-        println!();
-        println!("Set one with:");
-        println!("  path auth default s3://my-bucket/traces");
-        println!("  path auth default ~/Dropbox/toolpath   # a folder needs no credentials");
-        println!("  path auth default pathbase");
-    }
-    Ok(())
 }
 
 fn login(path: &Path, url: Option<String>, code_arg: Option<String>) -> Result<()> {
@@ -337,7 +275,7 @@ fn suggest_default_target() -> Result<()> {
     }
     println!();
     println!("`path share` still uploads to Pathbase. To make S3 the default:");
-    println!("  path auth default s3://my-bucket/traces");
+    println!("  path target s3://my-bucket/traces");
     Ok(())
 }
 

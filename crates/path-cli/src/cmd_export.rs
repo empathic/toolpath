@@ -208,7 +208,7 @@ pub enum ExportTarget {
 
         /// Destination: `s3://bucket/prefix`, or a folder (`~/traces`,
         /// `file:///srv/traces`). Defaults to the target from
-        /// `path auth default`.
+        /// `path target`.
         #[arg(long, value_name = "DESTINATION")]
         to: Option<String>,
     },
@@ -1909,7 +1909,7 @@ fn run_object(input: String, to: Option<String>) -> Result<()> {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| input.clone());
 
-        let uri = dest.uri_for(&cache_id);
+        let uri = dest.uri_for(&crate::store::name_for_body(&body, &cache_id));
         uri.put(&settings, body.as_bytes())?;
         println!("{uri}");
         eprintln!("Uploaded {} bytes → {uri}", body.len());

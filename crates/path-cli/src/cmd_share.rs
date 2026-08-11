@@ -63,8 +63,8 @@ pub struct ShareArgs {
     /// local path — spell a bucket `s3://…`.
     ///
     /// Without this flag the target comes from `$TOOLPATH_SHARE_TARGET`,
-    /// then `path auth default`, then Pathbase. For object storage the
-    /// document lands at `<prefix>/<cache-id>.json`, and the printed
+    /// then `path target`, then Pathbase. For object storage the
+    /// document is named `<date>-<topic>-<cache-id>.json`, and the printed
     /// location is what `path resume` takes.
     #[arg(long, value_name = "TARGET")]
     pub to: Option<String>,
@@ -110,7 +110,7 @@ impl ShareTarget {
                 upload,
             } => crate::cmd_export::run_pathbase_inner(auth, base_url, upload, body, summary),
             ShareTarget::Object { dest, settings } => {
-                let uri = dest.uri_for(cache_id);
+                let uri = dest.uri_for(&crate::store::name_for_body(body, cache_id));
                 uri.put(&settings, body.as_bytes())?;
                 println!("{uri}");
                 eprintln!("Uploaded {summary} → {uri}");

@@ -427,6 +427,100 @@ fn missing_object_reports_not_found() {
     assert!(err.to_string().contains("not found"), "actual: {err}");
 }
 
+// ── Resuming from a destination rather than a document ──────────────
+//
+// `path share` has a picker across every harness; resuming from where
+// you shared to needs one too, or a destination is a write-only hole.
+
+#[test]
+fn a_destination_holding_one_document_resumes_it_without_asking() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+    let bucket = tempfile::tempdir().unwrap();
+
+    let graph = toolpath::v1::Graph::from_path(make_convo_path(
+        "agent:claude-code",
+        "claude-code://resume-only-one",
+    ));
+    seed_object(bucket.path(), "2026-08-07-only-one-claude-abc", &graph);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(
+        ResumeArgs {
+            // The destination, not a document inside it.
+            input: bucket.path().to_string_lossy().into_owned(),
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(Harness::Claude),
+            no_cache: false,
+            force: false,
+            url: None,
+        },
+        &recorder,
+    )
+    .unwrap();
+
+    assert_eq!(recorder.captured().binary, "claude");
+}
+
+#[test]
+fn an_empty_destination_says_how_to_fill_it() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+    let bucket = tempfile::tempdir().unwrap();
+
+    let err = run_with_strategy(
+        ResumeArgs {
+            input: bucket.path().to_string_lossy().into_owned(),
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(Harness::Claude),
+            no_cache: false,
+            force: false,
+            url: None,
+        },
+        &RecordingExec::default(),
+    )
+    .unwrap_err();
+    let s = err.to_string();
+    assert!(s.contains("no shared documents"), "actual: {s}");
+    assert!(s.contains("path share --to"), "actual: {s}");
+}
+
+#[test]
+fn a_destination_url_without_a_json_suffix_is_browsed_not_fetched() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+    let bucket = tempfile::tempdir().unwrap();
+
+    let graph = toolpath::v1::Graph::from_path(make_convo_path(
+        "agent:claude-code",
+        "claude-code://resume-url-browse",
+    ));
+    seed_object(bucket.path(), "2026-08-07-browse-claude-abc", &graph);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(
+        ResumeArgs {
+            // A `file://` URL naming the container, not an object.
+            input: format!("file://{}", bucket.path().display()),
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(Harness::Claude),
+            no_cache: false,
+            force: false,
+            url: None,
+        },
+        &recorder,
+    )
+    .unwrap();
+
+    assert_eq!(recorder.captured().binary, "claude");
+}
+
 // ── Rejection cases ─────────────────────────────────────────────────
 
 #[test]

@@ -24,6 +24,8 @@ pub mod cmd_resume;
 mod cmd_share;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_show;
+#[cfg(not(target_os = "emscripten"))]
+mod cmd_target;
 mod cmd_track;
 mod cmd_validate;
 mod config;
@@ -84,7 +86,7 @@ enum Commands {
         ansi: bool,
     },
     /// Share an agent session via an interactive picker — to Pathbase,
-    /// an S3 bucket, or a folder (see `path auth default`)
+    /// an S3 bucket, or a folder (see `path target`)
     #[cfg(not(target_os = "emscripten"))]
     Share {
         #[command(flatten)]
@@ -109,12 +111,18 @@ enum Commands {
         #[command(flatten)]
         args: cmd_kind::KindArgs,
     },
-    /// Manage where shares go (`auth default`) and the credentials to
-    /// get there: Pathbase, or S3 under `auth s3`
+    /// Manage upload credentials: Pathbase, or S3 under `auth s3`
     #[cfg(not(target_os = "emscripten"))]
     Auth {
         #[command(subcommand)]
         op: cmd_auth::AuthOp,
+    },
+    /// Show or set where `path share` uploads: Pathbase, an S3 bucket,
+    /// or a folder
+    #[cfg(not(target_os = "emscripten"))]
+    Target {
+        #[command(flatten)]
+        args: cmd_target::TargetArgs,
     },
     /// Plumbing: lower-level operations on documents and sources
     /// (import, export, cache, list, render, merge, validate, derive,
@@ -148,6 +156,8 @@ pub fn run() -> Result<()> {
         Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Auth { op } => cmd_auth::run(op),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::Target { args } => cmd_target::run(args),
         Commands::P { command } => cmd_p::run(command, cli.pretty),
     }
 }

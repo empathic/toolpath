@@ -15,7 +15,7 @@
 //!
 //! 1. `--to <target>` on the command
 //! 2. `$TOOLPATH_SHARE_TARGET`
-//! 3. `default_target` in `config.json` (`path auth default <target>`)
+//! 3. `default_target` in `config.json` (`path target <value>`)
 //! 4. Pathbase
 //!
 //! Nothing is inferred from which credentials happen to exist. A share
@@ -100,7 +100,7 @@ impl Target {
     }
 }
 
-/// Where a resolved target came from, so `path auth default` and the
+/// Where a resolved target came from, so `path target` and the
 /// share confirmation can say *why* this is the destination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Origin {
@@ -173,8 +173,8 @@ pub(crate) fn resolve(flag: Option<&str>) -> Result<(Target, Origin)> {
              default target and no Pathbase login, and defaulting to Pathbase here \
              would publish anonymously.\n\
              \n  \
-             path auth default s3://my-bucket/traces   # or a folder: path auth default ~/traces\n  \
-             path share --to pathbase                  # to publish to Pathbase this once"
+             path target s3://my-bucket/traces   # or a folder: path target ~/traces\n  \
+             path share --to pathbase            # to publish to Pathbase this once"
         );
     }
     Ok((Target::Pathbase, Origin::Builtin))
@@ -192,7 +192,7 @@ pub(crate) fn describe_effective() -> Result<String> {
     if fallback_is_a_bad_guess()? {
         return Ok(
             "not configured — S3 credentials are stored but no default target is set \
-             (run `path auth default`)"
+             (run `path target`)"
                 .to_string(),
         );
     }
@@ -264,9 +264,33 @@ pub(crate) fn apply_pathbase_flags(
     }
 }
 
-/// Guard against a destination that can't work: an `s3://` target with
-/// no credentials anywhere. A local folder never needs any, which is
-/// the whole appeal of `path auth default ~/traces`.
+/// Prove a target works, at the moment someone chooses it.
+///
+/// Configuration time is the right time to fail: a target is set once
+/// and used many times, so a wrong one discovered at share time has
+/// already cost a session pick and a derivation — and is discovered
+/// when the user wanted a result, not a setup step.
+///
+/// Deliberately a real write (see [`Destination::verify`]), including
+/// when no credentials are stored: that is the case *most* likely to
+/// break later, and `object_store`'s credential chain may still supply
+/// one from an instance role, so guessing helps nobody. Local folders
+/// go through the same path — it catches an unwritable parent or a
+/// read-only mount, and creates the folder as a side effect.
+pub(crate) fn verify(target: &Target, settings: &crate::store::S3Settings) -> Result<()> {
+    match target {
+        // Pathbase has its own auth story, reported by `path auth status`.
+        Target::Pathbase => Ok(()),
+        Target::Object(dest) => dest.verify(settings),
+    }
+}
+
+/// Cheap reachability check for the moment before an upload.
+///
+/// Weaker than [`verify`] on purpose: the upload is about to happen and
+/// will report its own failure, so all this needs to buy is not wasting
+/// a derivation on a typo'd bucket. Local folders create themselves on
+/// write and need nothing.
 pub(crate) fn check_reachable(target: &Target, settings: &crate::store::S3Settings) -> Result<()> {
     let Target::Object(dest) = target else {
         return Ok(());
@@ -274,17 +298,13 @@ pub(crate) fn check_reachable(target: &Target, settings: &crate::store::S3Settin
     if dest.is_local() {
         return Ok(());
     }
-    if settings.access_key_id.is_some() {
-        return Ok(());
+    if settings.access_key_id.is_none() {
+        // object_store will still try the AWS credential chain
+        // (instance role, web identity), so this is a note, not a
+        // failure.
+        eprintln!("note: no S3 credentials configured; falling back to the AWS credential chain.");
     }
-    // No explicit credentials — object_store will still try the AWS
-    // credential chain (instance role, web identity), so this is a
-    // note, not a failure.
-    eprintln!(
-        "note: no S3 credentials configured; falling back to the AWS credential chain. \
-         Run `path auth s3 login` if the upload fails."
-    );
-    Ok(())
+    dest.probe(settings)
 }
 
 #[cfg(test)]
@@ -415,7 +435,7 @@ mod tests {
                 Err(e) => e.to_string(),
                 Ok(t) => panic!("expected a refusal, got {t:?}"),
             };
-            assert!(err.contains("path auth default"), "{err}");
+            assert!(err.contains("path target"), "{err}");
         });
     }
 

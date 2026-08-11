@@ -2,47 +2,88 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## Share and resume anywhere: S3, a folder, or Pathbase — 2026-08-07
+## Share and resume anywhere: S3, a folder, or Pathbase — 2026-08-10
 
 **`path-cli`** (0.17.0) makes the share destination configurable. Bare
 `path share` still goes to Pathbase by default, but it can now be
-pointed at an S3 bucket or a plain folder once, and stay there.
+pointed at an S3 bucket or a plain folder once, and stay there — and
+what you share to is somewhere you can browse and resume out of, not a
+write-only hole.
 
-**Designating a target.** `path auth default <target>` sets it, and
-`path auth default` with no argument prints what's in effect and why:
+**Designating a target.** `path target <value>` sets it, and
+`path target` with no argument prints what's in effect and why:
 
 ```
-path auth default ~/Dropbox/toolpath-traces   # a folder — no credentials needed
-path auth default s3://my-bucket/traces
-path auth default pathbase                     # switch back
-path auth default --clear
+path target ~/Dropbox/toolpath-traces   # a folder — no credentials needed
+path target s3://my-bucket/traces
+path target pathbase                     # switch back
+path target --clear
 ```
 
+Setting a target **verifies** it, by doing what a share does: writing a
+small object and removing it. That's the whole point of checking at
+configuration time — a target is set once and used many times, so a
+wrong one that survives costs a session pick and a derivation later, at
+the moment the user wanted a result rather than a setup step. A listing
+would only tell you about `s3:ListBucket`, which isn't the permission a
+share needs; only a write answers the question actually being asked.
+Folders go through the same path, which also creates them. `--no-verify`
+stores a target unchecked, for a bucket that doesn't exist yet or a
+laptop that's offline.
+
+It's a top-level verb rather than a flag on `share` or a subcommand of
+`auth`, because it's a persistent setting and it is not authentication.
 The value is stored as `default_target` in `~/.toolpath/config.json` —
-one place, so "where does my next share go?" has one answer. A
-scheme-less value is a **local path**; spell a bucket `s3://…`. Folder
-targets are stored as `file://` URLs, so a stored default can't drift
-with the working directory, but they're displayed and printed as plain
-paths. Resolution order: `--to`, then `$TOOLPATH_SHARE_TARGET`, then
-the stored default, then Pathbase.
+one place, so "where does my next share go?" has one answer.
+
+A scheme-less value is a **local path**; spell a bucket `s3://…`. A
+*bare relative* value (`my-bucket/traces`) is rejected outright rather
+than quietly creating `./my-bucket/traces` and reporting success —
+`./my-bucket/traces` says you meant it. Folder targets are stored as
+`file://` URLs, so a stored default can't drift with the working
+directory, but they're displayed and printed as plain paths.
+Resolution: `--to`, then `$TOOLPATH_SHARE_TARGET`, then the stored
+default, then Pathbase.
 
 Nothing is inferred from which credentials happen to exist: a share
 that silently changes destination is a data-egress bug, not a
 convenience. The one guard is at the bottom of the order — if S3
-credentials are stored, no Pathbase session exists, and no default is
+credentials are stored, no Pathbase session exists, and no target is
 set, `path share` refuses rather than falling through to the
 *anonymous public* Pathbase endpoint.
 
-**Per-call override.** `path share --to <target>` takes the same three
-forms. The Pathbase-only flags (`--anon`, `--repo`, `--public`,
-`--url`, `--name`) select Pathbase on their own, overriding an object
-default; combining one with an explicit object `--to` is an error
-rather than a silent resolution. The target is resolved before the
-harness scan and the picker, so a typo costs nothing to discover.
+**Legible object names.** A shared document lands at
+`<date>-<topic>-<cache-id>.json` — e.g.
+`2026-08-07-add-s3-support-to-share-claude-6f2a1c9e.json`. Every
+component is a pure function of the document, so re-sharing a session
+that has grown overwrites its own object instead of leaving a trail of
+near-duplicates; the date comes from the session's *first* step, so it
+doesn't move as the conversation continues. The point is that a
+destination is a folder someone will open or a bucket someone will page
+through, and it also makes listing cheap enough to build a picker on.
 
-**Resume.** `path resume s3://bucket/key.json` is the inverse — a new
-input shape alongside Pathbase URLs, shorthands, file paths, and cache
-ids, caching downloads under an `s3-<bucket>-<key>` id so `--force` and
+**Resuming from a destination.** `path resume <destination>` — a
+bucket, a prefix, or a folder — lists what's there and offers a picker,
+the counterpart to `path share`'s picker across every harness. Rows are
+built from object names alone, so browsing a hundred shared sessions
+costs one list request and zero downloads. A destination holding a
+single document skips the picker. Anything ending in `.json` is still
+treated as a document and fetched directly.
+
+**Per-call override.** `path share --to <target>` takes the same forms.
+The Pathbase-only flags (`--anon`, `--repo`, `--public`, `--url`,
+`--name`) select Pathbase on their own, overriding an object target;
+combining one with an explicit object `--to` is an error rather than a
+silent resolution. The target is resolved before the harness scan and
+the picker, and an `s3://` target is probed for reachability before the
+picker too — a weaker check than `path target`'s, since the upload is
+about to happen and will report its own failure; all it needs to buy is
+not wasting a derivation on a typo'd bucket. Both checks bound their own
+runtime (short timeouts *and* a retry cap, since the default ten retries
+would otherwise multiply the timeout).
+
+**Resume by location.** `path resume s3://bucket/key.json` caches
+downloads under an `s3-<bucket>-<key>` id, so `--force` and
 `--no-cache` behave exactly as they do for Pathbase. A document shared
 to a folder is resumed with its plain path, which already worked.
 
@@ -65,9 +106,11 @@ export writes wherever `path share` would.
 
 Transport is the `object_store` crate, so one code path covers AWS S3,
 any S3-compatible endpoint (R2, MinIO, Ceph, B2 — point `--endpoint` at
-it), and `file://` for a folder. The folder backend is what the tests
-round-trip against, so share and resume are exercised end-to-end
-without a network or a mock HTTP server.
+it), and `file://` for a folder. `memory://` is rejected: it's a fresh
+per-process store, so anything "shared" there is gone before the
+command exits. The folder backend is what the tests round-trip against,
+so share and resume are exercised end-to-end without a network or a
+mock HTTP server.
 
 ## Projected Claude sessions are resumable again — 2026-07-30
 
