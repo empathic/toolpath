@@ -2,6 +2,18 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## opencode resolver captures env at construction — 2026-08-11
+
+- **`toolpath-opencode`** (0.5.1): `PathResolver` consulted
+  `$XDG_DATA_HOME` on every `data_dir()` call instead of once in
+  `new()` (#171). A resolver's answers are now fully determined at
+  construction, so `PathResolver::new().with_home(tmp)` can no longer
+  silently resolve into the live environment's real opencode data
+  dir. Also fixes a latent bug where an empty `$XDG_DATA_HOME`
+  resolved to the relative path `opencode`; per the XDG spec an empty
+  variable now counts as unset and falls back to
+  `~/.local/share/opencode`.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real
