@@ -350,3 +350,41 @@ fn explicit_harness_not_on_path_errors() {
     assert!(s.contains("isn't on PATH"), "actual: {s}");
     assert!(s.contains("claude"), "actual: {s}");
 }
+
+// ── Containment ─────────────────────────────────────────────────────
+
+/// RESOLVER_ENV_VARS are typically unset (CI included), so ScopedHome's
+/// unsets are no-ops there and a regression would go undetected. Set
+/// each var to a decoy dir, then assert every provider's resolver still
+/// roots under the sandbox home.
+#[test]
+fn resolvers_under_scoped_home_cannot_escape_sandbox() {
+    let _env = env_lock();
+    let decoy = tempfile::tempdir().unwrap();
+    let _guards: Vec<ScopedVar> = RESOLVER_ENV_VARS
+        .iter()
+        .map(|&v| ScopedVar::set(v, decoy.path()))
+        .collect();
+
+    let _home = ScopedHome::new();
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+
+    let under = |p: std::path::PathBuf| {
+        assert!(p.starts_with(&home), "escaped sandbox: {}", p.display());
+    };
+    under(toolpath_claude::PathResolver::new().claude_dir().unwrap());
+    under(toolpath_gemini::PathResolver::new().gemini_dir().unwrap());
+    under(toolpath_codex::PathResolver::new().codex_dir().unwrap());
+    under(toolpath_opencode::PathResolver::new().data_dir().unwrap());
+    under(toolpath_copilot::PathResolver::new().copilot_dir().unwrap());
+    under(
+        toolpath_cursor::PathResolver::new()
+            .user_data_dir()
+            .unwrap(),
+    );
+    under(
+        toolpath_pi::PathResolver::new()
+            .sessions_dir()
+            .to_path_buf(),
+    );
+}

@@ -97,6 +97,32 @@ impl Drop for ScopedHome {
     }
 }
 
+/// RAII guard that sets a single env var and restores its previous
+/// value on drop. Callers must hold `env_lock()`.
+pub struct ScopedVar {
+    name: &'static str,
+    prev: Option<OsString>,
+}
+
+impl ScopedVar {
+    pub fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let prev = std::env::var_os(name);
+        unsafe { std::env::set_var(name, value) };
+        Self { name, prev }
+    }
+}
+
+impl Drop for ScopedVar {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.name, v),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+}
+
 /// RAII guard that prepends a tempdir of fake binaries to `$PATH`.
 pub struct ScopedPath {
     _td: tempfile::TempDir,
