@@ -183,6 +183,17 @@ pub enum ImportSource {
         #[arg(long)]
         url: Option<String>,
     },
+    /// Import from object storage — an S3 bucket, an S3-compatible
+    /// endpoint, or a folder (the inverse of `path share --to`).
+    /// S3 credentials come from `path auth s3 login` or the AWS
+    /// environment; a folder needs none.
+    #[command(alias = "s3")]
+    Object {
+        /// Object URL: `s3://bucket/key.json` (also `s3a://`, and
+        /// `file:///dir/key.json` for a local folder)
+        #[arg(index = 1)]
+        target: String,
+    },
 }
 
 #[derive(clap::Args, Debug)]
@@ -301,6 +312,7 @@ fn derive(source: ImportSource) -> Result<Vec<DerivedDoc>> {
             base,
         } => derive_pi(project, session, all, base),
         ImportSource::Pathbase { target, url } => derive_pathbase(target, url),
+        ImportSource::Object { target } => derive_object(target),
     }
 }
 
@@ -1528,6 +1540,19 @@ fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<Deriv
             &target,
             url_flag.as_deref(),
         )?])
+    }
+}
+
+fn derive_object(target: String) -> Result<Vec<DerivedDoc>> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = target;
+        anyhow::bail!("'path p import object' requires a native environment with network access");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        Ok(vec![crate::derive::object_fetch_to_doc(&target)?])
     }
 }
 

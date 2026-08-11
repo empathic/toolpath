@@ -7,9 +7,16 @@
 //! `<input>` is resolved in this order:
 //! 1. `https://` / `http://` URL → fetched via `pathbase-client`,
 //!    cached unless `--no-cache`.
-//! 2. `owner/repo/slug` shorthand → same Pathbase fetch flow.
-//! 3. Existing file path → read directly.
-//! 4. Otherwise treated as a cache id under `~/.toolpath/documents/`.
+//! 2. `s3://` / `s3a://` / `file://` URL ending in `.json` → fetched
+//!    from object storage (the inverse of `path share --to`), cached
+//!    the same way.
+//! 3. A **share destination** rather than a document — a bucket, a
+//!    prefix, or a directory — is listed and offered in a picker. A
+//!    shared document is always `<name>.json`, so anything else naming
+//!    a place is somewhere to browse.
+//! 4. `owner/repo/slug` shorthand → same Pathbase fetch flow.
+//! 5. Existing file path → read directly.
+//! 6. Otherwise treated as a cache id under `~/.toolpath/documents/`.
 //!
 //! ## Harness selection
 //!
@@ -48,10 +55,15 @@ use crate::harness::Harness;
 
 #[derive(Args, Debug)]
 pub struct ResumeArgs {
-    /// Toolpath document to resume from. Accepted shapes: a Pathbase
-    /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
-    /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
-    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
+    /// Toolpath document to resume from, or a share destination to pick
+    /// one out of.
+    ///
+    /// Accepted shapes: a Pathbase URL
+    /// (`https://host/owner/repo/slug`); an object-storage URL
+    /// (`s3://bucket/key.json`); a share destination — a bucket, a
+    /// prefix, or a folder — which is listed in a picker; a bare
+    /// Pathbase shorthand (`owner/repo/slug`); a path to a local
+    /// toolpath JSON file; or a cache id (e.g. `claude-abc`).
     pub input: String,
 
     /// Working directory to run the resumed harness from. Defaults to
@@ -193,6 +205,42 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
     Ok(path)
 }
 
+/// Fetch a remote document, preferring an existing cache entry.
+///
+/// `--force` skips the probe and re-fetches; `--no-cache` skips both the
+/// probe AND the post-fetch write (still useful for ephemeral
+/// environments). Callers supply the cache id up front because every
+/// remote shape can compute it from the reference alone — that's what
+/// makes the cache hit free of a round trip.
+fn fetch_cached(
+    raw: &str,
+    cache_id: &str,
+    args: &ResumeArgs,
+    fetch: impl FnOnce() -> Result<crate::derive::DerivedDoc>,
+) -> Result<Graph> {
+    if !args.force
+        && !args.no_cache
+        && let Ok(cache_path) = crate::cache::cache_path(cache_id)
+        && cache_path.exists()
+    {
+        let json = std::fs::read_to_string(&cache_path)
+            .with_context(|| format!("read {}", cache_path.display()))?;
+        eprintln!("Resolved {raw} → {cache_id} (cached)");
+        return Graph::from_json(&json)
+            .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e));
+    }
+
+    let derived = fetch()?;
+    if !args.no_cache {
+        // force=true here: we either short-circuited above (cache miss)
+        // or the user explicitly passed --force, and either way we want
+        // the new bytes to land.
+        crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        eprintln!("Resolved {raw} → {}", derived.cache_id);
+    }
+    Ok(derived.doc)
+}
+
 /// Resolve the user-supplied `<input>` argument into a parsed `Graph`
 /// plus the source harness inferred from its single inline path (if
 /// any). See spec § "Input resolution" for the order.
@@ -202,14 +250,31 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
     enum Shape<'a> {
         PathbaseUrl(&'a str),
         PathbaseShorthand(&'a str),
+        ObjectStore(&'a str),
+        /// A share destination rather than a single document: list it
+        /// and let the user pick.
+        ObjectContainer(&'a str),
         FilePath(&'a str),
         CacheId(&'a str),
     }
 
+    // A shared document is always `<name>.json`, so anything else that
+    // names a place — a bucket, a prefix, a directory — is a container
+    // to browse rather than a document to load.
+    let names_a_document = raw.trim_end_matches('/').ends_with(".json");
+
     let shape = if raw.starts_with("http://") || raw.starts_with("https://") {
         Shape::PathbaseUrl(raw)
+    } else if crate::store::looks_like_object_uri(raw) {
+        if names_a_document {
+            Shape::ObjectStore(raw)
+        } else {
+            Shape::ObjectContainer(raw)
+        }
     } else if looks_like_pathbase_shorthand(raw) {
         Shape::PathbaseShorthand(raw)
+    } else if std::path::Path::new(raw).is_dir() {
+        Shape::ObjectContainer(raw)
     } else if std::path::Path::new(raw).is_file() {
         Shape::FilePath(raw)
     } else {
@@ -218,34 +283,28 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
 
     let graph: Graph = match shape {
         Shape::PathbaseUrl(u) | Shape::PathbaseShorthand(u) => {
-            // Probe the local cache before going to the network. The cache
-            // id is purely a function of the parsed (owner, repo, id), so
-            // we can compute it without fetching. `--force` skips the probe
-            // and re-fetches; `--no-cache` skips both the probe AND the
-            // post-fetch write (still useful for ephemeral environments).
+            // The cache id is purely a function of the parsed (owner,
+            // repo, id), so we can probe the cache without fetching.
             let (_, ref_) = crate::derive::parse_pathbase_ref(u, args.url.as_deref())?;
             let cache_id = crate::cache::pathbase_cache_id(&ref_.owner, &ref_.repo, &ref_.id);
-            if !args.force
-                && !args.no_cache
-                && let Ok(cache_path) = crate::cache::cache_path(&cache_id)
-                && cache_path.exists()
-            {
-                let json = std::fs::read_to_string(&cache_path)
-                    .with_context(|| format!("read {}", cache_path.display()))?;
-                eprintln!("Resolved {} → {} (cached)", raw, cache_id);
-                Graph::from_json(&json)
-                    .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e))?
-            } else {
-                let derived = crate::derive::pathbase_fetch_to_doc(u, args.url.as_deref())?;
-                if !args.no_cache {
-                    // force=true here: we either short-circuited above
-                    // (cache miss) or the user explicitly passed --force,
-                    // and either way we want the new bytes to land.
-                    crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
-                    eprintln!("Resolved {} → {}", raw, derived.cache_id);
-                }
-                derived.doc
-            }
+            fetch_cached(raw, &cache_id, args, || {
+                crate::derive::pathbase_fetch_to_doc(u, args.url.as_deref())
+            })?
+        }
+        Shape::ObjectStore(u) => {
+            // Same shape as Pathbase: the cache id falls out of the URI
+            // alone, so an already-downloaded object costs no request.
+            let cache_id = crate::store::ObjectUri::parse(u)?.cache_id();
+            fetch_cached(raw, &cache_id, args, || {
+                crate::derive::object_fetch_to_doc(u)
+            })?
+        }
+        Shape::ObjectContainer(c) => {
+            let picked = pick_from_destination(c)?;
+            let uri = picked.to_string();
+            fetch_cached(&uri, &picked.cache_id(), args, || {
+                crate::derive::object_fetch_to_doc(&uri)
+            })?
         }
         Shape::FilePath(p) => {
             let json = std::fs::read_to_string(p).with_context(|| format!("read {}", p))?;
@@ -269,6 +328,108 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
 
     let harness = graph.single_path().and_then(infer_source_harness);
     Ok((graph, harness))
+}
+
+/// List a share destination and let the user pick one of its documents.
+///
+/// This is the other half of `path share`: sharing has a picker across
+/// every harness, so resuming from where you shared to needs one too,
+/// or a destination is a write-only hole you can only read out of by
+/// already knowing a filename.
+///
+/// Rows are built from object names alone — no downloads — which is
+/// what legible names buy: browsing a hundred shared sessions costs one
+/// list request.
+fn pick_from_destination(raw: &str) -> Result<crate::store::ObjectUri> {
+    let dest = crate::store::Destination::parse(raw)?;
+    let settings = crate::store::effective_settings()?;
+    let entries = dest.list(&settings)?;
+
+    if entries.is_empty() {
+        anyhow::bail!("no shared documents in {dest}. `path share --to {dest}` puts one there.");
+    }
+
+    // One document is not a choice worth making the user confirm.
+    if entries.len() == 1 {
+        let only = &entries[0];
+        eprintln!("Resuming the only document in {dest}: {}", only.stem);
+        return Ok(only.uri.clone());
+    }
+
+    if !crate::fuzzy::available() {
+        eprintln!("{} documents in {dest}:", entries.len());
+        for e in entries.iter().take(20) {
+            eprintln!("  {}", e.uri);
+        }
+        if entries.len() > 20 {
+            eprintln!("  … and {} more", entries.len() - 20);
+        }
+        anyhow::bail!("picking needs `fzf` on PATH and a TTY; pass a full location instead");
+    }
+
+    let lines: Vec<String> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| format_object_row(i, e))
+        .collect();
+    let header = format!("resume a shared session from {dest}");
+    let opts = crate::fuzzy::PickOptions {
+        with_nth: "2..",
+        prompt: "resume> ",
+        preview: None,
+        preview_window: "up:60%:wrap-word",
+        header: Some(&header),
+        tiebreak: "index",
+        multi: false,
+    };
+    let line = match crate::fuzzy::pick(&lines, &opts)? {
+        crate::fuzzy::PickResult::Selected(v) => match v.into_iter().next() {
+            Some(l) => l,
+            None => std::process::exit(130),
+        },
+        crate::fuzzy::PickResult::NoMatch => std::process::exit(1),
+        // Esc / Ctrl-C: deliberate cancel, same exit code `share` uses.
+        crate::fuzzy::PickResult::Cancelled => std::process::exit(130),
+    };
+    let idx: usize = line
+        .split('\t')
+        .next()
+        .and_then(|i| i.parse().ok())
+        .ok_or_else(|| anyhow::anyhow!("internal: failed to parse picker row"))?;
+    entries
+        .get(idx)
+        .map(|e| e.uri.clone())
+        .ok_or_else(|| anyhow::anyhow!("internal: picker returned an out-of-range row"))
+}
+
+/// `<index>\t<modified>  <size>  <name>` — a hidden index column so the
+/// selection maps back to its entry without reparsing the display, and
+/// a display built only from what listing already told us.
+fn format_object_row(index: usize, entry: &crate::store::ObjectEntry) -> String {
+    let when = entry
+        .modified
+        .map(|t| t.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "          ".to_string());
+    format!(
+        "{index}\t{when}  {:>8}  {}",
+        human_size(entry.size),
+        entry.stem
+    )
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
 }
 
 /// Probe `$PATH` (or `path_override`, for tests) for a given binary name.

@@ -125,9 +125,23 @@ path p export pathbase --input claude-<session-id>
 # (full URL or bare `<owner>/<repo>/<slug>` triple)
 path p import pathbase https://pathbase.dev/alex/pathstash/path-pr-42
 
+# Send shares somewhere else instead. Designate it once, and bare
+# `path share` goes there from then on.
+path auth s3 login                      # credentials, if you're using a bucket
+path target ~/Dropbox/toolpath-traces   # a folder — no credentials needed
+path target s3://my-bucket/traces       # or a bucket; checked before it's stored
+path share                              # → wherever you pointed it
+path target                             # what's in effect, and why
+
+# Override for one call, without changing the default
+path share --to /tmp/scratch
+path share --to pathbase
+
 # Resume a Toolpath document into your coding agent of choice (interactive
 # harness picker; project the session and exec the harness's resume command)
 path resume https://pathbase.dev/alex/pathstash/path-pr-42
+path resume ~/Dropbox/toolpath-traces   # lists what you've shared, pick one
+path resume s3://my-bucket/traces/2026-08-07-fix-the-parser-claude-abc.json
 path resume claude-<session-id> --harness claude -C /path/to/project
 
 # Query the whole local cache with a jaq (jq) filter over wrapped steps
@@ -160,14 +174,26 @@ path
     codex     --session ID
     opencode  --session ID
     pi        --project PATH --session ID [--base DIR]
-  share       # one-shot interactive picker + Pathbase upload
+  share       # one-shot interactive picker + upload to the share target
+              [--to pathbase|s3://BUCKET/PREFIX|FOLDER]
+              [--harness NAME] [--session ID] [--project PATH] [--no-cache]
+              [--url URL] [--anon] [--repo OWNER/NAME] [--name TEXT] [--public]
   resume      # project a doc into a coding agent and exec --resume
+              # INPUT: pathbase URL | s3://…/doc.json | a destination to
+              # browse | owner/repo/slug | file | cache id
   query       # jaq (jq) filter over cached steps
               FILTER [--source NAME] [--id CACHE-ID] [--input FILE]
               [--project PATH] [--kind SELECTOR] [-c] [-r]
   kind        # list bundled kinds, or print a kind's schema
               [KIND[/VERSION]]
   auth        login | status | whoami | logout [--url URL]
+              s3 login [--region R] [--endpoint URL] [--access-key-id ID]
+                       [--secret-access-key KEY] [--session-token TOK]
+                       [--virtual-hosted-style]
+              s3 status | s3 logout
+  target      # where `path share` uploads; no argument prints it.
+              # Setting one writes a probe object to prove it works.
+              [pathbase | s3://BUCKET/PREFIX | FOLDER] [--clear] [--no-verify]
   p           # plumbing: lower-level building blocks
     query
       ancestors --input FILE --step-id ID
@@ -188,10 +214,12 @@ path
       opencode  [--session ID] [--all] [--project ID] [--no-snapshot-diffs]
       pi        [--project PATH] [--session ID] [--all] [--base DIR]
       pathbase  TRACE-ID-OR-URL [--url URL]
+      object    URL                                   # s3:// or file://; alias: s3
                                                       # global: [--force] [--no-cache]
     export
       claude    --input REF [--project DIR | --output FILE]
       pathbase  --input REF [--url URL]
+      object    --input REF [--to DEST]               # alias: s3
     cache
       ls | rm CACHE-ID
     render
