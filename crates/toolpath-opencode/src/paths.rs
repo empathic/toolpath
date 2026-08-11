@@ -30,7 +30,8 @@ const LOG_SUBDIR: &str = "log";
 pub struct PathResolver {
     home_dir: Option<PathBuf>,
     data_dir: Option<PathBuf>,
-    /// `$XDG_DATA_HOME` as captured at construction.
+    /// `$XDG_DATA_HOME` as captured at construction. Per the XDG
+    /// Base Directory spec, an empty value counts as unset.
     xdg_data_home: Option<PathBuf>,
 }
 
@@ -45,7 +46,9 @@ impl PathResolver {
         Self {
             home_dir: home_dir(),
             data_dir: None,
-            xdg_data_home: std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+            xdg_data_home: std::env::var_os("XDG_DATA_HOME")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
         }
     }
 
@@ -229,6 +232,19 @@ mod tests {
         assert_eq!(
             r.data_dir().unwrap(),
             PathBuf::from("/xdg/at/construction/opencode")
+        );
+    }
+
+    #[test]
+    fn empty_xdg_data_home_is_treated_as_unset() {
+        let env = XdgVarGuard::lock();
+        // Per the XDG Base Directory spec, an empty variable must be
+        // treated as unset, not as a "" base path.
+        env.set("");
+        let r = PathResolver::new().with_home("/home/test");
+        assert_eq!(
+            r.data_dir().unwrap(),
+            PathBuf::from("/home/test/.local/share/opencode")
         );
     }
 
