@@ -14,12 +14,13 @@ use std::sync::{Mutex, OnceLock};
 use path_cli::cmd_resume::ResumeArgs;
 use path_cli::harness::Harness;
 
-/// Process-wide lock for tests that mutate `$HOME`, `$PATH`, or
-/// `$TOOLPATH_CONFIG_DIR`. Integration tests under `tests/resume.rs`
-/// can't reach the library's internal `crate::config::TEST_ENV_LOCK`,
-/// so we use a separate lock here. Crucially, no library test holds
-/// this lock — but library tests now properly save+restore env vars
-/// (see commit 23deeb2), so the integration suite can be self-isolating.
+/// Process-wide lock for tests that mutate the process environment
+/// (see the RAII guards below). Integration tests under
+/// `tests/resume.rs` can't reach the library's internal
+/// `crate::config::TEST_ENV_LOCK`, so we use a separate lock here.
+/// Crucially, no library test holds this lock — but library tests now
+/// properly save+restore env vars (see commit 23deeb2), so the
+/// integration suite can be self-isolating.
 pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -27,11 +28,23 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// RAII guard that pins `$HOME` and `$TOOLPATH_CONFIG_DIR` to a tempdir.
+/// Env vars that can redirect a harness path resolver away from
+/// `$HOME`, so pinning `$HOME` alone does not sandbox them.
+pub const RESOLVER_ENV_VARS: &[&str] = &[
+    "XDG_DATA_HOME", // read by toolpath-opencode's resolver
+    "COPILOT_HOME",  // read by toolpath-copilot's resolver
+    "APPDATA",       // read by toolpath-cursor's resolver (Windows)
+];
+
+/// RAII guard that sandboxes every env var the harness path resolvers
+/// consult: pins `$HOME` and `$TOOLPATH_CONFIG_DIR` to a tempdir and
+/// unsets [`RESOLVER_ENV_VARS`] so resolution falls back to the
+/// pinned `$HOME`.
 pub struct ScopedHome {
     _td: tempfile::TempDir,
     prev_home: Option<OsString>,
     prev_config: Option<OsString>,
+    prev_resolver_vars: Vec<(&'static str, Option<OsString>)>,
 }
 
 impl ScopedHome {
@@ -39,14 +52,22 @@ impl ScopedHome {
         let td = tempfile::tempdir().unwrap();
         let prev_home = std::env::var_os("HOME");
         let prev_config = std::env::var_os("TOOLPATH_CONFIG_DIR");
+        let prev_resolver_vars = RESOLVER_ENV_VARS
+            .iter()
+            .map(|&name| (name, std::env::var_os(name)))
+            .collect();
         unsafe {
             std::env::set_var("HOME", td.path());
             std::env::set_var("TOOLPATH_CONFIG_DIR", td.path().join(".toolpath"));
+            for name in RESOLVER_ENV_VARS {
+                std::env::remove_var(name);
+            }
         }
         Self {
             _td: td,
             prev_home,
             prev_config,
+            prev_resolver_vars,
         }
     }
 
@@ -65,6 +86,12 @@ impl Drop for ScopedHome {
             match &self.prev_config {
                 Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
                 None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
+            }
+            for (name, prev) in &self.prev_resolver_vars {
+                match prev {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
             }
         }
     }
