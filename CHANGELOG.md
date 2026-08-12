@@ -7,21 +7,21 @@ All notable changes to the Toolpath workspace are documented here.
 - **`path-cli`** (0.17.0): `path share` now resolves a default Pathbase
   repo from the session's own directory (the project for path-keyed
   harnesses, the recorded cwd otherwise — from `path.base` when no
-  `--project` is in play). Two config surfaces feed the mapping:
-  - `~/.toolpath/config.toml` (personal): `[[project]]` rules with
-    `dir` (subtree match, `~/`-expandable; most specific wins) and
-    `repo = "owner/name"`.
-  - `.toolpath.toml` at the repo root (tracked, shared by a team):
-    `[share] repo = "owner/name"`, discovered by walking up from the
-    session's directory; the nearest file naming a repo wins.
+  `--project` is in play). The mapping lives in `~/.toolpath/config.toml`:
+  `[[project]]` rules with `dir` (subtree match, `~/`-expandable; most
+  specific wins) and `repo = "owner/name"`.
 
-  Precedence: `--repo` flag, then personal config, then the tracked
-  file, then today's behavior (`<you>/pathstash`). A resolved mapping
-  prints a `Sharing to owner/name (<origin>)` provenance line before
-  uploading. Configured repos require an authed upload: hitting one
-  while logged out is an error with a `path auth login` hint rather
-  than a silent anonymous upload; explicit `--anon` opts out of the
-  mapping entirely.
+  Precedence: `--repo` flag, then config, then today's behavior
+  (`<you>/pathstash`). A resolved mapping prints a
+  `Sharing to owner/name (<origin>)` provenance line before uploading.
+  Configured repos require an authed upload: hitting one while logged
+  out is an error with a `path auth login` hint rather than a silent
+  anonymous upload; explicit `--anon` opts out of the mapping entirely.
+
+  A repo-tracked `.toolpath.toml` variant (team commits the mapping,
+  every clone follows it) was built and pulled back out: a committed
+  file silently redirecting other users' uploads needs a first-use
+  consent flow first — deferred to issue #179.
 - **`toolpath-cli`** (0.17.0): lockstep bump of the deprecated shim.
 
 ## Projected Claude sessions are resumable again — 2026-07-30

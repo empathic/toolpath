@@ -1715,11 +1715,13 @@ fn share_configured_repo_requires_login() {
         .stderr(predicate::str::contains("path auth login"));
 }
 
-/// A repo-tracked `.toolpath.toml` at the project root feeds the same
-/// mapping (and the error provenance names the file).
+/// A repo-tracked `.toolpath.toml` is deliberately not consulted (it
+/// needs a consent flow first — issue #179): with no personal config,
+/// share falls through to the anonymous default exactly as if the file
+/// weren't there.
 #[test]
-fn share_tracked_toolpath_toml_configures_repo() {
-    let (temp, project) = claude_session_fixture();
+fn share_ignores_tracked_toolpath_toml() {
+    let (port, server, temp, project, home) = share_anon_fixture();
     std::fs::write(
         project.join(".toolpath.toml"),
         "[share]\nrepo = \"team/sessions\"\n",
@@ -1728,7 +1730,7 @@ fn share_tracked_toolpath_toml_configures_repo() {
     let cfg = tempfile::tempdir().unwrap();
 
     cmd()
-        .env("HOME", temp.path())
+        .env("HOME", &home)
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
         .args([
             "share",
@@ -1739,12 +1741,15 @@ fn share_tracked_toolpath_toml_configures_repo() {
             "--project",
         ])
         .arg(&project)
-        .args(["--no-cache", "--url", "http://127.0.0.1:1"])
+        .args(["--no-cache", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("team/sessions"))
-        .stderr(predicate::str::contains(".toolpath.toml"))
-        .stderr(predicate::str::contains("path auth login"));
+        .success()
+        .stderr(predicate::str::contains("Sharing to").not())
+        .stderr(predicate::str::contains("team/sessions").not());
+
+    server.join().unwrap();
+    drop(temp);
 }
 
 /// Explicit `--anon` opts out of the configured mapping: the upload goes

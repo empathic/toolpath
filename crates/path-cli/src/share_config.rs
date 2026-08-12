@@ -1,21 +1,19 @@
 //! Project-directory → Pathbase repo mapping for `path share`.
 //!
-//! Two config surfaces name the repo a project's sessions upload to:
-//!
-//! - **`~/.toolpath/config.toml`** (personal): `[[project]]` rules with a
-//!   `dir` and a `repo`, matched by subtree against the session's own
-//!   directory — the project for path-keyed harnesses, the recorded cwd
-//!   otherwise. The most specific matching `dir` wins.
-//! - **`.toolpath.toml`** (repo-tracked, committed by a team): the nearest
-//!   file walking up from the session's directory whose `[share]` table
-//!   names a `repo`.
-//!
-//! Personal config beats the tracked file so a user can redirect a team
-//! default without editing the repo; the `--repo` flag beats both (that
+//! `~/.toolpath/config.toml` `[[project]]` rules name the repo a
+//! project's sessions upload to: each rule carries a `dir` and a `repo`,
+//! matched by subtree against the session's own directory — the project
+//! for path-keyed harnesses, the recorded cwd otherwise. The most
+//! specific matching `dir` wins. The `--repo` flag beats config (that
 //! precedence lives in `cmd_share::effective_repo`). Rule matching is
-//! pure path logic, so a personal rule still applies when the checkout
-//! it names has been deleted; the tracked-file walk needs the directory
-//! to exist and silently falls through when it doesn't.
+//! pure path logic, so a rule still applies when the checkout it names
+//! has been deleted.
+//!
+//! Only the user's own config is consulted. A repo-tracked
+//! `.toolpath.toml` variant (a team commits the mapping once, every
+//! clone follows it) was built and deliberately pulled out: a committed
+//! file silently redirecting other users' uploads needs a first-use
+//! consent flow first — see issue #179.
 
 #![cfg(not(target_os = "emscripten"))]
 
@@ -28,9 +26,6 @@ use crate::cmd_share::home_relative;
 
 /// Personal config file under the toolpath config dir.
 pub(crate) const GLOBAL_CONFIG_FILE: &str = "config.toml";
-/// Repo-tracked config file, discovered by walking up from the
-/// session's directory.
-pub(crate) const TRACKED_CONFIG_FILE: &str = ".toolpath.toml";
 
 /// A repo mapping resolved from config. `origin` is the human-readable
 /// provenance ("which file, which rule") shown in the "Sharing to" line
@@ -57,10 +52,7 @@ fn resolve_repo_from(
     session_dir: &Path,
 ) -> Result<Option<ConfiguredRepo>> {
     let dir = canonicalize_prefix(session_dir);
-    if let Some(found) = global_rule(global_config, home, &dir)? {
-        return Ok(Some(found));
-    }
-    tracked_file(&dir, home)
+    global_rule(global_config, home, &dir)
 }
 
 /// Canonicalize the longest existing ancestor of `p` and re-append the
@@ -92,19 +84,6 @@ struct GlobalConfig {
 #[derive(Debug, Deserialize)]
 struct ProjectRule {
     dir: String,
-    #[serde(default)]
-    repo: Option<String>,
-}
-
-/// A repo-tracked `.toolpath.toml`.
-#[derive(Debug, Deserialize)]
-struct TrackedConfig {
-    #[serde(default)]
-    share: Option<ShareTable>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ShareTable {
     #[serde(default)]
     repo: Option<String>,
 }
@@ -151,40 +130,12 @@ fn global_rule(
     Ok(Some(ConfiguredRepo { repo, origin }))
 }
 
-fn tracked_file(session_dir: &Path, home: Option<&Path>) -> Result<Option<ConfiguredRepo>> {
-    for dir in session_dir.ancestors() {
-        let candidate = dir.join(TRACKED_CONFIG_FILE);
-        let Some(text) = read_optional(&candidate)? else {
-            continue;
-        };
-        let config: TrackedConfig = toml::from_str(&text)
-            .with_context(|| format!("failed to parse {}", candidate.display()))?;
-        // A file without `[share] repo` doesn't answer the question; keep
-        // walking so a nested config can't mask an ancestor's answer.
-        let Some(repo) = config.share.and_then(|s| s.repo) else {
-            continue;
-        };
-        let origin = home_relative(&candidate, home);
-        let repo = parse_repo(&repo, &origin)?;
-        return Ok(Some(ConfiguredRepo { repo, origin }));
-    }
-    Ok(None)
-}
-
-/// Read a config file that's allowed to be absent. A missing file (or a
-/// non-directory ancestor on the walk-up) is `None`; any other I/O
-/// failure is a real error.
+/// Read a config file that's allowed to be absent. A missing file is
+/// `None`; any other I/O failure is a real error.
 fn read_optional(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            Ok(None)
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).context(format!("failed to read {}", path.display())),
     }
 }
@@ -380,89 +331,23 @@ mod tests {
     }
 
     #[test]
-    fn tracked_file_found_by_walking_up() {
-        let temp = TempDir::new().unwrap();
-        let repo_root = temp.path().join("repo");
-        let nested = repo_root.join("crates/thing");
-        std::fs::create_dir_all(&nested).unwrap();
-        write(
-            &repo_root.join(TRACKED_CONFIG_FILE),
-            "[share]\nrepo = \"team/sessions\"\n",
-        );
-        let missing_global = temp.path().join("config.toml");
-        let found = resolve_repo_from(&missing_global, None, &nested)
-            .unwrap()
-            .unwrap();
-        assert_eq!(repo_str(&found), "team/sessions");
-        assert!(
-            found.origin.ends_with(".toolpath.toml"),
-            "origin: {}",
-            found.origin
-        );
-    }
-
-    #[test]
-    fn nearest_tracked_file_wins() {
-        let temp = TempDir::new().unwrap();
-        let repo_root = temp.path().join("repo");
-        let sub = repo_root.join("sub");
-        std::fs::create_dir_all(&sub).unwrap();
-        write(
-            &repo_root.join(TRACKED_CONFIG_FILE),
-            "[share]\nrepo = \"team/root\"\n",
-        );
-        write(
-            &sub.join(TRACKED_CONFIG_FILE),
-            "[share]\nrepo = \"team/sub\"\n",
-        );
-        let missing_global = temp.path().join("config.toml");
-        let found = resolve_repo_from(&missing_global, None, &sub)
-            .unwrap()
-            .unwrap();
-        assert_eq!(repo_str(&found), "team/sub");
-    }
-
-    #[test]
-    fn tracked_file_without_repo_falls_through_to_ancestor() {
-        let temp = TempDir::new().unwrap();
-        let repo_root = temp.path().join("repo");
-        let sub = repo_root.join("sub");
-        std::fs::create_dir_all(&sub).unwrap();
-        write(
-            &repo_root.join(TRACKED_CONFIG_FILE),
-            "[share]\nrepo = \"team/root\"\n",
-        );
-        // Nested file exists but doesn't name a repo — future settings
-        // could live here; it must not mask the root's answer.
-        write(&sub.join(TRACKED_CONFIG_FILE), "[share]\npublic = false\n");
-        let missing_global = temp.path().join("config.toml");
-        let found = resolve_repo_from(&missing_global, None, &sub)
-            .unwrap()
-            .unwrap();
-        assert_eq!(repo_str(&found), "team/root");
-    }
-
-    #[test]
-    fn global_rule_beats_tracked_file() {
+    fn tracked_toolpath_toml_in_repo_is_not_consulted() {
+        // A committed `.toolpath.toml` must not redirect uploads without
+        // a consent flow (issue #179) — only the user's own config
+        // applies.
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().join("repo");
         std::fs::create_dir_all(&repo_root).unwrap();
         write(
-            &repo_root.join(TRACKED_CONFIG_FILE),
+            &repo_root.join(".toolpath.toml"),
             "[share]\nrepo = \"team/sessions\"\n",
         );
-        let config = temp.path().join("config.toml");
-        write(
-            &config,
-            &format!(
-                "[[project]]\ndir = {:?}\nrepo = \"me/fork\"\n",
-                repo_root.display().to_string()
-            ),
+        let missing_global = temp.path().join("config.toml");
+        assert!(
+            resolve_repo_from(&missing_global, None, &repo_root)
+                .unwrap()
+                .is_none()
         );
-        let found = resolve_repo_from(&config, None, &repo_root)
-            .unwrap()
-            .unwrap();
-        assert_eq!(repo_str(&found), "me/fork");
     }
 
     #[test]
@@ -478,33 +363,22 @@ mod tests {
     }
 
     #[test]
-    fn malformed_tracked_file_errors_with_file_path() {
-        let temp = TempDir::new().unwrap();
-        let repo_root = temp.path().join("repo");
-        std::fs::create_dir_all(&repo_root).unwrap();
-        write(&repo_root.join(TRACKED_CONFIG_FILE), "[share\nrepo=");
-        let missing_global = temp.path().join("config.toml");
-        let err = resolve_repo_from(&missing_global, None, &repo_root).unwrap_err();
-        assert!(
-            err.to_string().contains(".toolpath.toml"),
-            "error should name the file: {err:#}"
-        );
-    }
-
-    #[test]
     fn invalid_repo_string_errors_with_origin() {
         let temp = TempDir::new().unwrap();
-        let repo_root = temp.path().join("repo");
-        std::fs::create_dir_all(&repo_root).unwrap();
+        let config = temp.path().join("config.toml");
+        let project = temp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
         write(
-            &repo_root.join(TRACKED_CONFIG_FILE),
-            "[share]\nrepo = \"not-owner-slash-name\"\n",
+            &config,
+            &format!(
+                "[[project]]\ndir = {:?}\nrepo = \"not-owner-slash-name\"\n",
+                project.display().to_string()
+            ),
         );
-        let missing_global = temp.path().join("config.toml");
-        let err = resolve_repo_from(&missing_global, None, &repo_root).unwrap_err();
+        let err = resolve_repo_from(&config, None, &project).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("owner/name"), "got: {msg}");
-        assert!(msg.contains(".toolpath.toml"), "got: {msg}");
+        assert!(msg.contains("config.toml"), "got: {msg}");
     }
 
     #[test]
