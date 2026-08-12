@@ -102,8 +102,9 @@ sessions in one portable schema that records **who** changed **what**,
     <div class="object-card">
       <h3>One query, every agent</h3>
       <p>Which sessions burned the most tokens? What did the agent try
-      before the fix that worked? One jq filter across every session on
-      the machine answers it, whichever agents wrote the logs.</p>
+      before the fix that worked? <code>path query</code> answers it with
+      one jq filter across every session on the machine, whichever
+      agents wrote the logs.</p>
     </div>
     <div class="object-card">
       <h3>Pick up where anyone left off</h3>
