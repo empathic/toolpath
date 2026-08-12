@@ -297,25 +297,31 @@ path p import git --repo . --branch main --no-cache | path p render dot | dot -T
   <path d="M0,65 Q100,40 220,58 Q350,76 470,44 Q600,14 720,58 Q815,80 900,54" class="topo-pencil" stroke-width="1" opacity="0.12" fill="none"/>
 </svg>
 
-## Workspace
-
-Toolpath is a Rust workspace of focused crates:
-
-| Crate                                                    | What it does                           |
-| -------------------------------------------------------- | -------------------------------------- |
-| [`toolpath`](https://docs.rs/toolpath)                   | Core types, builders, query API        |
-| [`toolpath-convo`](https://docs.rs/toolpath-convo)       | Provider-agnostic conversation traits  |
-| [`toolpath-claude`](https://docs.rs/toolpath-claude)     | Derive from Claude Code sessions       |
-| [`toolpath-gemini`](https://docs.rs/toolpath-gemini)     | Derive from Gemini CLI sessions        |
-| [`toolpath-codex`](https://docs.rs/toolpath-codex)       | Derive from Codex CLI rollouts         |
-| [`toolpath-copilot`](https://docs.rs/toolpath-copilot)   | Derive from Copilot CLI sessions       |
-| [`toolpath-opencode`](https://docs.rs/toolpath-opencode) | Derive from opencode databases         |
-| [`toolpath-cursor`](https://docs.rs/toolpath-cursor)     | Derive from Cursor (IDE) composers     |
-| [`toolpath-pi`](https://docs.rs/toolpath-pi)             | Derive from Pi sessions                |
-| [`toolpath-git`](https://docs.rs/toolpath-git)           | Derive from git history                |
-| [`toolpath-github`](https://docs.rs/toolpath-github)     | Derive from GitHub pull requests       |
-| [`toolpath-dot`](https://docs.rs/toolpath-dot)           | Graphviz DOT visualization             |
-| [`toolpath-md`](https://docs.rs/toolpath-md)             | Markdown rendering for LLMs            |
-| [`path-cli`](https://docs.rs/path-cli)                   | Unified CLI (`cargo install path-cli`) |
-
-See [Crates](/crates/) for details, or [docs.rs](https://docs.rs/toolpath) for API reference.
+<div class="scenarios">
+  <h2>Go deeper</h2>
+  <div class="objects">
+    <div class="object-card">
+      <h3>Read the spec</h3>
+      <p>The format stands alone: an <a href="/rfc/">RFC</a>, a
+      <a href="{{ site.repo }}/blob/main/schema/toolpath.schema.json">JSON
+      Schema</a>, and a dozen
+      <a href="{{ site.repo }}/tree/main/examples">example documents</a>.
+      If Rust isn't your language, implement the schema in yours.</p>
+    </div>
+    <div class="object-card">
+      <h3>Build on the crates</h3>
+      <p>Everything the CLI does is a library call: core types, a
+      provider crate per harness, renderers for DOT and Markdown. See
+      <a href="/crates/">the crates</a> or the
+      <a href="https://docs.rs/toolpath">API reference</a>.</p>
+    </div>
+    <div class="object-card">
+      <h3>Stay in Claude Code</h3>
+      <p><code>/plugin install path@toolpath</code> adds
+      <code>/path:share</code> and <code>/path:query</code> as slash
+      commands and installs the CLI on first use. See
+      <a href="{{ site.repo }}/tree/main/plugins/claude-code">the
+      plugin</a>.</p>
+    </div>
+  </div>
+</div>
