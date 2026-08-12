@@ -206,19 +206,22 @@ ancestry of `path.head`.
 
 ## Supported harnesses
 
-| Harness | Read | Write | Resume |
-|---|:-:|:-:|:-:|
-| Claude Code | ✓ | ✓ | ✓ `claude -r` |
-| Gemini CLI | ✓ | ✓ | ✓ `gemini --resume` |
-| Codex CLI | ✓ | ✓ | ✓ `codex resume` |
-| Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` |
-| opencode | ✓ | ✓ | ✓ `opencode --session` |
-| Cursor (IDE) | ✓ | ✓ | ✓ opens workspace |
-| Pi | ✓ | ✓ | ✓ `pi --session` |
+Every harness below is supported end to end: the `path` CLI reads its
+sessions, writes them back, and resumes them in place. What varies is
+how much detail each harness's own log records. Toolpath recovers
+everything the log contains.
 
-Read and write cover each harness's native session files; resume
-projects a document into the target harness and hands off to it. Git
-history and GitHub pull requests parse into the same schema, so a
+| Harness | What changed | What it cost |
+|---|---|---|
+| Claude Code | rebuilt from tool calls | exact totals per message |
+| Gemini CLI | rebuilt from tool calls | exact totals, reasoning itemized |
+| Codex CLI | exact diffs from the log | exact, attributed per step |
+| Copilot CLI <em>(preview)</em> | exact diffs from the log | session totals |
+| opencode | exact diffs from snapshots | exact totals, reasoning itemized |
+| Cursor (IDE) | exact before/after files | only when the log has them |
+| Pi | rebuilt from tool calls | only when the log has them |
+
+Git history and GitHub pull requests parse into the same schema, so a
 session, the PR it became, and the release that shipped it can share
 one graph.
 
