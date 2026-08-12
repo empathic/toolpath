@@ -107,10 +107,11 @@ sessions in one portable schema that records **who** changed **what**,
     </div>
     <div class="object-card">
       <h3>Pick up where anyone left off</h3>
-      <p>Start on your laptop, resume at your desk. Hand a stuck session
-      to a teammate. Move a Claude Code session into Codex. Wherever it
-      lands, the next agent starts with everything the last one knew:
-      the intent, the state, the dead ends already ruled out.</p>
+      <p>Start on your laptop, push the agent to a server. Hand a stuck
+      session to a teammate. Move a Claude Code session into Codex.
+      Wherever it lands, the next agent starts with everything the last
+      one knew: the intent, the state, the dead ends already ruled
+      out.</p>
     </div>
   </div>
 </div>
