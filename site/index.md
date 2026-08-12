@@ -92,11 +92,12 @@ sessions in one portable schema that records **who** changed **what**,
   <h2>When you need it</h2>
   <div class="objects">
     <div class="object-card">
-      <h3>Switch harnesses mid-task</h3>
-      <p>Claude Code started the feature. Codex should finish it. Share
-      the session, resume it in the other harness, and the new agent
-      starts with everything the old one knew: the intent, the state,
-      the dead ends already ruled out.</p>
+      <h3>Ship the session with the PR</h3>
+      <p>An agent wrote the diff, and the diff can't say why. Share the
+      session to <a href="https://pathbase.dev">Pathbase</a> and link it
+      from the PR: reviewers see what was asked, what was tried and
+      rejected, and how the result was verified. The questions that
+      stall a merge get answered before they're asked.</p>
     </div>
     <div class="object-card">
       <h3>One query, every agent</h3>
