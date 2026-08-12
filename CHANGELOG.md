@@ -2,6 +2,33 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Configured share remotes for `path share` — 2026-08-12
+
+- **`path-cli`** (0.17.0): `path share` now resolves a default share
+  remote from the session's own directory (the project for path-keyed
+  harnesses, the recorded cwd otherwise — from `path.base` when no
+  `--project` is in play). The mapping lives in `~/.toolpath/config.toml`:
+  `[[project]]` rules with `dir` (subtree match, `~/`-expandable; most
+  specific wins) and `remote` — either a bare `owner/name` (a Pathbase
+  repo on the credentialed/default server) or a canonical Pathbase repo
+  web URL (`https://<host>/u/<owner>/<name>`), which also carries the
+  server. The URL scheme is the extension point for future backends;
+  unknown schemes are rejected today.
+
+  Precedence: `--repo` flag, then config, then today's behavior
+  (`<you>/pathstash`); `--url` beats a URL remote's embedded server. A
+  resolved remote prints a `Sharing to <remote> (<origin>)` provenance
+  line before uploading. Configured remotes require an authed upload:
+  hitting one while logged out is an error with a `path auth login`
+  hint rather than a silent anonymous upload; explicit `--anon` opts
+  out of the mapping entirely.
+
+  A repo-tracked `.toolpath.toml` variant (team commits the mapping,
+  every clone follows it) was built and pulled back out: a committed
+  file silently redirecting other users' uploads needs a first-use
+  consent flow first — deferred to issue #179.
+- **`toolpath-cli`** (0.17.0): lockstep bump of the deprecated shim.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

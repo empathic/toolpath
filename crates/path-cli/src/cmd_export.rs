@@ -24,6 +24,7 @@ use std::path::PathBuf;
 
 #[cfg(not(target_os = "emscripten"))]
 use crate::cache::cache_ref;
+use crate::remote::RepoSpec;
 
 #[derive(Subcommand, Debug)]
 pub enum ExportTarget {
@@ -180,7 +181,7 @@ pub enum ExportTarget {
         anon: bool,
 
         /// Target a specific repo as `owner/name` instead of `<you>/pathstash`
-        #[arg(long, value_parser = parse_repo_spec)]
+        #[arg(long, value_parser = crate::remote::parse_repo_spec)]
         repo: Option<RepoSpec>,
 
         /// Human-readable display label for the uploaded graph
@@ -193,26 +194,6 @@ pub enum ExportTarget {
         #[arg(long)]
         public: bool,
     },
-}
-
-/// `owner/name` pair for `--repo`.
-#[derive(Debug, Clone)]
-pub(crate) struct RepoSpec {
-    pub(crate) owner: String,
-    pub(crate) name: String,
-}
-
-pub(crate) fn parse_repo_spec(s: &str) -> std::result::Result<RepoSpec, String> {
-    let (owner, name) = s
-        .split_once('/')
-        .ok_or_else(|| format!("expected owner/name, got `{s}`"))?;
-    if owner.is_empty() || name.is_empty() {
-        return Err(format!("expected owner/name, got `{s}`"));
-    }
-    Ok(RepoSpec {
-        owner: owner.to_string(),
-        name: name.to_string(),
-    })
 }
 
 pub fn run(target: ExportTarget) -> Result<()> {
@@ -2881,20 +2862,6 @@ mod tests {
             err.to_string().contains("Not logged in"),
             "expected `Not logged in` error, got: {err}"
         );
-    }
-
-    #[test]
-    fn parse_repo_spec_accepts_owner_slash_name() {
-        let spec = parse_repo_spec("alex/pathstash").unwrap();
-        assert_eq!(spec.owner, "alex");
-        assert_eq!(spec.name, "pathstash");
-    }
-
-    #[test]
-    fn parse_repo_spec_rejects_missing_slash() {
-        assert!(parse_repo_spec("alex").is_err());
-        assert!(parse_repo_spec("/pathstash").is_err());
-        assert!(parse_repo_spec("alex/").is_err());
     }
 
     #[test]

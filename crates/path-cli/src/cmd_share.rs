@@ -9,11 +9,11 @@ use clap::Args;
 use std::path::PathBuf;
 
 use crate::artifact::ArtifactType;
-use crate::cmd_export::RepoSpec;
 use crate::harness::{
     Harness, HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_copilot,
     is_not_found_cursor, is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
 };
+use crate::remote::RepoSpec;
 
 #[derive(Args, Debug)]
 pub struct ShareArgs {
@@ -26,7 +26,7 @@ pub struct ShareArgs {
     pub anon: bool,
 
     /// Target a specific repo as `owner/name` instead of `<you>/pathstash`
-    #[arg(long, value_parser = crate::cmd_export::parse_repo_spec)]
+    #[arg(long, value_parser = crate::remote::parse_repo_spec)]
     pub repo: Option<RepoSpec>,
 
     /// Human-readable display label for the uploaded graph
@@ -601,7 +601,7 @@ fn bail_no_sessions(
     let mut summary = String::from("No agent sessions found.\n");
     // Pad harness names so the path column lines up: "opencode:" is the
     // longest at 9 chars (8 + colon).
-    let home = home_dir();
+    let home = crate::config::home_dir();
     summary.push_str(&format_status_line(
         "claude",
         &harness_status_claude(bundle, home.as_deref()),
@@ -632,14 +632,6 @@ fn bail_no_sessions(
     ));
     eprint!("{summary}");
     anyhow::bail!("no shareable sessions");
-}
-
-/// Cross-platform `$HOME` lookup matching the providers' internal helpers.
-/// Returns `None` only when neither `$HOME` nor `$USERPROFILE` is set.
-fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from)
 }
 
 /// Human-readable status of a harness's on-disk store: either the (possibly
@@ -683,7 +675,7 @@ fn harness_status_claude(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     };
     match mgr.resolver().projects_dir() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -696,7 +688,7 @@ fn harness_status_gemini(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     };
     match mgr.resolver().tmp_dir() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -709,7 +701,7 @@ fn harness_status_codex(bundle: &HarnessBundle, home: Option<&std::path::Path>) 
     };
     match mgr.resolver().sessions_root() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -722,7 +714,7 @@ fn harness_status_copilot(bundle: &HarnessBundle, home: Option<&std::path::Path>
     };
     match mgr.resolver().session_state_dir() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -738,7 +730,7 @@ fn harness_status_opencode(
     };
     match mgr.resolver().db_path() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -751,7 +743,7 @@ fn harness_status_pi(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> 
     };
     let p = mgr.resolver().sessions_dir().to_path_buf();
     HarnessStatus {
-        path: home_relative(&p, home),
+        path: crate::config::home_relative(&p, home),
         exists: p.exists(),
     }
 }
@@ -762,27 +754,11 @@ fn harness_status_cursor(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     };
     match mgr.resolver().db_path() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
     }
-}
-
-/// Display `path` as `~/relative/part` when it's under `home`, otherwise
-/// return its absolute lossy form. Pure helper — does no filesystem I/O.
-fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
-    if let Some(home) = home
-        && let Ok(rest) = path.strip_prefix(home)
-    {
-        // strip_prefix returns the empty path when path == home; treat that
-        // as plain "~".
-        if rest.as_os_str().is_empty() {
-            return "~".to_string();
-        }
-        return format!("~/{}", rest.display());
-    }
-    path.display().to_string()
 }
 
 fn share_explicit(
@@ -819,15 +795,21 @@ fn share_explicit(
             "Cache is current for {} session {cache_id}; uploading without re-deriving",
             harness.name()
         );
+        let session_dir = project.as_deref().map(PathBuf::from).or_else(|| {
+            toolpath::v1::Graph::from_json(&body)
+                .ok()
+                .and_then(|doc| doc_session_dir(&doc))
+        });
+        let dest = resolve_destination(args, &auth, base_url, session_dir)?;
         let summary = format!("{} session {}", harness.name(), cache_id);
         let upload = crate::cmd_export::PathbaseUploadArgs {
             url: args.url.clone(),
             anon: args.anon,
-            repo: args.repo.clone(),
+            repo: dest.repo,
             name: args.name.clone(),
             public: args.public,
         };
-        return crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary);
+        return crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary);
     }
 
     let derived = derive_session(harness, project.as_deref(), session)?;
@@ -855,15 +837,100 @@ fn share_explicit(
         );
     }
 
+    let session_dir = project
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| doc_session_dir(&derived.doc));
+    let dest = resolve_destination(args, &auth, base_url, session_dir)?;
     let body = derived.doc.to_json()?;
     let upload = crate::cmd_export::PathbaseUploadArgs {
         url: args.url.clone(),
         anon: args.anon,
-        repo: args.repo.clone(),
+        repo: dest.repo,
         name: args.name.clone(),
         public: args.public,
     };
-    crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary)
+    crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)
+}
+
+/// The directory a derived session document belongs to: its single
+/// path's `base.uri` when that's a `file://` URI (conversation derives
+/// record the session's cwd there). This is how session-keyed harnesses
+/// (codex/opencode/copilot/cursor), which carry no `--project`, feed the
+/// configured-repo lookup.
+fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
+    let base = doc.single_path()?.path.base.as_ref()?;
+    let dir = base.uri.strip_prefix("file://")?;
+    if dir.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(dir))
+}
+
+/// Where an upload goes: the repo (`None` = the pathstash default) and
+/// the server it lives on.
+#[derive(Debug)]
+struct ShareDestination {
+    repo: Option<RepoSpec>,
+    base_url: String,
+}
+
+/// Apply the configured remote to the upload destination. `--repo` wins;
+/// explicit `--anon` skips config entirely (anonymous uploads have no
+/// repo); otherwise a remote configured for the session's directory
+/// applies (see `share_config`). A URL-form remote also carries the
+/// server, which replaces `base_url` unless `--url` was given — flags
+/// win. A configured remote needs an authed upload, so hitting one while
+/// unauthenticated is an error rather than a silent fall-through to the
+/// anonymous endpoint; a cross-server remote rides the stored token and
+/// lets the upload's own 401 handling surface a re-login hint.
+fn resolve_destination(
+    args: &ShareArgs,
+    auth: &crate::cmd_pathbase::AuthMode,
+    base_url: String,
+    session_dir: Option<PathBuf>,
+) -> Result<ShareDestination> {
+    if args.repo.is_some() || args.anon {
+        return Ok(ShareDestination {
+            repo: args.repo.clone(),
+            base_url,
+        });
+    }
+    let Some(dir) = session_dir else {
+        return Ok(ShareDestination {
+            repo: None,
+            base_url,
+        });
+    };
+    let Some(found) = crate::share_config::resolve_remote(&dir)? else {
+        return Ok(ShareDestination {
+            repo: None,
+            base_url,
+        });
+    };
+    if matches!(auth, crate::cmd_pathbase::AuthMode::Anon) {
+        let login_url = found
+            .base_url
+            .as_ref()
+            .map(|u| format!(" --url {u}"))
+            .unwrap_or_default();
+        anyhow::bail!(
+            "sessions in {} are configured to upload to {} ({}), which requires login.\n\
+             Run `path auth login{login_url}`, or pass --anon to upload anonymously instead.",
+            dir.display(),
+            found.display,
+            found.origin,
+        );
+    }
+    let base_url = match (&args.url, found.base_url) {
+        (None, Some(remote_url)) => remote_url,
+        _ => base_url,
+    };
+    eprintln!("Sharing to {} ({})", found.display, found.origin);
+    Ok(ShareDestination {
+        repo: Some(found.repo),
+        base_url,
+    })
 }
 
 /// Build the TSV line fed to the picker. Three hidden parser-only
@@ -1254,35 +1321,6 @@ mod tests {
     }
 
     #[test]
-    fn home_relative_strips_home_prefix() {
-        let home = Path::new("/Users/alex");
-        assert_eq!(
-            home_relative(Path::new("/Users/alex/.claude/projects"), Some(home)),
-            "~/.claude/projects"
-        );
-    }
-
-    #[test]
-    fn home_relative_returns_tilde_for_home_itself() {
-        let home = Path::new("/Users/alex");
-        assert_eq!(home_relative(home, Some(home)), "~");
-    }
-
-    #[test]
-    fn home_relative_passes_through_paths_outside_home() {
-        let home = Path::new("/Users/alex");
-        assert_eq!(
-            home_relative(Path::new("/tmp/elsewhere"), Some(home)),
-            "/tmp/elsewhere"
-        );
-    }
-
-    #[test]
-    fn home_relative_passes_through_when_no_home() {
-        assert_eq!(home_relative(Path::new("/foo/bar"), None), "/foo/bar");
-    }
-
-    #[test]
     fn harness_status_renders_existing_path_with_zero_sessions() {
         let s = HarnessStatus {
             path: "~/.claude/projects".to_string(),
@@ -1350,6 +1388,192 @@ mod tests {
         };
         let status = harness_status_claude(&bundle, None);
         assert!(status.exists);
+    }
+
+    fn share_args() -> ShareArgs {
+        ShareArgs {
+            url: None,
+            anon: false,
+            repo: None,
+            name: None,
+            public: false,
+            harness: None,
+            session: None,
+            project: None,
+            no_cache: false,
+        }
+    }
+
+    fn graph_with_base(uri: &str) -> toolpath::v1::Graph {
+        let json = format!(
+            r#"{{"graph":{{"id":"g"}},"paths":[{{"path":{{"id":"p","head":"s1","base":{{"uri":{uri:?}}}}},"steps":[]}}]}}"#
+        );
+        toolpath::v1::Graph::from_json(&json).unwrap()
+    }
+
+    #[test]
+    fn doc_session_dir_reads_file_uri_base() {
+        let doc = graph_with_base("file:///work/proj");
+        assert_eq!(doc_session_dir(&doc), Some(PathBuf::from("/work/proj")));
+    }
+
+    #[test]
+    fn doc_session_dir_ignores_non_file_base() {
+        let doc = graph_with_base("github:org/repo");
+        assert_eq!(doc_session_dir(&doc), None);
+        let doc = graph_with_base("file://");
+        assert_eq!(doc_session_dir(&doc), None);
+    }
+
+    #[test]
+    fn doc_session_dir_none_without_base() {
+        let json = r#"{"graph":{"id":"g"},"paths":[{"path":{"id":"p","head":"s1"},"steps":[]}]}"#;
+        let doc = toolpath::v1::Graph::from_json(json).unwrap();
+        assert_eq!(doc_session_dir(&doc), None);
+    }
+
+    const DEFAULT_BASE: &str = "https://pathbase.dev";
+
+    fn authed() -> crate::cmd_pathbase::AuthMode {
+        crate::cmd_pathbase::AuthMode::Authed {
+            token: "tok".into(),
+            username: "me".into(),
+        }
+    }
+
+    #[test]
+    fn destination_flag_wins_without_touching_config() {
+        let mut args = share_args();
+        args.repo = Some(crate::remote::parse_repo_spec("me/flag").unwrap());
+        let dest = resolve_destination(
+            &args,
+            &authed(),
+            DEFAULT_BASE.to_string(),
+            Some(PathBuf::from("/anywhere")),
+        )
+        .unwrap();
+        let repo = dest.repo.unwrap();
+        assert_eq!((repo.owner.as_str(), repo.name.as_str()), ("me", "flag"));
+        assert_eq!(dest.base_url, DEFAULT_BASE);
+    }
+
+    #[test]
+    fn destination_anon_flag_skips_config() {
+        let mut args = share_args();
+        args.anon = true;
+        let dest = resolve_destination(
+            &args,
+            &crate::cmd_pathbase::AuthMode::Anon,
+            DEFAULT_BASE.to_string(),
+            Some(PathBuf::from("/anywhere")),
+        )
+        .unwrap();
+        assert!(dest.repo.is_none());
+        assert_eq!(dest.base_url, DEFAULT_BASE);
+    }
+
+    #[test]
+    fn destination_default_without_session_dir() {
+        let dest = resolve_destination(
+            &share_args(),
+            &crate::cmd_pathbase::AuthMode::Anon,
+            DEFAULT_BASE.to_string(),
+            None,
+        )
+        .unwrap();
+        assert!(dest.repo.is_none());
+    }
+
+    /// One env-scoped run covering the remote forms: bare `owner/name`
+    /// (auth required when logged out, resolves when authed, base URL
+    /// untouched) and full URL (base URL replaced, `--url` flag wins,
+    /// logged-out hint names the remote's server).
+    #[test]
+    fn destination_applies_configured_remote() {
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let cfg = TempDir::new().unwrap();
+        let bare = cfg.path().join("bare-proj");
+        let url = cfg.path().join("url-proj");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::create_dir_all(&url).unwrap();
+        std::fs::write(
+            cfg.path().join("config.toml"),
+            format!(
+                "[[project]]\ndir = {bare:?}\nremote = \"team/sessions\"\n\n\
+                 [[project]]\ndir = {url:?}\nremote = \"https://pathbase.internal/u/team/proj\"\n",
+                bare = bare.display().to_string(),
+                url = url.display().to_string(),
+            ),
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var(crate::config::CONFIG_DIR_ENV, cfg.path());
+        }
+        let bare_unauthed = resolve_destination(
+            &share_args(),
+            &crate::cmd_pathbase::AuthMode::Anon,
+            DEFAULT_BASE.to_string(),
+            Some(bare.clone()),
+        );
+        let bare_authed = resolve_destination(
+            &share_args(),
+            &authed(),
+            DEFAULT_BASE.to_string(),
+            Some(bare),
+        );
+        let url_unauthed = resolve_destination(
+            &share_args(),
+            &crate::cmd_pathbase::AuthMode::Anon,
+            DEFAULT_BASE.to_string(),
+            Some(url.clone()),
+        );
+        let url_authed = resolve_destination(
+            &share_args(),
+            &authed(),
+            DEFAULT_BASE.to_string(),
+            Some(url.clone()),
+        );
+        let mut flag_args = share_args();
+        flag_args.url = Some("https://flag.example".to_string());
+        let url_flag_wins = resolve_destination(
+            &flag_args,
+            &authed(),
+            "https://flag.example".to_string(),
+            Some(url),
+        );
+        unsafe {
+            std::env::remove_var(crate::config::CONFIG_DIR_ENV);
+        }
+
+        let err = bare_unauthed.unwrap_err().to_string();
+        assert!(err.contains("team/sessions"), "got: {err}");
+        assert!(err.contains("path auth login"), "got: {err}");
+
+        let dest = bare_authed.unwrap();
+        let repo = dest.repo.unwrap();
+        assert_eq!(
+            (repo.owner.as_str(), repo.name.as_str()),
+            ("team", "sessions")
+        );
+        assert_eq!(dest.base_url, DEFAULT_BASE);
+
+        let err = url_unauthed.unwrap_err().to_string();
+        assert!(
+            err.contains("path auth login --url https://pathbase.internal"),
+            "logged-out hint should name the remote's server: {err}"
+        );
+
+        let dest = url_authed.unwrap();
+        assert_eq!(dest.base_url, "https://pathbase.internal");
+        assert_eq!(dest.repo.unwrap().name, "proj");
+
+        let dest = url_flag_wins.unwrap();
+        assert_eq!(
+            dest.base_url, "https://flag.example",
+            "--url must beat the remote's embedded server"
+        );
     }
 
     #[test]

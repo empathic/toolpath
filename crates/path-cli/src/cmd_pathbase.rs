@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 
 use crate::config::config_dir;
 
-pub(crate) const CREDENTIALS_FILE: &str = "credentials.json";
 pub(crate) const DEFAULT_URL: &str = "https://pathbase.dev";
 pub(crate) const PATHBASE_URL_ENV: &str = "PATHBASE_URL";
 
@@ -655,7 +654,7 @@ pub(crate) fn graphs_download(
 // ── File storage ────────────────────────────────────────────────────────
 
 pub(crate) fn credentials_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join(CREDENTIALS_FILE))
+    Ok(config_dir()?.join(crate::config::CREDENTIALS_FILE_NAME))
 }
 
 pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
@@ -1109,7 +1108,7 @@ pub(crate) mod tests {
                 display_name: None,
             },
         };
-        store_session(&dir.join(CREDENTIALS_FILE), &creds).unwrap();
+        store_session(&dir.join(crate::config::CREDENTIALS_FILE_NAME), &creds).unwrap();
     }
 
     fn me_response_body(username: &str) -> String {
