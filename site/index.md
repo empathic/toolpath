@@ -88,37 +88,6 @@ Toolpath fixes both. It is the open session format: every harness's
 sessions in one portable schema that records **who** changed **what**,
 **why**, what they tried that didn't work, and what it cost.
 
-## Supported harnesses
-
-| Harness | Read | Write | Resume |
-|---|:-:|:-:|:-:|
-| Claude Code | ✓ | ✓ | ✓ `claude -r` |
-| Gemini CLI | ✓ | ✓ | ✓ `gemini --resume` |
-| Codex CLI | ✓ | ✓ | ✓ `codex resume` |
-| Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` |
-| opencode | ✓ | ✓ | ✓ `opencode --session` |
-| Cursor (IDE) | ✓ | ✓ | ✓ opens workspace |
-| Pi | ✓ | ✓ | ✓ `pi --session` |
-
-Toolpath is open and versioned: the schema is published, and a document
-that validates today will validate tomorrow. Harness formats are
-neither. They are undocumented, proprietary, and change without notice.
-So Toolpath treats them as boundaries around a stable center, and
-everything it does is one of three moves across that boundary:
-
-- **Parse in.** A session crosses the boundary once and becomes a
-  stable document you can keep, query, and share.
-- **Project out.** A document becomes the on-disk layout a target
-  harness expects. Any writable harness, not just the one the session
-  started in.
-- **Resume.** A projection followed by a handoff: Toolpath writes the
-  session where the harness looks for it, then starts the harness on
-  it.
-
-Git history and GitHub pull requests parse into the same schema, so a
-session, the PR it became, and the release that shipped it can share
-one graph.
-
 <div class="scenarios">
   <h2>When you need it</h2>
   <div class="objects">
@@ -213,6 +182,37 @@ ancestry of `path.head`.
 <text x="726" y="146" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600" class="t-accent" letter-spacing="0.08em">HEAD</text>
 </svg>
 </div>
+
+## Supported harnesses
+
+| Harness | Read | Write | Resume |
+|---|:-:|:-:|:-:|
+| Claude Code | ✓ | ✓ | ✓ `claude -r` |
+| Gemini CLI | ✓ | ✓ | ✓ `gemini --resume` |
+| Codex CLI | ✓ | ✓ | ✓ `codex resume` |
+| Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` |
+| opencode | ✓ | ✓ | ✓ `opencode --session` |
+| Cursor (IDE) | ✓ | ✓ | ✓ opens workspace |
+| Pi | ✓ | ✓ | ✓ `pi --session` |
+
+Toolpath is open and versioned: the schema is published, and a document
+that validates today will validate tomorrow. Harness formats are
+neither. They are undocumented, proprietary, and change without notice.
+So Toolpath treats them as boundaries around a stable center, and
+everything it does is one of three moves across that boundary:
+
+- **Parse in.** A session crosses the boundary once and becomes a
+  stable document you can keep, query, and share.
+- **Project out.** A document becomes the on-disk layout a target
+  harness expects. Any writable harness, not just the one the session
+  started in.
+- **Resume.** A projection followed by a handoff: Toolpath writes the
+  session where the harness looks for it, then starts the harness on
+  it.
+
+Git history and GitHub pull requests parse into the same schema, so a
+session, the PR it became, and the release that shipped it can share
+one graph.
 
 ## What Toolpath adds
 
