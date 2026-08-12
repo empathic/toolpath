@@ -13,10 +13,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub(crate) use crate::config::PATHBASE_URL_ENV;
 use crate::config::config_dir;
 
 pub(crate) const DEFAULT_URL: &str = "https://pathbase.dev";
-pub(crate) const PATHBASE_URL_ENV: &str = "PATHBASE_URL";
 
 /// JSON blob persisted at `credentials.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
