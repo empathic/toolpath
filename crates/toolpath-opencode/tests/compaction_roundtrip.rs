@@ -10,21 +10,15 @@
 //! What this test asserts (and why):
 //!
 //!   - A compacted session loads via the SQLite reader without crashing.
-//!   - `to_view` surfaces the compaction part as a `ConversationEvent`
-//!     in `view.events` (this is the documented contract).
-//!   - User/assistant content surrounding the compaction part survives
-//!     the IR derive/extract round-trip and the projector emits a
-//!     functionally equivalent `Session`.
-//!
-//! Known limitation (documented, not asserted as fully preserved): the
-//! `ConversationEvent` carrying the compaction metadata does not
-//! survive the `derive → extract` round-trip today — `derive_path` does
-//! not emit `conversation.event` steps for `view.events`, and the
-//! opencode projector does not consume `view.events`. The compaction
-//! marker is purely structural metadata (the surrounding messages
-//! carry the actual content), so for "good UX" today this is an
-//! acceptable loss; if/when we close the gap, this test gets
-//! tightened.
+//!   - `to_view` surfaces the compaction part as a `part.compaction`
+//!     `ConversationEvent` at its position in the item stream, parented
+//!     on the preceding turn (this is the documented contract).
+//!   - The event, and the user/assistant content surrounding it, survive
+//!     the IR derive/extract round-trip: `derive_path` emits the event
+//!     as a `conversation.event` step and `extract_conversation`
+//!     restores it, including its `parent_id` (from the `source_parent`
+//!     key stamped at derive time).
+//!   - The projector emits a functionally equivalent `Session`.
 
 use std::fs;
 
@@ -32,7 +26,7 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 use toolpath::v1::Graph;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, DeriveConfig, derive_path, extract_conversation,
+    ConversationProjector, ConversationView, DeriveConfig, Item, derive_path, extract_conversation,
 };
 use toolpath_opencode::project::OpencodeProjector;
 use toolpath_opencode::types::{MessageData, PartData};
@@ -136,18 +130,62 @@ fn fixture_loads_with_compaction_part() {
 fn to_view_surfaces_compaction_as_event() {
     let (_temp, session) = setup_session();
     let view = to_view(&session);
-    let event = view
-        .events
-        .iter()
-        .find(|e| e.event_type == "part.compaction");
+    let event = view.events().find(|e| e.event_type == "part.compaction");
     assert!(
         event.is_some(),
-        "expected a `part.compaction` ConversationEvent in view.events; got: {:?}",
-        view.events
-            .iter()
-            .map(|e| &e.event_type)
-            .collect::<Vec<_>>()
+        "expected a `part.compaction` ConversationEvent in view.events(); got: {:?}",
+        view.events().map(|e| &e.event_type).collect::<Vec<_>>()
     );
+
+    // In-stream position and parent: the boundary rides on msg_a1's part
+    // list, so it lands before msg_a1's turn and parents on msg_u1 (the
+    // last turn pushed when the part was reached).
+    assert_eq!(event.unwrap().parent_id.as_deref(), Some("msg_u1"));
+    let pos = view
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Event(e) if e.event_type == "part.compaction"))
+        .unwrap();
+    match &view.items[pos - 1] {
+        Item::Turn(t) => assert_eq!(t.id, "msg_u1"),
+        other => panic!("expected msg_u1 turn before the boundary, got {other:?}"),
+    }
+    match &view.items[pos + 1] {
+        Item::Turn(t) => assert_eq!(t.id, "msg_a1"),
+        other => panic!("expected msg_a1 turn after the boundary, got {other:?}"),
+    }
+}
+
+#[test]
+fn compaction_event_survives_ir_roundtrip() {
+    let (_temp, session) = setup_session();
+    let view = to_view(&session);
+    let after = ir_roundtrip(&view);
+
+    let pos = after
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Event(e) if e.event_type == "part.compaction"))
+        .expect("part.compaction event dropped by derive → extract roundtrip");
+
+    // Stream position: still between the first user turn and the first
+    // assistant turn.
+    let before_turn = after.items[..pos]
+        .iter()
+        .rev()
+        .find_map(Item::as_turn)
+        .expect("no turn before the boundary after roundtrip");
+    assert!(before_turn.text.contains("refactor the auth module"));
+    let after_turn = after.items[pos..]
+        .iter()
+        .find_map(Item::as_turn)
+        .expect("no turn after the boundary after roundtrip");
+    assert!(after_turn.text.contains("reading the current auth code"));
+
+    // Parent restored from the `source_parent` key stamped at derive time:
+    // the boundary still parents on the turn preceding it in the stream.
+    let event = after.items[pos].as_event().unwrap();
+    assert_eq!(event.parent_id.as_deref(), Some(before_turn.id.as_str()));
 }
 
 #[test]
@@ -158,11 +196,11 @@ fn pre_compact_user_turn_survives_roundtrip() {
 
     let needle = "refactor the auth module";
     assert!(
-        view.turns.iter().any(|t| t.text.contains(needle)),
+        view.turns().any(|t| t.text.contains(needle)),
         "pre-compact prompt missing from initial view"
     );
     assert!(
-        after.turns.iter().any(|t| t.text.contains(needle)),
+        after.turns().any(|t| t.text.contains(needle)),
         "pre-compact prompt dropped after roundtrip"
     );
 }
@@ -178,11 +216,11 @@ fn post_compact_user_and_assistant_turns_survive_roundtrip() {
         "added session validation to login()",
     ] {
         assert!(
-            view.turns.iter().any(|t| t.text.contains(needle)),
+            view.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(needle)),
+            after.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} dropped after roundtrip"
         );
     }
@@ -200,8 +238,9 @@ fn projector_emits_session_with_pre_and_post_compact_messages() {
     let projected: Session = projector.project(&after).expect("project");
 
     // The projected session must carry both surrounding user prompts and
-    // both assistant responses (modulo whatever the compaction part
-    // itself becomes — see module-level note).
+    // both assistant responses. The compaction event itself is dropped on
+    // projection (the projector walks turns only), so message counts
+    // exclude it.
     let user_count = projected
         .messages
         .iter()

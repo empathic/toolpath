@@ -54,7 +54,7 @@ fn show_conversation(provider: &dyn ConversationProvider) {
     }
     println!("Files changed: {:?}", view.files_changed);
 
-    for turn in &view.turns {
+    for turn in view.turns() {
         println!("[{}] {}", turn.role, turn.text);
 
         // Environment context

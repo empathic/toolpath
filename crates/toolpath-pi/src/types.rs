@@ -79,8 +79,12 @@ pub enum Entry {
         #[serde(flatten)]
         base: EntryBase,
         summary: String,
-        #[serde(rename = "firstKeptEntryId")]
-        first_kept_entry_id: String,
+        #[serde(
+            rename = "firstKeptEntryId",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        first_kept_entry_id: Option<String>,
         #[serde(rename = "tokensBefore")]
         tokens_before: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -667,7 +671,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(summary, "sum");
-                assert_eq!(first_kept_entry_id, "bb00");
+                assert_eq!(first_kept_entry_id.as_deref(), Some("bb00"));
                 assert_eq!(*tokens_before, 100000);
                 assert_eq!(*from_hook, Some(false));
             }

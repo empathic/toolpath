@@ -157,8 +157,8 @@ fn rebuilt_session_re_lifts_to_equivalent_view() {
     let (_, rebuilt, _) = roundtrip(&source);
     let view_again = session_to_view(&rebuilt);
 
-    assert_eq!(view_forward.turns.len(), view_again.turns.len());
-    for (a, b) in view_forward.turns.iter().zip(view_again.turns.iter()) {
+    assert_eq!(view_forward.turns().count(), view_again.turns().count());
+    for (a, b) in view_forward.turns().zip(view_again.turns()) {
         assert_eq!(a.role, b.role, "role mismatch on turn {}", a.id);
         assert_eq!(a.text, b.text, "text mismatch on turn {}", a.id);
         assert_eq!(
@@ -206,6 +206,69 @@ fn projector_serializes_to_disk_readable_shape() {
     }
 }
 
+/// A session with a `/summarize` marker (capabilityType 22) between
+/// the assistant reply and a follow-up user prompt.
+const SUMMARIZATION_FIXTURE_SQL: &str = r#"
+    CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+    CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+
+    INSERT INTO cursorDiskKV (key, value) VALUES
+      ('composerData:aaaa1111-1111-4111-a111-111111111111',
+       '{"_v":16,"composerId":"aaaa1111-1111-4111-a111-111111111111","name":"S","createdAt":1000,"lastUpdatedAt":4000,"isAgentic":true,"unifiedMode":"agent","agentBackend":"cursor-agent","fullConversationHeadersOnly":[{"bubbleId":"u1","type":1},{"bubbleId":"a1","type":2},{"bubbleId":"s1","type":2,"grouping":{"isRenderable":true,"capabilityType":22}},{"bubbleId":"u2","type":1}]}'),
+      ('bubbleId:aaaa1111-1111-4111-a111-111111111111:u1',
+       '{"_v":3,"type":1,"bubbleId":"u1","createdAt":"2026-06-01T00:00:00.000Z","text":"start"}'),
+      ('bubbleId:aaaa1111-1111-4111-a111-111111111111:a1',
+       '{"_v":3,"type":2,"bubbleId":"a1","createdAt":"2026-06-01T00:00:01.000Z","text":"working on it"}'),
+      ('bubbleId:aaaa1111-1111-4111-a111-111111111111:s1',
+       '{"_v":3,"type":2,"bubbleId":"s1","createdAt":"2026-06-01T00:00:02.000Z","text":"","capabilityType":22}'),
+      ('bubbleId:aaaa1111-1111-4111-a111-111111111111:u2',
+       '{"_v":3,"type":1,"bubbleId":"u2","createdAt":"2026-06-01T00:00:03.000Z","text":"continue"}');
+"#;
+
+#[test]
+fn summarization_marker_survives_full_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("state.vscdb");
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(SUMMARIZATION_FIXTURE_SQL).unwrap();
+    drop(conn);
+    let reader = DbReader::open(&db_path).unwrap();
+    let source = reader
+        .load_session("aaaa1111-1111-4111-a111-111111111111")
+        .unwrap();
+
+    let (view_back, rebuilt, _) = roundtrip(&source);
+
+    // The event survives the Path serialization with its native id.
+    let marker_events: Vec<_> = view_back
+        .events()
+        .filter(|e| e.event_type == "summarization")
+        .collect();
+    assert_eq!(marker_events.len(), 1);
+    assert_eq!(marker_events[0].id, "s1");
+
+    // The projected bubble store carries the marker row at its
+    // original position with the shape Cursor writes natively.
+    assert_eq!(rebuilt.bubbles.len(), 4);
+    let marker = &rebuilt.bubbles[2];
+    assert_eq!(marker.bubble_id, "s1");
+    assert_eq!(marker.kind, BUBBLE_TYPE_ASSISTANT);
+    assert_eq!(marker.capability_type, Some(22));
+    assert_eq!(marker.text, "");
+    assert!(marker.tool_former_data.is_none());
+    let h = &rebuilt.data.full_conversation_headers_only[2];
+    assert_eq!(h.bubble_id, "s1");
+    assert_eq!(h.grouping.as_ref().unwrap().capability_type, Some(22));
+
+    // Re-lifting the rebuilt store yields the marker event again at
+    // the same stream position.
+    let view_again = session_to_view(&rebuilt);
+    assert_eq!(view_again.items.len(), 4);
+    let ev = view_again.items[2].as_event().expect("marker event");
+    assert_eq!(ev.id, "s1");
+    assert_eq!(ev.event_type, "summarization");
+}
+
 /// Demonstrate that a `CursorProjector` can be used as a generic
 /// projector for *any* `ConversationView` — including views produced
 /// from foreign providers — and that the resulting bubble store
@@ -214,7 +277,7 @@ fn projector_serializes_to_disk_readable_shape() {
 fn projector_accepts_foreign_view_shape() {
     use serde_json::json;
     use toolpath_convo::{
-        EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage,
+        EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
         ToolCategory, ToolInvocation, ToolResult, Turn,
     };
 
@@ -229,8 +292,8 @@ fn projector_accepts_foreign_view_shape() {
             working_dir: Some("/foreign".into()),
             ..Default::default()
         }),
-        turns: vec![
-            Turn {
+        items: vec![
+            Item::Turn(Turn {
                 id: "uA".into(),
                 parent_id: None,
                 group_id: None,
@@ -249,8 +312,8 @@ fn projector_accepts_foreign_view_shape() {
                 }),
                 delegations: vec![],
                 file_mutations: vec![],
-            },
-            Turn {
+            }),
+            Item::Turn(Turn {
                 id: "aA".into(),
                 parent_id: Some("uA".into()),
                 group_id: None,
@@ -292,7 +355,7 @@ fn projector_accepts_foreign_view_shape() {
                     after: Some("new\n".into()),
                     rename_to: None,
                 }],
-            },
+            }),
         ],
         ..Default::default()
     };

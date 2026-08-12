@@ -195,6 +195,39 @@ pub struct ConversationEvent {
     pub data: HashMap<String, serde_json::Value>,
 }
 
+/// One element of a conversation's ordered stream — a turn or a
+/// non-conversational event. Keeping both in a single ordered `Vec`
+/// preserves their exact interleaving, so `derive_path` ↔
+/// `extract_conversation` round-trips losslessly.
+// `Turn` is much larger than `Event` but is also the dominant item in any
+// conversation, so we keep it inline rather than box the hot path —
+// boxing would add an allocation per turn to save space only on the rarer
+// Event items.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Item {
+    Turn(Turn),
+    Event(ConversationEvent),
+}
+
+impl Item {
+    /// The turn, if this item is one.
+    pub fn as_turn(&self) -> Option<&Turn> {
+        match self {
+            Item::Turn(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// The event, if this item is one.
+    pub fn as_event(&self) -> Option<&ConversationEvent> {
+        match self {
+            Item::Event(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 /// Toolpath's classification of what a tool invocation does.
 ///
 /// This is toolpath's ontology, not a provider-specific label. Provider
@@ -333,8 +366,11 @@ pub struct ConversationView {
     /// When the conversation was last active.
     pub last_activity: Option<DateTime<Utc>>,
 
-    /// Ordered turns.
-    pub turns: Vec<Turn>,
+    /// The conversation's ordered stream: turns and non-conversational
+    /// events, interleaved in real order so the interleaving survives
+    /// derive ↔ extract round-trips. Use `turns()` / `events()` to read
+    /// one kind.
+    pub items: Vec<Item>,
 
     /// Aggregate token usage across all turns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,12 +391,6 @@ pub struct ConversationView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub session_ids: Vec<String>,
 
-    /// Non-conversational events (hooks, snapshots, metadata) in order.
-    /// These are provider-specific entries that aren't turns but need to
-    /// be preserved for round-trip fidelity.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub events: Vec<ConversationEvent>,
-
     /// Path-level base: where this session was rooted (`cwd`, git
     /// commit/branch/remote). Projects directly to `Path.base`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -373,11 +403,20 @@ pub struct ConversationView {
 }
 
 impl ConversationView {
+    /// All turns, in order, skipping events and compaction boundaries.
+    pub fn turns(&self) -> impl Iterator<Item = &Turn> {
+        self.items.iter().filter_map(Item::as_turn)
+    }
+
+    /// All non-conversational events, in order.
+    pub fn events(&self) -> impl Iterator<Item = &ConversationEvent> {
+        self.items.iter().filter_map(Item::as_event)
+    }
+
     /// Title derived from the first user turn, truncated to `max_len` characters.
     pub fn title(&self, max_len: usize) -> Option<String> {
         let text = self
-            .turns
-            .iter()
+            .turns()
             .find(|t| t.role == Role::User && !t.text.is_empty())
             .map(|t| &t.text)?;
 
@@ -391,18 +430,18 @@ impl ConversationView {
 
     /// All turns with the given role.
     pub fn turns_by_role(&self, role: &Role) -> Vec<&Turn> {
-        self.turns.iter().filter(|t| &t.role == role).collect()
+        self.turns().filter(|t| &t.role == role).collect()
     }
 
     /// Turns added after the turn with the given ID.
     ///
     /// If the ID is not found, returns all turns. If the ID is the last
-    /// turn, returns an empty slice.
-    pub fn turns_since(&self, turn_id: &str) -> &[Turn] {
-        match self.turns.iter().position(|t| t.id == turn_id) {
-            Some(idx) if idx + 1 < self.turns.len() => &self.turns[idx + 1..],
-            Some(_) => &[],
-            None => &self.turns,
+    /// turn, returns an empty vec.
+    pub fn turns_since(&self, turn_id: &str) -> Vec<&Turn> {
+        let turns: Vec<&Turn> = self.turns().collect();
+        match turns.iter().position(|t| t.id == turn_id) {
+            Some(idx) => turns[idx + 1..].to_vec(),
+            None => turns,
         }
     }
 }
@@ -573,8 +612,8 @@ mod tests {
             id: "sess-1".into(),
             started_at: None,
             last_activity: None,
-            turns: vec![
-                Turn {
+            items: vec![
+                Item::Turn(Turn {
                     id: "t1".into(),
                     parent_id: None,
                     group_id: None,
@@ -590,8 +629,8 @@ mod tests {
                     environment: None,
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                },
-                Turn {
+                }),
+                Item::Turn(Turn {
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
                     group_id: None,
@@ -622,8 +661,8 @@ mod tests {
                     environment: None,
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                },
-                Turn {
+                }),
+                Item::Turn(Turn {
                     id: "t3".into(),
                     parent_id: Some("t2".into()),
                     group_id: None,
@@ -639,13 +678,12 @@ mod tests {
                     environment: None,
                     delegations: vec![],
                     file_mutations: Vec::new(),
-                },
+                }),
             ],
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }
@@ -670,12 +708,11 @@ mod tests {
             id: "empty".into(),
             started_at: None,
             last_activity: None,
-            turns: vec![],
+            items: vec![],
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         };
         assert!(view.title(50).is_none());
@@ -730,7 +767,8 @@ mod tests {
 
     #[test]
     fn test_turn_serde_roundtrip() {
-        let turn = &sample_view().turns[1];
+        let view = sample_view();
+        let turn = view.turns().nth(1).unwrap();
         let json = serde_json::to_string(turn).unwrap();
         let back: Turn = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, "t2");
@@ -746,15 +784,17 @@ mod tests {
         let json = serde_json::to_string(&view).unwrap();
         let back: ConversationView = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, "sess-1");
-        assert_eq!(back.turns.len(), 3);
+        assert_eq!(back.turns().count(), 3);
     }
 
     #[test]
     fn test_watcher_event_variants() {
-        let turn_event = WatcherEvent::Turn(Box::new(sample_view().turns[0].clone()));
+        let view = sample_view();
+        let turn_event = WatcherEvent::Turn(Box::new(view.turns().next().unwrap().clone()));
         assert!(matches!(turn_event, WatcherEvent::Turn(_)));
 
-        let updated_event = WatcherEvent::TurnUpdated(Box::new(sample_view().turns[1].clone()));
+        let updated_event =
+            WatcherEvent::TurnUpdated(Box::new(view.turns().nth(1).unwrap().clone()));
         assert!(matches!(updated_event, WatcherEvent::TurnUpdated(_)));
 
         let progress_event = WatcherEvent::Progress {
@@ -766,7 +806,7 @@ mod tests {
 
     #[test]
     fn test_watcher_event_as_turn() {
-        let turn = sample_view().turns[0].clone();
+        let turn = sample_view().turns().next().unwrap().clone();
         let event = WatcherEvent::Turn(Box::new(turn.clone()));
         assert_eq!(event.as_turn().unwrap().id, "t1");
 
@@ -790,16 +830,17 @@ mod tests {
         assert_eq!(kind, "hook_progress");
         assert_eq!(data["hookName"], "pre-commit");
 
-        let turn = WatcherEvent::Turn(Box::new(sample_view().turns[0].clone()));
+        let turn = WatcherEvent::Turn(Box::new(sample_view().turns().next().unwrap().clone()));
         assert!(turn.as_progress().is_none());
     }
 
     #[test]
     fn test_watcher_event_is_update() {
-        let turn = WatcherEvent::Turn(Box::new(sample_view().turns[0].clone()));
+        let turn = WatcherEvent::Turn(Box::new(sample_view().turns().next().unwrap().clone()));
         assert!(!turn.is_update());
 
-        let updated = WatcherEvent::TurnUpdated(Box::new(sample_view().turns[0].clone()));
+        let updated =
+            WatcherEvent::TurnUpdated(Box::new(sample_view().turns().next().unwrap().clone()));
         assert!(updated.is_update());
 
         let progress = WatcherEvent::Progress {
@@ -811,10 +852,11 @@ mod tests {
 
     #[test]
     fn test_watcher_event_turn_id() {
-        let turn = WatcherEvent::Turn(Box::new(sample_view().turns[1].clone()));
+        let turn = WatcherEvent::Turn(Box::new(sample_view().turns().nth(1).unwrap().clone()));
         assert_eq!(turn.turn_id(), Some("t2"));
 
-        let updated = WatcherEvent::TurnUpdated(Box::new(sample_view().turns[0].clone()));
+        let updated =
+            WatcherEvent::TurnUpdated(Box::new(sample_view().turns().next().unwrap().clone()));
         assert_eq!(updated.turn_id(), Some("t1"));
 
         let progress = WatcherEvent::Progress {
@@ -1014,7 +1056,7 @@ mod tests {
             id: "s1".into(),
             started_at: None,
             last_activity: None,
-            turns: vec![],
+            items: vec![],
             total_usage: Some(TokenUsage {
                 input_tokens: Some(1000),
                 output_tokens: Some(500),
@@ -1025,7 +1067,6 @@ mod tests {
             provider_id: Some("claude-code".into()),
             files_changed: vec!["src/main.rs".into(), "src/lib.rs".into()],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         };
         let json = serde_json::to_string(&view).unwrap();
@@ -1041,8 +1082,8 @@ mod tests {
 
     #[test]
     fn test_conversation_view_old_format_deserializes() {
-        // Old-format JSON without total_usage/provider_id/files_changed
-        let json = r#"{"id":"s1","started_at":null,"last_activity":null,"turns":[]}"#;
+        // Minimal JSON without total_usage/provider_id/files_changed
+        let json = r#"{"id":"s1","started_at":null,"last_activity":null,"items":[]}"#;
         let view: ConversationView = serde_json::from_str(json).unwrap();
         assert!(view.total_usage.is_none());
         assert!(view.provider_id.is_none());
@@ -1107,25 +1148,24 @@ mod tests {
             id: "s1".into(),
             started_at: None,
             last_activity: None,
-            turns: vec![],
-            total_usage: None,
-            provider_id: None,
-            files_changed: vec![],
-            session_ids: vec![],
-            events: vec![ConversationEvent {
+            items: vec![Item::Event(ConversationEvent {
                 id: "evt-1".into(),
                 timestamp: "2026-01-01T00:00:00Z".into(),
                 parent_id: None,
                 event_type: "attachment".into(),
                 data: HashMap::new(),
-            }],
+            })],
+            total_usage: None,
+            provider_id: None,
+            files_changed: vec![],
+            session_ids: vec![],
             ..Default::default()
         };
         let json = serde_json::to_string(&view).unwrap();
-        assert!(json.contains("events"));
+        assert!(json.contains("Event"));
         let back: ConversationView = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 1);
-        assert_eq!(back.events[0].event_type, "attachment");
+        assert_eq!(back.events().count(), 1);
+        assert_eq!(back.events().next().unwrap().event_type, "attachment");
     }
 
     #[test]
@@ -1134,12 +1174,11 @@ mod tests {
             id: "s1".into(),
             started_at: None,
             last_activity: None,
-            turns: vec![],
+            items: vec![],
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         };
         let json = serde_json::to_string(&view).unwrap();
@@ -1148,9 +1187,9 @@ mod tests {
 
     #[test]
     fn test_conversation_view_old_format_no_events() {
-        // Old-format JSON without events field should deserialize with empty vec
-        let json = r#"{"id":"s1","started_at":null,"last_activity":null,"turns":[]}"#;
+        // JSON without any event items should deserialize with no events
+        let json = r#"{"id":"s1","started_at":null,"last_activity":null,"items":[]}"#;
         let view: ConversationView = serde_json::from_str(json).unwrap();
-        assert!(view.events.is_empty());
+        assert!(view.events().next().is_none());
     }
 }

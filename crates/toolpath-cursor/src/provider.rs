@@ -39,14 +39,20 @@ use crate::types::{
     TOOL_EDIT_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2, ToolFormerData, tool_name_for_id,
 };
 use toolpath_convo::{
-    ConversationMeta, ConversationProvider, ConversationView, ConvoError as ConvoTraitError,
-    EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn, unified_diff,
+    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError as ConvoTraitError, EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role,
+    SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn, unified_diff,
 };
 
 /// The dispatch family used in `path.meta.source` and
 /// `ConversationView.provider_id`.
 pub const PROVIDER_ID: &str = "cursor";
+
+/// `event_type` for Cursor's `/summarize` marker bubble
+/// (`capabilityType: 22`). The bubble carries no recoverable summary —
+/// that lives server-side — so it rides the item stream as an opaque
+/// event and the projector writes it back verbatim.
+pub const EVENT_SUMMARIZATION: &str = "summarization";
 
 /// Provider for Cursor sessions.
 #[derive(Default)]
@@ -287,7 +293,7 @@ pub fn session_to_view(session: &CursorSession) -> ConversationView {
 
 struct Builder<'a> {
     session: &'a CursorSession,
-    turns: Vec<Turn>,
+    items: Vec<Item>,
     files_changed_order: Vec<String>,
     files_changed_seen: std::collections::HashSet<String>,
     total_usage: TokenUsage,
@@ -298,7 +304,7 @@ impl<'a> Builder<'a> {
     fn new(session: &'a CursorSession) -> Self {
         Self {
             session,
-            turns: Vec::new(),
+            items: Vec::new(),
             files_changed_order: Vec::new(),
             files_changed_seen: std::collections::HashSet::new(),
             total_usage: TokenUsage::default(),
@@ -309,6 +315,19 @@ impl<'a> Builder<'a> {
     fn build(mut self) -> ConversationView {
         let mut prev_turn_id: Option<String> = None;
         for bubble in &self.session.bubbles {
+            // Cursor's `/summarize` boundary marker (capabilityType 22) carries
+            // no recoverable summary or kept set — those live server-side, not
+            // in the local store — so there's nothing to derive a compaction
+            // from. Preserve it as an opaque event at its stream position so
+            // the projector can write the marker bubble back. See
+            // docs/agents/formats/cursor.md.
+            if bubble.is_summarization() {
+                self.items.push(Item::Event(summarization_event(
+                    bubble,
+                    prev_turn_id.as_deref(),
+                )));
+                continue;
+            }
             let turn = match bubble.kind {
                 BUBBLE_TYPE_USER => self.user_turn(bubble, prev_turn_id.as_deref()),
                 BUBBLE_TYPE_ASSISTANT => self.assistant_turn(bubble, prev_turn_id.as_deref()),
@@ -318,7 +337,7 @@ impl<'a> Builder<'a> {
                 _ => continue,
             };
             prev_turn_id = Some(turn.id.clone());
-            self.turns.push(turn);
+            self.items.push(Item::Turn(turn));
         }
 
         let started_at = self.session.started_at().or_else(|| {
@@ -336,7 +355,7 @@ impl<'a> Builder<'a> {
             id: self.session.id().to_string(),
             started_at,
             last_activity,
-            turns: self.turns,
+            items: self.items,
             total_usage: if self.total_usage_set {
                 Some(self.total_usage)
             } else {
@@ -345,7 +364,6 @@ impl<'a> Builder<'a> {
             provider_id: Some(PROVIDER_ID.to_string()),
             files_changed: self.files_changed_order,
             session_ids: vec![self.session.id().to_string()],
-            events: Vec::new(),
             base: Some(SessionBase {
                 working_dir: self
                     .session
@@ -588,6 +606,22 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// Lift a `/summarize` marker bubble into an opaque [`ConversationEvent`],
+/// keyed by the bubble id so the projector can restore the exact row.
+fn summarization_event(bubble: &Bubble, parent: Option<&str>) -> ConversationEvent {
+    let mut data = std::collections::HashMap::new();
+    if let Some(ct) = bubble.capability_type {
+        data.insert("capabilityType".to_string(), Value::from(ct));
+    }
+    ConversationEvent {
+        id: bubble.bubble_id.clone(),
+        timestamp: bubble.created_at.clone().unwrap_or_default(),
+        parent_id: parent.map(str::to_string),
+        event_type: EVENT_SUMMARIZATION.to_string(),
+        data,
+    }
+}
+
 /// Render a tool result `Value` to the text the model would have
 /// seen. For shell commands that's the stdout/stderr stream; for
 /// edits it's the descriptive summary; everything else falls back
@@ -748,24 +782,25 @@ mod tests {
 
         assert_eq!(view.id, "c1");
         assert_eq!(view.provider_id.as_deref(), Some("cursor"));
-        assert_eq!(view.turns.len(), 3);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 3);
 
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "hello");
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "hello");
 
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "hi back");
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "hi back");
+        assert_eq!(turns[1].model.as_deref(), Some("claude-opus-4-7"));
         assert_eq!(
-            view.turns[1].token_usage.as_ref().unwrap().input_tokens,
+            turns[1].token_usage.as_ref().unwrap().input_tokens,
             Some(10)
         );
 
-        assert_eq!(view.turns[2].role, Role::Assistant);
-        assert_eq!(view.turns[2].tool_uses.len(), 1);
-        assert_eq!(view.turns[2].tool_uses[0].name, "edit_file_v2");
+        assert_eq!(turns[2].role, Role::Assistant);
+        assert_eq!(turns[2].tool_uses.len(), 1);
+        assert_eq!(turns[2].tool_uses[0].name, "edit_file_v2");
         assert_eq!(
-            view.turns[2].tool_uses[0].category,
+            turns[2].tool_uses[0].category,
             Some(ToolCategory::FileWrite)
         );
     }
@@ -785,7 +820,7 @@ mod tests {
     fn file_mutation_populated_with_diff() {
         let (_t, mgr) = setup();
         let view = session_to_view(&mgr.read_session("c1").unwrap());
-        let edit_turn = &view.turns[2];
+        let edit_turn = view.turns().nth(2).unwrap();
         assert_eq!(edit_turn.file_mutations.len(), 1);
         let fm = &edit_turn.file_mutations[0];
         assert_eq!(fm.path, "/p/x.rs");
@@ -807,9 +842,10 @@ mod tests {
     fn parent_id_chains_turns() {
         let (_t, mgr) = setup();
         let view = session_to_view(&mgr.read_session("c1").unwrap());
-        assert!(view.turns[0].parent_id.is_none());
-        assert_eq!(view.turns[1].parent_id.as_deref(), Some("u1"));
-        assert_eq!(view.turns[2].parent_id.as_deref(), Some("a1"));
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert!(turns[0].parent_id.is_none());
+        assert_eq!(turns[1].parent_id.as_deref(), Some("u1"));
+        assert_eq!(turns[2].parent_id.as_deref(), Some("a1"));
     }
 
     #[test]
@@ -824,7 +860,7 @@ mod tests {
         let r = crate::reader::DbReader::open(f.path()).unwrap();
         let s = r.load_session("cs").unwrap();
         let view = session_to_view(&s);
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         assert_eq!(tool.category, Some(ToolCategory::Shell));
         let result = tool.result.as_ref().unwrap();
         assert!(!result.is_error);
@@ -844,7 +880,7 @@ mod tests {
         let r = crate::reader::DbReader::open(f.path()).unwrap();
         let s = r.load_session("ce").unwrap();
         let view = session_to_view(&s);
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         assert!(tool.result.as_ref().unwrap().is_error);
     }
 
@@ -860,10 +896,57 @@ mod tests {
         let r = crate::reader::DbReader::open(f.path()).unwrap();
         let s = r.load_session("cu").unwrap();
         let view = session_to_view(&s);
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         assert_eq!(tool.name, "future_thing_v9");
         assert_eq!(tool.category, None);
         assert_eq!(tool.input["x"], 1);
+    }
+
+    #[test]
+    fn summarization_bubble_becomes_event_at_stream_position() {
+        let setup_sql = r#"
+            INSERT INTO cursorDiskKV (key, value) VALUES
+              ('composerData:cz', '{"_v":16,"composerId":"cz","fullConversationHeadersOnly":[{"bubbleId":"u1","type":1},{"bubbleId":"s1","type":2,"grouping":{"isRenderable":true,"capabilityType":22}},{"bubbleId":"u2","type":1}]}'),
+              ('bubbleId:cz:u1', '{"_v":3,"type":1,"bubbleId":"u1","createdAt":"2026-06-01T00:00:00.000Z","text":"first"}'),
+              ('bubbleId:cz:s1', '{"_v":3,"type":2,"bubbleId":"s1","createdAt":"2026-06-01T00:00:01.000Z","text":"","capabilityType":22}'),
+              ('bubbleId:cz:u2', '{"_v":3,"type":1,"bubbleId":"u2","createdAt":"2026-06-01T00:00:02.000Z","text":"after"}');
+        "#;
+        let f = fixture_db(setup_sql);
+        let r = crate::reader::DbReader::open(f.path()).unwrap();
+        let s = r.load_session("cz").unwrap();
+        let view = session_to_view(&s);
+
+        assert_eq!(view.items.len(), 3);
+        assert_eq!(view.items[0].as_turn().unwrap().id, "u1");
+        let ev = view.items[1].as_event().expect("marker preserved as event");
+        assert_eq!(ev.id, "s1");
+        assert_eq!(ev.event_type, EVENT_SUMMARIZATION);
+        assert_eq!(ev.timestamp, "2026-06-01T00:00:01.000Z");
+        assert_eq!(ev.parent_id.as_deref(), Some("u1"));
+        assert_eq!(ev.data["capabilityType"], serde_json::json!(22));
+        let after = view.items[2].as_turn().unwrap();
+        assert_eq!(after.id, "u2");
+        assert_eq!(
+            after.parent_id.as_deref(),
+            Some("u1"),
+            "turn chain skips the marker"
+        );
+    }
+
+    #[test]
+    fn leading_summarization_event_has_no_parent() {
+        let setup_sql = r#"
+            INSERT INTO cursorDiskKV (key, value) VALUES
+              ('composerData:cl', '{"_v":16,"composerId":"cl","fullConversationHeadersOnly":[{"bubbleId":"s1","type":2},{"bubbleId":"u1","type":1}]}'),
+              ('bubbleId:cl:s1', '{"_v":3,"type":2,"bubbleId":"s1","createdAt":"2026-06-01T00:00:00.000Z","text":"","capabilityType":22}'),
+              ('bubbleId:cl:u1', '{"_v":3,"type":1,"bubbleId":"u1","createdAt":"2026-06-01T00:00:01.000Z","text":"hi"}');
+        "#;
+        let f = fixture_db(setup_sql);
+        let r = crate::reader::DbReader::open(f.path()).unwrap();
+        let view = session_to_view(&r.load_session("cl").unwrap());
+        let ev = view.items[0].as_event().unwrap();
+        assert_eq!(ev.parent_id, None);
+        assert!(view.items[1].as_turn().unwrap().parent_id.is_none());
     }
 
     #[test]
@@ -882,7 +965,7 @@ mod tests {
         let ids = ConversationProvider::list_conversations(&mgr, "").unwrap();
         assert_eq!(ids, vec!["c1".to_string()]);
         let v = ConversationProvider::load_conversation(&mgr, "", "c1").unwrap();
-        assert_eq!(v.turns.len(), 3);
+        assert_eq!(v.turns().count(), 3);
         let m = ConversationProvider::load_metadata(&mgr, "", "c1").unwrap();
         assert_eq!(m.message_count, 3);
     }

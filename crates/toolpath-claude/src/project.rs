@@ -65,7 +65,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // under `data["raw"]`. Dump them straight back. A headerless event is
     // identified by that `raw` key — no enumerated type list.
     let mut emitted_preamble = false;
-    for event in &view.events {
+    for event in view.events() {
         if let Some(raw) = event.data.get("raw") {
             convo.preamble.push(raw.clone());
             emitted_preamble = true;
@@ -86,7 +86,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // every downstream `parentUuid` reference valid.
     let mut tool_result_events_by_parent: HashMap<String, Vec<&toolpath_convo::ConversationEvent>> =
         HashMap::new();
-    for event in &view.events {
+    for event in view.events() {
         if event.event_type != TOOL_RESULT_USER_EVENT {
             continue;
         }
@@ -114,7 +114,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // intermediate streaming snapshots: they carry no per-step meaning, the
     // IR doesn't retain them, and the final total is what consumers sum.)
     let mut group_total: HashMap<&str, toolpath_convo::TokenUsage> = HashMap::new();
-    for turn in &view.turns {
+    for turn in view.turns() {
         if let (Some(mid), Some(usage)) = (turn.group_id.as_deref(), &turn.token_usage) {
             group_total
                 .entry(mid)
@@ -123,7 +123,32 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    for turn in &view.turns {
+    // Iterate the full item stream (not just turns) so a compaction boundary
+    // lands at its true position between the turns it separates — and so do
+    // events: real Claude interleaves attachments and system entries
+    // (turn_duration, etc.) with the turns, so emitting them from a trailing
+    // pass regrouped them at the end of the file and reordered the entry
+    // stream on every round-trip. Tool-result events stay with the by-parent
+    // mechanism (their position must follow the assistant entry that isn't
+    // 1:1 with an item on cross-harness views); preamble lines (`raw`) were
+    // already pushed above.
+    for item in &view.items {
+        let turn = match item {
+            toolpath_convo::Item::Turn(t) => t,
+            toolpath_convo::Item::Event(event) => {
+                if event.data.contains_key("raw")
+                    || event.event_type == TOOL_RESULT_USER_EVENT
+                    || consumed_event_ids.contains(&event.id)
+                {
+                    continue;
+                }
+                consumed_event_ids.insert(event.id.clone());
+                let entry = project_event(event, &view.id);
+                convo.add_entry(entry);
+                continue;
+            }
+        };
+
         // Pre-rewrite this turn's parent_id if a synthesized tool_result
         // was emitted between it and its IR-recorded parent.
         let effective_parent = turn
@@ -202,7 +227,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     }
 
     // Emit non-preamble events (attachments, etc.) as entries.
-    for event in &view.events {
+    for event in view.events() {
         if event.data.contains_key("raw") {
             continue; // headerless line — already pushed onto convo.preamble
         }
@@ -324,16 +349,23 @@ fn apply_turn_metadata(entry: &mut ConversationEntry, turn: &Turn) {
         }
     }
 
-    // Source-format details (`version`, `user_type`, `request_id`,
-    // per-entry catch-all) used to ride through `Turn.extra["claude"]` for
-    // claude → IR → claude round-trip. The IR no longer carries
-    // provider-specific extras; the projected entry's fields stay `None`
-    // and the harness fills in defaults at write time.
+    // The IR carries no provider-specific extras, so source-format details
+    // (`version`, `user_type`, `request_id`, per-entry catch-all) stay `None`
+    // here and the harness fills in defaults at write time.
 }
 
 /// Build a `ConversationEntry` for a user turn.
 fn user_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
     let content = MessageContent::Text(turn.text.clone());
+
+    // Claude writes local-command caveat entries with `isMeta: true` — the
+    // loader hides them from the transcript sent back to the API. The flag
+    // is a deterministic function of the caveat envelope, so re-derive it
+    // rather than carry it through the IR.
+    let mut extra: std::collections::HashMap<String, serde_json::Value> = Default::default();
+    if turn.text.trim_start().starts_with("<local-command-caveat>") {
+        extra.insert("isMeta".to_string(), serde_json::json!(true));
+    }
 
     ConversationEntry {
         uuid: turn.id.clone(),
@@ -363,7 +395,7 @@ fn user_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
         tool_use_result: None,
         snapshot: None,
         message_id: None,
-        extra: Default::default(),
+        extra,
     }
 }
 
@@ -427,6 +459,19 @@ fn build_assistant_content(turn: &Turn) -> MessageContent {
     let has_tool_uses = !turn.tool_uses.is_empty();
 
     if !has_thinking && !has_tool_uses {
+        // A fully empty assistant turn (a source whose derivation dropped an
+        // empty-thinking block, an aborted response, …) must NOT become
+        // `[{"type":"text","text":""}]`: that content shape aborts Claude
+        // 2.1.216's transcript renderer — a resumed session shows no ❯
+        // prompts and no Compacted indicator. Re-emit it as the empty
+        // thinking block real Claude writes for these entries (verified to
+        // render, signature-less, in 2.1.216).
+        if turn.text.is_empty() {
+            return MessageContent::Parts(vec![ContentPart::Thinking {
+                thinking: String::new(),
+                signature: None,
+            }]);
+        }
         // Claude Code expects assistant content to always be an array,
         // even for simple text-only responses.
         return MessageContent::Parts(vec![ContentPart::Text {
@@ -1021,12 +1066,11 @@ mod tests {
             id: id.to_string(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }
@@ -1074,6 +1118,33 @@ mod tests {
     /// Helper: return all conversation entries (preamble is separate).
     fn content_entries(convo: &Conversation) -> &[ConversationEntry] {
         &convo.entries
+    }
+
+    #[test]
+    fn test_fully_empty_assistant_turn_never_projects_an_empty_text_block() {
+        // `[{"type":"text","text":""}]` aborts Claude 2.1.216's transcript
+        // renderer — a resumed session shows no ❯ prompts and no Compacted
+        // indicator. An empty turn (thinking dropped at derive, aborted
+        // response) must project as the empty thinking block real Claude
+        // writes instead (verified to render signature-less in 2.1.216).
+        let content = build_assistant_content(&assistant_turn("a1", ""));
+        let MessageContent::Parts(parts) = content else {
+            panic!("assistant content is always Parts");
+        };
+        assert_eq!(
+            serde_json::to_value(&parts).unwrap(),
+            serde_json::json!([{"type":"thinking","thinking":""}]),
+        );
+
+        // Non-empty text keeps the plain text shape.
+        let content = build_assistant_content(&assistant_turn("a2", "hi"));
+        let MessageContent::Parts(parts) = content else {
+            panic!("assistant content is always Parts");
+        };
+        assert_eq!(
+            serde_json::to_value(&parts).unwrap(),
+            serde_json::json!([{"type":"text","text":"hi"}]),
+        );
     }
 
     // ── Message-group usage re-expansion ─────────────────────────────
@@ -1148,11 +1219,7 @@ mod tests {
 
         // Re-read: total back on the final turn only; no fabricated attribution.
         let back = crate::provider::to_view(&convo);
-        let a: Vec<&Turn> = back
-            .turns
-            .iter()
-            .filter(|t| t.role == Role::Assistant)
-            .collect();
+        let a: Vec<&Turn> = back.turns().filter(|t| t.role == Role::Assistant).collect();
         assert!(a[0].token_usage.is_none());
         assert_eq!(a[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
         assert!(a.iter().all(|t| t.attributed_token_usage.is_none()));

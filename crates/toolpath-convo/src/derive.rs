@@ -13,7 +13,7 @@ use toolpath::v1::{
     PathMeta, Step, StepIdentity, StructuralChange,
 };
 
-use crate::{ConversationView, Role, ToolCategory, ToolInvocation, Turn};
+use crate::{ConversationView, Item, Role, ToolCategory, ToolInvocation, Turn};
 
 /// Configuration for [`derive_path`].
 #[derive(Debug, Clone)]
@@ -44,6 +44,13 @@ impl Default for DeriveConfig {
 }
 
 /// Derive a [`Path`] from a [`ConversationView`].
+///
+/// Step ids must be unique within a path (a toolpath invariant), so a
+/// collision is resolved as the steps are emitted rather than surfaced as an
+/// error: a byte-identical re-emission (e.g. a Claude compaction replay of an
+/// unchanged message) is dropped, and a same-id-but-different step is renamed
+/// to a fresh id. Either way the derivation always succeeds and the result is
+/// collision-free.
 pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let provider = view.provider_id.as_deref().unwrap_or("unknown");
     let id_prefix: String = view.id.chars().take(8).collect();
@@ -82,8 +89,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             })
         })
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
                 .map(|wd| {
                     let uri = if wd.starts_with('/') {
@@ -101,326 +107,489 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
 
     let conv_artifact_key = format!("{}://{}", provider, view.id);
 
-    let mut steps: Vec<Step> = Vec::with_capacity(view.turns.len());
+    let mut steps: Vec<Step> = Vec::with_capacity(view.items.len());
     // Final step id → index in `steps`, for resolving id collisions as steps
-    // are emitted (see `push_step_and_dedup`).
+    // are emitted (see `push_step`).
     let mut by_id: HashMap<String, usize> = HashMap::new();
     let mut turn_to_step: HashMap<String, String> = HashMap::new();
     let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
 
-    for (idx, turn) in view.turns.iter().enumerate() {
-        // Step id: use the turn's native id when set so it round-trips
-        // through `extract_conversation`; otherwise synthesize sequentially.
-        let step_id = if turn.id.is_empty() {
-            format!("step-{:04}", idx + 1)
-        } else {
-            turn.id.clone()
-        };
+    // Single ordered pass over `view.items`, dispatching per variant so each
+    // emitted step lands at its true position relative to its neighbors —
+    // crucial for compaction boundaries, which must sit between the turns
+    // they separate.
+    //
+    // Per-variant counters drive the synthetic step ids: turns synthesize
+    // `step-{:04}` indexed by turn count, events `event-{:04}` by event count.
+    //
+    // `last_step_id` tracks the previously emitted step so that events (and
+    // compactions) without an explicit parent chain off whatever came before.
+    let mut turn_idx = 0usize;
+    let mut event_idx = 0usize;
+    let mut last_step_id: Option<String> = None;
+    // The step id of the most recent *turn* (events/compactions don't update
+    // it). Used to splice intervening events/compactions into the linear
+    // parent chain so they land on the head's ancestry instead of dangling
+    // as false dead ends — without disturbing genuine branches.
+    let mut prev_turn_step: Option<String> = None;
+    let mut event_steps: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        let actor = actor_for_turn(turn, provider);
-        record_actor(&mut actors, &actor, turn, provider, view);
+    // A byte-identical re-emission of an id-bearing item (the Claude
+    // chain-merge replay shape) is the same source entry, not a new step,
+    // and is recognized on source bytes, before any resolution: resolved
+    // step forms are not comparable across the stream (splicing rewires
+    // `parents`, and parent mappings mutate as colliding steps rename),
+    // but source bytes are. Turn replays are identified in a prepass so
+    // every per-turn structure below (`turn_groups`, synthesized
+    // `step-NNNN` ids, group accounting) is built over surviving turns
+    // only — an in-loop skip would still consume a group slot and an id
+    // slot, losing a group-tail usage stamp and shifting later synthesized
+    // ids. Event replays skip in-loop, before consuming an event index.
+    let turn_skip: Vec<bool> = {
+        let mut seen: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+        view.turns()
+            .map(|turn| {
+                if turn.id.is_empty() {
+                    return false;
+                }
+                let Ok(source) = serde_json::to_value(turn) else {
+                    return false;
+                };
+                let variants = seen.entry(turn.id.clone()).or_default();
+                if variants.contains(&source) {
+                    true
+                } else {
+                    variants.push(source);
+                    false
+                }
+            })
+            .collect()
+    };
+    let mut seen_event_sources: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
 
-        let mut step = Step {
-            step: StepIdentity {
-                id: step_id,
-                parents: Vec::new(),
-                actor,
-                timestamp: turn.timestamp.clone(),
-            },
-            change: HashMap::new(),
-            meta: None,
-        };
+    // Group ids of surviving turns in stream order, so a turn can tell
+    // whether it's the last of its message group (message-level token
+    // accounting, below).
+    let turn_groups: Vec<Option<String>> = view
+        .turns()
+        .zip(&turn_skip)
+        .filter(|(_, skip)| !**skip)
+        .map(|(t, _)| t.group_id.clone())
+        .collect();
 
-        // Parent mapping
-        if let Some(parent_id) = &turn.parent_id
-            && let Some(parent_step_id) = turn_to_step.get(parent_id)
-        {
-            step.step.parents.push(parent_step_id.clone());
-        }
+    let mut turn_walk_idx = 0usize;
+    for item in &view.items {
+        match item {
+            Item::Turn(turn) => {
+                let walked = turn_walk_idx;
+                turn_walk_idx += 1;
+                if turn_skip[walked] {
+                    continue;
+                }
+                let idx = turn_idx;
+                turn_idx += 1;
 
-        // Build conversation.append structural change extras
-        let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
-        extra.insert(
-            "role".to_string(),
-            serde_json::Value::String(turn.role.to_string()),
-        );
-        extra.insert(
-            "text".to_string(),
-            serde_json::Value::String(turn.text.clone()),
-        );
+                // Step id: use the turn's native id when set so it round-trips
+                // through `extract_conversation`; otherwise synthesize sequentially.
+                let step_id = if turn.id.is_empty() {
+                    format!("step-{:04}", idx + 1)
+                } else {
+                    turn.id.clone()
+                };
 
-        if config.include_thinking
-            && let Some(thinking) = &turn.thinking
-        {
-            extra.insert(
-                "thinking".to_string(),
-                serde_json::Value::String(thinking.clone()),
-            );
-        }
+                let actor = actor_for_turn(turn, provider);
+                record_actor(&mut actors, &actor, turn, provider, view);
 
-        if config.include_tool_uses && !turn.tool_uses.is_empty() {
-            let arr: Vec<serde_json::Value> = turn
-                .tool_uses
-                .iter()
-                .map(|t| {
-                    let mut obj = serde_json::json!({
-                        "id": t.id,
-                        "name": t.name,
-                        "input": t.input,
-                        "category": t.category,
-                    });
-                    if let Some(result) = &t.result
-                        && let Ok(v) = serde_json::to_value(result)
-                    {
-                        obj.as_object_mut().unwrap().insert("result".to_string(), v);
-                    }
-                    obj
-                })
-                .collect();
-            extra.insert("tool_uses".to_string(), serde_json::Value::Array(arr));
-        }
+                let mut step = Step {
+                    step: StepIdentity {
+                        id: step_id.clone(),
+                        parents: Vec::new(),
+                        actor,
+                        timestamp: turn.timestamp.clone(),
+                    },
+                    change: HashMap::new(),
+                    meta: None,
+                };
 
-        // Message-level accounting lands exactly once per message: when a
-        // provider splits one message across several turns (group_id
-        // set on each), only the run's last turn carries token_usage, so
-        // summing over steps yields session totals. A turn without a
-        // group_id is its own accounting unit.
-        let last_of_message = match &turn.group_id {
-            None => true,
-            Some(mid) => view
-                .turns
-                .get(idx + 1)
-                .is_none_or(|next| next.group_id.as_ref() != Some(mid)),
-        };
-        if last_of_message
-            && let Some(usage) = &turn.token_usage
-            && let Ok(v) = serde_json::to_value(usage)
-        {
-            extra.insert("token_usage".to_string(), v);
-        }
+                // Parent mapping
+                if let Some(parent_id) = &turn.parent_id
+                    && let Some(parent_step_id) = turn_to_step.get(parent_id)
+                {
+                    step.step.parents.push(parent_step_id.clone());
+                }
 
-        // Per-step attributed spend rides its own key on every step that
-        // has it (independent of the once-per-message `token_usage`), so
-        // summing `token_usage` is unaffected while per-step cost stays
-        // readable structurally.
-        if let Some(attr) = &turn.attributed_token_usage
-            && let Ok(v) = serde_json::to_value(attr)
-        {
-            extra.insert("attributed_token_usage".to_string(), v);
-        }
+                let pre_splice = step.step.parents.first().cloned();
+                step.step.parents =
+                    splice_onto_intervening(step.step.parents, &prev_turn_step, &last_step_id);
+                let final_parent = step.step.parents.first().cloned();
+                let spliced = final_parent != pre_splice;
+                let onto_event = final_parent
+                    .as_ref()
+                    .is_some_and(|p| event_steps.contains(p));
 
-        if let Some(mid) = &turn.group_id {
-            extra.insert(
-                "group_id".to_string(),
-                serde_json::Value::String(mid.clone()),
-            );
-        }
-
-        if !turn.delegations.is_empty()
-            && let Ok(v) = serde_json::to_value(&turn.delegations)
-        {
-            extra.insert("delegations".to_string(), v);
-        }
-
-        if let Some(stop_reason) = &turn.stop_reason {
-            extra.insert(
-                "stop_reason".to_string(),
-                serde_json::Value::String(stop_reason.clone()),
-            );
-        }
-
-        if let Some(env) = &turn.environment
-            && let Ok(v) = serde_json::to_value(env)
-        {
-            extra.insert("environment".to_string(), v);
-        }
-
-        step.change.insert(
-            conv_artifact_key.clone(),
-            ArtifactChange {
-                raw: None,
-                structural: Some(StructuralChange {
-                    change_type: "conversation.append".to_string(),
-                    extra,
-                }),
-            },
-        );
-
-        // File mutations → sibling `file.write` change entries.
-        //
-        // Preferred: each `Turn::file_mutations` entry comes from the
-        // provider's `to_view` with the resolved diff already in
-        // `raw_diff` (claude's git-HEAD lookup, codex's `apply_patch_end`
-        // parse, opencode's git2 tree↔tree, etc.). `tool_id` links back
-        // to a specific `ToolInvocation` when the provider can attribute.
-        //
-        // Fallback (un-migrated providers): for any `FileWrite`-category
-        // tool with no matching mutation, synthesize from `tool.input`
-        // via `file_write_change`.
-        let attributed: std::collections::HashSet<String> = turn
-            .file_mutations
-            .iter()
-            .filter_map(|fm| fm.tool_id.clone())
-            .collect();
-        for fm in &turn.file_mutations {
-            let mut t_extra: HashMap<String, serde_json::Value> = HashMap::new();
-            if let Some(tid) = &fm.tool_id {
-                t_extra.insert(
-                    "tool_id".to_string(),
-                    serde_json::Value::String(tid.clone()),
+                // Build conversation.append structural change extras
+                let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
+                // Splicing rewires `parents` onto intervening steps and would
+                // otherwise destroy the source linkage; the pre-splice parent
+                // (null for a root) rides along so extract can restore it
+                // exactly instead of guessing it back from the event chain.
+                // Also stamped when the parent IS an event step natively —
+                // without it, extract can't tell native event linkage from a
+                // splice artifact and re-derivation would drift.
+                if spliced || onto_event {
+                    extra.insert(
+                        "source_parent".to_string(),
+                        pre_splice
+                            .clone()
+                            .map_or(serde_json::Value::Null, serde_json::Value::String),
+                    );
+                }
+                extra.insert(
+                    "role".to_string(),
+                    serde_json::Value::String(turn.role.to_string()),
                 );
-                if let Some(tool) = turn.tool_uses.iter().find(|t| &t.id == tid) {
+                extra.insert(
+                    "text".to_string(),
+                    serde_json::Value::String(turn.text.clone()),
+                );
+
+                if config.include_thinking
+                    && let Some(thinking) = &turn.thinking
+                {
+                    extra.insert(
+                        "thinking".to_string(),
+                        serde_json::Value::String(thinking.clone()),
+                    );
+                }
+
+                if config.include_tool_uses && !turn.tool_uses.is_empty() {
+                    let arr: Vec<serde_json::Value> = turn
+                        .tool_uses
+                        .iter()
+                        .map(|t| {
+                            let mut obj = serde_json::json!({
+                                "id": t.id,
+                                "name": t.name,
+                                "input": t.input,
+                                "category": t.category,
+                            });
+                            if let Some(result) = &t.result
+                                && let Ok(v) = serde_json::to_value(result)
+                            {
+                                obj.as_object_mut().unwrap().insert("result".to_string(), v);
+                            }
+                            obj
+                        })
+                        .collect();
+                    extra.insert("tool_uses".to_string(), serde_json::Value::Array(arr));
+                }
+
+                // Message-group accounting: a message's total `token_usage`
+                // lands once, on the group's last turn, so summing over a
+                // path's steps yields session totals. A turn with no `group_id`
+                // is its own group.
+                let last_of_group = match &turn.group_id {
+                    None => true,
+                    Some(mid) => match turn_groups.get(idx + 1) {
+                        Some(Some(next)) => next != mid,
+                        _ => true,
+                    },
+                };
+                if last_of_group
+                    && let Some(usage) = &turn.token_usage
+                    && let Ok(v) = serde_json::to_value(usage)
+                {
+                    extra.insert("token_usage".to_string(), v);
+                }
+
+                // Per-step attributed spend (when the source reports it) rides
+                // its own key, independent of the once-per-group `token_usage`.
+                if let Some(attr) = &turn.attributed_token_usage
+                    && let Ok(v) = serde_json::to_value(attr)
+                {
+                    extra.insert("attributed_token_usage".to_string(), v);
+                }
+
+                if let Some(mid) = &turn.group_id {
+                    extra.insert(
+                        "group_id".to_string(),
+                        serde_json::Value::String(mid.clone()),
+                    );
+                }
+
+                if !turn.delegations.is_empty()
+                    && let Ok(v) = serde_json::to_value(&turn.delegations)
+                {
+                    extra.insert("delegations".to_string(), v);
+                }
+
+                if let Some(stop_reason) = &turn.stop_reason {
+                    extra.insert(
+                        "stop_reason".to_string(),
+                        serde_json::Value::String(stop_reason.clone()),
+                    );
+                }
+
+                if let Some(env) = &turn.environment
+                    && let Ok(v) = serde_json::to_value(env)
+                {
+                    extra.insert("environment".to_string(), v);
+                }
+
+                step.change.insert(
+                    conv_artifact_key.clone(),
+                    ArtifactChange {
+                        raw: None,
+                        structural: Some(StructuralChange {
+                            change_type: "conversation.append".to_string(),
+                            extra,
+                        }),
+                    },
+                );
+
+                // File mutations → sibling `file.write` change entries.
+                //
+                // Preferred: each `Turn::file_mutations` entry comes from the
+                // provider's `to_view` with the resolved diff already in
+                // `raw_diff` (claude's git-HEAD lookup, codex's `apply_patch_end`
+                // parse, opencode's git2 tree↔tree, etc.). `tool_id` links back
+                // to a specific `ToolInvocation` when the provider can attribute.
+                //
+                // Fallback (un-migrated providers): for any `FileWrite`-category
+                // tool with no matching mutation, synthesize from `tool.input`
+                // via `file_write_change`.
+                let attributed: std::collections::HashSet<String> = turn
+                    .file_mutations
+                    .iter()
+                    .filter_map(|fm| fm.tool_id.clone())
+                    .collect();
+                for fm in &turn.file_mutations {
+                    let mut t_extra: HashMap<String, serde_json::Value> = HashMap::new();
+                    if let Some(tid) = &fm.tool_id {
+                        t_extra.insert(
+                            "tool_id".to_string(),
+                            serde_json::Value::String(tid.clone()),
+                        );
+                        if let Some(tool) = turn.tool_uses.iter().find(|t| &t.id == tid) {
+                            t_extra.insert(
+                                "tool".to_string(),
+                                serde_json::Value::String(tool.name.clone()),
+                            );
+                        }
+                    }
+                    if let Some(op) = &fm.operation {
+                        t_extra.insert(
+                            "operation".to_string(),
+                            serde_json::Value::String(op.clone()),
+                        );
+                    }
+                    if let Some(b) = &fm.before {
+                        t_extra.insert("before".to_string(), serde_json::Value::String(b.clone()));
+                    }
+                    if let Some(a) = &fm.after {
+                        t_extra.insert("after".to_string(), serde_json::Value::String(a.clone()));
+                    }
+                    if let Some(rt) = &fm.rename_to {
+                        t_extra.insert(
+                            "rename_to".to_string(),
+                            serde_json::Value::String(rt.clone()),
+                        );
+                    }
+                    step.change.insert(
+                        fm.path.clone(),
+                        ArtifactChange {
+                            raw: fm.raw_diff.clone(),
+                            structural: Some(StructuralChange {
+                                change_type: "file.write".to_string(),
+                                extra: t_extra,
+                            }),
+                        },
+                    );
+                }
+                for tool in &turn.tool_uses {
+                    if tool.category != Some(ToolCategory::FileWrite)
+                        || attributed.contains(&tool.id)
+                    {
+                        continue;
+                    }
+                    let Some(path) = extract_file_path(tool) else {
+                        continue;
+                    };
+                    let (raw, mut t_extra) = file_write_change(tool, &path, None);
                     t_extra.insert(
                         "tool".to_string(),
                         serde_json::Value::String(tool.name.clone()),
                     );
+                    t_extra.insert(
+                        "tool_id".to_string(),
+                        serde_json::Value::String(tool.id.clone()),
+                    );
+                    step.change.insert(
+                        path,
+                        ArtifactChange {
+                            raw,
+                            structural: Some(StructuralChange {
+                                change_type: "file.write".to_string(),
+                                extra: t_extra,
+                            }),
+                        },
+                    );
+                }
+
+                let (final_id, appended) = push_step(&mut steps, &mut by_id, step);
+                // Map the turn's native id to whatever id its step ended up
+                // with, so later turns chaining off it resolve correctly even
+                // when this one was renamed or dropped as a duplicate.
+                turn_to_step.insert(turn.id.clone(), final_id.clone());
+                if appended {
+                    last_step_id = Some(final_id.clone());
+                    prev_turn_step = Some(final_id);
                 }
             }
-            if let Some(op) = &fm.operation {
-                t_extra.insert(
-                    "operation".to_string(),
-                    serde_json::Value::String(op.clone()),
-                );
-            }
-            if let Some(b) = &fm.before {
-                t_extra.insert("before".to_string(), serde_json::Value::String(b.clone()));
-            }
-            if let Some(a) = &fm.after {
-                t_extra.insert("after".to_string(), serde_json::Value::String(a.clone()));
-            }
-            if let Some(rt) = &fm.rename_to {
-                t_extra.insert(
-                    "rename_to".to_string(),
-                    serde_json::Value::String(rt.clone()),
-                );
-            }
-            step.change.insert(
-                fm.path.clone(),
-                ArtifactChange {
-                    raw: fm.raw_diff.clone(),
-                    structural: Some(StructuralChange {
-                        change_type: "file.write".to_string(),
-                        extra: t_extra,
-                    }),
-                },
-            );
-        }
-        for tool in &turn.tool_uses {
-            if tool.category != Some(ToolCategory::FileWrite) || attributed.contains(&tool.id) {
-                continue;
-            }
-            let Some(path) = extract_file_path(tool) else {
-                continue;
-            };
-            let (raw, mut t_extra) = file_write_change(tool, &path, None);
-            t_extra.insert(
-                "tool".to_string(),
-                serde_json::Value::String(tool.name.clone()),
-            );
-            t_extra.insert(
-                "tool_id".to_string(),
-                serde_json::Value::String(tool.id.clone()),
-            );
-            step.change.insert(
-                path,
-                ArtifactChange {
-                    raw,
-                    structural: Some(StructuralChange {
-                        change_type: "file.write".to_string(),
-                        extra: t_extra,
-                    }),
-                },
-            );
-        }
 
-        let final_id = push_step_and_dedup(&mut steps, &mut by_id, step);
-        turn_to_step.insert(turn.id.clone(), final_id);
+            // Emit `view.events` as `conversation.event` steps so that
+            // attachments, preamble lines (ai-title, last-prompt,
+            // queue-operation, permission-mode), and other non-turn entries
+            // survive the IR-to-Path-to-IR roundtrip. Without this,
+            // derive_path drops everything outside `turns`, so a Claude
+            // session loses ~10–25% of its lines on import/export. An event
+            // without an explicit `parent_id` chains off whatever step came
+            // before it.
+            Item::Event(event) => {
+                // Skip before consuming an event index, so the `event-NNNN`
+                // ids synthesized for id-less events don't shift when a
+                // replay sits among them.
+                if !event.id.is_empty()
+                    && let Ok(source) = serde_json::to_value(event)
+                {
+                    let variants = seen_event_sources.entry(event.id.clone()).or_default();
+                    if variants.contains(&source) {
+                        continue;
+                    }
+                    variants.push(source);
+                }
+
+                let idx = event_idx;
+                event_idx += 1;
+
+                // Event step id: prefer the event's native id so it round-trips.
+                let step_id = if event.id.is_empty() {
+                    format!("event-{:04}", idx + 1)
+                } else {
+                    event.id.clone()
+                };
+                let actor = format!("tool:{}", provider);
+                actors
+                    .entry(actor.clone())
+                    .or_insert_with(|| ActorDefinition {
+                        name: Some(provider.to_string()),
+                        provider: Some(provider.to_string()),
+                        ..Default::default()
+                    });
+
+                // event.data is flattened into StructuralChange.extra. Strip keys
+                // that collide with the typed fields on StructuralChange itself —
+                // most importantly `type`, which serde renames `change_type` to.
+                // A Codex `user_message` event carries `data["type"] = "user_message"`,
+                // which would otherwise overwrite our `change_type = "conversation.event"`
+                // and break PathOrRef untagged-enum disambiguation on parse.
+                let mut extra: HashMap<String, serde_json::Value> = event
+                    .data
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != "type")
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                // Stash the original `type` value under a non-colliding key so
+                // round-trip can recover it for providers that need it.
+                if let Some(t) = event.data.get("type") {
+                    extra.insert("event_data_type".to_string(), t.clone());
+                }
+                extra.insert(
+                    "entry_type".to_string(),
+                    serde_json::Value::String(event.event_type.clone()),
+                );
+                // Always recorded — for an id-less event this is the
+                // synthesized step id, so extract restores exactly the id a
+                // re-derive will see and derive→extract→derive is stable at
+                // generation one (an absent key would make extract fall back
+                // to the step id and gen 2 gain this key, changing bytes).
+                extra.insert(
+                    "event_source_id".to_string(),
+                    serde_json::Value::String(step_id.clone()),
+                );
+                // Source linkage, always recorded (`null` = chained by
+                // position, no named parent). Without it, extract can only
+                // hand back the resolved-and-spliced chain, which erases the
+                // source distinction between an event that named a parent and
+                // one that was positional — two such events with otherwise
+                // equal data would collapse into one on the next derive. The
+                // named form stamps the *resolved* parent (a parent that was
+                // renamed stamps its renamed id, verbatim when unresolvable),
+                // so a re-derive of the extracted view resolves identically.
+                extra.insert(
+                    "source_parent".to_string(),
+                    event
+                        .parent_id
+                        .as_ref()
+                        .map_or(serde_json::Value::Null, |pid| {
+                            serde_json::Value::String(
+                                turn_to_step
+                                    .get(pid)
+                                    .cloned()
+                                    .unwrap_or_else(|| pid.clone()),
+                            )
+                        }),
+                );
+
+                let parents: Vec<String> = event
+                    .parent_id
+                    .as_ref()
+                    .and_then(|pid| turn_to_step.get(pid).cloned())
+                    .or_else(|| last_step_id.clone())
+                    .into_iter()
+                    .collect();
+                let parents = splice_onto_intervening(parents, &prev_turn_step, &last_step_id);
+
+                let mut step = Step {
+                    step: StepIdentity {
+                        id: step_id.clone(),
+                        parents,
+                        actor,
+                        timestamp: event.timestamp.clone(),
+                    },
+                    change: HashMap::new(),
+                    meta: None,
+                };
+
+                step.change.insert(
+                    conv_artifact_key.clone(),
+                    ArtifactChange {
+                        raw: None,
+                        structural: Some(StructuralChange {
+                            change_type: "conversation.event".to_string(),
+                            extra,
+                        }),
+                    },
+                );
+                let (final_id, appended) = push_step(&mut steps, &mut by_id, step);
+                // Let a later turn spliced onto this event resolve its parent
+                // on a re-derive (its `parent_id` will be this event's step id).
+                turn_to_step.insert(final_id.clone(), final_id.clone());
+                event_steps.insert(final_id.clone());
+                if appended {
+                    last_step_id = Some(final_id);
+                }
+            }
+        }
     }
 
-    // Emit `view.events` as `conversation.event` steps so that attachments,
-    // preamble lines (ai-title, last-prompt, queue-operation, permission-mode),
-    // and other non-turn entries survive the IR-to-Path-to-IR roundtrip.
-    // Without this, derive_path drops everything outside `turns`, so a
-    // Claude session loses ~10–25% of its lines on import/export.
-    // Track the last emitted step id so events without an explicit
-    // `parent_id` can chain off whatever step came before them.
-    let mut last_step_id: Option<String> = steps.last().map(|s| s.step.id.clone());
-    for (idx, event) in view.events.iter().enumerate() {
-        // Event step id: prefer the event's native id so it round-trips.
-        let step_id = if event.id.is_empty() {
-            format!("event-{:04}", idx + 1)
-        } else {
-            event.id.clone()
-        };
-        let actor = format!("tool:{}", provider);
-        actors
-            .entry(actor.clone())
-            .or_insert_with(|| ActorDefinition {
-                name: Some(provider.to_string()),
-                provider: Some(provider.to_string()),
-                ..Default::default()
-            });
-
-        // event.data is flattened into StructuralChange.extra. Strip keys
-        // that collide with the typed fields on StructuralChange itself —
-        // most importantly `type`, which serde renames `change_type` to.
-        // A Codex `user_message` event carries `data["type"] = "user_message"`,
-        // which would otherwise overwrite our `change_type = "conversation.event"`
-        // and break PathOrRef untagged-enum disambiguation on parse.
-        let mut extra: HashMap<String, serde_json::Value> = event
-            .data
-            .iter()
-            .filter(|(k, _)| k.as_str() != "type")
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        // Stash the original `type` value under a non-colliding key so
-        // round-trip can recover it for providers that need it.
-        if let Some(t) = event.data.get("type") {
-            extra.insert("event_data_type".to_string(), t.clone());
-        }
-        extra.insert(
-            "entry_type".to_string(),
-            serde_json::Value::String(event.event_type.clone()),
-        );
-        if !event.id.is_empty() {
-            extra.insert(
-                "event_source_id".to_string(),
-                serde_json::Value::String(event.id.clone()),
-            );
-        }
-
-        let parents: Vec<String> = event
-            .parent_id
-            .as_ref()
-            .and_then(|pid| turn_to_step.get(pid).cloned())
-            .or_else(|| last_step_id.clone())
-            .into_iter()
-            .collect();
-
-        let mut step = Step {
-            step: StepIdentity {
-                id: step_id.clone(),
-                parents,
-                actor,
-                timestamp: event.timestamp.clone(),
-            },
-            change: HashMap::new(),
-            meta: None,
-        };
-
-        step.change.insert(
-            conv_artifact_key.clone(),
-            ArtifactChange {
-                raw: None,
-                structural: Some(StructuralChange {
-                    change_type: "conversation.event".to_string(),
-                    extra,
-                }),
-            },
-        );
-        last_step_id = Some(push_step_and_dedup(&mut steps, &mut by_id, step));
-    }
-
+    // The head is the last emitted step. Use `steps.last()` rather than
+    // `last_step_id`: when the final item is a duplicate that `push_step`
+    // drops, `last_step_id` regresses to the earlier step it collapsed
+    // into, which would orphan any real step emitted after that earlier
+    // step (e.g. an event between a turn and its replay) as a spurious
+    // dead end. The last surviving step keeps the whole chain on the
+    // head's ancestry.
     let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
 
     // Meta
@@ -475,27 +644,50 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     }
 }
 
-/// Push `step` into `steps`, resolving an id collision with an already-emitted
-/// step so the path's step ids stay unique. A byte-identical re-emission (same
-/// serialized step) is dropped — keeping it would only duplicate a step that
-/// already exists — and a same-id-but-different step is re-IDed to a fresh
-/// `<id>#<n>` so the original id stays recoverable and no data is lost. Returns
-/// the id the step ended up under (the surviving id when dropped, the new id
-/// when re-IDed), which the caller records in `turn_to_step` / `last_step_id`
-/// so parent references keep pointing at a real step.
-fn push_step_and_dedup(
+fn splice_onto_intervening(
+    mut parents: Vec<String>,
+    prev_turn_step: &Option<String>,
+    last_step_id: &Option<String>,
+) -> Vec<String> {
+    let resolved = parents.first().cloned();
+    let chains_onto_prev = resolved == *prev_turn_step;
+    if chains_onto_prev
+        && let Some(last) = last_step_id
+        && Some(last) != resolved.as_ref()
+    {
+        parents = vec![last.clone()];
+    }
+    parents
+}
+
+/// Push `step` into `steps`, resolving an id collision with an
+/// already-emitted step. A byte-identical re-emission (same id, parents,
+/// actor, timestamp, change) is dropped — keeping it would only duplicate a
+/// step that already exists — and a same-id-but-different step is re-IDed to a
+/// fresh `<id>#<n>` so the original id stays recoverable and no data is lost.
+/// Returns the id the step ended up under (the surviving id when dropped, the
+/// new id when re-IDed), which the caller records in `turn_to_step` /
+/// `last_step_id` so the DAG keeps pointing at a real step.
+/// Returns the step's final id plus whether it was actually appended —
+/// `false` means a byte-identical re-emission was dropped. Callers must not
+/// advance their stream position (`last_step_id`/`prev_turn_step`) on a
+/// drop: the duplicate contributes nothing to the stream, and regressing
+/// the position would bypass whatever was emitted between the original and
+/// the replay (e.g. a compaction boundary), orphaning it as a false dead
+/// end and mis-parenting later steps.
+fn push_step(
     steps: &mut Vec<Step>,
     by_id: &mut HashMap<String, usize>,
     mut step: Step,
-) -> String {
+) -> (String, bool) {
     let id = step.step.id.clone();
     let Some(&existing) = by_id.get(&id) else {
         by_id.insert(id.clone(), steps.len());
         steps.push(step);
-        return id;
+        return (id, true);
     };
-    if serde_value_eq(&steps[existing], &step) {
-        return id;
+    if steps_content_eq(&steps[existing], &step) {
+        return (id, false);
     }
     let mut n = 2u32;
     let mut renamed = format!("{id}#{n}");
@@ -506,19 +698,26 @@ fn push_step_and_dedup(
     step.step.id = renamed.clone();
     by_id.insert(renamed.clone(), steps.len());
     steps.push(step);
-    renamed
+    (renamed, true)
 }
 
 /// Whether two steps are the same entry — equal once serialized, so dropping
-/// one is lossless. `Step` doesn't implement `PartialEq`, and this only runs on
-/// an actual id collision (rare), so the serialize cost is negligible.
-fn serde_value_eq(a: &Step, b: &Step) -> bool {
+/// one is lossless. Step doesn't implement `PartialEq`, and serializing only
+/// happens on an actual id collision (rare), so the cost is negligible.
+/// Wire-level replays never reach this comparison: they are recognized at the
+/// source level (`seen_turn_sources`/`seen_event_sources`) before resolution,
+/// because resolved forms are not comparable across the stream — splicing
+/// rewires `parents`, and parent mappings mutate as colliding steps rename.
+fn steps_content_eq(a: &Step, b: &Step) -> bool {
     serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
 }
 
 fn actor_for_turn(turn: &Turn, provider: &str) -> String {
     match &turn.role {
         Role::User => "human:user".to_string(),
+        Role::Assistant if turn.model.as_deref() == Some("<synthetic>") => {
+            format!("tool:{}", provider)
+        }
         Role::Assistant => {
             let model = turn.model.as_deref().unwrap_or("unknown");
             format!("agent:{}", model)
@@ -603,9 +802,12 @@ fn file_write_change(
             );
         }
         extra.insert("after".to_string(), serde_json::Value::String(content));
-    } else if let Some(edits) = input.get("edits").and_then(|v| v.as_array()) {
-        extra.insert("edits".to_string(), serde_json::Value::Array(edits.clone()));
     }
+    // Multi-edit shapes (`edits: [...]`) contribute only the raw diff: the
+    // per-edit pairs are provider-shaped JSON that `FileMutation` cannot
+    // carry, so copying them onto the wire made the first round-trip
+    // silently degrade the document. The full input still rides the
+    // `tool.invoke` step.
 
     (
         file_write_diff(&tool.name, input, path, before_state),
@@ -715,7 +917,7 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolInvocation, ToolResult};
+    use crate::{DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolResult};
 
     fn base_turn(id: &str, role: Role) -> Turn {
         Turn {
@@ -740,7 +942,7 @@ mod tests {
     fn view_with(turns: Vec<Turn>) -> ConversationView {
         ConversationView {
             id: "abcdef012345".to_string(),
-            turns,
+            items: turns.into_iter().map(Item::Turn).collect(),
             provider_id: Some("pi".to_string()),
             ..Default::default()
         }
@@ -753,96 +955,6 @@ mod tests {
             .find(|k| k.contains("://"))
             .expect("conversation artifact key present");
         step.change[key].structural.as_ref().unwrap()
-    }
-
-    #[test]
-    fn test_duplicate_id_identical_content_is_dropped() {
-        // A byte-identical re-emission of the same id collapses to one step.
-        let mut first = base_turn("dup", Role::User);
-        first.text = "same".into();
-        let mid = base_turn("mid", Role::Assistant);
-        let mut second = base_turn("dup", Role::User);
-        second.text = "same".into();
-        let view = view_with(vec![first, mid, second]);
-
-        let path = derive_path(&view, &DeriveConfig::default());
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        assert_eq!(ids, vec!["dup", "mid"], "identical re-emission is dropped");
-    }
-
-    #[test]
-    fn test_duplicate_id_different_content_is_renamed() {
-        // The same id with DIFFERENT content keeps both steps: the later one is
-        // re-IDed to `<id>#<n>` so the path stays unique and no data is lost.
-        let mut first = base_turn("dup", Role::User);
-        first.text = "original".into();
-        let mid = base_turn("mid", Role::Assistant);
-        let mut second = base_turn("dup", Role::User);
-        second.text = "replayed".into();
-        let view = view_with(vec![first, mid, second]);
-
-        let path = derive_path(&view, &DeriveConfig::default());
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        assert_eq!(ids, vec!["dup", "mid", "dup#2"]);
-        assert_eq!(
-            conv_change(&path.steps[0]).extra["text"],
-            serde_json::json!("original")
-        );
-        assert_eq!(
-            conv_change(&path.steps[2]).extra["text"],
-            serde_json::json!("replayed")
-        );
-    }
-
-    #[test]
-    fn test_renamed_duplicate_keeps_parent_references_correct() {
-        // Resolving collisions inline (as steps are emitted) — not as a
-        // post-pass — keeps parent references correct: a later turn whose
-        // parent_id matches a renamed duplicate resolves to the RENAMED step,
-        // not the first occurrence that kept the original id.
-        let mut first = base_turn("dup", Role::User);
-        first.text = "original".into();
-        let mut second = base_turn("dup", Role::User); // re-IDed to dup#2
-        second.text = "replayed".into();
-        let mut child = base_turn("child", Role::Assistant);
-        child.parent_id = Some("dup".into());
-        let view = view_with(vec![first, second, child]);
-
-        let path = derive_path(&view, &DeriveConfig::default());
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        assert_eq!(ids, vec!["dup", "dup#2", "child"]);
-        assert_eq!(
-            path.steps[2].step.parents,
-            vec!["dup#2".to_string()],
-            "child parents on the renamed later duplicate, not the first `dup`"
-        );
-    }
-
-    #[test]
-    fn test_duplicate_event_ids_are_resolved_to_unique_ids() {
-        // The blocking case: Claude Code reuses `uuid` on attachment lines, so
-        // two distinct events arrive with the same id. derive_path must still
-        // yield unique step ids (consumers key on them, e.g. a UNIQUE index).
-        let a = base_turn("t1", Role::User);
-        let mut view = view_with(vec![a]);
-        for v in ["v1", "v2"] {
-            view.events.push(crate::ConversationEvent {
-                id: "evt".into(), // same id, different content
-                timestamp: "2026-01-01T00:00:00Z".into(),
-                parent_id: None,
-                event_type: "attachment".into(),
-                data: std::collections::HashMap::from([("k".to_string(), serde_json::json!(v))]),
-            });
-        }
-
-        let path = derive_path(&view, &DeriveConfig::default());
-        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
-        assert_eq!(unique.len(), ids.len(), "step ids must be unique: {ids:?}");
-        assert!(
-            ids.contains(&"evt") && ids.contains(&"evt#2"),
-            "both events survive with distinct ids: {ids:?}"
-        );
     }
 
     #[test]
@@ -889,7 +1001,10 @@ mod tests {
         let path = derive_path(&view, &DeriveConfig::default());
         let extracted = crate::extract::extract_conversation(&path);
 
-        let usage = extracted.turns[0]
+        let usage = extracted
+            .turns()
+            .next()
+            .unwrap()
             .token_usage
             .as_ref()
             .expect("token_usage survives round-trip");
@@ -953,6 +1068,198 @@ mod tests {
     }
 
     #[test]
+    fn test_duplicate_id_identical_content_is_dropped() {
+        // The same turn id can appear twice with byte-identical content (a
+        // Claude compaction replay re-emitting an unchanged message). The
+        // re-emission is dropped: one step survives, and the conversation
+        // head resolves to it.
+        let mut first = base_turn("dup", Role::User);
+        first.text = "same".into();
+        let mid = base_turn("mid", Role::Assistant);
+        let mut second = base_turn("dup", Role::User);
+        second.text = "same".into();
+        let view = view_with(vec![first, mid, second]);
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["dup", "mid"], "identical re-emission dropped");
+        // Head is the last surviving step in document order, not the earlier
+        // step the dropped duplicate collapsed into — so any real step after
+        // that earlier one (here `mid`) stays on the head's ancestry.
+        assert_eq!(path.path.head, "mid", "head is the last surviving step");
+    }
+
+    #[test]
+    fn test_duplicate_id_different_content_is_renamed() {
+        // The same turn id with DIFFERENT content keeps both steps: the
+        // collision is resolved by renaming the later one to a fresh id so the
+        // path stays unique — never dropping data, never erroring.
+        let mut first = base_turn("dup", Role::User);
+        first.text = "original".into();
+        let mid = base_turn("mid", Role::Assistant);
+        let mut second = base_turn("dup", Role::User);
+        second.text = "replayed".into();
+        let view = view_with(vec![first, mid, second]);
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["dup", "mid", "dup#2"],
+            "differing duplicate re-IDed to `<id>#<n>`, not dropped"
+        );
+        assert_eq!(path.path.head, "dup#2", "head is the re-IDed final step");
+        assert_eq!(
+            conv_change(&path.steps[0]).extra["text"],
+            serde_json::json!("original")
+        );
+        assert_eq!(
+            conv_change(&path.steps[2]).extra["text"],
+            serde_json::json!("replayed")
+        );
+    }
+
+    #[test]
+    fn test_renamed_duplicate_keeps_parent_references_correct() {
+        // Resolving collisions inline (as steps are emitted) — not as a
+        // post-pass — keeps parent references correct: a later turn whose
+        // parent_id matches a renamed duplicate resolves to the RENAMED step,
+        // not the first occurrence that kept the original id.
+        let mut first = base_turn("dup", Role::User);
+        first.text = "original".into();
+        let mut second = base_turn("dup", Role::User); // re-IDed to dup#2
+        second.text = "replayed".into();
+        let mut child = base_turn("child", Role::Assistant);
+        child.parent_id = Some("dup".into());
+        let view = view_with(vec![first, second, child]);
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["dup", "dup#2", "child"]);
+        assert_eq!(
+            path.steps[2].step.parents,
+            vec!["dup#2".to_string()],
+            "child parents on the renamed later duplicate, not the first `dup`"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_event_ids_are_resolved_to_unique_ids() {
+        // The blocking case: Claude Code reuses `uuid` on attachment lines, so
+        // two distinct events arrive with the same id. derive_path must still
+        // yield unique step ids (consumers key on them, e.g. a UNIQUE index).
+        let a = base_turn("t1", Role::User);
+        let mut view = view_with(vec![a]);
+        for v in ["v1", "v2"] {
+            view.items.push(Item::Event(crate::ConversationEvent {
+                id: "evt".into(), // same id, different content
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                parent_id: None,
+                event_type: "attachment".into(),
+                data: std::collections::HashMap::from([("k".to_string(), serde_json::json!(v))]),
+            }));
+        }
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "step ids must be unique: {ids:?}");
+        assert!(
+            ids.contains(&"evt") && ids.contains(&"evt#2"),
+            "both events survive with distinct ids: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn test_replay_of_spliced_turn_is_still_dropped() {
+        // The Claude chain-merge shape: `u1; event; a1(parent u1); replay of
+        // a1`. Deriving splices a1 onto the event (parents = [event], with
+        // `source_parent = u1` stamped), so the replay's bytes no longer
+        // match the stored step verbatim. The comparison must see through
+        // the splice artifacts and drop the replay — otherwise it gets
+        // renamed-kept, becomes the head, and orphans the original turn and
+        // its event as false dead ends.
+        let u1 = base_turn("u1", Role::User);
+        let event = crate::ConversationEvent {
+            id: String::new(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: None,
+            event_type: "attachment".into(),
+            data: std::collections::HashMap::new(),
+        };
+        let mut a1 = base_turn("a1", Role::Assistant);
+        a1.parent_id = Some("u1".into());
+        a1.text = "answer".into();
+        let replay = a1.clone();
+
+        let mut view = view_with(vec![u1]);
+        view.items.push(Item::Event(event));
+        view.items.push(Item::Turn(a1));
+        view.items.push(Item::Turn(replay));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["u1", "event-0001", "a1"],
+            "the byte-identical replay is dropped, not renamed-kept"
+        );
+        assert_eq!(path.path.head, "a1", "the original keeps the head");
+        assert_eq!(
+            path.steps[2].step.parents,
+            vec!["event-0001".to_string()],
+            "the original stays spliced onto the event"
+        );
+    }
+
+    #[test]
+    fn test_same_group_replay_keeps_group_usage() {
+        // Replays are excluded from `turn_groups` in the prepass, so a
+        // byte-identical same-group replay at the group tail must not eat
+        // the once-per-group token stamp — the original tail still sees
+        // itself as last of its group.
+        let u = base_turn("u1", Role::User);
+        let mut a = base_turn("a1", Role::Assistant);
+        a.group_id = Some("g1".into());
+        a.token_usage = Some(crate::TokenUsage {
+            input_tokens: Some(5),
+            output_tokens: Some(7),
+            ..Default::default()
+        });
+        let replay = a.clone();
+        let mut view = view_with(vec![u, a]);
+        view.items.push(Item::Turn(replay));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["u1", "a1"], "the replay is dropped");
+        assert!(
+            conv_change(&path.steps[1])
+                .extra
+                .contains_key("token_usage"),
+            "group tail keeps its once-per-group usage stamp"
+        );
+    }
+
+    #[test]
+    fn test_replay_does_not_shift_idless_turn_ids() {
+        // A skipped replay must not consume a synthesized-id slot: an
+        // id-less turn after it derives the same `step-NNNN` id as it
+        // would without the replay.
+        let u = base_turn("u1", Role::User);
+        let replay = u.clone();
+        let mut idless = base_turn("", Role::Assistant);
+        idless.text = "reply".into();
+        let mut view = view_with(vec![u]);
+        view.items.push(Item::Turn(replay));
+        view.items.push(Item::Turn(idless));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["u1", "step-0002"]);
+    }
+
+    #[test]
     fn test_system_role() {
         let turn = base_turn("t1", Role::System);
         let view = view_with(vec![turn]);
@@ -989,13 +1296,13 @@ mod tests {
         let other = base_turn("t4", Role::Other("bash".into()));
 
         let mut view = view_with(vec![user, assistant, system, other]);
-        view.events.push(crate::ConversationEvent {
+        view.items.push(Item::Event(crate::ConversationEvent {
             id: "e1".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
             parent_id: None,
             event_type: "attachment".into(),
             data: HashMap::new(),
-        });
+        }));
 
         let path = derive_path(&view, &DeriveConfig::default());
         let graph = serde_json::json!({
@@ -1083,13 +1390,13 @@ mod tests {
         other.text = "tool output".into();
 
         let mut view = view_with(vec![user, assistant, system, other]);
-        view.events.push(crate::ConversationEvent {
+        view.items.push(Item::Event(crate::ConversationEvent {
             id: "e1".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
             parent_id: None,
             event_type: "attachment".into(),
             data: HashMap::new(),
-        });
+        }));
 
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(
@@ -1679,6 +1986,34 @@ mod tests {
         assert_eq!(
             path.meta.unwrap().title.as_deref(),
             Some("pi session: abcdef01")
+        );
+    }
+
+    fn dead_end_ids(path: &Path) -> Vec<String> {
+        toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+            .iter()
+            .map(|s| s.step.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn test_splice_preserves_genuine_dead_end_branches() {
+        // The splice must NOT swallow real branches: an abandoned turn that
+        // forks off an earlier turn (not the previous one) stays a dead end.
+        let a = base_turn("a", Role::User);
+        let mut x = base_turn("x", Role::Assistant); // abandoned branch off a
+        x.parent_id = Some("a".into());
+        let mut b = base_turn("b", Role::Assistant); // main line off a
+        b.parent_id = Some("a".into());
+        let mut c = base_turn("c", Role::Assistant);
+        c.parent_id = Some("b".into());
+
+        let view = view_with(vec![a, x, b, c]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(
+            dead_end_ids(&path),
+            vec!["x".to_string()],
+            "the abandoned branch must remain a dead end"
         );
     }
 

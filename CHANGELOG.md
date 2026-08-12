@@ -58,6 +58,63 @@ install: `/plugin marketplace add empathic/toolpath`, then
   fallback, checksum rejection) — wired into `quality_gates.sh` as the
   new `plugin` gate; plugin shell scripts join the shellcheck gate.
 
+## Turns and events become one ordered item stream — 2026-07-27
+
+`ConversationView` replaces its parallel `turns`/`events` vecs with a
+single ordered `items` stream that preserves the source's exact
+interleaving, and `derive_path` emits `conversation.event` steps so
+non-turn entries survive import/export.
+
+- **`toolpath-convo`** (0.12.0): **Breaking** —
+  `ConversationView.turns`/`.events` are replaced by
+  `items: Vec<Item>` (`Turn | Event`), with `turns()`/`events()`
+  iterators. `derive_path` emits `conversation.event` steps
+  (previously dropped — a Claude session lost its attachments and
+  system entries on import/export), resolves duplicate step ids by
+  renaming to `<id>#<n>`, recognizes byte-identical wire replays at
+  the source level and drops them (the Claude chain-merge shape,
+  including replays of steps that were spliced or renamed), and
+  splices events onto the head's ancestry so they don't dangle as
+  false dead ends. Event steps always stamp `source_parent` (`null` =
+  positional chaining) so `extract_conversation` restores source
+  linkage exactly. New proptest suite pins unique step ids,
+  derive → extract → derive stability, and replay no-ops over
+  randomized interleavings with id collisions.
+- **`toolpath-claude`** (0.13.0): the projector emits events inline at
+  their item position — real Claude interleaves attachments and system
+  entries with turns; the old trailing pass regrouped them at end of
+  file. `wire_order_roundtrip` pins the projected entry-type sequence
+  to the captured fixture. Byte-identical duplicate-uuid replays (the
+  compaction re-emission block) are stripped at read time, with
+  compact boundaries exempt.
+- **`toolpath-codex`** (0.7.0): events interleave with turns at their
+  rollout position — a `compacted` marker now derives between its
+  surrounding turns instead of after them, pinned through
+  derive → extract. Empty carrier turns that carry token accounting
+  survive via a keep-mask, and the opening `turn_context` placement
+  matches native rollouts.
+- **`toolpath-gemini`** (0.7.0): all-zero token usage is dropped,
+  split assistant messages group via `group_id` with the snapshot
+  counted once, and colliding wire ids dedup with `#N` suffixes.
+- **`toolpath-opencode`** (0.6.0): compaction parts become in-position
+  `part.compaction` events parented on the preceding turn (previously
+  a trailing events vec). Empty compaction-host user messages are
+  suppressed with parents redirected past them; attachment-only user
+  messages still emit turns. Projected timestamps are monotonized so
+  a re-read keeps emission order.
+- **`toolpath-cursor`** (0.3.0): `/summarize` marker bubbles
+  (`capabilityType` 22) become `summarization` events and project
+  back to well-formed marker bubbles — the marker survives a full
+  cursor → toolpath → cursor round-trip instead of being dropped.
+- **`toolpath-copilot`** (0.2.0): non-turn events carry a turn
+  watermark and merge into `items` in source order; assistant
+  messages whose only content is token usage survive as turns.
+- **`toolpath-pi`** (0.7.0): tree parents resolve past discarded
+  entries (model changes, labels, folded tool results, the virtual
+  root) via `resolve_item_parent`; compaction stays a System turn.
+- **`path-cli`** (0.17.0), **`toolpath-cli`** (0.17.0): dependency
+  bumps for all of the above. 0.17.0 rather than 0.16.0 because
+  0.16.0 had already been released from main.
 ## `path p cache sync` — incremental session ingestion — 2026-07-16
 
 Adds `path p cache sync [types…]`, the first step toward a cache that

@@ -7,16 +7,18 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, FileMutation, Result, Role,
-    ToolInvocation, Turn,
+    ConversationEvent, ConversationProjector, ConversationView, ConvoError, FileMutation, Item,
+    Result, Role, ToolInvocation, Turn,
 };
 
+use crate::provider::EVENT_SUMMARIZATION;
 use crate::reader::CONTENT_PREFIX;
 use crate::types::{
-    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, BubbleGrouping, BubbleHeader, CAPABILITY_TOOL,
-    ComposerData, ComposerHead, CursorSession, ModelConfig, ModelInfo, SelectedModel,
-    TOOL_EDIT_FILE_V2, TOOL_GLOB_FILE_SEARCH, TOOL_READ_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2,
-    TOOL_TASK_V2, ThinkingBlock, TokenCount, ToolFormerData, WorkspaceIdentifier, WorkspaceUri,
+    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, BubbleGrouping, BubbleHeader,
+    CAPABILITY_SUMMARIZATION, CAPABILITY_TOOL, ComposerData, ComposerHead, CursorSession,
+    ModelConfig, ModelInfo, SelectedModel, TOOL_EDIT_FILE_V2, TOOL_GLOB_FILE_SEARCH,
+    TOOL_READ_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2, TOOL_TASK_V2, ThinkingBlock, TokenCount,
+    ToolFormerData, WorkspaceIdentifier, WorkspaceUri,
 };
 
 const DEFAULT_AGENT_BACKEND: &str = "cursor-agent";
@@ -100,8 +102,7 @@ fn project_view(
         .workspace_path
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
                 .map(PathBuf::from)
         })
@@ -132,44 +133,55 @@ fn project_view(
         .unwrap_or_else(|| DEFAULT_MODEL_NAME.to_string());
 
     let created_at = view.started_at.map(|t| t.timestamp_millis()).or_else(|| {
-        view.turns
-            .first()
+        view.turns()
+            .next()
             .and_then(|t| parse_timestamp_ms(&t.timestamp))
     });
     let last_updated_at = view
         .last_activity
         .map(|t| t.timestamp_millis())
         .or_else(|| {
-            view.turns
+            view.turns()
                 .last()
                 .and_then(|t| parse_timestamp_ms(&t.timestamp))
         })
         .or(created_at);
 
     let mut content_blobs: HashMap<String, String> = HashMap::new();
-    let mut bubbles: Vec<Bubble> = Vec::with_capacity(view.turns.len());
-    let mut headers: Vec<BubbleHeader> = Vec::with_capacity(view.turns.len());
+    let mut bubbles: Vec<Bubble> = Vec::with_capacity(view.turns().count());
+    let mut headers: Vec<BubbleHeader> = Vec::with_capacity(view.turns().count());
 
     let mut total_input: u64 = 0;
     let mut total_output: u64 = 0;
     let mut total_files: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for turn in &view.turns {
-        if !is_projectable(turn) {
-            continue;
-        }
-        let bubble = build_bubble(turn, &mut content_blobs);
+    for item in &view.items {
+        match item {
+            Item::Turn(turn) => {
+                if !is_projectable(turn) {
+                    continue;
+                }
+                let bubble = build_bubble(turn, &mut content_blobs);
 
-        if let Some(tc) = &bubble.token_count {
-            total_input = total_input.saturating_add(tc.input_tokens.unwrap_or(0));
-            total_output = total_output.saturating_add(tc.output_tokens.unwrap_or(0));
-        }
-        for fm in &turn.file_mutations {
-            total_files.insert(fm.path.clone());
-        }
+                if let Some(tc) = &bubble.token_count {
+                    total_input = total_input.saturating_add(tc.input_tokens.unwrap_or(0));
+                    total_output = total_output.saturating_add(tc.output_tokens.unwrap_or(0));
+                }
+                for fm in &turn.file_mutations {
+                    total_files.insert(fm.path.clone());
+                }
 
-        headers.push(header_for(&bubble, turn));
-        bubbles.push(bubble);
+                headers.push(header_for(&bubble, turn));
+                bubbles.push(bubble);
+            }
+            Item::Event(ev) if ev.event_type == EVENT_SUMMARIZATION => {
+                let bubble = summarization_bubble(ev);
+                headers.push(summarization_header(&bubble));
+                bubbles.push(bubble);
+            }
+            // Other event kinds have no bubble-store representation.
+            Item::Event(_) => {}
+        }
     }
 
     let workspace_identifier = if workspace_path_str.starts_with('/') {
@@ -330,7 +342,7 @@ fn build_bubble(turn: &Turn, content_blobs: &mut HashMap<String, String>) -> Bub
         tool_former_data,
         all_thinking_blocks,
         tool_results: Vec::new(),
-        extra: bubble_required_extras(is_tool_bubble),
+        extra: bubble_required_extras(!is_tool_bubble),
     }
 }
 
@@ -355,6 +367,57 @@ fn header_for(bubble: &Bubble, turn: &Turn) -> BubbleHeader {
         bubble_id: bubble.bubble_id.clone(),
         kind: bubble.kind,
         grouping: Some(grouping),
+        content_height_hint: None,
+    }
+}
+
+/// Rebuild the `/summarize` marker bubble from its preserved event.
+/// Field values mirror the real capabilityType-22 rows Cursor writes:
+/// assistant type, empty text, zero token count, no `richText`, no
+/// `context`.
+fn summarization_bubble(ev: &ConversationEvent) -> Bubble {
+    Bubble {
+        v: BUBBLE_SCHEMA_V,
+        bubble_id: ev.id.clone(),
+        kind: BUBBLE_TYPE_ASSISTANT,
+        created_at: if ev.timestamp.is_empty() {
+            None
+        } else {
+            Some(ev.timestamp.clone())
+        },
+        text: String::new(),
+        rich_text: None,
+        capability_type: Some(CAPABILITY_SUMMARIZATION),
+        conversation_state: Some("~".into()),
+        unified_mode: Some(UNIFIED_MODE_AGENT),
+        is_agentic: false,
+        request_id: Some(String::new()),
+        checkpoint_id: None,
+        token_count: Some(TokenCount {
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            extra: HashMap::new(),
+        }),
+        model_info: None,
+        tool_former_data: None,
+        all_thinking_blocks: Vec::new(),
+        tool_results: Vec::new(),
+        extra: bubble_required_extras(false),
+    }
+}
+
+fn summarization_header(bubble: &Bubble) -> BubbleHeader {
+    BubbleHeader {
+        bubble_id: bubble.bubble_id.clone(),
+        kind: bubble.kind,
+        grouping: Some(BubbleGrouping {
+            is_renderable: true,
+            has_text: None,
+            has_thinking: None,
+            thinking_duration_ms: None,
+            capability_type: bubble.capability_type,
+            extra: HashMap::new(),
+        }),
         content_height_hint: None,
     }
 }
@@ -826,8 +889,10 @@ fn composer_required_extras() -> HashMap<String, Value> {
 }
 
 // Each key is required — missing keys throw `Object.entries(undefined)`
-// in Cursor's renderer and the bubble doesn't display.
-fn bubble_required_extras(is_tool_bubble: bool) -> HashMap<String, Value> {
+// in Cursor's renderer and the bubble doesn't display. `include_context`
+// adds the `context` envelope, which text bubbles need but tool bubbles
+// and `/summarize` marker bubbles must not carry (native rows omit it).
+fn bubble_required_extras(include_context: bool) -> HashMap<String, Value> {
     let empty_arr = Value::Array(Vec::new());
     let mut out: HashMap<String, Value> = HashMap::new();
     for k in [
@@ -892,7 +957,7 @@ fn bubble_required_extras(is_tool_bubble: bool) -> HashMap<String, Value> {
     ] {
         out.insert(k.into(), Value::Bool(false));
     }
-    if !is_tool_bubble {
+    if include_context {
         out.insert("context".into(), empty_context_value());
     }
     out.insert("todos".into(), empty_arr);
@@ -963,16 +1028,16 @@ mod tests {
     }
 
     fn view_with(turns: Vec<Turn>) -> ConversationView {
+        use toolpath_convo::Item;
         ConversationView {
             id: "comp-1".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("cursor".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             base: Some(SessionBase {
                 working_dir: Some("/proj".into()),
                 vcs_revision: None,
@@ -1181,6 +1246,84 @@ mod tests {
         assert_eq!(headers[0].kind, BUBBLE_TYPE_USER);
         assert_eq!(headers[1].bubble_id, "a1");
         assert_eq!(headers[1].kind, BUBBLE_TYPE_ASSISTANT);
+    }
+
+    fn summarization_item(id: &str, ts: &str, parent: Option<&str>) -> Item {
+        Item::Event(ConversationEvent {
+            id: id.into(),
+            timestamp: ts.into(),
+            parent_id: parent.map(str::to_string),
+            event_type: EVENT_SUMMARIZATION.into(),
+            data: [("capabilityType".to_string(), json!(22))]
+                .into_iter()
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn summarization_event_projects_to_marker_bubble() {
+        let mut view = view_with(vec![user_turn("u1", "hi"), assistant_turn("a1", "ok")]);
+        view.items.insert(
+            1,
+            summarization_item("s1", "2026-06-01T00:00:00.500Z", Some("u1")),
+        );
+        let s = CursorProjector::new().project(&view).unwrap();
+
+        assert_eq!(s.bubbles.len(), 3);
+        let marker = &s.bubbles[1];
+        assert_eq!(marker.bubble_id, "s1");
+        assert_eq!(marker.kind, BUBBLE_TYPE_ASSISTANT);
+        assert_eq!(marker.capability_type, Some(CAPABILITY_SUMMARIZATION));
+        assert_eq!(marker.text, "");
+        assert_eq!(
+            marker.created_at.as_deref(),
+            Some("2026-06-01T00:00:00.500Z")
+        );
+        assert!(marker.rich_text.is_none());
+        assert!(marker.tool_former_data.is_none());
+        assert!(!marker.extra.contains_key("context"));
+
+        let h = &s.data.full_conversation_headers_only[1];
+        assert_eq!(h.bubble_id, "s1");
+        assert_eq!(h.kind, BUBBLE_TYPE_ASSISTANT);
+        assert_eq!(
+            h.grouping.as_ref().unwrap().capability_type,
+            Some(CAPABILITY_SUMMARIZATION)
+        );
+    }
+
+    #[test]
+    fn projected_summarization_marker_re_lifts_to_the_same_event() {
+        let mut view = view_with(vec![user_turn("u1", "hi"), assistant_turn("a1", "ok")]);
+        view.items.insert(
+            1,
+            summarization_item("s1", "2026-06-01T00:00:00.500Z", Some("u1")),
+        );
+        let s = CursorProjector::new().project(&view).unwrap();
+
+        let view_again = crate::provider::session_to_view(&s);
+        assert_eq!(view_again.items.len(), 3);
+        let ev = view_again.items[1].as_event().expect("marker survives");
+        assert_eq!(ev.id, "s1");
+        assert_eq!(ev.event_type, EVENT_SUMMARIZATION);
+        assert_eq!(ev.timestamp, "2026-06-01T00:00:00.500Z");
+        assert_eq!(ev.parent_id.as_deref(), Some("u1"));
+        assert_eq!(ev.data["capabilityType"], json!(22));
+    }
+
+    #[test]
+    fn non_summarization_events_project_to_no_bubble() {
+        let mut view = view_with(vec![user_turn("u1", "hi")]);
+        view.items.push(Item::Event(ConversationEvent {
+            id: "e1".into(),
+            timestamp: "2026-06-01T00:00:02.000Z".into(),
+            parent_id: Some("u1".into()),
+            event_type: "attachment".into(),
+            data: Default::default(),
+        }));
+        let s = CursorProjector::new().project(&view).unwrap();
+        assert_eq!(s.bubbles.len(), 1);
+        assert_eq!(s.data.full_conversation_headers_only.len(), 1);
     }
 
     #[test]
