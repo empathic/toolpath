@@ -77,16 +77,8 @@ Explore Toolpath documents in your browser. Real <code>path</code> commands, rea
 Every coding agent writes its own undocumented session log. Claude Code
 keeps rotating JSONL chains, Codex writes rollout files, Gemini has chat
 directories, Copilot an event stream. The session that produced a change
-is locked inside the harness that ran it.
-
-And once the change lands, git loses the rest. When Claude writes code,
-`rustfmt` reformats it, and a human refines it, git blame attributes
-everything to the human's commit. Dead ends disappear. Tool contributions
-collapse into whoever typed `git commit`.
-
-Toolpath fixes both. It is the open session format: every harness's
-sessions in one portable schema that records **who** changed **what**,
-**why**, what they tried that didn't work, and what it cost.
+is locked inside the harness that ran it, and that harness can change
+its format at any time.
 
 <div class="scenarios">
   <h2>When you need it</h2>
