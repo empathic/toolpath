@@ -243,13 +243,17 @@ specification,
 documents in any language, and [examples/](examples/) holds 12 documents
 covering steps, paths, and graphs.
 
-The on-disk formats we reverse-engineered to build the derive crates
-are documented under
-[docs/agents/formats/](docs/agents/formats/README.md). That includes a
-twelve-part reference for Claude Code's JSONL (envelope, entry types,
-session chains, compaction, a writing-compatible guide) and the writer
-contract the Copilot CLI loader enforces. If you're building your own
-session tooling, they're useful even if you never run our code.
+[docs/agents/formats/](docs/agents/formats/README.md) records our
+understanding of each agent's on-disk session format, written down
+while building the derive crates. That includes a twelve-part reference
+for Claude Code's JSONL (envelope, entry types, session chains,
+compaction, a writing-compatible guide) and the writer contract the
+Copilot CLI loader appears to enforce. None of these formats are
+documented by their vendors, so the notes come from observed behavior
+of specific versions: they are works in progress, with gaps, and the
+agents can change their formats at any time. Corrections are welcome.
+If you're building your own session tooling, they're a useful starting
+point even if you never run our code.
 
 ## CLI reference
 
@@ -422,8 +426,8 @@ See each crate's README for library-level documentation.
 - [CHANGELOG.md](CHANGELOG.md) -- Release history
 - [schema/toolpath.schema.json](schema/toolpath.schema.json) -- JSON Schema
 - [examples/](examples/) -- 12 example documents covering steps, paths, and graphs
-- [docs/agents/formats/](docs/agents/formats/README.md) -- Reference for the on-disk
-  session formats of every agent we derive from
+- [docs/agents/formats/](docs/agents/formats/README.md) -- Our working notes on the
+  on-disk session formats of every agent we derive from
 
 ## Requirements
 
