@@ -402,6 +402,13 @@
     font-size: 0.72rem;
     color: var(--text-secondary);
   }
+  .harness-list a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .harness-list li:hover a {
+    color: var(--accent);
+  }
 
   /* --- Tables --- */
   table {

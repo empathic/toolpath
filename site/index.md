@@ -207,13 +207,13 @@ ancestry of `path.head`.
 ## Supported harnesses
 
 <ul class="harness-list">
-  <li>Claude Code</li>
-  <li>Gemini CLI</li>
-  <li>Codex CLI</li>
-  <li>Copilot CLI <em>(preview)</em></li>
-  <li>opencode</li>
-  <li>Pi</li>
-  <li>Cursor IDE</li>
+  <li><a href="{{ site.repo }}/tree/main/docs/agents/formats/claude-code">Claude Code</a></li>
+  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/gemini.md">Gemini CLI</a></li>
+  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/codex.md">Codex CLI</a></li>
+  <li><a href="{{ site.repo }}/tree/main/docs/agents/formats/copilot-cli">Copilot CLI <em>(preview)</em></a></li>
+  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/opencode.md">opencode</a></li>
+  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/pi.md">Pi</a></li>
+  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/cursor.md">Cursor IDE</a></li>
 </ul>
 
 Parsing captures the full session: prompts, tool calls, reasoning,
