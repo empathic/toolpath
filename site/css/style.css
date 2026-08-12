@@ -376,6 +376,15 @@
     color: var(--text-dim);
   }
 
+  /* --- Harness list (3-across bulleted grid) --- */
+  .harness-list {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.35rem var(--space-lg);
+    margin: 1rem 0;
+    padding-left: 1.2rem;
+  }
+
   /* --- Tables --- */
   table {
     border-collapse: collapse;
@@ -899,6 +908,9 @@
   @media (max-width: 640px) {
     html {
       font-size: 14px;
+    }
+    .harness-list {
+      grid-template-columns: 1fr 1fr;
     }
     .hero {
       flex-direction: column;

@@ -206,15 +206,15 @@ ancestry of `path.head`.
 
 ## Supported harnesses
 
-| Harness | Notes |
-|---|---|
-| Claude Code | |
-| Gemini CLI | |
-| Codex CLI | |
-| Copilot CLI | preview |
-| opencode | |
-| Cursor | the IDE; not yet the cursor-agent CLI |
-| Pi | |
+<ul class="harness-list">
+  <li>Claude Code</li>
+  <li>Gemini CLI</li>
+  <li>Codex CLI</li>
+  <li>Copilot CLI <em>(preview)</em></li>
+  <li>opencode</li>
+  <li>Pi</li>
+  <li>Cursor <em>(the IDE; not yet the cursor-agent CLI)</em></li>
+</ul>
 
 Parsing captures the full session: prompts, tool calls, reasoning,
 file changes, sub-agent work, token usage. Projecting writes a session
