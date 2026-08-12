@@ -12,18 +12,18 @@ directories, Copilot an event stream, opencode a SQLite database,
 Cursor a composer store, Pi session trees. Toolpath reads them all into
 one format and writes them back. With everything in one format you can:
 
-- Share a session and resume it on another machine or in another
-  harness. A session started in Claude Code can be picked up in Codex.
-- Run one `jq` filter over every session on the machine with
-  `path query`, regardless of which agent wrote it.
-- Account for tokens consistently: real session totals, per-step
-  attribution where the source reports it, and reasoning breakdowns,
-  even though every provider reports usage differently.
-- Keep the provenance that git collapses at merge time: who changed
-  what, why, and the dead ends.
-- Keep an archive you control. `path p cache sync` incrementally
-  ingests every session on the machine into plain JSON under
-  `~/.toolpath/`.
+- **Portability.** Share a session and resume it on another machine or
+  in another harness. A session started in Claude Code can be picked up
+  in Codex.
+- **An archive you control.** `path p cache sync` incrementally ingests
+  every session on the machine into plain JSON under `~/.toolpath/`.
+- **Unified tooling.** Run one `jq` filter over every session on the
+  machine with `path query`, regardless of which agent wrote it.
+- **Token accounting.** Real session totals, per-step attribution where
+  the source reports it, and reasoning breakdowns, even though every
+  provider reports usage differently.
+- **Provenance.** Who changed what, why, and what was tried and
+  abandoned. The record that git collapses at merge time.
 
 ## Supported sources
 
