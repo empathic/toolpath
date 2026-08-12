@@ -1690,7 +1690,7 @@ fn share_configured_repo_requires_login() {
     std::fs::write(
         cfg.path().join("config.toml"),
         format!(
-            "[[project]]\ndir = {:?}\nrepo = \"team/sessions\"\n",
+            "[[project]]\ndir = {:?}\nremote = \"team/sessions\"\n",
             project.display().to_string()
         ),
     )
@@ -1724,7 +1724,7 @@ fn share_ignores_tracked_toolpath_toml() {
     let (port, server, temp, project, home) = share_anon_fixture();
     std::fs::write(
         project.join(".toolpath.toml"),
-        "[share]\nrepo = \"team/sessions\"\n",
+        "[share]\nremote = \"team/sessions\"\n",
     )
     .unwrap();
     let cfg = tempfile::tempdir().unwrap();
@@ -1761,7 +1761,7 @@ fn share_anon_flag_ignores_configured_repo() {
     std::fs::write(
         cfg.path().join("config.toml"),
         format!(
-            "[[project]]\ndir = {:?}\nrepo = \"team/sessions\"\n",
+            "[[project]]\ndir = {:?}\nremote = \"team/sessions\"\n",
             project.display().to_string()
         ),
     )
@@ -1789,10 +1789,11 @@ fn share_anon_flag_ignores_configured_repo() {
     drop(temp);
 }
 
-/// Mock Pathbase for the authed configured-repo test: answers the
-/// `GET /api/v1/u/me` credentials probe and then a graph POST, capturing
+/// Mock Pathbase for the authed configured-remote tests: serves
+/// `requests` sequential connections, answering `GET /api/v1/u/me`
+/// (credentials probe) or a graph POST by request line, and capturing
 /// each request's start line for assertions.
-fn authed_upload_server() -> (u16, std::thread::JoinHandle<Vec<String>>) {
+fn authed_upload_server(requests: usize) -> (u16, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
 
@@ -1800,7 +1801,7 @@ fn authed_upload_server() -> (u16, std::thread::JoinHandle<Vec<String>>) {
     let port = listener.local_addr().unwrap().port();
     let handle = std::thread::spawn(move || {
         let mut starts = Vec::new();
-        for _ in 0..2 {
+        for _ in 0..requests {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream);
             let mut start = String::new();
@@ -1852,13 +1853,13 @@ fn authed_upload_server() -> (u16, std::thread::JoinHandle<Vec<String>>) {
 /// provenance line on stderr and the share URL on stdout.
 #[test]
 fn share_configured_repo_uploads_when_authed() {
-    let (port, server) = authed_upload_server();
+    let (port, server) = authed_upload_server(2);
     let (temp, project) = claude_session_fixture();
     let cfg = tempfile::tempdir().unwrap();
     std::fs::write(
         cfg.path().join("config.toml"),
         format!(
-            "[[project]]\ndir = {:?}\nrepo = \"team/sessions\"\n",
+            "[[project]]\ndir = {:?}\nremote = \"team/sessions\"\n",
             project.display().to_string()
         ),
     )
@@ -1899,5 +1900,61 @@ fn share_configured_repo_uploads_when_authed() {
     assert!(
         starts[1].starts_with("POST /api/v1/u/team/repos/sessions/graphs"),
         "upload must target the configured repo: {starts:?}"
+    );
+}
+
+/// A URL-form remote carries its own server: credentials point at server
+/// A (which answers the auth probe), the configured remote embeds server
+/// B — the upload POST must land on B, at the remote's repo.
+#[test]
+fn share_url_remote_targets_embedded_server() {
+    let (port_a, server_a) = authed_upload_server(1);
+    let (port_b, server_b) = authed_upload_server(1);
+    let (temp, project) = claude_session_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg.path().join("config.toml"),
+        format!(
+            "[[project]]\ndir = {:?}\nremote = \"http://127.0.0.1:{port_b}/u/team/proj\"\n",
+            project.display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        cfg.path().join("credentials.json"),
+        format!(
+            r#"{{"url":"http://127.0.0.1:{port_a}","token":"tok","user":{{"id":"u-1","username":"alex"}}}}"#
+        ),
+    )
+    .unwrap();
+
+    cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(format!(
+            "Sharing to http://127.0.0.1:{port_b}/u/team/proj"
+        )));
+
+    let starts_a = server_a.join().unwrap();
+    assert!(
+        starts_a[0].starts_with("GET /api/v1/u/me"),
+        "server A gets only the auth probe: {starts_a:?}"
+    );
+    let starts_b = server_b.join().unwrap();
+    assert!(
+        starts_b[0].starts_with("POST /api/v1/u/team/repos/proj/graphs"),
+        "server B gets the upload at the remote's repo: {starts_b:?}"
     );
 }

@@ -2,21 +2,26 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## Configured repo mappings for `path share` — 2026-08-12
+## Configured share remotes for `path share` — 2026-08-12
 
-- **`path-cli`** (0.17.0): `path share` now resolves a default Pathbase
-  repo from the session's own directory (the project for path-keyed
+- **`path-cli`** (0.17.0): `path share` now resolves a default share
+  remote from the session's own directory (the project for path-keyed
   harnesses, the recorded cwd otherwise — from `path.base` when no
   `--project` is in play). The mapping lives in `~/.toolpath/config.toml`:
   `[[project]]` rules with `dir` (subtree match, `~/`-expandable; most
-  specific wins) and `repo = "owner/name"`.
+  specific wins) and `remote` — either a bare `owner/name` (a Pathbase
+  repo on the credentialed/default server) or a canonical Pathbase repo
+  web URL (`https://<host>/u/<owner>/<name>`), which also carries the
+  server. The URL scheme is the extension point for future backends;
+  unknown schemes are rejected today.
 
   Precedence: `--repo` flag, then config, then today's behavior
-  (`<you>/pathstash`). A resolved mapping prints a
-  `Sharing to owner/name (<origin>)` provenance line before uploading.
-  Configured repos require an authed upload: hitting one while logged
-  out is an error with a `path auth login` hint rather than a silent
-  anonymous upload; explicit `--anon` opts out of the mapping entirely.
+  (`<you>/pathstash`); `--url` beats a URL remote's embedded server. A
+  resolved remote prints a `Sharing to <remote> (<origin>)` provenance
+  line before uploading. Configured remotes require an authed upload:
+  hitting one while logged out is an error with a `path auth login`
+  hint rather than a silent anonymous upload; explicit `--anon` opts
+  out of the mapping entirely.
 
   A repo-tracked `.toolpath.toml` variant (team commits the mapping,
   every clone follows it) was built and pulled back out: a committed
