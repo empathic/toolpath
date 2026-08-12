@@ -636,7 +636,7 @@ fn bail_no_sessions(
 
 /// Cross-platform `$HOME` lookup matching the providers' internal helpers.
 /// Returns `None` only when neither `$HOME` nor `$USERPROFILE` is set.
-fn home_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
@@ -771,7 +771,7 @@ fn harness_status_cursor(bundle: &HarnessBundle, home: Option<&std::path::Path>)
 
 /// Display `path` as `~/relative/part` when it's under `home`, otherwise
 /// return its absolute lossy form. Pure helper — does no filesystem I/O.
-fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+pub(crate) fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
     if let Some(home) = home
         && let Ok(rest) = path.strip_prefix(home)
     {
@@ -819,11 +819,17 @@ fn share_explicit(
             "Cache is current for {} session {cache_id}; uploading without re-deriving",
             harness.name()
         );
+        let session_dir = project.as_deref().map(PathBuf::from).or_else(|| {
+            toolpath::v1::Graph::from_json(&body)
+                .ok()
+                .and_then(|doc| doc_session_dir(&doc))
+        });
+        let repo = effective_repo(args, &auth, session_dir)?;
         let summary = format!("{} session {}", harness.name(), cache_id);
         let upload = crate::cmd_export::PathbaseUploadArgs {
             url: args.url.clone(),
             anon: args.anon,
-            repo: args.repo.clone(),
+            repo,
             name: args.name.clone(),
             public: args.public,
         };
@@ -855,15 +861,67 @@ fn share_explicit(
         );
     }
 
+    let session_dir = project
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| doc_session_dir(&derived.doc));
+    let repo = effective_repo(args, &auth, session_dir)?;
     let body = derived.doc.to_json()?;
     let upload = crate::cmd_export::PathbaseUploadArgs {
         url: args.url.clone(),
         anon: args.anon,
-        repo: args.repo.clone(),
+        repo,
         name: args.name.clone(),
         public: args.public,
     };
     crate::cmd_export::run_pathbase_inner(auth, base_url, upload, &body, &summary)
+}
+
+/// The directory a derived session document belongs to: its single
+/// path's `base.uri` when that's a `file://` URI (conversation derives
+/// record the session's cwd there). This is how session-keyed harnesses
+/// (codex/opencode/copilot/cursor), which carry no `--project`, feed the
+/// configured-repo lookup.
+fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
+    let base = doc.single_path()?.path.base.as_ref()?;
+    let dir = base.uri.strip_prefix("file://")?;
+    if dir.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(dir))
+}
+
+/// Decide the upload repo. `--repo` wins; explicit `--anon` skips config
+/// entirely (anonymous uploads have no repo); otherwise a repo mapping
+/// configured for the session's directory applies (see `share_config`).
+/// A configured repo needs an authed upload, so hitting one while
+/// unauthenticated is an error rather than a silent fall-through to the
+/// anonymous endpoint.
+fn effective_repo(
+    args: &ShareArgs,
+    auth: &crate::cmd_pathbase::AuthMode,
+    session_dir: Option<PathBuf>,
+) -> Result<Option<RepoSpec>> {
+    if args.repo.is_some() || args.anon {
+        return Ok(args.repo.clone());
+    }
+    let Some(dir) = session_dir else {
+        return Ok(None);
+    };
+    let Some(found) = crate::share_config::resolve_repo(&dir)? else {
+        return Ok(None);
+    };
+    let repo = format!("{}/{}", found.repo.owner, found.repo.name);
+    if matches!(auth, crate::cmd_pathbase::AuthMode::Anon) {
+        anyhow::bail!(
+            "sessions in {} are configured to upload to {repo} ({}), which requires login.\n\
+             Run `path auth login`, or pass --anon to upload anonymously instead.",
+            dir.display(),
+            found.origin,
+        );
+    }
+    eprintln!("Sharing to {repo} ({})", found.origin);
+    Ok(Some(found.repo))
 }
 
 /// Build the TSV line fed to the picker. Three hidden parser-only
@@ -1350,6 +1408,128 @@ mod tests {
         };
         let status = harness_status_claude(&bundle, None);
         assert!(status.exists);
+    }
+
+    fn share_args() -> ShareArgs {
+        ShareArgs {
+            url: None,
+            anon: false,
+            repo: None,
+            name: None,
+            public: false,
+            harness: None,
+            session: None,
+            project: None,
+            no_cache: false,
+        }
+    }
+
+    fn graph_with_base(uri: &str) -> toolpath::v1::Graph {
+        let json = format!(
+            r#"{{"graph":{{"id":"g"}},"paths":[{{"path":{{"id":"p","head":"s1","base":{{"uri":{uri:?}}}}},"steps":[]}}]}}"#
+        );
+        toolpath::v1::Graph::from_json(&json).unwrap()
+    }
+
+    #[test]
+    fn doc_session_dir_reads_file_uri_base() {
+        let doc = graph_with_base("file:///work/proj");
+        assert_eq!(doc_session_dir(&doc), Some(PathBuf::from("/work/proj")));
+    }
+
+    #[test]
+    fn doc_session_dir_ignores_non_file_base() {
+        let doc = graph_with_base("github:org/repo");
+        assert_eq!(doc_session_dir(&doc), None);
+        let doc = graph_with_base("file://");
+        assert_eq!(doc_session_dir(&doc), None);
+    }
+
+    #[test]
+    fn doc_session_dir_none_without_base() {
+        let json = r#"{"graph":{"id":"g"},"paths":[{"path":{"id":"p","head":"s1"},"steps":[]}]}"#;
+        let doc = toolpath::v1::Graph::from_json(json).unwrap();
+        assert_eq!(doc_session_dir(&doc), None);
+    }
+
+    #[test]
+    fn effective_repo_flag_wins_without_touching_config() {
+        let mut args = share_args();
+        args.repo = Some(crate::cmd_export::parse_repo_spec("me/flag").unwrap());
+        let auth = crate::cmd_pathbase::AuthMode::Authed {
+            token: "tok".into(),
+            username: "me".into(),
+        };
+        let repo = effective_repo(&args, &auth, Some(PathBuf::from("/anywhere")))
+            .unwrap()
+            .unwrap();
+        assert_eq!((repo.owner.as_str(), repo.name.as_str()), ("me", "flag"));
+    }
+
+    #[test]
+    fn effective_repo_anon_flag_skips_config() {
+        let mut args = share_args();
+        args.anon = true;
+        let got = effective_repo(
+            &args,
+            &crate::cmd_pathbase::AuthMode::Anon,
+            Some(PathBuf::from("/anywhere")),
+        )
+        .unwrap();
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn effective_repo_none_without_session_dir() {
+        let got =
+            effective_repo(&share_args(), &crate::cmd_pathbase::AuthMode::Anon, None).unwrap();
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn effective_repo_configured_repo_requires_auth() {
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let cfg = TempDir::new().unwrap();
+        let project = cfg.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            cfg.path().join("config.toml"),
+            format!(
+                "[[project]]\ndir = {:?}\nrepo = \"team/sessions\"\n",
+                project.display().to_string()
+            ),
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var(crate::config::CONFIG_DIR_ENV, cfg.path());
+        }
+        let unauthed = effective_repo(
+            &share_args(),
+            &crate::cmd_pathbase::AuthMode::Anon,
+            Some(project.clone()),
+        );
+        let authed = effective_repo(
+            &share_args(),
+            &crate::cmd_pathbase::AuthMode::Authed {
+                token: "tok".into(),
+                username: "me".into(),
+            },
+            Some(project),
+        );
+        unsafe {
+            std::env::remove_var(crate::config::CONFIG_DIR_ENV);
+        }
+
+        let err = unauthed.unwrap_err().to_string();
+        assert!(err.contains("team/sessions"), "got: {err}");
+        assert!(err.contains("path auth login"), "got: {err}");
+        let repo = authed.unwrap().unwrap();
+        assert_eq!(
+            (repo.owner.as_str(), repo.name.as_str()),
+            ("team", "sessions")
+        );
     }
 
     #[test]

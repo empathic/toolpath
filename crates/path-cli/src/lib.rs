@@ -36,6 +36,8 @@ mod io;
 pub mod kinds;
 mod query;
 mod schema;
+#[cfg(not(target_os = "emscripten"))]
+mod share_config;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
 mod sync;

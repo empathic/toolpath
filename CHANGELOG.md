@@ -2,6 +2,28 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Configured repo mappings for `path share` — 2026-08-12
+
+- **`path-cli`** (0.17.0): `path share` now resolves a default Pathbase
+  repo from the session's own directory (the project for path-keyed
+  harnesses, the recorded cwd otherwise — from `path.base` when no
+  `--project` is in play). Two config surfaces feed the mapping:
+  - `~/.toolpath/config.toml` (personal): `[[project]]` rules with
+    `dir` (subtree match, `~/`-expandable; most specific wins) and
+    `repo = "owner/name"`.
+  - `.toolpath.toml` at the repo root (tracked, shared by a team):
+    `[share] repo = "owner/name"`, discovered by walking up from the
+    session's directory; the nearest file naming a repo wins.
+
+  Precedence: `--repo` flag, then personal config, then the tracked
+  file, then today's behavior (`<you>/pathstash`). A resolved mapping
+  prints a `Sharing to owner/name (<origin>)` provenance line before
+  uploading. Configured repos require an authed upload: hitting one
+  while logged out is an error with a `path auth login` hint rather
+  than a silent anonymous upload; explicit `--anon` opts out of the
+  mapping entirely.
+- **`toolpath-cli`** (0.17.0): lockstep bump of the deprecated shim.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

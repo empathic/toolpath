@@ -1648,3 +1648,251 @@ fn share_no_harness_non_tty_prints_recipe() {
         .stderr(predicate::str::contains("path import"))
         .stderr(predicate::str::contains("path export pathbase"));
 }
+
+// ── share: configured repo mappings (`~/.toolpath/config.toml`, `.toolpath.toml`) ──
+
+/// Build the claude session fixture used by the configured-repo share
+/// tests: a project dir plus a matching `~/.claude/projects/<slug>`
+/// session. Returns (fixture-temp, project-path).
+fn claude_session_fixture() -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let claude_dir = temp.path().join(".claude");
+    // toolpath-claude maps '/', '_', and '.' to '-' when sanitizing project
+    // paths into directory slugs — mirror that here so the fixture lands
+    // where the resolver looks for it.
+    let project_slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let project_dir = claude_dir.join("projects").join(&project_slug);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("session-abc.jsonl"),
+        format!(
+            r#"{{"type":"user","uuid":"u-1","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-1","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+    (temp, project)
+}
+
+/// A configured repo requires an authed upload: hitting a `[[project]]`
+/// rule while not logged in must error with a login hint instead of
+/// silently falling through to the anonymous endpoint.
+#[test]
+fn share_configured_repo_requires_login() {
+    let (temp, project) = claude_session_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg.path().join("config.toml"),
+        format!(
+            "[[project]]\ndir = {:?}\nrepo = \"team/sessions\"\n",
+            project.display().to_string()
+        ),
+    )
+    .unwrap();
+
+    cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache", "--url", "http://127.0.0.1:1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("team/sessions"))
+        .stderr(predicate::str::contains("path auth login"));
+}
+
+/// A repo-tracked `.toolpath.toml` at the project root feeds the same
+/// mapping (and the error provenance names the file).
+#[test]
+fn share_tracked_toolpath_toml_configures_repo() {
+    let (temp, project) = claude_session_fixture();
+    std::fs::write(
+        project.join(".toolpath.toml"),
+        "[share]\nrepo = \"team/sessions\"\n",
+    )
+    .unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+
+    cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache", "--url", "http://127.0.0.1:1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("team/sessions"))
+        .stderr(predicate::str::contains(".toolpath.toml"))
+        .stderr(predicate::str::contains("path auth login"));
+}
+
+/// Explicit `--anon` opts out of the configured mapping: the upload goes
+/// to the anonymous endpoint with no "Sharing to" line.
+#[test]
+fn share_anon_flag_ignores_configured_repo() {
+    let (port, server, temp, project, home) = share_anon_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg.path().join("config.toml"),
+        format!(
+            "[[project]]\ndir = {:?}\nrepo = \"team/sessions\"\n",
+            project.display().to_string()
+        ),
+    )
+    .unwrap();
+
+    cmd()
+        .env("HOME", &home)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--anon", "--no-cache", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Sharing to").not());
+
+    server.join().unwrap();
+    drop(temp);
+}
+
+/// Mock Pathbase for the authed configured-repo test: answers the
+/// `GET /api/v1/u/me` credentials probe and then a graph POST, capturing
+/// each request's start line for assertions.
+fn authed_upload_server() -> (u16, std::thread::JoinHandle<Vec<String>>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let mut starts = Vec::new();
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut start = String::new();
+            reader.read_line(&mut start).unwrap();
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.trim_end().split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            if content_length > 0 {
+                let mut body = vec![0u8; content_length];
+                reader.read_exact(&mut body).ok();
+            }
+            // Progenitor strictly validates response shapes, so both
+            // bodies carry every required field.
+            let (status, body) = if start.starts_with("GET") {
+                (
+                    "200 OK",
+                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","username":"alex","email":null,"display_name":null,"bio":null,"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#,
+                )
+            } else {
+                (
+                    "201 Created",
+                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/u/team/repos/sessions/graphs/fe94b6f9","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#,
+                )
+            };
+            let resp = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{body}",
+                body.len()
+            );
+            let mut stream = reader.into_inner();
+            let _ = stream.write_all(resp.as_bytes());
+            starts.push(start.trim_end().to_string());
+        }
+        starts
+    });
+    (port, handle)
+}
+
+/// Logged in with a `[[project]]` rule covering the session's project:
+/// the upload must go to the configured repo's graphs endpoint, with the
+/// provenance line on stderr and the share URL on stdout.
+#[test]
+fn share_configured_repo_uploads_when_authed() {
+    let (port, server) = authed_upload_server();
+    let (temp, project) = claude_session_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg.path().join("config.toml"),
+        format!(
+            "[[project]]\ndir = {:?}\nrepo = \"team/sessions\"\n",
+            project.display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        cfg.path().join("credentials.json"),
+        format!(
+            r#"{{"url":"http://127.0.0.1:{port}","token":"tok","user":{{"id":"u-1","username":"alex"}}}}"#
+        ),
+    )
+    .unwrap();
+
+    cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Sharing to team/sessions"))
+        .stdout(predicate::str::contains(
+            "https://example.test/u/team/repos/sessions/graphs/fe94b6f9",
+        ));
+
+    let starts = server.join().unwrap();
+    assert!(
+        starts[0].starts_with("GET /api/v1/u/me"),
+        "first request should be the auth probe: {starts:?}"
+    );
+    assert!(
+        starts[1].starts_with("POST /api/v1/u/team/repos/sessions/graphs"),
+        "upload must target the configured repo: {starts:?}"
+    );
+}
