@@ -213,7 +213,7 @@ ancestry of `path.head`.
   <li>Copilot CLI <em>(preview)</em></li>
   <li>opencode</li>
   <li>Pi</li>
-  <li>Cursor <em>(the IDE; not yet the cursor-agent CLI)</em></li>
+  <li>Cursor IDE</li>
 </ul>
 
 Parsing captures the full session: prompts, tool calls, reasoning,
