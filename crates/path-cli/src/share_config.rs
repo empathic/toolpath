@@ -9,11 +9,9 @@
 //! Rule matching is pure path logic, so a rule still applies when the
 //! checkout it names has been deleted.
 //!
-//! A remote is either a bare `owner/name` (a Pathbase repo on the
-//! credentialed/default server) or a canonical Pathbase repo web URL
-//! (`https://<host>/u/<owner>/<name>`), which also carries the server.
-//! The URL scheme is the extension point for future backends (an
-//! `s3://` bucket, say) — unknown schemes are rejected today.
+//! The remote value grammar (bare `owner/name`, or a canonical Pathbase
+//! repo web URL that also carries the server) lives in `crate::remote`;
+//! this module only decides *which* rule applies to a directory.
 //!
 //! Only the user's own config is consulted. A repo-tracked
 //! `.toolpath.toml` variant (a team commits the mapping once, every
@@ -23,12 +21,12 @@
 
 #![cfg(not(target_os = "emscripten"))]
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use crate::cmd_export::RepoSpec;
-use crate::cmd_share::home_relative;
+use crate::config::{home_dir, home_relative};
+use crate::remote::{RepoSpec, parse_remote};
 
 /// Personal config file under the toolpath config dir.
 pub(crate) const GLOBAL_CONFIG_FILE: &str = "config.toml";
@@ -50,11 +48,7 @@ pub(crate) struct ConfiguredRemote {
 /// Resolve the share remote configured for `session_dir`, if any.
 pub(crate) fn resolve_remote(session_dir: &Path) -> Result<Option<ConfiguredRemote>> {
     let global = crate::config::config_dir()?.join(GLOBAL_CONFIG_FILE);
-    resolve_remote_from(
-        &global,
-        crate::cmd_share::home_dir().as_deref(),
-        session_dir,
-    )
+    resolve_remote_from(&global, home_dir().as_deref(), session_dir)
 }
 
 fn resolve_remote_from(
@@ -154,57 +148,6 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).context(format!("failed to read {}", path.display())),
-    }
-}
-
-/// Parse a remote value: bare `owner/name`, or a canonical Pathbase
-/// repo web URL (`https://<host>/u/<owner>/<name>`) whose authority
-/// becomes the server base URL. The scheme is the backend selector, so
-/// anything other than http(s) is rejected with the supported forms.
-fn parse_remote(value: &str, origin: &str) -> Result<(RepoSpec, Option<String>)> {
-    if let Some((scheme, _)) = value.split_once("://") {
-        if scheme != "http" && scheme != "https" {
-            bail!(
-                "unsupported remote scheme `{scheme}` in {origin}: expected `owner/name` \
-                 or a Pathbase repo URL like https://pathbase.dev/u/owner/name"
-            );
-        }
-        let (base_url, repo) = parse_pathbase_repo_url(value, origin)?;
-        return Ok((repo, Some(base_url)));
-    }
-    let repo = crate::cmd_export::parse_repo_spec(value)
-        .map_err(|e| anyhow!("invalid remote in {origin}: {e}"))?;
-    Ok((repo, None))
-}
-
-/// Split a canonical Pathbase repo web URL into its server base URL and
-/// `owner/name`. The path must be exactly `/u/<owner>/<name>` (trailing
-/// slash tolerated) — graph URLs and other server pages are not remotes.
-fn parse_pathbase_repo_url(value: &str, origin: &str) -> Result<(String, RepoSpec)> {
-    let complaint = || {
-        anyhow!(
-            "invalid Pathbase repo URL in {origin}: expected \
-             https://<host>/u/<owner>/<name>, got `{value}`"
-        )
-    };
-    if value.contains('?') || value.contains('#') {
-        return Err(complaint());
-    }
-    let (scheme, rest) = value.split_once("://").expect("caller checked the scheme");
-    let (authority, path) = rest.split_once('/').ok_or_else(complaint)?;
-    if authority.is_empty() {
-        return Err(complaint());
-    }
-    let segments: Vec<&str> = path.trim_end_matches('/').split('/').collect();
-    match segments.as_slice() {
-        ["u", owner, name] if !owner.is_empty() && !name.is_empty() => Ok((
-            format!("{scheme}://{authority}"),
-            RepoSpec {
-                owner: (*owner).to_string(),
-                name: (*name).to_string(),
-            },
-        )),
-        _ => Err(complaint()),
     }
 }
 
@@ -437,50 +380,6 @@ mod tests {
         assert_eq!(repo_str(&found), "team/sessions");
         assert_eq!(found.base_url.as_deref(), Some("https://pathbase.dev"));
         assert_eq!(found.display, "https://pathbase.dev/u/team/sessions");
-    }
-
-    #[test]
-    fn url_remote_keeps_port_and_scheme() {
-        let (base, repo) = parse_pathbase_repo_url("http://127.0.0.1:8080/u/a/b", "test").unwrap();
-        assert_eq!(base, "http://127.0.0.1:8080");
-        assert_eq!((repo.owner.as_str(), repo.name.as_str()), ("a", "b"));
-    }
-
-    #[test]
-    fn url_remote_tolerates_trailing_slash() {
-        let (base, repo) =
-            parse_pathbase_repo_url("https://pathbase.dev/u/team/sessions/", "test").unwrap();
-        assert_eq!(base, "https://pathbase.dev");
-        assert_eq!(repo.name, "sessions");
-    }
-
-    #[test]
-    fn url_remote_rejects_non_repo_pages() {
-        // Graph URLs, bare hosts, missing /u/ prefixes, and query
-        // strings are not remotes.
-        for bad in [
-            "https://pathbase.dev/u/team/sessions/graphs/abc",
-            "https://pathbase.dev",
-            "https://pathbase.dev/",
-            "https://pathbase.dev/team/sessions",
-            "https://pathbase.dev/u/team",
-            "https:///u/team/sessions",
-            "https://pathbase.dev/u/team/sessions?x=1",
-        ] {
-            let err = parse_remote(bad, "test").unwrap_err();
-            assert!(
-                err.to_string().contains("expected"),
-                "`{bad}` should be rejected with the expected form: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn unsupported_scheme_is_rejected() {
-        let err = parse_remote("s3://bucket/sessions", "test").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("unsupported remote scheme `s3`"), "got: {msg}");
-        assert!(msg.contains("owner/name"), "got: {msg}");
     }
 
     #[test]

@@ -35,6 +35,7 @@ pub mod harness;
 mod io;
 pub mod kinds;
 mod query;
+mod remote;
 mod schema;
 #[cfg(not(target_os = "emscripten"))]
 mod share_config;

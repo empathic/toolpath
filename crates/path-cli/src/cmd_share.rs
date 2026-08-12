@@ -9,11 +9,11 @@ use clap::Args;
 use std::path::PathBuf;
 
 use crate::artifact::ArtifactType;
-use crate::cmd_export::RepoSpec;
 use crate::harness::{
     Harness, HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_copilot,
     is_not_found_cursor, is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
 };
+use crate::remote::RepoSpec;
 
 #[derive(Args, Debug)]
 pub struct ShareArgs {
@@ -26,7 +26,7 @@ pub struct ShareArgs {
     pub anon: bool,
 
     /// Target a specific repo as `owner/name` instead of `<you>/pathstash`
-    #[arg(long, value_parser = crate::cmd_export::parse_repo_spec)]
+    #[arg(long, value_parser = crate::remote::parse_repo_spec)]
     pub repo: Option<RepoSpec>,
 
     /// Human-readable display label for the uploaded graph
@@ -601,7 +601,7 @@ fn bail_no_sessions(
     let mut summary = String::from("No agent sessions found.\n");
     // Pad harness names so the path column lines up: "opencode:" is the
     // longest at 9 chars (8 + colon).
-    let home = home_dir();
+    let home = crate::config::home_dir();
     summary.push_str(&format_status_line(
         "claude",
         &harness_status_claude(bundle, home.as_deref()),
@@ -632,14 +632,6 @@ fn bail_no_sessions(
     ));
     eprint!("{summary}");
     anyhow::bail!("no shareable sessions");
-}
-
-/// Cross-platform `$HOME` lookup matching the providers' internal helpers.
-/// Returns `None` only when neither `$HOME` nor `$USERPROFILE` is set.
-pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from)
 }
 
 /// Human-readable status of a harness's on-disk store: either the (possibly
@@ -683,7 +675,7 @@ fn harness_status_claude(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     };
     match mgr.resolver().projects_dir() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -696,7 +688,7 @@ fn harness_status_gemini(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     };
     match mgr.resolver().tmp_dir() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -709,7 +701,7 @@ fn harness_status_codex(bundle: &HarnessBundle, home: Option<&std::path::Path>) 
     };
     match mgr.resolver().sessions_root() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -722,7 +714,7 @@ fn harness_status_copilot(bundle: &HarnessBundle, home: Option<&std::path::Path>
     };
     match mgr.resolver().session_state_dir() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -738,7 +730,7 @@ fn harness_status_opencode(
     };
     match mgr.resolver().db_path() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
@@ -751,7 +743,7 @@ fn harness_status_pi(bundle: &HarnessBundle, home: Option<&std::path::Path>) -> 
     };
     let p = mgr.resolver().sessions_dir().to_path_buf();
     HarnessStatus {
-        path: home_relative(&p, home),
+        path: crate::config::home_relative(&p, home),
         exists: p.exists(),
     }
 }
@@ -762,27 +754,11 @@ fn harness_status_cursor(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     };
     match mgr.resolver().db_path() {
         Ok(p) => HarnessStatus {
-            path: home_relative(&p, home),
+            path: crate::config::home_relative(&p, home),
             exists: p.exists(),
         },
         Err(_) => HarnessStatus::unresolved(),
     }
-}
-
-/// Display `path` as `~/relative/part` when it's under `home`, otherwise
-/// return its absolute lossy form. Pure helper — does no filesystem I/O.
-pub(crate) fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
-    if let Some(home) = home
-        && let Ok(rest) = path.strip_prefix(home)
-    {
-        // strip_prefix returns the empty path when path == home; treat that
-        // as plain "~".
-        if rest.as_os_str().is_empty() {
-            return "~".to_string();
-        }
-        return format!("~/{}", rest.display());
-    }
-    path.display().to_string()
 }
 
 fn share_explicit(
@@ -1345,35 +1321,6 @@ mod tests {
     }
 
     #[test]
-    fn home_relative_strips_home_prefix() {
-        let home = Path::new("/Users/alex");
-        assert_eq!(
-            home_relative(Path::new("/Users/alex/.claude/projects"), Some(home)),
-            "~/.claude/projects"
-        );
-    }
-
-    #[test]
-    fn home_relative_returns_tilde_for_home_itself() {
-        let home = Path::new("/Users/alex");
-        assert_eq!(home_relative(home, Some(home)), "~");
-    }
-
-    #[test]
-    fn home_relative_passes_through_paths_outside_home() {
-        let home = Path::new("/Users/alex");
-        assert_eq!(
-            home_relative(Path::new("/tmp/elsewhere"), Some(home)),
-            "/tmp/elsewhere"
-        );
-    }
-
-    #[test]
-    fn home_relative_passes_through_when_no_home() {
-        assert_eq!(home_relative(Path::new("/foo/bar"), None), "/foo/bar");
-    }
-
-    #[test]
     fn harness_status_renders_existing_path_with_zero_sessions() {
         let s = HarnessStatus {
             path: "~/.claude/projects".to_string(),
@@ -1497,7 +1444,7 @@ mod tests {
     #[test]
     fn destination_flag_wins_without_touching_config() {
         let mut args = share_args();
-        args.repo = Some(crate::cmd_export::parse_repo_spec("me/flag").unwrap());
+        args.repo = Some(crate::remote::parse_repo_spec("me/flag").unwrap());
         let dest = resolve_destination(
             &args,
             &authed(),
