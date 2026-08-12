@@ -100,12 +100,16 @@ sessions in one portable schema that records **who** changed **what**,
 | Cursor (IDE) | ✓ | ✓ | ✓ opens workspace |
 | Pi | ✓ | ✓ | ✓ `pi --session` |
 
-Toolpath reads each harness's native session files and writes them
-back. Resuming projects a document into the target harness's own
-on-disk layout and hands off to that harness, so any readable session
-can continue in any writable harness. Git history and GitHub pull
-requests import into the same schema, so a session, the PR it became,
-and the release that shipped it can share one graph.
+Toolpath itself is open and versioned. The schema is published, and a
+document that validates today will validate tomorrow. The harness
+formats are neither: they are undocumented, proprietary, and can change
+with any release. Toolpath treats them as boundaries. Parsing a session
+in produces a stable document you can keep; projecting one out produces
+the on-disk layout a target harness expects, whether or not it is the
+harness the session started in. Resume is a projection followed by a
+handoff. Git history and GitHub pull requests parse into the same
+schema, so a session, the PR it became, and the release that shipped it
+can share one graph.
 
 <div class="scenarios">
   <h2>When you need it</h2>
