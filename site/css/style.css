@@ -376,13 +376,31 @@
     color: var(--text-dim);
   }
 
-  /* --- Harness list (3-across bulleted grid) --- */
+  /* --- Harness list (stamped mono chips) --- */
   .harness-list {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0.35rem var(--space-lg);
-    margin: 1rem 0;
-    padding-left: 1.2rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    list-style: none;
+    margin: 1.25rem 0;
+    padding: 0;
+  }
+  .harness-list li {
+    font-family: var(--font);
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    padding: 0.45rem 0.8rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    transition: border-color 0.15s ease;
+  }
+  .harness-list li:hover {
+    border-color: var(--accent);
+  }
+  .harness-list li em {
+    font-style: normal;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
   }
 
   /* --- Tables --- */
@@ -908,9 +926,6 @@
   @media (max-width: 640px) {
     html {
       font-size: 14px;
-    }
-    .harness-list {
-      grid-template-columns: 1fr 1fr;
     }
     .hero {
       flex-direction: column;
