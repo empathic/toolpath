@@ -1,6 +1,6 @@
 {
   "name": "path",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Toolpath for Claude Code — /path:share uploads an agent session to Pathbase, /path:query answers questions about your local session history. Bundles the path CLI, installed globally on first use",
   "author": {
     "name": "Empathic"

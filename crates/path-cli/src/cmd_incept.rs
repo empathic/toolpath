@@ -58,6 +58,7 @@ pub fn run(target: InceptTarget) -> Result<()> {
                 input,
                 project,
                 output,
+                force: false,
             })
         }
         InceptTarget::Cursor {

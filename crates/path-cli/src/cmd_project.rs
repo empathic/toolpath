@@ -31,6 +31,7 @@ pub fn run(target: ProjectTarget) -> Result<()> {
                 input,
                 project: None,
                 output,
+                force: false,
             })
         }
     }

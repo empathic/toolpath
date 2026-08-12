@@ -42,12 +42,12 @@ PY
 ok "manifests parse and agree (plugin 'path', versions match)"
 
 bash -n "$ENSURE" || fail "ensure-path.sh does not parse"
-for cmd in share query; do
+for cmd in share query resume link-pr; do
     [ -f "$PLUGIN/commands/$cmd.md" ] || fail "missing command $cmd.md"
     grep -q "ensure-path.sh" "$PLUGIN/commands/$cmd.md" \
         || fail "$cmd.md does not invoke the ensure-path.sh wrapper"
 done
-ok "scripts parse; both commands exist and use the wrapper"
+ok "scripts parse; all four commands exist and use the wrapper"
 
 # --- ensure-path.sh behavior ----------------------------------------------
 

@@ -29,6 +29,37 @@ All notable changes to the Toolpath workspace are documented here.
   consent flow first — deferred to issue #179.
 - **`toolpath-cli`** (0.17.0): lockstep bump of the deprecated shim.
 
+## Plugin `/path:resume` + `/path:link-pr`; export clobber guard — 2026-07-30
+
+Two new plugin commands (plugin `path` 0.2.0), plus the guard that keeps
+same-machine round-trips from destroying local history. (The two
+resume-blocking projector fixes discovered in the same investigation
+shipped separately — see "Projected Claude sessions are resumable
+again" below.)
+
+- **`path-cli`** (unreleased): `p export claude --project` refuses to
+  overwrite an existing session file (the error names the id and
+  suggests `claude -r`); a new `--force` flag restores the old
+  clobbering behavior. Found the hard way: same-machine round-trips
+  (share your own session, then resume it) silently replaced the richer
+  local original with the lossy projection. `path resume`
+  short-circuits the same case — an already-local session skips
+  projection entirely and resumes the local copy, which may be newer
+  than the shared document.
+- **Plugin `path` 0.2.0** — two new commands:
+  - `/path:resume <pathbase-url>` fetches a shared session and projects
+    it into the current project, then hands the user the exact resume
+    step (`/resume <id>` in the running UI, or `claude -r <id>`). The
+    running TUI cannot be switched programmatically — Claude Code has no
+    such mechanism — so the handoff is the floor. The clobber guard
+    lives in the CLI (see above), so an already-local session turns
+    into a direct `/resume <id>` handoff instead of an overwrite.
+  - `/path:link-pr [pr]` shares the current conversation (same selection
+    and auth rules as `/path:share`) and appends the Pathbase link to a
+    PR description — the PR from the arguments, else the current
+    branch's, else the one under discussion. Idempotent: an already
+    linked URL is not added twice.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real

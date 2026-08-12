@@ -43,6 +43,12 @@ pub enum ExportTarget {
         /// Output JSONL to this file. Mutually exclusive with --project.
         #[arg(short, long, conflicts_with = "project")]
         output: Option<PathBuf>,
+
+        /// Overwrite the session file if this session id already exists in
+        /// the target project. Without it the export refuses rather than
+        /// clobbering local history.
+        #[arg(long)]
+        force: bool,
     },
     /// Project a toolpath document into a Gemini CLI session
     Gemini {
@@ -202,7 +208,8 @@ pub fn run(target: ExportTarget) -> Result<()> {
             input,
             project,
             output,
-        } => run_claude(input, project, output),
+            force,
+        } => run_claude(input, project, output, force),
         ExportTarget::Gemini {
             input,
             project,
@@ -280,17 +287,52 @@ pub(crate) struct PathbaseUploadArgs {
 // projected session id. They are called by `path resume`; the existing
 // `run_<harness>` functions are untouched.
 
-/// Project `path` into a Claude session under `project_dir` and return
-/// the resulting session id.
+/// Outcome of projecting a Path into a Claude project directory.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) enum ClaudeProjection {
+    /// The session file was written.
+    Written { session_id: String },
+    /// A session with this id already exists in the target project; nothing
+    /// was written. Resuming the local copy is the least destructive move —
+    /// it may be newer than the shared document.
+    AlreadyLocal { session_id: String },
+}
+
+/// Project `path` into a Claude session under `project_dir`.
+///
+/// Never overwrites: if the session already exists locally the projection is
+/// skipped and `AlreadyLocal` is returned (callers that want to clobber go
+/// through `p export claude --force`).
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn project_claude(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-) -> Result<String> {
+) -> Result<ClaudeProjection> {
     let conv = build_claude_conversation(path)?;
+    if claude_session_file(&conv.session_id, project_dir)?.is_some() {
+        return Ok(ClaudeProjection::AlreadyLocal {
+            session_id: conv.session_id,
+        });
+    }
     let jsonl = serialize_jsonl(&conv)?;
-    write_into_claude_project(&conv, &jsonl, project_dir)?;
-    Ok(conv.session_id)
+    write_into_claude_project(&conv, &jsonl, project_dir, false)?;
+    Ok(ClaudeProjection::Written {
+        session_id: conv.session_id,
+    })
+}
+
+/// Path of the session file for `session_id` under `project_dir`'s Claude
+/// project directory, if it exists.
+#[cfg(not(target_os = "emscripten"))]
+fn claude_session_file(session_id: &str, project_dir: &std::path::Path) -> Result<Option<PathBuf>> {
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
+    let resolver = toolpath_claude::PathResolver::new();
+    let claude_project_dir = resolver
+        .project_dir(&project_dir.to_string_lossy())
+        .map_err(|e| anyhow::anyhow!("Cannot resolve Claude project dir: {}", e))?;
+    let candidate = claude_project_dir.join(format!("{}.jsonl", session_id));
+    Ok(candidate.exists().then_some(candidate))
 }
 
 /// Project `path` into a Gemini session under `project_dir` and return
@@ -590,10 +632,15 @@ pub(crate) fn project_pi(
     Ok(session.header.id)
 }
 
-fn run_claude(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+fn run_claude(
+    input: String,
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output);
+        let _ = (input, project, output, force);
         anyhow::bail!("'path export claude' requires a native environment");
     }
 
@@ -605,7 +652,8 @@ fn run_claude(input: String, project: Option<PathBuf>, output: Option<PathBuf>) 
 
         match (project, output) {
             (Some(project_dir), None) => {
-                let out_path = write_into_claude_project(&conversation, &jsonl, &project_dir)?;
+                let out_path =
+                    write_into_claude_project(&conversation, &jsonl, &project_dir, force)?;
                 let session_id = &conversation.session_id;
                 eprintln!(
                     "Exported session {} ({} entries) → {}",
@@ -677,6 +725,7 @@ fn write_into_claude_project(
     conv: &toolpath_claude::Conversation,
     jsonl: &str,
     project_dir: &std::path::Path,
+    force: bool,
 ) -> Result<PathBuf> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
@@ -692,6 +741,15 @@ fn write_into_claude_project(
 
     let session_id = &conv.session_id;
     let out_path = claude_project_dir.join(format!("{}.jsonl", session_id));
+    if !force && out_path.exists() {
+        anyhow::bail!(
+            "Session {} already exists in this project ({}). Resume it directly with \
+             `claude -r {}`, or pass --force to overwrite the local session file.",
+            session_id,
+            out_path.display(),
+            session_id
+        );
+    }
     std::fs::write(&out_path, jsonl).with_context(|| format!("write {}", out_path.display()))?;
     Ok(out_path)
 }
@@ -2097,6 +2155,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(output_path.clone()),
+            false,
         )
         .unwrap();
 
@@ -2140,7 +2199,8 @@ mod tests {
         };
         std::fs::write(&input_path, serde_json::to_string(&multi).unwrap()).unwrap();
 
-        let err = run_claude(input_path.to_string_lossy().to_string(), None, None).unwrap_err();
+        let err =
+            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
         assert!(err.to_string().contains("single-path graph"));
     }
 
@@ -2149,7 +2209,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(&input_path, "not json").unwrap();
-        let err = run_claude(input_path.to_string_lossy().to_string(), None, None).unwrap_err();
+        let err =
+            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
         assert!(err.to_string().contains("parse") || err.to_string().contains("Failed"));
     }
 
@@ -3136,7 +3197,10 @@ mod tests {
             }
         }
 
-        let returned_id = result.expect("project_claude should succeed");
+        let returned_id = match result.expect("project_claude should succeed") {
+            ClaudeProjection::Written { session_id } => session_id,
+            ClaudeProjection::AlreadyLocal { .. } => panic!("fresh project dir must be Written"),
+        };
         assert_eq!(returned_id, session_id);
 
         let claude_projects = fake_home.join(".claude/projects");
@@ -3144,6 +3208,98 @@ mod tests {
             claude_projects.exists(),
             "claude projects dir missing under HOME"
         );
+    }
+
+    #[test]
+    fn project_claude_never_overwrites_an_existing_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let session_id = "claude-clobber-test-session";
+        let path = make_convo_path(&format!("claude-code://{}", session_id));
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+        let first = project_claude(&path, &cwd);
+        // Simulate local divergence: the session gained content after the
+        // first projection.
+        let session_file = claude_session_file(session_id, &cwd)
+            .unwrap()
+            .expect("first projection must have written the session file");
+        let mut contents = std::fs::read_to_string(&session_file).unwrap();
+        contents.push_str("{\"local\":\"divergence\"}\n");
+        std::fs::write(&session_file, &contents).unwrap();
+
+        let second = project_claude(&path, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        assert!(matches!(
+            first.expect("first projection should succeed"),
+            ClaudeProjection::Written { .. }
+        ));
+        match second.expect("second projection should succeed") {
+            ClaudeProjection::AlreadyLocal { session_id: id } => assert_eq!(id, session_id),
+            ClaudeProjection::Written { .. } => panic!("existing session must not be re-projected"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&session_file).unwrap(),
+            contents,
+            "existing session file must be untouched"
+        );
+    }
+
+    #[test]
+    fn export_claude_refuses_existing_session_without_force() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let session_id = "claude-force-test-session";
+        let path = make_convo_path(&format!("claude-code://{}", session_id));
+        let input_path = temp.path().join("input.json");
+        let doc = toolpath::v1::Graph::from_path(path);
+        std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
+        let input = input_path.to_string_lossy().to_string();
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+        let first = run_claude(input.clone(), Some(cwd.clone()), None, false);
+        let second = run_claude(input.clone(), Some(cwd.clone()), None, false);
+        let forced = run_claude(input, Some(cwd.clone()), None, true);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        first.expect("first export should succeed");
+        let err = second.expect_err("re-export without --force must fail");
+        assert!(
+            err.to_string().contains("--force"),
+            "unhelpful error: {err}"
+        );
+        forced.expect("re-export with --force should succeed");
     }
 
     #[test]
