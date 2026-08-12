@@ -28,9 +28,9 @@ one format and writes them back. With everything in one format you can:
 - **Provenance.** Who changed what, why, and what was tried and
   abandoned. The record that git collapses at merge time.
 
-## Supported sources
+## Supported harnesses
 
-| Source | Read | Write | Resume | Notes |
+| Harness | Read | Write | Resume | Notes |
 |---|:-:|:-:|:-:|---|
 | Claude Code | ✓ | ✓ | ✓ `claude -r` | Rotated session files merged into one chain; projected sessions load in Claude Code |
 | Gemini CLI | ✓ | ✓ | ✓ `gemini --resume` | Sub-agent sessions folded in; reasoning tokens round-trip losslessly |
@@ -39,14 +39,22 @@ one format and writes them back. With everything in one format you can:
 | opencode | ✓ | ✓ | ✓ `opencode --session` | File diffs recovered from opencode's git snapshots |
 | Cursor (IDE) | ✓ | ✓ | ✓ opens workspace | Projected composers render in Cursor.app's chat sidebar |
 | Pi | ✓ | ✓ | ✓ `pi --session` | Branching session trees preserved as DAGs |
-| git | ✓ | | | Commits become steps |
-| GitHub PRs | ✓ | | | Review threads, CI runs, and comments attached |
 
 Read means `path p import`, `path p list`, and `path show`. Write means
 `path p export`. Resume means `path resume`, which projects the session
 into the harness's on-disk layout and execs its resume command. Any
 readable session can be projected into any writable harness; a
 cross-harness conformance matrix in CI exercises the pairs.
+
+## Beyond sessions
+
+Agent sessions are one kind of path. Toolpath is a general format for
+how artifacts change across the development lifecycle, so the session
+that wrote a change, the pull request that reviewed it, and the release
+that shipped it can share one graph. `path p import git` derives paths
+from commit history and `path p import github` from GitHub pull
+requests, review threads, CI runs and comments included; `path p merge`
+combines documents into a single `Graph`.
 
 ## Install
 
