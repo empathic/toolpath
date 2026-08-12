@@ -613,6 +613,53 @@
     }
   }
 
+  /* Code spans in headings keep their literal case (slash commands) and
+     drop the inline-chip background. */
+  h1 code,
+  h2 code,
+  h3 code {
+    text-transform: none;
+    background: none;
+    padding: 0;
+  }
+
+  /* --- Plugin page Q&A transcript --- */
+  .qa {
+    font-family: var(--font);
+    background: var(--bg-surface);
+    border-left: 3px solid var(--accent);
+    padding: var(--space-md) 1.25rem;
+    margin: 1.25rem 0;
+  }
+  .qa-q {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 0;
+    padding-left: 1.4em;
+    text-indent: -1.4em;
+  }
+  .qa-q::before {
+    content: "> ";
+    color: var(--text-dim);
+  }
+  .qa-a p {
+    font-size: 0.8rem;
+    line-height: 1.7;
+    margin: 0.75rem 0 0;
+    padding-left: 1.4em;
+  }
+  .qa-a p:first-of-type {
+    text-indent: -1.4em;
+  }
+  .qa-a p:first-of-type::before {
+    content: "⏺ ";
+    color: var(--accent);
+  }
+  .qa-a code {
+    background: var(--bg-elevated);
+  }
+
   /* --- Topographic divider --- */
   .divider {
     background: repeating-linear-gradient(

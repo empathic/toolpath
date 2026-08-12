@@ -184,7 +184,7 @@ When changing a crate's public API (new types, new trait impls, new public metho
 
 The `toolpath-cli` shim lives **outside** the workspace (`exclude = ["crates/toolpath-cli"]` in the root `Cargo.toml`): both it and `path-cli` produce a binary literally named `path`, and cargo can't write two bin targets to the same workspace `target/debug/path`. Consequently `cargo build/test --workspace` and `cargo run -p toolpath-cli` **do not** include it — use `--manifest-path crates/toolpath-cli/Cargo.toml`. The release script special-cases it.
 
-Build the site after changes: `cd site && pnpm run build` (should produce 11 pages).
+Build the site after changes: `cd site && pnpm run build` (should produce 12 pages).
 
 ## Things to know
 
