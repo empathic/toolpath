@@ -11,12 +11,22 @@ use std::path::PathBuf;
 pub(crate) const CONFIG_DIR_NAME: &str = ".toolpath";
 pub(crate) const CONFIG_DIR_ENV: &str = "TOOLPATH_CONFIG_DIR";
 
+// Every file and directory name under the config dir is declared here,
+// next to the directory resolution — never inline at a use site.
+
+/// The user's config file (see `share_config`).
+pub(crate) const CONFIG_FILE_NAME: &str = "config.toml";
 /// The artifact manifest under the config dir (see `sync::engine`).
 pub(crate) const MANIFEST_FILE_NAME: &str = "manifest.json";
 /// Sibling advisory lock serializing manifest writers. A separate
 /// file because the manifest itself is replaced by rename on every
 /// write, which would drop any lock held on it.
 pub(crate) const MANIFEST_LOCK_FILE_NAME: &str = "manifest.json.lock";
+/// Pathbase bearer token + user, written by `path auth login`
+/// (see `cmd_pathbase`).
+pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.json";
+/// The document cache directory (see `cache`).
+pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
 
 /// The configured toolpath config directory (default `~/.toolpath`,
 /// overridable via `$TOOLPATH_CONFIG_DIR`).

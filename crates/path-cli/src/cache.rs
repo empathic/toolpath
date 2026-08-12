@@ -11,8 +11,6 @@ use toolpath::v1::Graph;
 
 use crate::config::config_dir;
 
-const DOCUMENTS_DIR: &str = "documents";
-
 /// An entry surfaced by `list_cached`.
 #[derive(Debug, Clone)]
 pub(crate) struct CacheEntry {
@@ -24,7 +22,7 @@ pub(crate) struct CacheEntry {
 
 /// The cache directory: `$CONFIG_DIR/documents/`.
 pub(crate) fn cache_dir() -> Result<PathBuf> {
-    Ok(config_dir()?.join(DOCUMENTS_DIR))
+    Ok(config_dir()?.join(crate::config::DOCUMENTS_DIR_NAME))
 }
 
 /// Path for a given cache id (does not check existence).

@@ -28,9 +28,6 @@ use std::path::{Path, PathBuf};
 use crate::config::{home_dir, home_relative};
 use crate::remote::{RepoSpec, parse_remote};
 
-/// Personal config file under the toolpath config dir.
-pub(crate) const GLOBAL_CONFIG_FILE: &str = "config.toml";
-
 /// A share remote resolved from config. `display` is the remote exactly
 /// as configured; `origin` is the human-readable provenance ("which
 /// file, which rule") — both are shown in the "Sharing to" line and in
@@ -47,7 +44,7 @@ pub(crate) struct ConfiguredRemote {
 
 /// Resolve the share remote configured for `session_dir`, if any.
 pub(crate) fn resolve_remote(session_dir: &Path) -> Result<Option<ConfiguredRemote>> {
-    let global = crate::config::config_dir()?.join(GLOBAL_CONFIG_FILE);
+    let global = crate::config::config_dir()?.join(crate::config::CONFIG_FILE_NAME);
     resolve_remote_from(&global, home_dir().as_deref(), session_dir)
 }
 
