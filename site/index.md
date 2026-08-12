@@ -8,9 +8,10 @@ nav: home
   <div class="hero-content">
     <h1>Toolpath</h1>
     <p class="tagline">
-      <strong>What happens between commits?</strong> Toolpath records the
-      decisions that get lost at merge time.  Record, transform, and analyze
-      sessions in a tool agnostic way.
+      <strong>An open format for coding-agent sessions.</strong> One schema
+      for what an agent did, why, what it tried that didn't work, and what
+      it cost. Read any harness's sessions, query them together, share
+      them, resume them anywhere.
     </p>
     <div class="hero-install">
       <div class="install-option">
@@ -74,33 +75,60 @@ Explore Toolpath documents in your browser. Real <code>path</code> commands, rea
 
 ## The problem
 
-When Claude writes code, `rustfmt` reformats it, and a human refines it, git
-blame attributes everything to the human's commit. The actual provenance is
-lost. Dead ends disappear. Tool contributions collapse into whoever typed `git
-commit`.
+Every coding agent writes its own undocumented session log. Claude Code
+keeps rotating JSONL chains, Codex writes rollout files, Gemini has chat
+directories, Copilot an event stream. The session that produced a change
+is locked inside the harness that ran it.
 
-Toolpath records **who** changed **what**, **why**, what they tried that didn't
-work, and how to verify all of it.
+And once the change lands, git loses the rest. When Claude writes code,
+`rustfmt` reformats it, and a human refines it, git blame attributes
+everything to the human's commit. Dead ends disappear. Tool contributions
+collapse into whoever typed `git commit`.
+
+Toolpath reads every harness's sessions into one open schema that records
+**who** changed **what**, **why**, what they tried that didn't work, and
+what it cost.
+
+## Supported harnesses
+
+| Harness | Read | Write | Resume |
+|---|:-:|:-:|:-:|
+| Claude Code | ✓ | ✓ | ✓ `claude -r` |
+| Gemini CLI | ✓ | ✓ | ✓ `gemini --resume` |
+| Codex CLI | ✓ | ✓ | ✓ `codex resume` |
+| Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` |
+| opencode | ✓ | ✓ | ✓ `opencode --session` |
+| Cursor (IDE) | ✓ | ✓ | ✓ opens workspace |
+| Pi | ✓ | ✓ | ✓ `pi --session` |
+
+Read means `path p import`; write means `path p export`; resume means
+`path resume`, which projects the session into the harness's on-disk
+layout and execs its resume command. Any readable session can be
+projected into any writable harness. Git history and GitHub pull
+requests import into the same schema, so a session, the PR it became,
+and the release that shipped it can share one graph.
 
 <div class="scenarios">
   <h2>When you need it</h2>
   <div class="objects">
     <div class="object-card">
+      <h3>Switch harnesses mid-task</h3>
+      <p>A session that started in Claude Code can continue in Codex.
+      <code>path share</code> publishes it; <code>path resume</code>
+      projects it into the target harness and picks up where you left
+      off.</p>
+    </div>
+    <div class="object-card">
+      <h3>One query, every agent</h3>
+      <p>Dead ends, token spend, tool calls: <code>path query</code> runs
+      one jq filter across every session on the machine, whichever agent
+      wrote it.</p>
+    </div>
+    <div class="object-card">
       <h3>Multi-actor PR</h3>
       <p>Claude wrote the implementation, rustfmt reformatted, you refined the
       error messages. Toolpath gives each actor their own step so reviewers see
       who did what.</p>
-    </div>
-    <div class="object-card">
-      <h3>Rotated AI session</h3>
-      <p>Claude Code hit context limits mid-task and rotated to a new session.
-      Toolpath chains the segments together so no work is lost.</p>
-    </div>
-    <div class="object-card">
-      <h3>Release lineage</h3>
-      <p>Three teams contributed PRs to the release. Toolpath merges the
-      provenance into a single Graph so you can trace any line back to the
-      intent behind it.</p>
     </div>
   </div>
 </div>
@@ -223,19 +251,19 @@ No parents (it's the first step). No meta. One file, one perspective. Every docu
 # Install
 cargo install path-cli
 
-# Import provenance from this repo's git history (top-level surface is
-# the porcelain; plumbing lives under `path p …`)
-path p import git --repo . --branch main --no-cache --pretty
+# Archive every agent session on this machine (all harnesses, incremental)
+path p cache sync
 
-# Visualize it
-path p import git --repo . --branch main --no-cache | path p render dot | dot -Tpng -o graph.png
-
-# Import from Claude conversation logs
-path p import claude --project /path/to/project --no-cache --pretty
-
-# Query the local cache with a jaq (jq) filter — dead ends, or steps by an agent
+# Query across all of them with a jq filter, whichever agent produced them
 path query 'map(select(.dead_end))'
-path query --input doc.json 'map(select(.step.actor | startswith("agent:")))'
+path query 'map(select(.step.actor | startswith("agent:")))'
+
+# Share a session, then resume it in the original harness or a different one
+path share
+path resume https://pathbase.dev/alex/pathstash/path-pr-42 --harness codex
+
+# Derive provenance from git history and visualize it
+path p import git --repo . --branch main --no-cache | path p render dot | dot -Tpng -o graph.png
 ```
 
 <svg class="topo topo-wide" viewBox="0 0 900 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -249,14 +277,21 @@ path query --input doc.json 'map(select(.step.actor | startswith("agent:")))'
 
 Toolpath is a Rust workspace of focused crates:
 
-| Crate                                                | What it does                           |
-| ---------------------------------------------------- | -------------------------------------- |
-| [`toolpath`](https://docs.rs/toolpath)               | Core types, builders, query API        |
-| [`toolpath-convo`](https://docs.rs/toolpath-convo)   | Provider-agnostic conversation traits  |
-| [`toolpath-git`](https://docs.rs/toolpath-git)       | Derive from git history                |
-| [`toolpath-github`](https://docs.rs/toolpath-github) | Derive from GitHub pull requests       |
-| [`toolpath-claude`](https://docs.rs/toolpath-claude) | Derive from Claude conversations       |
-| [`toolpath-dot`](https://docs.rs/toolpath-dot)       | Graphviz DOT visualization             |
-| [`path-cli`](https://docs.rs/path-cli)               | Unified CLI (`cargo install path-cli`) |
+| Crate                                                    | What it does                           |
+| -------------------------------------------------------- | -------------------------------------- |
+| [`toolpath`](https://docs.rs/toolpath)                   | Core types, builders, query API        |
+| [`toolpath-convo`](https://docs.rs/toolpath-convo)       | Provider-agnostic conversation traits  |
+| [`toolpath-claude`](https://docs.rs/toolpath-claude)     | Derive from Claude Code sessions       |
+| [`toolpath-gemini`](https://docs.rs/toolpath-gemini)     | Derive from Gemini CLI sessions        |
+| [`toolpath-codex`](https://docs.rs/toolpath-codex)       | Derive from Codex CLI rollouts         |
+| [`toolpath-copilot`](https://docs.rs/toolpath-copilot)   | Derive from Copilot CLI sessions       |
+| [`toolpath-opencode`](https://docs.rs/toolpath-opencode) | Derive from opencode databases         |
+| [`toolpath-cursor`](https://docs.rs/toolpath-cursor)     | Derive from Cursor (IDE) composers     |
+| [`toolpath-pi`](https://docs.rs/toolpath-pi)             | Derive from Pi sessions                |
+| [`toolpath-git`](https://docs.rs/toolpath-git)           | Derive from git history                |
+| [`toolpath-github`](https://docs.rs/toolpath-github)     | Derive from GitHub pull requests       |
+| [`toolpath-dot`](https://docs.rs/toolpath-dot)           | Graphviz DOT visualization             |
+| [`toolpath-md`](https://docs.rs/toolpath-md)             | Markdown rendering for LLMs            |
+| [`path-cli`](https://docs.rs/path-cli)                   | Unified CLI (`cargo install path-cli`) |
 
 See [Crates](/crates/) for details, or [docs.rs](https://docs.rs/toolpath) for API reference.
