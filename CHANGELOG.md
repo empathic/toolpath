@@ -2,6 +2,36 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Parallel `path query` execution — 2026-08-06
+
+`path query` now evaluates cache documents on a thread pool. For the
+plans that treat every file independently (`PerFileStream`,
+`Decompose`), the whole per-file pipeline — read, parse, wrap, filter,
+render — runs on rayon workers, with only ordered output assembly on
+the main thread; `Slurp` plans parallelize the parse/wrap phase only
+(the merged jaq array is `Rc`-based and must be built on one thread).
+Output is byte-identical to the sequential scan — same ordering, same
+warnings, same error precedence — enforced by tests pinning the
+parallel building blocks against the sequential engine.
+
+Measured on a real 97-doc / 114 MB cache (M-series, medians of 5):
+streamed and decomposed queries drop from ~0.95 s to ~0.31 s (~3.1×),
+slurped queries improve ~1.2×. On an even 60-doc / 56 MB synthetic
+cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
+206 ms).
+
+- **`path-cli`** (0.17.0):
+  - `query/mod.rs`: plan dispatch (`execute_plan`) and a chunked
+    parallel driver (`for_each_file`) that preserves selection order,
+    per-file warning order, and explicit-file error positions.
+  - `query/filter.rs`: per-file worker evaluation (`render_file`,
+    `partials_file` — partials cross threads as compact JSON bytes and
+    are reparsed on the consuming thread), a per-thread compiled-filter
+    cache, and `finish_decompose` shared by the sequential and parallel
+    drivers so the zero-file rule lives once.
+  - The emscripten (playground) build keeps the sequential engine —
+    no threads there.
+
 ## Projected Claude sessions are resumable again — 2026-07-30
 
 Two fixes found by live-resuming a projected session against the real
