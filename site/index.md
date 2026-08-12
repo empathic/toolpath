@@ -92,7 +92,7 @@ sessions in one portable schema that records **who** changed **what**,
   <h2>When you need it</h2>
   <div class="objects">
     <div class="object-card">
-      <h3>Merge faster</h3>
+      <h3>Reduce review time</h3>
       <p>An agent wrote the diff, and the diff can't say why. Share the
       session to <a href="https://pathbase.dev">Pathbase</a> and link it
       from the PR: reviewers see what was asked, what was tried and
