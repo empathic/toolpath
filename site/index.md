@@ -88,6 +88,31 @@ Toolpath fixes both. It is the open session format: every harness's
 sessions in one portable schema that records **who** changed **what**,
 **why**, what they tried that didn't work, and what it cost.
 
+<div class="scenarios">
+  <h2>When you need it</h2>
+  <div class="objects">
+    <div class="object-card">
+      <h3>Switch harnesses mid-task</h3>
+      <p>Claude Code started the feature. Codex should finish it. Share
+      the session, resume it in the other harness, and the new agent
+      starts with everything the old one knew: the intent, the state,
+      the dead ends already ruled out.</p>
+    </div>
+    <div class="object-card">
+      <h3>One query, every agent</h3>
+      <p>Which sessions burned the most tokens? What did the agent try
+      before the fix that worked? One jq filter across every session on
+      the machine answers it, whichever agents wrote the logs.</p>
+    </div>
+    <div class="object-card">
+      <h3>Multi-actor PR</h3>
+      <p>Claude wrote the implementation, rustfmt reformatted it, you
+      fixed the edge case, and git blame credits only you. Toolpath keeps
+      a step per actor, so review shows who did what, and why.</p>
+    </div>
+  </div>
+</div>
+
 ## Parse in, project out
 
 Toolpath is open and versioned: the schema is published, and a document
@@ -104,31 +129,6 @@ everything it does is one of three moves across that boundary:
 - **Resume.** A projection followed by a handoff: Toolpath writes the
   session where the harness looks for it, then starts the harness on
   it.
-
-<div class="scenarios">
-  <h2>When you need it</h2>
-  <div class="objects">
-    <div class="object-card">
-      <h3>Switch harnesses mid-task</h3>
-      <p>A session that started in Claude Code can continue in Codex.
-      <code>path share</code> publishes it; <code>path resume</code>
-      projects it into the target harness and picks up where you left
-      off.</p>
-    </div>
-    <div class="object-card">
-      <h3>One query, every agent</h3>
-      <p>Dead ends, token spend, tool calls: <code>path query</code> runs
-      one jq filter across every session on the machine, whichever agent
-      wrote it.</p>
-    </div>
-    <div class="object-card">
-      <h3>Multi-actor PR</h3>
-      <p>Claude wrote the implementation, rustfmt reformatted, you refined the
-      error messages. Toolpath gives each actor their own step so reviewers see
-      who did what.</p>
-    </div>
-  </div>
-</div>
 
 ## Three core objects
 
