@@ -1,20 +1,45 @@
 # Development
 
-## Building and testing
+Requires Rust 1.85+ (edition 2024); the exact toolchain is pinned via
+`rust-toolchain.toml`. Day-to-day tasks are driven by
+[`just`](https://github.com/casey/just); run `just help` to list the
+recipes.
+
+## The dev loop
 
 ```bash
-cargo build --workspace
-cargo test --workspace
-cargo clippy --workspace -- -D warnings
+just check            # auto-format, then run the full CI verification
+just ci               # the same quality gates CI runs, without auto-format
 ```
 
-Requires Rust 1.85+ (edition 2024); the exact toolchain is pinned via
-`rust-toolchain.toml`.
-
-Validate the example documents:
+Both take gate names to narrow or exclude: the gates are `format`,
+`shellcheck`, `clippy`, `test`, `doc`, `examples`, `plugin`, and
+`site`, and a `-` prefix excludes one.
 
 ```bash
-for f in examples/*.json; do cargo run -p path-cli -- p validate --input "$f"; done
+just ci test          # just the workspace tests
+just check -site      # everything except the site build
+```
+
+Individual pieces are also available directly:
+
+```bash
+just fmt              # format all code (Rust + site)
+just clippy           # clippy across the workspace, warnings denied
+cargo test --workspace
+```
+
+The `examples` gate validates every document under `examples/` with
+`path p validate`.
+
+## Other recipes
+
+```bash
+just site                 # site dev server (eleventy + wasm watcher)
+just refresh-openapi      # re-fetch the Pathbase OpenAPI spec into pathbase-client
+just test-pathbase-live   # live smoke test against a Pathbase deployment
+just release-check        # dry-run publish of all workspace crates (safe)
+just release-publish      # publish to crates.io for real
 ```
 
 ## Agent session format notes
