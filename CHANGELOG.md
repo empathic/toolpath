@@ -2,6 +2,54 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## SQLite step index for `path query` — 2026-07-21
+
+`path query` now keeps a disposable SQLite accelerator at
+`$CONFIG_DIR/index.db`: every wrapped step as a row (exactly what the
+jaq engine consumes), with generated columns over the hot fields and a
+stat-level freshness gate per document. The cache files stay canonical
+— delete the index and the next query rebuilds it lazily; a schema
+version bump rebuilds it automatically. `TOOLPATH_QUERY_NO_INDEX=1`
+bypasses it.
+
+What it accelerates (real 97-doc / 114 MB / 46k-step cache, medians;
+"rayon" = 0.17.0's parallel scan):
+
+- **Absorbed counts** — a filter that is exactly `length` or
+  `map(select(P)) | length` with a recognized `P` becomes
+  `SELECT count(*)`: 0.90 s → **30 ms** (~30×; no step is parsed at
+  all). Recognized `P` atoms: `.dead_end` (and `| not`),
+  `.step.actor == "…"`, `.step.actor | startswith("…")`,
+  `.path.meta.source == "…"`, and `and`-conjunctions of those.
+- **Predicated scans** — a leading `map(select(P))` / `.[] | select(P)`
+  prefilters rows in SQL before parsing: `map(select(.step.actor |
+  startswith("agent:"))) | length` 0.98 s → 169 ms (~6×; 310 ms under
+  rayon alone).
+- Unrecognized/slurp queries are unchanged (they ride 0.17.0's
+  parallel scan); a predicated stream lands at parity with it
+  (row-fetch + per-row parse ≈ parallel whole-file parse).
+
+Correctness: recognition is exact (whole-predicate or nothing) and the
+prefilter feeds the *unchanged* original filter, so pruned rows are
+ones the filter's own first stage would drop — the integration suite
+asserts index-served output is byte-identical to the no-index path
+across every plan, staleness self-healing included. Content-scoped
+queries (`--kind`/`--project`/`--project-under`) bypass the index.
+
+- **`path-cli`** (0.18.0):
+  - `query/index.rs`: the store — WAL, per-thread connections,
+    `(mtime_ns, size)` stamps, write-through from `cache::write_cached`
+    (sync/import keep the index warm), purge on `p cache rm`, orphan
+    pruning on full scans, version-gated self-rebuild. One-time build
+    cost on first query: ~1.7 s for the 114 MB cache; index size ~250 MB
+    (rows + hot-field indexes).
+  - `query/plan.rs`: `RowPredicate` — conservative recognizer for the
+    leading-`select` predicate and the absorbable-count shape, with an
+    in-code `matches` mirror used when a stale doc is reparsed.
+  - `TOOLPATH_QUERY_EXPLAIN=1` now also prints the index strategy
+    (`count absorbed into SQL (dead_end=true)`, `serving fresh docs,
+    prefilter …`, or `off`).
+
 ## Parallel `path query` execution — 2026-08-06
 
 `path query` now evaluates cache documents on a thread pool. For the

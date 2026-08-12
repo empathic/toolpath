@@ -75,6 +75,10 @@ fn run_rm(id: &str) -> Result<()> {
     if let Err(e) = crate::sync::evict_cache_id(id) {
         eprintln!("warning: sync manifest not updated: {e}");
     }
+    #[cfg(not(target_os = "emscripten"))]
+    if let Err(e) = crate::query::index::purge_id(id) {
+        eprintln!("warning: query index not updated: {e}");
+    }
     eprintln!("Removed {id}");
     Ok(())
 }

@@ -83,6 +83,13 @@ pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<PathBuf
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("chmod 0600 {}", path.display()))?;
     }
+    // Write-through to the query step index, so sync/import keep it warm
+    // and the next query serves this doc without reparsing it. Best-effort:
+    // the index is a disposable accelerator and self-heals via its stat gate.
+    #[cfg(not(target_os = "emscripten"))]
+    if let Err(e) = crate::query::index::index_written_doc(id, doc, &path) {
+        eprintln!("warning: query index not updated for {id}: {e:#}");
+    }
     Ok(path)
 }
 
