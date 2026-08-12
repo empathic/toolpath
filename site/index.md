@@ -105,10 +105,6 @@ everything it does is one of three moves across that boundary:
   session where the harness looks for it, then starts the harness on
   it.
 
-Git history and GitHub pull requests parse into the same schema, so a
-session, the PR it became, and the release that shipped it can share
-one graph.
-
 <div class="scenarios">
   <h2>When you need it</h2>
   <div class="objects">
@@ -217,7 +213,10 @@ ancestry of `path.head`.
 | Pi | ✓ | ✓ | ✓ `pi --session` |
 
 Read and write cover each harness's native session files; resume
-projects a document into the target harness and hands off to it.
+projects a document into the target harness and hands off to it. Git
+history and GitHub pull requests parse into the same schema, so a
+session, the PR it became, and the release that shipped it can share
+one graph.
 
 ## What Toolpath adds
 
