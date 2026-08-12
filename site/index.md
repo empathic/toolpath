@@ -80,6 +80,18 @@ directories, Copilot an event stream. The session that produced a change
 is locked inside the harness that ran it, and that harness can change
 its format at any time.
 
+## One format for everyone's tools
+
+Toolpath is the open session format: every harness's sessions in one
+portable schema that records **who** changed **what**, **why**, what
+they tried that didn't work, and what it cost.
+
+One schema means tooling stops being per-agent. A cost dashboard, a
+review surface, a search index, an archive: build it once against the
+format and it works with sessions from every supported harness. And
+when the next agent ships, one new parser brings it into every tool
+you already have.
+
 <div class="scenarios">
   <h2>When you need it</h2>
   <div class="objects">
