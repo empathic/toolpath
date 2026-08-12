@@ -68,8 +68,6 @@ bundles the CLI (downloaded and installed globally on first use) and adds
 
 See [plugins/claude-code](plugins/claude-code/) for details.
 
-> The older `toolpath-cli` crate name still works: `cargo install toolpath-cli` is now a thin shim that pulls in `path-cli` and installs the same binary. New users should reach for `path-cli` directly; the shim will eventually be retired.
-
 ## Quick start
 
 ```bash
@@ -396,7 +394,6 @@ crates/
   toolpath-md/        Markdown rendering for LLM consumption
   pathbase-client/    Progenitor-derived typed client for the Pathbase HTTP API
   path-cli/           Unified CLI (binary: path)
-  toolpath-cli/       Deprecated shim that re-exports path-cli
 ```
 
 See each crate's README for library-level documentation.
