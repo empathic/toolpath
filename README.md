@@ -320,12 +320,6 @@ path
 
 Global: `--pretty` for formatted JSON output.
 
-**Breaking** (pre-1.0). The previous top-level commands `path import`,
-`path export`, `path cache`, `path list`, `path render`, `path merge`,
-`path validate`, `path derive`, `path project`, `path incept`, and
-`path track` were **removed** in `path-cli` 0.10.0; they all now live
-exclusively under `path p`.
-
 ## Interactive selection
 
 When `path p import <provider>` is run with no `--session` and stdin/stderr
