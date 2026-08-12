@@ -1,0 +1,20 @@
+---
+source: crates/path-cli/tests/render_md_snapshots.rs
+expression: "render_md_doc(COMPACTED_DOC, \"full\")"
+---
+# Compacted session
+
+**Source:** `claude-code`
+
+**User:** refactor the auth module
+
+**Assistant:** Reading the auth code first.
+
+**Tools:**
+- `Read` `{"file_path":"auth.rs"}` → fn login() {}
+
+*— context compacted (manual, 25450 tokens before) —*
+
+> Earlier turns refactored the auth module.
+
+**User:** now add session validation

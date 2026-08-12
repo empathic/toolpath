@@ -505,6 +505,27 @@ overflow or plan-mode transitions. Each session is exactly one
 starts, a new `session-*.json` is created. There is no chain index to
 follow.
 
+## Compaction — in-memory only, never persisted
+
+Gemini CLI **does** compress context — automatically when token usage
+crosses a configurable threshold, and manually via `/compress` (aliases
+`summarize`/`compact`). Both go through the same
+`tryCompressChat` / `ChatCompressionService.compress` path, differing
+only by a `force` flag (manual forces; auto gates on the threshold).
+
+But compression is **purely in-memory**. No summary, boundary, or
+marker is ever written to the session file — and, per a known
+gemini-cli bug (issues #20803 / #21335), the on-disk file isn't even
+updated to the compressed state: it retains the **full pre-compression
+history**. So a derivation reading the session file always sees the
+complete, uncompressed conversation with no compaction event in it.
+
+Net for us: still **no compaction provenance to model** and no
+duplicate-id hazard — but the reason is "compresses but persists
+nothing," not "no compaction mechanism." (The `summary` field on the
+format remains a sub-agent's reported result — see
+[§Sub-agents](#sub-agents) — not a context summary.)
+
 ## Timestamps and encoding
 
 - All timestamps are ISO-8601 UTC with millisecond precision and a

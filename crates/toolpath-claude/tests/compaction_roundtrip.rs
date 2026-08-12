@@ -13,19 +13,27 @@
 //!   - The fixture loads cleanly (no parser crash on `compact_boundary`).
 //!   - Pre-compact user/assistant content survives the round-trip.
 //!   - Post-compact user/assistant content survives the round-trip.
-//!   - The `compact_boundary` marker becomes an inline event in
+//!   - The `compact_boundary` marker becomes an `Item::Compaction` in
 //!     `view.items` at its stream position (after the last pre-compact
-//!     turn, before the summary), and holds that position through
-//!     derive → extract with its id and event type intact.
+//!     turn, before the post-compact turns), and holds that position
+//!     through derive → extract with its id intact.
 //!   - The conversation can be re-projected to Claude JSONL and
 //!     re-parsed by `ConversationReader` without error.
 //!
-//! Known limitation (documented, not asserted): the synthetic
-//! `isCompactSummary: true` summary entry is surfaced as a plain
-//! `Role::User` turn — `toolpath-claude` does not yet recognize the
-//! `isCompactSummary` flag. Acceptable for "good UX" today (the
-//! compacted summary text still lands in the transcript), but if/when
-//! we tighten this, this test gets tightened with it.
+//! Boundary handling — asserted in depth by `compaction_view.rs` — is now
+//! first-class: the `compact_boundary` marker is read as an
+//! `Item::Compaction`, and the synthetic `isCompactSummary: true` entry is
+//! folded into that boundary's `summary` rather than surfaced as a
+//! `Role::User` turn. This test covers the complement: the *surrounding*
+//! content — the pre- and post-compact turns and their tool-call pairs —
+//! surviving the derive → project → re-read round-trip intact.
+//!
+//! Known limitation: the fold applies only when a `compact_boundary`
+//! immediately precedes the summary entry. An orphan `isCompactSummary`
+//! entry with no inline boundary — the old-style rotation-chain shape,
+//! where a continuation file opens with the summary alone — surfaces as a
+//! plain user turn, and projecting that turn back to JSONL drops its
+//! `isCompactSummary` and `isVisibleInTranscriptOnly` flags.
 
 use std::path::{Path, PathBuf};
 
@@ -55,6 +63,11 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
     let back = Graph::from_json(&json).expect("parse Graph");
     let path = back.into_single_path().expect("single path");
     extract_conversation(&path)
+}
+
+fn project_and_reread(view: &ConversationView) -> ConversationView {
+    let convo = ClaudeProjector.project(view).expect("project view");
+    toolpath_claude::provider::to_view(&convo)
 }
 
 #[test]
@@ -171,10 +184,11 @@ fn post_compact_tool_call_pairs_survive_roundtrip() {
 }
 
 #[test]
-fn compact_boundary_event_survives_at_stream_position() {
-    // Events restore their source `parent_id` from the stamped
-    // `source_parent` key, so position among the turns — not resolved step
-    // parents — is the round-trip contract asserted here.
+fn compact_boundary_survives_at_stream_position() {
+    // Position among the turns — not resolved step parents — is the
+    // round-trip contract asserted here: the boundary's `Item::Compaction`
+    // must sit after the two pre-compact turns and before the first
+    // post-compact turn, both in the initial view and after derive → extract.
     let original = load_view();
     let after = ir_roundtrip(&original);
 
@@ -182,11 +196,21 @@ fn compact_boundary_event_survives_at_stream_position() {
         let idx = view
             .items
             .iter()
-            .position(|item| matches!(item, Item::Event(e) if e.event_type == "compact_boundary"))
-            .unwrap_or_else(|| panic!("compact_boundary event missing from {label}"));
+            .position(|item| matches!(item, Item::Compaction(_)))
+            .unwrap_or_else(|| panic!("Item::Compaction missing from {label}"));
 
-        let event = view.items[idx].as_event().unwrap();
-        assert_eq!(event.id, "uuid-boundary", "event id diverged in {label}");
+        let compaction = view.items[idx].as_compaction().unwrap();
+        assert_eq!(
+            compaction.id, "uuid-boundary",
+            "compaction id diverged in {label}"
+        );
+        assert!(
+            compaction
+                .summary
+                .as_deref()
+                .is_some_and(|s| s.contains("[compacted summary]")),
+            "isCompactSummary text must stay folded into the boundary in {label}"
+        );
 
         let turns_before = view.items[..idx].iter().filter_map(Item::as_turn).count();
         assert_eq!(
@@ -199,8 +223,8 @@ fn compact_boundary_event_survives_at_stream_position() {
             .find_map(Item::as_turn)
             .unwrap_or_else(|| panic!("no turn after the boundary in {label}"));
         assert!(
-            next_turn.text.contains("[compacted summary]"),
-            "boundary must precede the summary turn in {label}, got {:?}",
+            next_turn.text.contains("Now add the session validation."),
+            "boundary must precede the first post-compact turn in {label}, got {:?}",
             next_turn.text
         );
     }
@@ -229,6 +253,48 @@ fn projector_output_is_re_parseable_by_reader() {
         .expect("tempfile");
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     ConversationReader::read_conversation(tmp.path()).expect("re-read projected JSONL");
+}
+
+#[test]
+fn projection_fixpoint_holds() {
+    // Shared oracle: one projection may normalize (re-mint the summary uuid,
+    // reorder events), but a second cycle must be the identity, the
+    // compaction payload must survive the first, and both output views must
+    // satisfy the structural invariants.
+    let source = load_view();
+    let once = project_and_reread(&source);
+    let twice = project_and_reread(&once);
+    toolpath_convo::testing::assert_fixpoint(&source, &once, &twice);
+
+    // Claude→Claude projection preserves turn uuids, so the parent chain
+    // must survive verbatim — including the first post-boundary turn, which
+    // chains through the compaction on both sides of the trip.
+    let parents = |v: &ConversationView| -> Vec<(String, Option<String>)> {
+        v.turns()
+            .map(|t| (t.id.clone(), t.parent_id.clone()))
+            .collect()
+    };
+    assert_eq!(
+        parents(&source),
+        parents(&once),
+        "turn parent chain changed across projection"
+    );
+}
+
+#[test]
+fn projected_summary_carries_render_flags() {
+    let view = load_view();
+    let convo = ClaudeProjector.project(&view).expect("project view");
+    let summary = convo
+        .entries
+        .iter()
+        .find(|e| e.extra.get("isCompactSummary") == Some(&serde_json::json!(true)))
+        .expect("projected conversation should contain a compact-summary entry");
+    assert_eq!(
+        summary.extra.get("isVisibleInTranscriptOnly"),
+        Some(&serde_json::json!(true)),
+        "summary must be transcript-only or the TUI renders it inline on resume"
+    );
 }
 
 #[test]

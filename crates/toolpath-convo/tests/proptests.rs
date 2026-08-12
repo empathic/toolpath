@@ -14,8 +14,8 @@
 use proptest::prelude::*;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationEvent, ConversationView, DeriveConfig, Item, Role, Turn, derive_path,
-    extract_conversation,
+    Compaction, CompactionTrigger, ConversationEvent, ConversationView, DeriveConfig, Item, Role,
+    Turn, derive_path, extract_conversation,
 };
 
 fn turn(id: &str, parent: Option<&str>, role: Role, text: &str) -> Turn {
@@ -53,6 +53,8 @@ enum Elem {
     /// (repeats collide, the Claude reused-attachment-uuid shape); 4 = `t0`
     /// (collides with the turn id pool).
     Event(u8, Option<u8>),
+    /// (parent slot or None, kept-anchor slot or None, auto?)
+    Compaction(Option<u8>, Option<u8>, bool),
 }
 
 fn elem() -> impl Strategy<Value = Elem> {
@@ -61,6 +63,8 @@ fn elem() -> impl Strategy<Value = Elem> {
             .prop_map(|(id, p, kind, muts)| Elem::Turn(id, p, kind, muts)),
         1 => (0u8..5, proptest::option::of(0u8..8))
             .prop_map(|(id_slot, p)| Elem::Event(id_slot, p)),
+        1 => (proptest::option::of(0u8..8), proptest::option::of(0u8..8), any::<bool>())
+            .prop_map(|(p, k, a)| Elem::Compaction(p, k, a)),
     ]
 }
 
@@ -80,6 +84,7 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
             }
         })
     };
+    let mut compact_n = 0usize;
     for e in elems {
         match e {
             Elem::Turn(id_slot, p, kind, muts) => {
@@ -128,6 +133,23 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
                 if !id.is_empty() {
                     ids.push(id);
                 }
+            }
+            Elem::Compaction(p, k, auto) => {
+                compact_n += 1;
+                items.push(Item::Compaction(Compaction {
+                    id: format!("c{compact_n}"),
+                    parent_id: resolve(p, &ids),
+                    timestamp: "2026-01-01T00:00:00Z".into(),
+                    trigger: Some(if auto {
+                        CompactionTrigger::Auto
+                    } else {
+                        CompactionTrigger::Manual
+                    }),
+                    summary: Some("condensed".into()),
+                    pre_tokens: None,
+                    kept_from: resolve(k, &ids),
+                }));
+                ids.push(format!("c{compact_n}"));
             }
         }
     }

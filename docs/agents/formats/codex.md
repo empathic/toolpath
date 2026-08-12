@@ -175,6 +175,57 @@ pub enum RolloutItem {
 | `session_state` | Mid-session state updates (e.g. model switch) | 0 |
 | `compacted` | Inserted when Codex compacts history mid-session | 0 |
 
+### `compacted` — context compaction
+
+When Codex compacts mid-session it appends a single `compacted` line to
+the **same rollout file** — no new file, no new session id:
+
+```json
+{"type":"compacted","payload":{"message":"…summary text…","replacement_history":[…],"window_id":"019f86c9-2b8a-7651-bff3-7914eb125b25"}}
+```
+
+Per current Codex `main` (`codex-rs/protocol/src/protocol.rs`,
+`CompactedItem`), `payload` is `{message, replacement_history?,
+window_id?}`. **Observed in a real 2026-07 capture
+(`test-fixtures/codex/compacted-real.jsonl`)**, the payload has grown:
+`{message, replacement_history, window_id, first_window_id,
+previous_window_id, window_number}` — the window fields chain
+compaction windows by UUID. In that capture `message` is **empty**: the
+real summary lives inside `replacement_history` as a
+`{"type":"compaction", "id":"cmp_…", "encrypted_content":"…"}` entry —
+**encrypted, unrecoverable from the rollout**. `replacement_history` is
+the new context window verbatim: a *prefix*-keep (the first user
+message survives; later turns are dropped), which the suffix-anchored
+`kept_from` contract cannot represent — so the derived boundary stays
+wholesale with no summary. **There is no `trigger`, `preTokens`, or
+`summary` field** — manual `/compact` and automatic (overflow)
+compaction write an **identical** record; the manual/auto distinction
+(`CompactionTrigger`) is analytics-only and never persisted to the
+rollout. (A separate field-less `event_msg` `context_compacted` is also
+written — the TUI renders its "Context compacted" row from this event,
+so the projector emits it after every `compacted` line.)
+
+The turns on either side keep their original ids — Codex does **not**
+replay or re-id messages across the boundary, so there's no
+duplicate-id hazard. `toolpath-codex` maps the marker to an
+`Item::Compaction` positioned between the turns it separates (see
+`tests/compaction_roundtrip.rs`), which the shared `derive_path`
+projects to a `conversation.compact` step; the surrounding turns
+survive intact. Only a non-empty `message` is consumed (as
+`Compaction.summary`; the empty string normalizes to no summary).
+Codex never persists the manual-vs-auto trigger or the pre-compaction
+token count, and `replacement_history` is a prefix-keep window with an
+encrypted summary we can't fold in, so `trigger`/`pre_tokens` are
+`None` and `kept` is empty. The marker carries no id of its own, so a stable `compact-<n>`
+is synthesized; `parent_id` links to the last turn before the boundary.
+
+> Note: the repo fixture `tests/fixtures/compacted_session.jsonl` is
+> synthetic (real compaction needs a full context window to trigger),
+> but its `compacted` line uses the real
+> `{message, replacement_history}` shape. The captured fixture
+> `test-fixtures/codex/convo-compacted.jsonl` is a production rollout
+> that actually compacted (with an empty `message`).
+
 ## `session_meta` — first line of every file
 
 ```json
@@ -862,6 +913,7 @@ The mapping below is what the provider actually emits. Source:
 | `event_msg.token_count.info.total_token_usage` | cumulative; differenced per step → `Turn.attributed_token_usage`, summed per round → `Turn.token_usage` (round's final turn) + `ConversationView.total_usage` |
 | `event_msg.token_count.info.total_token_usage.reasoning_output_tokens` (⊆ output, cumulative) | differenced per step → `breakdowns["output"]["reasoning"]` on `attributed_token_usage`; summed per round onto `token_usage` (informational, never summed into the total) |
 | `event_msg` non-turn types (`task_started`, `task_complete`, `user_message`, `agent_message`, etc.) | `ConversationView.events` as typed `ConversationEvent`s |
+| `compacted` (`payload.message`) | `Item::Compaction` slotted between the surrounding turns (`summary = message`; `trigger`/`pre_tokens` `None`, `kept` empty); projects to a `conversation.compact` step |
 | unknown `response_item` / `event_msg` kinds | preserved verbatim in `events` and round-trip via `RolloutItem::Unknown` / `ResponseItem::Other` / `EventMsg::Other` |
 
 ### Fidelity guarantees

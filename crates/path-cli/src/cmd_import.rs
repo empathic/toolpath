@@ -242,9 +242,52 @@ fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Resul
             }
             let summary = doc_summary(&d.doc);
             eprintln!("Imported {} → {}", summary, d.cache_id);
+            if let Some(events) = event_type_summary(&d.doc) {
+                eprintln!("  events preserved: {}", events);
+            }
         }
     }
     Ok(())
+}
+
+/// One-line count of non-conversation events in the derived document,
+/// grouped by type — e.g. `attachment ×6, turn_duration ×2`. This is how a
+/// source event type our mapping doesn't model stays VISIBLE at import
+/// time instead of riding along silently (Copilot's
+/// `session.compaction_start`/`complete` pair did exactly that before its
+/// encoding was mapped: sessions imported "clean" with `compactions=0`).
+fn event_type_summary(doc: &Graph) -> Option<String> {
+    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    let paths = doc.paths.iter().filter_map(|p| match p {
+        toolpath::v1::PathOrRef::Path(path) => Some(path.as_ref()),
+        toolpath::v1::PathOrRef::Ref(_) => None,
+    });
+    for path in paths {
+        for step in &path.steps {
+            for ch in step.change.values() {
+                let Some(s) = &ch.structural else { continue };
+                if s.change_type != "conversation.event" {
+                    continue;
+                }
+                let ty = s
+                    .extra
+                    .get("entry_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                *counts.entry(ty.to_string()).or_default() += 1;
+            }
+        }
+    }
+    if counts.is_empty() {
+        return None;
+    }
+    Some(
+        counts
+            .iter()
+            .map(|(t, n)| format!("{t} ×{n}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 fn doc_summary(doc: &Graph) -> String {

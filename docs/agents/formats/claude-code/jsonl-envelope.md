@@ -84,7 +84,7 @@ Every envelope field we have observed, in rough order of prominence:
 | `isCompactSummary`   | bool    | synthetic user message after `compact_boundary` | Always paired with `isVisibleInTranscriptOnly: true`. |
 | `isVisibleInTranscriptOnly` | bool | see above | Entry is visible in the UI but not replayed to the model. |
 | `logicalParentUuid`  | UUID    | `compact_boundary` | Points at the pre-compact last message. `parentUuid` is `null` on these. |
-| `compactMetadata`    | object  | `compact_boundary` | `{trigger: "auto"|"manual", preTokens: number}`. |
+| `compactMetadata`    | object  | `compact_boundary` | `{trigger: "auto"|"manual", preTokens}`; 2.1.x also carries `postTokens`, `durationMs`, and `preservedSegment`/`preservedMessages` enumerating the verbatim-kept recent tail. |
 | `thinkingMetadata`   | object  | some user entries | `{level, disabled, triggers[]}`. Indicates extended-thinking configuration. |
 
 ### Hook-injected fields

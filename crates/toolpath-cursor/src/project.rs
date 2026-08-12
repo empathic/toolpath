@@ -181,6 +181,11 @@ fn project_view(
             }
             // Other event kinds have no bubble-store representation.
             Item::Event(_) => {}
+            // Foreign typed boundaries (cursor's own marker rides as a
+            // summarization event, not an Item::Compaction) are dropped —
+            // the marker bubble carries no summary text, so there is
+            // nothing faithful to write for a cross-harness boundary.
+            Item::Compaction(_) => {}
         }
     }
 

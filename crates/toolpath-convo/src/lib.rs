@@ -3,6 +3,7 @@
 pub mod derive;
 pub mod extract;
 pub mod project;
+pub mod testing;
 
 pub use derive::{DeriveConfig, derive_path, file_write_diff, unified_diff};
 
@@ -195,19 +196,138 @@ pub struct ConversationEvent {
     pub data: HashMap<String, serde_json::Value>,
 }
 
-/// One element of a conversation's ordered stream — a turn or a
-/// non-conversational event. Keeping both in a single ordered `Vec`
-/// preserves their exact interleaving, so `derive_path` ↔
-/// `extract_conversation` round-trips losslessly.
-// `Turn` is much larger than `Event` but is also the dominant item in any
-// conversation, so we keep it inline rather than box the hot path —
-// boxing would add an allocation per turn to save space only on the rarer
-// Event items.
+/// How a context compaction was triggered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionTrigger {
+    /// The harness compacted automatically on context overflow.
+    Auto,
+    /// The user ran a compact command (e.g. `/compact`).
+    Manual,
+}
+
+/// A context-compaction boundary: the agent summarized older turns and
+/// continued. Every harness records this as an inline marker within one
+/// session (never a new session), so it's modeled as one item in the
+/// conversation's ordered stream and projects to a `conversation.compact`
+/// step. All fields beyond identity are optional — harnesses vary in what
+/// they persist (see `docs/agents/formats/`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Compaction {
+    /// Unique identifier (the harness boundary id, or synthesized).
+    pub id: String,
+
+    /// Logical parent — the last turn before compaction. Projects to the
+    /// step's `parents`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+
+    /// When the compaction occurred (ISO 8601).
+    pub timestamp: String,
+
+    /// Auto (overflow) vs. manual (`/compact`). `None` when the harness
+    /// doesn't persist which (Codex, Pi).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<CompactionTrigger>,
+
+    /// The summary text that replaced the condensed prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+
+    /// Context token count just before compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_tokens: Option<u64>,
+
+    /// Id of the oldest prior turn that survives verbatim into the
+    /// post-compaction context window — the anchor of the kept tail.
+    /// The surviving set is the contiguous parent-chain run from this
+    /// anchor up to the boundary; [`expand_kept`] computes it. `None` =
+    /// wholesale (the summary replaced everything). This is the
+    /// harness-agnostic contract: every round-tripping harness's native
+    /// marker names an anchor (Pi's `firstKeptEntryId`, opencode's
+    /// `tailStartID`, the start of Claude's preserved tail). Native detail
+    /// richer than these fields is deliberately not carried — the
+    /// compaction provenance is this closed typed set, and round-trips
+    /// are lossy beyond it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_from: Option<String>,
+}
+
+/// Expand a boundary's [`Compaction::kept_from`] anchor into the concrete
+/// list of surviving turn ids, oldest first.
+///
+/// Walks the turn parent chain backward from the boundary's `parent_id`
+/// until it reaches the anchor. The result is the contiguous run of prior
+/// turns `[anchor ..= boundary.parent]` — abandoned tree branches (turns
+/// off the boundary's ancestry) are never included, no matter where they
+/// sit in file order. Returns an empty list when `kept_from` is `None`
+/// (wholesale) or when the anchor is not on the boundary's parent chain
+/// (an inconsistency [`testing::check_view_invariants`] reports).
+pub fn expand_kept(items: &[Item], boundary: &Compaction) -> Vec<String> {
+    let Some(anchor) = boundary.kept_from.as_deref() else {
+        return Vec::new();
+    };
+    let turns: HashMap<&str, &Turn> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Turn(t) => Some((t.id.as_str(), t)),
+            _ => None,
+        })
+        .collect();
+    let events: HashMap<&str, &ConversationEvent> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Event(e) => Some((e.id.as_str(), e)),
+            _ => None,
+        })
+        .collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut cur = boundary.parent_id.as_deref();
+    let mut found = false;
+    while let Some(id) = cur {
+        if !seen.insert(id) {
+            break; // cycle guard
+        }
+        if let Some(turn) = turns.get(id) {
+            kept.push(id.to_string());
+            if id == anchor {
+                found = true;
+                break;
+            }
+            cur = turn.parent_id.as_deref();
+        } else if let Some(event) = events.get(id) {
+            // Events are chain links, not kept turns — the walk passes
+            // through them (same rule as the step-space twin,
+            // `expand_kept_steps`). E.g. pi threads its `model_change`
+            // entries into the turn parent chain.
+            cur = event.parent_id.as_deref();
+        } else {
+            break; // chain left the item space (e.g. an earlier boundary)
+        }
+    }
+    if !found {
+        return Vec::new();
+    }
+    kept.reverse();
+    kept
+}
+
+/// One element of a conversation's ordered stream — a turn, a
+/// non-conversational event, or a compaction boundary. Keeping all three
+/// in a single ordered `Vec` preserves their exact interleaving, so
+/// `derive_path` ↔ `extract_conversation` round-trips losslessly and a
+/// compaction boundary lands at its true position.
+// `Turn` is much larger than the other variants but is also the dominant
+// item in any conversation, so we keep it inline rather than box the hot
+// path — boxing would add an allocation per turn to save space only on
+// the rarer Event/Compaction items.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Item {
     Turn(Turn),
     Event(ConversationEvent),
+    Compaction(Compaction),
 }
 
 impl Item {
@@ -223,6 +343,14 @@ impl Item {
     pub fn as_event(&self) -> Option<&ConversationEvent> {
         match self {
             Item::Event(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// The compaction, if this item is one.
+    pub fn as_compaction(&self) -> Option<&Compaction> {
+        match self {
+            Item::Compaction(c) => Some(c),
             _ => None,
         }
     }
@@ -366,10 +494,10 @@ pub struct ConversationView {
     /// When the conversation was last active.
     pub last_activity: Option<DateTime<Utc>>,
 
-    /// The conversation's ordered stream: turns and non-conversational
-    /// events, interleaved in real order so the interleaving survives
-    /// derive ↔ extract round-trips. Use `turns()` / `events()` to read
-    /// one kind.
+    /// The conversation's ordered stream: turns, non-conversational
+    /// events, and compaction boundaries, interleaved in real order so
+    /// the interleaving survives derive ↔ extract round-trips. Use
+    /// `turns()` / `events()` / `compactions()` to read one kind.
     pub items: Vec<Item>,
 
     /// Aggregate token usage across all turns.
@@ -411,6 +539,11 @@ impl ConversationView {
     /// All non-conversational events, in order.
     pub fn events(&self) -> impl Iterator<Item = &ConversationEvent> {
         self.items.iter().filter_map(Item::as_event)
+    }
+
+    /// All compaction boundaries, in order.
+    pub fn compactions(&self) -> impl Iterator<Item = &Compaction> {
+        self.items.iter().filter_map(Item::as_compaction)
     }
 
     /// Title derived from the first user turn, truncated to `max_len` characters.

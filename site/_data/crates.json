@@ -1,7 +1,7 @@
 [
   {
     "name": "toolpath",
-    "version": "0.7.0",
+    "version": "0.8.0",
     "description": "Core types, builders, and query API",
     "docs": "https://docs.rs/toolpath",
     "crate": "https://crates.io/crates/toolpath",
@@ -17,7 +17,7 @@
   },
   {
     "name": "toolpath-git",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "description": "Derive from git repository history",
     "docs": "https://docs.rs/toolpath-git",
     "crate": "https://crates.io/crates/toolpath-git",
@@ -25,7 +25,7 @@
   },
   {
     "name": "toolpath-github",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "description": "Derive from GitHub pull requests",
     "docs": "https://docs.rs/toolpath-github",
     "crate": "https://crates.io/crates/toolpath-github",
@@ -89,7 +89,7 @@
   },
   {
     "name": "toolpath-dot",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Graphviz DOT visualization",
     "docs": "https://docs.rs/toolpath-dot",
     "crate": "https://crates.io/crates/toolpath-dot",
@@ -97,7 +97,7 @@
   },
   {
     "name": "toolpath-md",
-    "version": "0.7.0",
+    "version": "0.8.0",
     "description": "Markdown rendering for LLM consumption",
     "docs": "https://docs.rs/toolpath-md",
     "crate": "https://crates.io/crates/toolpath-md",

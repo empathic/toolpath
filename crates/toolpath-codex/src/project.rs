@@ -30,12 +30,13 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Item, Result, Role, ToolInvocation, Turn,
+    Compaction, ConversationProjector, ConversationView, ConvoError, Item, Result, Role,
+    ToolInvocation, Turn,
 };
 
 use crate::types::{
-    ContentPart, CustomToolCall, CustomToolCallOutput, FunctionCall, FunctionCallOutput, Message,
-    Reasoning, RolloutLine, SessionMeta, TurnContext,
+    CompactedItem, ContentPart, CustomToolCall, CustomToolCallOutput, FunctionCall,
+    FunctionCallOutput, Message, Reasoning, RolloutLine, SessionMeta, TurnContext,
 };
 
 // ── CodexProjector ───────────────────────────────────────────────────
@@ -207,10 +208,10 @@ fn project_view(
     let group_last_idx = group_last_indices(view);
     let group_attributed = groups_with_attribution(view);
 
-    // Walk the full ordered item stream. Only turns project to rollout
-    // lines: events carry raw rollout payloads the projector re-derives
-    // from the turns themselves (session_meta, turn_context, token_count),
-    // so they are dropped rather than replayed.
+    // Walk the full ordered item stream. Turns and compaction boundaries
+    // project to rollout lines; events carry raw rollout payloads the
+    // projector re-derives from the turns themselves (session_meta,
+    // turn_context, token_count), so they are dropped rather than replayed.
     let mut turn_idx = 0usize;
     for (item_idx, item) in view.items.iter().enumerate() {
         if Some(item_idx) == opening_ctx_at {
@@ -250,7 +251,7 @@ fn project_view(
                 );
                 turn_idx += 1;
             }
-
+            Item::Compaction(c) => emit_compaction(c, &mut lines),
             Item::Event(_) => {}
         }
     }
@@ -379,6 +380,36 @@ fn make_turn_context_line(turn_id: &str, timestamp: &str, cwd: &str, model: &str
 /// reasonable defaults.
 fn codex_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
     None
+}
+
+/// Emit a `compacted` rollout line for a [`Compaction`] boundary — the
+/// inverse of `Builder::handle_compacted`. Codex's payload is
+/// `{message, replacement_history?, window_id?, …}`; only `summary` survives
+/// the forward path, so we round-trip it as `message` (defaulting to the
+/// empty string) and leave the other fields absent. The `compacted` line is
+/// followed by the `event_msg`/`context_compacted` marker Codex writes with
+/// every real compaction — the resumed TUI renders its "Context compacted"
+/// row from that event, not from the `compacted` line, so omitting it made
+/// projected resumes drop the visible boundary.
+fn emit_compaction(c: &Compaction, lines: &mut Vec<RolloutLine>) {
+    let payload = CompactedItem {
+        message: c.summary.clone().unwrap_or_default(),
+        replacement_history: None,
+        window_id: None,
+        extra: HashMap::new(),
+    };
+    lines.push(RolloutLine {
+        timestamp: c.timestamp.clone(),
+        kind: "compacted".to_string(),
+        payload: serde_json::to_value(&payload).unwrap_or(Value::Null),
+        extra: HashMap::new(),
+    });
+    lines.push(RolloutLine {
+        timestamp: c.timestamp.clone(),
+        kind: "event_msg".to_string(),
+        payload: json!({ "type": "context_compacted" }),
+        extra: HashMap::new(),
+    });
 }
 
 fn emit_turn_lines(

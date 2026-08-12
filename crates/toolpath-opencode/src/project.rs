@@ -6,13 +6,15 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    Compaction, CompactionTrigger, ConversationProjector, ConversationView, ConvoError, Result,
+    Role, ToolInvocation, Turn,
 };
 
 use crate::types::{
-    AssistantMessage, Message, MessageData, MessagePath, MessageTime, ModelRef, Part, PartData,
-    ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange, Tokens, ToolPart,
-    ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
+    AssistantMessage, CompactionPart, Message, MessageData, MessagePath, MessageTime, ModelRef,
+    Part, PartData, ReasoningPart, Session, StepFinishPart, StepStartPart, TextPart, TimeRange,
+    Tokens, ToolPart, ToolRunTime, ToolState, ToolStateCompleted, ToolStateError, UserMessage,
+    UserSummary,
 };
 
 const DEFAULT_AGENT: &str = "build";
@@ -147,6 +149,22 @@ fn project_view(
     let mut messages: Vec<Message> = Vec::new();
     let mut prev_msg_id: Option<String> = None;
     let mut counter: u32 = 0;
+    // IR turn id → the message id we re-mint for it, so a compaction's kept
+    // tail anchor (an IR turn id) can be rewritten to the id the projected
+    // session actually carries — otherwise `tailStartID` would dangle and the
+    // kept anchor would collapse to `None` on re-read.
+    let mut id_map: HashMap<String, String> = HashMap::new();
+    // Indexes (into `messages`) of boundary messages whose `tailStartID`
+    // couldn't be resolved to an already-projected message — wholesale
+    // boundaries (`kept_from: None`) and anchors with no projected turn
+    // before the boundary. Their `tailStartID` is the first message
+    // written after the boundary, patched in once it exists.
+    let mut wholesale_boundaries: Vec<usize> = Vec::new();
+    // IR id of the assistant turn that carries a boundary's summary text
+    // (opencode ≥ 1.17 writes the compaction summary as an assistant
+    // message flagged `summary: true`). Set when a compaction's summary
+    // matches the next turn's text; consumed when that turn is projected.
+    let mut pending_summary_turn: Option<String> = None;
 
     let default_provider = cfg
         .default_model_provider
@@ -157,10 +175,10 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
-    // Walk the ordered item stream. Only turns project to messages;
-    // events (including `part.compaction` boundaries) have no opencode
-    // message form on the return path and are dropped below.
-    for item in &view.items {
+    // Walk the ordered item stream so compaction boundaries land at their
+    // true position (between the turns they separate) — the inverse of the
+    // forward Builder, which reads `compaction` parts in message order.
+    for (idx, item) in view.items.iter().enumerate() {
         match item {
             toolpath_convo::Item::Turn(turn) => match turn.role {
                 Role::User => {
@@ -172,6 +190,7 @@ fn project_view(
                         &default_provider,
                         &default_model,
                     );
+                    id_map.insert(turn.id.clone(), msg.id.clone());
                     prev_msg_id = Some(msg.id.clone());
                     messages.push(msg);
                 }
@@ -179,7 +198,7 @@ fn project_view(
                     let parent = prev_msg_id
                         .clone()
                         .unwrap_or_else(|| mint_message_id(&session_id, counter));
-                    let msg = build_assistant_message(
+                    let mut msg = build_assistant_message(
                         turn,
                         &session_id,
                         &mut counter,
@@ -189,6 +208,13 @@ fn project_view(
                         &default_provider,
                         &default_model,
                     );
+                    if pending_summary_turn.as_deref() == Some(turn.id.as_str()) {
+                        pending_summary_turn = None;
+                        if let MessageData::Assistant(a) = &mut msg.data {
+                            a.summary = Some(true);
+                        }
+                    }
+                    id_map.insert(turn.id.clone(), msg.id.clone());
                     prev_msg_id = Some(msg.id.clone());
                     messages.push(msg);
                 }
@@ -199,9 +225,73 @@ fn project_view(
                     // UserMessage.system if needed.
                 }
             },
+            toolpath_convo::Item::Compaction(c) => {
+                // Inverse of the forward Builder's compaction handling:
+                // emit a synthetic compaction-bearing user message so a
+                // re-read reproduces the `Item::Compaction`. When the
+                // boundary carries a summary, either the next assistant
+                // turn already IS the summary (its text matches — the
+                // opencode ≥ 1.17 shape; mark it `summary: true` when it's
+                // projected) or we emit the synthetic summary user message
+                // the forward path reads from `UserMessage.summary.body`.
+                // Rewrite the kept anchor (an IR turn id) to the message id
+                // we minted for its turn — resolving forward past turns
+                // that project no message (see `resolve_tail_anchor`).
+                // When nothing before the boundary projects (wholesale, or
+                // a System-anchored run with no projectable turn), the
+                // boundary anchors on the first message written after it —
+                // patched in below — or omits `tailStartID` when nothing
+                // follows.
+                // Synthetic boundary/summary messages don't advance
+                // `prev_msg_id`: assistant turns parent on the previous
+                // conversational message, never on a marker message that
+                // won't re-read as a turn.
+                let tail_anchor = c
+                    .kept_from
+                    .as_ref()
+                    .and_then(|k| resolve_tail_anchor(k, view, &id_map));
+                if tail_anchor.is_none() {
+                    wholesale_boundaries.push(messages.len());
+                }
+                let summary_turn = c.summary.as_deref().and_then(|s| {
+                    view.items[idx + 1..]
+                        .iter()
+                        .find_map(toolpath_convo::Item::as_turn)
+                        .filter(|t| t.role == Role::Assistant && t.text == s)
+                        .map(|t| t.id.clone())
+                });
+                let emit_summary_message = summary_turn.is_none();
+                if summary_turn.is_some() {
+                    pending_summary_turn = summary_turn;
+                }
+                messages.extend(build_compaction_messages(
+                    c,
+                    tail_anchor,
+                    emit_summary_message,
+                    &session_id,
+                    &mut counter,
+                    &agent,
+                    &default_provider,
+                    &default_model,
+                ));
+            }
             toolpath_convo::Item::Event(_) => {
                 // Non-conversational events have no opencode message form;
                 // they're metadata that doesn't round-trip through parts.
+            }
+        }
+    }
+
+    for idx in wholesale_boundaries {
+        let next_id = match messages.get(idx + 1) {
+            Some(m) => m.id.clone(),
+            None => continue,
+        };
+        if let Some(msg) = messages.get_mut(idx) {
+            for part in &mut msg.parts {
+                if let PartData::Compaction(cp) = &mut part.data {
+                    cp.tail_start_id = Some(next_id.clone());
+                }
             }
         }
     }
@@ -331,6 +421,155 @@ fn build_user_message(
         data: MessageData::User(user),
         parts,
     }
+}
+
+/// Rewrite a compaction's kept anchor (an IR turn id) to a message id the
+/// projected session actually carries. A directly projected anchor maps
+/// through `id_map`; an anchor whose turn projects no message (System /
+/// Other roles) resolves forward to the first projected turn at-or-after
+/// it in the view's item order — a grown kept run is acceptable, a
+/// dangling foreign id is not. `None` when nothing at-or-after the anchor
+/// has been projected yet; the caller then patches in the first
+/// post-boundary message, or omits `tailStartID` when nothing follows.
+fn resolve_tail_anchor(
+    anchor: &str,
+    view: &ConversationView,
+    id_map: &HashMap<String, String>,
+) -> Option<String> {
+    if let Some(mapped) = id_map.get(anchor) {
+        return Some(mapped.clone());
+    }
+    let pos = view
+        .items
+        .iter()
+        .position(|i| matches!(i, toolpath_convo::Item::Turn(t) if t.id == anchor))?;
+    view.items[pos..]
+        .iter()
+        .filter_map(toolpath_convo::Item::as_turn)
+        .find_map(|t| id_map.get(&t.id).cloned())
+}
+
+/// Inverse of the forward Builder's `push_compaction`: project an
+/// [`Item::Compaction`] back into opencode messages so a re-read
+/// reproduces it.
+///
+/// opencode writes a compaction as a synthetic user message carrying a
+/// single `compaction` part. We mirror that: one user message whose only
+/// part is a [`CompactionPart`]. When the boundary has a `summary` and
+/// `emit_summary_message` is set (no assistant turn already carries the
+/// text), we also emit, immediately after, the synthetic summary user
+/// message the forward path pairs with this boundary via its
+/// `UserMessage.summary.body`.
+#[allow(clippy::too_many_arguments)]
+fn build_compaction_messages(
+    c: &Compaction,
+    tail_anchor: Option<String>,
+    emit_summary_message: bool,
+    session_id: &str,
+    counter: &mut u32,
+    agent: &str,
+    default_provider: &str,
+    default_model: &str,
+) -> Vec<Message> {
+    let time_created = parse_timestamp_ms(&c.timestamp).unwrap_or(0);
+    let model = ModelRef {
+        provider_id: default_provider.to_string(),
+        model_id: default_model.to_string(),
+        variant: None,
+    };
+
+    let mut out = Vec::new();
+
+    *counter += 1;
+    let msg_id = mint_message_id(session_id, *counter);
+    let user = UserMessage {
+        time: MessageTime {
+            created: time_created,
+            completed: None,
+        },
+        agent: agent.to_string(),
+        model: model.clone(),
+        format: None,
+        summary: Some(UserSummary {
+            title: None,
+            body: None,
+            diffs: vec![],
+            extra: HashMap::new(),
+        }),
+        system: None,
+        tools: None,
+        extra: HashMap::new(),
+    };
+
+    *counter += 1;
+    let compaction_part = Part {
+        id: mint_part_id(session_id, *counter),
+        message_id: msg_id.clone(),
+        session_id: session_id.to_string(),
+        time_created,
+        time_updated: time_created,
+        data: PartData::Compaction(CompactionPart {
+            auto: c.trigger == Some(CompactionTrigger::Auto),
+            overflow: None,
+            // The kept tail anchors on the earliest surviving turn — already
+            // rewritten by the caller to the message id this projection minted
+            // for it, so the `tailStartID` wire key resolves on re-read.
+            tail_start_id: tail_anchor,
+            extra: HashMap::new(),
+        }),
+    };
+
+    out.push(Message {
+        id: msg_id,
+        session_id: session_id.to_string(),
+        time_created,
+        time_updated: time_created,
+        data: MessageData::User(user),
+        parts: vec![compaction_part],
+    });
+
+    if let Some(summary) = c
+        .summary
+        .as_ref()
+        .filter(|s| !s.is_empty() && emit_summary_message)
+    {
+        // The summary message must sort strictly AFTER the compaction message
+        // so the reader (which orders by `(time_created ASC, id ASC)`) sees the
+        // boundary first and pairs this summary with it. Sharing `time_created`
+        // would leave the order to the non-monotonic minted ids — dropping the
+        // summary whenever it happened to sort first.
+        let summary_time = time_created + 1;
+        *counter += 1;
+        let summary_msg_id = mint_message_id(session_id, *counter);
+        let summary_user = UserMessage {
+            time: MessageTime {
+                created: summary_time,
+                completed: None,
+            },
+            agent: agent.to_string(),
+            model,
+            format: None,
+            summary: Some(UserSummary {
+                title: None,
+                body: Some(summary.clone()),
+                diffs: vec![],
+                extra: HashMap::new(),
+            }),
+            system: None,
+            tools: None,
+            extra: HashMap::new(),
+        };
+        out.push(Message {
+            id: summary_msg_id,
+            session_id: session_id.to_string(),
+            time_created: summary_time,
+            time_updated: summary_time,
+            data: MessageData::User(summary_user),
+            parts: Vec::new(),
+        });
+    }
+
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -852,6 +1091,205 @@ mod tests {
             .unwrap();
         assert!(s.id.starts_with("ses_"));
         assert!(s.messages.is_empty());
+    }
+
+    #[test]
+    fn compaction_summary_and_kept_anchor_survive_projection() {
+        use toolpath_convo::Item;
+        // A compaction with a summary and a kept tail anchored on the
+        // assistant turn `a1`. The projector must (a) rewrite the anchor to
+        // the message id it mints for `a1` (not the raw IR id, which no
+        // projected message carries), and (b) give the summary message a
+        // strictly-later timestamp so the reader — which orders by
+        // (time_created, id) — pairs it with the boundary instead of dropping
+        // it on a hash-id tie.
+        let mut view = view_with(vec![user_turn("first"), assistant_turn("ans")]);
+        view.items.push(Item::Compaction(Compaction {
+            id: "c".into(),
+            parent_id: Some("a1".into()),
+            timestamp: "2026-04-21T12:00:02.000Z".into(),
+            trigger: Some(CompactionTrigger::Auto),
+            summary: Some("condensed".into()),
+            pre_tokens: None,
+            kept_from: Some("a1".into()),
+        }));
+
+        let s = OpencodeProjector::default().project(&view).unwrap();
+
+        let assistant_id = s
+            .messages
+            .iter()
+            .find(|m| matches!(m.data, MessageData::Assistant(_)))
+            .map(|m| m.id.clone())
+            .expect("assistant message");
+
+        let comp_msg = s
+            .messages
+            .iter()
+            .find(|m| {
+                m.parts
+                    .iter()
+                    .any(|p| matches!(p.data, PartData::Compaction(_)))
+            })
+            .expect("compaction-bearing message");
+        let cp = comp_msg
+            .parts
+            .iter()
+            .find_map(|p| match &p.data {
+                PartData::Compaction(cp) => Some(cp),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            cp.tail_start_id.as_deref(),
+            Some(assistant_id.as_str()),
+            "kept anchor rewritten to the minted message id"
+        );
+
+        let summary_msg = s
+            .messages
+            .iter()
+            .find(|m| match &m.data {
+                MessageData::User(u) => {
+                    u.summary.as_ref().and_then(|sm| sm.body.as_ref()).is_some()
+                }
+                _ => false,
+            })
+            .expect("summary message");
+        assert!(
+            summary_msg.time_created > comp_msg.time_created,
+            "summary must sort after the compaction message"
+        );
+    }
+
+    #[test]
+    fn system_anchored_kept_from_resolves_forward_to_projected_turn() {
+        use toolpath_convo::Item;
+        // The kept anchor names a System-role turn — a role opencode can't
+        // project, so the anchor has no minted message id. It must resolve
+        // FORWARD to the first projected turn at-or-after it (keep-more),
+        // never write the raw IR id into `tailStartID` as a dangling
+        // foreign id.
+        let mut sys = user_turn("branch context");
+        sys.id = "sys1".into();
+        sys.role = Role::System;
+        let mut u1 = user_turn("first");
+        u1.parent_id = Some("sys1".into());
+        u1.timestamp = "2026-04-21T12:00:01.000Z".into();
+        let mut a1 = assistant_turn("ans");
+        a1.parent_id = Some("u1".into());
+        a1.timestamp = "2026-04-21T12:00:02.000Z".into();
+        let mut view = view_with(vec![sys, u1, a1]);
+        view.items.push(Item::Compaction(Compaction {
+            id: "c".into(),
+            parent_id: Some("a1".into()),
+            timestamp: "2026-04-21T12:00:03.000Z".into(),
+            trigger: Some(CompactionTrigger::Auto),
+            summary: None,
+            pre_tokens: None,
+            kept_from: Some("sys1".into()),
+        }));
+        let mut u2 = user_turn("after");
+        u2.id = "u2".into();
+        u2.parent_id = Some("c".into());
+        u2.timestamp = "2026-04-21T12:00:04.000Z".into();
+        view.items.push(Item::Turn(u2));
+
+        let s = OpencodeProjector::default().project(&view).unwrap();
+
+        let first_msg_id = s.messages.first().map(|m| m.id.clone()).unwrap();
+        let cp = s
+            .messages
+            .iter()
+            .flat_map(|m| m.parts.iter())
+            .find_map(|p| match &p.data {
+                PartData::Compaction(cp) => Some(cp),
+                _ => None,
+            })
+            .expect("compaction part");
+        assert_eq!(
+            cp.tail_start_id.as_deref(),
+            Some(first_msg_id.as_str()),
+            "anchor resolves forward to u1's minted message id"
+        );
+
+        let reread = crate::provider::to_view(&s);
+        let c = reread.compactions().next().expect("boundary survives");
+        let kept = toolpath_convo::expand_kept(&reread.items, c);
+        let kept_texts: Vec<&str> = kept
+            .iter()
+            .map(|id| reread.turns().find(|t| &t.id == id).unwrap().text.as_str())
+            .collect();
+        assert_eq!(
+            kept_texts,
+            vec!["first", "ans"],
+            "the re-read kept run covers every projectable original kept turn"
+        );
+        assert!(
+            toolpath_convo::testing::check_view_invariants(&reread).is_empty(),
+            "invariants must accept the re-read view"
+        );
+    }
+
+    #[test]
+    fn system_anchor_with_no_prior_projected_turn_patches_past_boundary() {
+        use toolpath_convo::Item;
+        // Nothing between the System anchor and the boundary projects; the
+        // anchor patches forward to the first post-boundary message (still
+        // a real projected message at-or-after the anchor).
+        let mut sys = user_turn("branch context");
+        sys.id = "sys1".into();
+        sys.role = Role::System;
+        let boundary = Compaction {
+            id: "c".into(),
+            parent_id: Some("sys1".into()),
+            timestamp: "2026-04-21T12:00:01.000Z".into(),
+            trigger: Some(CompactionTrigger::Auto),
+            summary: None,
+            pre_tokens: None,
+            kept_from: Some("sys1".into()),
+        };
+        let mut u2 = user_turn("after");
+        u2.id = "u2".into();
+        u2.parent_id = Some("c".into());
+        u2.timestamp = "2026-04-21T12:00:02.000Z".into();
+
+        let mut view = view_with(vec![sys.clone()]);
+        view.items.push(Item::Compaction(boundary.clone()));
+        view.items.push(Item::Turn(u2));
+        let s = OpencodeProjector::default().project(&view).unwrap();
+        let u2_msg_id = s
+            .messages
+            .iter()
+            .find(|m| m.parts.iter().any(|p| matches!(p.data, PartData::Text(_))))
+            .map(|m| m.id.clone())
+            .expect("post-boundary user message");
+        let cp = s
+            .messages
+            .iter()
+            .flat_map(|m| m.parts.iter())
+            .find_map(|p| match &p.data {
+                PartData::Compaction(cp) => Some(cp),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(cp.tail_start_id.as_deref(), Some(u2_msg_id.as_str()));
+
+        // With nothing at-or-after the anchor at all, `tailStartID` is
+        // omitted rather than left dangling.
+        let mut view = view_with(vec![sys]);
+        view.items.push(Item::Compaction(boundary));
+        let s = OpencodeProjector::default().project(&view).unwrap();
+        let cp = s
+            .messages
+            .iter()
+            .flat_map(|m| m.parts.iter())
+            .find_map(|p| match &p.data {
+                PartData::Compaction(cp) => Some(cp),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(cp.tail_start_id, None);
     }
 
     #[test]

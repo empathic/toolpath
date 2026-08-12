@@ -330,17 +330,23 @@ equivalent.
   "logicalParentUuid": "...",             // the real prior message UUID
   "compactMetadata": {
     "trigger": "auto",                    // or "manual"
-    "preTokens": 180000
+    "preTokens": 1008497,
+    "postTokens": 11528,                  // 2.1.x
+    "preservedSegment": { "headUuid": "...", "anchorUuid": "...", "tailUuid": "..." },
+    "preservedMessages": { "anchorUuid": "...", "uuids": ["..."] }
   },
   ...
 }
 ```
 
-Immediately followed by a synthetic `user`-role message with
-`isCompactSummary: true` and `isVisibleInTranscriptOnly: true`
-carrying the compacted summary as its content. See
-[session-chains.md](session-chains.md) for how this interacts with
-file rotation.
+`compactMetadata` in current 2.1.x enumerates the verbatim-kept recent
+tail (`preservedSegment` / `preservedMessages`); older versions carry
+only `{trigger, preTokens}`. Immediately followed by a synthetic
+`user`-role message with `isCompactSummary: true` and
+`isVisibleInTranscriptOnly: true` carrying the compacted summary as its
+content. See [session-chains.md](session-chains.md) for how this
+interacts with file rotation, and for the **duplicate-UUID
+re-emission** that can accompany a compaction.
 
 ---
 

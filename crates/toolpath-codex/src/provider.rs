@@ -42,9 +42,9 @@ use crate::types::{
 };
 use serde_json::Value;
 use toolpath_convo::{
-    ConversationEvent, ConversationMeta, ConversationProvider, ConversationView, ConvoError,
-    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
-    ToolCategory, ToolInvocation, ToolResult, Turn,
+    Compaction, ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
+    ConvoError, EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase,
+    TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Provider for Codex sessions.
@@ -188,13 +188,23 @@ pub fn to_turn(line_payload: &ResponseItem) -> Option<Turn> {
     }
 }
 
+/// A non-turn stream entry captured during the walk: a generic event or
+/// a typed compaction boundary.
+enum Pending {
+    Event(ConversationEvent),
+    Compaction(Compaction),
+}
+
 struct Builder<'a> {
     session: &'a Session,
     turns: Vec<Turn>,
-    /// Events paired with a turn watermark: the number of turns already
-    /// pushed when the event arrived. Assembly merges the two streams on
-    /// that watermark so `items` preserves the rollout's interleaving.
-    events: Vec<(usize, ConversationEvent)>,
+    /// Non-turn entries (events and compaction boundaries) paired with a
+    /// turn watermark: the number of turns already pushed when the entry
+    /// arrived. Assembly merges the two streams on that watermark so
+    /// `items` preserves the rollout's interleaving.
+    pending: Vec<(usize, Pending)>,
+    /// Running count of `compacted` markers, used to synthesize stable ids.
+    compact_count: usize,
     /// Plaintext reasoning summaries (rare — only in configurations where
     /// OpenAI exposes public reasoning). These land on `Turn.thinking`.
     pending_reasoning_plaintext: Vec<String>,
@@ -219,7 +229,8 @@ impl<'a> Builder<'a> {
         Self {
             session,
             turns: Vec::new(),
-            events: Vec::new(),
+            pending: Vec::new(),
+            compact_count: 0,
             pending_reasoning_plaintext: Vec::new(),
             current_round_id: None,
             pending_attributed: None,
@@ -237,7 +248,7 @@ impl<'a> Builder<'a> {
     /// watermark (turns pushed so far) is where the event sits relative to
     /// the turns when `build` merges the two streams back together.
     fn push_event(&mut self, event: ConversationEvent) {
-        self.events.push((self.turns.len(), event));
+        self.pending.push((self.turns.len(), Pending::Event(event)));
     }
 
     fn build(mut self) -> ConversationView {
@@ -274,10 +285,7 @@ impl<'a> Builder<'a> {
                     self.push_event(event_from_raw(&line.timestamp, "session_state", &payload));
                 }
                 RolloutItem::Compacted(payload) => {
-                    // Context-compaction markers ride as generic events for
-                    // now; typed boundary support builds on this in the
-                    // compaction-provenance work.
-                    self.push_event(event_from_raw(&line.timestamp, "compacted", &payload));
+                    self.handle_compacted(&line.timestamp, &payload);
                 }
                 RolloutItem::Unknown { kind, payload } => {
                     self.push_event(event_from_raw(&line.timestamp, &kind, &payload));
@@ -326,7 +334,7 @@ impl<'a> Builder<'a> {
         // Filter empty carrier turns (no text, no thinking, no tool calls).
         // Previously done inside `derive_path_from_view`; moved here so the
         // canonical `derive_path` sees only meaningful turns. We compute a
-        // keep-mask instead of `retain`-ing in place so the event watermarks
+        // keep-mask instead of `retain`-ing in place so the watermarks
         // (which index the unfiltered turn stream) stay valid. A turn that
         // carries token accounting is NOT empty: `finalize_usage` (above) may
         // have stamped a group's total `token_usage` onto an otherwise-bare
@@ -375,35 +383,54 @@ impl<'a> Builder<'a> {
         // `<event_type>-<timestamp>`, which collides when codex emits
         // multiple events of the same type at the same timestamp (rare
         // but real). Suffix duplicates with their position so each step
-        // gets a unique id.
+        // gets a unique id. Compaction ids (`compact-<n>`) are unique by
+        // construction and are reserved first so events can't collide with
+        // them either.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for id in turn_final_id.iter().flatten() {
             seen.insert(id.clone());
         }
-        for (i, (_, e)) in self.events.iter_mut().enumerate() {
+        for (_, p) in &self.pending {
+            if let Pending::Compaction(c) = p {
+                seen.insert(c.id.clone());
+            }
+        }
+        for (i, (_, p)) in self.pending.iter_mut().enumerate() {
+            let Pending::Event(e) = p else { continue };
             if !seen.insert(e.id.clone()) {
                 e.id = format!("{}-{:04}", e.id, i);
                 seen.insert(e.id.clone());
             }
         }
 
-        // Merge the two streams back into rollout order. An event's
+        // Merge the two streams back into rollout order. An entry's
         // watermark `w` means it arrived after turn `w - 1` and before
-        // turn `w`, so it flushes ahead of turn `w`; events past the last
+        // turn `w`, so it flushes ahead of turn `w`; entries past the last
         // turn drain at the end. Watermarks are nondecreasing (both vecs
-        // are append-only), so a single forward pass suffices.
-        let mut items: Vec<Item> = Vec::with_capacity(self.turns.len() + self.events.len());
-        let mut events = self.events.into_iter().peekable();
+        // are append-only), so a single forward pass suffices. A flushed
+        // compaction resolves its `parent_id` to the nearest surviving
+        // turn at or before its marker, so the boundary hangs off the real
+        // prior turn even when empty carriers around it were dropped.
+        let mut items: Vec<Item> = Vec::with_capacity(self.turns.len() + self.pending.len());
+        let to_item = |(w, p): (usize, Pending)| match p {
+            Pending::Event(e) => Item::Event(e),
+            Pending::Compaction(mut c) => {
+                c.parent_id = resolve_surviving_turn(w.checked_sub(1), &keep)
+                    .and_then(|idx| turn_final_id[idx].clone());
+                Item::Compaction(c)
+            }
+        };
+        let mut pending = self.pending.into_iter().peekable();
         for (idx, turn) in self.turns.into_iter().enumerate() {
-            while events.peek().is_some_and(|(w, _)| *w <= idx) {
-                items.push(Item::Event(events.next().unwrap().1));
+            while pending.peek().is_some_and(|(w, _)| *w <= idx) {
+                items.push(to_item(pending.next().unwrap()));
             }
             if !keep[idx] {
                 continue;
             }
             items.push(Item::Turn(turn));
         }
-        items.extend(events.map(|(_, e)| Item::Event(e)));
+        items.extend(pending.map(to_item));
 
         ConversationView {
             id: self.session.id.clone(),
@@ -661,6 +688,42 @@ impl<'a> Builder<'a> {
         self.turns.push(turn);
     }
 
+    /// Map a Codex `compacted` marker to a [`Compaction`], recorded on the
+    /// watermarked stream at its source position. Only `message`
+    /// is consumed (as `summary`), and only when non-empty. Observed at
+    /// 0.5x-era Codex (2026-07): the payload grew
+    /// `{window_id, first_window_id, previous_window_id, window_number,
+    /// replacement_history}`; `message` is empty, the real summary lives in
+    /// `replacement_history` as a `compaction` entry with
+    /// `encrypted_content` (unrecoverable), and the surviving turns in
+    /// `replacement_history` are a *prefix*-keep (the first user message) —
+    /// not representable by the suffix-anchored `kept_from` contract. So
+    /// `trigger`/`pre_tokens`/`kept_from` stay `None` (wholesale) and the
+    /// window bookkeeping is deliberately not carried. The marker has no id
+    /// of its own; we synthesize a stable `compact-<n>`.
+    /// See `docs/agents/formats/codex.md`.
+    fn handle_compacted(&mut self, timestamp: &str, payload: &Value) {
+        self.compact_count += 1;
+        let summary = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let compaction = Compaction {
+            id: format!("compact-{}", self.compact_count),
+            parent_id: None,
+            timestamp: timestamp.to_string(),
+            trigger: None,
+            summary,
+            pre_tokens: None,
+            kept_from: None,
+        };
+        // Watermarked like events; `parent_id` resolves during assembly to
+        // the nearest surviving turn at or before this marker.
+        self.pending
+            .push((self.turns.len(), Pending::Compaction(compaction)));
+    }
+
     fn drain_pending_onto(&mut self, turn: &mut Turn) {
         if turn.role != Role::Assistant {
             return;
@@ -767,6 +830,21 @@ impl<'a> Builder<'a> {
             .iter()
             .rposition(|t| t.role == Role::Assistant)
             .or_else(|| self.turns.len().checked_sub(1))
+    }
+}
+
+/// Walk backward from the buffer index of the turn preceding a compaction
+/// marker (its watermark minus one) to the nearest surviving turn at or
+/// before it. Empty carrier turns are filtered out before assembly, so a
+/// dropped predecessor falls through to the real prior turn the boundary
+/// hangs off of. `None` means the marker preceded every surviving turn.
+fn resolve_surviving_turn(prev_turn: Option<usize>, keep: &[bool]) -> Option<usize> {
+    let mut idx = prev_turn?;
+    loop {
+        if keep.get(idx).copied().unwrap_or(false) {
+            return Some(idx);
+        }
+        idx = idx.checked_sub(1)?;
     }
 }
 

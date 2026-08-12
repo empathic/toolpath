@@ -12,7 +12,8 @@ use crate::types::{
 use serde_json::json;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    Compaction, CompactionTrigger, ConversationProjector, ConversationView, ConvoError, Result,
+    Role, ToolInvocation, Turn,
 };
 
 // ── ClaudeProjector ───────────────────────────────────────────────────
@@ -135,6 +136,30 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     for item in &view.items {
         let turn = match item {
             toolpath_convo::Item::Turn(t) => t,
+            toolpath_convo::Item::Compaction(c) => {
+                // Emit the boundary (+ summary) that `to_view` re-folds into
+                // this `Item::Compaction`. The preserved set rides in
+                // compactMetadata.preservedMessages, which is how re-read
+                // recovers it.
+                let effective_parent = c
+                    .parent_id
+                    .as_ref()
+                    .and_then(|pid| parent_rewrites.get(pid).cloned())
+                    .or_else(|| c.parent_id.clone());
+                let entries = compaction_entries(c, &view.id, effective_parent, &view.items);
+                let summary_uuid = entries.get(1).map(|e| e.uuid.clone());
+                for entry in entries {
+                    convo.add_entry(entry);
+                }
+                // Claude's wire convention chains the first post-boundary
+                // entry through the synthetic summary (boundary ← summary ←
+                // first-post-entry), so IR parents pointing at the boundary
+                // must be redirected to the summary we just emitted.
+                if let Some(summary_uuid) = summary_uuid {
+                    parent_rewrites.insert(c.id.clone(), summary_uuid);
+                }
+                continue;
+            }
             toolpath_convo::Item::Event(event) => {
                 if event.data.contains_key("raw")
                     || event.event_type == TOOL_RESULT_USER_EVENT
@@ -246,6 +271,160 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     }
 
     Ok(convo)
+}
+
+/// Inverse of [`crate::provider::compaction_from_boundary`]: turn an
+/// [`Item::Compaction`](toolpath_convo::Item) back into the on-disk entries
+/// Claude writes for a compaction, so re-reading re-detects the same
+/// compaction with the same preserved set.
+///
+/// Emits the boundary (`type: "system"`, `subtype: "compact_boundary"`)
+/// carrying `logicalParentUuid` and `compactMetadata.{trigger, preTokens,
+/// preservedMessages}` in `extra` — where [`crate::provider::is_compact_boundary`]
+/// and `compaction_from_boundary` read them. `preservedMessages.uuids` is
+/// [`toolpath_convo::expand_kept`] — the contiguous kept tail named by
+/// `kept_from` (the compaction contract carries nothing richer). Then the
+/// synthetic summary (`type: "user"`, `isCompactSummary: true`,
+/// `parentUuid` = boundary), only when `summary` is `Some`.
+///
+/// Both entries also get the invariant wire constants real boundaries carry
+/// (`content: "Conversation compacted"`, `level: "info"`, `isMeta: false`,
+/// `userType: "external"`, explicit `parentUuid: null` on the boundary) and
+/// `cwd`/`gitBranch` from the parent turn's environment — the same
+/// [`apply_turn_metadata`] mechanism ordinary turns use. Fields the closed IR
+/// doesn't carry (`compactMetadata.{durationMs, postTokens, preservedSegment,
+/// anchorUuid, allUuids}`, the summary's own timestamp, `version`,
+/// `entrypoint`, `slug`) are not reconstructed; that loss is by design.
+///
+/// Preserved turns are NOT re-logged as a replay block. Claude's resume
+/// rebuilds context from the summary plus post-boundary turns only — anything
+/// before the boundary's `parentUuid: null` is unreachable — so a replay is
+/// dead weight (a resume test confirmed it changes nothing), and the preserved
+/// set already round-trips through `preservedMessages`.
+///
+/// `effective_parent` is the boundary's logical parent after any tool-result
+/// parent rewrites — it lands in the entry's top-level `logicalParentUuid`.
+fn compaction_entries(
+    c: &Compaction,
+    session_id: &str,
+    effective_parent: Option<String>,
+    items: &[toolpath_convo::Item],
+) -> Vec<ConversationEntry> {
+    let mut entries: Vec<ConversationEntry> = Vec::new();
+
+    let mut compact_metadata = serde_json::Map::new();
+    if let Some(trigger) = c.trigger {
+        let s = match trigger {
+            CompactionTrigger::Auto => "auto",
+            CompactionTrigger::Manual => "manual",
+        };
+        compact_metadata.insert("trigger".into(), json!(s));
+    }
+    if let Some(pre_tokens) = c.pre_tokens {
+        compact_metadata.insert("preTokens".into(), json!(pre_tokens));
+    }
+    let preserved: Vec<String> = toolpath_convo::expand_kept(items, c);
+    if !preserved.is_empty() {
+        compact_metadata.insert("preservedMessages".into(), json!({ "uuids": preserved }));
+    }
+
+    let mut boundary_extra: HashMap<String, serde_json::Value> = HashMap::new();
+    boundary_extra.insert("subtype".into(), json!("compact_boundary"));
+    if let Some(parent) = &effective_parent {
+        boundary_extra.insert("logicalParentUuid".into(), json!(parent));
+    }
+    boundary_extra.insert(
+        "compactMetadata".into(),
+        serde_json::Value::Object(compact_metadata),
+    );
+    // Invariant wire constants on every real boundary entry.
+    boundary_extra.insert("content".into(), json!("Conversation compacted"));
+    boundary_extra.insert("level".into(), json!("info"));
+    boundary_extra.insert("isMeta".into(), json!(false));
+    // The boundary's own parentUuid is always null on the wire (the logical
+    // parent rides in logicalParentUuid) — and explicitly null, not omitted.
+    // `parent_uuid: None` skips the key, so the explicit null goes through
+    // `extra`; on re-read the flatten consumes it back into `parent_uuid`.
+    boundary_extra.insert("parentUuid".into(), serde_json::Value::Null);
+
+    // The IR's Compaction carries no environment of its own; a real
+    // boundary is stamped with the session's cwd/gitBranch like any other
+    // entry, so borrow the parent turn's environment via the same
+    // mechanism ordinary turns use.
+    let parent_turn = c.parent_id.as_deref().and_then(|pid| {
+        items.iter().find_map(|item| match item {
+            toolpath_convo::Item::Turn(t) if t.id == pid => Some(t),
+            _ => None,
+        })
+    });
+
+    let mut boundary = ConversationEntry {
+        uuid: c.id.clone(),
+        parent_uuid: None,
+        is_sidechain: false,
+        entry_type: "system".to_string(),
+        timestamp: c.timestamp.clone(),
+        session_id: Some(session_id.to_string()),
+        cwd: None,
+        git_branch: None,
+        message: None,
+        version: None,
+        user_type: Some("external".to_string()),
+        request_id: None,
+        tool_use_result: None,
+        snapshot: None,
+        message_id: None,
+        extra: boundary_extra,
+    };
+    if let Some(turn) = parent_turn {
+        apply_turn_metadata(&mut boundary, turn);
+    }
+
+    entries.push(boundary);
+
+    if let Some(summary) = &c.summary {
+        let mut summary_extra: HashMap<String, serde_json::Value> = HashMap::new();
+        summary_extra.insert("isCompactSummary".into(), json!(true));
+        // Real boundaries also mark the summary transcript-only; without it
+        // the TUI renders the entire summary text inline on resume instead
+        // of collapsing it behind the "Compacted" indicator (verified
+        // against claude 2.1.216 by resuming a projected session).
+        summary_extra.insert("isVisibleInTranscriptOnly".into(), json!(true));
+
+        let mut summary_entry = ConversationEntry {
+            uuid: format!("{}-summary", c.id),
+            parent_uuid: Some(c.id.clone()),
+            is_sidechain: false,
+            entry_type: "user".to_string(),
+            timestamp: c.timestamp.clone(),
+            session_id: Some(session_id.to_string()),
+            cwd: None,
+            git_branch: None,
+            message: Some(Message {
+                role: MessageRole::User,
+                content: Some(MessageContent::Text(summary.clone())),
+                model: None,
+                id: None,
+                message_type: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+            }),
+            version: None,
+            user_type: Some("external".to_string()),
+            request_id: None,
+            tool_use_result: None,
+            snapshot: None,
+            message_id: None,
+            extra: summary_extra,
+        };
+        if let Some(turn) = parent_turn {
+            apply_turn_metadata(&mut summary_entry, turn);
+        }
+        entries.push(summary_entry);
+    }
+
+    entries
 }
 
 /// Rebuild a Claude tool-result user entry verbatim from a preserved event.
@@ -1718,5 +1897,69 @@ mod tests {
         assert!(!json_str.contains("\"userType\""));
         assert!(!json_str.contains("\"requestId\""));
         assert!(!json_str.contains("\"gitBranch\""));
+    }
+
+    // ── Compaction entries carry the invariant wire fields ────────────
+
+    #[test]
+    fn test_compaction_entries_carry_wire_constants_and_parent_metadata() {
+        let mut pre = user_turn("u1", "before");
+        pre.environment = Some(EnvironmentSnapshot {
+            working_dir: Some("/project".to_string()),
+            vcs_branch: Some("main".to_string()),
+            vcs_revision: None,
+        });
+        let mut post = user_turn("u2", "after");
+        post.parent_id = Some("b1".to_string());
+        let compaction = toolpath_convo::Compaction {
+            id: "b1".to_string(),
+            parent_id: Some("u1".to_string()),
+            timestamp: "2024-01-01T00:00:02Z".to_string(),
+            trigger: Some(toolpath_convo::CompactionTrigger::Manual),
+            summary: Some("summary text".to_string()),
+            pre_tokens: Some(1000),
+            kept_from: None,
+        };
+        let mut view = make_view("sess-1", vec![pre]);
+        view.items
+            .push(toolpath_convo::Item::Compaction(compaction));
+        view.items.push(toolpath_convo::Item::Turn(post));
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+        let boundary = convo
+            .entries
+            .iter()
+            .find(|e| e.uuid == "b1")
+            .expect("boundary entry");
+
+        assert_eq!(
+            boundary.extra.get("content"),
+            Some(&json!("Conversation compacted"))
+        );
+        assert_eq!(boundary.extra.get("level"), Some(&json!("info")));
+        assert_eq!(boundary.extra.get("isMeta"), Some(&json!(false)));
+        assert_eq!(boundary.user_type.as_deref(), Some("external"));
+        assert_eq!(boundary.cwd.as_deref(), Some("/project"));
+        assert_eq!(boundary.git_branch.as_deref(), Some("main"));
+
+        // parentUuid must serialize as an explicit null, not an omitted key.
+        let json_str = serde_json::to_string(boundary).unwrap();
+        assert!(json_str.contains("\"parentUuid\":null"));
+
+        let summary = convo
+            .entries
+            .iter()
+            .find(|e| e.uuid == "b1-summary")
+            .expect("summary entry");
+        assert_eq!(summary.parent_uuid.as_deref(), Some("b1"));
+        assert_eq!(summary.user_type.as_deref(), Some("external"));
+        assert_eq!(summary.cwd.as_deref(), Some("/project"));
+        assert_eq!(summary.git_branch.as_deref(), Some("main"));
+
+        // On re-read the flatten consumes the explicit null back into
+        // `parent_uuid`; the extra map must not accumulate the key.
+        let reread: ConversationEntry = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(reread.parent_uuid, None);
+        assert!(!reread.extra.contains_key("parentUuid"));
     }
 }
