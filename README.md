@@ -17,8 +17,11 @@ one format and writes them back. With everything in one format you can:
   in Codex.
 - **An archive you control.** `path p cache sync` incrementally ingests
   every session on the machine into plain JSON under `~/.toolpath/`.
-- **Unified tooling.** Run one `jq` filter over every session on the
-  machine with `path query`, regardless of which agent wrote it.
+- **Unified tooling.** A tool written against one schema works for
+  every harness at once, instead of needing a parser per agent.
+  `path query` is the built-in example: it searches and aggregates
+  across every session on the machine, whoever wrote them, using jq
+  filters.
 - **Token accounting.** Real session totals, per-step attribution where
   the source reports it, and reasoning breakdowns, even though every
   provider reports usage differently.
