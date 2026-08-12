@@ -206,20 +206,16 @@ ancestry of `path.head`.
 
 ## Supported harnesses
 
-Every harness below is supported end to end: the `path` CLI reads its
-sessions, writes them back, and resumes them in place. What varies is
-how much detail each harness's own log records. Toolpath recovers
-everything the log contains.
+**Claude Code** · **Gemini CLI** · **Codex CLI** ·
+**Copilot CLI** <em>(preview)</em> · **opencode** ·
+**Cursor** <em>(the IDE; not yet the cursor-agent CLI)</em> · **Pi**
 
-| Harness | What changed | What it cost |
-|---|---|---|
-| Claude Code | rebuilt from tool calls | exact totals per message |
-| Gemini CLI | rebuilt from tool calls | exact totals, reasoning itemized |
-| Codex CLI | exact diffs from the log | exact, attributed per step |
-| Copilot CLI <em>(preview)</em> | exact diffs from the log | session totals |
-| opencode | exact diffs from snapshots | exact totals, reasoning itemized |
-| Cursor (IDE) | exact before/after files | only when the log has them |
-| Pi | rebuilt from tool calls | only when the log has them |
+Parsing captures the full session: prompts, tool calls, reasoning,
+file changes, sub-agent work, token usage. Projecting writes a session
+the harness accepts as its own, so it resumes natively. Where a
+harness's log genuinely doesn't record something, the gap is
+documented in the [format notes]({{ site.repo }}/tree/main/docs/agents/formats)
+rather than papered over.
 
 Git history and GitHub pull requests parse into the same schema, so a
 session, the PR it became, and the release that shipped it can share
