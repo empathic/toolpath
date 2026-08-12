@@ -8,10 +8,9 @@ nav: home
   <div class="hero-content">
     <h1>Toolpath</h1>
     <p class="tagline">
-      <strong>An open format for coding-agent sessions.</strong> One schema
-      for what an agent did, why, what it tried that didn't work, and what
-      it cost. Read any harness's sessions, query them together, share
-      them, resume them anywhere.
+      <strong>The open session format.</strong> What your coding agent did,
+      why, what it tried, and what it cost, in one portable schema. Read
+      it, query it, share it, resume it in any harness.
     </p>
     <div class="hero-install">
       <div class="install-option">
@@ -85,9 +84,9 @@ And once the change lands, git loses the rest. When Claude writes code,
 everything to the human's commit. Dead ends disappear. Tool contributions
 collapse into whoever typed `git commit`.
 
-Toolpath reads every harness's sessions into one open schema that records
-**who** changed **what**, **why**, what they tried that didn't work, and
-what it cost.
+Toolpath fixes both. It is the open session format: every harness's
+sessions in one portable schema that records **who** changed **what**,
+**why**, what they tried that didn't work, and what it cost.
 
 ## Supported harnesses
 

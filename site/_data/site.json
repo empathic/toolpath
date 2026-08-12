@@ -1,5 +1,5 @@
 {
   "title": "Toolpath",
-  "description": "A format for artifact transformation provenance",
+  "description": "The open, portable session format for coding agents",
   "repo": "https://github.com/empathic/toolpath"
 }
