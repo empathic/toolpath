@@ -207,13 +207,13 @@ ancestry of `path.head`.
 ## Supported harnesses
 
 <ul class="harness-list">
-  <li><a href="{{ site.repo }}/tree/main/docs/agents/formats/claude-code">Claude Code</a></li>
-  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/gemini.md">Gemini CLI</a></li>
-  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/codex.md">Codex CLI</a></li>
-  <li><a href="{{ site.repo }}/tree/main/docs/agents/formats/copilot-cli">Copilot CLI <em>(preview)</em></a></li>
-  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/opencode.md">opencode</a></li>
-  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/pi.md">Pi</a></li>
-  <li><a href="{{ site.repo }}/blob/main/docs/agents/formats/cursor.md">Cursor IDE</a></li>
+  <li><a href="https://docs.rs/toolpath-claude">Claude Code</a></li>
+  <li><a href="https://docs.rs/toolpath-gemini">Gemini CLI</a></li>
+  <li><a href="https://docs.rs/toolpath-codex">Codex CLI</a></li>
+  <li><a href="https://docs.rs/toolpath-copilot">Copilot CLI <em>(preview)</em></a></li>
+  <li><a href="https://docs.rs/toolpath-opencode">opencode</a></li>
+  <li><a href="https://docs.rs/toolpath-pi">Pi</a></li>
+  <li><a href="https://docs.rs/toolpath-cursor">Cursor IDE</a></li>
 </ul>
 
 Parsing captures the full session: prompts, tool calls, reasoning,
