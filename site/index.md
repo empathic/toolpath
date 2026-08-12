@@ -100,10 +100,10 @@ sessions in one portable schema that records **who** changed **what**,
 | Cursor (IDE) | ✓ | ✓ | ✓ opens workspace |
 | Pi | ✓ | ✓ | ✓ `pi --session` |
 
-Read means `path p import`; write means `path p export`; resume means
-`path resume`, which projects the session into the harness's on-disk
-layout and execs its resume command. Any readable session can be
-projected into any writable harness. Git history and GitHub pull
+Toolpath reads each harness's native session files and writes them
+back. Resuming projects a document into the target harness's own
+on-disk layout and hands off to that harness, so any readable session
+can continue in any writable harness. Git history and GitHub pull
 requests import into the same schema, so a session, the PR it became,
 and the release that shipped it can share one graph.
 
