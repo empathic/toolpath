@@ -376,6 +376,40 @@
     color: var(--text-dim);
   }
 
+  /* --- Harness list (stamped mono chips) --- */
+  .harness-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    list-style: none;
+    margin: 1.25rem 0;
+    padding: 0;
+  }
+  .harness-list li {
+    font-family: var(--font);
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    padding: 0.45rem 0.8rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    transition: border-color 0.15s ease;
+  }
+  .harness-list li:hover {
+    border-color: var(--accent);
+  }
+  .harness-list li em {
+    font-style: normal;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+  }
+  .harness-list a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .harness-list li:hover a {
+    color: var(--accent);
+  }
+
   /* --- Tables --- */
   table {
     border-collapse: collapse;
@@ -612,7 +646,7 @@
 
   /* --- Hero --- */
   .hero {
-    padding: var(--space-2xl) 0 var(--space-xl);
+    padding: var(--space-lg) 0 var(--space-xl);
     border-bottom: none;
     margin-bottom: 0;
     display: flex;
@@ -903,7 +937,7 @@
     .hero {
       flex-direction: column;
       gap: var(--space-md);
-      padding: var(--space-xl) 0 var(--space-lg);
+      padding: var(--space-md) 0 var(--space-lg);
     }
     .hero h1 {
       font-size: 1.6rem;

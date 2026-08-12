@@ -8,9 +8,9 @@ nav: home
   <div class="hero-content">
     <h1>Toolpath</h1>
     <p class="tagline">
-      <strong>What happens between commits?</strong> Toolpath records the
-      decisions that get lost at merge time.  Record, transform, and analyze
-      sessions in a tool agnostic way.
+      <strong>The open session format.</strong> What your coding agent did,
+      why, what it tried, and what it cost, in one portable schema. Read
+      it, query it, share it, resume it in any harness.
     </p>
     <div class="hero-install">
       <div class="install-option">
@@ -74,36 +74,69 @@ Explore Toolpath documents in your browser. Real <code>path</code> commands, rea
 
 ## The problem
 
-When Claude writes code, `rustfmt` reformats it, and a human refines it, git
-blame attributes everything to the human's commit. The actual provenance is
-lost. Dead ends disappear. Tool contributions collapse into whoever typed `git
-commit`.
+Every coding agent writes its own undocumented session log. Claude Code
+keeps rotating JSONL chains, Codex writes rollout files, Gemini has chat
+directories, Copilot an event stream. The session that produced a change
+is locked inside the harness that ran it, and that harness can change
+its format at any time.
 
-Toolpath records **who** changed **what**, **why**, what they tried that didn't
-work, and how to verify all of it.
+## One format for everyone's tools
+
+Toolpath is the open session format: every harness's sessions in one
+portable schema that records **who** changed **what**, **why**, what
+they tried that didn't work, and what it cost.
+
+One schema means tooling stops being per-agent. A cost dashboard, a
+review surface, a search index, an archive: build it once against the
+format and it works with sessions from every supported harness. And
+when the next agent ships, one new parser brings it into every tool
+you already have.
 
 <div class="scenarios">
   <h2>When you need it</h2>
   <div class="objects">
     <div class="object-card">
-      <h3>Multi-actor PR</h3>
-      <p>Claude wrote the implementation, rustfmt reformatted, you refined the
-      error messages. Toolpath gives each actor their own step so reviewers see
-      who did what.</p>
+      <h3>Reduce review time</h3>
+      <p>An agent wrote the diff, and the diff can't say why. Share the
+      session to <a href="https://pathbase.dev">Pathbase</a> and link it
+      from the PR: reviewers see what was asked, what was tried and
+      rejected, and how the result was verified. The questions that
+      stall a merge get answered before they're asked.</p>
     </div>
     <div class="object-card">
-      <h3>Rotated AI session</h3>
-      <p>Claude Code hit context limits mid-task and rotated to a new session.
-      Toolpath chains the segments together so no work is lost.</p>
+      <h3>One query, every agent</h3>
+      <p>Which sessions burned the most tokens? What did the agent try
+      before the fix that worked? <code>path query</code> answers it with
+      one jq filter across every session on the machine, whichever
+      agents wrote the logs.</p>
     </div>
     <div class="object-card">
-      <h3>Release lineage</h3>
-      <p>Three teams contributed PRs to the release. Toolpath merges the
-      provenance into a single Graph so you can trace any line back to the
-      intent behind it.</p>
+      <h3>Pick up where anyone left off</h3>
+      <p>Start on your laptop, push the agent to a server. Hand a stuck
+      session to a teammate. Move a Claude Code session into Codex.
+      Wherever it lands, the next agent starts with everything the last
+      one knew: the intent, the state, the dead ends already ruled
+      out.</p>
     </div>
   </div>
 </div>
+
+## Parse in, project out
+
+Toolpath is open and versioned: the schema is published, and a document
+that validates today will validate tomorrow. Harness formats are
+neither. They are undocumented, proprietary, and change without notice.
+So Toolpath treats them as boundaries around a stable center, and
+everything it does is one of three moves across that boundary:
+
+- **Parse in.** A session crosses the boundary once and becomes a
+  stable document you can keep, query, and share.
+- **Project out.** A document becomes the on-disk layout a target
+  harness expects. Any writable harness, not just the one the session
+  started in.
+- **Resume.** A projection followed by a handoff: Toolpath writes the
+  session where the harness looks for it, then starts the harness on
+  it.
 
 ## Three core objects
 
@@ -175,6 +208,29 @@ ancestry of `path.head`.
 </svg>
 </div>
 
+## Supported harnesses
+
+<ul class="harness-list">
+  <li><a href="https://docs.rs/toolpath-claude">Claude Code</a></li>
+  <li><a href="https://docs.rs/toolpath-gemini">Gemini CLI</a></li>
+  <li><a href="https://docs.rs/toolpath-codex">Codex CLI</a></li>
+  <li><a href="https://docs.rs/toolpath-copilot">Copilot CLI <em>(preview)</em></a></li>
+  <li><a href="https://docs.rs/toolpath-opencode">opencode</a></li>
+  <li><a href="https://docs.rs/toolpath-pi">Pi</a></li>
+  <li><a href="https://docs.rs/toolpath-cursor">Cursor IDE</a></li>
+</ul>
+
+Parsing captures the full session: prompts, tool calls, reasoning,
+file changes, sub-agent work, token usage. Projecting writes a session
+the harness accepts as its own, so it resumes natively. Where a
+harness's log genuinely doesn't record something, the gap is
+documented in the [format notes]({{ site.repo }}/tree/main/docs/agents/formats)
+rather than papered over.
+
+Git history and GitHub pull requests parse into the same schema, so a
+session, the PR it became, and the release that shipped it can share
+one graph.
+
 ## What Toolpath adds
 
 | What                   | Git                         | Toolpath                                         |
@@ -223,19 +279,19 @@ No parents (it's the first step). No meta. One file, one perspective. Every docu
 # Install
 cargo install path-cli
 
-# Import provenance from this repo's git history (top-level surface is
-# the porcelain; plumbing lives under `path p …`)
-path p import git --repo . --branch main --no-cache --pretty
+# Archive every agent session on this machine (all harnesses, incremental)
+path p cache sync
 
-# Visualize it
-path p import git --repo . --branch main --no-cache | path p render dot | dot -Tpng -o graph.png
-
-# Import from Claude conversation logs
-path p import claude --project /path/to/project --no-cache --pretty
-
-# Query the local cache with a jaq (jq) filter — dead ends, or steps by an agent
+# Query across all of them with a jq filter, whichever agent produced them
 path query 'map(select(.dead_end))'
-path query --input doc.json 'map(select(.step.actor | startswith("agent:")))'
+path query 'map(select(.step.actor | startswith("agent:")))'
+
+# Share a session, then resume it in the original harness or a different one
+path share
+path resume https://pathbase.dev/alex/pathstash/path-pr-42 --harness codex
+
+# Derive provenance from git history and visualize it
+path p import git --repo . --branch main --no-cache | path p render dot | dot -Tpng -o graph.png
 ```
 
 <svg class="topo topo-wide" viewBox="0 0 900 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -245,18 +301,31 @@ path query --input doc.json 'map(select(.step.actor | startswith("agent:")))'
   <path d="M0,65 Q100,40 220,58 Q350,76 470,44 Q600,14 720,58 Q815,80 900,54" class="topo-pencil" stroke-width="1" opacity="0.12" fill="none"/>
 </svg>
 
-## Workspace
-
-Toolpath is a Rust workspace of focused crates:
-
-| Crate                                                | What it does                           |
-| ---------------------------------------------------- | -------------------------------------- |
-| [`toolpath`](https://docs.rs/toolpath)               | Core types, builders, query API        |
-| [`toolpath-convo`](https://docs.rs/toolpath-convo)   | Provider-agnostic conversation traits  |
-| [`toolpath-git`](https://docs.rs/toolpath-git)       | Derive from git history                |
-| [`toolpath-github`](https://docs.rs/toolpath-github) | Derive from GitHub pull requests       |
-| [`toolpath-claude`](https://docs.rs/toolpath-claude) | Derive from Claude conversations       |
-| [`toolpath-dot`](https://docs.rs/toolpath-dot)       | Graphviz DOT visualization             |
-| [`path-cli`](https://docs.rs/path-cli)               | Unified CLI (`cargo install path-cli`) |
-
-See [Crates](/crates/) for details, or [docs.rs](https://docs.rs/toolpath) for API reference.
+<div class="scenarios">
+  <h2>Go deeper</h2>
+  <div class="objects">
+    <div class="object-card">
+      <h3>Read the spec</h3>
+      <p>The format stands alone: an <a href="/rfc/">RFC</a>, a
+      <a href="{{ site.repo }}/blob/main/schema/toolpath.schema.json">JSON
+      Schema</a>, and a dozen
+      <a href="{{ site.repo }}/tree/main/examples">example documents</a>.
+      If Rust isn't your language, implement the schema in yours.</p>
+    </div>
+    <div class="object-card">
+      <h3>Build on the crates</h3>
+      <p>Everything the CLI does is a library call: core types, a
+      provider crate per harness, renderers for DOT and Markdown. See
+      <a href="/crates/">the crates</a> or the
+      <a href="https://docs.rs/toolpath">API reference</a>.</p>
+    </div>
+    <div class="object-card">
+      <h3>Stay in Claude Code</h3>
+      <p><code>/plugin install path@toolpath</code> adds
+      <code>/path:share</code> and <code>/path:query</code> as slash
+      commands and installs the CLI on first use. See
+      <a href="{{ site.repo }}/tree/main/plugins/claude-code">the
+      plugin</a>.</p>
+    </div>
+  </div>
+</div>
