@@ -26,7 +26,8 @@ mod cmd_share;
 mod cmd_show;
 mod cmd_track;
 mod cmd_validate;
-mod config;
+#[doc(hidden)]
+pub mod config;
 mod derive;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
@@ -143,7 +144,7 @@ pub fn run() -> Result<()> {
         #[cfg(not(target_os = "emscripten"))]
         Commands::Share { args } => cmd_share::run(args, &config),
         #[cfg(not(target_os = "emscripten"))]
-        Commands::Resume { args } => cmd_resume::run(args),
+        Commands::Resume { args } => cmd_resume::run(args, &config),
         Commands::Query { args } => cmd_query::run(args, cli.pretty, &config),
         Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]

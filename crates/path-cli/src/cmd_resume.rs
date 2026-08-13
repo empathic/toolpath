@@ -83,14 +83,14 @@ pub struct ResumeArgs {
     pub url: Option<String>,
 }
 
-pub fn run(args: ResumeArgs) -> Result<()> {
-    run_with_strategy(args, &RealExec)
+pub fn run(args: ResumeArgs, config: &Config) -> Result<()> {
+    run_with_strategy(args, &RealExec, config)
 }
 
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
-pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
-    let (graph, source_harness) = resolve_input(&args)?;
+pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy, config: &Config) -> Result<()> {
+    let (graph, source_harness) = resolve_input(&args, config)?;
     let path = ensure_path_with_agent(&graph)?;
 
     let cwd = match args.cwd.as_ref() {
@@ -111,10 +111,7 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
         }
     );
 
-    // Transitional: `resume` does not take `&Config` yet; load one for
-    // the export path.
-    let config = Config::load()?;
-    let session_id = project_into_harness(path, target, &cwd, &config)?;
+    let session_id = project_into_harness(path, target, &cwd, config)?;
     let (binary, argv) = invocation_for(target, &session_id, &cwd);
     exec_harness(&binary, &argv, &cwd, exec)
 }
@@ -200,7 +197,10 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
 /// Resolve the user-supplied `<input>` argument into a parsed `Graph`
 /// plus the source harness inferred from its single inline path (if
 /// any). See spec § "Input resolution" for the order.
-pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>)> {
+pub(crate) fn resolve_input(
+    args: &ResumeArgs,
+    config: &Config,
+) -> Result<(Graph, Option<Harness>)> {
     let raw = args.input.as_str();
 
     enum Shape<'a> {
@@ -240,11 +240,7 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
                 Graph::from_json(&json)
                     .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e))?
             } else {
-                // Transitional: `resolve_input` does not take `&Config`
-                // yet; load one for the Pathbase fetch.
-                let config = Config::load()?;
-                let derived =
-                    crate::derive::pathbase_fetch_to_doc(&config, u, args.url.as_deref())?;
+                let derived = crate::derive::pathbase_fetch_to_doc(config, u, args.url.as_deref())?;
                 if !args.no_cache {
                     // force=true here: we either short-circuited above
                     // (cache miss) or the user explicitly passed --force,
@@ -597,12 +593,23 @@ fn looks_like_pathbase_shorthand(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// A `Config` rooted at `home`, so the projectors write inside the
+    /// test's tempdir.
+    fn config_with_home(home: &std::path::Path) -> Config {
+        Config {
+            home: Some(home.to_path_buf()),
+            ..Config::default()
+        }
+    }
+
     #[test]
     fn run_with_strategy_records_invocation_for_file_input_with_explicit_harness() {
+        // The `$PATH` guard mutates process-global state; the lock
+        // serializes it against the other env-mutating tests.
         let _env = crate::config::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let _home = scoped_home_for_resume();
+        let home = tempfile::tempdir().unwrap();
         let _path_guard = ScopedPathForResume::with_binaries(&["claude"]);
         let cwd = tempfile::tempdir().unwrap();
         let doc_file = cwd.path().join("doc.json");
@@ -627,7 +634,7 @@ mod tests {
         };
 
         let recorder = RecordingExec::default();
-        run_with_strategy(args, &recorder).unwrap();
+        run_with_strategy(args, &recorder, &config_with_home(home.path())).unwrap();
 
         let cap = recorder.captured();
         assert_eq!(cap.binary, "claude");
@@ -761,16 +768,13 @@ mod tests {
             force: false,
             url: None,
         };
-        let (g, harness) = resolve_input(&args).unwrap();
+        let (g, harness) = resolve_input(&args, &Config::default()).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
         assert_eq!(harness, Some(Harness::Claude));
     }
 
     #[test]
     fn resolve_input_url_dispatches_to_pathbase_fetch() {
-        let _env = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         use crate::cmd_pathbase::tests::MockServer;
         let body = {
             let mut path = make_path_with_actor("agent:codex");
@@ -795,7 +799,12 @@ mod tests {
             force: false,
             url: None,
         };
-        let (g, harness) = resolve_input(&args).unwrap();
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            toolpath_config_dir: Some(cfg_dir.path().to_path_buf()),
+            ..Config::default()
+        };
+        let (g, harness) = resolve_input(&args, &config).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
@@ -856,7 +865,11 @@ mod tests {
             force: false,
             url: None,
         };
-        let result = resolve_input(&args);
+        let config = Config {
+            toolpath_config_dir: Some(cfg_dir.path().to_path_buf()),
+            ..Config::default()
+        };
+        let result = resolve_input(&args, &config);
 
         // Restore env before asserting so a panic doesn't poison sibling tests.
         unsafe {
@@ -884,7 +897,7 @@ mod tests {
             force: false,
             url: None,
         };
-        let err = resolve_input(&args).unwrap_err();
+        let err = resolve_input(&args, &Config::default()).unwrap_err();
         let s = err.to_string();
         assert!(s.contains("couldn't resolve"), "actual: {s}");
     }
@@ -989,14 +1002,11 @@ mod tests {
 
     #[test]
     fn project_into_harness_claude_round_trip() {
-        let _env = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _home = scoped_home_for_resume();
+        let home = tempfile::tempdir().unwrap();
         let cwd = tempfile::tempdir().unwrap();
         let path = make_convo_path_for_resume("claude-code://resume-test-session");
 
-        let config = Config::load().unwrap();
+        let config = config_with_home(home.path());
         let session_id = project_into_harness(&path, Harness::Claude, cwd.path(), &config).unwrap();
         assert!(!session_id.is_empty());
     }
@@ -1044,10 +1054,6 @@ mod tests {
         }
     }
 
-    fn scoped_home_for_resume() -> ScopedHomeForResume {
-        ScopedHomeForResume::new()
-    }
-
     struct ScopedPathForResume {
         _bin_dir: tempfile::TempDir,
         prev: Option<std::ffi::OsString>,
@@ -1080,33 +1086,6 @@ mod tests {
                 match &self.prev {
                     Some(v) => std::env::set_var("PATH", v),
                     None => std::env::remove_var("PATH"),
-                }
-            }
-        }
-    }
-
-    struct ScopedHomeForResume {
-        _td: tempfile::TempDir,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl ScopedHomeForResume {
-        fn new() -> Self {
-            let td = tempfile::tempdir().unwrap();
-            let prev = std::env::var_os("HOME");
-            unsafe {
-                std::env::set_var("HOME", td.path());
-            }
-            Self { _td: td, prev }
-        }
-    }
-
-    impl Drop for ScopedHomeForResume {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.prev {
-                    Some(v) => std::env::set_var("HOME", v),
-                    None => std::env::remove_var("HOME"),
                 }
             }
         }
