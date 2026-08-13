@@ -94,13 +94,14 @@ impl SyncObserver for () {}
 /// (query auto-syncs, imports) union their records instead of
 /// clobbering each other.
 pub(crate) fn sync_bundle(
-    config_dir: &Path,
+    config: &Config,
     bundle: &HarnessBundle,
     types: &[ArtifactType],
     project_under: Option<&Path>,
     observer: &mut dyn SyncObserver,
 ) -> Result<Vec<(ArtifactType, SyncOutcome)>> {
-    let manifest = load_manifest(config_dir)?;
+    let config_dir = config.config_dir()?;
+    let manifest = load_manifest(&config_dir)?;
     let mut out = Vec::with_capacity(types.len());
     for &artifact_type in types {
         // Types with no source in this bundle — an uninstalled
@@ -116,7 +117,8 @@ pub(crate) fn sync_bundle(
             .cloned()
             .unwrap_or_default();
         let outcome = sync_artifacts(
-            config_dir,
+            config,
+            &config_dir,
             source.as_ref(),
             artifact_type,
             &artifacts,
@@ -133,7 +135,7 @@ pub(crate) fn sync_bundle(
 /// artifact needs nothing — no read, no scope check. All-`None` stamps
 /// mean freshness is unknowable; only a real stamp can vouch
 /// (mirrors `record_is_current`).
-fn is_unchanged(rec: Option<&SyncRecord>, artifact: &ArtifactRef) -> bool {
+fn is_unchanged(config: &Config, rec: Option<&SyncRecord>, artifact: &ArtifactRef) -> bool {
     rec.is_some_and(|rec| {
         (rec.modified.is_some() || rec.size.is_some())
             && rec.modified == artifact.modified
@@ -141,7 +143,7 @@ fn is_unchanged(rec: Option<&SyncRecord>, artifact: &ArtifactRef) -> bool {
             && rec
                 .cache_id
                 .as_deref()
-                .is_some_and(|id| crate::cache::cache_path(id).is_ok_and(|p| p.exists()))
+                .is_some_and(|id| crate::cache::cache_path(config, id).is_ok_and(|p| p.exists()))
     })
 }
 
@@ -180,6 +182,7 @@ fn flush_writes(
 /// failures are warned and tallied, not fatal; cache-write failures
 /// (disk, permissions) abort.
 fn sync_artifacts(
+    config: &Config,
     config_dir: &Path,
     source: &dyn ArtifactSource,
     artifact_type: ArtifactType,
@@ -193,7 +196,12 @@ fn sync_artifacts(
     // progress denominator and the loop's skip decision.
     let order: Vec<(&ArtifactRef, bool)> = newest_first(artifacts)
         .into_iter()
-        .map(|artifact| (artifact, is_unchanged(records.get(&artifact.id), artifact)))
+        .map(|artifact| {
+            (
+                artifact,
+                is_unchanged(config, records.get(&artifact.id), artifact),
+            )
+        })
         .collect();
     let pending_total = order.iter().filter(|(_, unchanged)| !unchanged).count();
     observer.begin(artifact_type, pending_total);
@@ -264,7 +272,7 @@ fn sync_artifacts(
                 // force: sync owns refresh semantics — a re-sync or a
                 // prior manual `p import` of the same session must not
                 // error on the existing cache entry.
-                write_cached(&derived.cache_id, &derived.doc, true)?;
+                write_cached(config, &derived.cache_id, &derived.doc, true)?;
                 stage(
                     &mut writes,
                     SyncRecord {
@@ -346,7 +354,7 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
                 && (rec.modified.is_some() || rec.size.is_some())
                 && rec.modified == artifact.modified
                 && rec.size == artifact.size
-                && crate::cache::cache_path(cache_id).is_ok_and(|p| p.exists())
+                && crate::cache::cache_path(config, cache_id).is_ok_and(|p| p.exists())
         })
 }
 
@@ -372,7 +380,7 @@ pub(crate) fn fresh_cache_id(
     ((rec.modified.is_some() || rec.size.is_some())
         && rec.modified == modified
         && rec.size == size
-        && crate::cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
+        && crate::cache::cache_path(config, &cache_id).is_ok_and(|p| p.exists()))
     .then_some(cache_id)
 }
 
@@ -475,9 +483,9 @@ mod tests {
 
     /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
     /// `f` receives the tempdir root for building provider fixtures and
-    /// the config directory itself. The variable stays set because
-    /// the cache still reads it.
-    fn with_cfg<F: FnOnce(&Path, &Path) -> R, R>(f: F) -> R {
+    /// a `Config` carrying the same root, and the config directory
+    /// itself.
+    fn with_cfg<F: FnOnce(&Path, &Config, &Path) -> R, R>(f: F) -> R {
         let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let config_root = temp.path().join(".toolpath");
@@ -485,7 +493,11 @@ mod tests {
         unsafe {
             std::env::set_var(CONFIG_DIR_ENV, &config_root);
         }
-        let result = f(temp.path(), &config_root);
+        let config = Config {
+            toolpath_config_dir: Some(config_root.clone()),
+            ..Config::default()
+        };
+        let result = f(temp.path(), &config, &config_root);
         unsafe {
             match prev {
                 Some(v) => std::env::set_var(CONFIG_DIR_ENV, v),
@@ -519,8 +531,8 @@ mod tests {
         }
     }
 
-    fn cached_step_count(cache_id: &str) -> usize {
-        let path = crate::cache::cache_path(cache_id).unwrap();
+    fn cached_step_count(config: &Config, cache_id: &str) -> usize {
+        let path = crate::cache::cache_path(config, cache_id).unwrap();
         let json = std::fs::read_to_string(path).unwrap();
         let doc = toolpath::v1::Graph::from_json(&json).unwrap();
         doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
@@ -538,7 +550,7 @@ mod tests {
 
     #[test]
     fn manifest_roundtrips_and_missing_is_empty() {
-        with_cfg(|_, config_dir| {
+        with_cfg(|_, _, config_dir| {
             assert!(load_manifest(config_dir).unwrap().is_empty());
 
             let mut manifest = Manifest::default();
@@ -561,7 +573,7 @@ mod tests {
     #[test]
     fn manifest_file_is_0600() {
         use std::os::unix::fs::PermissionsExt;
-        with_cfg(|_, config_dir| {
+        with_cfg(|_, _, config_dir| {
             save_manifest(config_dir, &Manifest::default()).unwrap();
             let mode = std::fs::metadata(manifest_path(config_dir))
                 .unwrap()
@@ -574,7 +586,7 @@ mod tests {
 
     #[test]
     fn corrupt_manifest_errors_with_hint() {
-        with_cfg(|_, config_dir| {
+        with_cfg(|_, _, config_dir| {
             save_manifest(config_dir, &Manifest::default()).unwrap();
             std::fs::write(manifest_path(config_dir), "not json").unwrap();
             let err = load_manifest(config_dir).unwrap_err();
@@ -584,7 +596,7 @@ mod tests {
 
     #[test]
     fn enumerated_claude_sessions_are_stamped() {
-        with_cfg(|home, _| {
+        with_cfg(|home, _, _| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
             let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
@@ -602,13 +614,13 @@ mod tests {
 
     #[test]
     fn first_sync_ingests_then_second_is_unchanged() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             write_claude_session(home, "-test-project", "sess-bbb", "Fix a bug");
             let bundle = claude_bundle(home);
 
             let outcomes =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             assert_eq!(outcomes.len(), 1);
             let (_, first) = outcomes[0];
             assert_eq!(
@@ -628,12 +640,12 @@ mod tests {
                 .as_deref()
                 .expect("synced record is materialized");
             assert!(
-                crate::cache::cache_path(cache_id).unwrap().exists(),
+                crate::cache::cache_path(config, cache_id).unwrap().exists(),
                 "cache doc must exist for {cache_id}"
             );
 
             let (_, second) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!(
                 (second.new, second.updated, second.unchanged, second.failed),
@@ -644,16 +656,16 @@ mod tests {
 
     #[test]
     fn changed_session_is_rederived() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
 
             let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                 .cache_id
                 .clone()
                 .expect("synced record is materialized");
-            let steps_before = cached_step_count(&cache_id);
+            let steps_before = cached_step_count(config, &cache_id);
 
             // Session continues: a later user turn lands in the file,
             // changing its size (and mtime).
@@ -666,7 +678,7 @@ mod tests {
             std::fs::write(&file, body).unwrap();
 
             let (_, outcome) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!(
                 (
@@ -678,7 +690,7 @@ mod tests {
                 (0, 1, 0, 0)
             );
             assert!(
-                cached_step_count(&cache_id) > steps_before,
+                cached_step_count(config, &cache_id) > steps_before,
                 "re-derived doc must contain the appended turn"
             );
         });
@@ -686,12 +698,12 @@ mod tests {
 
     #[test]
     fn sync_touches_only_requested_types() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
 
             let outcomes =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Codex], None, &mut ()).unwrap();
+                sync_bundle(config, &bundle, &[ArtifactType::Codex], None, &mut ()).unwrap();
             assert_eq!(outcomes[0].1, SyncOutcome::default());
             assert!(
                 load_manifest(config_dir).unwrap().is_empty(),
@@ -702,17 +714,17 @@ mod tests {
 
     #[test]
     fn sync_overwrites_cache_entry_it_does_not_remember() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
 
             // Losing the manifest (or a prior manual `p import`) leaves a
             // cache entry sync doesn't know about; re-syncing must
             // overwrite it, not die on the exists-check.
             std::fs::remove_file(manifest_path(config_dir)).unwrap();
             let (_, outcome) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!((outcome.new, outcome.failed), (1, 0));
         });
@@ -720,7 +732,7 @@ mod tests {
 
     #[test]
     fn failed_derivation_is_tallied_and_skipped() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
             let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
@@ -728,6 +740,7 @@ mod tests {
             artifacts.push(make_ref(ArtifactType::Claude, "does-not-exist"));
 
             let outcome = sync_artifacts(
+                config,
                 config_dir,
                 source.as_ref(),
                 ArtifactType::Claude,
@@ -749,15 +762,15 @@ mod tests {
 
     #[test]
     fn rotated_session_resyncs_under_its_head_id() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                 .cache_id
                 .clone()
                 .unwrap();
-            let steps_before = cached_step_count(&cache_id);
+            let steps_before = cached_step_count(config, &cache_id);
 
             // The session rotates: a successor file whose first entry
             // carries the predecessor's sessionId (the bridge).
@@ -774,7 +787,7 @@ mod tests {
             .unwrap();
 
             let (_, outcome) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!(
                 (outcome.new, outcome.updated, outcome.unchanged),
@@ -787,13 +800,13 @@ mod tests {
                 "successor segments are not separate artifacts"
             );
             assert!(
-                cached_step_count(&cache_id) > steps_before,
+                cached_step_count(config, &cache_id) > steps_before,
                 "post-rotation turns must reach the cached doc"
             );
 
             // And the grown chain settles: a third sync is a no-op.
             let (_, again) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!((again.updated, again.unchanged), (0, 1));
         });
@@ -801,10 +814,10 @@ mod tests {
 
     #[test]
     fn all_none_stamps_never_read_as_unchanged() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
 
             // A record whose stamps are all None (stat failed when it
             // was written) must not match a stub whose stat also
@@ -816,6 +829,7 @@ mod tests {
             let artifact = make_ref(ArtifactType::Claude, "sess-aaa");
             let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
             let outcome = sync_artifacts(
+                config,
                 config_dir,
                 source.as_ref(),
                 ArtifactType::Claude,
@@ -831,7 +845,7 @@ mod tests {
 
     #[test]
     fn recorded_import_is_unchanged_to_the_next_sync() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, _| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
 
@@ -846,12 +860,12 @@ mod tests {
             let artifact = derived.provenance.as_ref().unwrap();
             assert_eq!(artifact.id, "sess-aaa");
             assert!(artifact.modified.is_some() && artifact.size.is_some());
-            crate::cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
+            crate::cache::write_cached(config, &derived.cache_id, &derived.doc, true).unwrap();
             record_artifact(config, artifact, &derived.cache_id).unwrap();
 
             // The import's stamp must match sync's own enumeration.
             let (_, outcome) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!(
                 (
@@ -867,13 +881,13 @@ mod tests {
 
     #[test]
     fn project_under_scopes_path_keyed_enumeration() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-scope-alpha", "aaaa1111-x", "In alpha");
             write_claude_session(home, "-scope-beta", "bbbb2222-x", "In beta");
             let bundle = claude_bundle(home);
 
             let (_, scoped) = sync_bundle(
-                config_dir,
+                config,
                 &bundle,
                 &[ArtifactType::Claude],
                 Some(Path::new("/scope/alpha")),
@@ -889,7 +903,7 @@ mod tests {
 
             // Unscoped sync picks up the rest.
             let (_, full) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!((full.new, full.unchanged), (1, 1));
         });
@@ -917,13 +931,13 @@ mod tests {
 
     #[test]
     fn out_of_scope_codex_peek_is_memoized_then_scope_match_derives() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             let bundle = codex_bundle(home, "/work/proj");
 
             // cwd lives outside the constraint: one bounded peek, a
             // known-but-uncached record, no derive.
             let (_, out) = sync_bundle(
-                config_dir,
+                config,
                 &bundle,
                 &[ArtifactType::Codex],
                 Some(Path::new("/elsewhere")),
@@ -944,7 +958,7 @@ mod tests {
             // Matching constraint: the memoized record answers the scope
             // question and the artifact derives.
             let (_, hit) = sync_bundle(
-                config_dir,
+                config,
                 &bundle,
                 &[ArtifactType::Codex],
                 Some(Path::new("/work/proj")),
@@ -983,12 +997,12 @@ mod tests {
 
     #[test]
     fn copilot_syncs_and_scopes_via_memoized_peek() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             let bundle = copilot_bundle(home, "sess-cp", "/work/proj");
 
             // Out-of-scope first: one peek, a known record with the cwd.
             let (_, out) = sync_bundle(
-                config_dir,
+                config,
                 &bundle,
                 &[ArtifactType::Copilot],
                 Some(Path::new("/elsewhere")),
@@ -1002,7 +1016,7 @@ mod tests {
 
             // In scope: derives; then a plain re-sync is a no-op.
             let (_, hit) = sync_bundle(
-                config_dir,
+                config,
                 &bundle,
                 &[ArtifactType::Copilot],
                 Some(Path::new("/work")),
@@ -1011,7 +1025,7 @@ mod tests {
             .unwrap()[0];
             assert_eq!((hit.updated, hit.out_of_scope), (1, 0));
             let (_, again) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Copilot], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Copilot], None, &mut ()).unwrap()
                     [0];
             assert_eq!(again.unchanged, 1);
         });
@@ -1019,17 +1033,17 @@ mod tests {
 
     #[test]
     fn evicted_cache_entry_rematerializes_on_next_sync() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                 .cache_id
                 .clone()
                 .unwrap();
 
             // `p cache rm`: doc removed, record downgraded to known.
-            crate::cache::remove_cached(&cache_id).unwrap();
+            crate::cache::remove_cached(config, &cache_id).unwrap();
             evict_cache_id(config_dir, &cache_id).unwrap();
             assert!(
                 load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
@@ -1038,11 +1052,13 @@ mod tests {
             );
 
             let (_, outcome) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!((outcome.new, outcome.updated), (0, 1));
             assert!(
-                crate::cache::cache_path(&cache_id).unwrap().exists(),
+                crate::cache::cache_path(config, &cache_id)
+                    .unwrap()
+                    .exists(),
                 "evicted artifact re-materializes"
             );
         });
@@ -1050,10 +1066,10 @@ mod tests {
 
     #[test]
     fn manually_deleted_doc_is_restored_even_with_stale_record() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                 .cache_id
                 .clone()
@@ -1061,10 +1077,10 @@ mod tests {
 
             // Doc deleted behind the CLI's back: the record still claims
             // materialization, but sync verifies the doc exists.
-            let doc = crate::cache::cache_path(&cache_id).unwrap();
+            let doc = crate::cache::cache_path(config, &cache_id).unwrap();
             std::fs::remove_file(&doc).unwrap();
             let (_, outcome) =
-                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
                     [0];
             assert_eq!((outcome.new, outcome.updated), (0, 1));
             assert!(doc.exists());
@@ -1073,13 +1089,9 @@ mod tests {
 
     #[test]
     fn fresh_cache_id_tracks_source_and_eviction() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            let config = &Config {
-                toolpath_config_dir: Some(config_dir.to_path_buf()),
-                ..Config::default()
-            };
 
             // Nothing synced yet: no fresh copy.
             assert!(
@@ -1093,7 +1105,7 @@ mod tests {
                 .is_none()
             );
 
-            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             let cache_id = fresh_cache_id(
                 config,
                 &bundle,
@@ -1121,7 +1133,7 @@ mod tests {
                 )
                 .is_none()
             );
-            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             assert!(
                 fresh_cache_id(
                     config,
@@ -1134,7 +1146,7 @@ mod tests {
             );
 
             // Evicted: known but not materialized, so not fresh.
-            crate::cache::remove_cached(&cache_id).unwrap();
+            crate::cache::remove_cached(config, &cache_id).unwrap();
             evict_cache_id(config_dir, &cache_id).unwrap();
             assert!(
                 fresh_cache_id(
@@ -1151,7 +1163,7 @@ mod tests {
 
     #[test]
     fn copilot_peek_accepts_top_level_cwd() {
-        with_cfg(|home, config_dir| {
+        with_cfg(|home, config, config_dir| {
             // Older CLIs store cwd at the payload top level, no
             // `context` object — the peek must still find it.
             let copilot_dir = home.join(".copilot");
@@ -1173,7 +1185,7 @@ mod tests {
                 ..Default::default()
             };
             let (_, out) = sync_bundle(
-                config_dir,
+                config,
                 &bundle,
                 &[ArtifactType::Copilot],
                 Some(Path::new("/elsewhere")),

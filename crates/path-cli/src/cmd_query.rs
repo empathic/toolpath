@@ -120,6 +120,7 @@ pub fn run(args: QueryArgs, pretty: bool, config: &Config) -> Result<()> {
     let compact = args.compact || (!pretty && !std::io::stdout().is_terminal());
 
     crate::query::run(
+        config,
         &scope,
         &args.filter,
         compact,
@@ -137,16 +138,9 @@ fn sync_query_scope(args: &QueryArgs, config: &Config) {
     if types.is_empty() {
         return;
     }
-    let config_dir = match config.config_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("warning: cache sync skipped: {e}");
-            return;
-        }
-    };
     let bundle = crate::providers::harness_bundle(config);
     match crate::sync::sync_bundle(
-        &config_dir,
+        config,
         &bundle,
         &types,
         args.project_under.as_deref(),
