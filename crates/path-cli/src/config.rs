@@ -43,8 +43,14 @@ pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root
 /// receives values as parameters and does not read the environment.
+///
+/// Public because `cmd_resume::run_with_strategy` takes a `&Config`
+/// across the crate boundary. It is a test seam, not API: the item is
+/// `#[doc(hidden)]` and the fields stay crate-private, so
+/// [`Config::load`] is the only constructor outside the crate.
+#[doc(hidden)]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Config {
+pub struct Config {
     /// `$APPDATA`: Windows harness data root.
     pub(crate) appdata: Option<PathBuf>,
     /// `$COPILOT_HOME`: Copilot CLI session root override.
@@ -109,7 +115,8 @@ impl Config {
     }
 
     /// Read the process environment and extract an immutable `Config`.
-    pub(crate) fn load() -> Result<Self> {
+    #[doc(hidden)]
+    pub fn load() -> Result<Self> {
         let vars: Vec<&str> = Self::env_var_names().collect();
         let env = Env::raw().only(&vars).map(|key| {
             Self::ENV_MAP
