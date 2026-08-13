@@ -42,6 +42,7 @@ pub struct Scope {
 /// `filter` is jaq source (`.` emits the array verbatim).
 /// `compact` forces single-line JSON; otherwise output is pretty-printed.
 /// `raw` prints string results without JSON quoting (like `jq -r`).
+/// `explain` is the `$TOOLPATH_QUERY_EXPLAIN` value from [`crate::config::Config`].
 ///
 /// The filter is analyzed once into a [`plan::Plan`]; the executor then streams
 /// documents one at a time. An element-wise `.[] | g` filter prints as it goes
@@ -49,12 +50,17 @@ pub struct Scope {
 /// only its per-file partials — the filter's own output, not the input cache.
 /// Anything the planner can't prove decomposable falls back to the whole-array
 /// path, which is still lean — the step values are held once, not re-serialized.
-pub fn run(scope: &Scope, code: &str, compact: bool, raw: bool) -> Result<()> {
+pub fn run(
+    scope: &Scope,
+    code: &str,
+    compact: bool,
+    raw: bool,
+    explain: Option<&str>,
+) -> Result<()> {
     let plan = plan::analyze(code);
     // Opt-in observability: `TOOLPATH_QUERY_EXPLAIN=1` reveals the execution
     // strategy on stderr. Not a behavioral flag — purely diagnostic.
-    let explain = std::env::var("TOOLPATH_QUERY_EXPLAIN");
-    if matches!(explain.as_deref(), Ok(v) if !v.is_empty() && v != "0") {
+    if matches!(explain, Some(v) if !v.is_empty() && v != "0") {
         eprintln!("query plan: {}", plan.describe());
     }
     // Buffer stdout: the streaming path prints one value per output, and a
