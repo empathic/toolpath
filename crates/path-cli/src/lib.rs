@@ -34,6 +34,7 @@ mod fuzzy;
 pub mod harness;
 mod io;
 pub mod kinds;
+mod providers;
 mod query;
 mod remote;
 mod schema;
@@ -127,6 +128,9 @@ enum Commands {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
+    #[cfg_attr(target_os = "emscripten", expect(unused_variables))]
+    let config = config::Config::load()?;
+
     #[cfg(not(target_os = "emscripten"))]
     fuzzy::set_picker_override(cli.picker);
 
@@ -136,7 +140,7 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         #[cfg(not(target_os = "emscripten"))]
-        Commands::Show { source, ansi } => cmd_show::run(source, ansi),
+        Commands::Show { source, ansi } => cmd_show::run(source, ansi, &config),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Share { args } => cmd_share::run(args),
         #[cfg(not(target_os = "emscripten"))]

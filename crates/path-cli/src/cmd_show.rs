@@ -7,6 +7,8 @@
 //! diffstats — short enough for a preview pane, rich enough to choose by.
 #![cfg(not(target_os = "emscripten"))]
 
+use crate::config::Config;
+use crate::providers;
 use anyhow::Result;
 use clap::Subcommand;
 use toolpath::v1::Graph;
@@ -89,8 +91,8 @@ pub enum ShowSource {
     },
 }
 
-pub fn run(source: ShowSource, ansi: bool) -> Result<()> {
-    let path = derive_one(source)?;
+pub fn run(source: ShowSource, ansi: bool, config: &Config) -> Result<()> {
+    let path = derive_one(source, config)?;
     let doc = Graph::from_path(path);
     let opts = toolpath_md::RenderOptions {
         detail: toolpath_md::Detail::Summary,
@@ -105,10 +107,11 @@ pub fn run(source: ShowSource, ansi: bool) -> Result<()> {
     Ok(())
 }
 
-fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
+fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path> {
     match source {
         ShowSource::Claude { project, session } => {
-            let manager = toolpath_claude::ClaudeConvo::new();
+            let manager =
+                toolpath_claude::ClaudeConvo::with_resolver(providers::claude_resolver(config));
             let convo = manager
                 .read_conversation(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -119,7 +122,8 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             Ok(toolpath_claude::derive::derive_path(&convo, &cfg))
         }
         ShowSource::Gemini { project, session } => {
-            let manager = toolpath_gemini::GeminiConvo::new();
+            let manager =
+                toolpath_gemini::GeminiConvo::with_resolver(providers::gemini_resolver(config));
             let convo = manager
                 .read_conversation(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -133,7 +137,8 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             session,
             project: _,
         } => {
-            let manager = toolpath_codex::CodexConvo::new();
+            let manager =
+                toolpath_codex::CodexConvo::with_resolver(providers::codex_resolver(config));
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -144,7 +149,8 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             session,
             project: _,
         } => {
-            let manager = toolpath_copilot::CopilotConvo::new();
+            let manager =
+                toolpath_copilot::CopilotConvo::with_resolver(providers::copilot_resolver(config));
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -155,7 +161,9 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             session,
             project: _,
         } => {
-            let manager = toolpath_opencode::OpencodeConvo::new();
+            let manager = toolpath_opencode::OpencodeConvo::with_resolver(
+                providers::opencode_resolver(config),
+            );
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -170,7 +178,8 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             session,
             project: _,
         } => {
-            let manager = toolpath_cursor::CursorConvo::new();
+            let manager =
+                toolpath_cursor::CursorConvo::with_resolver(providers::cursor_resolver(config));
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -182,12 +191,11 @@ fn derive_one(source: ShowSource) -> Result<toolpath::v1::Path> {
             session,
             base,
         } => {
-            let manager = if let Some(p) = base {
-                let resolver = toolpath_pi::PathResolver::new().with_sessions_dir(&p);
-                toolpath_pi::PiConvo::with_resolver(resolver)
-            } else {
-                toolpath_pi::PiConvo::new()
-            };
+            let mut resolver = providers::pi_resolver(config);
+            if let Some(p) = base {
+                resolver = resolver.with_sessions_dir(&p);
+            }
+            let manager = toolpath_pi::PiConvo::with_resolver(resolver);
             let s = manager
                 .read_session(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
