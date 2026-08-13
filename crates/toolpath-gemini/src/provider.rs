@@ -682,7 +682,7 @@ mod tests {
 }"#;
         fs::write(session_dir.join("qclszz.json"), sub).unwrap();
 
-        let resolver = PathResolver::new().with_gemini_dir(&gemini);
+        let resolver = PathResolver::new(temp.path()).with_gemini_dir(&gemini);
         (temp, GeminiConvo::with_resolver(resolver))
     }
 
@@ -1026,7 +1026,8 @@ mod tests {
         )
         .unwrap();
 
-        let mgr = GeminiConvo::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
+        let mgr =
+            GeminiConvo::with_resolver(PathResolver::new(temp.path()).with_gemini_dir(&gemini));
         let view = ConversationProvider::load_conversation(&mgr, "/p", "s").unwrap();
 
         let d = &view.turns[1].delegations[0];
@@ -1066,7 +1067,8 @@ mod tests {
         )
         .unwrap();
 
-        let mgr = GeminiConvo::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
+        let mgr =
+            GeminiConvo::with_resolver(PathResolver::new(temp.path()).with_gemini_dir(&gemini));
         let view = ConversationProvider::load_conversation(&mgr, "/p", "s").unwrap();
         let delegations = &view.turns[1].delegations;
         assert_eq!(delegations.len(), 2);

@@ -6,7 +6,7 @@
 //! path. Both are supported: the resolver prefers the friendly name when
 //! it exists on disk, and falls back to the hash otherwise.
 
-use crate::error::{ConvoError, Result};
+use crate::error::Result;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -34,27 +34,16 @@ pub struct SessionEntry {
 
 #[derive(Debug, Clone)]
 pub struct PathResolver {
-    home_dir: Option<PathBuf>,
+    home_dir: PathBuf,
     gemini_dir: Option<PathBuf>,
 }
 
-impl Default for PathResolver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PathResolver {
-    pub fn new() -> Self {
+    pub fn new<P: Into<PathBuf>>(home: P) -> Self {
         Self {
-            home_dir: dirs::home_dir(),
+            home_dir: home.into(),
             gemini_dir: None,
         }
-    }
-
-    pub fn with_home<P: Into<PathBuf>>(mut self, home: P) -> Self {
-        self.home_dir = Some(home.into());
-        self
     }
 
     pub fn with_gemini_dir<P: Into<PathBuf>>(mut self, gemini_dir: P) -> Self {
@@ -62,23 +51,23 @@ impl PathResolver {
         self
     }
 
-    pub fn home_dir(&self) -> Result<&Path> {
-        self.home_dir.as_deref().ok_or(ConvoError::NoHomeDirectory)
+    pub fn home_dir(&self) -> &Path {
+        &self.home_dir
     }
 
-    pub fn gemini_dir(&self) -> Result<PathBuf> {
-        if let Some(d) = &self.gemini_dir {
-            return Ok(d.clone());
+    pub fn gemini_dir(&self) -> PathBuf {
+        match &self.gemini_dir {
+            Some(d) => d.clone(),
+            None => self.home_dir.join(".gemini"),
         }
-        Ok(self.home_dir()?.join(".gemini"))
     }
 
-    pub fn projects_file(&self) -> Result<PathBuf> {
-        Ok(self.gemini_dir()?.join(PROJECTS_FILE))
+    pub fn projects_file(&self) -> PathBuf {
+        self.gemini_dir().join(PROJECTS_FILE)
     }
 
-    pub fn tmp_dir(&self) -> Result<PathBuf> {
-        Ok(self.gemini_dir()?.join(TMP_DIR))
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.gemini_dir().join(TMP_DIR)
     }
 
     /// Absolute path to the project slot directory under `tmp/`.
@@ -88,7 +77,7 @@ impl PathResolver {
     /// `tmp/<sha256(project_path)>/`. The returned path may not exist
     /// yet — callers decide how to handle that.
     pub fn project_dir(&self, project_path: &str) -> Result<PathBuf> {
-        let tmp = self.tmp_dir()?;
+        let tmp = self.tmp_dir();
 
         if let Some(friendly) = self.friendly_name_for(project_path)? {
             let candidate = tmp.join(&friendly);
@@ -142,10 +131,10 @@ impl PathResolver {
     /// Read `projects.json` and reverse-lookup a friendly name for the
     /// given absolute project path.
     pub fn friendly_name_for(&self, project_path: &str) -> Result<Option<String>> {
-        let file = match self.projects_file() {
-            Ok(p) if p.exists() => p,
-            _ => return Ok(None),
-        };
+        let file = self.projects_file();
+        if !file.exists() {
+            return Ok(None);
+        }
         let bytes = fs::read(&file)?;
         let projects: ProjectsFile = match serde_json::from_slice(&bytes) {
             Ok(p) => p,
@@ -162,8 +151,8 @@ impl PathResolver {
         let mut seen = std::collections::HashSet::new();
 
         // projects.json entries.
-        if let Ok(file) = self.projects_file()
-            && file.exists()
+        let file = self.projects_file();
+        if file.exists()
             && let Ok(bytes) = fs::read(&file)
             && let Ok(projects) = serde_json::from_slice::<ProjectsFile>(&bytes)
         {
@@ -175,9 +164,8 @@ impl PathResolver {
         }
 
         // `.project_root` markers under tmp/.
-        if let Ok(tmp) = self.tmp_dir()
-            && tmp.exists()
-        {
+        let tmp = self.tmp_dir();
+        if tmp.exists() {
             for entry in fs::read_dir(&tmp)?.flatten() {
                 if entry.file_type().ok().is_some_and(|ft| ft.is_dir()) {
                     let marker = entry.path().join(".project_root");
@@ -378,7 +366,7 @@ impl PathResolver {
     }
 
     pub fn exists(&self) -> bool {
-        self.gemini_dir().map(|p| p.exists()).unwrap_or(false)
+        self.gemini_dir().exists()
     }
 }
 
@@ -456,17 +444,6 @@ pub fn project_hash(project_path: &str) -> String {
     s
 }
 
-mod dirs {
-    use std::env;
-    use std::path::PathBuf;
-
-    pub fn home_dir() -> Option<PathBuf> {
-        env::var_os("HOME")
-            .or_else(|| env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,9 +453,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let gemini = temp.path().join(".gemini");
         fs::create_dir_all(&gemini).unwrap();
-        let resolver = PathResolver::new()
-            .with_home(temp.path())
-            .with_gemini_dir(&gemini);
+        let resolver = PathResolver::new(temp.path()).with_gemini_dir(&gemini);
         (temp, resolver)
     }
 
@@ -504,21 +479,21 @@ mod tests {
     #[test]
     fn test_gemini_dir_default() {
         let (temp, resolver) = setup();
-        let dir = resolver.gemini_dir().unwrap();
+        let dir = resolver.gemini_dir();
         assert_eq!(dir, temp.path().join(".gemini"));
     }
 
     #[test]
     fn test_gemini_dir_from_home() {
         let temp = TempDir::new().unwrap();
-        let resolver = PathResolver::new().with_home(temp.path());
-        assert_eq!(resolver.gemini_dir().unwrap(), temp.path().join(".gemini"));
+        let resolver = PathResolver::new(temp.path());
+        assert_eq!(resolver.gemini_dir(), temp.path().join(".gemini"));
     }
 
     #[test]
     fn test_project_dir_friendly_name() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         fs::write(
             gemini.join("projects.json"),
             r#"{"projects":{"/abs/myrepo":"myrepo"}}"#,
@@ -533,7 +508,7 @@ mod tests {
     #[test]
     fn test_project_dir_hash_fallback() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         let hashed = project_hash("/abs/other");
         fs::create_dir_all(gemini.join("tmp").join(&hashed)).unwrap();
 
@@ -544,7 +519,7 @@ mod tests {
     #[test]
     fn test_project_dir_no_dir_returns_hash_path() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         let dir = resolver.project_dir("/never/exists").unwrap();
         assert_eq!(dir, gemini.join("tmp").join(project_hash("/never/exists")));
     }
@@ -552,7 +527,7 @@ mod tests {
     #[test]
     fn test_project_dir_prefers_friendly_name_even_without_tmp() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         // Friendly name is present in projects.json, but tmp/<friendly>/
         // doesn't exist. When no slot exists, we still prefer the friendly
         // path so callers targeting the known name work.
@@ -568,7 +543,7 @@ mod tests {
     #[test]
     fn test_session_dir_chat_file() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         fs::create_dir_all(gemini.join("tmp/myrepo/chats/session-uuid")).unwrap();
         fs::write(
             gemini.join("projects.json"),
@@ -593,7 +568,7 @@ mod tests {
     #[test]
     fn test_logs_file() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         let logs = resolver.logs_file("/abs/myrepo").unwrap();
         assert!(logs.ends_with("logs.json"));
         // Should live inside the project slot
@@ -609,7 +584,7 @@ mod tests {
     #[test]
     fn test_friendly_name_lookup_malformed_file() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         fs::write(gemini.join("projects.json"), "not json").unwrap();
         assert_eq!(resolver.friendly_name_for("/nope").unwrap(), None);
     }
@@ -617,7 +592,7 @@ mod tests {
     #[test]
     fn test_list_project_dirs_union() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
 
         fs::write(
             gemini.join("projects.json"),
@@ -646,7 +621,7 @@ mod tests {
     #[test]
     fn test_list_sessions() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         fs::create_dir_all(gemini.join("tmp/p/chats/session-a")).unwrap();
         fs::create_dir_all(gemini.join("tmp/p/chats/session-b")).unwrap();
@@ -670,7 +645,7 @@ mod tests {
     #[test]
     fn test_list_chat_files() {
         let (_temp, resolver) = setup();
-        let gemini = resolver.gemini_dir().unwrap();
+        let gemini = resolver.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         fs::create_dir_all(gemini.join("tmp/p/chats/session-x")).unwrap();
         fs::write(gemini.join("tmp/p/chats/session-x/main.json"), "{}").unwrap();
@@ -686,28 +661,21 @@ mod tests {
         let (_temp, resolver) = setup();
         assert!(resolver.exists());
 
-        let missing = PathResolver::new().with_gemini_dir("/never/exists");
+        let missing = PathResolver::new("/never/exists");
         assert!(!missing.exists());
-    }
-
-    #[test]
-    fn test_home_dir_from_env() {
-        let home = dirs::home_dir();
-        // Most test environments have one of HOME/USERPROFILE set
-        assert!(home.is_some());
     }
 
     #[test]
     fn test_tmp_dir() {
         let (_t, r) = setup();
-        let tmp = r.tmp_dir().unwrap();
+        let tmp = r.tmp_dir();
         assert!(tmp.ends_with(".gemini/tmp"));
     }
 
     #[test]
     fn test_chats_dir() {
         let (_t, r) = setup();
-        let gemini = r.gemini_dir().unwrap();
+        let gemini = r.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         let chats = r.chats_dir("/p").unwrap();
         assert_eq!(chats, gemini.join("tmp/p/chats"));
@@ -718,7 +686,7 @@ mod tests {
         // Flat main files at the top of `chats/` are enumerated; UUID
         // subdirectories are not.
         let (_t, r) = setup();
-        let gemini = r.gemini_dir().unwrap();
+        let gemini = r.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         let chats = gemini.join("tmp/p/chats");
         fs::create_dir_all(&chats).unwrap();
@@ -748,7 +716,7 @@ mod tests {
     #[test]
     fn test_main_session_file_path() {
         let (_t, r) = setup();
-        let gemini = r.gemini_dir().unwrap();
+        let gemini = r.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         let p = r.main_session_file("/p", "session-2026-04-17-abc").unwrap();
         assert_eq!(p, gemini.join("tmp/p/chats/session-2026-04-17-abc.json"));
@@ -762,7 +730,7 @@ mod tests {
     #[test]
     fn test_resolve_main_file_by_stem() {
         let (_t, r) = setup();
-        let gemini = r.gemini_dir().unwrap();
+        let gemini = r.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         let chats = gemini.join("tmp/p/chats");
         fs::create_dir_all(&chats).unwrap();
@@ -781,7 +749,7 @@ mod tests {
         // Matches the way Gemini CLI's `--resume <uuid>` resolves: scans
         // all main files and matches on inner `sessionId`.
         let (_t, r) = setup();
-        let gemini = r.gemini_dir().unwrap();
+        let gemini = r.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         let chats = gemini.join("tmp/p/chats");
         fs::create_dir_all(&chats).unwrap();
@@ -805,7 +773,7 @@ mod tests {
         // match, the direct stem lookup wins — it's the fast path and
         // mirrors CLI lookup order.
         let (_t, r) = setup();
-        let gemini = r.gemini_dir().unwrap();
+        let gemini = r.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         let chats = gemini.join("tmp/p/chats");
         fs::create_dir_all(&chats).unwrap();
@@ -829,7 +797,7 @@ mod tests {
     #[test]
     fn test_resolve_main_file_returns_none_when_unmatched() {
         let (_t, r) = setup();
-        let gemini = r.gemini_dir().unwrap();
+        let gemini = r.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         let chats = gemini.join("tmp/p/chats");
         fs::create_dir_all(&chats).unwrap();
@@ -848,7 +816,7 @@ mod tests {
         // A main file whose inner sessionId matches a sibling UUID dir
         // should surface once as the main stem, not twice.
         let (_t, r) = setup();
-        let gemini = r.gemini_dir().unwrap();
+        let gemini = r.gemini_dir();
         fs::write(gemini.join("projects.json"), r#"{"projects":{"/p":"p"}}"#).unwrap();
         let chats = gemini.join("tmp/p/chats");
         fs::create_dir_all(&chats).unwrap();

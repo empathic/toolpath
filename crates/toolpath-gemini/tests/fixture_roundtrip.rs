@@ -34,7 +34,7 @@ fn fixture_load_via_provider() {
     let temp = tempfile::tempdir().unwrap();
     let (gemini, _sd) = write_session(temp.path());
 
-    let mgr = GeminiConvo::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
+    let mgr = GeminiConvo::with_resolver(PathResolver::new(temp.path()).with_gemini_dir(&gemini));
     let view = ConversationProvider::load_conversation(
         &mgr,
         "/Users/ben/empathic/oss/toolpath",
@@ -68,7 +68,7 @@ fn fixture_derives_to_valid_path() {
     let temp = tempfile::tempdir().unwrap();
     let (gemini, _sd) = write_session(temp.path());
 
-    let mgr = GeminiConvo::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
+    let mgr = GeminiConvo::with_resolver(PathResolver::new(temp.path()).with_gemini_dir(&gemini));
     let convo = mgr
         .read_conversation("/Users/ben/empathic/oss/toolpath", "session-uuid")
         .unwrap();

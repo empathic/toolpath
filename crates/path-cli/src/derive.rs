@@ -105,7 +105,7 @@ pub(crate) fn derive_gemini_session(
     session: &str,
 ) -> Result<DerivedDoc> {
     derive_gemini_session_with(
-        &toolpath_gemini::GeminiConvo::with_resolver(providers::gemini_resolver(config)),
+        &toolpath_gemini::GeminiConvo::with_resolver(providers::require_gemini_resolver(config)?),
         project,
         session,
     )

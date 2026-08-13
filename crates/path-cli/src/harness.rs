@@ -99,7 +99,6 @@ pub(crate) fn is_not_found_claude(err: &toolpath_claude::ConvoError) -> bool {
 pub(crate) fn is_not_found_gemini(err: &toolpath_gemini::ConvoError) -> bool {
     use toolpath_gemini::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::GeminiDirectoryNotFound(_))
 }
 

@@ -37,7 +37,7 @@ pub use watcher::ConversationWatcher;
 /// ```rust,no_run
 /// use toolpath_gemini::GeminiConvo;
 ///
-/// let manager = GeminiConvo::new();
+/// let manager = GeminiConvo::new("/Users/alex");
 /// let projects = manager.list_projects()?;
 /// let convo = manager.read_conversation(
 ///     "/Users/alex/project",
@@ -51,15 +51,11 @@ pub struct GeminiConvo {
     io: ConvoIO,
 }
 
-impl Default for GeminiConvo {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl GeminiConvo {
-    pub fn new() -> Self {
-        Self { io: ConvoIO::new() }
+    pub fn new<P: Into<std::path::PathBuf>>(home: P) -> Self {
+        Self {
+            io: ConvoIO::new(home),
+        }
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
@@ -80,7 +76,7 @@ impl GeminiConvo {
         self.io.exists()
     }
 
-    pub fn gemini_dir_path(&self) -> Result<std::path::PathBuf> {
+    pub fn gemini_dir_path(&self) -> std::path::PathBuf {
         self.io.gemini_dir_path()
     }
 
@@ -225,7 +221,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new().with_gemini_dir(&gemini);
+        let resolver = PathResolver::new(temp.path()).with_gemini_dir(&gemini);
         (temp, GeminiConvo::with_resolver(resolver))
     }
 
@@ -333,7 +329,7 @@ mod tests {
     #[test]
     fn test_gemini_dir_path() {
         let (t, mgr) = setup();
-        assert_eq!(mgr.gemini_dir_path().unwrap(), t.path().join(".gemini"));
+        assert_eq!(mgr.gemini_dir_path(), t.path().join(".gemini"));
     }
 
     #[test]
@@ -344,8 +340,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default() {
-        let _mgr = GeminiConvo::default();
+    fn test_new_roots_at_home() {
+        let temp = TempDir::new().unwrap();
+        let mgr = GeminiConvo::new(temp.path());
+        assert_eq!(mgr.gemini_dir_path(), temp.path().join(".gemini"));
     }
 
     #[test]

@@ -45,7 +45,7 @@ struct FileState {
 /// use toolpath_gemini::{GeminiConvo, ConversationWatcher};
 /// use toolpath_convo::WatcherEvent;
 ///
-/// let manager = GeminiConvo::new();
+/// let manager = GeminiConvo::new("/Users/alex");
 /// let mut watcher = ConversationWatcher::new(
 ///     manager,
 ///     "/path/to/project".to_string(),
@@ -265,7 +265,8 @@ mod tests {
             r#"{"projects":{"/abs/myrepo":"myrepo"}}"#,
         )
         .unwrap();
-        let mgr = GeminiConvo::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
+        let mgr =
+            GeminiConvo::with_resolver(PathResolver::new(temp.path()).with_gemini_dir(&gemini));
         (temp, mgr, session_dir)
     }
 

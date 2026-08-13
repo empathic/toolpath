@@ -852,7 +852,7 @@ fn write_into_gemini_project(
     project_path: &str,
     config: &Config,
 ) -> Result<()> {
-    let resolver = providers::gemini_resolver(config);
+    let resolver = providers::require_gemini_resolver(config)?;
     let chats_dir = resolver
         .chats_dir(project_path)
         .map_err(|e| anyhow::anyhow!("Cannot resolve Gemini chats dir: {}", e))?;
@@ -2371,7 +2371,7 @@ mod tests {
 
         // The file landed at chats/session-*.json (flat, prefixed).
         let canon_project = std::fs::canonicalize(&project_dir).unwrap();
-        let resolver = PathResolver::new().with_home(&fake_home);
+        let resolver = PathResolver::new(&fake_home);
         let chats_dir = resolver.chats_dir(canon_project.to_str().unwrap()).unwrap();
 
         let session_files: Vec<PathBuf> = std::fs::read_dir(&chats_dir)
