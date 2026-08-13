@@ -75,8 +75,8 @@ impl ArtifactType {
     }
 }
 
-/// Bundle of provider managers used during aggregation. Production code
-/// builds this from real `$HOME` via `from_environment`; tests construct
+/// Bundle of provider managers used during aggregation. Production
+/// code builds this with `providers::harness_bundle`; tests construct
 /// it directly with provider-specific resolvers.
 #[derive(Default)]
 pub(crate) struct HarnessBundle {
@@ -87,23 +87,6 @@ pub(crate) struct HarnessBundle {
     pub(crate) opencode: Option<toolpath_opencode::OpencodeConvo>,
     pub(crate) cursor: Option<toolpath_cursor::CursorConvo>,
     pub(crate) pi: Option<toolpath_pi::PiConvo>,
-}
-
-impl HarnessBundle {
-    /// Build the production bundle. Each provider is included
-    /// unconditionally (its `new()` doesn't fail on a missing home dir);
-    /// consumers skip the ones whose listing returns empty/NotFound.
-    pub(crate) fn from_environment() -> Self {
-        Self {
-            claude: Some(toolpath_claude::ClaudeConvo::new()),
-            gemini: Some(toolpath_gemini::GeminiConvo::new()),
-            codex: Some(toolpath_codex::CodexConvo::new()),
-            copilot: Some(toolpath_copilot::CopilotConvo::new()),
-            opencode: Some(toolpath_opencode::OpencodeConvo::new()),
-            cursor: Some(toolpath_cursor::CursorConvo::new()),
-            pi: Some(toolpath_pi::PiConvo::new()),
-        }
-    }
 }
 
 pub(crate) fn is_not_found_claude(err: &toolpath_claude::ConvoError) -> bool {
