@@ -10,10 +10,11 @@ use clap::Subcommand;
 use std::path::PathBuf;
 
 use crate::cache::{list_cached, remove_cached};
+use crate::config::Config;
 #[cfg(not(target_os = "emscripten"))]
 use crate::{
     artifact::{ArtifactRef, ArtifactType},
-    harness::HarnessBundle,
+    providers,
     sync::{SyncObserver, SyncOutcome, sync_bundle},
 };
 
@@ -43,15 +44,15 @@ pub enum CacheOp {
     },
 }
 
-pub fn run(op: CacheOp) -> Result<()> {
+pub fn run(op: CacheOp, config: &Config) -> Result<()> {
     match op {
         CacheOp::Ls => run_ls(),
-        CacheOp::Rm { id } => run_rm(&id),
+        CacheOp::Rm { id } => run_rm(&id, config),
         #[cfg(not(target_os = "emscripten"))]
         CacheOp::Sync {
             types,
             project_under,
-        } => run_sync(types, project_under),
+        } => run_sync(types, project_under, config),
     }
 }
 
@@ -67,12 +68,16 @@ fn run_ls() -> Result<()> {
     Ok(())
 }
 
-fn run_rm(id: &str) -> Result<()> {
+#[cfg_attr(target_os = "emscripten", expect(unused_variables))]
+fn run_rm(id: &str, config: &Config) -> Result<()> {
     remove_cached(id)?;
     // The artifact is still real — downgrade its manifest record to
     // "known, not cached" so the next sync can re-materialize it.
     #[cfg(not(target_os = "emscripten"))]
-    if let Err(e) = crate::sync::evict_cache_id(id) {
+    if let Err(e) = config
+        .config_dir()
+        .and_then(|dir| crate::sync::evict_cache_id(&dir, id))
+    {
         eprintln!("warning: sync manifest not updated: {e}");
     }
     eprintln!("Removed {id}");
@@ -80,11 +85,17 @@ fn run_rm(id: &str) -> Result<()> {
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn run_sync(types: Vec<ArtifactType>, project_under: Option<PathBuf>) -> Result<()> {
+fn run_sync(
+    types: Vec<ArtifactType>,
+    project_under: Option<PathBuf>,
+    config: &Config,
+) -> Result<()> {
     let explicit = !types.is_empty();
     let types = resolve_types(&types);
-    let bundle = HarnessBundle::from_environment();
+    let config_dir = config.config_dir()?;
+    let bundle = providers::harness_bundle(config);
     let outcomes = sync_bundle(
+        &config_dir,
         &bundle,
         &types,
         project_under.as_deref(),
