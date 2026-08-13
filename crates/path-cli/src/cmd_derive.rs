@@ -15,5 +15,8 @@ pub fn run(source: DeriveSource, pretty: bool) -> Result<()> {
         force: false,
         no_cache: true,
     };
-    crate::cmd_import::run(args, pretty)
+    // Transitional: `p derive` does not take `&Config` yet; load one
+    // for the import path.
+    let config = crate::config::Config::load()?;
+    crate::cmd_import::run(args, pretty, &config)
 }

@@ -102,7 +102,7 @@ pub fn run(command: PCommand, pretty: bool, config: &Config) -> Result<()> {
             format,
             json,
         } => crate::cmd_list::run(source, format, json, config),
-        PCommand::Import { args } => crate::cmd_import::run(args, pretty),
+        PCommand::Import { args } => crate::cmd_import::run(args, pretty, config),
         PCommand::Export { target } => crate::cmd_export::run(target),
         PCommand::Cache { op } => crate::cmd_cache::run(op, config),
         PCommand::Render { format } => crate::cmd_render::run(format),
