@@ -517,7 +517,7 @@ pub fn run(args: ShareArgs, config: &Config) -> Result<()> {
     let rows = gather_artifacts(&bundle, &cwd, harness, project_filter);
 
     if rows.is_empty() {
-        return bail_no_sessions(&bundle, project_filter);
+        return bail_no_sessions(&bundle, project_filter, config);
     }
 
     if !crate::fuzzy::available() {
@@ -594,6 +594,7 @@ pub fn run(args: ShareArgs, config: &Config) -> Result<()> {
 fn bail_no_sessions(
     bundle: &HarnessBundle,
     project_filter: Option<&std::path::Path>,
+    config: &Config,
 ) -> Result<()> {
     if let Some(p) = project_filter {
         anyhow::bail!(
@@ -605,35 +606,32 @@ fn bail_no_sessions(
     let mut summary = String::from("No agent sessions found.\n");
     // Pad harness names so the path column lines up: "opencode:" is the
     // longest at 9 chars (8 + colon).
-    let home = crate::config::home_dir();
+    let home = config.home_dir().map(std::path::PathBuf::as_path);
     summary.push_str(&format_status_line(
         "claude",
-        &harness_status_claude(bundle, home.as_deref()),
+        &harness_status_claude(bundle, home),
     ));
     summary.push_str(&format_status_line(
         "gemini",
-        &harness_status_gemini(bundle, home.as_deref()),
+        &harness_status_gemini(bundle, home),
     ));
     summary.push_str(&format_status_line(
         "codex",
-        &harness_status_codex(bundle, home.as_deref()),
+        &harness_status_codex(bundle, home),
     ));
     summary.push_str(&format_status_line(
         "copilot",
-        &harness_status_copilot(bundle, home.as_deref()),
+        &harness_status_copilot(bundle, home),
     ));
     summary.push_str(&format_status_line(
         "opencode",
-        &harness_status_opencode(bundle, home.as_deref()),
+        &harness_status_opencode(bundle, home),
     ));
     summary.push_str(&format_status_line(
         "cursor",
-        &harness_status_cursor(bundle, home.as_deref()),
+        &harness_status_cursor(bundle, home),
     ));
-    summary.push_str(&format_status_line(
-        "pi",
-        &harness_status_pi(bundle, home.as_deref()),
-    ));
+    summary.push_str(&format_status_line("pi", &harness_status_pi(bundle, home)));
     eprint!("{summary}");
     anyhow::bail!("no shareable sessions");
 }
