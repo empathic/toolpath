@@ -309,7 +309,7 @@ fn derive(source: ImportSource, config: &Config) -> Result<Vec<DerivedDoc>> {
             all,
             base,
         } => derive_pi(project, session, all, base, config),
-        ImportSource::Pathbase { target, url } => derive_pathbase(target, url),
+        ImportSource::Pathbase { target, url } => derive_pathbase(target, url, config),
     }
 }
 
@@ -1524,16 +1524,21 @@ fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|t| t.with_timezone(&chrono::Utc))
 }
 
-fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<DerivedDoc>> {
+fn derive_pathbase(
+    target: String,
+    url_flag: Option<String>,
+    config: &Config,
+) -> Result<Vec<DerivedDoc>> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (target, url_flag);
+        let _ = (target, url_flag, config);
         anyhow::bail!("'path import pathbase' requires a native environment with network access");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
         Ok(vec![crate::derive::pathbase_fetch_to_doc(
+            config,
             &target,
             url_flag.as_deref(),
         )?])

@@ -240,7 +240,11 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
                 Graph::from_json(&json)
                     .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e))?
             } else {
-                let derived = crate::derive::pathbase_fetch_to_doc(u, args.url.as_deref())?;
+                // Transitional: `resolve_input` does not take `&Config`
+                // yet; load one for the Pathbase fetch.
+                let config = Config::load()?;
+                let derived =
+                    crate::derive::pathbase_fetch_to_doc(&config, u, args.url.as_deref())?;
                 if !args.no_cache {
                     // force=true here: we either short-circuited above
                     // (cache miss) or the user explicitly passed --force,

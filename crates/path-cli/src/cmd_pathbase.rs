@@ -13,8 +13,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(crate) use crate::config::PATHBASE_URL_ENV;
-use crate::config::config_dir;
+use crate::config::Config;
 
 pub(crate) const DEFAULT_URL: &str = "https://pathbase.dev";
 
@@ -61,11 +60,19 @@ pub(crate) struct CreatedGraph {
 
 // ── URL + prompt helpers ────────────────────────────────────────────────
 
-pub(crate) fn resolve_url(cli_url: Option<String>) -> String {
-    let raw = cli_url
-        .or_else(|| std::env::var(PATHBASE_URL_ENV).ok())
-        .unwrap_or_else(|| DEFAULT_URL.to_string());
+/// Strip a trailing `/` so a server URL concatenates and compares
+/// uniformly.
+pub(crate) fn normalize_url(raw: &str) -> String {
     raw.trim_end_matches('/').to_string()
+}
+
+/// The Pathbase server for this invocation: the `--url` flag, then
+/// `$PATHBASE_URL` via [`Config`], then [`DEFAULT_URL`].
+pub(crate) fn resolve_url(config: &Config, cli_url: Option<String>) -> String {
+    let raw = cli_url
+        .or_else(|| config.pathbase_url.clone())
+        .unwrap_or_else(|| DEFAULT_URL.to_string());
+    normalize_url(&raw)
 }
 
 /// Extract `scheme://host[:port]` from a URL, dropping any path/query.
@@ -260,11 +267,16 @@ pub(crate) enum AuthMode {
 /// `host_of(base_url) != host_of(stored.url)` triggers an advisory warning
 /// before the credentials probe so the user sees the mismatch even if
 /// `api_me` happens to succeed.
-pub(crate) fn preflight_auth(base_url: &str, anon: bool, needs_auth: bool) -> Result<AuthMode> {
+pub(crate) fn preflight_auth(
+    config: &Config,
+    base_url: &str,
+    anon: bool,
+    needs_auth: bool,
+) -> Result<AuthMode> {
     if anon {
         return Ok(AuthMode::Anon);
     }
-    let stored = load_session(&credentials_path()?)?;
+    let stored = load_session(&credentials_path(config)?)?;
 
     let go_anon = stored.is_none() && !needs_auth;
     if go_anon {
@@ -653,8 +665,10 @@ pub(crate) fn graphs_download(
 
 // ── File storage ────────────────────────────────────────────────────────
 
-pub(crate) fn credentials_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join(crate::config::CREDENTIALS_FILE_NAME))
+pub(crate) fn credentials_path(config: &Config) -> Result<PathBuf> {
+    Ok(config
+        .config_dir()?
+        .join(crate::config::CREDENTIALS_FILE_NAME))
 }
 
 pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
@@ -715,10 +729,41 @@ pub(crate) mod tests {
         }
     }
 
+    fn config_with_url(url: Option<&str>) -> Config {
+        Config {
+            pathbase_url: url.map(str::to_string),
+            ..Config::default()
+        }
+    }
+
+    fn config_with_dir(dir: &std::path::Path) -> Config {
+        Config {
+            toolpath_config_dir: Some(dir.to_path_buf()),
+            ..Config::default()
+        }
+    }
+
     #[test]
     fn resolve_url_prefers_cli_flag() {
-        let got = resolve_url(Some("https://example.com/".into()));
+        let config = config_with_url(Some("https://from-env.example"));
+        let got = resolve_url(&config, Some("https://example.com/".into()));
         assert_eq!(got, "https://example.com");
+    }
+
+    #[test]
+    fn resolve_url_falls_back_to_config_then_default() {
+        let config = config_with_url(Some("https://from-env.example/"));
+        assert_eq!(resolve_url(&config, None), "https://from-env.example");
+        assert_eq!(resolve_url(&config_with_url(None), None), DEFAULT_URL);
+    }
+
+    #[test]
+    fn credentials_path_sits_under_the_config_dir() {
+        let config = config_with_dir(std::path::Path::new("/tmp/cfg-root"));
+        assert_eq!(
+            credentials_path(&config).unwrap(),
+            std::path::PathBuf::from("/tmp/cfg-root/credentials.json")
+        );
     }
 
     #[test]
@@ -1093,8 +1138,8 @@ pub(crate) mod tests {
     //
     // The preflight is the gate that decides authed-vs-anon BEFORE the
     // share picker runs, so a credential rejection shouldn't make the
-    // user pick a session and *then* fail. These tests use
-    // TOOLPATH_CONFIG_DIR + a tempdir-credentials file to drive the
+    // user pick a session and *then* fail. These tests inject a `Config`
+    // carrying a tempdir config dir + a credentials file to drive the
     // logged-in path through the same MockServer used elsewhere.
 
     fn write_credentials(dir: &std::path::Path, url: &str) {
@@ -1119,13 +1164,18 @@ pub(crate) mod tests {
         )
     }
 
-    /// Cleared TOOLPATH_CONFIG_DIR + no `--anon` + no auth-requiring flags
+    /// Empty config dir + no `--anon` + no auth-requiring flags
     /// → preflight returns Anon with the "not logged in" notice.
     #[test]
     fn preflight_anon_when_logged_out_and_no_auth_flags() {
         let cfg = tempfile::tempdir().unwrap();
-        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
-        let mode = preflight_auth("https://pathbase.dev", false, false).unwrap();
+        let mode = preflight_auth(
+            &config_with_dir(cfg.path()),
+            "https://pathbase.dev",
+            false,
+            false,
+        )
+        .unwrap();
         assert!(matches!(mode, AuthMode::Anon));
     }
 
@@ -1137,10 +1187,9 @@ pub(crate) mod tests {
             Box::leak(me_response_body("alice").into_boxed_str()),
         );
         let cfg = tempfile::tempdir().unwrap();
-        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), &server.base());
         let base = server.base();
-        let mode = preflight_auth(&base, false, false).unwrap();
+        let mode = preflight_auth(&config_with_dir(cfg.path()), &base, false, false).unwrap();
         match mode {
             AuthMode::Authed { username, .. } => assert_eq!(username, "alice"),
             AuthMode::Anon => panic!("expected Authed, got Anon"),
@@ -1153,10 +1202,9 @@ pub(crate) mod tests {
     fn preflight_falls_back_to_anon_on_401_without_auth_flags() {
         let server = MockServer::start("HTTP/1.1 401 Unauthorized", "{}");
         let cfg = tempfile::tempdir().unwrap();
-        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), &server.base());
         let base = server.base();
-        let mode = preflight_auth(&base, false, false).unwrap();
+        let mode = preflight_auth(&config_with_dir(cfg.path()), &base, false, false).unwrap();
         assert!(matches!(mode, AuthMode::Anon));
     }
 
@@ -1166,10 +1214,9 @@ pub(crate) mod tests {
     fn preflight_propagates_401_when_auth_required() {
         let server = MockServer::start("HTTP/1.1 401 Unauthorized", "{}");
         let cfg = tempfile::tempdir().unwrap();
-        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), &server.base());
         let base = server.base();
-        let err = preflight_auth(&base, false, true).unwrap_err();
+        let err = preflight_auth(&config_with_dir(cfg.path()), &base, false, true).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("--repo"), "expected mention of --repo: {msg}");
     }
@@ -1180,56 +1227,14 @@ pub(crate) mod tests {
         // Even with valid credentials in place, --anon returns Anon without
         // calling api_me (no MockServer needed — would 404).
         let cfg = tempfile::tempdir().unwrap();
-        let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), "https://pathbase.dev");
-        let mode = preflight_auth("https://pathbase.dev", true, false).unwrap();
+        let mode = preflight_auth(
+            &config_with_dir(cfg.path()),
+            "https://pathbase.dev",
+            true,
+            false,
+        )
+        .unwrap();
         assert!(matches!(mode, AuthMode::Anon));
-    }
-
-    /// Test-helper guard for `std::env::set_var`. Process env is shared
-    /// across all `cargo test` threads, so concurrent tests that mutate or
-    /// read *any* env var would race — `std::env::set_var`/`var_os` are not
-    /// thread-safe. `EnvGuard` serializes against every other env-touching
-    /// test in the crate via the *shared* [`crate::config::TEST_ENV_LOCK`]
-    /// (held for the guard's lifetime), not a private lock: these tests set
-    /// `TOOLPATH_CONFIG_DIR`, which `cmd_resume`/`cmd_cache`/`cmd_export`
-    /// also read/write under that same lock. A separate mutex here would
-    /// only exclude EnvGuard users from each other while still racing those
-    /// modules. Drop restores the prior value.
-    struct EnvGuard {
-        key: String,
-        prior: Option<std::ffi::OsString>,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-    impl EnvGuard {
-        fn set(key: &str, val: &str) -> Self {
-            // PoisonError on a previously-panicked test still gives us a
-            // valid lock — recover the inner guard and proceed.
-            let lock = crate::config::TEST_ENV_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let prior = std::env::var_os(key);
-            // SAFETY: TEST_ENV_LOCK serializes this against every other
-            // env-touching test in the crate, so no concurrent
-            // set_var/var_os on the shared environ can occur.
-            unsafe {
-                std::env::set_var(key, val);
-            }
-            Self {
-                key: key.to_string(),
-                prior,
-                _lock: lock,
-            }
-        }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.prior {
-                    Some(v) => std::env::set_var(&self.key, v),
-                    None => std::env::remove_var(&self.key),
-                }
-            }
-        }
     }
 }

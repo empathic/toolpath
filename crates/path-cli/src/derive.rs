@@ -366,14 +366,18 @@ pub(crate) fn derive_pi_session_with(
 /// URL or bare `owner/repo/<uuid>` triple) and parse it as a toolpath
 /// document. Used by `path import pathbase` and `path resume <url>`.
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Result<DerivedDoc> {
+pub(crate) fn pathbase_fetch_to_doc(
+    config: &Config,
+    target: &str,
+    url_flag: Option<&str>,
+) -> Result<DerivedDoc> {
     use crate::cmd_pathbase::{credentials_path, graphs_download, load_session, resolve_url};
 
     let (base, ref_) = parse_pathbase_ref(target, url_flag)?;
-    let stored = load_session(&credentials_path()?)?;
+    let stored = load_session(&credentials_path(config)?)?;
     let base_url = base
         .or_else(|| stored.as_ref().map(|s| s.url.clone()))
-        .unwrap_or_else(|| resolve_url(None));
+        .unwrap_or_else(|| resolve_url(config, None));
 
     let token = stored.as_ref().map(|s| s.token.as_str());
 
@@ -414,7 +418,7 @@ pub(crate) fn parse_pathbase_ref(
     target: &str,
     url_flag: Option<&str>,
 ) -> Result<(Option<String>, PathRef)> {
-    use crate::cmd_pathbase::resolve_url;
+    use crate::cmd_pathbase::normalize_url;
 
     let scheme = if target.starts_with("https://") {
         Some("https://")
@@ -440,7 +444,7 @@ pub(crate) fn parse_pathbase_ref(
         })?;
         Ok((Some(format!("{scheme}{host}")), triple))
     } else {
-        let base = url_flag.map(|u| resolve_url(Some(u.to_string())));
+        let base = url_flag.map(normalize_url);
         let segs: Vec<&str> = target.split('/').filter(|s| !s.is_empty()).collect();
         let triple = extract_triple(&segs)
             .ok_or_else(|| anyhow::anyhow!("expected `<owner>/<repo>/<uuid>`, got `{target}`"))?;
@@ -600,7 +604,12 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 200 OK", body);
         let url = format!("{}/u/alex/repos/pathstash/graphs/{UUID}", server.base());
 
-        let derived = pathbase_fetch_to_doc(&url, None).unwrap();
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            toolpath_config_dir: Some(cfg_dir.path().to_path_buf()),
+            ..Config::default()
+        };
+        let derived = pathbase_fetch_to_doc(&config, &url, None).unwrap();
 
         assert_eq!(derived.cache_id, format!("pathbase-alex-pathstash-{UUID}"));
         assert!(derived.doc.into_single_path().is_some());
