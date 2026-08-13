@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use crate::config::{home_dir, home_relative};
+use crate::config::{Config, home_dir, home_relative};
 use crate::remote::{RepoSpec, parse_remote};
 
 /// A share remote resolved from config. `display` is the remote exactly
@@ -43,8 +43,11 @@ pub(crate) struct ConfiguredRemote {
 }
 
 /// Resolve the share remote configured for `session_dir`, if any.
-pub(crate) fn resolve_remote(session_dir: &Path) -> Result<Option<ConfiguredRemote>> {
-    let global = crate::config::config_dir()?.join(crate::config::CONFIG_FILE_NAME);
+pub(crate) fn resolve_remote(
+    config: &Config,
+    session_dir: &Path,
+) -> Result<Option<ConfiguredRemote>> {
+    let global = config.config_dir()?.join(crate::config::CONFIG_FILE_NAME);
     resolve_remote_from(&global, home_dir().as_deref(), session_dir)
 }
 

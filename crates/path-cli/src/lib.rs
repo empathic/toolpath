@@ -149,7 +149,7 @@ pub fn run() -> Result<()> {
         #[cfg(not(target_os = "emscripten"))]
         Commands::Show { source, ansi } => cmd_show::run(source, ansi, &config),
         #[cfg(not(target_os = "emscripten"))]
-        Commands::Share { args } => cmd_share::run(args),
+        Commands::Share { args } => cmd_share::run(args, &config),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Resume { args } => cmd_resume::run(args),
         Commands::Query { args } => cmd_query::run(args, cli.pretty, &config),
