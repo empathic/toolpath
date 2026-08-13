@@ -51,6 +51,7 @@ const CONFIG_ENV_VARS: &[&str] = &[
     PATHBASE_URL_ENV,
     CONFIG_DIR_ENV,
     "TOOLPATH_QUERY_EXPLAIN",
+    "USERPROFILE",
     "XDG_DATA_HOME",
 ];
 
@@ -71,6 +72,8 @@ pub(crate) struct Config {
     pub(crate) toolpath_config_dir: Option<PathBuf>,
     /// `$TOOLPATH_QUERY_EXPLAIN`: query-planner diagnostics on stderr.
     pub(crate) toolpath_query_explain: Option<String>,
+    /// `$USERPROFILE`: Windows home, the fallback when `$HOME` is unset.
+    pub(crate) userprofile: Option<PathBuf>,
     /// `$XDG_DATA_HOME`: opencode's data root (Linux).
     pub(crate) xdg_data_home: Option<PathBuf>,
 }
@@ -119,6 +122,14 @@ impl Config {
             .as_ref()
             .ok_or_else(|| anyhow!("$HOME is not set; cannot locate config directory"))?;
         Ok(home.join(CONFIG_DIR_NAME))
+    }
+
+    /// The home directory the provider resolvers should use:
+    /// `$HOME`, falling back to `$USERPROFILE` (Windows). Matches the
+    /// resolvers' own internal fallback.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) fn home_dir(&self) -> Option<&PathBuf> {
+        self.home.as_ref().or(self.userprofile.as_ref())
     }
 }
 
@@ -184,6 +195,7 @@ mod tests {
             jail.set_env("APPDATA", "/home/jailed/appdata");
             jail.set_env(PATHBASE_URL_ENV, "https://pathbase.test");
             jail.set_env("TOOLPATH_QUERY_EXPLAIN", "1");
+            jail.set_env("USERPROFILE", "/home/jailed-profile");
             let config = Config::load().unwrap();
             assert_eq!(
                 config,
@@ -194,6 +206,7 @@ mod tests {
                     pathbase_url: Some("https://pathbase.test".to_string()),
                     toolpath_config_dir: Some(PathBuf::from("/tmp/cfg-root")),
                     toolpath_query_explain: Some("1".to_string()),
+                    userprofile: Some(PathBuf::from("/home/jailed-profile")),
                     xdg_data_home: Some(PathBuf::from("/home/jailed/.local/share")),
                 }
             );
@@ -201,11 +214,13 @@ mod tests {
         });
     }
 
-    /// Variables outside [`CONFIG_ENV_VARS`] never reach the `Config`,
-    /// even when the name collides with a field. Jail does not clear
-    /// the ambient environment. Assert only on fields whose variables
-    /// are set here or never exported ambiently
-    /// (`TOOLPATH_QUERY_EXPLAIN`, unlike `PATHBASE_URL` or `HOME`).
+    /// Variables outside [`CONFIG_ENV_VARS`] never reach the `Config`.
+    /// The `only` filter and serde's unknown-field drop both enforce
+    /// this; the test observes their combined effect and cannot tell
+    /// them apart. Jail does not clear the ambient environment. Assert
+    /// only on fields whose variables are set here or never exported
+    /// ambiently (`TOOLPATH_QUERY_EXPLAIN`, unlike `PATHBASE_URL` or
+    /// `HOME`).
     #[test]
     #[allow(clippy::result_large_err)]
     fn load_ignores_unowned_env_vars() {
@@ -261,6 +276,26 @@ mod tests {
             config.config_dir().unwrap(),
             PathBuf::from("/home/alex/.toolpath")
         );
+    }
+
+    #[test]
+    fn home_dir_prefers_home_over_userprofile() {
+        let config = Config {
+            home: Some(PathBuf::from("/home/alex")),
+            userprofile: Some(PathBuf::from("C:/Users/alex")),
+            ..Config::default()
+        };
+        assert_eq!(config.home_dir(), Some(&PathBuf::from("/home/alex")));
+    }
+
+    #[test]
+    fn home_dir_falls_back_to_userprofile() {
+        let config = Config {
+            userprofile: Some(PathBuf::from("C:/Users/alex")),
+            ..Config::default()
+        };
+        assert_eq!(config.home_dir(), Some(&PathBuf::from("C:/Users/alex")));
+        assert_eq!(Config::default().home_dir(), None);
     }
 
     #[test]
