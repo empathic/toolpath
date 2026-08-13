@@ -92,7 +92,6 @@ pub(crate) struct HarnessBundle {
 pub(crate) fn is_not_found_claude(err: &toolpath_claude::ConvoError) -> bool {
     use toolpath_claude::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::ClaudeDirectoryNotFound(_))
 }
 

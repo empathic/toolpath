@@ -46,7 +46,7 @@ pub use watcher::ConversationWatcher;
 /// ```rust,no_run
 /// use toolpath_claude::ClaudeConvo;
 ///
-/// let manager = ClaudeConvo::new();
+/// let manager = ClaudeConvo::new("/Users/alex");
 ///
 /// // List all projects
 /// let projects = manager.list_projects()?;
@@ -75,19 +75,11 @@ impl Clone for ClaudeConvo {
     }
 }
 
-impl Default for ClaudeConvo {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ClaudeConvo {
-    /// Creates a new ClaudeConvo manager with default path resolution.
-    pub fn new() -> Self {
-        Self {
-            io: ConvoIO::new(),
-            chain_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
-        }
+    /// Creates a new ClaudeConvo manager rooted at `home`, so the
+    /// Claude directory is `<home>/.claude`.
+    pub fn new<P: Into<std::path::PathBuf>>(home: P) -> Self {
+        Self::with_io(ConvoIO::new(home))
     }
 
     /// Creates a ClaudeConvo manager with a custom path resolver.
@@ -99,15 +91,24 @@ impl ClaudeConvo {
     /// ```rust
     /// use toolpath_claude::{ClaudeConvo, PathResolver};
     ///
-    /// let resolver = PathResolver::new()
-    ///     .with_home("/custom/home")
-    ///     .with_claude_dir("/custom/.claude");
+    /// let resolver = PathResolver::new("/custom/home").with_claude_dir("/custom/.claude");
     ///
     /// let manager = ClaudeConvo::with_resolver(resolver);
     /// ```
     pub fn with_resolver(resolver: PathResolver) -> Self {
+        Self::with_io(ConvoIO::with_resolver(resolver))
+    }
+
+    /// Verbose warnings cover every unparseable line of a conversation
+    /// file, not just the first 5.
+    pub fn with_verbose_warnings(mut self, verbose_warnings: bool) -> Self {
+        self.io = self.io.with_verbose_warnings(verbose_warnings);
+        self
+    }
+
+    fn with_io(io: ConvoIO) -> Self {
         Self {
-            io: ConvoIO::with_resolver(resolver),
+            io,
             chain_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
@@ -280,12 +281,12 @@ impl ClaudeConvo {
     }
 
     /// Returns the path to the Claude directory.
-    pub fn claude_dir_path(&self) -> Result<std::path::PathBuf> {
+    pub fn claude_dir_path(&self) -> std::path::PathBuf {
         self.io.claude_dir_path()
     }
 
     /// Checks if a specific conversation exists.
-    pub fn conversation_exists(&self, project_path: &str, session_id: &str) -> Result<bool> {
+    pub fn conversation_exists(&self, project_path: &str, session_id: &str) -> bool {
         self.io.conversation_exists(project_path, session_id)
     }
 
@@ -415,7 +416,7 @@ mod tests {
         let claude_dir = temp.path().join(".claude");
         fs::create_dir_all(claude_dir.join("projects/-test-project")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         (temp, manager)
@@ -456,7 +457,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
         (temp, manager)
     }
@@ -500,16 +501,8 @@ mod tests {
     #[test]
     fn test_conversation_exists() {
         let (_temp, manager) = setup_test_with_conversation();
-        assert!(
-            manager
-                .conversation_exists("/test/project", "session-abc")
-                .unwrap()
-        );
-        assert!(
-            !manager
-                .conversation_exists("/test/project", "nonexistent")
-                .unwrap()
-        );
+        assert!(manager.conversation_exists("/test/project", "session-abc"));
+        assert!(!manager.conversation_exists("/test/project", "nonexistent"));
     }
 
     #[test]
@@ -527,8 +520,7 @@ mod tests {
     #[test]
     fn test_claude_dir_path() {
         let (_temp, manager) = setup_test_with_conversation();
-        let path = manager.claude_dir_path().unwrap();
-        assert!(path.exists());
+        assert!(manager.claude_dir_path().exists());
     }
 
     #[test]
@@ -595,9 +587,11 @@ mod tests {
     }
 
     #[test]
-    fn test_default_impl() {
-        // Test that Default trait works
-        let _manager = ClaudeConvo::default();
+    fn new_roots_at_home() {
+        let temp = TempDir::new().unwrap();
+        let manager = ClaudeConvo::new(temp.path());
+        assert_eq!(manager.claude_dir_path(), temp.path().join(".claude"));
+        assert!(manager.with_verbose_warnings(true).io().verbose_warnings());
     }
 
     // ── Session chain convenience methods ────────────────────────────
@@ -628,7 +622,7 @@ mod tests {
         ];
         fs::write(project_dir.join("session-c.jsonl"), c.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(claude_dir);
         (temp, ClaudeConvo::with_resolver(resolver))
     }
 

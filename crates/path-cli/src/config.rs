@@ -53,6 +53,10 @@ pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
 pub struct Config {
     /// `$APPDATA`: Windows harness data root.
     pub(crate) appdata: Option<PathBuf>,
+    /// `$CLAUDE_CLI_DEBUG`: the Claude reader warns about every
+    /// unparseable conversation line, not just the first 5. Presence is
+    /// the signal; the value is not read.
+    pub(crate) claude_cli_debug: Option<String>,
     /// `$CODEX_ROLLOUT_STRICT`: the Codex reader errors on an
     /// unparseable rollout line. Presence is the signal; the value is
     /// not read.
@@ -104,6 +108,7 @@ impl Config {
     /// influence a `Config`. Names match case-insensitively.
     const ENV_MAP: &'static [(&'static str, &'static str)] = &[
         ("APPDATA", "appdata"),
+        ("CLAUDE_CLI_DEBUG", "claude_cli_debug"),
         ("CODEX_ROLLOUT_STRICT", "codex_rollout_strict"),
         ("COPILOT_HOME", "copilot_home"),
         ("HOME", "home"),
@@ -197,6 +202,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env(CONFIG_DIR_ENV, "/tmp/cfg-root");
             jail.set_env("HOME", "/home/jailed");
+            jail.set_env("CLAUDE_CLI_DEBUG", "1");
             jail.set_env("CODEX_ROLLOUT_STRICT", "1");
             jail.set_env("XDG_DATA_HOME", "/home/jailed/.local/share");
             jail.set_env("COPILOT_HOME", "/home/jailed/.copilot");
@@ -209,6 +215,7 @@ mod tests {
                 config,
                 Config {
                     appdata: Some(PathBuf::from("/home/jailed/appdata")),
+                    claude_cli_debug: Some("1".to_string()),
                     codex_rollout_strict: Some("1".to_string()),
                     copilot_home: Some(PathBuf::from("/home/jailed/.copilot")),
                     home: Some(PathBuf::from("/home/jailed")),

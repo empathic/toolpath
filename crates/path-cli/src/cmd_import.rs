@@ -438,7 +438,9 @@ fn derive_claude(
     all: bool,
     config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let manager = toolpath_claude::ClaudeConvo::with_resolver(providers::claude_resolver(config));
+    let manager =
+        toolpath_claude::ClaudeConvo::with_resolver(providers::require_claude_resolver(config)?)
+            .with_verbose_warnings(providers::claude_verbose_warnings(config));
     derive_claude_with_manager(&manager, project, session, all)
 }
 
@@ -1576,7 +1578,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = toolpath_claude::PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = toolpath_claude::ClaudeConvo::with_resolver(resolver);
         (temp, manager)
     }
@@ -1621,7 +1623,7 @@ mod tests {
             .unwrap();
         }
 
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = toolpath_claude::PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         (temp, toolpath_claude::ClaudeConvo::with_resolver(resolver))
     }
 

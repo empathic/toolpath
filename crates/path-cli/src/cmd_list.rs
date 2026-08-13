@@ -279,7 +279,9 @@ fn run_github(repo: String, fmt: ListFormat) -> Result<()> {
 // ── Claude ──────────────────────────────────────────────────────────────────
 
 fn run_claude(project: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
-    let manager = providers::claude_convo(config);
+    let manager =
+        toolpath_claude::ClaudeConvo::with_resolver(providers::require_claude_resolver(config)?)
+            .with_verbose_warnings(providers::claude_verbose_warnings(config));
 
     match (project, fmt) {
         // TSV/JSON without --project: emit sessions across every project so
@@ -1311,7 +1313,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = toolpath_claude::PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = toolpath_claude::ClaudeConvo::with_resolver(resolver);
         (temp, manager)
     }
@@ -1344,7 +1346,7 @@ mod tests {
         let projects_dir = claude_dir.join("projects");
         std::fs::create_dir_all(&projects_dir).unwrap();
 
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = toolpath_claude::PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = toolpath_claude::ClaudeConvo::with_resolver(resolver);
 
         let result = list_claude_projects(&manager, ListFormat::Pretty);
@@ -1386,7 +1388,7 @@ mod tests {
         let projects_dir = claude_dir.join("projects/-empty-project");
         std::fs::create_dir_all(&projects_dir).unwrap();
 
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = toolpath_claude::PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = toolpath_claude::ClaudeConvo::with_resolver(resolver);
 
         let result = list_claude_sessions(&manager, "/empty/project", ListFormat::Pretty);

@@ -948,7 +948,7 @@ mod tests {
         ];
         fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         (temp, ClaudeConvo::with_resolver(resolver))
     }
 
@@ -978,7 +978,7 @@ mod tests {
         ];
         fs::write(project_dir.join("session-2.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         (temp, ClaudeConvo::with_resolver(resolver))
     }
 
@@ -1119,7 +1119,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
@@ -1144,7 +1144,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
@@ -1172,7 +1172,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
@@ -1196,7 +1196,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
@@ -1296,7 +1296,7 @@ mod tests {
         ];
         fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = crate::watcher::ConversationWatcher::new(
@@ -1333,7 +1333,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = crate::watcher::ConversationWatcher::new(
@@ -1389,7 +1389,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = crate::watcher::ConversationWatcher::new(
@@ -1565,7 +1565,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
@@ -1593,7 +1593,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
@@ -1639,7 +1639,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
@@ -1662,7 +1662,7 @@ mod tests {
         ];
         fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
@@ -1758,7 +1758,7 @@ mod tests {
         ];
         fs::write(project_dir.join("session-b.jsonl"), entries_b.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         (temp, ClaudeConvo::with_resolver(resolver))
     }
 
@@ -1809,7 +1809,7 @@ mod tests {
         ];
         fs::write(project_dir.join("solo.jsonl"), entries.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let provider = ClaudeConvo::with_resolver(resolver);
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "solo").unwrap();
@@ -1852,7 +1852,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = crate::watcher::ConversationWatcher::new(
