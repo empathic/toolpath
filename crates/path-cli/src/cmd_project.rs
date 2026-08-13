@@ -10,6 +10,8 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
+use crate::config::Config;
+
 #[derive(Subcommand, Debug)]
 pub enum ProjectTarget {
     /// Project a toolpath document into Claude JSONL format
@@ -24,15 +26,16 @@ pub enum ProjectTarget {
     },
 }
 
-pub fn run(target: ProjectTarget) -> Result<()> {
+pub fn run(target: ProjectTarget, config: &Config) -> Result<()> {
     match target {
-        ProjectTarget::Claude { input, output } => {
-            crate::cmd_export::run(crate::cmd_export::ExportTarget::Claude {
+        ProjectTarget::Claude { input, output } => crate::cmd_export::run(
+            crate::cmd_export::ExportTarget::Claude {
                 input,
                 project: None,
                 output,
                 force: false,
-            })
-        }
+            },
+            config,
+        ),
     }
 }
