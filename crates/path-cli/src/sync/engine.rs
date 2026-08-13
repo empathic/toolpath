@@ -303,11 +303,12 @@ fn sync_artifacts(
 
 /// Record an externally-derived cache write (`p import`, `share`) in
 /// the manifest, so sync doesn't re-derive what was just written.
-///
-/// Transitional: loads a [`Config`] per call. New code takes the
-/// config directory as a parameter.
-pub(crate) fn record_artifact(artifact: &ArtifactRef, cache_id: &str) -> Result<()> {
-    let config_dir = Config::load()?.config_dir()?;
+pub(crate) fn record_artifact(
+    config: &Config,
+    artifact: &ArtifactRef,
+    cache_id: &str,
+) -> Result<()> {
+    let config_dir = config.config_dir()?;
     update_manifest(&config_dir, |manifest| {
         manifest
             .entry(artifact.artifact_type.name().to_string())
@@ -328,13 +329,7 @@ pub(crate) fn record_artifact(artifact: &ArtifactRef, cache_id: &str) -> Result<
 /// Whether the manifest already records exactly this artifact state
 /// under exactly this cache entry, with the doc present — i.e. a
 /// write would reproduce what's already there.
-///
-/// Transitional: loads a [`Config`] per call. New code takes the
-/// config directory as a parameter.
-pub(crate) fn record_is_current(artifact: &ArtifactRef, cache_id: &str) -> bool {
-    let Ok(config) = Config::load() else {
-        return false;
-    };
+pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_id: &str) -> bool {
     let Ok(config_dir) = config.config_dir() else {
         return false;
     };
@@ -854,7 +849,7 @@ mod tests {
             assert_eq!(artifact.id, "sess-aaa");
             assert!(artifact.modified.is_some() && artifact.size.is_some());
             crate::cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
-            record_artifact(artifact, &derived.cache_id).unwrap();
+            record_artifact(config, artifact, &derived.cache_id).unwrap();
 
             // The import's stamp must match sync's own enumeration.
             let (_, outcome) =
