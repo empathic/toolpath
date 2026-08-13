@@ -478,33 +478,19 @@ fn save_manifest(config_dir: &Path, manifest: &Manifest) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
     use std::path::Path;
 
-    /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
-    /// `f` receives the tempdir root for building provider fixtures and
-    /// a `Config` carrying the same root, and the config directory
-    /// itself.
+    /// Run `f` with a `Config` whose config dir is `<tempdir>/.toolpath`;
+    /// `f` also receives the tempdir root for building provider fixtures
+    /// and the config directory itself.
     fn with_cfg<F: FnOnce(&Path, &Config, &Path) -> R, R>(f: F) -> R {
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let config_root = temp.path().join(".toolpath");
-        let prev = std::env::var_os(CONFIG_DIR_ENV);
-        unsafe {
-            std::env::set_var(CONFIG_DIR_ENV, &config_root);
-        }
         let config = Config {
             toolpath_config_dir: Some(config_root.clone()),
             ..Config::default()
         };
-        let result = f(temp.path(), &config, &config_root);
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var(CONFIG_DIR_ENV, v),
-                None => std::env::remove_var(CONFIG_DIR_ENV),
-            }
-        }
-        result
+        f(temp.path(), &config, &config_root)
     }
 
     fn write_claude_session(home: &Path, project_slug: &str, session: &str, prompt: &str) {

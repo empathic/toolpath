@@ -108,7 +108,7 @@ pub fn run(command: PCommand, pretty: bool, config: &Config) -> Result<()> {
         PCommand::Render { format } => crate::cmd_render::run(format),
         PCommand::Merge { inputs, title } => crate::cmd_merge::run(inputs, title, pretty),
         PCommand::Validate { input } => crate::cmd_validate::run(input),
-        PCommand::Derive { source } => crate::cmd_derive::run(source, pretty),
+        PCommand::Derive { source } => crate::cmd_derive::run(source, pretty, config),
         PCommand::Project { target } => crate::cmd_project::run(target, config),
         PCommand::Incept { target } => crate::cmd_incept::run(target, config),
         PCommand::Track { op } => crate::cmd_track::run(op, pretty),

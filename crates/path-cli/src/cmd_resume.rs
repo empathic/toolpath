@@ -817,17 +817,9 @@ mod tests {
         // input at a 500-erroring mock server (so any network round-trip
         // would surface as an error), and confirm resolve_input still
         // returns the cached graph.
-        let _env = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
-        // Pin TOOLPATH_CONFIG_DIR to a tempdir so we don't pollute the
-        // user's real cache.
+        // The `Config` pins the config dir to a tempdir, so the test
+        // never touches the user's real cache.
         let cfg_dir = tempfile::tempdir().unwrap();
-        let prev_cfg = std::env::var_os("TOOLPATH_CONFIG_DIR");
-        unsafe {
-            std::env::set_var("TOOLPATH_CONFIG_DIR", cfg_dir.path());
-        }
 
         // Seed the cache with a codex-source graph. Cache id keys on the
         // graph UUID since Pathbase 1.1+ addresses graphs by UUID.
@@ -869,26 +861,14 @@ mod tests {
             toolpath_config_dir: Some(cfg_dir.path().to_path_buf()),
             ..Config::default()
         };
-        let result = resolve_input(&args, &config);
-
-        // Restore env before asserting so a panic doesn't poison sibling tests.
-        unsafe {
-            match prev_cfg {
-                Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
-                None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
-            }
-        }
-
-        let (g, harness) = result.expect("resolve_input should reuse cache without refetching");
+        let (g, harness) = resolve_input(&args, &config)
+            .expect("resolve_input should reuse cache without refetching");
         let _ = ensure_path_with_agent(&g).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
 
     #[test]
     fn resolve_input_unresolvable_errors_clearly() {
-        let _env = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         let args = ResumeArgs {
             input: "definitely/not/a/real/cache/id".to_string(),
             cwd: None,
