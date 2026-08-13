@@ -558,8 +558,12 @@ mod tests {
         assert!(source_for(&empty, ArtifactType::Claude).is_none());
         assert!(source_for(&empty, ArtifactType::Git).is_none());
 
+        let config = crate::config::Config {
+            home: Some(PathBuf::from("/home/jailed")),
+            ..Default::default()
+        };
         let with_claude = HarnessBundle {
-            claude: Some(toolpath_claude::ClaudeConvo::new()),
+            claude: Some(crate::providers::claude_convo(&config)),
             ..Default::default()
         };
         assert!(source_for(&with_claude, ArtifactType::Claude).is_some());

@@ -11,6 +11,8 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
+use crate::config::Config;
+
 #[derive(Subcommand, Debug)]
 pub enum PCommand {
     /// List available sources (branches, projects, sessions)
@@ -93,7 +95,7 @@ pub enum PCommand {
     },
 }
 
-pub fn run(command: PCommand, pretty: bool, config: &crate::config::Config) -> Result<()> {
+pub fn run(command: PCommand, pretty: bool, config: &Config) -> Result<()> {
     match command {
         PCommand::List {
             source,
@@ -102,7 +104,7 @@ pub fn run(command: PCommand, pretty: bool, config: &crate::config::Config) -> R
         } => crate::cmd_list::run(source, format, json, config),
         PCommand::Import { args } => crate::cmd_import::run(args, pretty),
         PCommand::Export { target } => crate::cmd_export::run(target),
-        PCommand::Cache { op } => crate::cmd_cache::run(op),
+        PCommand::Cache { op } => crate::cmd_cache::run(op, config),
         PCommand::Render { format } => crate::cmd_render::run(format),
         PCommand::Merge { inputs, title } => crate::cmd_merge::run(inputs, title, pretty),
         PCommand::Validate { input } => crate::cmd_validate::run(input),

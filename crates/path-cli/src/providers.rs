@@ -10,6 +10,8 @@
 //! against `with_home`. The injected directory wins against both.
 
 use crate::config::Config;
+#[cfg(not(target_os = "emscripten"))]
+use crate::harness::HarnessBundle;
 use std::path::Path;
 
 pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
@@ -85,6 +87,23 @@ pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiC
         resolver = resolver.with_sessions_dir(dir);
     }
     toolpath_pi::PiConvo::with_resolver(resolver)
+}
+
+/// The production [`HarnessBundle`], every provider built from
+/// `config`. Each provider is included unconditionally (construction
+/// does not fail on a missing home dir); consumers skip the ones whose
+/// listing returns empty/NotFound.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
+    HarnessBundle {
+        claude: Some(claude_convo(config)),
+        gemini: Some(gemini_convo(config)),
+        codex: Some(codex_convo(config)),
+        copilot: Some(copilot_convo(config)),
+        opencode: Some(opencode_convo(config)),
+        cursor: Some(cursor_convo(config)),
+        pi: Some(pi_convo(config, None)),
+    }
 }
 
 #[cfg(all(test, not(target_os = "emscripten")))]
@@ -209,5 +228,18 @@ mod tests {
     fn pi_convo_base_replaces_the_sessions_dir() {
         let manager = pi_convo(&config_with_home(), Some(Path::new("/pi/base")));
         assert_eq!(manager.resolver().sessions_dir(), PathBuf::from("/pi/base"));
+    }
+
+    #[test]
+    fn harness_bundle_roots_providers_at_config_home() {
+        let bundle = harness_bundle(&config_with_home());
+        assert_eq!(
+            bundle.claude.unwrap().resolver().projects_dir().unwrap(),
+            PathBuf::from("/home/jailed/.claude/projects")
+        );
+        assert_eq!(
+            bundle.pi.unwrap().resolver().sessions_dir(),
+            PathBuf::from("/home/jailed/.pi/agent/sessions")
+        );
     }
 }
