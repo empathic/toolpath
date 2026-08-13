@@ -824,7 +824,9 @@ fn pick_gemini_global(
 }
 
 fn derive_codex(session: Option<String>, all: bool, config: &Config) -> Result<Vec<DerivedDoc>> {
-    let manager = toolpath_codex::CodexConvo::with_resolver(providers::codex_resolver(config));
+    let manager =
+        toolpath_codex::CodexConvo::with_resolver(providers::require_codex_resolver(config)?)
+            .with_strict(providers::codex_strict(config));
 
     let session_ids: Vec<String> = match (session, all) {
         (Some(s), _) => vec![s],

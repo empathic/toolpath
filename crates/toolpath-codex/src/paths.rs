@@ -17,27 +17,16 @@ const LOG_FILE: &str = "log/codex-tui.log";
 /// Builder-style resolver over the `~/.codex/` filesystem.
 #[derive(Debug, Clone)]
 pub struct PathResolver {
-    home_dir: Option<PathBuf>,
+    home_dir: PathBuf,
     codex_dir: Option<PathBuf>,
 }
 
-impl Default for PathResolver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PathResolver {
-    pub fn new() -> Self {
+    pub fn new<P: Into<PathBuf>>(home: P) -> Self {
         Self {
-            home_dir: dirs::home_dir(),
+            home_dir: home.into(),
             codex_dir: None,
         }
-    }
-
-    pub fn with_home<P: Into<PathBuf>>(mut self, home: P) -> Self {
-        self.home_dir = Some(home.into());
-        self
     }
 
     /// Override the codex directory directly (defaults to `~/.codex`).
@@ -46,37 +35,37 @@ impl PathResolver {
         self
     }
 
-    pub fn home_dir(&self) -> Result<&Path> {
-        self.home_dir.as_deref().ok_or(ConvoError::NoHomeDirectory)
+    pub fn home_dir(&self) -> &Path {
+        &self.home_dir
     }
 
-    pub fn codex_dir(&self) -> Result<PathBuf> {
-        if let Some(d) = &self.codex_dir {
-            return Ok(d.clone());
+    pub fn codex_dir(&self) -> PathBuf {
+        match &self.codex_dir {
+            Some(d) => d.clone(),
+            None => self.home_dir.join(".codex"),
         }
-        Ok(self.home_dir()?.join(".codex"))
     }
 
-    pub fn sessions_root(&self) -> Result<PathBuf> {
-        Ok(self.codex_dir()?.join(SESSIONS_SUBDIR))
+    pub fn sessions_root(&self) -> PathBuf {
+        self.codex_dir().join(SESSIONS_SUBDIR)
     }
 
-    pub fn history_file(&self) -> Result<PathBuf> {
-        Ok(self.codex_dir()?.join(HISTORY_FILE))
+    pub fn history_file(&self) -> PathBuf {
+        self.codex_dir().join(HISTORY_FILE)
     }
 
-    pub fn log_file(&self) -> Result<PathBuf> {
-        Ok(self.codex_dir()?.join(LOG_FILE))
+    pub fn log_file(&self) -> PathBuf {
+        self.codex_dir().join(LOG_FILE)
     }
 
     pub fn exists(&self) -> bool {
-        self.codex_dir().map(|p| p.exists()).unwrap_or(false)
+        self.codex_dir().exists()
     }
 
     /// Enumerate every `rollout-*.jsonl` file under `sessions/`, newest
     /// first by file mtime.
     pub fn list_rollout_files(&self) -> Result<Vec<PathBuf>> {
-        let root = self.sessions_root()?;
+        let root = self.sessions_root();
         if !root.exists() {
             return Ok(Vec::new());
         }
@@ -155,7 +144,7 @@ impl PathResolver {
             return Ok(None);
         }
         let candidate = self
-            .sessions_root()?
+            .sessions_root()
             .join(y)
             .join(m)
             .join(d)
@@ -237,17 +226,6 @@ fn walk_for_rollouts(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-mod dirs {
-    use std::env;
-    use std::path::PathBuf;
-
-    pub fn home_dir() -> Option<PathBuf> {
-        env::var_os("HOME")
-            .or_else(|| env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,29 +235,27 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let codex = temp.path().join(".codex");
         fs::create_dir_all(&codex).unwrap();
-        let resolver = PathResolver::new()
-            .with_home(temp.path())
-            .with_codex_dir(&codex);
+        let resolver = PathResolver::new(temp.path()).with_codex_dir(&codex);
         (temp, resolver)
     }
 
     #[test]
     fn codex_dir_defaults_to_home() {
         let temp = TempDir::new().unwrap();
-        let r = PathResolver::new().with_home(temp.path());
-        assert_eq!(r.codex_dir().unwrap(), temp.path().join(".codex"));
+        let r = PathResolver::new(temp.path());
+        assert_eq!(r.codex_dir(), temp.path().join(".codex"));
     }
 
     #[test]
     fn sessions_root_under_codex_dir() {
         let (_t, r) = setup();
-        assert!(r.sessions_root().unwrap().ends_with(".codex/sessions"));
+        assert!(r.sessions_root().ends_with(".codex/sessions"));
     }
 
     #[test]
     fn list_rollouts_walks_date_tree() {
         let (_t, r) = setup();
-        let day = r.sessions_root().unwrap().join("2026/04/20");
+        let day = r.sessions_root().join("2026/04/20");
         fs::create_dir_all(&day).unwrap();
         fs::write(day.join("rollout-2026-04-20T10-00-00-aaa.jsonl"), "{}").unwrap();
         fs::write(day.join("rollout-2026-04-20T11-00-00-bbb.jsonl"), "{}").unwrap();
@@ -307,7 +283,7 @@ mod tests {
     #[test]
     fn find_rollout_by_full_stem() {
         let (_t, r) = setup();
-        let day = r.sessions_root().unwrap().join("2026/04/20");
+        let day = r.sessions_root().join("2026/04/20");
         fs::create_dir_all(&day).unwrap();
         let stem = "rollout-2026-04-20T10-00-00-abc-xyz";
         fs::write(day.join(format!("{}.jsonl", stem)), "{}").unwrap();
@@ -318,7 +294,7 @@ mod tests {
     #[test]
     fn find_rollout_by_uuid_suffix() {
         let (_t, r) = setup();
-        let day = r.sessions_root().unwrap().join("2026/04/20");
+        let day = r.sessions_root().join("2026/04/20");
         fs::create_dir_all(&day).unwrap();
         fs::write(
             day.join("rollout-2026-04-20T10-00-00-019dabc6-8fef-7681-a054-b5bb75fcb97d.jsonl"),
@@ -337,7 +313,7 @@ mod tests {
     #[test]
     fn find_rollout_by_short_prefix() {
         let (_t, r) = setup();
-        let day = r.sessions_root().unwrap().join("2026/04/20");
+        let day = r.sessions_root().join("2026/04/20");
         fs::create_dir_all(&day).unwrap();
         fs::write(
             day.join("rollout-2026-04-20T10-00-00-019dabc6-unique.jsonl"),
@@ -375,7 +351,7 @@ mod tests {
     #[test]
     fn find_rollout_stem_in_mismatched_date_dir_falls_back_to_walk() {
         let (_t, r) = setup();
-        let day = r.sessions_root().unwrap().join("2026/04/21");
+        let day = r.sessions_root().join("2026/04/21");
         fs::create_dir_all(&day).unwrap();
         let stem = "rollout-2026-04-20T10-00-00-abc-xyz";
         fs::write(day.join(format!("{}.jsonl", stem)), "{}").unwrap();
@@ -393,7 +369,7 @@ mod tests {
     #[test]
     fn find_rollout_ambiguous_prefix_errors() {
         let (_t, r) = setup();
-        let day = r.sessions_root().unwrap().join("2026/04/20");
+        let day = r.sessions_root().join("2026/04/20");
         fs::create_dir_all(&day).unwrap();
         fs::write(
             day.join("rollout-2026-04-20T10-00-00-019dabc6-a.jsonl"),
@@ -412,21 +388,15 @@ mod tests {
     #[test]
     fn history_and_log_file_paths() {
         let (t, r) = setup();
-        assert_eq!(
-            r.history_file().unwrap(),
-            t.path().join(".codex/history.jsonl")
-        );
-        assert_eq!(
-            r.log_file().unwrap(),
-            t.path().join(".codex/log/codex-tui.log")
-        );
+        assert_eq!(r.history_file(), t.path().join(".codex/history.jsonl"));
+        assert_eq!(r.log_file(), t.path().join(".codex/log/codex-tui.log"));
     }
 
     #[test]
     fn exists_reflects_codex_dir() {
         let (_t, r) = setup();
         assert!(r.exists());
-        let missing = PathResolver::new().with_codex_dir("/never/exists");
+        let missing = PathResolver::new("/never/exists");
         assert!(!missing.exists());
     }
 }

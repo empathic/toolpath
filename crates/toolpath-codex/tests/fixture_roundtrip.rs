@@ -295,7 +295,7 @@ fn list_sessions_via_convo() {
     let dst = day.join("rollout-2026-04-20T12-43-30-019dabc6-8fef-7681-a054-b5bb75fcb97d.jsonl");
     std::fs::copy(fixture_path(), &dst).unwrap();
 
-    let resolver = PathResolver::new().with_codex_dir(&codex);
+    let resolver = PathResolver::new(temp.path()).with_codex_dir(&codex);
     let mgr = CodexConvo::with_resolver(resolver);
     let sessions = mgr.list_sessions().unwrap();
     assert_eq!(sessions.len(), 1);

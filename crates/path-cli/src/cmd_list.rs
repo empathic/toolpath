@@ -620,7 +620,9 @@ fn emit_gemini_tsv(m: &toolpath_gemini::ConversationMetadata) {
 // ── Codex ───────────────────────────────────────────────────────────────────
 
 fn run_codex(fmt: ListFormat, config: &Config) -> Result<()> {
-    let manager = providers::codex_convo(config);
+    let manager =
+        toolpath_codex::CodexConvo::with_resolver(providers::require_codex_resolver(config)?)
+            .with_strict(providers::codex_strict(config));
     let sessions = manager
         .list_sessions()
         .map_err(|e| anyhow::anyhow!("{}", e))?;

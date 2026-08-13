@@ -47,20 +47,29 @@ use toolpath_convo::{
 };
 
 /// Provider for Codex sessions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CodexConvo {
     io: ConvoIO,
 }
 
 impl CodexConvo {
-    pub fn new() -> Self {
-        Self { io: ConvoIO::new() }
+    pub fn new<P: Into<std::path::PathBuf>>(home: P) -> Self {
+        Self {
+            io: ConvoIO::new(home),
+        }
     }
 
     pub fn with_resolver(resolver: crate::paths::PathResolver) -> Self {
         Self {
             io: ConvoIO::with_resolver(resolver),
         }
+    }
+
+    /// Strict mode makes an unparseable rollout line an error instead
+    /// of a warning.
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.io = self.io.with_strict(strict);
+        self
     }
 
     pub fn io(&self) -> &ConvoIO {
@@ -1051,7 +1060,7 @@ mod tests {
         fs::create_dir_all(&day).unwrap();
         let name = "rollout-2026-04-20T10-00-00-019dabc6-8fef-7681-a054-b5bb75fcb97d";
         fs::write(day.join(format!("{}.jsonl", name)), body).unwrap();
-        let resolver = crate::paths::PathResolver::new().with_codex_dir(&codex);
+        let resolver = crate::paths::PathResolver::new(temp.path()).with_codex_dir(&codex);
         (temp, CodexConvo::with_resolver(resolver), name.to_string())
     }
 

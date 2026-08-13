@@ -908,7 +908,7 @@ mod tests {
             format!("{meta}\n{user}\n"),
         )
         .unwrap();
-        let resolver = toolpath_codex::PathResolver::new().with_codex_dir(&codex_dir);
+        let resolver = toolpath_codex::PathResolver::new(home).with_codex_dir(&codex_dir);
         HarnessBundle {
             codex: Some(toolpath_codex::CodexConvo::with_resolver(resolver)),
             ..Default::default()

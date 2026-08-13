@@ -159,7 +159,8 @@ pub(crate) fn derive_gemini_session_with(
 /// Derive a single Codex session given an explicit session id.
 pub(crate) fn derive_codex_session(config: &Config, session: &str) -> Result<DerivedDoc> {
     derive_codex_session_with(
-        &toolpath_codex::CodexConvo::with_resolver(providers::codex_resolver(config)),
+        &toolpath_codex::CodexConvo::with_resolver(providers::require_codex_resolver(config)?)
+            .with_strict(providers::codex_strict(config)),
         session,
     )
 }

@@ -6,20 +6,33 @@ use crate::reader::RolloutReader;
 use crate::types::{RolloutItem, Session, SessionMetadata};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ConvoIO {
     resolver: PathResolver,
+    strict: bool,
 }
 
 impl ConvoIO {
-    pub fn new() -> Self {
-        Self {
-            resolver: PathResolver::new(),
-        }
+    pub fn new<P: Into<PathBuf>>(home: P) -> Self {
+        Self::with_resolver(PathResolver::new(home))
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            strict: false,
+        }
+    }
+
+    /// Strict mode makes an unparseable rollout line an error instead
+    /// of a warning.
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
+    }
+
+    pub fn strict(&self) -> bool {
+        self.strict
     }
 
     pub fn resolver(&self) -> &PathResolver {
@@ -30,7 +43,7 @@ impl ConvoIO {
         self.resolver.exists()
     }
 
-    pub fn codex_dir_path(&self) -> Result<PathBuf> {
+    pub fn codex_dir_path(&self) -> PathBuf {
         self.resolver.codex_dir()
     }
 
@@ -70,12 +83,12 @@ impl ConvoIO {
     /// Read one session by id or filename stem.
     pub fn read_session(&self, session_id: &str) -> Result<Session> {
         let path = self.resolver.find_rollout_file(session_id)?;
-        RolloutReader::read_session(&path)
+        RolloutReader::read_session_with(&path, self.strict)
     }
 
     /// Read one session by absolute path.
     pub fn read_session_path<P: AsRef<std::path::Path>>(&self, path: P) -> Result<Session> {
-        RolloutReader::read_session(path)
+        RolloutReader::read_session_with(path, self.strict)
     }
 
     /// Cheap per-file metadata: parses the session_meta line + walks
@@ -85,7 +98,7 @@ impl ConvoIO {
         // Full parse is simplest; rollout files are small (typical
         // session 200-300 KB). If that becomes a bottleneck we'd peek
         // the first line plus `stat` for mtime.
-        let session = RolloutReader::read_session(path)?;
+        let session = RolloutReader::read_session_with(path, self.strict)?;
 
         let meta_line = session.items().find_map(|item| match item {
             RolloutItem::SessionMeta(m) => Some(m),
@@ -143,7 +156,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new().with_codex_dir(&codex);
+        let resolver = PathResolver::new(temp.path()).with_codex_dir(&codex);
         (temp, ConvoIO::with_resolver(resolver))
     }
 
@@ -171,7 +184,7 @@ mod tests {
     #[test]
     fn list_session_ids_returns_stems_without_reading_bodies() {
         let (_t, io) = setup();
-        let day = io.resolver().sessions_root().unwrap().join("2026/04/21");
+        let day = io.resolver().sessions_root().join("2026/04/21");
         fs::create_dir_all(&day).unwrap();
         fs::write(
             day.join("rollout-2026-04-21T09-00-00-bbb.jsonl"),
@@ -221,7 +234,24 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let codex = temp.path().join(".codex");
         fs::create_dir_all(&codex).unwrap();
-        let io = ConvoIO::with_resolver(PathResolver::new().with_codex_dir(&codex));
+        let io = ConvoIO::with_resolver(PathResolver::new(temp.path()).with_codex_dir(&codex));
         assert!(io.list_sessions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn strict_reads_reject_an_unparseable_line() {
+        let (_t, io) = setup();
+        let day = io.resolver().sessions_root().join("2026/04/21");
+        fs::create_dir_all(&day).unwrap();
+        let file = day.join("rollout-2026-04-21T09-00-00-bbb.jsonl");
+        fs::write(&file, "not json").unwrap();
+
+        assert!(io.read_session_path(&file).is_ok());
+        assert!(
+            io.clone()
+                .with_strict(true)
+                .read_session_path(&file)
+                .is_err()
+        );
     }
 }

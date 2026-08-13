@@ -111,7 +111,6 @@ pub(crate) fn is_not_found_pi(err: &toolpath_pi::PiError) -> bool {
 pub(crate) fn is_not_found_codex(err: &toolpath_codex::ConvoError) -> bool {
     use toolpath_codex::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::CodexDirectoryNotFound(_))
 }
 

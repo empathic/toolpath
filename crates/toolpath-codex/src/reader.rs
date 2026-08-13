@@ -1,9 +1,9 @@
 //! Parse Codex rollout JSONL files.
 //!
-//! The writer is append-only but backgrounded — a crashed Codex
-//! process may leave the final line mid-write. We skip unparseable
-//! lines by default and surface them as warnings rather than failing
-//! the whole read.
+//! The writer is append-only but backgrounded, so a crashed Codex
+//! process may leave the final line mid-write. The reader skips
+//! unparseable lines and surfaces them as warnings. Strict mode turns
+//! the first unparseable line into an error.
 
 use crate::error::{ConvoError, Result};
 use crate::types::{RolloutLine, Session};
@@ -14,11 +14,19 @@ use std::path::{Path, PathBuf};
 pub struct RolloutReader;
 
 impl RolloutReader {
-    /// Read every line of a rollout file into a [`Session`].
+    /// Read every line of a rollout file into a [`Session`], skipping
+    /// unparseable lines.
     ///
     /// The session id is taken from the first line's `session_meta`
     /// payload if present; otherwise from the filename stem.
     pub fn read_session<P: AsRef<Path>>(path: P) -> Result<Session> {
+        Self::read_session_with(path, false)
+    }
+
+    /// [`Self::read_session`] with the strict flag supplied by the
+    /// caller. Strict mode returns the first unparseable line as an
+    /// error.
+    pub fn read_session_with<P: AsRef<Path>>(path: P, strict: bool) -> Result<Session> {
         let path = path.as_ref();
         if !path.exists() {
             return Err(ConvoError::SessionNotFound(path.display().to_string()));
@@ -46,9 +54,7 @@ impl RolloutReader {
             match serde_json::from_str::<RolloutLine>(&raw) {
                 Ok(line) => lines.push(line),
                 Err(e) => {
-                    // Tolerate a single truncated last line (common after crashes);
-                    // warn about anything else.
-                    if std::env::var("CODEX_ROLLOUT_STRICT").is_ok() {
+                    if strict {
                         return Err(ConvoError::Json(e));
                     }
                     eprintln!(
@@ -152,39 +158,22 @@ mod tests {
         assert!(matches!(err, ConvoError::SessionNotFound(_)));
     }
 
-    /// Serializes access to `CODEX_ROLLOUT_STRICT` across tests in this
-    /// module. Two tests probe `read_session` with opposing strictness
-    /// expectations; without serialization, cargo test's threaded
-    /// runner can observe the env var set by one test during another.
-    fn strict_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        use std::sync::{Mutex, OnceLock};
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-    }
-
     #[test]
     fn read_session_handles_truncated_last_line() {
-        let _g = strict_env_lock();
-        // Belt-and-braces: even under the lock, make sure the env var
-        // is clear before we observe lenient behavior.
-        unsafe { std::env::remove_var("CODEX_ROLLOUT_STRICT") };
-        // Good first line, garbage second — reader skips and warns.
-        let body = sample_rollout() + "\n{\"timestamp\":\"broken"; // truncated
+        // Good first line, truncated second: the reader skips and warns.
+        let body = sample_rollout() + "\n{\"timestamp\":\"broken";
         let f = write_fixture(&body);
         let s = RolloutReader::read_session(f.path()).unwrap();
         assert_eq!(s.lines.len(), 4, "truncated line dropped, others kept");
+        let s = RolloutReader::read_session_with(f.path(), false).unwrap();
+        assert_eq!(s.lines.len(), 4);
     }
 
     #[test]
-    fn read_session_respects_strict_env() {
-        let _g = strict_env_lock();
+    fn read_session_strict_errors_on_unparseable_line() {
         let body = sample_rollout() + "\n{\"timestamp\":\"broken";
         let f = write_fixture(&body);
-        unsafe { std::env::set_var("CODEX_ROLLOUT_STRICT", "1") };
-        let err = RolloutReader::read_session(f.path()).unwrap_err();
-        unsafe { std::env::remove_var("CODEX_ROLLOUT_STRICT") };
+        let err = RolloutReader::read_session_with(f.path(), true).unwrap_err();
         assert!(matches!(err, ConvoError::Json(_)));
     }
 

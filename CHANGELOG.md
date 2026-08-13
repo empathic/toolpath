@@ -31,6 +31,34 @@ cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
     drivers so the zero-file rule lives once.
   - The emscripten (playground) build keeps the sequential engine —
     no threads there.
+## `toolpath-codex`: the caller supplies the home directory — 2026-08-13
+
+- **`toolpath-codex`** (0.7.0): breaking. `PathResolver::new(home)`
+  takes the home directory as a required argument. The crate reads no
+  environment variable; it keeps the layout knowledge (`<home>/.codex`)
+  and the caller owns "what is home". `CodexConvo::new(home)` and
+  `ConvoIO::new(home)` take the same argument.
+
+  Removed: the `Default` impls on `PathResolver`, `ConvoIO`, and
+  `CodexConvo`; `PathResolver::with_home`; the `NoHomeDirectory` error
+  variant. `with_codex_dir` stays as the full override.
+
+  The home directory is always present, so `home_dir()`, `codex_dir()`,
+  `sessions_root()`, `history_file()`, `log_file()`, and
+  `ConvoIO::codex_dir_path()` return a path instead of a `Result`.
+
+  Strict rollout parsing is a parameter. `CodexConvo::with_strict(bool)`
+  and `ConvoIO::with_strict(bool)` set it,
+  `RolloutReader::read_session_with(path, strict)` takes it directly,
+  and `RolloutReader::read_session(path)` stays lenient. The crate reads
+  no environment variable for it.
+- **`path-cli`** (unreleased): `providers::codex_resolver` returns
+  `Option<PathResolver>`. `None` means the configuration carries no home
+  directory, so Codex is out of reach: the harness bundle omits it, and
+  a command that targets Codex reports "cannot determine the home
+  directory". `Config` reads `$CODEX_ROLLOUT_STRICT` and passes the flag
+  to every `CodexConvo` it builds, so the variable keeps its behavior
+  for CLI users.
 
 ## `toolpath-gemini`: the caller supplies the home directory — 2026-08-13
 
