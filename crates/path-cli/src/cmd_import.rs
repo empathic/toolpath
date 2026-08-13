@@ -19,12 +19,14 @@ use crate::artifact::{ArtifactRef, ArtifactType};
 #[cfg(not(target_os = "emscripten"))]
 use crate::cache::make_id;
 use crate::cache::write_cached;
+use crate::config::Config;
 use crate::derive::{
     DerivedDoc, derive_claude_session_with, derive_codex_session_with, derive_copilot_session_with,
     derive_gemini_session_with, derive_pi_session_with,
 };
 #[cfg(not(target_os = "emscripten"))]
 use crate::derive::{derive_cursor_session_with, derive_opencode_session_with, doc_inner_id};
+use crate::providers;
 
 #[derive(Subcommand, Debug)]
 pub enum ImportSource {
@@ -199,12 +201,19 @@ pub struct ImportArgs {
     pub no_cache: bool,
 }
 
-pub fn run(args: ImportArgs, pretty: bool) -> Result<()> {
-    let docs = derive(args.source)?;
-    emit(&docs, args.force, args.no_cache, pretty)
+pub fn run(args: ImportArgs, pretty: bool, config: &Config) -> Result<()> {
+    let docs = derive(args.source, config)?;
+    emit(&docs, args.force, args.no_cache, pretty, config)
 }
 
-fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Result<()> {
+#[cfg_attr(target_os = "emscripten", expect(unused_variables))]
+fn emit(
+    docs: &[DerivedDoc],
+    force: bool,
+    no_cache: bool,
+    pretty: bool,
+    config: &Config,
+) -> Result<()> {
     if docs.is_empty() {
         anyhow::bail!("no documents produced");
     }
@@ -223,7 +232,7 @@ fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Resul
             #[cfg(not(target_os = "emscripten"))]
             if !force
                 && let Some(stub) = &d.provenance
-                && crate::sync::record_is_current(stub, &d.cache_id)
+                && crate::sync::record_is_current(config, stub, &d.cache_id)
             {
                 println!("{}", crate::cache::cache_path(&d.cache_id)?.display());
                 eprintln!(
@@ -236,7 +245,7 @@ fn emit(docs: &[DerivedDoc], force: bool, no_cache: bool, pretty: bool) -> Resul
             println!("{}", path.display());
             #[cfg(not(target_os = "emscripten"))]
             if let Some(stub) = &d.provenance
-                && let Err(e) = crate::sync::record_artifact(stub, &d.cache_id)
+                && let Err(e) = crate::sync::record_artifact(config, stub, &d.cache_id)
             {
                 eprintln!("warning: sync manifest not updated: {e}");
             }
@@ -255,7 +264,7 @@ fn doc_summary(doc: &Graph) -> String {
     }
 }
 
-fn derive(source: ImportSource) -> Result<Vec<DerivedDoc>> {
+fn derive(source: ImportSource, config: &Config) -> Result<Vec<DerivedDoc>> {
     match source {
         ImportSource::Git {
             repo,
@@ -275,31 +284,31 @@ fn derive(source: ImportSource) -> Result<Vec<DerivedDoc>> {
             project,
             session,
             all,
-        } => derive_claude(project, session, all),
+        } => derive_claude(project, session, all, config),
         ImportSource::Gemini {
             project,
             session,
             all,
-        } => derive_gemini(project, session, all),
-        ImportSource::Codex { session, all } => derive_codex(session, all),
-        ImportSource::Copilot { session, all } => derive_copilot(session, all),
+        } => derive_gemini(project, session, all, config),
+        ImportSource::Codex { session, all } => derive_codex(session, all, config),
+        ImportSource::Copilot { session, all } => derive_copilot(session, all, config),
         ImportSource::Opencode {
             session,
             all,
             project,
             no_snapshot_diffs,
-        } => derive_opencode(session, all, project, no_snapshot_diffs),
+        } => derive_opencode(session, all, project, no_snapshot_diffs, config),
         ImportSource::Cursor {
             session,
             all,
             project,
-        } => derive_cursor(session, all, project),
+        } => derive_cursor(session, all, project, config),
         ImportSource::Pi {
             project,
             session,
             all,
             base,
-        } => derive_pi(project, session, all, base),
+        } => derive_pi(project, session, all, base, config),
         ImportSource::Pathbase { target, url } => derive_pathbase(target, url),
     }
 }
@@ -424,8 +433,9 @@ fn derive_claude(
     project: Option<String>,
     session: Option<String>,
     all: bool,
+    config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let manager = toolpath_claude::ClaudeConvo::new();
+    let manager = providers::claude_convo(config);
     derive_claude_with_manager(&manager, project, session, all)
 }
 
@@ -621,8 +631,9 @@ fn derive_gemini(
     project: Option<String>,
     session: Option<String>,
     all: bool,
+    config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let manager = toolpath_gemini::GeminiConvo::new();
+    let manager = providers::gemini_convo(config);
     derive_gemini_with_manager(&manager, project, session, all)
 }
 
@@ -808,8 +819,8 @@ fn pick_gemini_global(
     Ok(Some(parse_project_session(&selected)))
 }
 
-fn derive_codex(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
-    let manager = toolpath_codex::CodexConvo::new();
+fn derive_codex(session: Option<String>, all: bool, config: &Config) -> Result<Vec<DerivedDoc>> {
+    let manager = providers::codex_convo(config);
 
     let session_ids: Vec<String> = match (session, all) {
         (Some(s), _) => vec![s],
@@ -909,8 +920,8 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
     Ok(Some(parse_single_id(&selected)))
 }
 
-fn derive_copilot(session: Option<String>, all: bool) -> Result<Vec<DerivedDoc>> {
-    let manager = toolpath_copilot::CopilotConvo::new();
+fn derive_copilot(session: Option<String>, all: bool, config: &Config) -> Result<Vec<DerivedDoc>> {
+    let manager = providers::copilot_convo(config);
 
     let session_ids: Vec<String> = match (session, all) {
         (Some(s), _) => vec![s],
@@ -1017,10 +1028,11 @@ fn derive_opencode(
     all: bool,
     project: Option<String>,
     no_snapshot_diffs: bool,
+    config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (session, all, project, no_snapshot_diffs);
+        let _ = (session, all, project, no_snapshot_diffs, config);
         anyhow::bail!(
             "'path import opencode' requires a native environment (SQLite + git2 not available under wasm)"
         );
@@ -1028,7 +1040,7 @@ fn derive_opencode(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = toolpath_opencode::OpencodeConvo::new();
+        let manager = providers::opencode_convo(config);
         let derive_one = |sid: &str| derive_opencode_session_with(&manager, sid, no_snapshot_diffs);
 
         let session_ids: Vec<String> = match (session, all) {
@@ -1129,10 +1141,11 @@ fn derive_cursor(
     session: Option<String>,
     all: bool,
     project: Option<String>,
+    config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (session, all, project);
+        let _ = (session, all, project, config);
         anyhow::bail!(
             "'path import cursor' requires a native environment (SQLite not available under wasm)"
         );
@@ -1140,7 +1153,7 @@ fn derive_cursor(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = toolpath_cursor::CursorConvo::new();
+        let manager = providers::cursor_convo(config);
         let derive_one = |sid: &str| derive_cursor_session_with(&manager, sid);
 
         let workspace_filter = project
@@ -1281,13 +1294,9 @@ fn derive_pi(
     session: Option<String>,
     all: bool,
     base: Option<PathBuf>,
+    config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let manager = if let Some(path) = base {
-        let resolver = toolpath_pi::PathResolver::new().with_sessions_dir(&path);
-        toolpath_pi::PiConvo::with_resolver(resolver)
-    } else {
-        toolpath_pi::PiConvo::new()
-    };
+    let manager = providers::pi_convo(config, base.as_deref());
     derive_pi_with_manager(&manager, project, session, all)
 }
 

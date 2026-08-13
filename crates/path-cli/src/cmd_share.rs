@@ -824,8 +824,12 @@ fn share_explicit(
         // overwrite so cache and upload agree (use `--no-cache` to skip
         // the cache write entirely).
         let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        // Transitional: `share` does not take `&Config` yet; load one
+        // for the engine. A load failure degrades like a manifest-write
+        // failure.
         if let Some(stub) = &derived.provenance
-            && let Err(e) = crate::sync::record_artifact(stub, &derived.cache_id)
+            && let Err(e) = crate::config::Config::load()
+                .and_then(|config| crate::sync::record_artifact(&config, stub, &derived.cache_id))
         {
             eprintln!("warning: sync manifest not updated: {e}");
         }
@@ -994,20 +998,23 @@ fn derive_session(
     project: Option<&str>,
     session: &str,
 ) -> Result<crate::derive::DerivedDoc> {
+    // Transitional: `share` does not take `&Config` yet; load one for
+    // the derive helpers.
+    let config = crate::config::Config::load()?;
     match harness {
         ArtifactType::Claude => {
-            crate::derive::derive_claude_session(project.expect("path_keyed"), session)
+            crate::derive::derive_claude_session(&config, project.expect("path_keyed"), session)
         }
         ArtifactType::Gemini => {
-            crate::derive::derive_gemini_session(project.expect("path_keyed"), session)
+            crate::derive::derive_gemini_session(&config, project.expect("path_keyed"), session)
         }
-        ArtifactType::Copilot => crate::derive::derive_copilot_session(session),
+        ArtifactType::Copilot => crate::derive::derive_copilot_session(&config, session),
         ArtifactType::Pi => {
-            crate::derive::derive_pi_session(project.expect("path_keyed"), session, None)
+            crate::derive::derive_pi_session(&config, project.expect("path_keyed"), session, None)
         }
-        ArtifactType::Codex => crate::derive::derive_codex_session(session),
-        ArtifactType::Opencode => crate::derive::derive_opencode_session(session, false),
-        ArtifactType::Cursor => crate::derive::derive_cursor_session(session),
+        ArtifactType::Codex => crate::derive::derive_codex_session(&config, session),
+        ArtifactType::Opencode => crate::derive::derive_opencode_session(&config, session, false),
+        ArtifactType::Cursor => crate::derive::derive_cursor_session(&config, session),
         ArtifactType::Git => {
             anyhow::bail!("share only handles agent sessions; git artifacts go through `p import`")
         }
