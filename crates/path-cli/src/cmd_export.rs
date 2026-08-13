@@ -24,6 +24,9 @@ use std::path::PathBuf;
 
 #[cfg(not(target_os = "emscripten"))]
 use crate::cache::cache_ref;
+use crate::config::Config;
+#[cfg(not(target_os = "emscripten"))]
+use crate::providers;
 use crate::remote::RepoSpec;
 
 #[derive(Subcommand, Debug)]
@@ -202,44 +205,44 @@ pub enum ExportTarget {
     },
 }
 
-pub fn run(target: ExportTarget) -> Result<()> {
+pub fn run(target: ExportTarget, config: &Config) -> Result<()> {
     match target {
         ExportTarget::Claude {
             input,
             project,
             output,
             force,
-        } => run_claude(input, project, output, force),
+        } => run_claude(input, project, output, force, config),
         ExportTarget::Gemini {
             input,
             project,
             output,
-        } => run_gemini(input, project, output),
+        } => run_gemini(input, project, output, config),
         ExportTarget::Pi {
             input,
             project,
             output,
-        } => run_pi(input, project, output),
+        } => run_pi(input, project, output, config),
         ExportTarget::Codex {
             input,
             project,
             output,
-        } => run_codex(input, project, output),
+        } => run_codex(input, project, output, config),
         ExportTarget::Opencode {
             input,
             project,
             output,
-        } => run_opencode(input, project, output),
+        } => run_opencode(input, project, output, config),
         ExportTarget::Copilot {
             input,
             project,
             output,
-        } => run_copilot(input, project, output),
+        } => run_copilot(input, project, output, config),
         ExportTarget::Cursor {
             input,
             project,
             output,
-        } => run_cursor(input, project, output),
+        } => run_cursor(input, project, output, config),
         ExportTarget::Pathbase {
             input,
             url,
@@ -307,15 +310,16 @@ pub(crate) enum ClaudeProjection {
 pub(crate) fn project_claude(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<ClaudeProjection> {
     let conv = build_claude_conversation(path)?;
-    if claude_session_file(&conv.session_id, project_dir)?.is_some() {
+    if claude_session_file(&conv.session_id, project_dir, config)?.is_some() {
         return Ok(ClaudeProjection::AlreadyLocal {
             session_id: conv.session_id,
         });
     }
     let jsonl = serialize_jsonl(&conv)?;
-    write_into_claude_project(&conv, &jsonl, project_dir, false)?;
+    write_into_claude_project(&conv, &jsonl, project_dir, false, config)?;
     Ok(ClaudeProjection::Written {
         session_id: conv.session_id,
     })
@@ -324,10 +328,14 @@ pub(crate) fn project_claude(
 /// Path of the session file for `session_id` under `project_dir`'s Claude
 /// project directory, if it exists.
 #[cfg(not(target_os = "emscripten"))]
-fn claude_session_file(session_id: &str, project_dir: &std::path::Path) -> Result<Option<PathBuf>> {
+fn claude_session_file(
+    session_id: &str,
+    project_dir: &std::path::Path,
+    config: &Config,
+) -> Result<Option<PathBuf>> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let resolver = toolpath_claude::PathResolver::new();
+    let resolver = providers::claude_resolver(config);
     let claude_project_dir = resolver
         .project_dir(&project_dir.to_string_lossy())
         .map_err(|e| anyhow::anyhow!("Cannot resolve Claude project dir: {}", e))?;
@@ -341,6 +349,7 @@ fn claude_session_file(session_id: &str, project_dir: &std::path::Path) -> Resul
 pub(crate) fn project_gemini(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<String> {
     use toolpath_convo::ConversationProjector;
     let project_dir = std::fs::canonicalize(project_dir)
@@ -358,7 +367,7 @@ pub(crate) fn project_gemini(
     if conv.session_uuid.is_empty() {
         anyhow::bail!("Projected conversation has no session UUID");
     }
-    write_into_gemini_project(&conv, &project_path)?;
+    write_into_gemini_project(&conv, &project_path, config)?;
     Ok(conv.session_uuid)
 }
 
@@ -367,6 +376,7 @@ pub(crate) fn project_gemini(
 pub(crate) fn project_codex(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<String> {
     use toolpath_convo::ConversationProjector;
     let project_dir = std::fs::canonicalize(project_dir)
@@ -381,7 +391,7 @@ pub(crate) fn project_codex(
     if session.id.is_empty() {
         anyhow::bail!("Projected session has no id");
     }
-    write_into_codex_project(&session)?;
+    write_into_codex_project(&session, config)?;
     Ok(session.id)
 }
 
@@ -420,18 +430,24 @@ pub(crate) fn build_copilot_session(
 pub(crate) fn project_copilot(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<String> {
     let session = build_copilot_session(path, project_dir)?;
-    write_into_copilot_project(&session)?;
+    write_into_copilot_project(&session, config)?;
     Ok(session.id)
 }
 
 /// `path p export copilot` — project a document into a Copilot session on
 /// disk (`--project`), to a file (`--output`), or to stdout (neither).
-fn run_copilot(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+fn run_copilot(
+    input: String,
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    config: &Config,
+) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output);
+        let _ = (input, project, output, config);
         anyhow::bail!("'path export copilot' requires a native environment");
     }
 
@@ -440,7 +456,7 @@ fn run_copilot(input: String, project: Option<PathBuf>, output: Option<PathBuf>)
         let path = load_path_doc(&input)?;
         match (project, output) {
             (Some(project_dir), None) => {
-                let id = project_copilot(&path, &project_dir)?;
+                let id = project_copilot(&path, &project_dir, config)?;
                 eprintln!();
                 eprintln!("Resume with:");
                 eprintln!("  copilot --resume {id}");
@@ -475,8 +491,8 @@ fn run_copilot(input: String, project: Option<PathBuf>, output: Option<PathBuf>)
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_copilot_project(session: &toolpath_copilot::Session) -> Result<()> {
-    let resolver = toolpath_copilot::PathResolver::new();
+fn write_into_copilot_project(session: &toolpath_copilot::Session, config: &Config) -> Result<()> {
+    let resolver = providers::copilot_resolver(config);
     let state_dir = resolver
         .session_state_dir()
         .map_err(|e| anyhow::anyhow!("Cannot resolve ~/.copilot/session-state: {}", e))?;
@@ -601,10 +617,11 @@ fn copilot_first_user_message(session: &toolpath_copilot::Session) -> String {
 pub(crate) fn project_opencode(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<String> {
     let session = build_opencode_session(path, Some(project_dir))?;
     let id = session.id.clone();
-    write_into_opencode_db(&session, project_dir)?;
+    write_into_opencode_db(&session, project_dir, config)?;
     Ok(id)
 }
 
@@ -614,6 +631,7 @@ pub(crate) fn project_opencode(
 pub(crate) fn project_pi(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<String> {
     use toolpath_convo::ConversationProjector;
     let project_dir = std::fs::canonicalize(project_dir)
@@ -628,7 +646,7 @@ pub(crate) fn project_pi(
     if session.header.id.is_empty() {
         anyhow::bail!("Projected session has no id");
     }
-    write_into_pi_project(&session, &cwd_str)?;
+    write_into_pi_project(&session, &cwd_str, config)?;
     Ok(session.header.id)
 }
 
@@ -637,10 +655,11 @@ fn run_claude(
     project: Option<PathBuf>,
     output: Option<PathBuf>,
     force: bool,
+    config: &Config,
 ) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output, force);
+        let _ = (input, project, output, force, config);
         anyhow::bail!("'path export claude' requires a native environment");
     }
 
@@ -653,7 +672,7 @@ fn run_claude(
         match (project, output) {
             (Some(project_dir), None) => {
                 let out_path =
-                    write_into_claude_project(&conversation, &jsonl, &project_dir, force)?;
+                    write_into_claude_project(&conversation, &jsonl, &project_dir, force, config)?;
                 let session_id = &conversation.session_id;
                 eprintln!(
                     "Exported session {} ({} entries) → {}",
@@ -726,12 +745,13 @@ fn write_into_claude_project(
     jsonl: &str,
     project_dir: &std::path::Path,
     force: bool,
+    config: &Config,
 ) -> Result<PathBuf> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
     let project_path = project_dir.to_string_lossy();
 
-    let resolver = toolpath_claude::PathResolver::new();
+    let resolver = providers::claude_resolver(config);
     let claude_project_dir = resolver
         .project_dir(&project_path)
         .map_err(|e| anyhow::anyhow!("Cannot resolve Claude project dir: {}", e))?;
@@ -756,10 +776,15 @@ fn write_into_claude_project(
 
 // ── Gemini ────────────────────────────────────────────────────────────
 
-fn run_gemini(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+fn run_gemini(
+    input: String,
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    config: &Config,
+) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output);
+        let _ = (input, project, output, config);
         anyhow::bail!("'path export gemini' requires a native environment");
     }
 
@@ -779,7 +804,7 @@ fn run_gemini(input: String, project: Option<PathBuf>, output: Option<PathBuf>) 
         let conversation = build_gemini_conversation(&input, &project_path)?;
 
         match (project, output) {
-            (Some(_), None) => write_into_gemini_project(&conversation, &project_path)?,
+            (Some(_), None) => write_into_gemini_project(&conversation, &project_path, config)?,
             (None, Some(out_path)) => write_to_output_path(&conversation, &out_path)?,
             (None, None) => write_to_stdout(&conversation)?,
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
@@ -821,8 +846,9 @@ fn build_gemini_conversation(
 fn write_into_gemini_project(
     conversation: &toolpath_gemini::types::Conversation,
     project_path: &str,
+    config: &Config,
 ) -> Result<()> {
-    let resolver = toolpath_gemini::PathResolver::new();
+    let resolver = providers::gemini_resolver(config);
     let chats_dir = resolver
         .chats_dir(project_path)
         .map_err(|e| anyhow::anyhow!("Cannot resolve Gemini chats dir: {}", e))?;
@@ -980,10 +1006,15 @@ fn gemini_main_stem(convo: &toolpath_gemini::types::Conversation) -> String {
 
 // ── Pi ────────────────────────────────────────────────────────────────
 
-fn run_pi(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+fn run_pi(
+    input: String,
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    config: &Config,
+) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output);
+        let _ = (input, project, output, config);
         anyhow::bail!("'path export pi' requires a native environment");
     }
 
@@ -1002,7 +1033,7 @@ fn run_pi(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> R
         let session = build_pi_session(&input, &cwd_str)?;
 
         match (project, output) {
-            (Some(_), None) => write_into_pi_project(&session, &cwd_str)?,
+            (Some(_), None) => write_into_pi_project(&session, &cwd_str, config)?,
             (None, Some(out_path)) => write_pi_to_output_path(&session, &out_path)?,
             (None, None) => write_pi_to_stdout(&session)?,
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
@@ -1032,8 +1063,12 @@ fn build_pi_session(input: &str, cwd: &str) -> Result<toolpath_pi::PiSession> {
 /// `--project` mode: write the resume-ready layout under
 /// `~/.pi/agent/sessions/--<encoded-cwd>--/<session>.jsonl`.
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_pi_project(session: &toolpath_pi::PiSession, cwd: &str) -> Result<()> {
-    let resolver = toolpath_pi::PathResolver::new();
+fn write_into_pi_project(
+    session: &toolpath_pi::PiSession,
+    cwd: &str,
+    config: &Config,
+) -> Result<()> {
+    let resolver = providers::pi_resolver(config);
     let project_dir = resolver.project_dir(cwd);
     std::fs::create_dir_all(&project_dir)
         .with_context(|| format!("create {}", project_dir.display()))?;
@@ -1120,10 +1155,15 @@ fn serialize_pi_jsonl(session: &toolpath_pi::PiSession) -> Result<String> {
 
 // ── Codex ─────────────────────────────────────────────────────────────
 
-fn run_codex(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+fn run_codex(
+    input: String,
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    config: &Config,
+) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output);
+        let _ = (input, project, output, config);
         anyhow::bail!("'path export codex' requires a native environment");
     }
 
@@ -1143,7 +1183,7 @@ fn run_codex(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -
         let session = build_codex_session(&input, &cwd_str)?;
 
         match (project, output) {
-            (Some(_), None) => write_into_codex_project(&session)?,
+            (Some(_), None) => write_into_codex_project(&session, config)?,
             (None, Some(out_path)) => write_codex_to_output_path(&session, &out_path)?,
             (None, None) => write_codex_to_stdout(&session)?,
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
@@ -1175,9 +1215,9 @@ fn build_codex_session(input: &str, cwd: &str) -> Result<toolpath_codex::Session
 /// matches Codex's own filing convention; the timestamp prefix is
 /// derived from the session's first event time.
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_codex_project(session: &toolpath_codex::Session) -> Result<()> {
+fn write_into_codex_project(session: &toolpath_codex::Session, config: &Config) -> Result<()> {
     let session_ts = codex_session_timestamp(session)?;
-    let resolver = toolpath_codex::PathResolver::new();
+    let resolver = providers::codex_resolver(config);
     let sessions_root = resolver
         .sessions_root()
         .map_err(|e| anyhow::anyhow!("Cannot resolve Codex sessions dir: {}", e))?;
@@ -1384,10 +1424,15 @@ fn serialize_codex_jsonl(session: &toolpath_codex::Session) -> Result<String> {
 
 // ── Opencode ──────────────────────────────────────────────────────────
 
-fn run_opencode(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+fn run_opencode(
+    input: String,
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    config: &Config,
+) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output);
+        let _ = (input, project, output, config);
         anyhow::bail!("'path export opencode' requires a native environment");
     }
 
@@ -1397,7 +1442,7 @@ fn run_opencode(input: String, project: Option<PathBuf>, output: Option<PathBuf>
         match (project, output) {
             (Some(project_dir), None) => {
                 let session = build_opencode_session(&path, Some(&project_dir))?;
-                write_into_opencode_db(&session, &project_dir)?;
+                write_into_opencode_db(&session, &project_dir, config)?;
             }
             (None, Some(out_path)) => {
                 let session = build_opencode_session(&path, None)?;
@@ -1437,13 +1482,12 @@ fn build_opencode_session(
 fn write_into_opencode_db(
     session: &toolpath_opencode::Session,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<()> {
-    use toolpath_opencode::PathResolver;
-
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
 
-    let resolver = PathResolver::new();
+    let resolver = providers::opencode_resolver(config);
     let db_path = resolver
         .db_path()
         .map_err(|e| anyhow::anyhow!("Cannot resolve opencode db path: {}", e))?;
@@ -1625,10 +1669,15 @@ fn write_opencode_to_stdout(session: &toolpath_opencode::Session) -> Result<()> 
 
 // ── Cursor ────────────────────────────────────────────────────────────
 
-fn run_cursor(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+fn run_cursor(
+    input: String,
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    config: &Config,
+) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output);
+        let _ = (input, project, output, config);
         anyhow::bail!("'path export cursor' requires a native environment");
     }
 
@@ -1637,16 +1686,16 @@ fn run_cursor(input: String, project: Option<PathBuf>, output: Option<PathBuf>) 
         let path = load_path_doc(&input)?;
         match (project, output) {
             (Some(project_dir), None) => {
-                let session = build_cursor_session(&path, Some(&project_dir))?;
-                write_into_cursor_db(&session, &project_dir)?;
+                let session = build_cursor_session(&path, Some(&project_dir), config)?;
+                write_into_cursor_db(&session, &project_dir, config)?;
             }
             (None, Some(out_path)) => {
-                let session = build_cursor_session(&path, None)?;
+                let session = build_cursor_session(&path, None, config)?;
                 write_cursor_to_output_path(&session, &out_path)?;
             }
             (None, None) => {
                 let cwd = std::env::current_dir().ok();
-                let session = build_cursor_session(&path, cwd.as_deref())?;
+                let session = build_cursor_session(&path, cwd.as_deref(), config)?;
                 write_cursor_to_stdout(&session)?;
             }
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
@@ -1659,10 +1708,11 @@ fn run_cursor(input: String, project: Option<PathBuf>, output: Option<PathBuf>) 
 pub(crate) fn project_cursor(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<String> {
-    let session = build_cursor_session(path, Some(project_dir))?;
+    let session = build_cursor_session(path, Some(project_dir), config)?;
     let id = session.data.composer_id.clone();
-    write_into_cursor_db(&session, project_dir)?;
+    write_into_cursor_db(&session, project_dir, config)?;
     Ok(id)
 }
 
@@ -1670,9 +1720,10 @@ pub(crate) fn project_cursor(
 fn build_cursor_session(
     path: &toolpath::v1::Path,
     project_dir: Option<&std::path::Path>,
+    config: &Config,
 ) -> Result<toolpath_cursor::CursorSession> {
     use toolpath_convo::ConversationProjector;
-    use toolpath_cursor::{CursorProjector, PathResolver};
+    use toolpath_cursor::CursorProjector;
 
     let view = toolpath_convo::extract_conversation(path);
     let mut projector = CursorProjector::new();
@@ -1681,7 +1732,7 @@ fn build_cursor_session(
         // Cursor filters sidebar composers by `workspaceIdentifier.id`.
         // Reuse the existing id when present, otherwise pre-create a
         // workspaceStorage entry so Cursor adopts ours on next open.
-        let resolver = PathResolver::new();
+        let resolver = providers::cursor_resolver(config);
         if let Ok(ensured) =
             resolver.ensure_workspace_storage_entry(&canonical, stable_workspace_id_for)
         {
@@ -1713,13 +1764,12 @@ fn stable_workspace_id_for(folder: &std::path::Path) -> String {
 fn write_into_cursor_db(
     session: &toolpath_cursor::CursorSession,
     project_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<()> {
-    use toolpath_cursor::PathResolver;
-
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
 
-    let resolver = PathResolver::new();
+    let resolver = providers::cursor_resolver(config);
     let db_path = resolver
         .db_path()
         .map_err(|e| anyhow::anyhow!("Cannot resolve Cursor state.vscdb path: {}", e))?;
@@ -2074,6 +2124,26 @@ mod tests {
     use std::collections::HashMap;
     use toolpath::v1::{ArtifactChange, PathIdentity, Step, StepIdentity, StructuralChange};
 
+    /// A `Config` rooted at a test's temp home. The export path builds
+    /// every resolver from it, so no test needs to touch `$HOME`.
+    fn config_with_home(home: &std::path::Path) -> Config {
+        Config {
+            home: Some(home.to_path_buf()),
+            ..Config::default()
+        }
+    }
+
+    /// A `Config` for the opencode export. The resolver reads
+    /// `$XDG_DATA_HOME` internally and that read wins against the home,
+    /// so the data root is injected too.
+    fn config_with_opencode_home(home: &std::path::Path) -> Config {
+        Config {
+            home: Some(home.to_path_buf()),
+            xdg_data_home: Some(home.join(".local/share")),
+            ..Config::default()
+        }
+    }
+
     fn make_path_doc() -> toolpath::v1::Graph {
         let artifact_key = "agent://claude/test-session";
 
@@ -2156,6 +2226,7 @@ mod tests {
             None,
             Some(output_path.clone()),
             false,
+            &Config::default(),
         )
         .unwrap();
 
@@ -2199,8 +2270,14 @@ mod tests {
         };
         std::fs::write(&input_path, serde_json::to_string(&multi).unwrap()).unwrap();
 
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude(
+            input_path.to_string_lossy().to_string(),
+            None,
+            None,
+            false,
+            &Config::default(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("single-path graph"));
     }
 
@@ -2209,8 +2286,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(&input_path, "not json").unwrap();
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude(
+            input_path.to_string_lossy().to_string(),
+            None,
+            None,
+            false,
+            &Config::default(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("parse") || err.to_string().contains("Failed"));
     }
 
@@ -2274,26 +2357,13 @@ mod tests {
         let input_path = temp.path().join("doc.json");
         std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
 
-        // Override HOME so `PathResolver::new()` lands in the temp dir.
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = run_gemini(
+        run_gemini(
             input_path.to_string_lossy().to_string(),
             Some(project_dir.clone()),
             None,
-        );
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-        result.expect("export gemini");
+            &config_with_home(&fake_home),
+        )
+        .expect("export gemini");
 
         // The file landed at chats/session-*.json (flat, prefixed).
         let canon_project = std::fs::canonicalize(&project_dir).unwrap();
@@ -2366,6 +2436,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             Some(project),
             None,
+            &Config::default(),
         )
         .expect_err("should reject multi-path graph");
         assert!(err.to_string().contains("single-path graph"));
@@ -2430,6 +2501,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(out_path.clone()),
+            &Config::default(),
         )
         .expect("export gemini --output");
 
@@ -2532,25 +2604,13 @@ mod tests {
         let input_path = temp.path().join("doc.json");
         std::fs::write(&input_path, graph.to_json().unwrap()).unwrap();
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = run_pi(
+        run_pi(
             input_path.to_string_lossy().to_string(),
             Some(project_dir.clone()),
             None,
-        );
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-        result.expect("export pi");
+            &config_with_home(&fake_home),
+        )
+        .expect("export pi");
 
         let canon_project = std::fs::canonicalize(&project_dir).unwrap();
         let resolver = PathResolver::new().with_home(&fake_home);
@@ -2607,6 +2667,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             Some(project),
             None,
+            &Config::default(),
         )
         .expect_err("should reject empty graph");
         assert!(err.to_string().contains("single-path"));
@@ -2662,6 +2723,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(out_path.clone()),
+            &Config::default(),
         )
         .expect("export pi --output");
 
@@ -2727,6 +2789,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(out_path.clone()),
+            &Config::default(),
         )
         .expect("export codex --output");
 
@@ -2753,8 +2816,8 @@ mod tests {
     #[test]
     fn codex_writes_into_dated_sessions_dir_with_project() {
         // `--project DIR` mode writes to
-        // `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. The
-        // resolver's HOME-based default is overridden via $HOME.
+        // `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` under the
+        // injected home.
         use toolpath_codex::PathResolver;
 
         let temp = tempfile::tempdir().unwrap();
@@ -2804,25 +2867,13 @@ mod tests {
         let input_path = temp.path().join("doc.json");
         std::fs::write(&input_path, graph.to_json().unwrap()).unwrap();
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = run_codex(
+        run_codex(
             input_path.to_string_lossy().to_string(),
             Some(project_dir.clone()),
             None,
-        );
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-        result.expect("export codex --project");
+            &config_with_home(&fake_home),
+        )
+        .expect("export codex --project");
 
         let resolver = PathResolver::new().with_home(&fake_home);
         let dated_dir = resolver
@@ -2880,6 +2931,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             Some(project),
             None,
+            &Config::default(),
         )
         .expect_err("should reject empty graph");
         assert!(err.to_string().contains("single-path"));
@@ -3006,6 +3058,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(out_path.clone()),
+            &Config::default(),
         )
         .unwrap();
 
@@ -3070,31 +3123,13 @@ mod tests {
         )
         .unwrap();
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prev_home = std::env::var_os("HOME");
-        let prev_xdg = std::env::var_os("XDG_DATA_HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-            std::env::remove_var("XDG_DATA_HOME");
-        }
-        let result = run_opencode(
+        run_opencode(
             input_path.to_string_lossy().to_string(),
             Some(project_dir.clone()),
             None,
-        );
-        unsafe {
-            match prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
-                None => std::env::remove_var("XDG_DATA_HOME"),
-            }
-        }
-        result.expect("export opencode --project");
+            &config_with_opencode_home(&fake_home),
+        )
+        .expect("export opencode --project");
 
         let conn = rusqlite::Connection::open(data_dir.join("opencode.db")).unwrap();
         let session_count: i64 = conn
@@ -3121,7 +3156,13 @@ mod tests {
         });
         std::fs::write(&input_path, empty_graph.to_string()).unwrap();
 
-        let err = run_opencode(input_path.to_string_lossy().to_string(), None, None).unwrap_err();
+        let err = run_opencode(
+            input_path.to_string_lossy().to_string(),
+            None,
+            None,
+            &Config::default(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("single-path"));
     }
 
@@ -3182,20 +3223,7 @@ mod tests {
         let session_id = "claude-wrapper-test-session";
         let path = make_convo_path(&format!("claude-code://{}", session_id));
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = project_claude(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        let result = project_claude(&path, &cwd, &config_with_home(&fake_home));
 
         let returned_id = match result.expect("project_claude should succeed") {
             ClaudeProjection::Written { session_id } => session_id,
@@ -3221,30 +3249,18 @@ mod tests {
         let session_id = "claude-clobber-test-session";
         let path = make_convo_path(&format!("claude-code://{}", session_id));
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let first = project_claude(&path, &cwd);
+        let config = config_with_home(&fake_home);
+        let first = project_claude(&path, &cwd, &config);
         // Simulate local divergence: the session gained content after the
         // first projection.
-        let session_file = claude_session_file(session_id, &cwd)
+        let session_file = claude_session_file(session_id, &cwd, &config)
             .unwrap()
             .expect("first projection must have written the session file");
         let mut contents = std::fs::read_to_string(&session_file).unwrap();
         contents.push_str("{\"local\":\"divergence\"}\n");
         std::fs::write(&session_file, &contents).unwrap();
 
-        let second = project_claude(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        let second = project_claude(&path, &cwd, &config);
 
         assert!(matches!(
             first.expect("first projection should succeed"),
@@ -3276,22 +3292,10 @@ mod tests {
         std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
         let input = input_path.to_string_lossy().to_string();
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let first = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let second = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let forced = run_claude(input, Some(cwd.clone()), None, true);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        let config = config_with_home(&fake_home);
+        let first = run_claude(input.clone(), Some(cwd.clone()), None, false, &config);
+        let second = run_claude(input.clone(), Some(cwd.clone()), None, false, &config);
+        let forced = run_claude(input, Some(cwd.clone()), None, true, &config);
 
         first.expect("first export should succeed");
         let err = second.expect_err("re-export without --force must fail");
@@ -3313,20 +3317,7 @@ mod tests {
         let session_uuid = "11111111-2222-3333-4444-aaaaaaaaaaaa";
         let path = make_convo_path(&format!("gemini-cli://{}", session_uuid));
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = project_gemini(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        let result = project_gemini(&path, &cwd, &config_with_home(&fake_home));
 
         let returned_id = result.expect("project_gemini should succeed");
         assert_eq!(returned_id, session_uuid);
@@ -3346,20 +3337,7 @@ mod tests {
         let session_uuid = "019dabc6-cccc-dddd-eeee-ffffffffffff";
         let path = make_convo_path(&format!("codex://{}", session_uuid));
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = project_codex(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        let result = project_codex(&path, &cwd, &config_with_home(&fake_home));
 
         let returned_id = result.expect("project_codex should succeed");
         assert_eq!(returned_id, session_uuid);
@@ -3419,26 +3397,7 @@ mod tests {
         // which adds the `ses_` prefix if not already present.
         let path = make_convo_path("opencode://ses_wrapper-test");
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        let prior_xdg = std::env::var_os("XDG_DATA_HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-            std::env::remove_var("XDG_DATA_HOME");
-        }
-        let result = project_opencode(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            match prior_xdg {
-                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
-                None => std::env::remove_var("XDG_DATA_HOME"),
-            }
-        }
+        let result = project_opencode(&path, &cwd, &config_with_opencode_home(&fake_home));
 
         let returned_id = result.expect("project_opencode should succeed");
         assert_eq!(returned_id, "ses_wrapper-test");
@@ -3465,20 +3424,7 @@ mod tests {
         let session_id = "pi-wrapper-test-session";
         let path = make_convo_path(&format!("pi://{}", session_id));
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = project_pi(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        let result = project_pi(&path, &cwd, &config_with_home(&fake_home));
 
         let returned_id = result.expect("project_pi should succeed");
         assert_eq!(returned_id, session_id);
