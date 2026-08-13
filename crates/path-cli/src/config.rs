@@ -140,7 +140,6 @@ impl Config {
     /// The home directory the provider resolvers should use:
     /// `$HOME`, falling back to `$USERPROFILE` (Windows). Matches the
     /// resolvers' own internal fallback.
-    #[cfg_attr(all(target_os = "emscripten", not(test)), expect(dead_code))]
     pub(crate) fn home_dir(&self) -> Option<&PathBuf> {
         self.home.as_ref().or(self.userprofile.as_ref())
     }
