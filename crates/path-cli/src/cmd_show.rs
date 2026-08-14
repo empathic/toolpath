@@ -185,7 +185,9 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager = providers::cursor_convo(config);
+            let manager = toolpath_cursor::CursorConvo::with_resolver(
+                providers::require_cursor_resolver(config)?,
+            );
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;

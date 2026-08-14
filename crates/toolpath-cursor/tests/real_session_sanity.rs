@@ -15,7 +15,11 @@ use toolpath_cursor::{CursorConvo, DeriveConfig, derive_path, session_to_view};
 
 #[test]
 fn real_cursor_db_round_trips_when_present() {
-    let mgr = CursorConvo::new();
+    let Some(home) = home_dir() else {
+        eprintln!("note: no home directory; skipping live test");
+        return;
+    };
+    let mgr = CursorConvo::new(home);
     if !mgr.io().exists() {
         eprintln!("note: no Cursor user-data directory; skipping live test");
         return;
@@ -63,4 +67,12 @@ fn real_cursor_db_round_trips_when_present() {
         sessions_checked += 1;
     }
     eprintln!("note: validated {sessions_checked} live composers");
+}
+
+/// The home directory this test reads Cursor state under. The library
+/// takes it as an argument, so the caller supplies it.
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
 }

@@ -49,15 +49,16 @@ use toolpath_convo::{
 pub const PROVIDER_ID: &str = "cursor";
 
 /// Provider for Cursor sessions.
-#[derive(Default)]
 pub struct CursorConvo {
     io: CursorIO,
 }
 
 impl CursorConvo {
-    pub fn new() -> Self {
+    /// Reads Cursor state under `home`, so the Anysphere directory is
+    /// `<home>/.cursor`.
+    pub fn new<P: Into<std::path::PathBuf>>(home: P) -> Self {
         Self {
-            io: CursorIO::new(),
+            io: CursorIO::new(home),
         }
     }
 
@@ -733,8 +734,7 @@ mod tests {
         fs::create_dir_all(&global).unwrap();
         let src = fixture_db(BASIC_FIXTURE);
         fs::copy(src.path(), global.join("state.vscdb")).unwrap();
-        let resolver = PathResolver::new()
-            .with_home(temp.path())
+        let resolver = PathResolver::new(temp.path())
             .with_anysphere_dir(temp.path().join(".cursor"))
             .with_user_data_dir(user_data);
         (temp, CursorConvo::with_resolver(resolver))

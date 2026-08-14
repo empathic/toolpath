@@ -17,9 +17,9 @@
 //! `$COPILOT_HOME` replaces the whole Copilot root, so the injected
 //! directory wins against the home-derived default.
 //!
-//! cursor (Windows) gets its directory injected, not just the home:
-//! its resolver reads `$APPDATA` internally, and that read wins
-//! against `with_home`. The injected directory wins against both.
+//! cursor takes `$APPDATA` as an argument next to the home directory.
+//! Only its Windows default user-data directory consults the value, so
+//! the injection is gated to Windows.
 
 use crate::config::Config;
 #[cfg(not(target_os = "emscripten"))]
@@ -114,18 +114,22 @@ pub(crate) fn require_opencode_resolver(
 }
 
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn cursor_convo(config: &Config) -> toolpath_cursor::CursorConvo {
-    let mut resolver = toolpath_cursor::PathResolver::new();
-    if let Some(home) = config.home_dir() {
-        resolver = resolver.with_home(home);
-    }
-    // The resolver consults $APPDATA only on Windows; injecting it on
+pub(crate) fn cursor_resolver(config: &Config) -> Option<toolpath_cursor::PathResolver> {
+    let resolver = toolpath_cursor::PathResolver::new(config.home_dir()?);
+    // The resolver applies $APPDATA only on Windows; injecting it on
     // other platforms would change resolution there.
     #[cfg(windows)]
-    if let Some(appdata) = &config.appdata {
-        resolver = resolver.with_user_data_dir(appdata.join("Cursor"));
-    }
-    toolpath_cursor::CursorConvo::with_resolver(resolver)
+    let resolver = match &config.appdata {
+        Some(appdata) => resolver.with_appdata(appdata),
+        None => resolver,
+    };
+    Some(resolver)
+}
+
+/// [`cursor_resolver`] for a command that targets Cursor.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn require_cursor_resolver(config: &Config) -> Result<toolpath_cursor::PathResolver> {
+    cursor_resolver(config).ok_or_else(|| missing_home("Cursor"))
 }
 
 /// `base` replaces the sessions directory: `--base` wins over the
@@ -160,7 +164,7 @@ pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
             toolpath_copilot::CopilotConvo::with_resolver(r).with_strict(copilot_strict(config))
         }),
         opencode: opencode_resolver(config).map(toolpath_opencode::OpencodeConvo::with_resolver),
-        cursor: Some(cursor_convo(config)),
+        cursor: cursor_resolver(config).map(toolpath_cursor::CursorConvo::with_resolver),
         pi: Some(pi_convo(config, None)),
     }
 }
@@ -314,12 +318,19 @@ mod tests {
     }
 
     #[test]
-    fn cursor_convo_roots_at_config_home() {
-        let manager = cursor_convo(&config_with_home());
+    fn cursor_resolver_roots_at_config_home() {
+        let resolver = cursor_resolver(&config_with_home()).unwrap();
         assert_eq!(
-            manager.resolver().anysphere_dir().unwrap(),
+            resolver.anysphere_dir(),
             PathBuf::from("/home/jailed/.cursor")
         );
+    }
+
+    #[test]
+    fn cursor_resolver_is_none_without_a_home() {
+        assert!(cursor_resolver(&Config::default()).is_none());
+        let err = require_cursor_resolver(&Config::default()).unwrap_err();
+        assert!(err.to_string().contains("home directory"));
     }
 
     #[test]
@@ -337,15 +348,15 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn cursor_convo_injects_user_data_dir_from_appdata() {
+    fn cursor_resolver_injects_appdata() {
         let config = Config {
             home: Some(PathBuf::from("/home/jailed")),
             appdata: Some(PathBuf::from("/appdata/roaming")),
             ..Config::default()
         };
-        let manager = cursor_convo(&config);
+        let resolver = cursor_resolver(&config).unwrap();
         assert_eq!(
-            manager.resolver().db_path().unwrap(),
+            resolver.db_path(),
             PathBuf::from("/appdata/roaming/Cursor/User/globalStorage/state.vscdb")
         );
     }

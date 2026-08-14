@@ -81,7 +81,7 @@
   },
   {
     "name": "toolpath-cursor",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",
     "docs": "https://docs.rs/toolpath-cursor",
     "crate": "https://crates.io/crates/toolpath-cursor",

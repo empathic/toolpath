@@ -128,7 +128,6 @@ pub(crate) fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool
 pub(crate) fn is_not_found_cursor(err: &toolpath_cursor::CursorError) -> bool {
     use toolpath_cursor::CursorError;
     matches!(err, CursorError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, CursorError::NoHomeDirectory)
         || matches!(err, CursorError::CursorDataDirectoryNotFound(_))
         || matches!(err, CursorError::DatabaseNotFound(_))
 }

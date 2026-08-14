@@ -294,7 +294,7 @@ pub(crate) fn derive_opencode_session_with(
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn derive_cursor_session(config: &Config, session: &str) -> Result<DerivedDoc> {
     derive_cursor_session_with(
-        &toolpath_cursor::CursorConvo::with_resolver(providers::cursor_resolver(config)),
+        &toolpath_cursor::CursorConvo::with_resolver(providers::require_cursor_resolver(config)?),
         session,
     )
 }

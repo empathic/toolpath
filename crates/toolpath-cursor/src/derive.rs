@@ -65,8 +65,7 @@ mod tests {
         fs::create_dir_all(&global).unwrap();
         let src = fixture_db(BASIC_FIXTURE);
         fs::copy(src.path(), global.join("state.vscdb")).unwrap();
-        let resolver = crate::PathResolver::new()
-            .with_home(temp.path())
+        let resolver = crate::PathResolver::new(temp.path())
             .with_anysphere_dir(temp.path().join(".cursor"))
             .with_user_data_dir(user_data);
         (temp, CursorConvo::with_resolver(resolver))

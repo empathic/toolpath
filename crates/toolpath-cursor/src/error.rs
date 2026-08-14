@@ -14,9 +14,6 @@ pub enum CursorError {
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("Home directory not found")]
-    NoHomeDirectory,
-
     #[error("Cursor data directory not found at path: {0}")]
     CursorDataDirectoryNotFound(PathBuf),
 
