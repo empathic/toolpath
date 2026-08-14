@@ -40,8 +40,9 @@ cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
   `ConvoIO::new(home)` take the same argument.
 
   Removed: the `Default` impls on `PathResolver`, `ConvoIO`, and
-  `CodexConvo`; `PathResolver::with_home`; the `NoHomeDirectory` error
-  variant. `with_codex_dir` stays as the full override.
+  `CodexConvo`; `PathResolver::with_home`; the `NoHomeDirectory` and
+  `CodexDirectoryNotFound` error variants. `with_codex_dir` stays as
+  the full override.
 
   The home directory is always present, so `home_dir()`, `codex_dir()`,
   `sessions_root()`, `history_file()`, `log_file()`, and
