@@ -46,41 +46,43 @@ pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
 ///
 /// Public because `cmd_resume::run_with_strategy` takes a `&Config`
 /// across the crate boundary. It is a test seam, not API: the item is
-/// `#[doc(hidden)]` and the fields stay crate-private, so
-/// [`Config::load`] is the only constructor outside the crate.
+/// `#[doc(hidden)]`. The fields are public so integration tests build
+/// a `Config` directly; integration tests are separate crates and
+/// cannot see `#[cfg(test)]` items. [`Config::load`] stays the only
+/// production constructor.
 #[doc(hidden)]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     /// `$APPDATA`: Windows harness data root.
-    pub(crate) appdata: Option<PathBuf>,
+    pub appdata: Option<PathBuf>,
     /// `$CLAUDE_CLI_DEBUG`: the Claude reader warns about every
     /// unparseable conversation line, not just the first 5. Presence is
     /// the signal; the value is not read.
-    pub(crate) claude_cli_debug: Option<String>,
+    pub claude_cli_debug: Option<String>,
     /// `$CODEX_ROLLOUT_STRICT`: the Codex reader errors on an
     /// unparseable rollout line. Presence is the signal; the value is
     /// not read.
-    pub(crate) codex_rollout_strict: Option<String>,
+    pub codex_rollout_strict: Option<String>,
     /// `$COPILOT_EVENTS_STRICT`: the Copilot reader errors on a
     /// malformed events line. Presence is the signal; the value is not
     /// read.
-    pub(crate) copilot_events_strict: Option<String>,
+    pub copilot_events_strict: Option<String>,
     /// `$COPILOT_HOME`: Copilot CLI session root override.
-    pub(crate) copilot_home: Option<PathBuf>,
+    pub copilot_home: Option<PathBuf>,
     /// `$GITHUB_TOKEN`: GitHub API token (see `providers`).
-    pub(crate) github_token: Option<String>,
+    pub github_token: Option<String>,
     /// `$HOME`: config-root fallback and the harness resolvers' root.
-    pub(crate) home: Option<PathBuf>,
+    pub home: Option<PathBuf>,
     /// `$PATHBASE_URL`: Pathbase server override (see `cmd_pathbase`).
-    pub(crate) pathbase_url: Option<String>,
+    pub pathbase_url: Option<String>,
     /// `$TOOLPATH_CONFIG_DIR`: overrides the `~/.toolpath` root.
-    pub(crate) toolpath_config_dir: Option<PathBuf>,
+    pub toolpath_config_dir: Option<PathBuf>,
     /// `$TOOLPATH_QUERY_EXPLAIN`: query-planner diagnostics on stderr.
-    pub(crate) toolpath_query_explain: Option<String>,
+    pub toolpath_query_explain: Option<String>,
     /// `$USERPROFILE`: Windows home, the fallback when `$HOME` is unset.
-    pub(crate) userprofile: Option<PathBuf>,
+    pub userprofile: Option<PathBuf>,
     /// `$XDG_DATA_HOME`: opencode's data root (Linux).
-    pub(crate) xdg_data_home: Option<PathBuf>,
+    pub xdg_data_home: Option<PathBuf>,
 }
 
 /// [`Env`], with values emitted as verbatim strings.
@@ -196,27 +198,18 @@ pub(crate) fn home_relative(path: &std::path::Path, home: Option<&std::path::Pat
     path.display().to_string()
 }
 
-/// Shared lock for tests that mutate the process environment. Every test
-/// that calls `set_var` / `remove_var`, or that runs a `figment::Jail`,
-/// grabs this lock first, otherwise parallel tests clobber each other's
-/// values.
-#[cfg(test)]
-pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `figment::Jail` restores the variables it sets, but it serializes
-    /// only against other Jail tests. Hold `TEST_ENV_LOCK` too: it
-    /// serializes against every other test that mutates the
-    /// environment.
+    /// `figment::Jail` restores the variables it sets, and it
+    /// serializes its own tests. No other test mutates the environment,
+    /// so the Jail tests need no further lock.
     // result_large_err: the Jail closure returns figment's own
     // 208-byte error type.
     #[test]
     #[allow(clippy::result_large_err)]
     fn load_maps_every_owned_env_var() {
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         figment::Jail::expect_with(|jail| {
             jail.set_env(CONFIG_DIR_ENV, "/tmp/cfg-root");
             jail.set_env("HOME", "/home/jailed");
@@ -262,7 +255,6 @@ mod tests {
     #[test]
     #[allow(clippy::result_large_err)]
     fn load_ignores_unowned_env_vars() {
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         figment::Jail::expect_with(|jail| {
             jail.set_env(PATHBASE_URL_ENV, "https://real.example");
             jail.set_env("PATHBASE_URL_BACKUP", "https://wrong.example");
@@ -291,7 +283,6 @@ mod tests {
     #[test]
     #[allow(clippy::result_large_err)]
     fn load_keeps_scalar_looking_values_verbatim() {
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         figment::Jail::expect_with(|jail| {
             jail.set_env("TOOLPATH_QUERY_EXPLAIN", "01");
             let config = Config::load().unwrap();

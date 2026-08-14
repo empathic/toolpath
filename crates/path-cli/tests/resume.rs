@@ -2,9 +2,9 @@
 //!
 //! Tests dispatch through `path_cli::cmd_resume::run_with_strategy`
 //! with a `RecordingExec` strategy so the would-be `execvp` becomes a
-//! captured `(binary, args, cwd)` tuple. Each test isolates `$HOME` and
-//! `$TOOLPATH_CONFIG_DIR` via an RAII guard under a shared lock, and
-//! passes a tempdir of fake binaries as the search path.
+//! captured `(binary, args, cwd)` tuple. Each test passes a `Config`
+//! rooted at a `TestHome` tempdir plus a tempdir of fake binaries as
+//! the search path, so the process environment stays untouched.
 
 #![cfg(not(target_os = "emscripten"))]
 
@@ -18,8 +18,7 @@ use support::*;
 
 #[test]
 fn file_input_explicit_claude_projects_and_records_exec() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["claude"]);
     let cwd = tempfile::tempdir().unwrap();
 
@@ -41,10 +40,8 @@ fn file_input_explicit_claude_projects_and_records_exec() {
     assert!(!cap.args[1].is_empty(), "session id should be non-empty");
     assert_eq!(cap.cwd, std::fs::canonicalize(cwd.path()).unwrap());
 
-    // Side effect: a JSONL was written under HOME/.claude/projects.
-    let projects = std::env::var_os("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".claude/projects"))
-        .unwrap();
+    // Side effect: a JSONL was written under the sandbox ~/.claude/projects.
+    let projects = home.home_dir().join(".claude/projects");
     assert!(projects.exists(), "claude projects dir not created");
     assert!(
         dir_contains_file_with_ext(&projects, "jsonl"),
@@ -54,8 +51,7 @@ fn file_input_explicit_claude_projects_and_records_exec() {
 
 #[test]
 fn file_input_explicit_gemini_projects_and_records_exec() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["gemini"]);
     let cwd = tempfile::tempdir().unwrap();
 
@@ -76,16 +72,13 @@ fn file_input_explicit_gemini_projects_and_records_exec() {
     assert_eq!(cap.args[0], "--resume");
     assert!(!cap.args[1].is_empty());
 
-    let tmp_root = std::env::var_os("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".gemini/tmp"))
-        .unwrap();
+    let tmp_root = home.home_dir().join(".gemini/tmp");
     assert!(tmp_root.exists(), "gemini tmp dir not created");
 }
 
 #[test]
 fn file_input_explicit_codex_projects_and_records_exec() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["codex"]);
     let cwd = tempfile::tempdir().unwrap();
 
@@ -106,16 +99,13 @@ fn file_input_explicit_codex_projects_and_records_exec() {
     assert_eq!(cap.args[0], "resume");
     assert!(!cap.args[1].is_empty());
 
-    let sessions = std::env::var_os("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".codex/sessions"))
-        .unwrap();
+    let sessions = home.home_dir().join(".codex/sessions");
     assert!(sessions.exists(), "codex sessions dir not created");
 }
 
 #[test]
 fn file_input_explicit_copilot_projects_and_records_exec() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["copilot"]);
     let cwd = tempfile::tempdir().unwrap();
 
@@ -138,9 +128,7 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
     assert!(!cap.args[1].is_empty());
 
     // A session-state/<id>/events.jsonl was projected under the temp ~/.copilot.
-    let state = std::env::var_os("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".copilot/session-state"))
-        .unwrap();
+    let state = home.home_dir().join(".copilot/session-state");
     assert!(state.exists(), "copilot session-state dir not created");
     let has_events = std::fs::read_dir(&state)
         .unwrap()
@@ -151,8 +139,7 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
 
 #[test]
 fn file_input_explicit_opencode_projects_and_records_exec() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["opencode"]);
     let cwd = tempfile::tempdir().unwrap();
 
@@ -221,8 +208,7 @@ fn file_input_explicit_opencode_projects_and_records_exec() {
 
 #[test]
 fn file_input_explicit_pi_projects_and_records_exec() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["pi"]);
     let cwd = tempfile::tempdir().unwrap();
 
@@ -243,9 +229,7 @@ fn file_input_explicit_pi_projects_and_records_exec() {
     assert_eq!(cap.args[0], "--session");
     assert!(!cap.args[1].is_empty());
 
-    let sessions = std::env::var_os("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".pi/agent/sessions"))
-        .unwrap();
+    let sessions = home.home_dir().join(".pi/agent/sessions");
     assert!(sessions.exists(), "pi sessions dir not created");
 }
 
@@ -253,16 +237,14 @@ fn file_input_explicit_pi_projects_and_records_exec() {
 
 #[test]
 fn cache_id_input_loads_and_projects() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["claude"]);
     let cwd = tempfile::tempdir().unwrap();
 
     // Seed a cache entry by writing the graph to
-    // <TOOLPATH_CONFIG_DIR>/documents/<id>.json directly.
+    // <config dir>/documents/<id>.json directly.
     let cache_id = "claude-resume-cache-test";
-    let documents = std::path::PathBuf::from(std::env::var_os("TOOLPATH_CONFIG_DIR").unwrap())
-        .join("documents");
+    let documents = home.config_dir().join("documents");
     std::fs::create_dir_all(&documents).unwrap();
     let graph = toolpath::v1::Graph::from_path(make_convo_path(
         "agent:claude-code",
@@ -301,8 +283,7 @@ fn cache_id_input_loads_and_projects() {
 
 #[test]
 fn multi_path_graph_returns_clear_error() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["claude"]);
     let cwd = tempfile::tempdir().unwrap();
 
@@ -336,8 +317,7 @@ fn multi_path_graph_returns_clear_error() {
 
 #[test]
 fn agentless_path_returns_clear_error() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let bin = fake_bin_dir(&["claude"]);
     let cwd = tempfile::tempdir().unwrap();
 
@@ -358,8 +338,7 @@ fn agentless_path_returns_clear_error() {
 
 #[test]
 fn explicit_harness_not_on_path_errors() {
-    let _env = env_lock();
-    let home = ScopedHome::new();
+    let home = TestHome::new();
     let cwd = tempfile::tempdir().unwrap();
 
     let path = make_convo_path("agent:claude-code", "claude-code://no-binary");
