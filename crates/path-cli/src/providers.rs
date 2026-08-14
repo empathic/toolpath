@@ -20,11 +20,15 @@
 //! cursor takes `$APPDATA` as an argument next to the home directory.
 //! Only its Windows default user-data directory consults the value, so
 //! the injection is gated to Windows.
+//!
+//! GitHub is a remote source: it takes an API token instead of a
+//! resolver, and [`github_token`] builds it here.
 
 use crate::config::Config;
 #[cfg(not(target_os = "emscripten"))]
 use crate::harness::HarnessBundle;
-
+#[cfg(not(target_os = "emscripten"))]
+use anyhow::{Context, bail};
 use anyhow::{Result, anyhow};
 
 fn missing_home(harness: &str) -> anyhow::Error {
@@ -138,6 +142,47 @@ pub(crate) fn pi_resolver(config: &Config) -> Option<toolpath_pi::PathResolver> 
 /// [`pi_resolver`] for a command that targets Pi.
 pub(crate) fn require_pi_resolver(config: &Config) -> Result<toolpath_pi::PathResolver> {
     pi_resolver(config).ok_or_else(|| missing_home("Pi"))
+}
+
+/// The GitHub API token: `$GITHUB_TOKEN` when it is set and not empty,
+/// otherwise the token the GitHub CLI holds.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn github_token(config: &Config) -> Result<String> {
+    github_token_or_else(config, gh_auth_token)
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn github_token_or_else(
+    config: &Config,
+    fallback: impl FnOnce() -> Result<String>,
+) -> Result<String> {
+    match config.github_token.as_deref() {
+        Some(token) if !token.is_empty() => Ok(token.to_string()),
+        _ => fallback(),
+    }
+}
+
+/// Read the token out of the GitHub CLI.
+#[cfg(not(target_os = "emscripten"))]
+fn gh_auth_token() -> Result<String> {
+    let output = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .context(
+            "Failed to run 'gh auth token'. Set GITHUB_TOKEN or install the GitHub CLI (gh).",
+        )?;
+
+    if output.status.success() {
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !token.is_empty() {
+            return Ok(token);
+        }
+    }
+
+    bail!(
+        "No GitHub token found. Set GITHUB_TOKEN environment variable \
+         or authenticate with 'gh auth login'."
+    )
 }
 
 /// The production [`HarnessBundle`], every provider built from
@@ -367,6 +412,30 @@ mod tests {
             bundle.pi.unwrap().resolver().sessions_dir(),
             PathBuf::from("/home/jailed/.pi/agent/sessions")
         );
+    }
+
+    #[test]
+    fn github_token_prefers_the_configured_value() {
+        let config = Config {
+            github_token: Some("configured".to_string()),
+            ..Config::default()
+        };
+        let token = github_token_or_else(&config, || Ok("fallback".to_string())).unwrap();
+        assert_eq!(token, "configured");
+    }
+
+    #[test]
+    fn github_token_falls_back_when_unset_or_empty() {
+        let fallback = || Ok("fallback".to_string());
+        assert_eq!(
+            github_token_or_else(&Config::default(), fallback).unwrap(),
+            "fallback"
+        );
+        let config = Config {
+            github_token: Some(String::new()),
+            ..Config::default()
+        };
+        assert_eq!(github_token_or_else(&config, fallback).unwrap(), "fallback");
     }
 
     #[test]

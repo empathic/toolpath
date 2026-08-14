@@ -155,41 +155,6 @@ mod native {
     use super::{DeriveConfig, PullRequestInfo, extract_issue_refs};
 
     // ====================================================================
-    // Auth
-    // ====================================================================
-
-    /// Resolve a GitHub API token.
-    ///
-    /// Checks `GITHUB_TOKEN` environment variable first, then falls back to
-    /// `gh auth token` subprocess. Returns an error if neither works.
-    pub fn resolve_token() -> Result<String> {
-        if let Ok(token) = std::env::var("GITHUB_TOKEN")
-            && !token.is_empty()
-        {
-            return Ok(token);
-        }
-
-        let output = std::process::Command::new("gh")
-            .args(["auth", "token"])
-            .output()
-            .context(
-                "Failed to run 'gh auth token'. Set GITHUB_TOKEN or install the GitHub CLI (gh).",
-            )?;
-
-        if output.status.success() {
-            let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !token.is_empty() {
-                return Ok(token);
-            }
-        }
-
-        bail!(
-            "No GitHub token found. Set GITHUB_TOKEN environment variable \
-             or authenticate with 'gh auth login'."
-        )
-    }
-
-    // ====================================================================
     // API Client
     // ====================================================================
 
@@ -1685,7 +1650,7 @@ mod native {
 
 // Re-export native-only functions at crate root for API compatibility
 #[cfg(not(target_os = "emscripten"))]
-pub use native::{derive_pull_request, list_pull_requests, resolve_token};
+pub use native::{derive_pull_request, list_pull_requests};
 
 #[cfg(test)]
 mod tests {

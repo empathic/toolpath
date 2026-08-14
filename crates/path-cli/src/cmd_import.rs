@@ -282,7 +282,7 @@ fn derive(source: ImportSource, config: &Config) -> Result<Vec<DerivedDoc>> {
             pr,
             no_ci,
             no_comments,
-        } => derive_github(url, repo, pr, no_ci, no_comments),
+        } => derive_github(url, repo, pr, no_ci, no_comments, config),
         ImportSource::Claude {
             project,
             session,
@@ -386,10 +386,11 @@ fn derive_github(
     pr: Option<u64>,
     no_ci: bool,
     no_comments: bool,
+    config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (url, repo, pr, no_ci, no_comments);
+        let _ = (url, repo, pr, no_ci, no_comments, config);
         anyhow::bail!("'path import github' requires a native environment with network access");
     }
 
@@ -413,15 +414,15 @@ fn derive_github(
             );
         };
 
-        let token = toolpath_github::resolve_token()?;
-        let config = toolpath_github::DeriveConfig {
-            token,
+        let derive_config = toolpath_github::DeriveConfig {
+            token: providers::github_token(config)?,
             include_ci: !no_ci,
             include_comments: !no_comments,
             ..Default::default()
         };
 
-        let path = toolpath_github::derive_pull_request(&owner, &repo_name, pr_number, &config)?;
+        let path =
+            toolpath_github::derive_pull_request(&owner, &repo_name, pr_number, &derive_config)?;
         let doc = Graph::from_path(path);
         let cache_id = make_id("github", &format!("{owner}_{repo_name}-{pr_number}"));
         Ok(vec![DerivedDoc {
