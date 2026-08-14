@@ -59,7 +59,6 @@ pub fn execute(
             eval_print(&main, merged, out, &pp, raw)?;
         }
         Plan::Decompose { reduce } => {
-            let reducer = compile(reduce)?;
             let mut partials: Vec<Val> = Vec::new();
             let mut saw_file = false;
             let mut emit = |val: Val| {
@@ -68,21 +67,108 @@ pub fn execute(
                 Ok(())
             };
             run_files(&mut emit)?;
-            if saw_file {
-                let merged: Val = partials.into_iter().collect();
-                eval_print(&reducer, merged, out, &pp, raw)?;
-            } else {
-                // No document contributed a partial: the decomposition
-                // identity `reduce(⋃ main(fᵢ)) == main(⋃ fᵢ)` degenerates to
-                // `main([])`. Run the *main* filter over an empty array so the
-                // answer matches slurp (`length` → 0, `sort_by|.[:N]` → []),
-                // not the reducer over `[]` (which would give null / error).
-                let empty: Val = std::iter::empty().collect();
-                eval_print(&main, empty, out, &pp, raw)?;
-            }
+            reduce_partials(main_src, reduce, partials, saw_file, compact, raw, out)?;
         }
     }
     Ok(())
+}
+
+/// Run a `Decompose` plan's reduce filter over the gathered per-file partials
+/// and print the answer — shared by the sequential and parallel drivers so the
+/// zero-file rule lives once.
+///
+/// With no document contributing a partial, the decomposition identity
+/// `reduce(⋃ main(fᵢ)) == main(⋃ fᵢ)` degenerates to `main([])`. Run the
+/// *main* filter over an empty array so the answer matches slurp (`length`
+/// → 0, `sort_by|.[:N]` → []), not the reducer over `[]` (which would give
+/// null / error).
+pub fn reduce_partials(
+    main_src: &str,
+    reduce_src: &str,
+    partials: Vec<Val>,
+    saw_file: bool,
+    compact: bool,
+    raw: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let pp = pretty(compact);
+    if saw_file {
+        let reducer = compile(reduce_src)?;
+        let merged: Val = partials.into_iter().collect();
+        eval_print(&reducer, merged, out, &pp, raw)
+    } else {
+        let main = compile(main_src)?;
+        let empty: Val = std::iter::empty().collect();
+        eval_print(&main, empty, out, &pp, raw)
+    }
+}
+
+/// Surface a filter's load/compile errors without running it. The parallel
+/// drivers call this before touching any file, preserving the sequential
+/// path's error precedence (a bad filter beats a missing `--id`).
+#[cfg(not(target_os = "emscripten"))]
+pub fn compile_check(code: &str) -> Result<()> {
+    compile(code).map(|_| ())
+}
+
+/// Compile `code` at most once per thread. Rayon workers are long-lived, so
+/// per-file evaluation pays one compile per pool thread, not per file.
+#[cfg(not(target_os = "emscripten"))]
+fn with_compiled<T>(code: &str, f: impl FnOnce(&Program) -> Result<T>) -> Result<T> {
+    use std::cell::RefCell;
+    thread_local! {
+        static CACHE: RefCell<Option<(String, Program)>> = const { RefCell::new(None) };
+    }
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !matches!(&*cache, Some((cached, _)) if cached == code) {
+            *cache = Some((code.to_string(), compile(code)?));
+        }
+        let (_, prog) = cache.as_ref().expect("just populated");
+        f(prog)
+    })
+}
+
+/// Evaluate `code` over one file's steps and render its outputs exactly as
+/// [`execute`]'s streaming printer would. Runs on worker threads.
+#[cfg(not(target_os = "emscripten"))]
+pub fn render_file(
+    code: &str,
+    steps: Vec<serde_json::Value>,
+    compact: bool,
+    raw: bool,
+) -> Result<Vec<u8>> {
+    with_compiled(code, |prog| {
+        let mut buf = Vec::new();
+        eval_print(prog, steps_to_val(steps)?, &mut buf, &pretty(compact), raw)?;
+        Ok(buf)
+    })
+}
+
+/// Evaluate `code` over one file's steps and pack the partial outputs into
+/// one compact JSON array. Jaq values are `Rc`-based and thread-local, so
+/// partials cross threads as bytes; [`unpack_partials`] reparses them on the
+/// consuming thread.
+#[cfg(not(target_os = "emscripten"))]
+pub fn partials_file(code: &str, steps: Vec<serde_json::Value>) -> Result<Vec<u8>> {
+    with_compiled(code, |prog| {
+        let vals = eval_collect(prog, steps_to_val(steps)?)?;
+        let arr: Val = vals.into_iter().collect();
+        let mut buf = Vec::new();
+        jaq_json::write::write(&mut buf, &pretty(true), 0, &arr)
+            .map_err(|e| anyhow!("internal: could not pack partials: {e}"))?;
+        Ok(buf)
+    })
+}
+
+/// Reparse one file's packed partials (the inverse of [`partials_file`]).
+#[cfg(not(target_os = "emscripten"))]
+pub fn unpack_partials(bytes: &[u8]) -> Result<Vec<Val>> {
+    match jaq_json::read::parse_single(bytes) {
+        Ok(Val::Arr(items)) => Ok(items.iter().cloned().collect()),
+        Ok(_) => Err(anyhow!("internal: packed partials were not an array")),
+        Err(e) => Err(anyhow!("internal: could not reparse partials: {e}")),
+    }
 }
 
 /// Convert one file's wrapped steps into a jaq array value. The byte buffer is
@@ -401,5 +487,94 @@ mod tests {
         // (unbalanced by the paren) must fall back to slurp, not emit a broken
         // filter.
         assert_slurps("map({id: .step.id}) | (sort_by(.id)) | .[:1]");
+    }
+
+    // ── The parallel drivers' building blocks ─────────────────────────
+    //
+    // `render_file`/`partials_file` + `reduce_partials` are what the
+    // parallel per-file drivers run on worker threads. Their output must be
+    // byte-identical to the sequential engine, which is itself pinned to
+    // slurp above.
+
+    fn file_steps(f: &serde_json::Value) -> Vec<serde_json::Value> {
+        f.as_array().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn render_file_concat_matches_sequential_stream() {
+        for (compact, raw) in [(true, false), (false, false), (true, true)] {
+            for code in [
+                ".[] | select(.dead_end)",
+                r#".[] | select(.step.actor | startswith("agent:")) | .step.id"#,
+                "map(select(.tokens > 40))",
+            ] {
+                let mut seq: Vec<u8> = Vec::new();
+                execute(&Plan::PerFileStream, code, compact, raw, &mut seq, |emit| {
+                    for f in &fixture() {
+                        emit(steps_to_val(file_steps(f))?)?;
+                    }
+                    Ok(())
+                })
+                .unwrap();
+
+                let mut par: Vec<u8> = Vec::new();
+                for f in &fixture() {
+                    par.extend(render_file(code, file_steps(f), compact, raw).unwrap());
+                }
+                assert_eq!(
+                    String::from_utf8(par).unwrap(),
+                    String::from_utf8(seq).unwrap(),
+                    "parallel render must equal sequential for `{code}` (compact={compact}, raw={raw})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn partials_roundtrip_matches_sequential_decompose() {
+        for code in [
+            "length",
+            "map(select(.dead_end)) | length",
+            "sort_by(-.tokens) | .[:2]",
+            "map({id: .step.id, t: .tokens})",
+        ] {
+            let plan = crate::query::plan::analyze(code);
+            let Plan::Decompose { reduce } = &plan else {
+                panic!("`{code}` should decompose");
+            };
+            let seq = run_with(&plan, code, &fixture());
+
+            let mut partials: Vec<Val> = Vec::new();
+            let mut saw_file = false;
+            for f in &fixture() {
+                saw_file = true;
+                let bytes = partials_file(code, file_steps(f)).unwrap();
+                partials.extend(unpack_partials(&bytes).unwrap());
+            }
+            let mut par: Vec<u8> = Vec::new();
+            reduce_partials(code, reduce, partials, saw_file, true, false, &mut par).unwrap();
+            assert_eq!(
+                String::from_utf8(par).unwrap(),
+                seq,
+                "parallel decompose must equal sequential for `{code}`"
+            );
+        }
+    }
+
+    #[test]
+    fn reduce_partials_zero_files_matches_slurp() {
+        for code in ["length", "sort_by(.tokens) | .[:2]"] {
+            let plan = crate::query::plan::analyze(code);
+            let Plan::Decompose { reduce } = &plan else {
+                panic!("`{code}` should decompose");
+            };
+            let mut par: Vec<u8> = Vec::new();
+            reduce_partials(code, reduce, Vec::new(), false, true, false, &mut par).unwrap();
+            let none: &[serde_json::Value] = &[];
+            assert_eq!(
+                String::from_utf8(par).unwrap(),
+                run_with(&Plan::Slurp, code, none)
+            );
+        }
     }
 }

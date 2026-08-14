@@ -56,6 +56,7 @@ git2 = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 rusqlite = { workspace = true }
+rayon = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 toml = { workspace = true }
 # Embedded fuzzy picker — used when external `fzf` isn't on PATH.
