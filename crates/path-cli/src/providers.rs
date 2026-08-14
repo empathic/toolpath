@@ -10,9 +10,11 @@
 //! error for a command that targets one harness.
 //!
 //! opencode, copilot, and cursor (Windows) get their directory
-//! injected, not just the home: their resolvers read `$XDG_DATA_HOME`
-//! / `$COPILOT_HOME` / `$APPDATA` internally, and those reads win
-//! against `with_home`. The injected directory wins against both.
+//! injected, not just the home. `$COPILOT_HOME` replaces the whole
+//! Copilot root, so the injected directory wins against the
+//! home-derived default. The opencode and cursor resolvers read
+//! `$XDG_DATA_HOME` / `$APPDATA` internally, and those reads win
+//! against `with_home`; the injected directory wins against both.
 
 use crate::config::Config;
 #[cfg(not(target_os = "emscripten"))]
@@ -66,15 +68,25 @@ pub(crate) fn codex_strict(config: &Config) -> bool {
     config.codex_rollout_strict.is_some()
 }
 
-pub(crate) fn copilot_convo(config: &Config) -> toolpath_copilot::CopilotConvo {
-    let mut resolver = toolpath_copilot::PathResolver::new();
-    if let Some(home) = config.home_dir() {
-        resolver = resolver.with_home(home);
-    }
-    if let Some(dir) = &config.copilot_home {
-        resolver = resolver.with_copilot_dir(dir);
-    }
-    toolpath_copilot::CopilotConvo::with_resolver(resolver)
+pub(crate) fn copilot_resolver(config: &Config) -> Option<toolpath_copilot::PathResolver> {
+    config.home_dir().map(|home| {
+        let resolver = toolpath_copilot::PathResolver::new(home);
+        match &config.copilot_home {
+            Some(dir) => resolver.with_copilot_dir(dir),
+            None => resolver,
+        }
+    })
+}
+
+/// [`copilot_resolver`] for a command that targets Copilot.
+pub(crate) fn require_copilot_resolver(config: &Config) -> Result<toolpath_copilot::PathResolver> {
+    copilot_resolver(config).ok_or_else(|| missing_home("Copilot"))
+}
+
+/// The Copilot reader's strict flag. `$COPILOT_EVENTS_STRICT` is strict
+/// when set, whatever its value.
+pub(crate) fn copilot_strict(config: &Config) -> bool {
+    config.copilot_events_strict.is_some()
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -132,7 +144,9 @@ pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
         codex: codex_resolver(config).map(|r| {
             toolpath_codex::CodexConvo::with_resolver(r).with_strict(codex_strict(config))
         }),
-        copilot: Some(copilot_convo(config)),
+        copilot: copilot_resolver(config).map(|r| {
+            toolpath_copilot::CopilotConvo::with_resolver(r).with_strict(copilot_strict(config))
+        }),
         opencode: Some(opencode_convo(config)),
         cursor: Some(cursor_convo(config)),
         pi: Some(pi_convo(config, None)),
@@ -222,17 +236,40 @@ mod tests {
     }
 
     #[test]
-    fn copilot_convo_injects_copilot_dir() {
+    fn copilot_resolver_injects_copilot_dir() {
         let config = Config {
             home: Some(PathBuf::from("/home/jailed")),
             copilot_home: Some(PathBuf::from("/copilot/root")),
             ..Config::default()
         };
-        let manager = copilot_convo(&config);
+        let resolver = copilot_resolver(&config).unwrap();
+        assert_eq!(resolver.copilot_dir(), PathBuf::from("/copilot/root"));
+    }
+
+    #[test]
+    fn copilot_resolver_roots_at_config_home() {
+        let resolver = copilot_resolver(&config_with_home()).unwrap();
         assert_eq!(
-            manager.resolver().copilot_dir().unwrap(),
-            PathBuf::from("/copilot/root")
+            resolver.session_state_dir(),
+            PathBuf::from("/home/jailed/.copilot/session-state")
         );
+    }
+
+    #[test]
+    fn copilot_resolver_is_none_without_a_home() {
+        assert!(copilot_resolver(&Config::default()).is_none());
+        let err = require_copilot_resolver(&Config::default()).unwrap_err();
+        assert!(err.to_string().contains("home directory"));
+    }
+
+    #[test]
+    fn copilot_strict_follows_presence_of_the_variable() {
+        assert!(!copilot_strict(&Config::default()));
+        let config = Config {
+            copilot_events_strict: Some(String::new()),
+            ..Config::default()
+        };
+        assert!(copilot_strict(&config));
     }
 
     #[test]

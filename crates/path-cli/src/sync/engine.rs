@@ -975,7 +975,7 @@ mod tests {
         let user =
             r#"{"type":"user.message","timestamp":"2026-07-01T00:00:01Z","data":{"content":"hi"}}"#;
         std::fs::write(dir.join("events.jsonl"), format!("{start}\n{user}\n")).unwrap();
-        let resolver = toolpath_copilot::PathResolver::new().with_copilot_dir(&copilot_dir);
+        let resolver = toolpath_copilot::PathResolver::new(home).with_copilot_dir(&copilot_dir);
         HarnessBundle {
             copilot: Some(toolpath_copilot::CopilotConvo::with_resolver(resolver)),
             ..Default::default()
@@ -1166,7 +1166,7 @@ mod tests {
                 ),
             )
             .unwrap();
-            let resolver = toolpath_copilot::PathResolver::new().with_copilot_dir(&copilot_dir);
+            let resolver = toolpath_copilot::PathResolver::new(home).with_copilot_dir(&copilot_dir);
             let bundle = HarnessBundle {
                 copilot: Some(toolpath_copilot::CopilotConvo::with_resolver(resolver)),
                 ..Default::default()

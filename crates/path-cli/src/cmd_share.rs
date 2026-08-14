@@ -708,12 +708,10 @@ fn harness_status_copilot(bundle: &HarnessBundle, home: Option<&std::path::Path>
     let Some(mgr) = &bundle.copilot else {
         return HarnessStatus::unresolved();
     };
-    match mgr.resolver().session_state_dir() {
-        Ok(p) => HarnessStatus {
-            path: crate::config::home_relative(&p, home),
-            exists: p.exists(),
-        },
-        Err(_) => HarnessStatus::unresolved(),
+    let p = mgr.resolver().session_state_dir();
+    HarnessStatus {
+        path: crate::config::home_relative(&p, home),
+        exists: p.exists(),
     }
 }
 
@@ -1148,7 +1146,7 @@ mod tests {
     fn copilot_only_bundle(home: &Path) -> HarnessBundle {
         let copilot_dir = home.join(".copilot");
         std::fs::create_dir_all(&copilot_dir).unwrap();
-        let resolver = toolpath_copilot::PathResolver::new().with_copilot_dir(&copilot_dir);
+        let resolver = toolpath_copilot::PathResolver::new(home).with_copilot_dir(&copilot_dir);
         HarnessBundle {
             copilot: Some(toolpath_copilot::CopilotConvo::with_resolver(resolver)),
             ..Default::default()

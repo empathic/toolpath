@@ -1,10 +1,11 @@
 //! Filesystem layout for GitHub Copilot CLI state.
 //!
 //! Sessions live at `~/.copilot/session-state/<session-id>/events.jsonl`
-//! (see `docs/agents/formats/copilot-cli/directory-layout.md`). The root is
-//! overridable with the `COPILOT_HOME` environment variable. Older sessions
-//! may sit under the legacy `history-session-state/` directory; we glance at
-//! it as a secondary location.
+//! (see `docs/agents/formats/copilot-cli/directory-layout.md`). The caller
+//! supplies the home directory, and [`PathResolver::with_copilot_dir`]
+//! replaces the whole root. Older sessions may sit under the legacy
+//! `history-session-state/` directory; we glance at it as a secondary
+//! location.
 
 use crate::error::{ConvoError, Result};
 use std::fs;
@@ -20,62 +21,50 @@ const SESSION_STORE_DB: &str = "session-store.db";
 /// Builder-style resolver over the `~/.copilot/` filesystem.
 #[derive(Debug, Clone)]
 pub struct PathResolver {
-    home_dir: Option<PathBuf>,
+    home_dir: PathBuf,
     copilot_dir: Option<PathBuf>,
 }
 
-impl Default for PathResolver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PathResolver {
-    pub fn new() -> Self {
+    pub fn new<P: Into<PathBuf>>(home: P) -> Self {
         Self {
-            home_dir: dirs::home_dir(),
-            // `COPILOT_HOME` replaces the entire `~/.copilot` root.
-            copilot_dir: std::env::var_os("COPILOT_HOME").map(PathBuf::from),
+            home_dir: home.into(),
+            copilot_dir: None,
         }
     }
 
-    pub fn with_home<P: Into<PathBuf>>(mut self, home: P) -> Self {
-        self.home_dir = Some(home.into());
-        self
-    }
-
-    /// Override the copilot directory directly (defaults to `~/.copilot`,
-    /// or `$COPILOT_HOME` when set).
+    /// Override the copilot directory directly (defaults to
+    /// `~/.copilot`).
     pub fn with_copilot_dir<P: Into<PathBuf>>(mut self, copilot_dir: P) -> Self {
         self.copilot_dir = Some(copilot_dir.into());
         self
     }
 
-    pub fn home_dir(&self) -> Result<&Path> {
-        self.home_dir.as_deref().ok_or(ConvoError::NoHomeDirectory)
+    pub fn home_dir(&self) -> &Path {
+        &self.home_dir
     }
 
-    pub fn copilot_dir(&self) -> Result<PathBuf> {
-        if let Some(d) = &self.copilot_dir {
-            return Ok(d.clone());
+    pub fn copilot_dir(&self) -> PathBuf {
+        match &self.copilot_dir {
+            Some(d) => d.clone(),
+            None => self.home_dir.join(COPILOT_SUBDIR),
         }
-        Ok(self.home_dir()?.join(COPILOT_SUBDIR))
     }
 
-    pub fn session_state_dir(&self) -> Result<PathBuf> {
-        Ok(self.copilot_dir()?.join(SESSION_STATE_SUBDIR))
+    pub fn session_state_dir(&self) -> PathBuf {
+        self.copilot_dir().join(SESSION_STATE_SUBDIR)
     }
 
-    pub fn legacy_session_state_dir(&self) -> Result<PathBuf> {
-        Ok(self.copilot_dir()?.join(LEGACY_SESSION_STATE_SUBDIR))
+    pub fn legacy_session_state_dir(&self) -> PathBuf {
+        self.copilot_dir().join(LEGACY_SESSION_STATE_SUBDIR)
     }
 
-    pub fn session_store_db(&self) -> Result<PathBuf> {
-        Ok(self.copilot_dir()?.join(SESSION_STORE_DB))
+    pub fn session_store_db(&self) -> PathBuf {
+        self.copilot_dir().join(SESSION_STORE_DB)
     }
 
     pub fn exists(&self) -> bool {
-        self.copilot_dir().map(|p| p.exists()).unwrap_or(false)
+        self.copilot_dir().exists()
     }
 
     /// `events.jsonl` path for a resolved session id.
@@ -92,7 +81,7 @@ impl PathResolver {
     /// `events.jsonl`, newest first by `events.jsonl` mtime.
     pub fn list_session_dirs(&self) -> Result<Vec<PathBuf>> {
         let mut dirs = Vec::new();
-        for root in [self.session_state_dir()?, self.legacy_session_state_dir()?] {
+        for root in [self.session_state_dir(), self.legacy_session_state_dir()] {
             collect_session_dirs(&root, &mut dirs);
         }
         dirs.sort_by_key(|p| {
@@ -160,17 +149,6 @@ fn collect_session_dirs(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-mod dirs {
-    use std::env;
-    use std::path::PathBuf;
-
-    pub fn home_dir() -> Option<PathBuf> {
-        env::var_os("HOME")
-            .or_else(|| env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,31 +165,27 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let copilot = temp.path().join(".copilot");
         fs::create_dir_all(&copilot).unwrap();
-        let resolver = PathResolver::new()
-            .with_home(temp.path())
-            .with_copilot_dir(&copilot);
+        let resolver = PathResolver::new(temp.path()).with_copilot_dir(&copilot);
         (temp, resolver)
     }
 
     #[test]
     fn copilot_dir_defaults_to_home() {
         let temp = TempDir::new().unwrap();
-        // Avoid COPILOT_HOME leaking in from the environment.
-        let r = PathResolver {
-            home_dir: Some(temp.path().to_path_buf()),
-            copilot_dir: None,
-        };
-        assert_eq!(r.copilot_dir().unwrap(), temp.path().join(".copilot"));
+        let r = PathResolver::new(temp.path());
+        assert_eq!(r.copilot_dir(), temp.path().join(".copilot"));
+    }
+
+    #[test]
+    fn copilot_dir_override_wins_over_home() {
+        let r = PathResolver::new("/home/alex").with_copilot_dir("/copilot/root");
+        assert_eq!(r.copilot_dir(), PathBuf::from("/copilot/root"));
     }
 
     #[test]
     fn session_state_dir_under_copilot_dir() {
         let (_t, r) = setup();
-        assert!(
-            r.session_state_dir()
-                .unwrap()
-                .ends_with(".copilot/session-state")
-        );
+        assert!(r.session_state_dir().ends_with(".copilot/session-state"));
     }
 
     #[test]

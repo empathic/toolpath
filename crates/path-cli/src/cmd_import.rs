@@ -930,7 +930,8 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
 
 fn derive_copilot(session: Option<String>, all: bool, config: &Config) -> Result<Vec<DerivedDoc>> {
     let manager =
-        toolpath_copilot::CopilotConvo::with_resolver(providers::copilot_resolver(config));
+        toolpath_copilot::CopilotConvo::with_resolver(providers::require_copilot_resolver(config)?)
+            .with_strict(providers::copilot_strict(config));
 
     let session_ids: Vec<String> = match (session, all) {
         (Some(s), _) => vec![s],

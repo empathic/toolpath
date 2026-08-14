@@ -493,10 +493,8 @@ fn run_copilot(
 
 #[cfg(not(target_os = "emscripten"))]
 fn write_into_copilot_project(session: &toolpath_copilot::Session, config: &Config) -> Result<()> {
-    let resolver = providers::copilot_resolver(config);
-    let state_dir = resolver
-        .session_state_dir()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve ~/.copilot/session-state: {}", e))?;
+    let resolver = providers::require_copilot_resolver(config)?;
+    let state_dir = resolver.session_state_dir();
     let sess_dir = state_dir.join(&session.id);
     std::fs::create_dir_all(&sess_dir).with_context(|| format!("create {}", sess_dir.display()))?;
 
@@ -517,9 +515,7 @@ fn write_into_copilot_project(session: &toolpath_copilot::Session, config: &Conf
     .with_context(|| "write workspace.yaml")?;
 
     // session-store.db `sessions` row — the resume picker reads this index.
-    let db_path = resolver
-        .session_store_db()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve session-store.db: {}", e))?;
+    let db_path = resolver.session_store_db();
     let registration = register_copilot_session(&db_path, session);
 
     eprintln!(

@@ -1,8 +1,8 @@
 //! Read a Copilot CLI session directory into a [`Session`].
 //!
 //! The reader is tolerant: a malformed `events.jsonl` line is logged to
-//! stderr and skipped (a crash can leave the final line truncated), unless
-//! `COPILOT_EVENTS_STRICT` is set, in which case the first bad line errors.
+//! stderr and skipped (a crash can leave the final line truncated). Strict
+//! mode turns the first malformed line into an error.
 
 use crate::error::{ConvoError, Result};
 use crate::types::{EventLine, Session, Workspace, parse_workspace};
@@ -15,9 +15,15 @@ const WORKSPACE_FILE: &str = "workspace.yaml";
 pub struct EventReader;
 
 impl EventReader {
-    /// Read a `session-state/<id>/` directory. The session id is the
-    /// directory name.
+    /// Read a `session-state/<id>/` directory, skipping malformed lines.
+    /// The session id is the directory name.
     pub fn read_session_dir<P: AsRef<Path>>(dir: P) -> Result<Session> {
+        Self::read_session_dir_with(dir, false)
+    }
+
+    /// [`Self::read_session_dir`] with the strict flag supplied by the
+    /// caller. Strict mode returns the first malformed line as an error.
+    pub fn read_session_dir_with<P: AsRef<Path>>(dir: P, strict: bool) -> Result<Session> {
         let dir = dir.as_ref();
         let id = dir
             .file_name()
@@ -25,7 +31,7 @@ impl EventReader {
             .ok_or_else(|| ConvoError::InvalidFormat(dir.to_path_buf()))?
             .to_string();
         let events_path = dir.join(EVENTS_FILE);
-        let lines = Self::read_lines(&events_path)?;
+        let lines = Self::read_lines_with(&events_path, strict)?;
         let workspace = Self::read_workspace(dir);
         Ok(Session {
             id,
@@ -44,16 +50,16 @@ impl EventReader {
         if ws.is_empty() { None } else { Some(ws) }
     }
 
-    /// Parse the JSONL lines of an `events.jsonl` file. Malformed-line
-    /// tolerance is controlled by `COPILOT_EVENTS_STRICT`.
+    /// Parse the JSONL lines of an `events.jsonl` file, skipping
+    /// malformed lines.
     pub fn read_lines<P: AsRef<Path>>(path: P) -> Result<Vec<EventLine>> {
-        let strict = std::env::var_os("COPILOT_EVENTS_STRICT").is_some();
-        Self::read_lines_impl(path.as_ref(), strict)
+        Self::read_lines_with(path, false)
     }
 
-    /// Parse the JSONL lines with `strict` passed explicitly (env-independent,
-    /// so tests don't race on a process-global var).
-    fn read_lines_impl(path: &Path, strict: bool) -> Result<Vec<EventLine>> {
+    /// [`Self::read_lines`] with the strict flag supplied by the caller.
+    /// Strict mode returns the first malformed line as an error.
+    pub fn read_lines_with<P: AsRef<Path>>(path: P, strict: bool) -> Result<Vec<EventLine>> {
+        let path = path.as_ref();
         let file = std::fs::File::open(path)?;
         let reader = BufReader::new(file);
         let mut lines = Vec::new();
@@ -143,15 +149,9 @@ mod tests {
     fn strict_mode_errors_on_malformed() {
         let body = "{bad}\n";
         let (_t, dir) = session_dir("sess-2", body);
-        // Exercise strict mode directly (no process-global env mutation, which
-        // would race the concurrent non-strict test).
-        let res = EventReader::read_lines_impl(&dir.join("events.jsonl"), true);
-        assert!(res.is_err());
-        // Non-strict tolerates the same file.
-        assert!(
-            EventReader::read_lines_impl(&dir.join("events.jsonl"), false)
-                .unwrap()
-                .is_empty()
-        );
+        let events = dir.join("events.jsonl");
+        assert!(EventReader::read_lines_with(&events, true).is_err());
+        assert!(EventReader::read_lines(&events).unwrap().is_empty());
+        assert!(EventReader::read_session_dir_with(&dir, true).is_err());
     }
 }

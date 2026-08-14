@@ -6,20 +6,33 @@ use crate::reader::EventReader;
 use crate::types::{Session, SessionMetadata};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ConvoIO {
     resolver: PathResolver,
+    strict: bool,
 }
 
 impl ConvoIO {
-    pub fn new() -> Self {
-        Self {
-            resolver: PathResolver::new(),
-        }
+    pub fn new<P: Into<PathBuf>>(home: P) -> Self {
+        Self::with_resolver(PathResolver::new(home))
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            strict: false,
+        }
+    }
+
+    /// Strict mode makes an unparseable events line an error instead of
+    /// a warning.
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
+    }
+
+    pub fn strict(&self) -> bool {
+        self.strict
     }
 
     pub fn resolver(&self) -> &PathResolver {
@@ -30,7 +43,7 @@ impl ConvoIO {
         self.resolver.exists()
     }
 
-    pub fn copilot_dir_path(&self) -> Result<PathBuf> {
+    pub fn copilot_dir_path(&self) -> PathBuf {
         self.resolver.copilot_dir()
     }
 
@@ -56,18 +69,18 @@ impl ConvoIO {
     /// Read one session by id (exact or unique prefix).
     pub fn read_session(&self, session_id: &str) -> Result<Session> {
         let dir = self.resolver.find_session_dir(session_id)?;
-        EventReader::read_session_dir(&dir)
+        EventReader::read_session_dir_with(&dir, self.strict)
     }
 
     /// Read one session by its directory path.
     pub fn read_session_dir<P: AsRef<std::path::Path>>(&self, dir: P) -> Result<Session> {
-        EventReader::read_session_dir(dir)
+        EventReader::read_session_dir_with(dir, self.strict)
     }
 
     /// Cheap per-session metadata. Copilot session files have no compact
     /// header, so this walks the file (sessions are small).
     pub fn read_metadata<P: AsRef<std::path::Path>>(&self, dir: P) -> Result<SessionMetadata> {
-        let session = EventReader::read_session_dir(dir)?;
+        let session = EventReader::read_session_dir_with(dir, self.strict)?;
         Ok(SessionMetadata {
             id: session.id.clone(),
             dir_path: session.dir_path.clone(),
@@ -102,7 +115,7 @@ mod tests {
         ]
         .join("\n");
         fs::write(dir.join("events.jsonl"), body).unwrap();
-        let resolver = PathResolver::new().with_copilot_dir(&copilot);
+        let resolver = PathResolver::new(temp.path()).with_copilot_dir(&copilot);
         (temp, ConvoIO::with_resolver(resolver))
     }
 
@@ -130,5 +143,21 @@ mod tests {
         let (_t, io) = setup();
         assert!(io.session_exists("sess-abc"));
         assert!(!io.session_exists("nope"));
+    }
+
+    #[test]
+    fn strict_reads_reject_a_malformed_line() {
+        let (t, io) = setup();
+        let dir = t.path().join(".copilot/session-state/sess-bad");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("events.jsonl"), "{bad}\n").unwrap();
+
+        assert!(io.read_session("sess-bad").is_ok());
+        assert!(
+            io.clone()
+                .with_strict(true)
+                .read_session("sess-bad")
+                .is_err()
+        );
     }
 }

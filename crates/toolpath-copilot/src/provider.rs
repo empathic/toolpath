@@ -654,20 +654,29 @@ fn str_arg(args: &Value, keys: &[&str]) -> Option<String> {
 // ── Manager facade ───────────────────────────────────────────────────
 
 /// Reads Copilot CLI sessions and converts them to [`ConversationView`]s.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CopilotConvo {
     io: ConvoIO,
 }
 
 impl CopilotConvo {
-    pub fn new() -> Self {
-        Self { io: ConvoIO::new() }
+    pub fn new<P: Into<std::path::PathBuf>>(home: P) -> Self {
+        Self {
+            io: ConvoIO::new(home),
+        }
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
         Self {
             io: ConvoIO::with_resolver(resolver),
         }
+    }
+
+    /// Strict mode makes an unparseable events line an error instead of
+    /// a warning.
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.io = self.io.with_strict(strict);
+        self
     }
 
     pub fn io(&self) -> &ConvoIO {

@@ -25,7 +25,7 @@ fn setup() -> (TempDir, CopilotConvo, String) {
         "/tests/fixtures/sample-session.jsonl"
     );
     fs::copy(fixture, dir.join("events.jsonl")).unwrap();
-    let resolver = PathResolver::new().with_copilot_dir(&copilot);
+    let resolver = PathResolver::new(temp.path()).with_copilot_dir(&copilot);
     (temp, CopilotConvo::with_resolver(resolver), id.to_string())
 }
 

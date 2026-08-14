@@ -20,8 +20,9 @@ as the npm package [`@github/copilot`](https://www.npmjs.com/package/@github/cop
 
 ## What it reads
 
-Sessions live under `~/.copilot/session-state/<session-id>/` (override the root
-with `COPILOT_HOME`):
+Sessions live under `~/.copilot/session-state/<session-id>/` (the caller
+supplies the home directory; `PathResolver::with_copilot_dir` replaces the
+whole root):
 
 - `events.jsonl` — the append-only event stream this crate parses into a
   conversation.
@@ -37,7 +38,7 @@ It also tolerates the legacy `history-session-state/` location.
 ```rust,no_run
 use toolpath_copilot::{CopilotConvo, derive};
 
-let convo = CopilotConvo::new();
+let convo = CopilotConvo::new("/Users/alex");
 
 // List sessions (newest first).
 for meta in convo.list_sessions()? {
