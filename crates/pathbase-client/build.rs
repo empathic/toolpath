@@ -46,6 +46,10 @@ fn main() {
     let ast = syn::parse2::<syn::File>(tokens).expect("parse generated tokens");
     let formatted = prettyplease::unparse(&ast);
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "cargo passes OUT_DIR to a build script only through the environment"
+    )]
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
     let out_file = out_dir.join("pathbase_client.rs");
     fs::write(&out_file, formatted).unwrap_or_else(|e| panic!("write {}: {e}", out_file.display()));

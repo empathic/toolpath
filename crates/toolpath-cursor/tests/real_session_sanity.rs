@@ -71,6 +71,10 @@ fn real_cursor_db_round_trips_when_present() {
 
 /// The home directory this test reads Cursor state under. The library
 /// takes it as an argument, so the caller supplies it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this test reads the developer's real Cursor store, so it must locate the real home directory"
+)]
 fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
