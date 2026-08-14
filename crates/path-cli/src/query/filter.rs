@@ -67,21 +67,22 @@ pub fn execute(
                 Ok(())
             };
             run_files(&mut emit)?;
-            finish_decompose(main_src, reduce, partials, saw_file, compact, raw, out)?;
+            reduce_partials(main_src, reduce, partials, saw_file, compact, raw, out)?;
         }
     }
     Ok(())
 }
 
-/// Finish a `Decompose` plan over the gathered per-file partials — shared by
-/// the sequential and parallel drivers so the zero-file rule lives once.
+/// Run a `Decompose` plan's reduce filter over the gathered per-file partials
+/// and print the answer — shared by the sequential and parallel drivers so the
+/// zero-file rule lives once.
 ///
 /// With no document contributing a partial, the decomposition identity
 /// `reduce(⋃ main(fᵢ)) == main(⋃ fᵢ)` degenerates to `main([])`. Run the
 /// *main* filter over an empty array so the answer matches slurp (`length`
 /// → 0, `sort_by|.[:N]` → []), not the reducer over `[]` (which would give
 /// null / error).
-pub fn finish_decompose(
+pub fn reduce_partials(
     main_src: &str,
     reduce_src: &str,
     partials: Vec<Val>,
@@ -490,7 +491,7 @@ mod tests {
 
     // ── The parallel drivers' building blocks ─────────────────────────
     //
-    // `render_file`/`partials_file` + `finish_decompose` are what the
+    // `render_file`/`partials_file` + `reduce_partials` are what the
     // parallel per-file drivers run on worker threads. Their output must be
     // byte-identical to the sequential engine, which is itself pinned to
     // slurp above.
@@ -551,7 +552,7 @@ mod tests {
                 partials.extend(unpack_partials(&bytes).unwrap());
             }
             let mut par: Vec<u8> = Vec::new();
-            finish_decompose(code, reduce, partials, saw_file, true, false, &mut par).unwrap();
+            reduce_partials(code, reduce, partials, saw_file, true, false, &mut par).unwrap();
             assert_eq!(
                 String::from_utf8(par).unwrap(),
                 seq,
@@ -561,14 +562,14 @@ mod tests {
     }
 
     #[test]
-    fn finish_decompose_zero_files_matches_slurp() {
+    fn reduce_partials_zero_files_matches_slurp() {
         for code in ["length", "sort_by(.tokens) | .[:2]"] {
             let plan = crate::query::plan::analyze(code);
             let Plan::Decompose { reduce } = &plan else {
                 panic!("`{code}` should decompose");
             };
             let mut par: Vec<u8> = Vec::new();
-            finish_decompose(code, reduce, Vec::new(), false, true, false, &mut par).unwrap();
+            reduce_partials(code, reduce, Vec::new(), false, true, false, &mut par).unwrap();
             let none: &[serde_json::Value] = &[];
             assert_eq!(
                 String::from_utf8(par).unwrap(),

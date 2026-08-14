@@ -107,7 +107,7 @@ fn execute_plan(
                     Ok(())
                 },
             )?;
-            filter::finish_decompose(code, reduce, partials, saw_file, compact, raw, out)
+            filter::reduce_partials(code, reduce, partials, saw_file, compact, raw, out)
         }
     }
 }
