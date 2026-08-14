@@ -1310,7 +1310,7 @@ fn derive_pi(
     base: Option<PathBuf>,
     config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let mut resolver = providers::pi_resolver(config);
+    let mut resolver = providers::require_pi_resolver(config)?;
     if let Some(path) = base {
         resolver = resolver.with_sessions_dir(&path);
     }

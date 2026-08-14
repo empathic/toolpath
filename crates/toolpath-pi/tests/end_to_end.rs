@@ -33,7 +33,7 @@ fn write_fixture(sessions_dir: &Path) {
 fn manager_for(temp: &TempDir) -> PiConvo {
     let sessions_dir = temp.path().join(".pi/agent/sessions");
     fs::create_dir_all(&sessions_dir).unwrap();
-    let resolver = PathResolver::new().with_sessions_dir(&sessions_dir);
+    let resolver = PathResolver::new("/tmp/fake-home").with_sessions_dir(&sessions_dir);
     PiConvo::with_resolver(resolver)
 }
 

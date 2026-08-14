@@ -604,7 +604,7 @@ mod tests {
     fn resolver_with_project(tmp: &TempDir, cwd: &str) -> (PathResolver, PathBuf) {
         let sessions = tmp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
-        let resolver = PathResolver::new().with_sessions_dir(&sessions);
+        let resolver = PathResolver::new("/tmp/fake-home").with_sessions_dir(&sessions);
         let proj_dir = resolver.project_dir(cwd);
         fs::create_dir_all(&proj_dir).unwrap();
         (resolver, proj_dir)
@@ -648,7 +648,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let sessions = tmp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
-        let resolver = PathResolver::new().with_sessions_dir(&sessions);
+        let resolver = PathResolver::new("/tmp/fake-home").with_sessions_dir(&sessions);
         let err = read_session(&resolver, "/nonexistent-proj", "x").unwrap_err();
         assert!(matches!(err, PiError::ProjectNotFound(_)));
     }
@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn test_list_session_files_nonexistent_project() {
         let tmp = TempDir::new().unwrap();
-        let resolver = PathResolver::new().with_sessions_dir(tmp.path());
+        let resolver = PathResolver::new("/tmp/fake-home").with_sessions_dir(tmp.path());
         let files = list_session_files(&resolver, "/missing").unwrap();
         assert!(files.is_empty());
     }

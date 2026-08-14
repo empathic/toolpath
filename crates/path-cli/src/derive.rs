@@ -341,7 +341,7 @@ pub(crate) fn derive_pi_session(
     session: &str,
     base: Option<PathBuf>,
 ) -> Result<DerivedDoc> {
-    let mut resolver = providers::pi_resolver(config);
+    let mut resolver = providers::require_pi_resolver(config)?;
     if let Some(path) = base {
         resolver = resolver.with_sessions_dir(&path);
     }

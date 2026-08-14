@@ -22,16 +22,17 @@ pub use types::{
 use toolpath_convo::ConversationView;
 
 /// High-level interface for reading Pi sessions.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PiConvo {
     resolver: PathResolver,
 }
 
 impl PiConvo {
-    /// Build a manager with the default resolver (`~/.pi/agent/sessions/`).
-    pub fn new() -> Self {
+    /// Build a manager for `<home>/.pi/agent/sessions/`. The caller
+    /// supplies the home directory.
+    pub fn new(home: impl AsRef<std::path::Path>) -> Self {
         Self {
-            resolver: PathResolver::new(),
+            resolver: PathResolver::new(home),
         }
     }
 
