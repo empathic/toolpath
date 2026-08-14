@@ -45,14 +45,17 @@ use toolpath_convo::{
 };
 
 /// Provider for opencode sessions.
-#[derive(Default)]
 pub struct OpencodeConvo {
     io: ConvoIO,
 }
 
 impl OpencodeConvo {
-    pub fn new() -> Self {
-        Self { io: ConvoIO::new() }
+    /// Roots at `home`, so the data directory is
+    /// `<home>/.local/share/opencode`.
+    pub fn new<P: Into<std::path::PathBuf>>(home: P) -> Self {
+        Self {
+            io: ConvoIO::new(home),
+        }
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
@@ -152,14 +155,14 @@ pub fn native_name(category: ToolCategory, args: &Value) -> Option<&'static str>
 /// [`ConversationView`] shape. File mutations from the snapshot git repo
 /// are not populated; use [`to_view_with_resolver`] when you have one.
 pub fn to_view(session: &Session) -> ConversationView {
-    to_view_with_resolver(session, &PathResolver::new())
+    Builder::new(session).build_with_resolver(None)
 }
 
 /// Like [`to_view`] but opens opencode's snapshot git repository via the
 /// resolver and pre-resolves each turn's file mutations against the
 /// snapshot pair. Falls back silently when the repo isn't present.
 pub fn to_view_with_resolver(session: &Session, resolver: &PathResolver) -> ConversationView {
-    Builder::new(session).build_with_resolver(resolver)
+    Builder::new(session).build_with_resolver(Some(resolver))
 }
 
 struct Builder<'a> {
@@ -195,14 +198,14 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn build_with_resolver(mut self, resolver: &PathResolver) -> ConversationView {
+    fn build_with_resolver(mut self, resolver: Option<&PathResolver>) -> ConversationView {
         let session_version = self.session.version.clone();
         let session_directory = self.session.directory.to_string_lossy().to_string();
         let session_project_id = self.session.project_id.clone();
-        self.snapshot_repo = resolver
-            .snapshot_gitdir(&session_project_id, &self.session.directory)
-            .ok()
-            .and_then(|gd| git2::Repository::open(gd).ok());
+        self.snapshot_repo = resolver.and_then(|r| {
+            let gitdir = r.snapshot_gitdir(&session_project_id, &self.session.directory);
+            git2::Repository::open(gitdir).ok()
+        });
 
         let mut view = self.build();
 
@@ -729,7 +732,7 @@ impl ConversationProvider for OpencodeConvo {
         let s = self
             .read_session(conversation_id)
             .map_err(|e| ConvoTraitError::Provider(e.to_string()))?;
-        Ok(to_view(&s))
+        Ok(to_view_with_resolver(&s, self.resolver()))
     }
 
     fn load_metadata(
@@ -928,9 +931,7 @@ mod tests {
         ))
         .unwrap();
         drop(conn);
-        let resolver = PathResolver::new()
-            .with_home(temp.path())
-            .with_data_dir(&data);
+        let resolver = PathResolver::new(temp.path()).with_data_dir(&data);
         (temp, OpencodeConvo::with_resolver(resolver))
     }
 

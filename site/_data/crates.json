@@ -65,7 +65,7 @@
   },
   {
     "name": "toolpath-opencode",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Derive from opencode SQLite databases",
     "docs": "https://docs.rs/toolpath-opencode",
     "crate": "https://crates.io/crates/toolpath-opencode",

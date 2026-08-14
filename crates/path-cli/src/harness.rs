@@ -121,7 +121,6 @@ pub(crate) fn is_not_found_copilot(err: &toolpath_copilot::ConvoError) -> bool {
 pub(crate) fn is_not_found_opencode(err: &toolpath_opencode::ConvoError) -> bool {
     use toolpath_opencode::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::OpencodeDirectoryNotFound(_))
         || matches!(err, ConvoError::DatabaseNotFound(_))
 }

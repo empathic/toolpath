@@ -246,7 +246,9 @@ pub(crate) fn derive_opencode_session(
     no_snapshot_diffs: bool,
 ) -> Result<DerivedDoc> {
     derive_opencode_session_with(
-        &toolpath_opencode::OpencodeConvo::with_resolver(providers::opencode_resolver(config)),
+        &toolpath_opencode::OpencodeConvo::with_resolver(providers::require_opencode_resolver(
+            config,
+        )?),
         session,
         no_snapshot_diffs,
     )

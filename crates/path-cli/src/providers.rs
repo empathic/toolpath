@@ -9,12 +9,17 @@
 //! home, so the harness is out of reach. `require_*` turns that into an
 //! error for a command that targets one harness.
 //!
-//! opencode, copilot, and cursor (Windows) get their directory
-//! injected, not just the home. `$COPILOT_HOME` replaces the whole
-//! Copilot root, so the injected directory wins against the
-//! home-derived default. The opencode and cursor resolvers read
-//! `$XDG_DATA_HOME` / `$APPDATA` internally, and those reads win
-//! against `with_home`; the injected directory wins against both.
+//! opencode takes the XDG data root as well as the home:
+//! `$XDG_DATA_HOME` comes from [`Config`], and the resolver appends
+//! `opencode` to it.
+//!
+//! copilot gets its directory injected, not just the home:
+//! `$COPILOT_HOME` replaces the whole Copilot root, so the injected
+//! directory wins against the home-derived default.
+//!
+//! cursor (Windows) gets its directory injected, not just the home:
+//! its resolver reads `$APPDATA` internally, and that read wins
+//! against `with_home`. The injected directory wins against both.
 
 use crate::config::Config;
 #[cfg(not(target_os = "emscripten"))]
@@ -90,15 +95,22 @@ pub(crate) fn copilot_strict(config: &Config) -> bool {
 }
 
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn opencode_convo(config: &Config) -> toolpath_opencode::OpencodeConvo {
-    let mut resolver = toolpath_opencode::PathResolver::new();
-    if let Some(home) = config.home_dir() {
-        resolver = resolver.with_home(home);
-    }
-    if let Some(xdg) = &config.xdg_data_home {
-        resolver = resolver.with_data_dir(xdg.join("opencode"));
-    }
-    toolpath_opencode::OpencodeConvo::with_resolver(resolver)
+pub(crate) fn opencode_resolver(config: &Config) -> Option<toolpath_opencode::PathResolver> {
+    config.home_dir().map(|home| {
+        let resolver = toolpath_opencode::PathResolver::new(home);
+        match &config.xdg_data_home {
+            Some(xdg) => resolver.with_xdg_data_home(xdg),
+            None => resolver,
+        }
+    })
+}
+
+/// [`opencode_resolver`] for a command that targets opencode.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn require_opencode_resolver(
+    config: &Config,
+) -> Result<toolpath_opencode::PathResolver> {
+    opencode_resolver(config).ok_or_else(|| missing_home("opencode"))
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -147,7 +159,7 @@ pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
         copilot: copilot_resolver(config).map(|r| {
             toolpath_copilot::CopilotConvo::with_resolver(r).with_strict(copilot_strict(config))
         }),
-        opencode: Some(opencode_convo(config)),
+        opencode: opencode_resolver(config).map(toolpath_opencode::OpencodeConvo::with_resolver),
         cursor: Some(cursor_convo(config)),
         pi: Some(pi_convo(config, None)),
     }
@@ -160,8 +172,7 @@ mod tests {
 
     // Assertions stay on paths fully determined by injected values;
     // resolver defaults that read the ambient environment (home
-    // fallbacks, `$XDG_DATA_HOME` when no directory is injected) are
-    // not asserted here.
+    // fallbacks) are not asserted here.
 
     fn config_with_home() -> Config {
         Config {
@@ -273,17 +284,33 @@ mod tests {
     }
 
     #[test]
-    fn opencode_convo_injects_data_dir() {
+    fn opencode_resolver_injects_the_xdg_data_root() {
         let config = Config {
             home: Some(PathBuf::from("/home/jailed")),
             xdg_data_home: Some(PathBuf::from("/xdg/data")),
             ..Config::default()
         };
-        let manager = opencode_convo(&config);
+        let resolver = opencode_resolver(&config).unwrap();
         assert_eq!(
-            manager.resolver().db_path().unwrap(),
+            resolver.db_path(),
             PathBuf::from("/xdg/data/opencode/opencode.db")
         );
+    }
+
+    #[test]
+    fn opencode_resolver_roots_at_config_home() {
+        let resolver = opencode_resolver(&config_with_home()).unwrap();
+        assert_eq!(
+            resolver.db_path(),
+            PathBuf::from("/home/jailed/.local/share/opencode/opencode.db")
+        );
+    }
+
+    #[test]
+    fn opencode_resolver_is_none_without_a_home() {
+        assert!(opencode_resolver(&Config::default()).is_none());
+        let err = require_opencode_resolver(&Config::default()).unwrap_err();
+        assert!(err.to_string().contains("home directory"));
     }
 
     #[test]

@@ -99,9 +99,7 @@ fn setup_session() -> (TempDir, Session) {
     let conn = Connection::open(data.join("opencode.db")).unwrap();
     conn.execute_batch(COMPACTION_SQL).unwrap();
     drop(conn);
-    let resolver = PathResolver::new()
-        .with_home(temp.path())
-        .with_data_dir(&data);
+    let resolver = PathResolver::new(temp.path()).with_data_dir(&data);
     let mgr = OpencodeConvo::with_resolver(resolver);
     let session = mgr.read_session("ses_compact").unwrap();
     (temp, session)

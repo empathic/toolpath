@@ -31,6 +31,38 @@ cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
     drivers so the zero-file rule lives once.
   - The emscripten (playground) build keeps the sequential engine —
     no threads there.
+## `toolpath-opencode`: the caller supplies the home directory — 2026-08-14
+
+- **`toolpath-opencode`** (0.6.0): breaking. `PathResolver::new(home)`
+  takes the home directory as a required argument. The crate reads no
+  environment variable; it keeps the layout knowledge
+  (`<home>/.local/share/opencode`) and the caller owns "what is home".
+  `OpencodeConvo::new(home)` and `ConvoIO::new(home)` take the same
+  argument.
+
+  Removed: the `Default` impls on `PathResolver`, `ConvoIO`, and
+  `OpencodeConvo`; `PathResolver::with_home`; the `NoHomeDirectory`
+  error variant.
+
+  `PathResolver::with_xdg_data_home(xdg)` sets the XDG data root; the
+  resolver appends `opencode` to it. The data directory resolves in
+  this order: `with_data_dir`, `with_xdg_data_home`, then
+  `<home>/.local/share/opencode`.
+
+  The home directory is always present, so `home_dir()`, `data_dir()`,
+  `db_path()`, `snapshot_root()`, `log_dir()`, `snapshot_gitdir()`, and
+  `ConvoIO::db_path()` return a path instead of a `Result`.
+
+  The snapshot git repository needs a resolver. `to_view(session)` and
+  `derive_path(session, config)` skip it; `to_view_with_resolver` and
+  `derive_path_with_resolver` open it, as does the
+  `ConversationProvider` impl on `OpencodeConvo`.
+- **`path-cli`** (unreleased): `providers::opencode_resolver` returns
+  `Option<PathResolver>`. `None` means the configuration carries no home
+  directory, so opencode is out of reach: the harness bundle omits it,
+  and a command that targets opencode reports "cannot determine the home
+  directory". `Config` reads `$XDG_DATA_HOME` and passes it to the
+  resolver, so the variable keeps its behavior for CLI users.
 ## `toolpath-copilot`: the caller supplies the home directory — 2026-08-14
 
 - **`toolpath-copilot`** (0.2.0): breaking. `PathResolver::new(home)`

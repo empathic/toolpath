@@ -1479,10 +1479,7 @@ fn write_into_opencode_db(
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
 
-    let resolver = providers::opencode_resolver(config);
-    let db_path = resolver
-        .db_path()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve opencode db path: {}", e))?;
+    let db_path = providers::require_opencode_resolver(config)?.db_path();
     if !db_path.exists() {
         anyhow::bail!(
             "opencode database not found at {} — has opencode been run on this machine?",
@@ -2121,17 +2118,6 @@ mod tests {
     fn config_with_home(home: &std::path::Path) -> Config {
         Config {
             home: Some(home.to_path_buf()),
-            ..Config::default()
-        }
-    }
-
-    /// A `Config` for the opencode export. The resolver reads
-    /// `$XDG_DATA_HOME` internally and that read wins against the home,
-    /// so the data root is injected too.
-    fn config_with_opencode_home(home: &std::path::Path) -> Config {
-        Config {
-            home: Some(home.to_path_buf()),
-            xdg_data_home: Some(home.join(".local/share")),
             ..Config::default()
         }
     }
@@ -3112,7 +3098,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             Some(project_dir.clone()),
             None,
-            &config_with_opencode_home(&fake_home),
+            &config_with_home(&fake_home),
         )
         .expect("export opencode --project");
 
@@ -3382,7 +3368,7 @@ mod tests {
         // which adds the `ses_` prefix if not already present.
         let path = make_convo_path("opencode://ses_wrapper-test");
 
-        let result = project_opencode(&path, &cwd, &config_with_opencode_home(&fake_home));
+        let result = project_opencode(&path, &cwd, &config_with_home(&fake_home));
 
         let returned_id = result.expect("project_opencode should succeed");
         assert_eq!(returned_id, "ses_wrapper-test");
