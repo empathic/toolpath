@@ -77,7 +77,7 @@ Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
 
 The binary is called `path` (package: `path-cli`; the older `toolpath-cli` package is a deprecated shim that still installs the same binary for users running `cargo install toolpath-cli`).
 
-The top-level surface is the porcelain (`show`, `share`, `resume`, `query`, `kind`, `auth`, `haiku`). Lower-level building blocks live under `path p …` (plumbing): `p list`, `p import`, `p export`, `p cache`, `p render`, `p merge`, `p validate`, `p derive`, `p project`, `p incept`, `p track`, `p query` (graph traversal: `ancestors`). The old top-level spellings of the plumbing commands were removed in 0.10.0 — no alias, no shim.
+The top-level surface is the porcelain (`show`, `share`, `resume`, `query`, `kind`, `auth`, `config`, `haiku`). Lower-level building blocks live under `path p …` (plumbing): `p list`, `p import`, `p export`, `p cache`, `p render`, `p merge`, `p validate`, `p derive`, `p project`, `p incept`, `p track`, `p query` (graph traversal: `ancestors`). The old top-level spellings of the plumbing commands were removed in 0.10.0 — no alias, no shim.
 
 ```bash
 # Plumbing: import from external formats into the local toolpath cache
@@ -125,6 +125,7 @@ cargo run -p path-cli -- show claude --project /path/to/project --session <sessi
 cargo run -p path-cli -- p track init --file src/main.rs --actor "human:alex"
 cargo run -p path-cli -- p validate --input doc.json
 cargo run -p path-cli -- auth login   # also: status, whoami, logout
+cargo run -p path-cli -- config edit  # $VISUAL/$EDITOR on ~/.toolpath/config.toml, validated after
 ```
 
 The **cache** at `~/.toolpath/documents/<cache-id>.json` is the single landing zone for every `import` (and for `import pathbase` downloads). Cache id is `<source>-<inner-id>` — e.g. `claude-abc123`, `git-main` (Pathbase paths key on `<owner>-<repo>-<slug>`, anon paths on `anon-pathstash-<uuid>`). Files are `0600`, parent directory `0700`. `$TOOLPATH_CONFIG_DIR` overrides the root. Imports error on cache hit (`--force` overwrites); `--no-cache` sends the JSON to stdout for shell composition. `p cache sync` fills the cache incrementally from the installed agent harnesses (see "Things to know") and always overwrites what it re-derives.
