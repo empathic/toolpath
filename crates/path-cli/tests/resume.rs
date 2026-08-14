@@ -2,9 +2,9 @@
 //!
 //! Tests dispatch through `path_cli::cmd_resume::run_with_strategy`
 //! with a `RecordingExec` strategy so the would-be `execvp` becomes a
-//! captured `(binary, args, cwd)` tuple. Each test isolates `$HOME`,
-//! `$TOOLPATH_CONFIG_DIR`, and `$PATH` via RAII guards under a shared
-//! lock.
+//! captured `(binary, args, cwd)` tuple. Each test isolates `$HOME` and
+//! `$TOOLPATH_CONFIG_DIR` via an RAII guard under a shared lock, and
+//! passes a tempdir of fake binaries as the search path.
 
 #![cfg(not(target_os = "emscripten"))]
 
@@ -20,7 +20,7 @@ use support::*;
 fn file_input_explicit_claude_projects_and_records_exec() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("claude");
+    let bin = fake_bin_dir(&["claude"]);
     let cwd = tempfile::tempdir().unwrap();
 
     let path = make_convo_path("agent:claude-code", "claude-code://resume-claude-int");
@@ -31,6 +31,7 @@ fn file_input_explicit_claude_projects_and_records_exec() {
         args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
         &home.config(),
+        &[bin.path().to_path_buf()],
     )
     .unwrap();
 
@@ -55,7 +56,7 @@ fn file_input_explicit_claude_projects_and_records_exec() {
 fn file_input_explicit_gemini_projects_and_records_exec() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("gemini");
+    let bin = fake_bin_dir(&["gemini"]);
     let cwd = tempfile::tempdir().unwrap();
 
     let path = make_convo_path("agent:gemini-cli", "gemini-cli://resume-gemini-int");
@@ -66,6 +67,7 @@ fn file_input_explicit_gemini_projects_and_records_exec() {
         args_explicit(doc_file, cwd.path(), Harness::Gemini),
         &recorder,
         &home.config(),
+        &[bin.path().to_path_buf()],
     )
     .unwrap();
 
@@ -84,7 +86,7 @@ fn file_input_explicit_gemini_projects_and_records_exec() {
 fn file_input_explicit_codex_projects_and_records_exec() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("codex");
+    let bin = fake_bin_dir(&["codex"]);
     let cwd = tempfile::tempdir().unwrap();
 
     let path = make_convo_path("agent:codex", "codex://resume-codex-int");
@@ -95,6 +97,7 @@ fn file_input_explicit_codex_projects_and_records_exec() {
         args_explicit(doc_file, cwd.path(), Harness::Codex),
         &recorder,
         &home.config(),
+        &[bin.path().to_path_buf()],
     )
     .unwrap();
 
@@ -113,7 +116,7 @@ fn file_input_explicit_codex_projects_and_records_exec() {
 fn file_input_explicit_copilot_projects_and_records_exec() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("copilot");
+    let bin = fake_bin_dir(&["copilot"]);
     let cwd = tempfile::tempdir().unwrap();
 
     let path = make_convo_path("agent:copilot", "copilot://resume-copilot-int");
@@ -124,6 +127,7 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
         args_explicit(doc_file, cwd.path(), Harness::Copilot),
         &recorder,
         &home.config(),
+        &[bin.path().to_path_buf()],
     )
     .unwrap();
 
@@ -149,7 +153,7 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
 fn file_input_explicit_opencode_projects_and_records_exec() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("opencode");
+    let bin = fake_bin_dir(&["opencode"]);
     let cwd = tempfile::tempdir().unwrap();
 
     // Pre-create the opencode db with the canonical schema. (Schema DDL
@@ -199,6 +203,7 @@ fn file_input_explicit_opencode_projects_and_records_exec() {
         args_explicit(doc_file, cwd.path(), Harness::Opencode),
         &recorder,
         &home.config(),
+        &[bin.path().to_path_buf()],
     )
     .unwrap();
 
@@ -218,7 +223,7 @@ fn file_input_explicit_opencode_projects_and_records_exec() {
 fn file_input_explicit_pi_projects_and_records_exec() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("pi");
+    let bin = fake_bin_dir(&["pi"]);
     let cwd = tempfile::tempdir().unwrap();
 
     let path = make_convo_path("agent:pi", "pi://resume-pi-int");
@@ -229,6 +234,7 @@ fn file_input_explicit_pi_projects_and_records_exec() {
         args_explicit(doc_file, cwd.path(), Harness::Pi),
         &recorder,
         &home.config(),
+        &[bin.path().to_path_buf()],
     )
     .unwrap();
 
@@ -249,7 +255,7 @@ fn file_input_explicit_pi_projects_and_records_exec() {
 fn cache_id_input_loads_and_projects() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("claude");
+    let bin = fake_bin_dir(&["claude"]);
     let cwd = tempfile::tempdir().unwrap();
 
     // Seed a cache entry by writing the graph to
@@ -278,7 +284,13 @@ fn cache_id_input_loads_and_projects() {
     };
 
     let recorder = RecordingExec::default();
-    run_with_strategy(resume_args, &recorder, &home.config()).unwrap();
+    run_with_strategy(
+        resume_args,
+        &recorder,
+        &home.config(),
+        &[bin.path().to_path_buf()],
+    )
+    .unwrap();
 
     let cap = recorder.captured();
     assert_eq!(cap.binary, "claude");
@@ -291,7 +303,7 @@ fn cache_id_input_loads_and_projects() {
 fn multi_path_graph_returns_clear_error() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("claude");
+    let bin = fake_bin_dir(&["claude"]);
     let cwd = tempfile::tempdir().unwrap();
 
     let p1 = make_convo_path("agent:claude-code", "claude-code://multi-1");
@@ -314,6 +326,7 @@ fn multi_path_graph_returns_clear_error() {
         args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
         &home.config(),
+        &[bin.path().to_path_buf()],
     )
     .unwrap_err();
     let s = err.to_string();
@@ -325,7 +338,7 @@ fn multi_path_graph_returns_clear_error() {
 fn agentless_path_returns_clear_error() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::with_binary("claude");
+    let bin = fake_bin_dir(&["claude"]);
     let cwd = tempfile::tempdir().unwrap();
 
     // human:* actor — should be rejected by ensure_path_with_agent.
@@ -337,6 +350,7 @@ fn agentless_path_returns_clear_error() {
         args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
         &home.config(),
+        &[bin.path().to_path_buf()],
     )
     .unwrap_err();
     assert!(err.to_string().contains("no agent session"));
@@ -346,7 +360,6 @@ fn agentless_path_returns_clear_error() {
 fn explicit_harness_not_on_path_errors() {
     let _env = env_lock();
     let home = ScopedHome::new();
-    let _path = ScopedPath::empty();
     let cwd = tempfile::tempdir().unwrap();
 
     let path = make_convo_path("agent:claude-code", "claude-code://no-binary");
@@ -357,6 +370,7 @@ fn explicit_harness_not_on_path_errors() {
         args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
         &home.config(),
+        &[],
     )
     .unwrap_err();
     let s = err.to_string();

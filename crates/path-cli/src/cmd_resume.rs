@@ -84,12 +84,18 @@ pub struct ResumeArgs {
 }
 
 pub fn run(args: ResumeArgs, config: &Config) -> Result<()> {
-    run_with_strategy(args, &RealExec, config)
+    let search_path = crate::config::search_path();
+    run_with_strategy(args, &RealExec, config, &search_path)
 }
 
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
-pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy, config: &Config) -> Result<()> {
+pub fn run_with_strategy(
+    args: ResumeArgs,
+    exec: &dyn ExecStrategy,
+    config: &Config,
+    search_path: &[PathBuf],
+) -> Result<()> {
     let (graph, source_harness) = resolve_input(&args, config)?;
     let path = ensure_path_with_agent(&graph)?;
 
@@ -100,7 +106,7 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy, config: &Con
         None => std::env::current_dir()?,
     };
 
-    let target = pick_harness(args.harness, source_harness, None)?;
+    let target = pick_harness(args.harness, source_harness, search_path)?;
     eprintln!(
         "Picked harness: {}{}",
         target.name(),
@@ -111,8 +117,8 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy, config: &Con
         }
     );
 
-    let session_id = project_into_harness(path, target, &cwd, config)?;
-    let (binary, argv) = invocation_for(target, &session_id, &cwd);
+    let session_id = project_into_harness(path, target, &cwd, config, search_path)?;
+    let (binary, argv) = invocation_for(target, &session_id, &cwd, search_path);
     exec_harness(&binary, &argv, &cwd, exec)
 }
 
@@ -275,16 +281,10 @@ pub(crate) fn resolve_input(
     Ok((graph, harness))
 }
 
-/// Probe `$PATH` (or `path_override`, for tests) for a given binary name.
-/// Cross-platform: on Windows, also tries `<name>.exe`.
-pub(crate) fn binary_on_path(name: &str, path_override: Option<&std::path::Path>) -> bool {
-    let dirs: Vec<std::path::PathBuf> = match path_override {
-        Some(p) => vec![p.to_path_buf()],
-        None => std::env::var_os("PATH")
-            .map(|p| std::env::split_paths(&p).collect())
-            .unwrap_or_default(),
-    };
-    for d in dirs {
+/// Probe `search_path` for a given binary name. Cross-platform: on
+/// Windows, also tries `<name>.exe`.
+pub(crate) fn binary_on_path(name: &str, search_path: &[PathBuf]) -> bool {
+    for d in search_path {
         let candidate = d.join(name);
         if candidate.is_file() {
             return true;
@@ -304,18 +304,18 @@ pub(crate) fn binary_on_path(name: &str, path_override: Option<&std::path::Path>
 /// explicitly from the IDE's command palette, but `open -a Cursor`
 /// (macOS) / `xdg-open` (Linux) always work. Treat cursor as available
 /// when either path is open.
-pub(crate) fn harness_available(harness: Harness, path_override: Option<&std::path::Path>) -> bool {
-    if binary_on_path(harness.name(), path_override) {
+pub(crate) fn harness_available(harness: Harness, search_path: &[PathBuf]) -> bool {
+    if binary_on_path(harness.name(), search_path) {
         return true;
     }
     if harness == Harness::Cursor {
         #[cfg(target_os = "macos")]
         {
-            return binary_on_path("open", path_override);
+            return binary_on_path("open", search_path);
         }
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            return binary_on_path("xdg-open", path_override);
+            return binary_on_path("xdg-open", search_path);
         }
     }
     false
@@ -326,15 +326,13 @@ pub(crate) fn harness_available(harness: Harness, path_override: Option<&std::pa
 /// - If `arg` is `Some`, validate the named harness is on PATH and return it.
 /// - Otherwise, enumerate installed harnesses and launch the fzf picker.
 ///   `source` is used to label the source row in the picker UI.
-///
-/// `path_override` is `None` in production; tests pass `Some(dir)` to fake `$PATH`.
 pub(crate) fn pick_harness(
     arg: Option<Harness>,
     source: Option<Harness>,
-    path_override: Option<&std::path::Path>,
+    search_path: &[PathBuf],
 ) -> Result<Harness> {
     if let Some(h) = arg {
-        if !harness_available(h, path_override) {
+        if !harness_available(h, search_path) {
             anyhow::bail!(
                 "harness `{}` isn't on PATH; install it or pick another with `--harness`",
                 h.name()
@@ -346,7 +344,7 @@ pub(crate) fn pick_harness(
     let installed: Vec<Harness> = Harness::ALL
         .iter()
         .copied()
-        .filter(|h| harness_available(*h, path_override))
+        .filter(|h| harness_available(*h, search_path))
         .collect();
 
     if installed.is_empty() {
@@ -426,16 +424,17 @@ pub(crate) fn invocation_for(
     harness: Harness,
     session_id: &str,
     cwd: &std::path::Path,
+    search_path: &[PathBuf],
 ) -> (String, Vec<String>) {
     if harness == Harness::Cursor {
-        return cursor_invocation(cwd);
+        return cursor_invocation(cwd, search_path);
     }
     (harness.name().to_string(), argv_for(harness, session_id))
 }
 
-fn cursor_invocation(cwd: &std::path::Path) -> (String, Vec<String>) {
+fn cursor_invocation(cwd: &std::path::Path, search_path: &[PathBuf]) -> (String, Vec<String>) {
     let workspace = cwd.to_string_lossy().into_owned();
-    if binary_on_path("cursor", None) {
+    if binary_on_path("cursor", search_path) {
         ("cursor".to_string(), vec![workspace])
     } else {
         #[cfg(target_os = "macos")]
@@ -463,6 +462,7 @@ pub(crate) fn project_into_harness(
     harness: Harness,
     cwd: &std::path::Path,
     config: &Config,
+    search_path: &[PathBuf],
 ) -> Result<String> {
     match harness {
         Harness::Claude => match crate::cmd_export::project_claude(path, cwd, config)? {
@@ -478,7 +478,7 @@ pub(crate) fn project_into_harness(
         Harness::Codex => crate::cmd_export::project_codex(path, cwd, config),
         Harness::Copilot => crate::cmd_export::project_copilot(path, cwd, config),
         Harness::Opencode => crate::cmd_export::project_opencode(path, cwd, config),
-        Harness::Cursor => crate::cmd_export::project_cursor(path, cwd, config),
+        Harness::Cursor => crate::cmd_export::project_cursor(path, cwd, config, search_path),
         Harness::Pi => crate::cmd_export::project_pi(path, cwd, config),
     }
 }
@@ -604,13 +604,9 @@ mod tests {
 
     #[test]
     fn run_with_strategy_records_invocation_for_file_input_with_explicit_harness() {
-        // The `$PATH` guard mutates process-global state; the lock
-        // serializes it against the other env-mutating tests.
-        let _env = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
-        let _path_guard = ScopedPathForResume::with_binaries(&["claude"]);
+        let bin_dir = fake_path_with(&["claude"]);
+        let search_path = vec![bin_dir.path().to_path_buf()];
         let cwd = tempfile::tempdir().unwrap();
         let doc_file = cwd.path().join("doc.json");
 
@@ -634,7 +630,13 @@ mod tests {
         };
 
         let recorder = RecordingExec::default();
-        run_with_strategy(args, &recorder, &config_with_home(home.path())).unwrap();
+        run_with_strategy(
+            args,
+            &recorder,
+            &config_with_home(home.path()),
+            &search_path,
+        )
+        .unwrap();
 
         let cap = recorder.captured();
         assert_eq!(cap.binary, "claude");
@@ -901,17 +903,19 @@ mod tests {
     #[test]
     fn binary_on_path_finds_present_binary() {
         let td = fake_path_with(&["claude"]);
-        assert!(binary_on_path("claude", Some(td.path())));
-        assert!(!binary_on_path("gemini", Some(td.path())));
+        let search_path = vec![td.path().to_path_buf()];
+        assert!(binary_on_path("claude", &search_path));
+        assert!(!binary_on_path("gemini", &search_path));
     }
 
     #[test]
     fn pick_harness_explicit_arg_validates_path() {
         let td = fake_path_with(&["claude"]);
-        let result = pick_harness(Some(Harness::Claude), None, Some(td.path()));
+        let search_path = vec![td.path().to_path_buf()];
+        let result = pick_harness(Some(Harness::Claude), None, &search_path);
         assert_eq!(result.unwrap(), Harness::Claude);
 
-        let err = pick_harness(Some(Harness::Gemini), None, Some(td.path())).unwrap_err();
+        let err = pick_harness(Some(Harness::Gemini), None, &search_path).unwrap_err();
         assert!(err.to_string().contains("`gemini` isn't on PATH"));
     }
 
@@ -919,21 +923,25 @@ mod tests {
     #[test]
     fn cursor_available_via_open_fallback_on_macos() {
         let td = fake_path_with(&["open"]);
-        assert!(harness_available(Harness::Cursor, Some(td.path())));
-        let picked = pick_harness(Some(Harness::Cursor), None, Some(td.path()));
+        let search_path = vec![td.path().to_path_buf()];
+        assert!(harness_available(Harness::Cursor, &search_path));
+        let picked = pick_harness(Some(Harness::Cursor), None, &search_path);
         assert_eq!(picked.unwrap(), Harness::Cursor);
     }
 
     #[test]
     fn cursor_unavailable_when_no_launcher_at_all() {
         let td = fake_path_with(&["claude"]);
-        assert!(!harness_available(Harness::Cursor, Some(td.path())));
+        assert!(!harness_available(
+            Harness::Cursor,
+            &[td.path().to_path_buf()]
+        ));
     }
 
     #[test]
     fn cursor_invocation_includes_workspace_path() {
         let cwd = std::path::PathBuf::from("/tmp/some-workspace");
-        let (binary, argv) = invocation_for(Harness::Cursor, "ignored-session-id", &cwd);
+        let (binary, argv) = invocation_for(Harness::Cursor, "ignored-session-id", &cwd, &[]);
         assert!(
             argv.iter().any(|a| a == "/tmp/some-workspace"),
             "workspace path must appear in argv; got {argv:?}",
@@ -947,7 +955,8 @@ mod tests {
     #[test]
     fn pick_harness_zero_installed_errors() {
         let td = fake_path_with(&[]);
-        let err = pick_harness(None, Some(Harness::Claude), Some(td.path())).unwrap_err();
+        let err =
+            pick_harness(None, Some(Harness::Claude), &[td.path().to_path_buf()]).unwrap_err();
         assert!(
             err.to_string().contains("no installed harnesses")
                 || err.to_string().contains("no harnesses on PATH"),
@@ -987,7 +996,8 @@ mod tests {
         let path = make_convo_path_for_resume("claude-code://resume-test-session");
 
         let config = config_with_home(home.path());
-        let session_id = project_into_harness(&path, Harness::Claude, cwd.path(), &config).unwrap();
+        let session_id =
+            project_into_harness(&path, Harness::Claude, cwd.path(), &config, &[]).unwrap();
         assert!(!session_id.is_empty());
     }
 
@@ -1031,43 +1041,6 @@ mod tests {
             },
             steps: vec![step],
             meta: None,
-        }
-    }
-
-    struct ScopedPathForResume {
-        _bin_dir: tempfile::TempDir,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl ScopedPathForResume {
-        /// Prepends a tempdir containing the named binaries to `PATH` for
-        /// the guard's lifetime.
-        fn with_binaries(binaries: &[&str]) -> Self {
-            let bin_dir = fake_path_with(binaries);
-            let prev = std::env::var_os("PATH");
-            let new_path = std::env::join_paths(
-                std::iter::once(bin_dir.path().to_path_buf())
-                    .chain(std::env::split_paths(&prev.clone().unwrap_or_default())),
-            )
-            .unwrap();
-            unsafe {
-                std::env::set_var("PATH", new_path);
-            }
-            Self {
-                _bin_dir: bin_dir,
-                prev,
-            }
-        }
-    }
-
-    impl Drop for ScopedPathForResume {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.prev {
-                    Some(v) => std::env::set_var("PATH", v),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
         }
     }
 
