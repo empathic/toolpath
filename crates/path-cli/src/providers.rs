@@ -29,6 +29,10 @@ pub(crate) fn claude_resolver(config: &Config) -> toolpath_claude::PathResolver 
     resolver
 }
 
+pub(crate) fn gemini_convo(config: &Config) -> toolpath_gemini::GeminiConvo {
+    toolpath_gemini::GeminiConvo::with_resolver(gemini_resolver(config))
+}
+
 pub(crate) fn gemini_resolver(config: &Config) -> toolpath_gemini::PathResolver {
     let mut resolver = toolpath_gemini::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -121,6 +125,15 @@ mod tests {
         assert_eq!(
             resolver.projects_dir().unwrap(),
             PathBuf::from("/home/jailed/.claude/projects")
+        );
+    }
+
+    #[test]
+    fn gemini_convo_roots_at_config_home() {
+        let manager = gemini_convo(&config_with_home());
+        assert_eq!(
+            manager.resolver().gemini_dir().unwrap(),
+            PathBuf::from("/home/jailed/.gemini")
         );
     }
 
