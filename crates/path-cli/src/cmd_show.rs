@@ -135,8 +135,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager =
-                toolpath_codex::CodexConvo::with_resolver(providers::codex_resolver(config));
+            let manager = providers::codex_convo(config);
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;

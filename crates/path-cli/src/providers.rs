@@ -41,6 +41,10 @@ pub(crate) fn gemini_resolver(config: &Config) -> toolpath_gemini::PathResolver 
     resolver
 }
 
+pub(crate) fn codex_convo(config: &Config) -> toolpath_codex::CodexConvo {
+    toolpath_codex::CodexConvo::with_resolver(codex_resolver(config))
+}
+
 pub(crate) fn codex_resolver(config: &Config) -> toolpath_codex::PathResolver {
     let mut resolver = toolpath_codex::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -143,6 +147,15 @@ mod tests {
         assert_eq!(
             resolver.gemini_dir().unwrap(),
             PathBuf::from("/home/jailed/.gemini")
+        );
+    }
+
+    #[test]
+    fn codex_convo_roots_at_config_home() {
+        let manager = codex_convo(&config_with_home());
+        assert_eq!(
+            manager.resolver().sessions_root().unwrap(),
+            PathBuf::from("/home/jailed/.codex/sessions")
         );
     }
 
