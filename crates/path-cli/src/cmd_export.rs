@@ -24,6 +24,8 @@ use std::path::PathBuf;
 
 #[cfg(not(target_os = "emscripten"))]
 use crate::cache::cache_ref;
+#[cfg(not(target_os = "emscripten"))]
+use crate::projection::{build_claude_conversation, serialize_jsonl};
 use crate::remote::RepoSpec;
 
 #[derive(Subcommand, Debug)]
@@ -692,32 +694,6 @@ fn load_path_doc(input: &str) -> Result<toolpath::v1::Path> {
             "expected a single-path graph; the source graph holds zero or multiple paths"
         )
     })
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn build_claude_conversation(path: &toolpath::v1::Path) -> Result<toolpath_claude::Conversation> {
-    use toolpath_convo::ConversationProjector;
-    let view = toolpath_convo::extract_conversation(path);
-    let projector = toolpath_claude::ClaudeProjector;
-    projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn serialize_jsonl(conv: &toolpath_claude::Conversation) -> Result<String> {
-    let mut lines = Vec::with_capacity(conv.preamble.len() + conv.entries.len());
-    for raw in &conv.preamble {
-        lines.push(serde_json::to_string(raw)?);
-    }
-    for entry in &conv.entries {
-        lines.push(serde_json::to_string(entry)?);
-    }
-    // Trailing newline matters: Claude Code appends to this file on resume,
-    // and without it the first appended entry lands on the last line.
-    let mut out = lines.join("\n");
-    out.push('\n');
-    Ok(out)
 }
 
 #[cfg(not(target_os = "emscripten"))]

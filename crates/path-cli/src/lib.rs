@@ -36,6 +36,8 @@ mod fuzzy;
 pub mod harness;
 mod io;
 pub mod kinds;
+#[cfg(not(target_os = "emscripten"))]
+mod projection;
 mod providers;
 mod query;
 mod remote;

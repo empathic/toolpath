@@ -2,6 +2,44 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## `path resume --remote` pushes a session to a remote host — 2026-08-17
+
+`path resume <input> --remote <ssh-destination> [-C <remote-dir>]
+[--dry-run]` projects a local Claude Code session onto a remote host
+and attaches to it under tmux. Re-running the same command reattaches
+to the live tmux session. Every push is a fork; the local original is
+never touched.
+
+- **`path-cli`** (0.19.0):
+  - The local host does all toolpath work: it projects the
+    conversation in memory, stamps it (`Conversation::set_session_id_and_cwd`)
+    with a minted session id and the remote project directory, and
+    ships the JSONL over ssh's stdin. The remote never runs `path`.
+  - Transport is the user's `ssh` binary from the search path, so
+    ProxyJump, Match blocks, aliases, and host keys work. Remote
+    scope is POSIX sh remotes with claude and tmux installed.
+  - One batched, read-only preflight call captures `$HOME`, the
+    absolute claude path, tmux presence, the physical project path
+    (`pwd -P`), and tmux session liveness. Every captured value must
+    be a single-line absolute path before it becomes a path
+    component, so a login banner errors verbatim instead of turning
+    into a filename.
+  - The remote session id is a UUID formatted from the SHA-256 of a
+    key-sorted canonical serialization of the parsed document, so
+    re-pushing unchanged content targets the same remote file across
+    invocations and input shapes. The tmux session is `path-<short8>`
+    of the source session id.
+  - `-C` names the remote directory (absolute, physical; a symlinked
+    value errors and names the physical path). The default is the
+    local cwd with the local home prefix replaced by the remote
+    `$HOME`.
+  - Every remote argument passes a POSIX single-quote escaping
+    helper; the session file lands 0600 via `umask 077`. Credentials
+    are never read, copied, or written.
+  - `--dry-run` runs preflight, prints the exact remote commands and
+    the target file path, and changes nothing on the remote.
+- **`toolpath-cli`** (0.19.0): lockstep bump of the deprecated shim.
+
 ## `toolpath-claude`: Conversation::set_session_id_and_cwd — 2026-08-17
 
 - **`toolpath-claude`** (0.12.3): `Conversation::set_session_id_and_cwd(session_id,
