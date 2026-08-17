@@ -1116,6 +1116,84 @@ fn export_pathbase_repo_flag_requires_login() {
 }
 
 #[test]
+fn export_pathbase_description_stamped_into_upload() {
+    // --description must land in the uploaded document's graph meta,
+    // not just a request parameter — the description travels inside
+    // the document.
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        // Read until the Content-Length body is complete — a single
+        // read may return only the headers.
+        let mut data = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = stream.read(&mut buf).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            data.extend_from_slice(&buf[..n]);
+            if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&data[..pos]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        if k.eq_ignore_ascii_case("content-length") {
+                            v.trim().parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                if data.len() >= pos + 4 + content_length {
+                    break;
+                }
+            }
+        }
+        tx.send(String::from_utf8_lossy(&data).to_string()).unwrap();
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
+        let resp = format!(
+            "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+    });
+
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "p",
+            "export",
+            "pathbase",
+            "--anon",
+            "--description",
+            "two attempts at the rate limiter",
+            "--url",
+        ])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("--input")
+        .arg(examples_dir().join("path-01-pr.path.json"))
+        .assert()
+        .success();
+
+    server.join().unwrap();
+    let request = rx.recv().unwrap();
+    assert!(
+        request.contains(r#""description":"two attempts at the rate limiter""#),
+        "uploaded body missing stamped description; request was:\n{request}"
+    );
+}
+
+#[test]
 fn import_pathbase_rejects_legacy_trace_id() {
     // The old `/traces/<id>` shape is gone; passing a bare token that
     // isn't an `<owner>/<repo>/<uuid>` triple should fail at parse time

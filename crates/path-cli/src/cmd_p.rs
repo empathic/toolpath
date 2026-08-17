@@ -55,6 +55,10 @@ pub enum PCommand {
         /// Title for the merged graph
         #[arg(long)]
         title: Option<String>,
+
+        /// Description for the merged graph (`meta.description`)
+        #[arg(long)]
+        description: Option<String>,
     },
     /// Validate a Toolpath document
     Validate {
@@ -104,7 +108,11 @@ pub fn run(command: PCommand, pretty: bool) -> Result<()> {
         PCommand::Export { target } => crate::cmd_export::run(target),
         PCommand::Cache { op } => crate::cmd_cache::run(op),
         PCommand::Render { format } => crate::cmd_render::run(format),
-        PCommand::Merge { inputs, title } => crate::cmd_merge::run(inputs, title, pretty),
+        PCommand::Merge {
+            inputs,
+            title,
+            description,
+        } => crate::cmd_merge::run(inputs, title, description, pretty),
         PCommand::Validate { input } => crate::cmd_validate::run(input),
         PCommand::Derive { source } => crate::cmd_derive::run(source, pretty),
         PCommand::Project { target } => crate::cmd_project::run(target),

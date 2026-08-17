@@ -5,7 +5,12 @@ use toolpath::v1::{Graph, GraphIdentity, GraphMeta, PathOrRef};
 ///
 /// Accepts file paths as arguments. Use `-` to read one document from stdin.
 /// Each input is a Graph; their `paths` collections are concatenated into one.
-pub fn run(inputs: Vec<String>, title: Option<String>, pretty: bool) -> Result<()> {
+pub fn run(
+    inputs: Vec<String>,
+    title: Option<String>,
+    description: Option<String>,
+    pretty: bool,
+) -> Result<()> {
     let mut all_paths = Vec::new();
 
     for input in &inputs {
@@ -23,7 +28,7 @@ pub fn run(inputs: Vec<String>, title: Option<String>, pretty: bool) -> Result<(
         all_paths.extend(doc.paths);
     }
 
-    let doc = merge_into_graph(all_paths, title);
+    let doc = merge_into_graph(all_paths, title, description);
 
     let json = if pretty {
         doc.to_json_pretty()?
@@ -36,16 +41,23 @@ pub fn run(inputs: Vec<String>, title: Option<String>, pretty: bool) -> Result<(
 }
 
 /// Merge collected paths into a single Graph document.
-fn merge_into_graph(paths: Vec<PathOrRef>, title: Option<String>) -> Graph {
+fn merge_into_graph(
+    paths: Vec<PathOrRef>,
+    title: Option<String>,
+    description: Option<String>,
+) -> Graph {
     let graph_id = format!("graph-merged-{}", paths.len());
+
+    let meta = (title.is_some() || description.is_some()).then(|| GraphMeta {
+        title,
+        description,
+        ..Default::default()
+    });
 
     Graph {
         graph: GraphIdentity { id: graph_id },
         paths,
-        meta: title.map(|t| GraphMeta {
-            title: Some(t),
-            ..Default::default()
-        }),
+        meta,
     }
 }
 
@@ -80,7 +92,7 @@ mod tests {
     fn test_merge_into_graph_no_title() {
         let p1 = make_path("p1", vec![make_step("s1", "human:alex")]);
         let paths = vec![PathOrRef::Path(Box::new(p1))];
-        let doc = merge_into_graph(paths, None);
+        let doc = merge_into_graph(paths, None, None);
         assert_eq!(doc.graph.id, "graph-merged-1");
         assert_eq!(doc.paths.len(), 1);
         assert!(doc.meta.is_none());
@@ -91,10 +103,20 @@ mod tests {
         let p1 = make_path("p1", vec![make_step("s1", "human:alex")]);
         let p2 = make_path("p2", vec![make_step("s2", "agent:claude")]);
         let paths = vec![PathOrRef::Path(Box::new(p1)), PathOrRef::Path(Box::new(p2))];
-        let doc = merge_into_graph(paths, Some("My Graph".to_string()));
+        let doc = merge_into_graph(paths, Some("My Graph".to_string()), None);
         assert_eq!(doc.graph.id, "graph-merged-2");
         assert_eq!(doc.paths.len(), 2);
         assert_eq!(doc.meta.unwrap().title.unwrap(), "My Graph");
+    }
+
+    #[test]
+    fn test_merge_into_graph_with_description_only() {
+        let p1 = make_path("p1", vec![make_step("s1", "human:alex")]);
+        let paths = vec![PathOrRef::Path(Box::new(p1))];
+        let doc = merge_into_graph(paths, None, Some("Two attempts at the fix".to_string()));
+        let meta = doc.meta.unwrap();
+        assert!(meta.title.is_none());
+        assert_eq!(meta.description.unwrap(), "Two attempts at the fix");
     }
 
     #[test]
@@ -106,14 +128,14 @@ mod tests {
                 ref_url: "https://example.com/path.json".to_string(),
             }),
         ];
-        let doc = merge_into_graph(paths, None);
+        let doc = merge_into_graph(paths, None, None);
         assert_eq!(doc.paths.len(), 2);
         assert!(matches!(&doc.paths[1], PathOrRef::Ref(_)));
     }
 
     #[test]
     fn test_merge_empty() {
-        let doc = merge_into_graph(Vec::new(), None);
+        let doc = merge_into_graph(Vec::new(), None, None);
         assert_eq!(doc.graph.id, "graph-merged-0");
         assert!(doc.paths.is_empty());
     }
@@ -122,7 +144,7 @@ mod tests {
     fn test_merge_roundtrip_json() {
         let p1 = make_path("p1", vec![make_step("s1", "human:alex")]);
         let paths = vec![PathOrRef::Path(Box::new(p1))];
-        let doc = merge_into_graph(paths, Some("Test".to_string()));
+        let doc = merge_into_graph(paths, Some("Test".to_string()), None);
         let json = doc.to_json().unwrap();
         let parsed = Graph::from_json(&json).unwrap();
         assert_eq!(parsed.paths.len(), 1);
@@ -141,6 +163,7 @@ mod tests {
         let result = run(
             vec![f1.to_str().unwrap().to_string()],
             Some("Pretty Test".to_string()),
+            None,
             true,
         );
         assert!(result.is_ok());
@@ -167,6 +190,7 @@ mod tests {
                 f2.to_str().unwrap().to_string(),
             ],
             Some("Combined".to_string()),
+            None,
             false,
         );
         assert!(result.is_ok());
