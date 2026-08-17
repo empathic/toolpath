@@ -1,9 +1,13 @@
-//! Provider resolver construction from [`Config`].
+//! Provider construction from [`Config`].
 //!
-//! Every provider construction site builds its `PathResolver` here, so
-//! the environment values a resolver consumes come from [`Config`].
-//! Call sites chain per-site overrides (e.g. `with_sessions_dir`) onto
-//! the returned resolver.
+//! A `*_convo` factory returns the harness's conversation manager
+//! with every environment value it consumes taken from [`Config`].
+//! Command modules construct managers through these factories.
+//!
+//! A `*_resolver` factory builds the manager's `PathResolver`; the
+//! `*_convo` factories consume them. A call site takes a resolver
+//! directly only to chain a per-command override (e.g.
+//! `with_sessions_dir`) before it constructs the manager.
 //!
 //! opencode, copilot, and cursor (Windows) get their directory
 //! injected, not just the home: their resolvers read `$XDG_DATA_HOME`
@@ -12,6 +16,10 @@
 #![cfg(not(target_os = "emscripten"))]
 
 use crate::config::Config;
+
+pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
+    toolpath_claude::ClaudeConvo::with_resolver(claude_resolver(config))
+}
 
 pub(crate) fn claude_resolver(config: &Config) -> toolpath_claude::PathResolver {
     let mut resolver = toolpath_claude::PathResolver::new();
@@ -96,6 +104,15 @@ mod tests {
             home: Some(PathBuf::from("/home/jailed")),
             ..Config::default()
         }
+    }
+
+    #[test]
+    fn claude_convo_roots_at_config_home() {
+        let manager = claude_convo(&config_with_home());
+        assert_eq!(
+            manager.resolver().projects_dir().unwrap(),
+            PathBuf::from("/home/jailed/.claude/projects")
+        );
     }
 
     #[test]
