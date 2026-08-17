@@ -157,9 +157,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager = toolpath_opencode::OpencodeConvo::with_resolver(
-                providers::opencode_resolver(config),
-            );
+            let manager = providers::opencode_convo(config);
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;

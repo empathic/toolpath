@@ -68,6 +68,10 @@ pub(crate) fn copilot_resolver(config: &Config) -> toolpath_copilot::PathResolve
     resolver
 }
 
+pub(crate) fn opencode_convo(config: &Config) -> toolpath_opencode::OpencodeConvo {
+    toolpath_opencode::OpencodeConvo::with_resolver(opencode_resolver(config))
+}
+
 pub(crate) fn opencode_resolver(config: &Config) -> toolpath_opencode::PathResolver {
     let mut resolver = toolpath_opencode::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -197,6 +201,20 @@ mod tests {
         assert_eq!(
             resolver.copilot_dir().unwrap(),
             PathBuf::from("/copilot/root")
+        );
+    }
+
+    #[test]
+    fn opencode_convo_injects_data_dir() {
+        let config = Config {
+            home: Some(PathBuf::from("/home/jailed")),
+            xdg_data_home: Some(PathBuf::from("/xdg/data")),
+            ..Config::default()
+        };
+        let manager = opencode_convo(&config);
+        assert_eq!(
+            manager.resolver().db_path().unwrap(),
+            PathBuf::from("/xdg/data/opencode/opencode.db")
         );
     }
 
