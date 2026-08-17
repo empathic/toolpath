@@ -184,11 +184,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             base,
         } => {
-            let mut resolver = providers::pi_resolver(config);
-            if let Some(p) = base {
-                resolver = resolver.with_sessions_dir(&p);
-            }
-            let manager = toolpath_pi::PiConvo::with_resolver(resolver);
+            let manager = providers::pi_convo(config, base.as_deref());
             let s = manager
                 .read_session(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;

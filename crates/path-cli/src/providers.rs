@@ -16,6 +16,7 @@
 #![cfg(not(target_os = "emscripten"))]
 
 use crate::config::Config;
+use std::path::Path;
 
 pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
     toolpath_claude::ClaudeConvo::with_resolver(claude_resolver(config))
@@ -99,6 +100,16 @@ pub(crate) fn cursor_resolver(config: &Config) -> toolpath_cursor::PathResolver 
         resolver = resolver.with_user_data_dir(appdata.join("Cursor"));
     }
     resolver
+}
+
+/// `base` replaces the sessions directory: `--base` wins over the
+/// config home.
+pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiConvo {
+    let mut resolver = pi_resolver(config);
+    if let Some(dir) = base {
+        resolver = resolver.with_sessions_dir(dir);
+    }
+    toolpath_pi::PiConvo::with_resolver(resolver)
 }
 
 pub(crate) fn pi_resolver(config: &Config) -> toolpath_pi::PathResolver {
@@ -280,6 +291,21 @@ mod tests {
             resolver.db_path().unwrap(),
             PathBuf::from("/appdata/roaming/Cursor/User/globalStorage/state.vscdb")
         );
+    }
+
+    #[test]
+    fn pi_convo_roots_at_config_home() {
+        let manager = pi_convo(&config_with_home(), None);
+        assert_eq!(
+            manager.resolver().sessions_dir(),
+            PathBuf::from("/home/jailed/.pi/agent/sessions")
+        );
+    }
+
+    #[test]
+    fn pi_convo_base_replaces_the_sessions_dir() {
+        let manager = pi_convo(&config_with_home(), Some(Path::new("/pi/base")));
+        assert_eq!(manager.resolver().sessions_dir(), PathBuf::from("/pi/base"));
     }
 
     #[test]
