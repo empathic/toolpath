@@ -83,6 +83,10 @@ pub(crate) fn opencode_resolver(config: &Config) -> toolpath_opencode::PathResol
     resolver
 }
 
+pub(crate) fn cursor_convo(config: &Config) -> toolpath_cursor::CursorConvo {
+    toolpath_cursor::CursorConvo::with_resolver(cursor_resolver(config))
+}
+
 pub(crate) fn cursor_resolver(config: &Config) -> toolpath_cursor::PathResolver {
     let mut resolver = toolpath_cursor::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -229,6 +233,15 @@ mod tests {
         assert_eq!(
             resolver.db_path().unwrap(),
             PathBuf::from("/xdg/data/opencode/opencode.db")
+        );
+    }
+
+    #[test]
+    fn cursor_convo_roots_at_config_home() {
+        let manager = cursor_convo(&config_with_home());
+        assert_eq!(
+            manager.resolver().anysphere_dir().unwrap(),
+            PathBuf::from("/home/jailed/.cursor")
         );
     }
 
