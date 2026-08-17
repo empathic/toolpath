@@ -53,6 +53,10 @@ pub(crate) fn codex_resolver(config: &Config) -> toolpath_codex::PathResolver {
     resolver
 }
 
+pub(crate) fn copilot_convo(config: &Config) -> toolpath_copilot::CopilotConvo {
+    toolpath_copilot::CopilotConvo::with_resolver(copilot_resolver(config))
+}
+
 pub(crate) fn copilot_resolver(config: &Config) -> toolpath_copilot::PathResolver {
     let mut resolver = toolpath_copilot::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -165,6 +169,20 @@ mod tests {
         assert_eq!(
             resolver.sessions_root().unwrap(),
             PathBuf::from("/home/jailed/.codex/sessions")
+        );
+    }
+
+    #[test]
+    fn copilot_convo_injects_copilot_dir() {
+        let config = Config {
+            home: Some(PathBuf::from("/home/jailed")),
+            copilot_home: Some(PathBuf::from("/copilot/root")),
+            ..Config::default()
+        };
+        let manager = copilot_convo(&config);
+        assert_eq!(
+            manager.resolver().copilot_dir().unwrap(),
+            PathBuf::from("/copilot/root")
         );
     }
 

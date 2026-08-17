@@ -146,8 +146,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager =
-                toolpath_copilot::CopilotConvo::with_resolver(providers::copilot_resolver(config));
+            let manager = providers::copilot_convo(config);
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
