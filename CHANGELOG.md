@@ -2,6 +2,17 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.7.1 — 2026-08-14
+
+Adds an optional `description` field to `StepMeta`, `PathMeta`, and
+`GraphMeta` (issue #181): a human-readable summary of the object itself,
+distinct from `intent`, which records the initial goal of the work. The
+field is promoted from `additionalProperties` to a first-class key in
+the JSON Schema and typed structs, and carried through the JSONL
+`PathOpen`/`PathMeta` line kinds, so existing documents are unaffected.
+The schema and RFC descriptions of `intent` were reworded to match its
+actual definition.
+
 ## Parallel `path query` execution — 2026-08-14
 
 `path query` now evaluates cache documents on a thread pool. For the

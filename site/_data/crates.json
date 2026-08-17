@@ -1,7 +1,7 @@
 [
   {
     "name": "toolpath",
-    "version": "0.7.0",
+    "version": "0.7.1",
     "description": "Core types, builders, and query API",
     "docs": "https://docs.rs/toolpath",
     "crate": "https://crates.io/crates/toolpath",
