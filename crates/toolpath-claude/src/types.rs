@@ -515,6 +515,40 @@ impl Conversation {
         })
     }
 
+    /// Rewrites the conversation to a new session id and working
+    /// directory, in place.
+    ///
+    /// Sets the conversation-level `session_id` and sets `session_id`
+    /// on every entry. Sets `project_path`. Replaces each entry's
+    /// `cwd` only where it is present. Rewrites the top-level
+    /// `sessionId` and `cwd` keys in preamble raw lines. Clears
+    /// `session_ids`: the result is a single new session, not a
+    /// segment chain. Message content and tool-result payloads are
+    /// untouched, so paths quoted inside them keep referring to the
+    /// source machine.
+    pub fn set_session_id_and_cwd(&mut self, session_id: &str, cwd: &str) {
+        self.session_id = session_id.to_string();
+        self.session_ids.clear();
+        self.project_path = Some(cwd.to_string());
+        for entry in &mut self.entries {
+            entry.session_id = Some(session_id.to_string());
+            if entry.cwd.is_some() {
+                entry.cwd = Some(cwd.to_string());
+            }
+        }
+        for raw in &mut self.preamble {
+            let Some(obj) = raw.as_object_mut() else {
+                continue;
+            };
+            if let Some(v) = obj.get_mut("sessionId") {
+                *v = Value::String(session_id.to_string());
+            }
+            if let Some(v) = obj.get_mut("cwd") {
+                *v = Value::String(cwd.to_string());
+            }
+        }
+    }
+
     /// Full text of the first user message, untruncated.
     pub fn first_user_text(&self) -> Option<String> {
         self.entries.iter().find_map(|e| {
@@ -1179,5 +1213,119 @@ mod tests {
     fn test_conversation_title_empty() {
         let convo = Conversation::new("empty".to_string());
         assert!(convo.title(50).is_none());
+    }
+
+    // ── Conversation::set_session_id_and_cwd ─────────────────────────────────────────
+
+    fn conversation_for_rewrite() -> Conversation {
+        let mut convo = Conversation::new("old-session".to_string());
+        convo.preamble = vec![
+            serde_json::json!({
+                "type": "permission-mode",
+                "permissionMode": "default",
+                "sessionId": "old-session",
+            }),
+            serde_json::json!({
+                "type": "file-history-snapshot",
+                "cwd": "/old/project",
+                "snapshot": {"cwd": "/old/project"},
+            }),
+            serde_json::json!({"type": "ai-title", "title": "old-session"}),
+        ];
+
+        let entries = vec![
+            // Full envelope: sessionId and cwd present.
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"old-session","cwd":"/old/project","message":{"role":"user","content":"Run ls in /old/project"}}"#,
+            // No cwd.
+            r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","sessionId":"old-session","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls /old/project"}}]}}"#,
+            // No sessionId, no cwd; carries a tool-result payload.
+            r#"{"uuid":"u3","type":"user","timestamp":"2024-01-01T00:00:02Z","toolUseResult":{"stdout":"/old/project/file.rs"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"/old/project/file.rs"}]}}"#,
+        ];
+        for entry_json in entries {
+            convo.add_entry(serde_json::from_str(entry_json).unwrap());
+        }
+        convo
+    }
+
+    #[test]
+    fn test_set_session_id_and_cwd_everywhere() {
+        let mut convo = conversation_for_rewrite();
+        convo.session_ids = vec!["old-a".to_string(), "old-b".to_string()];
+        convo.set_session_id_and_cwd("new-session", "/new/project");
+
+        assert_eq!(convo.session_id, "new-session");
+        assert!(convo.session_ids.is_empty());
+        for entry in &convo.entries {
+            assert_eq!(entry.session_id.as_deref(), Some("new-session"));
+        }
+    }
+
+    #[test]
+    fn test_cwd_replaced_only_where_present() {
+        let mut convo = conversation_for_rewrite();
+        convo.set_session_id_and_cwd("new-session", "/new/project");
+
+        assert_eq!(convo.project_path.as_deref(), Some("/new/project"));
+        assert_eq!(convo.entries[0].cwd.as_deref(), Some("/new/project"));
+        assert!(convo.entries[1].cwd.is_none());
+        assert!(convo.entries[2].cwd.is_none());
+    }
+
+    #[test]
+    fn test_project_path_set_when_absent() {
+        let mut convo = Conversation::new("old-session".to_string());
+        convo.set_session_id_and_cwd("new-session", "/new/project");
+
+        assert_eq!(convo.session_id, "new-session");
+        assert_eq!(convo.project_path.as_deref(), Some("/new/project"));
+    }
+
+    #[test]
+    fn test_preamble_top_level_keys_rewritten() {
+        let mut convo = conversation_for_rewrite();
+        let untouched_line = convo.preamble[2].clone();
+        convo.set_session_id_and_cwd("new-session", "/new/project");
+
+        assert_eq!(convo.preamble[0]["sessionId"], "new-session");
+        assert_eq!(convo.preamble[0]["permissionMode"], "default");
+        assert_eq!(convo.preamble[1]["cwd"], "/new/project");
+        // Top-level keys only: the nested snapshot keeps its cwd.
+        assert_eq!(convo.preamble[1]["snapshot"]["cwd"], "/old/project");
+        // A line without sessionId or cwd is untouched, even where a
+        // value happens to equal the old session id.
+        assert_eq!(convo.preamble[2], untouched_line);
+    }
+
+    #[test]
+    fn test_message_content_untouched() {
+        let convo = conversation_for_rewrite();
+        let messages_before: Vec<_> = convo
+            .entries
+            .iter()
+            .map(|e| serde_json::to_value(&e.message).unwrap())
+            .collect();
+        let results_before: Vec<_> = convo
+            .entries
+            .iter()
+            .map(|e| e.tool_use_result.clone())
+            .collect();
+
+        let mut convo = convo;
+        convo.set_session_id_and_cwd("new-session", "/new/project");
+
+        let messages_after: Vec<_> = convo
+            .entries
+            .iter()
+            .map(|e| serde_json::to_value(&e.message).unwrap())
+            .collect();
+        let results_after: Vec<_> = convo
+            .entries
+            .iter()
+            .map(|e| e.tool_use_result.clone())
+            .collect();
+        assert_eq!(messages_before, messages_after);
+        assert_eq!(results_before, results_after);
+        // Paths quoted in content still name the source machine.
+        assert!(convo.entries[0].text().contains("/old/project"));
     }
 }

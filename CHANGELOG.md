@@ -2,6 +2,21 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## `toolpath-claude`: Conversation::set_session_id_and_cwd — 2026-08-17
+
+- **`toolpath-claude`** (0.12.3): `Conversation::set_session_id_and_cwd(session_id,
+  cwd)` rewrites a conversation in place for a new session ID and
+  working directory. It sets the conversation-level `session_id`, sets
+  `session_id` on every entry, sets `project_path`, replaces `cwd`
+  where an entry has one, rewrites top-level `sessionId` and `cwd`
+  keys in preamble raw lines, and clears the segment list
+  `session_ids`. Message content and tool-result payloads stay
+  untouched.
+- Slug-pinning tests cover `PathResolver::conversation_file` with a
+  foreign home and a remote cwd, including the physical-path case (the
+  resolver slugs the string it is given, so callers pass the physical
+  cwd).
+
 ## `path config edit` — 2026-08-14
 
 - **`path-cli`** (0.18.0): new `path config` porcelain command, starting
