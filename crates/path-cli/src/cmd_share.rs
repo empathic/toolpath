@@ -39,6 +39,12 @@ pub struct ShareArgs {
     #[arg(long)]
     pub public: bool,
 
+    /// Set `meta.description` on the uploaded document — a
+    /// human-readable summary of the graph, stored in the document
+    /// itself
+    #[arg(long)]
+    pub description: Option<String>,
+
     /// Narrow the picker to one harness, or skip the picker entirely
     /// when used with --session.
     #[arg(long, value_enum)]
@@ -497,6 +503,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
         repo: args.repo.clone(),
         name: args.name.clone(),
         public: args.public,
+        description: args.description.clone(),
     };
     let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
     let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some();
@@ -571,6 +578,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
         repo: args.repo.clone(),
         name: args.name.clone(),
         public: args.public,
+        description: args.description.clone(),
         harness: h.harness(),
         session: None, // unused by share_explicit
         project: if h.path_keyed() {
@@ -808,6 +816,7 @@ fn share_explicit(
             repo: dest.repo,
             name: args.name.clone(),
             public: args.public,
+            description: args.description.clone(),
         };
         return crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary);
     }
@@ -849,6 +858,7 @@ fn share_explicit(
         repo: dest.repo,
         name: args.name.clone(),
         public: args.public,
+        description: args.description.clone(),
     };
     crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)
 }
@@ -1397,6 +1407,7 @@ mod tests {
             repo: None,
             name: None,
             public: false,
+            description: None,
             harness: None,
             session: None,
             project: None,
