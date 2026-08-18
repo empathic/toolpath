@@ -40,7 +40,7 @@ documents so every Codex-assisted change has a traceable origin.
 ```rust,no_run
 use toolpath_codex::{CodexConvo, derive::{DeriveConfig, derive_path}};
 
-let manager = CodexConvo::new();
+let manager = CodexConvo::new("/Users/alex");
 let session_id = "019dabc6-8fef-7681-a054-b5bb75fcb97d";
 let convo = manager.read_session(session_id)?;
 let path = derive_path(&convo, &DeriveConfig::default());

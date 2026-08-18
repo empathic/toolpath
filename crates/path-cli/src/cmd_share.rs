@@ -699,12 +699,10 @@ fn harness_status_codex(bundle: &HarnessBundle, home: Option<&std::path::Path>) 
     let Some(mgr) = &bundle.codex else {
         return HarnessStatus::unresolved();
     };
-    match mgr.resolver().sessions_root() {
-        Ok(p) => HarnessStatus {
-            path: crate::config::home_relative(&p, home),
-            exists: p.exists(),
-        },
-        Err(_) => HarnessStatus::unresolved(),
+    let p = mgr.resolver().sessions_root();
+    HarnessStatus {
+        path: crate::config::home_relative(&p, home),
+        exists: p.exists(),
     }
 }
 
@@ -1114,7 +1112,7 @@ mod tests {
     fn codex_only_bundle(home: &Path) -> HarnessBundle {
         let codex_dir = home.join(".codex");
         std::fs::create_dir_all(&codex_dir).unwrap();
-        let resolver = toolpath_codex::PathResolver::new().with_codex_dir(&codex_dir);
+        let resolver = toolpath_codex::PathResolver::new(home).with_codex_dir(&codex_dir);
         HarnessBundle {
             codex: Some(toolpath_codex::CodexConvo::with_resolver(resolver)),
             ..Default::default()

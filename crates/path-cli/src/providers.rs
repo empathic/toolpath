@@ -44,12 +44,19 @@ pub(crate) fn require_gemini_resolver(config: &Config) -> Result<toolpath_gemini
     gemini_resolver(config).ok_or_else(|| missing_home("Gemini"))
 }
 
-pub(crate) fn codex_convo(config: &Config) -> toolpath_codex::CodexConvo {
-    let mut resolver = toolpath_codex::PathResolver::new();
-    if let Some(home) = config.home_dir() {
-        resolver = resolver.with_home(home);
-    }
-    toolpath_codex::CodexConvo::with_resolver(resolver)
+pub(crate) fn codex_resolver(config: &Config) -> Option<toolpath_codex::PathResolver> {
+    config.home_dir().map(toolpath_codex::PathResolver::new)
+}
+
+/// [`codex_resolver`] for a command that targets Codex.
+pub(crate) fn require_codex_resolver(config: &Config) -> Result<toolpath_codex::PathResolver> {
+    codex_resolver(config).ok_or_else(|| missing_home("Codex"))
+}
+
+/// The Codex reader's strict flag. `$CODEX_ROLLOUT_STRICT` is strict
+/// when set, whatever its value.
+pub(crate) fn codex_strict(config: &Config) -> bool {
+    config.codex_rollout_strict.is_some()
 }
 
 pub(crate) fn copilot_convo(config: &Config) -> toolpath_copilot::CopilotConvo {
@@ -112,7 +119,9 @@ pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
     HarnessBundle {
         claude: Some(claude_convo(config)),
         gemini: gemini_resolver(config).map(toolpath_gemini::GeminiConvo::with_resolver),
-        codex: Some(codex_convo(config)),
+        codex: codex_resolver(config).map(|r| {
+            toolpath_codex::CodexConvo::with_resolver(r).with_strict(codex_strict(config))
+        }),
         copilot: Some(copilot_convo(config)),
         opencode: Some(opencode_convo(config)),
         cursor: Some(cursor_convo(config)),
@@ -160,12 +169,29 @@ mod tests {
     }
 
     #[test]
-    fn codex_convo_roots_at_config_home() {
-        let manager = codex_convo(&config_with_home());
+    fn codex_resolver_roots_at_config_home() {
+        let resolver = codex_resolver(&config_with_home()).unwrap();
         assert_eq!(
-            manager.resolver().sessions_root().unwrap(),
+            resolver.sessions_root(),
             PathBuf::from("/home/jailed/.codex/sessions")
         );
+    }
+
+    #[test]
+    fn codex_resolver_is_none_without_a_home() {
+        assert!(codex_resolver(&Config::default()).is_none());
+        let err = require_codex_resolver(&Config::default()).unwrap_err();
+        assert!(err.to_string().contains("home directory"));
+    }
+
+    #[test]
+    fn codex_strict_follows_presence_of_the_variable() {
+        assert!(!codex_strict(&Config::default()));
+        let config = Config {
+            codex_rollout_strict: Some(String::new()),
+            ..Config::default()
+        };
+        assert!(codex_strict(&config));
     }
 
     #[test]

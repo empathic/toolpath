@@ -11,12 +11,6 @@ pub enum ConvoError {
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("Home directory not found")]
-    NoHomeDirectory,
-
-    #[error("Codex directory not found at path: {0}")]
-    CodexDirectoryNotFound(PathBuf),
-
     #[error("Session not found: {0}")]
     SessionNotFound(String),
 

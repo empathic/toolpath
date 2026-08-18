@@ -65,7 +65,7 @@ mod tests {
         fs::create_dir_all(&day).unwrap();
         let name = "rollout-2026-04-20T10-00-00-019dabc6-8fef-7681-a054-b5bb75fcb97d";
         fs::write(day.join(format!("{}.jsonl", name)), body).unwrap();
-        let resolver = crate::PathResolver::new().with_codex_dir(&codex);
+        let resolver = crate::PathResolver::new(temp.path()).with_codex_dir(&codex);
         (temp, CodexConvo::with_resolver(resolver), name.into())
     }
 

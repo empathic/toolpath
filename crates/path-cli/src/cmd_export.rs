@@ -1221,10 +1221,8 @@ fn build_codex_session(config: &Config, input: &str, cwd: &str) -> Result<toolpa
 #[cfg(not(target_os = "emscripten"))]
 fn write_into_codex_project(session: &toolpath_codex::Session, config: &Config) -> Result<()> {
     let session_ts = codex_session_timestamp(session)?;
-    let resolver = providers::codex_resolver(config);
-    let sessions_root = resolver
-        .sessions_root()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Codex sessions dir: {}", e))?;
+    let resolver = providers::require_codex_resolver(config)?;
+    let sessions_root = resolver.sessions_root();
 
     // sessions/YYYY/MM/DD/
     let date_dir = sessions_root
@@ -1240,9 +1238,7 @@ fn write_into_codex_project(session: &toolpath_codex::Session, config: &Config) 
 
     // `codex resume` reads from state_5.sqlite, not the filesystem;
     // without a thread row the rollout file is invisible.
-    let codex_dir = resolver
-        .codex_dir()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve ~/.codex dir: {}", e))?;
+    let codex_dir = resolver.codex_dir();
     let registration = register_codex_thread(&codex_dir, session, &out_path, &session_ts);
 
     eprintln!(
@@ -2879,13 +2875,8 @@ mod tests {
         )
         .expect("export codex --project");
 
-        let resolver = PathResolver::new().with_home(&fake_home);
-        let dated_dir = resolver
-            .sessions_root()
-            .unwrap()
-            .join("2026")
-            .join("05")
-            .join("15");
+        let resolver = PathResolver::new(&fake_home);
+        let dated_dir = resolver.sessions_root().join("2026").join("05").join("15");
         assert!(
             dated_dir.exists(),
             "expected dated sessions dir at {}",
