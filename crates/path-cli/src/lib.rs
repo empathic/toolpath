@@ -147,7 +147,7 @@ pub fn run() -> Result<()> {
         Commands::Query { args } => cmd_query::run(args, cli.pretty, &config),
         Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]
-        Commands::Auth { op } => cmd_auth::run(op),
+        Commands::Auth { op } => cmd_auth::run(op, &config),
         Commands::P { command } => cmd_p::run(command, cli.pretty, &config),
     }
 }
