@@ -17,7 +17,7 @@ pub(crate) const CONFIG_DIR_NAME: &str = ".toolpath";
 pub(crate) const CONFIG_DIR_ENV: &str = "TOOLPATH_CONFIG_DIR";
 /// Pathbase server override (see `cmd_pathbase`).
 ///
-/// Declared here because [`CONFIG_ENV_VARS`] needs it on every build
+/// Declared here because [`Config::ENV_MAP`] needs it on every build
 /// target. `cmd_pathbase` depends on reqwest, so lib.rs compiles it
 /// out of the wasm/emscripten build; a constant declared there does
 /// not exist on that target.
@@ -39,21 +39,6 @@ pub(crate) const MANIFEST_LOCK_FILE_NAME: &str = "manifest.json.lock";
 pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 /// The document cache directory (see `cache`).
 pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
-
-/// Every environment variable [`Config`] reads. The figment env layer
-/// reads exactly these; no other variable can influence a `Config`.
-/// `Env::raw` matches names case-insensitively, so each [`Config`]
-/// field name matches its variable.
-const CONFIG_ENV_VARS: &[&str] = &[
-    "APPDATA",
-    "COPILOT_HOME",
-    "HOME",
-    PATHBASE_URL_ENV,
-    CONFIG_DIR_ENV,
-    "TOOLPATH_QUERY_EXPLAIN",
-    "USERPROFILE",
-    "XDG_DATA_HOME",
-];
 
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root
@@ -103,10 +88,38 @@ impl figment::Provider for VerbatimEnv {
 }
 
 impl Config {
+    /// Each environment variable [`Config`] reads, paired with the
+    /// field it fills. [`Config::load`] admits the left column and
+    /// renames each key to the right column; no other variable can
+    /// influence a `Config`. Names match case-insensitively.
+    const ENV_MAP: &'static [(&'static str, &'static str)] = &[
+        ("APPDATA", "appdata"),
+        ("COPILOT_HOME", "copilot_home"),
+        ("HOME", "home"),
+        (PATHBASE_URL_ENV, "pathbase_url"),
+        (CONFIG_DIR_ENV, "toolpath_config_dir"),
+        ("TOOLPATH_QUERY_EXPLAIN", "toolpath_query_explain"),
+        ("USERPROFILE", "userprofile"),
+        ("XDG_DATA_HOME", "xdg_data_home"),
+    ];
+
+    /// Every environment variable [`Config`] reads.
+    pub(crate) fn env_var_names() -> impl Iterator<Item = &'static str> {
+        Self::ENV_MAP.iter().map(|(var, _)| *var)
+    }
+
     /// Read the process environment and extract an immutable `Config`.
     pub(crate) fn load() -> Result<Self> {
+        let vars: Vec<&str> = Self::env_var_names().collect();
+        let env = Env::raw().only(&vars).map(|key| {
+            Self::ENV_MAP
+                .iter()
+                .find(|(var, _)| key.as_str().eq_ignore_ascii_case(var))
+                .map(|(_, field)| (*field).into())
+                .expect("only() admits exactly the mapped variables")
+        });
         Figment::from(Serialized::defaults(Config::default()))
-            .merge(VerbatimEnv(Env::raw().only(CONFIG_ENV_VARS)))
+            .merge(VerbatimEnv(env))
             .extract()
             .context("failed to load configuration from the environment")
     }
@@ -214,7 +227,7 @@ mod tests {
         });
     }
 
-    /// Variables outside [`CONFIG_ENV_VARS`] never reach the `Config`.
+    /// Variables outside [`Config::ENV_MAP`] never reach the `Config`.
     /// The `only` filter and serde's unknown-field drop both enforce
     /// this; the test observes their combined effect and cannot tell
     /// them apart. Jail does not clear the ambient environment. Assert
@@ -237,6 +250,15 @@ mod tests {
             assert_eq!(config.toolpath_query_explain, None);
             Ok(())
         });
+    }
+
+    /// The named env-var constants stay in [`Config::ENV_MAP`]. A
+    /// rename in one place but not the other fails here.
+    #[test]
+    fn named_env_constants_are_mapped() {
+        let names: Vec<&str> = Config::env_var_names().collect();
+        assert!(names.contains(&CONFIG_DIR_ENV));
+        assert!(names.contains(&PATHBASE_URL_ENV));
     }
 
     /// Values reach the `Config` verbatim. Type inference would turn
