@@ -40,6 +40,7 @@ hex = "0.4"
 jaq-core = "3.1.0"
 jaq-std = "3.0.1"
 jaq-json = "2.0.1"
+figment = { version = "0.10", features = ["env"] }
 
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
 toolpath-claude = { workspace = true, features = ["watcher"] }
@@ -91,3 +92,4 @@ assert_cmd = "2"
 predicates = "3"
 insta = { workspace = true }
 toolpath-convo = { workspace = true }
+figment = { version = "0.10", features = ["env", "test"] }
