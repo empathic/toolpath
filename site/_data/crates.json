@@ -25,7 +25,7 @@
   },
   {
     "name": "toolpath-github",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "description": "Derive from GitHub pull requests",
     "docs": "https://docs.rs/toolpath-github",
     "crate": "https://crates.io/crates/toolpath-github",

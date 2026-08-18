@@ -110,7 +110,7 @@ pub fn run(
     let fmt = resolve_format(format, json_flag);
     match source {
         ListSource::Git { repo, remote } => run_git(repo, remote, fmt),
-        ListSource::Github { repo } => run_github(repo, fmt),
+        ListSource::Github { repo } => run_github(repo, fmt, config),
         ListSource::Claude { project } => run_claude(project, fmt, config),
         ListSource::Gemini { project } => run_gemini(project, fmt, config),
         ListSource::Codex {} => run_codex(fmt, config),
@@ -197,10 +197,10 @@ fn run_git(repo_path: PathBuf, remote: String, fmt: ListFormat) -> Result<()> {
 
 // ── GitHub ──────────────────────────────────────────────────────────────────
 
-fn run_github(repo: String, fmt: ListFormat) -> Result<()> {
+fn run_github(repo: String, fmt: ListFormat, config: &Config) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (repo, fmt);
+        let _ = (repo, fmt, config);
         anyhow::bail!("'path list github' requires a native environment with network access");
     }
 
@@ -210,13 +210,12 @@ fn run_github(repo: String, fmt: ListFormat) -> Result<()> {
             .split_once('/')
             .ok_or_else(|| anyhow::anyhow!("Repository must be in owner/repo format"))?;
 
-        let token = toolpath_github::resolve_token()?;
-        let config = toolpath_github::DeriveConfig {
-            token,
+        let derive_config = toolpath_github::DeriveConfig {
+            token: providers::github_token(config)?,
             ..Default::default()
         };
 
-        let prs = toolpath_github::list_pull_requests(owner, repo_name, &config)?;
+        let prs = toolpath_github::list_pull_requests(owner, repo_name, &derive_config)?;
 
         match fmt {
             ListFormat::Json => {

@@ -67,6 +67,8 @@ pub struct Config {
     pub(crate) copilot_events_strict: Option<String>,
     /// `$COPILOT_HOME`: Copilot CLI session root override.
     pub(crate) copilot_home: Option<PathBuf>,
+    /// `$GITHUB_TOKEN`: GitHub API token (see `providers`).
+    pub(crate) github_token: Option<String>,
     /// `$HOME`: config-root fallback and the harness resolvers' root.
     pub(crate) home: Option<PathBuf>,
     /// `$PATHBASE_URL`: Pathbase server override (see `cmd_pathbase`).
@@ -116,6 +118,7 @@ impl Config {
         ("CODEX_ROLLOUT_STRICT", "codex_rollout_strict"),
         ("COPILOT_EVENTS_STRICT", "copilot_events_strict"),
         ("COPILOT_HOME", "copilot_home"),
+        ("GITHUB_TOKEN", "github_token"),
         ("HOME", "home"),
         (PATHBASE_URL_ENV, "pathbase_url"),
         (CONFIG_DIR_ENV, "toolpath_config_dir"),
@@ -212,6 +215,7 @@ mod tests {
             jail.set_env("XDG_DATA_HOME", "/home/jailed/.local/share");
             jail.set_env("COPILOT_EVENTS_STRICT", "1");
             jail.set_env("COPILOT_HOME", "/home/jailed/.copilot");
+            jail.set_env("GITHUB_TOKEN", "gh-jailed-token");
             jail.set_env("APPDATA", "/home/jailed/appdata");
             jail.set_env(PATHBASE_URL_ENV, "https://pathbase.test");
             jail.set_env("TOOLPATH_QUERY_EXPLAIN", "1");
@@ -225,6 +229,7 @@ mod tests {
                     codex_rollout_strict: Some("1".to_string()),
                     copilot_events_strict: Some("1".to_string()),
                     copilot_home: Some(PathBuf::from("/home/jailed/.copilot")),
+                    github_token: Some("gh-jailed-token".to_string()),
                     home: Some(PathBuf::from("/home/jailed")),
                     pathbase_url: Some("https://pathbase.test".to_string()),
                     toolpath_config_dir: Some(PathBuf::from("/tmp/cfg-root")),

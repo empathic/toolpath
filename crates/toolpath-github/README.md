@@ -15,10 +15,12 @@ are changes to `review://` artifacts; CI checks are changes to `ci://` artifacts
 
 ## Usage
 
-```rust,no_run
-use toolpath_github::{derive_pull_request, resolve_token, DeriveConfig};
+The caller supplies the API token.
 
-let token = resolve_token()?;
+```rust,no_run
+use toolpath_github::{derive_pull_request, DeriveConfig};
+
+let token = std::env::var("GITHUB_TOKEN")?;
 let config = DeriveConfig {
     token,
     include_ci: true,
@@ -58,7 +60,6 @@ to GitLab MRs, Gerrit, Phabricator, etc.
 
 | Function | Description |
 |---|---|
-| `resolve_token()` | Resolve GitHub token from `GITHUB_TOKEN` or `gh auth token` |
 | `derive_pull_request(owner, repo, pr, config)` | Derive a Path from a PR |
 | `list_pull_requests(owner, repo, config)` | List PRs with summary info |
 | `extract_issue_refs(body)` | Parse "Fixes #N" / "Closes #N" from text |

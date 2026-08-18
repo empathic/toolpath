@@ -31,6 +31,18 @@ cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
     drivers so the zero-file rule lives once.
   - The emscripten (playground) build keeps the sequential engine —
     no threads there.
+## `toolpath-github`: the caller supplies the API token — 2026-08-14
+
+- **`toolpath-github`** (0.7.0): breaking. Removed: `resolve_token`.
+  `DeriveConfig.token` is the only token input, so the caller owns
+  token resolution. The crate reads no environment variable and runs no
+  subprocess.
+- **`path-cli`** (unreleased): `Config` reads `$GITHUB_TOKEN`.
+  `providers::github_token` returns that value when it is set and not
+  empty, and falls back to `gh auth token`. `p import github` and
+  `p list github` take the token from there, so both keep their
+  behavior for CLI users.
+
 ## `toolpath-pi`: the caller supplies the home directory — 2026-08-14
 
 - **`toolpath-pi`** (0.7.0): breaking. `PathResolver::new(home)` takes
