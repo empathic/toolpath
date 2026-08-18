@@ -19,7 +19,7 @@ use support::*;
 #[test]
 fn file_input_explicit_claude_projects_and_records_exec() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("claude");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -30,6 +30,7 @@ fn file_input_explicit_claude_projects_and_records_exec() {
     run_with_strategy(
         args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
+        &home.config(),
     )
     .unwrap();
 
@@ -53,7 +54,7 @@ fn file_input_explicit_claude_projects_and_records_exec() {
 #[test]
 fn file_input_explicit_gemini_projects_and_records_exec() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("gemini");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -64,6 +65,7 @@ fn file_input_explicit_gemini_projects_and_records_exec() {
     run_with_strategy(
         args_explicit(doc_file, cwd.path(), Harness::Gemini),
         &recorder,
+        &home.config(),
     )
     .unwrap();
 
@@ -81,7 +83,7 @@ fn file_input_explicit_gemini_projects_and_records_exec() {
 #[test]
 fn file_input_explicit_codex_projects_and_records_exec() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("codex");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -92,6 +94,7 @@ fn file_input_explicit_codex_projects_and_records_exec() {
     run_with_strategy(
         args_explicit(doc_file, cwd.path(), Harness::Codex),
         &recorder,
+        &home.config(),
     )
     .unwrap();
 
@@ -109,7 +112,7 @@ fn file_input_explicit_codex_projects_and_records_exec() {
 #[test]
 fn file_input_explicit_copilot_projects_and_records_exec() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("copilot");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -120,6 +123,7 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
     run_with_strategy(
         args_explicit(doc_file, cwd.path(), Harness::Copilot),
         &recorder,
+        &home.config(),
     )
     .unwrap();
 
@@ -144,7 +148,7 @@ fn file_input_explicit_copilot_projects_and_records_exec() {
 #[test]
 fn file_input_explicit_opencode_projects_and_records_exec() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("opencode");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -194,6 +198,7 @@ fn file_input_explicit_opencode_projects_and_records_exec() {
     run_with_strategy(
         args_explicit(doc_file, cwd.path(), Harness::Opencode),
         &recorder,
+        &home.config(),
     )
     .unwrap();
 
@@ -212,7 +217,7 @@ fn file_input_explicit_opencode_projects_and_records_exec() {
 #[test]
 fn file_input_explicit_pi_projects_and_records_exec() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("pi");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -220,7 +225,12 @@ fn file_input_explicit_pi_projects_and_records_exec() {
     let doc_file = write_path_to_temp(cwd.path(), path);
 
     let recorder = RecordingExec::default();
-    run_with_strategy(args_explicit(doc_file, cwd.path(), Harness::Pi), &recorder).unwrap();
+    run_with_strategy(
+        args_explicit(doc_file, cwd.path(), Harness::Pi),
+        &recorder,
+        &home.config(),
+    )
+    .unwrap();
 
     let cap = recorder.captured();
     assert_eq!(cap.binary, "pi");
@@ -238,7 +248,7 @@ fn file_input_explicit_pi_projects_and_records_exec() {
 #[test]
 fn cache_id_input_loads_and_projects() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("claude");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -268,7 +278,7 @@ fn cache_id_input_loads_and_projects() {
     };
 
     let recorder = RecordingExec::default();
-    run_with_strategy(resume_args, &recorder).unwrap();
+    run_with_strategy(resume_args, &recorder, &home.config()).unwrap();
 
     let cap = recorder.captured();
     assert_eq!(cap.binary, "claude");
@@ -280,7 +290,7 @@ fn cache_id_input_loads_and_projects() {
 #[test]
 fn multi_path_graph_returns_clear_error() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("claude");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -303,6 +313,7 @@ fn multi_path_graph_returns_clear_error() {
     let err = run_with_strategy(
         args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
+        &home.config(),
     )
     .unwrap_err();
     let s = err.to_string();
@@ -313,7 +324,7 @@ fn multi_path_graph_returns_clear_error() {
 #[test]
 fn agentless_path_returns_clear_error() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::with_binary("claude");
     let cwd = tempfile::tempdir().unwrap();
 
@@ -325,6 +336,7 @@ fn agentless_path_returns_clear_error() {
     let err = run_with_strategy(
         args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
+        &home.config(),
     )
     .unwrap_err();
     assert!(err.to_string().contains("no agent session"));
@@ -333,7 +345,7 @@ fn agentless_path_returns_clear_error() {
 #[test]
 fn explicit_harness_not_on_path_errors() {
     let _env = env_lock();
-    let _home = ScopedHome::new();
+    let home = ScopedHome::new();
     let _path = ScopedPath::empty();
     let cwd = tempfile::tempdir().unwrap();
 
@@ -344,6 +356,7 @@ fn explicit_harness_not_on_path_errors() {
     let err = run_with_strategy(
         args_explicit(doc_file, cwd.path(), Harness::Claude),
         &recorder,
+        &home.config(),
     )
     .unwrap_err();
     let s = err.to_string();
