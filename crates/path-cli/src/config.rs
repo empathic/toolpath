@@ -61,6 +61,10 @@ pub struct Config {
     /// unparseable rollout line. Presence is the signal; the value is
     /// not read.
     pub(crate) codex_rollout_strict: Option<String>,
+    /// `$COPILOT_EVENTS_STRICT`: the Copilot reader errors on a
+    /// malformed events line. Presence is the signal; the value is not
+    /// read.
+    pub(crate) copilot_events_strict: Option<String>,
     /// `$COPILOT_HOME`: Copilot CLI session root override.
     pub(crate) copilot_home: Option<PathBuf>,
     /// `$HOME`: config-root fallback and the harness resolvers' root.
@@ -110,6 +114,7 @@ impl Config {
         ("APPDATA", "appdata"),
         ("CLAUDE_CLI_DEBUG", "claude_cli_debug"),
         ("CODEX_ROLLOUT_STRICT", "codex_rollout_strict"),
+        ("COPILOT_EVENTS_STRICT", "copilot_events_strict"),
         ("COPILOT_HOME", "copilot_home"),
         ("HOME", "home"),
         (PATHBASE_URL_ENV, "pathbase_url"),
@@ -205,6 +210,7 @@ mod tests {
             jail.set_env("CLAUDE_CLI_DEBUG", "1");
             jail.set_env("CODEX_ROLLOUT_STRICT", "1");
             jail.set_env("XDG_DATA_HOME", "/home/jailed/.local/share");
+            jail.set_env("COPILOT_EVENTS_STRICT", "1");
             jail.set_env("COPILOT_HOME", "/home/jailed/.copilot");
             jail.set_env("APPDATA", "/home/jailed/appdata");
             jail.set_env(PATHBASE_URL_ENV, "https://pathbase.test");
@@ -217,6 +223,7 @@ mod tests {
                     appdata: Some(PathBuf::from("/home/jailed/appdata")),
                     claude_cli_debug: Some("1".to_string()),
                     codex_rollout_strict: Some("1".to_string()),
+                    copilot_events_strict: Some("1".to_string()),
                     copilot_home: Some(PathBuf::from("/home/jailed/.copilot")),
                     home: Some(PathBuf::from("/home/jailed")),
                     pathbase_url: Some("https://pathbase.test".to_string()),

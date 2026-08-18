@@ -708,7 +708,9 @@ fn run_codex(fmt: ListFormat, config: &Config) -> Result<()> {
 // ── Copilot (preview) ─────────────────────────────────────────────────────────
 
 fn run_copilot(fmt: ListFormat, config: &Config) -> Result<()> {
-    let manager = providers::copilot_convo(config);
+    let manager =
+        toolpath_copilot::CopilotConvo::with_resolver(providers::require_copilot_resolver(config)?)
+            .with_strict(providers::copilot_strict(config));
     let sessions = manager
         .list_sessions()
         .map_err(|e| anyhow::anyhow!("{}", e))?;

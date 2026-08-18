@@ -31,6 +31,40 @@ cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
     drivers so the zero-file rule lives once.
   - The emscripten (playground) build keeps the sequential engine —
     no threads there.
+## `toolpath-copilot`: the caller supplies the home directory — 2026-08-14
+
+- **`toolpath-copilot`** (0.2.0): breaking. `PathResolver::new(home)`
+  takes the home directory as a required argument. The crate reads no
+  environment variable; it keeps the layout knowledge
+  (`<home>/.copilot`) and the caller owns "what is home".
+  `CopilotConvo::new(home)` and `ConvoIO::new(home)` take the same
+  argument.
+
+  Removed: the `Default` impls on `PathResolver`, `ConvoIO`, and
+  `CopilotConvo`; `PathResolver::with_home`; the `NoHomeDirectory`
+  error variant. `with_copilot_dir` stays as the full override, and it
+  wins against the home-derived default.
+
+  The home directory is always present, so `home_dir()`,
+  `copilot_dir()`, `session_state_dir()`,
+  `legacy_session_state_dir()`, `session_store_db()`, and
+  `ConvoIO::copilot_dir_path()` return a path instead of a `Result`.
+
+  Strict events parsing is a parameter. `CopilotConvo::with_strict(bool)`
+  and `ConvoIO::with_strict(bool)` set it,
+  `EventReader::read_lines_with(path, strict)` and
+  `EventReader::read_session_dir_with(dir, strict)` take it directly,
+  and `EventReader::read_lines(path)` stays lenient. The crate reads no
+  environment variable for it.
+- **`path-cli`** (unreleased): `providers::copilot_resolver` returns
+  `Option<PathResolver>`. `None` means the configuration carries no home
+  directory, so Copilot is out of reach: the harness bundle omits it,
+  and a command that targets Copilot reports "cannot determine the home
+  directory". `Config` reads `$COPILOT_EVENTS_STRICT` and passes the
+  flag to every `CopilotConvo` it builds, so the variable keeps its
+  behavior for CLI users. `$COPILOT_HOME` stays a `Config` read, and the
+  resolver receives it as the injected Copilot root.
+
 ## `toolpath-claude`: the caller supplies the home directory — 2026-08-13
 
 - **`toolpath-claude`** (0.13.0): breaking. `PathResolver::new(home)`

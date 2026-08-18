@@ -201,7 +201,10 @@ pub(crate) fn derive_codex_session_with(
 /// Derive a single Copilot session given an explicit session id.
 pub(crate) fn derive_copilot_session(config: &Config, session: &str) -> Result<DerivedDoc> {
     derive_copilot_session_with(
-        &toolpath_copilot::CopilotConvo::with_resolver(providers::copilot_resolver(config)),
+        &toolpath_copilot::CopilotConvo::with_resolver(providers::require_copilot_resolver(
+            config,
+        )?)
+        .with_strict(providers::copilot_strict(config)),
         session,
     )
 }

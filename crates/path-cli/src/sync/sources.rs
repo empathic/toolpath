@@ -489,7 +489,7 @@ impl ArtifactSource for CopilotSource<'_> {
             self.0.resolver().session_state_dir(),
             self.0.resolver().legacy_session_state_dir(),
         ];
-        for dir in dirs.into_iter().flatten() {
+        for dir in dirs {
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
             };

@@ -115,7 +115,6 @@ pub(crate) fn is_not_found_codex(err: &toolpath_codex::ConvoError) -> bool {
 pub(crate) fn is_not_found_copilot(err: &toolpath_copilot::ConvoError) -> bool {
     use toolpath_copilot::ConvoError;
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
-        || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::CopilotDirectoryNotFound(_))
 }
 
