@@ -722,12 +722,10 @@ fn harness_status_opencode(
     let Some(mgr) = &bundle.opencode else {
         return HarnessStatus::unresolved();
     };
-    match mgr.resolver().db_path() {
-        Ok(p) => HarnessStatus {
-            path: crate::config::home_relative(&p, home),
-            exists: p.exists(),
-        },
-        Err(_) => HarnessStatus::unresolved(),
+    let p = mgr.resolver().db_path();
+    HarnessStatus {
+        path: crate::config::home_relative(&p, home),
+        exists: p.exists(),
     }
 }
 

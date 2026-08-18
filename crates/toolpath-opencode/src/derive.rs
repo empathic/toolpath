@@ -21,13 +21,14 @@ pub struct DeriveConfig {
     pub no_snapshot_diffs: bool,
 }
 
-/// Derive a [`Path`] from an opencode [`Session`].
+/// Derive a [`Path`] from an opencode [`Session`]. Snapshot diffs need
+/// a resolver: use [`derive_path_with_resolver`] for them.
 pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
-    derive_path_with_resolver(session, config, &PathResolver::new())
+    derive_from_view(to_view(session), session, config)
 }
 
-/// Like [`derive_path`] but with a custom `PathResolver` (useful for
-/// tests with a temp data directory).
+/// Like [`derive_path`] but with a `PathResolver`, so the snapshot git
+/// repository supplies file diffs.
 pub fn derive_path_with_resolver(
     session: &Session,
     config: &DeriveConfig,
@@ -38,6 +39,14 @@ pub fn derive_path_with_resolver(
     } else {
         to_view_with_resolver(session, resolver)
     };
+    derive_from_view(view, session, config)
+}
+
+fn derive_from_view(
+    view: toolpath_convo::ConversationView,
+    session: &Session,
+    config: &DeriveConfig,
+) -> Path {
     let base_uri = config.project_path.as_ref().map(|p| {
         if p.starts_with('/') {
             format!("file://{}", p)
@@ -108,9 +117,7 @@ mod tests {
         ))
         .unwrap();
         drop(conn);
-        let resolver = PathResolver::new()
-            .with_home(temp.path())
-            .with_data_dir(&data_dir);
+        let resolver = PathResolver::new(temp.path()).with_data_dir(&data_dir);
         let mgr = OpencodeConvo::with_resolver(resolver.clone());
         (temp, mgr, resolver)
     }

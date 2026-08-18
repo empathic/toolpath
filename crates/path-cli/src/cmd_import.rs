@@ -1050,8 +1050,9 @@ fn derive_opencode(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager =
-            toolpath_opencode::OpencodeConvo::with_resolver(providers::opencode_resolver(config));
+        let manager = toolpath_opencode::OpencodeConvo::with_resolver(
+            providers::require_opencode_resolver(config)?,
+        );
         let derive_one = |sid: &str| derive_opencode_session_with(&manager, sid, no_snapshot_diffs);
 
         let session_ids: Vec<String> = match (session, all) {

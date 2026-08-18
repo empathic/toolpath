@@ -17,9 +17,6 @@ pub enum ConvoError {
     #[error("Git error: {0}")]
     Git(#[from] git2::Error),
 
-    #[error("Home directory not found")]
-    NoHomeDirectory,
-
     #[error("opencode directory not found at path: {0}")]
     OpencodeDirectoryNotFound(PathBuf),
 

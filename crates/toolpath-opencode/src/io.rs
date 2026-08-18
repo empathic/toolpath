@@ -14,17 +14,11 @@ pub struct ConvoIO {
     resolver: PathResolver,
 }
 
-impl Default for ConvoIO {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ConvoIO {
-    pub fn new() -> Self {
-        Self {
-            resolver: PathResolver::new(),
-        }
+    /// Roots at `home`, so the data directory is
+    /// `<home>/.local/share/opencode`.
+    pub fn new<P: Into<PathBuf>>(home: P) -> Self {
+        Self::with_resolver(PathResolver::new(home))
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
@@ -39,12 +33,12 @@ impl ConvoIO {
         self.resolver.db_exists()
     }
 
-    pub fn db_path(&self) -> Result<PathBuf> {
+    pub fn db_path(&self) -> PathBuf {
         self.resolver.db_path()
     }
 
     fn open_db(&self) -> Result<DbReader> {
-        DbReader::open(self.resolver.db_path()?)
+        DbReader::open(self.resolver.db_path())
     }
 
     /// List every project in the database.
@@ -220,10 +214,18 @@ mod tests {
         )
         .unwrap();
         drop(conn);
-        let resolver = PathResolver::new()
-            .with_home(temp.path())
-            .with_data_dir(&data);
+        let resolver = PathResolver::new(temp.path()).with_data_dir(&data);
         (temp, ConvoIO::with_resolver(resolver))
+    }
+
+    #[test]
+    fn new_roots_at_home() {
+        let temp = TempDir::new().unwrap();
+        let io = ConvoIO::new(temp.path());
+        assert_eq!(
+            io.db_path(),
+            temp.path().join(".local/share/opencode/opencode.db")
+        );
     }
 
     #[test]

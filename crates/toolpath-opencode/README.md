@@ -48,7 +48,7 @@ git repositories.
 ```rust,no_run
 use toolpath_opencode::{OpencodeConvo, derive::{DeriveConfig, derive_path}};
 
-let manager = OpencodeConvo::new();
+let manager = OpencodeConvo::new("/Users/alex");
 let session_id = "ses_24ee4deb6ffeWw7ZKWNVoOAgjD";
 let convo = manager.read_session(session_id)?;
 let path = derive_path(&convo, &DeriveConfig::default());

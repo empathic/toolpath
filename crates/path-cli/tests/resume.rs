@@ -155,8 +155,8 @@ fn file_input_explicit_opencode_projects_and_records_exec() {
     // Pre-create the opencode db with the canonical schema. (Schema DDL
     // copied from cmd_export's existing opencode test until/unless
     // toolpath-opencode exposes a public bootstrap helper.)
-    let resolver = toolpath_opencode::PathResolver::new();
-    let db_path = resolver.db_path().unwrap();
+    let resolver = toolpath_opencode::PathResolver::new(home.home_dir());
+    let db_path = resolver.db_path();
     std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();

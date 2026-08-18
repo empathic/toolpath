@@ -795,7 +795,9 @@ fn run_opencode(project: Option<String>, fmt: ListFormat, config: &Config) -> Re
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = providers::opencode_convo(config);
+        let manager = toolpath_opencode::OpencodeConvo::with_resolver(
+            providers::require_opencode_resolver(config)?,
+        );
         let metas = manager
             .io()
             .list_session_metadata(project.as_deref())
