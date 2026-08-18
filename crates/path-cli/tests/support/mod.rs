@@ -3,78 +3,56 @@
 //! These are NOT integration-test entry points — they're a support
 //! module imported by `tests/resume.rs`. Lives under `tests/` so it
 //! doesn't leak into the production library API.
+//!
+//! [`TestHome`] is the sandbox: a tempdir plus the `Config` that points
+//! at it. Tests pass that `Config` to the code under test, so no test
+//! reads or mutates the process environment.
 
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 
 use path_cli::cmd_resume::ResumeArgs;
 use path_cli::config::Config;
 use path_cli::harness::Harness;
 
-/// Process-wide lock for tests that mutate `$HOME` or
-/// `$TOOLPATH_CONFIG_DIR`. Integration tests under `tests/resume.rs`
-/// can't reach the library's internal `crate::config::TEST_ENV_LOCK`,
-/// so we use a separate lock here. Crucially, no library test holds
-/// this lock — but library tests now properly save+restore env vars
-/// (see commit 23deeb2), so the integration suite can be self-isolating.
-pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+/// A tempdir that stands in for the user's home directory.
+pub struct TestHome {
+    td: tempfile::TempDir,
 }
 
-/// RAII guard that pins `$HOME` and `$TOOLPATH_CONFIG_DIR` to a tempdir.
-pub struct ScopedHome {
-    _td: tempfile::TempDir,
-    prev_home: Option<OsString>,
-    prev_config: Option<OsString>,
-}
-
-impl ScopedHome {
+impl TestHome {
     pub fn new() -> Self {
-        let td = tempfile::tempdir().unwrap();
-        let prev_home = std::env::var_os("HOME");
-        let prev_config = std::env::var_os("TOOLPATH_CONFIG_DIR");
-        unsafe {
-            std::env::set_var("HOME", td.path());
-            std::env::set_var("TOOLPATH_CONFIG_DIR", td.path().join(".toolpath"));
-        }
         Self {
-            _td: td,
-            prev_home,
-            prev_config,
+            td: tempfile::tempdir().unwrap(),
         }
     }
 
     pub fn home_dir(&self) -> PathBuf {
-        PathBuf::from(self._td.path())
+        self.td.path().to_path_buf()
     }
 
-    /// The `Config` the CLI extracts at its composition root. Loaded
-    /// under this guard, so every path it carries points into the
-    /// sandbox.
+    /// The toolpath config directory inside the sandbox.
+    pub fn config_dir(&self) -> PathBuf {
+        self.td.path().join(".toolpath")
+    }
+
+    /// The `Config` the code under test receives. Every other field
+    /// stays `None`, so all seven harness resolvers root under the
+    /// sandbox home whatever the developer's environment holds.
     pub fn config(&self) -> Config {
-        Config::load().expect("load config")
+        Config {
+            home: Some(self.home_dir()),
+            toolpath_config_dir: Some(self.config_dir()),
+            ..Config::default()
+        }
     }
 }
 
-impl Drop for ScopedHome {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            match &self.prev_config {
-                Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
-                None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
-            }
-        }
+impl Default for TestHome {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
