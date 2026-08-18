@@ -10,6 +10,8 @@ use toolpath::v1::Graph;
 
 use crate::artifact::{ArtifactRef, ArtifactType, claude_chain_stamp, stat_stamp};
 use crate::cache::make_id;
+use crate::config::Config;
+use crate::providers;
 
 pub(crate) struct DerivedDoc {
     pub(crate) cache_id: String,
@@ -30,8 +32,16 @@ pub(crate) fn doc_inner_id(doc: &Graph) -> String {
 /// Derive a single Claude conversation given an explicit project + session.
 /// Used by `cmd_share` after its picker has resolved the pair; mirrors the
 /// `(Some(p), Some(s), _)` arm in [`derive_claude_with_manager`].
-pub(crate) fn derive_claude_session(project: &str, session: &str) -> Result<DerivedDoc> {
-    derive_claude_session_with(&toolpath_claude::ClaudeConvo::new(), project, session)
+pub(crate) fn derive_claude_session(
+    config: &Config,
+    project: &str,
+    session: &str,
+) -> Result<DerivedDoc> {
+    derive_claude_session_with(
+        &toolpath_claude::ClaudeConvo::with_resolver(providers::claude_resolver(config)),
+        project,
+        session,
+    )
 }
 
 /// [`derive_claude_session`] against a caller-supplied manager, so sync
@@ -89,8 +99,16 @@ pub(crate) fn derive_claude_session_with(
 }
 
 /// Derive a single Gemini conversation given an explicit project + session.
-pub(crate) fn derive_gemini_session(project: &str, session: &str) -> Result<DerivedDoc> {
-    derive_gemini_session_with(&toolpath_gemini::GeminiConvo::new(), project, session)
+pub(crate) fn derive_gemini_session(
+    config: &Config,
+    project: &str,
+    session: &str,
+) -> Result<DerivedDoc> {
+    derive_gemini_session_with(
+        &toolpath_gemini::GeminiConvo::with_resolver(providers::gemini_resolver(config)),
+        project,
+        session,
+    )
 }
 
 /// [`derive_gemini_session`] against a caller-supplied manager.
@@ -139,8 +157,11 @@ pub(crate) fn derive_gemini_session_with(
 }
 
 /// Derive a single Codex session given an explicit session id.
-pub(crate) fn derive_codex_session(session: &str) -> Result<DerivedDoc> {
-    derive_codex_session_with(&toolpath_codex::CodexConvo::new(), session)
+pub(crate) fn derive_codex_session(config: &Config, session: &str) -> Result<DerivedDoc> {
+    derive_codex_session_with(
+        &toolpath_codex::CodexConvo::with_resolver(providers::codex_resolver(config)),
+        session,
+    )
 }
 
 /// [`derive_codex_session`] against a caller-supplied manager.
@@ -176,8 +197,11 @@ pub(crate) fn derive_codex_session_with(
 }
 
 /// Derive a single Copilot session given an explicit session id.
-pub(crate) fn derive_copilot_session(session: &str) -> Result<DerivedDoc> {
-    derive_copilot_session_with(&toolpath_copilot::CopilotConvo::new(), session)
+pub(crate) fn derive_copilot_session(config: &Config, session: &str) -> Result<DerivedDoc> {
+    derive_copilot_session_with(
+        &toolpath_copilot::CopilotConvo::with_resolver(providers::copilot_resolver(config)),
+        session,
+    )
 }
 
 /// [`derive_copilot_session`] against a caller-supplied manager.
@@ -212,11 +236,12 @@ pub(crate) fn derive_copilot_session_with(
 /// Derive a single opencode session given an explicit session id.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn derive_opencode_session(
+    config: &Config,
     session: &str,
     no_snapshot_diffs: bool,
 ) -> Result<DerivedDoc> {
     derive_opencode_session_with(
-        &toolpath_opencode::OpencodeConvo::new(),
+        &toolpath_opencode::OpencodeConvo::with_resolver(providers::opencode_resolver(config)),
         session,
         no_snapshot_diffs,
     )
@@ -260,8 +285,11 @@ pub(crate) fn derive_opencode_session_with(
 
 /// Derive a single cursor composer given an explicit composer id.
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn derive_cursor_session(session: &str) -> Result<DerivedDoc> {
-    derive_cursor_session_with(&toolpath_cursor::CursorConvo::new(), session)
+pub(crate) fn derive_cursor_session(config: &Config, session: &str) -> Result<DerivedDoc> {
+    derive_cursor_session_with(
+        &toolpath_cursor::CursorConvo::with_resolver(providers::cursor_resolver(config)),
+        session,
+    )
 }
 
 /// [`derive_cursor_session`] against a caller-supplied manager.
@@ -301,17 +329,20 @@ pub(crate) fn derive_cursor_session_with(
 
 /// Derive a single Pi session given an explicit project + session.
 pub(crate) fn derive_pi_session(
+    config: &Config,
     project: &str,
     session: &str,
     base: Option<PathBuf>,
 ) -> Result<DerivedDoc> {
-    let manager = if let Some(path) = base {
-        let resolver = toolpath_pi::PathResolver::new().with_sessions_dir(&path);
-        toolpath_pi::PiConvo::with_resolver(resolver)
-    } else {
-        toolpath_pi::PiConvo::new()
-    };
-    derive_pi_session_with(&manager, project, session)
+    let mut resolver = providers::pi_resolver(config);
+    if let Some(path) = base {
+        resolver = resolver.with_sessions_dir(&path);
+    }
+    derive_pi_session_with(
+        &toolpath_pi::PiConvo::with_resolver(resolver),
+        project,
+        session,
+    )
 }
 
 /// [`derive_pi_session`] against a caller-supplied manager.
