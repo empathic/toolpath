@@ -51,6 +51,7 @@ pub struct Scope {
 /// Anything the planner can't prove decomposable falls back to the whole-array
 /// path, which is still lean — the step values are held once, not re-serialized.
 pub fn run(
+    config: &crate::config::Config,
     scope: &Scope,
     code: &str,
     compact: bool,
@@ -67,7 +68,7 @@ pub fn run(
     // raw `StdoutLock` is line-buffered (a syscall per line).
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    execute_plan(scope, &plan, code, compact, raw, &mut out)?;
+    execute_plan(config, scope, &plan, code, compact, raw, &mut out)?;
     out.flush().context("flush stdout")
 }
 
@@ -78,6 +79,7 @@ pub fn run(
 /// parallelizes parsing only.
 #[cfg(not(target_os = "emscripten"))]
 fn execute_plan(
+    config: &crate::config::Config,
     scope: &Scope,
     plan: &plan::Plan,
     code: &str,
@@ -87,11 +89,12 @@ fn execute_plan(
 ) -> Result<()> {
     match plan {
         plan::Plan::Slurp => filter::execute(plan, code, compact, raw, out, |emit| {
-            stream_files(scope, emit)
+            stream_files(config, scope, emit)
         }),
         plan::Plan::PerFileStream => {
             filter::compile_check(code)?;
             for_each_file(
+                config,
                 scope,
                 |steps| filter::render_file(code, steps, compact, raw),
                 |bytes| {
@@ -105,6 +108,7 @@ fn execute_plan(
             let mut partials: Vec<Val> = Vec::new();
             let mut saw_file = false;
             for_each_file(
+                config,
                 scope,
                 |steps| filter::partials_file(code, steps),
                 |bytes| {
@@ -122,6 +126,7 @@ fn execute_plan(
 /// plan runs on the sequential engine.
 #[cfg(target_os = "emscripten")]
 fn execute_plan(
+    config: &crate::config::Config,
     scope: &Scope,
     plan: &plan::Plan,
     code: &str,
@@ -130,7 +135,7 @@ fn execute_plan(
     out: &mut dyn Write,
 ) -> Result<()> {
     filter::execute(plan, code, compact, raw, out, |emit| {
-        stream_files(scope, emit)
+        stream_files(config, scope, emit)
     })
 }
 
@@ -143,6 +148,7 @@ fn execute_plan(
 /// sequential scan.
 #[cfg(not(target_os = "emscripten"))]
 fn for_each_file<T: Send>(
+    config: &crate::config::Config,
     scope: &Scope,
     per_file: impl Fn(Vec<serde_json::Value>) -> Result<T> + Sync,
     mut consume: impl FnMut(T) -> Result<()>,
@@ -152,7 +158,7 @@ fn for_each_file<T: Send>(
     let kind_sel = scope.kind.as_deref().map(kinds::parse_kind_selector);
     let project = scope.project.as_deref().map(canonicalize_or_self);
     let project_under = scope.project_under.as_deref().map(canonicalize_or_self);
-    let sources = select_files(scope)?;
+    let sources = select_files(config, scope)?;
 
     let chunk = rayon::current_num_threads().max(1) * 2;
     for batch in sources.chunks(chunk) {
@@ -211,11 +217,15 @@ impl DocSource {
 /// thread because jaq values are `Rc`-based, not `Send`. Chunking keeps
 /// output (and per-file warnings) byte-identical to a sequential scan while
 /// holding at most one chunk of parsed documents in memory.
-fn stream_files(scope: &Scope, emit: &mut dyn FnMut(Val) -> Result<()>) -> Result<()> {
+fn stream_files(
+    config: &crate::config::Config,
+    scope: &Scope,
+    emit: &mut dyn FnMut(Val) -> Result<()>,
+) -> Result<()> {
     let kind_sel = scope.kind.as_deref().map(kinds::parse_kind_selector);
     let project = scope.project.as_deref().map(canonicalize_or_self);
     let project_under = scope.project_under.as_deref().map(canonicalize_or_self);
-    let sources = select_files(scope)?;
+    let sources = select_files(config, scope)?;
 
     #[cfg(not(target_os = "emscripten"))]
     {
@@ -293,7 +303,7 @@ fn emit_wrapped(
 /// that is, when `--source`/`--id` is present, or when no `--input` is given
 /// at all (the default whole-cache scan). `--input` files are appended in the
 /// order given.
-fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
+fn select_files(config: &crate::config::Config, scope: &Scope) -> Result<Vec<DocSource>> {
     let mut sources = Vec::new();
 
     let restrict = scope.source.is_some() || !scope.ids.is_empty();
@@ -310,7 +320,7 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
         // dropped. A `--source`/default scan is not explicit (skip-warn).
         let by_id = id_set.is_some();
         let mut seen_ids: HashSet<String> = HashSet::new();
-        for entry in crate::cache::list_cached()? {
+        for entry in crate::cache::list_cached(config)? {
             if let Some(ids) = &id_set
                 && !ids.contains(entry.id.as_str())
             {
@@ -623,7 +633,7 @@ mod tests {
             project_under: None,
             kind: None,
         };
-        let files = select_files(&scope).unwrap();
+        let files = select_files(&crate::config::Config::default(), &scope).unwrap();
         assert_eq!(files.len(), 2);
         // The full path as given: inputs sharing a basename stay distinct.
         assert_eq!(files[0].cache_id, "/tmp/some.json");

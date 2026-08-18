@@ -46,7 +46,7 @@ pub enum CacheOp {
 
 pub fn run(op: CacheOp, config: &Config) -> Result<()> {
     match op {
-        CacheOp::Ls => run_ls(),
+        CacheOp::Ls => run_ls(config),
         CacheOp::Rm { id } => run_rm(&id, config),
         #[cfg(not(target_os = "emscripten"))]
         CacheOp::Sync {
@@ -56,8 +56,8 @@ pub fn run(op: CacheOp, config: &Config) -> Result<()> {
     }
 }
 
-fn run_ls() -> Result<()> {
-    let entries = list_cached()?;
+fn run_ls(config: &Config) -> Result<()> {
+    let entries = list_cached(config)?;
     if entries.is_empty() {
         eprintln!("No cached documents. Run `path import <source>` to create one.");
         return Ok(());
@@ -68,9 +68,8 @@ fn run_ls() -> Result<()> {
     Ok(())
 }
 
-#[cfg_attr(target_os = "emscripten", expect(unused_variables))]
 fn run_rm(id: &str, config: &Config) -> Result<()> {
-    remove_cached(id)?;
+    remove_cached(config, id)?;
     // The artifact is still real — downgrade its manifest record to
     // "known, not cached" so the next sync can re-materialize it.
     #[cfg(not(target_os = "emscripten"))]
@@ -92,10 +91,9 @@ fn run_sync(
 ) -> Result<()> {
     let explicit = !types.is_empty();
     let types = resolve_types(&types);
-    let config_dir = config.config_dir()?;
     let bundle = providers::harness_bundle(config);
     let outcomes = sync_bundle(
-        &config_dir,
+        config,
         &bundle,
         &types,
         project_under.as_deref(),

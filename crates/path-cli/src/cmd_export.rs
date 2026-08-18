@@ -456,7 +456,7 @@ fn run_copilot(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(config, &input)?;
         match (project, output) {
             (Some(project_dir), None) => {
                 let id = project_copilot(&path, &project_dir, config)?;
@@ -668,7 +668,7 @@ fn run_claude(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(config, &input)?;
         let conversation = build_claude_conversation(&path)?;
         let jsonl = serialize_jsonl(&conversation)?;
 
@@ -703,8 +703,8 @@ fn run_claude(
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn load_path_doc(input: &str) -> Result<toolpath::v1::Path> {
-    let file = cache_ref(input)?;
+fn load_path_doc(config: &Config, input: &str) -> Result<toolpath::v1::Path> {
+    let file = cache_ref(config, input)?;
     let json = std::fs::read_to_string(&file)
         .with_context(|| format!("Failed to read {}", file.display()))?;
     let doc = toolpath::v1::Graph::from_json(&json)
@@ -804,7 +804,7 @@ fn run_gemini(
         };
         let project_path = project_dir.to_string_lossy().to_string();
 
-        let conversation = build_gemini_conversation(&input, &project_path)?;
+        let conversation = build_gemini_conversation(config, &input, &project_path)?;
 
         match (project, output) {
             (Some(_), None) => write_into_gemini_project(&conversation, &project_path, config)?,
@@ -818,12 +818,13 @@ fn run_gemini(
 
 #[cfg(not(target_os = "emscripten"))]
 fn build_gemini_conversation(
+    config: &Config,
     input: &str,
     project_path: &str,
 ) -> Result<toolpath_gemini::types::Conversation> {
     use toolpath_convo::ConversationProjector;
 
-    let path = load_path_doc(input)?;
+    let path = load_path_doc(config, input)?;
     let view = toolpath_convo::extract_conversation(&path);
 
     // The projector bakes `projectHash` and `directories` into the
@@ -1033,7 +1034,7 @@ fn run_pi(
         };
         let cwd_str = project_dir.to_string_lossy().to_string();
 
-        let session = build_pi_session(&input, &cwd_str)?;
+        let session = build_pi_session(config, &input, &cwd_str)?;
 
         match (project, output) {
             (Some(_), None) => write_into_pi_project(&session, &cwd_str, config)?,
@@ -1046,10 +1047,10 @@ fn run_pi(
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn build_pi_session(input: &str, cwd: &str) -> Result<toolpath_pi::PiSession> {
+fn build_pi_session(config: &Config, input: &str, cwd: &str) -> Result<toolpath_pi::PiSession> {
     use toolpath_convo::ConversationProjector;
 
-    let path = load_path_doc(input)?;
+    let path = load_path_doc(config, input)?;
     let view = toolpath_convo::extract_conversation(&path);
 
     let projector = toolpath_pi::project::PiProjector::new().with_cwd(cwd.to_string());
@@ -1183,7 +1184,7 @@ fn run_codex(
         };
         let cwd_str = project_dir.to_string_lossy().to_string();
 
-        let session = build_codex_session(&input, &cwd_str)?;
+        let session = build_codex_session(config, &input, &cwd_str)?;
 
         match (project, output) {
             (Some(_), None) => write_into_codex_project(&session, config)?,
@@ -1196,10 +1197,10 @@ fn run_codex(
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn build_codex_session(input: &str, cwd: &str) -> Result<toolpath_codex::Session> {
+fn build_codex_session(config: &Config, input: &str, cwd: &str) -> Result<toolpath_codex::Session> {
     use toolpath_convo::ConversationProjector;
 
-    let path = load_path_doc(input)?;
+    let path = load_path_doc(config, input)?;
     let view = toolpath_convo::extract_conversation(&path);
 
     let projector = toolpath_codex::project::CodexProjector::new().with_cwd(cwd.to_string());
@@ -1441,7 +1442,7 @@ fn run_opencode(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(config, &input)?;
         match (project, output) {
             (Some(project_dir), None) => {
                 let session = build_opencode_session(&path, Some(&project_dir))?;
@@ -1686,7 +1687,7 @@ fn run_cursor(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(config, &input)?;
         match (project, output) {
             (Some(project_dir), None) => {
                 let session = build_cursor_session(&path, Some(&project_dir), config)?;
@@ -1959,7 +1960,7 @@ fn run_pathbase(args: PathbaseExportArgs, config: &Config) -> Result<()> {
     {
         use crate::cmd_pathbase::preflight_auth;
 
-        let file = cache_ref(&args.input)?;
+        let file = cache_ref(config, &args.input)?;
         let body = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read {}", file.display()))?;
         let upload = PathbaseUploadArgs {

@@ -794,7 +794,7 @@ fn share_explicit(
             session,
         )
     {
-        let doc_path = crate::cache::cache_path(&cache_id)?;
+        let doc_path = crate::cache::cache_path(config, &cache_id)?;
         let body = std::fs::read_to_string(&doc_path)
             .with_context(|| format!("Failed to read {}", doc_path.display()))?;
         eprintln!(
@@ -829,7 +829,7 @@ fn share_explicit(
         // the upload uses the fresh body, not the cache. Always
         // overwrite so cache and upload agree (use `--no-cache` to skip
         // the cache write entirely).
-        let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        let path = crate::cache::write_cached(config, &derived.cache_id, &derived.doc, true)?;
         if let Some(stub) = &derived.provenance
             && let Err(e) = crate::sync::record_artifact(config, stub, &derived.cache_id)
         {

@@ -231,7 +231,7 @@ pub(crate) fn resolve_input(
             let cache_id = crate::cache::pathbase_cache_id(&ref_.owner, &ref_.repo, &ref_.id);
             if !args.force
                 && !args.no_cache
-                && let Ok(cache_path) = crate::cache::cache_path(&cache_id)
+                && let Ok(cache_path) = crate::cache::cache_path(config, &cache_id)
                 && cache_path.exists()
             {
                 let json = std::fs::read_to_string(&cache_path)
@@ -245,7 +245,7 @@ pub(crate) fn resolve_input(
                     // force=true here: we either short-circuited above
                     // (cache miss) or the user explicitly passed --force,
                     // and either way we want the new bytes to land.
-                    crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+                    crate::cache::write_cached(config, &derived.cache_id, &derived.doc, true)?;
                     eprintln!("Resolved {} → {}", raw, derived.cache_id);
                 }
                 derived.doc
@@ -257,7 +257,7 @@ pub(crate) fn resolve_input(
                 .map_err(|e| anyhow::anyhow!("not a valid toolpath document: {}", e))?
         }
         Shape::CacheId(id) => {
-            let file = crate::cache::cache_ref(id).map_err(|e| {
+            let file = crate::cache::cache_ref(config, id).map_err(|e| {
                 anyhow::anyhow!(
                     "couldn't resolve `{}` as a URL, file path, or cache id: {}",
                     raw,

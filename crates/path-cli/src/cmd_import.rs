@@ -234,14 +234,17 @@ fn emit(
                 && let Some(stub) = &d.provenance
                 && crate::sync::record_is_current(config, stub, &d.cache_id)
             {
-                println!("{}", crate::cache::cache_path(&d.cache_id)?.display());
+                println!(
+                    "{}",
+                    crate::cache::cache_path(config, &d.cache_id)?.display()
+                );
                 eprintln!(
                     "{} is already up to date (pass --force to re-derive)",
                     d.cache_id
                 );
                 continue;
             }
-            let path = write_cached(&d.cache_id, &d.doc, force)?;
+            let path = write_cached(config, &d.cache_id, &d.doc, force)?;
             println!("{}", path.display());
             #[cfg(not(target_os = "emscripten"))]
             if let Some(stub) = &d.provenance
