@@ -70,7 +70,7 @@ gate_shellcheck() {
 
 # shellcheck disable=SC2329
 gate_clippy() {
-    cargo clippy --workspace -- -D warnings 2>&1
+    cargo clippy --workspace --all-targets -- -D warnings 2>&1
 }
 
 # shellcheck disable=SC2329

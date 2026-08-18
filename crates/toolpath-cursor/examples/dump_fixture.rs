@@ -147,6 +147,10 @@ fn referenced_blob_hashes(session: &CursorSession) -> std::collections::HashSet<
 
 /// The home directory this example reads Cursor state under. The
 /// library takes it as an argument, so the caller supplies it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this example reads the developer's real Cursor store, so it must locate the real home directory"
+)]
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))

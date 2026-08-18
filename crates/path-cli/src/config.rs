@@ -176,6 +176,10 @@ impl Config {
 ///
 /// The environment is read here so consumers take the search path as a
 /// parameter.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this module is the one place that reads the environment"
+)]
 pub(crate) fn search_path() -> Vec<PathBuf> {
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())

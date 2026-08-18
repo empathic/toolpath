@@ -100,6 +100,10 @@ pub const fn embedded_picker_available() -> bool {
     false
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the fzf probe keeps its own read until the search path's owner is decided in review"
+)]
 fn which(cmd: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {

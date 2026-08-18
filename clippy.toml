@@ -1,0 +1,8 @@
+disallowed-methods = [
+    { path = "std::env::var", reason = "environment access lives in path-cli's config module; take the value as a parameter" },
+    { path = "std::env::var_os", reason = "environment access lives in path-cli's config module; take the value as a parameter" },
+    { path = "std::env::vars", reason = "environment access lives in path-cli's config module; take the value as a parameter" },
+    { path = "std::env::vars_os", reason = "environment access lives in path-cli's config module; take the value as a parameter" },
+    { path = "std::env::set_var", reason = "tests construct values instead of mutating the environment" },
+    { path = "std::env::remove_var", reason = "tests construct values instead of mutating the environment" },
+]
