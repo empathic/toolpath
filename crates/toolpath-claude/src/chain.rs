@@ -90,7 +90,7 @@ impl ChainIndex {
             }
             self.known_files.insert(file_stem.clone());
 
-            let path = resolver.conversation_file(project_path, file_stem)?;
+            let path = resolver.conversation_file(project_path, file_stem);
             if let Some(first_sid) = ConversationReader::read_first_session_id(&path) {
                 if first_sid != *file_stem {
                     // This file is a successor of first_sid
@@ -165,14 +165,12 @@ mod tests {
         let project_dir = claude_dir.join("projects/-test-project");
         fs::create_dir_all(&project_dir).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         (temp, resolver)
     }
 
     fn write_session(resolver: &PathResolver, session_id: &str, entries: &[&str]) {
-        let path = resolver
-            .conversation_file("/test/project", session_id)
-            .unwrap();
+        let path = resolver.conversation_file("/test/project", session_id);
         fs::write(&path, entries.join("\n")).unwrap();
     }
 

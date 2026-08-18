@@ -29,7 +29,7 @@ Convert Claude conversations into Toolpath documents:
 ```rust,no_run
 use toolpath_claude::{ClaudeConvo, derive::{DeriveConfig, derive_path}};
 
-let manager = ClaudeConvo::new();
+let manager = ClaudeConvo::new("/Users/alex");
 let convo = manager.read_conversation("/Users/alex/project", "session-uuid")?;
 
 let config = DeriveConfig::default();
@@ -54,7 +54,7 @@ let path = derive_path(&convo, &config);
 ```rust,no_run
 use toolpath_claude::ClaudeConvo;
 
-let manager = ClaudeConvo::new();
+let manager = ClaudeConvo::new("/Users/alex");
 
 // List projects
 let projects = manager.list_projects()?;
@@ -134,7 +134,7 @@ populated and tool-result-only user entries are absorbed (no phantom empty turns
 use toolpath_claude::ClaudeConvo;
 use toolpath_convo::ConversationProvider;
 
-let provider = ClaudeConvo::new();
+let provider = ClaudeConvo::new("/Users/alex");
 let view = provider.load_conversation("/path/to/project", "session-id")?;
 
 for turn in &view.turns {

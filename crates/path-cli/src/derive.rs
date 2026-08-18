@@ -38,7 +38,8 @@ pub(crate) fn derive_claude_session(
     session: &str,
 ) -> Result<DerivedDoc> {
     derive_claude_session_with(
-        &toolpath_claude::ClaudeConvo::with_resolver(providers::claude_resolver(config)),
+        &toolpath_claude::ClaudeConvo::with_resolver(providers::require_claude_resolver(config)?)
+            .with_verbose_warnings(providers::claude_verbose_warnings(config)),
         project,
         session,
     )

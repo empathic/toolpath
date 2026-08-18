@@ -7,7 +7,19 @@ use std::path::Path;
 pub struct ConversationReader;
 
 impl ConversationReader {
+    /// Read a conversation file, warning about the first 5 unparseable
+    /// lines only.
     pub fn read_conversation<P: AsRef<Path>>(path: P) -> Result<Conversation> {
+        Self::read_conversation_with(path, false)
+    }
+
+    /// [`Self::read_conversation`] with the verbose-warning flag
+    /// supplied by the caller. Verbose warnings cover every unparseable
+    /// line, not just the first 5.
+    pub fn read_conversation_with<P: AsRef<Path>>(
+        path: P,
+        verbose_warnings: bool,
+    ) -> Result<Conversation> {
         let path = path.as_ref();
         if !path.exists() {
             return Err(ConvoError::ConversationNotFound(path.display().to_string()));
@@ -42,7 +54,7 @@ impl ConversationReader {
                     // re-emit them on roundtrip.
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
                         conversation.preamble.push(value);
-                    } else if line_num < 5 || std::env::var("CLAUDE_CLI_DEBUG").is_ok() {
+                    } else if line_num < 5 || verbose_warnings {
                         eprintln!(
                             "Warning: Failed to parse line {} in {:?}: not valid JSON",
                             line_num + 1,

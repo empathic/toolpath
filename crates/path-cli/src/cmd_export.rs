@@ -338,10 +338,8 @@ fn claude_session_file(
 ) -> Result<Option<PathBuf>> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let resolver = providers::claude_resolver(config);
-    let claude_project_dir = resolver
-        .project_dir(&project_dir.to_string_lossy())
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Claude project dir: {}", e))?;
+    let resolver = providers::require_claude_resolver(config)?;
+    let claude_project_dir = resolver.project_dir(&project_dir.to_string_lossy());
     let candidate = claude_project_dir.join(format!("{}.jsonl", session_id));
     Ok(candidate.exists().then_some(candidate))
 }
@@ -754,10 +752,8 @@ fn write_into_claude_project(
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
     let project_path = project_dir.to_string_lossy();
 
-    let resolver = providers::claude_resolver(config);
-    let claude_project_dir = resolver
-        .project_dir(&project_path)
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Claude project dir: {}", e))?;
+    let resolver = providers::require_claude_resolver(config)?;
+    let claude_project_dir = resolver.project_dir(&project_path);
 
     std::fs::create_dir_all(&claude_project_dir)
         .with_context(|| format!("create {}", claude_project_dir.display()))?;

@@ -510,7 +510,8 @@ mod tests {
     }
 
     fn claude_bundle(home: &Path) -> HarnessBundle {
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(home.join(".claude"));
+        let resolver =
+            toolpath_claude::PathResolver::new(home).with_claude_dir(home.join(".claude"));
         HarnessBundle {
             claude: Some(toolpath_claude::ClaudeConvo::with_resolver(resolver)),
             ..Default::default()

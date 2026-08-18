@@ -7,17 +7,30 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct ConvoIO {
     resolver: PathResolver,
+    verbose_warnings: bool,
 }
 
 impl ConvoIO {
-    pub fn new() -> Self {
-        Self {
-            resolver: PathResolver::new(),
-        }
+    pub fn new<P: Into<PathBuf>>(home: P) -> Self {
+        Self::with_resolver(PathResolver::new(home))
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            verbose_warnings: false,
+        }
+    }
+
+    /// Verbose warnings cover every unparseable line of a conversation
+    /// file, not just the first 5.
+    pub fn with_verbose_warnings(mut self, verbose_warnings: bool) -> Self {
+        self.verbose_warnings = verbose_warnings;
+        self
+    }
+
+    pub fn verbose_warnings(&self) -> bool {
+        self.verbose_warnings
     }
 
     pub fn resolver(&self) -> &PathResolver {
@@ -25,8 +38,8 @@ impl ConvoIO {
     }
 
     pub fn read_conversation(&self, project_path: &str, session_id: &str) -> Result<Conversation> {
-        let path = self.resolver.conversation_file(project_path, session_id)?;
-        ConversationReader::read_conversation(&path)
+        let path = self.resolver.conversation_file(project_path, session_id);
+        ConversationReader::read_conversation_with(&path, self.verbose_warnings)
     }
 
     pub fn read_conversation_metadata(
@@ -34,7 +47,7 @@ impl ConvoIO {
         project_path: &str,
         session_id: &str,
     ) -> Result<ConversationMetadata> {
-        let path = self.resolver.conversation_file(project_path, session_id)?;
+        let path = self.resolver.conversation_file(project_path, session_id);
         ConversationReader::read_conversation_metadata(&path)
     }
 
@@ -67,7 +80,7 @@ impl ConvoIO {
     }
 
     pub fn read_history(&self) -> Result<Vec<HistoryEntry>> {
-        let path = self.resolver.history_file()?;
+        let path = self.resolver.history_file();
         ConversationReader::read_history(&path)
     }
 
@@ -75,26 +88,18 @@ impl ConvoIO {
         self.resolver.exists()
     }
 
-    pub fn claude_dir_path(&self) -> Result<PathBuf> {
+    pub fn claude_dir_path(&self) -> PathBuf {
         self.resolver.claude_dir()
     }
 
-    pub fn conversation_exists(&self, project_path: &str, session_id: &str) -> Result<bool> {
-        let path = self.resolver.conversation_file(project_path, session_id)?;
-        Ok(path.exists())
+    pub fn conversation_exists(&self, project_path: &str, session_id: &str) -> bool {
+        self.resolver
+            .conversation_file(project_path, session_id)
+            .exists()
     }
 
     pub fn project_exists(&self, project_path: &str) -> bool {
-        self.resolver
-            .project_dir(project_path)
-            .map(|p| p.exists())
-            .unwrap_or(false)
-    }
-}
-
-impl Default for ConvoIO {
-    fn default() -> Self {
-        Self::new()
+        self.resolver.project_dir(project_path).exists()
     }
 }
 
@@ -118,14 +123,18 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let io = ConvoIO::with_resolver(resolver);
         (temp, io)
     }
 
     #[test]
-    fn test_default() {
-        let _io = ConvoIO::default();
+    fn new_roots_at_home() {
+        let temp = TempDir::new().unwrap();
+        let io = ConvoIO::new(temp.path());
+        assert_eq!(io.claude_dir_path(), temp.path().join(".claude"));
+        assert!(!io.verbose_warnings());
+        assert!(io.clone().with_verbose_warnings(true).verbose_warnings());
     }
 
     #[test]
@@ -162,7 +171,7 @@ mod tests {
         );
         fs::write(dir.join("imported-session.jsonl"), format!("{entry}\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let io = ConvoIO::with_resolver(resolver);
         let meta = io
             .read_conversation_metadata(on_disk, "imported-session")
@@ -203,21 +212,14 @@ mod tests {
     #[test]
     fn test_claude_dir_path() {
         let (_temp, io) = setup_io();
-        let path = io.claude_dir_path().unwrap();
-        assert!(path.exists());
+        assert!(io.claude_dir_path().exists());
     }
 
     #[test]
     fn test_conversation_exists() {
         let (_temp, io) = setup_io();
-        assert!(
-            io.conversation_exists("/test/project", "session-1")
-                .unwrap()
-        );
-        assert!(
-            !io.conversation_exists("/test/project", "nonexistent")
-                .unwrap()
-        );
+        assert!(io.conversation_exists("/test/project", "session-1"));
+        assert!(!io.conversation_exists("/test/project", "nonexistent"));
     }
 
     #[test]

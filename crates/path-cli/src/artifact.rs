@@ -135,9 +135,7 @@ pub(crate) fn claude_chain_stamp(
     let mut modified: Option<chrono::DateTime<chrono::Utc>> = None;
     let mut size: Option<u64> = None;
     for segment in &segments {
-        let Ok(file) = mgr.resolver().conversation_file(project, segment) else {
-            continue;
-        };
+        let file = mgr.resolver().conversation_file(project, segment);
         let (m, s) = stat_stamp(&file);
         if let Some(m) = m {
             modified = Some(modified.map_or(m, |cur| cur.max(m)));

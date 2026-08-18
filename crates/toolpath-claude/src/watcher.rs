@@ -22,7 +22,7 @@ use std::collections::HashSet;
 /// ```rust,no_run
 /// use toolpath_claude::{ClaudeConvo, ConversationWatcher};
 ///
-/// let manager = ClaudeConvo::new();
+/// let manager = ClaudeConvo::new("/Users/alex");
 /// let mut watcher = ConversationWatcher::new(
 ///     manager,
 ///     "/path/to/project".to_string(),
@@ -260,7 +260,7 @@ mod tests {
 
         create_test_jsonl(&claude_dir, "session-1", &[entry1, entry2]);
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(
@@ -288,7 +288,7 @@ mod tests {
 
         create_test_jsonl(&claude_dir, "session-1", &[entry1]);
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(
@@ -312,7 +312,7 @@ mod tests {
         let claude_dir = temp.path().join(".claude");
         create_test_jsonl(&claude_dir, "session-1", &[]);
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let watcher = ConversationWatcher::new(
@@ -334,7 +334,7 @@ mod tests {
         let entry1 = r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#;
         create_test_jsonl(&claude_dir, "session-1", &[entry1]);
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(
@@ -366,7 +366,7 @@ mod tests {
         let entry2 = r#"{"uuid":"uuid-2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi"}}"#;
         create_test_jsonl(&claude_dir, "session-1", &[entry1, entry2]);
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(
@@ -398,7 +398,7 @@ mod tests {
         let entry2 = r#"{"uuid":"uuid-2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi"}}"#;
         create_test_jsonl(&claude_dir, "session-1", &[entry1, entry2]);
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(
@@ -430,7 +430,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(
@@ -476,7 +476,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(
@@ -527,7 +527,7 @@ mod tests {
         ];
         fs::write(project_dir.join("session-b.jsonl"), entries_b.join("\n")).unwrap();
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(
@@ -562,7 +562,7 @@ mod tests {
         let entry1 = r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#;
         create_test_jsonl(&claude_dir, "session-1", &[entry1]);
 
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let manager = ClaudeConvo::with_resolver(resolver);
 
         let mut watcher = ConversationWatcher::new(

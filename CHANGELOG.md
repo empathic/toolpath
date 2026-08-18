@@ -31,6 +31,40 @@ cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
     drivers so the zero-file rule lives once.
   - The emscripten (playground) build keeps the sequential engine —
     no threads there.
+## `toolpath-claude`: the caller supplies the home directory — 2026-08-13
+
+- **`toolpath-claude`** (0.13.0): breaking. `PathResolver::new(home)`
+  takes the home directory as a required argument. The crate reads no
+  environment variable; it keeps the layout knowledge (`<home>/.claude`)
+  and the caller owns "what is home". `ClaudeConvo::new(home)` and
+  `ConvoIO::new(home)` take the same argument.
+
+  Removed: the `Default` impls on `PathResolver`, `ConvoIO`, and
+  `ClaudeConvo`; `PathResolver::with_home`; the `NoHomeDirectory` error
+  variant. `with_claude_dir` stays as the full override.
+
+  The home directory is always present, so `home_dir()`,
+  `claude_dir()`, `projects_dir()`, `history_file()`, `project_dir()`,
+  `conversation_file()`, `ConvoIO::claude_dir_path()`, and
+  `ConvoIO::conversation_exists()` return a value instead of a
+  `Result`. `ClaudeConvo::claude_dir_path()` and
+  `ClaudeConvo::conversation_exists()` follow.
+
+  Verbose parse warnings are a parameter.
+  `ClaudeConvo::with_verbose_warnings(bool)` and
+  `ConvoIO::with_verbose_warnings(bool)` set it,
+  `ConversationReader::read_conversation_with(path, verbose_warnings)`
+  takes it directly, and `ConversationReader::read_conversation(path)`
+  warns about the first 5 unparseable lines only. The crate reads no
+  environment variable for it.
+- **`path-cli`** (unreleased): `providers::claude_resolver` returns
+  `Option<PathResolver>`. `None` means the configuration carries no home
+  directory, so Claude is out of reach: the harness bundle omits it, and
+  a command that targets Claude reports "cannot determine the home
+  directory". `Config` reads `$CLAUDE_CLI_DEBUG` and passes the flag to
+  every `ClaudeConvo` it builds, so the variable keeps its behavior for
+  CLI users.
+
 ## `toolpath-codex`: the caller supplies the home directory — 2026-08-13
 
 - **`toolpath-codex`** (0.7.0): breaking. `PathResolver::new(home)`

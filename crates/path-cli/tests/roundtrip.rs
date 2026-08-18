@@ -26,7 +26,7 @@ fn setup_fixture() -> (TempDir, ClaudeConvo) {
 
     fs::write(project_dir.join("session-rt.jsonl"), FIXTURE).unwrap();
 
-    let resolver = PathResolver::new().with_home(temp.path());
+    let resolver = PathResolver::new(temp.path());
     let convo = ClaudeConvo::with_resolver(resolver);
     (temp, convo)
 }

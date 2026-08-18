@@ -27,12 +27,19 @@ fn missing_home(harness: &str) -> anyhow::Error {
     )
 }
 
-pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
-    let mut resolver = toolpath_claude::PathResolver::new();
-    if let Some(home) = config.home_dir() {
-        resolver = resolver.with_home(home);
-    }
-    toolpath_claude::ClaudeConvo::with_resolver(resolver)
+pub(crate) fn claude_resolver(config: &Config) -> Option<toolpath_claude::PathResolver> {
+    config.home_dir().map(toolpath_claude::PathResolver::new)
+}
+
+/// [`claude_resolver`] for a command that targets Claude.
+pub(crate) fn require_claude_resolver(config: &Config) -> Result<toolpath_claude::PathResolver> {
+    claude_resolver(config).ok_or_else(|| missing_home("Claude"))
+}
+
+/// The Claude reader's verbose-warning flag. `$CLAUDE_CLI_DEBUG` is
+/// verbose when set, whatever its value.
+pub(crate) fn claude_verbose_warnings(config: &Config) -> bool {
+    config.claude_cli_debug.is_some()
 }
 
 pub(crate) fn gemini_resolver(config: &Config) -> Option<toolpath_gemini::PathResolver> {
@@ -117,7 +124,10 @@ pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiC
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
     HarnessBundle {
-        claude: Some(claude_convo(config)),
+        claude: claude_resolver(config).map(|r| {
+            toolpath_claude::ClaudeConvo::with_resolver(r)
+                .with_verbose_warnings(claude_verbose_warnings(config))
+        }),
         gemini: gemini_resolver(config).map(toolpath_gemini::GeminiConvo::with_resolver),
         codex: codex_resolver(config).map(|r| {
             toolpath_codex::CodexConvo::with_resolver(r).with_strict(codex_strict(config))
@@ -147,12 +157,29 @@ mod tests {
     }
 
     #[test]
-    fn claude_convo_roots_at_config_home() {
-        let manager = claude_convo(&config_with_home());
+    fn claude_resolver_roots_at_config_home() {
+        let resolver = claude_resolver(&config_with_home()).unwrap();
         assert_eq!(
-            manager.resolver().projects_dir().unwrap(),
+            resolver.projects_dir(),
             PathBuf::from("/home/jailed/.claude/projects")
         );
+    }
+
+    #[test]
+    fn claude_resolver_is_none_without_a_home() {
+        assert!(claude_resolver(&Config::default()).is_none());
+        let err = require_claude_resolver(&Config::default()).unwrap_err();
+        assert!(err.to_string().contains("home directory"));
+    }
+
+    #[test]
+    fn claude_verbose_warnings_follows_presence_of_the_variable() {
+        assert!(!claude_verbose_warnings(&Config::default()));
+        let config = Config {
+            claude_cli_debug: Some(String::new()),
+            ..Config::default()
+        };
+        assert!(claude_verbose_warnings(&config));
     }
 
     #[test]
@@ -232,14 +259,14 @@ mod tests {
     }
 
     #[test]
-    fn convos_fall_back_to_config_userprofile() {
+    fn claude_resolver_falls_back_to_config_userprofile() {
         let config = Config {
             userprofile: Some(PathBuf::from("/users/jailed")),
             ..Config::default()
         };
-        let manager = claude_convo(&config);
+        let resolver = claude_resolver(&config).unwrap();
         assert_eq!(
-            manager.resolver().projects_dir().unwrap(),
+            resolver.projects_dir(),
             PathBuf::from("/users/jailed/.claude/projects")
         );
     }
@@ -278,7 +305,7 @@ mod tests {
     fn harness_bundle_roots_providers_at_config_home() {
         let bundle = harness_bundle(&config_with_home());
         assert_eq!(
-            bundle.claude.unwrap().resolver().projects_dir().unwrap(),
+            bundle.claude.unwrap().resolver().projects_dir(),
             PathBuf::from("/home/jailed/.claude/projects")
         );
         assert_eq!(

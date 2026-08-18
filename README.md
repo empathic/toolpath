@@ -187,7 +187,7 @@ Everything the CLI does is a library call. Each source has its own crate
 ```rust
 use toolpath_claude::{ClaudeConvo, derive::{derive_path, DeriveConfig}};
 
-let convo = ClaudeConvo::new();
+let convo = ClaudeConvo::new("/Users/alex");
 let conversation = convo.read_conversation("/path/to/project", "session-id")?;
 let path = derive_path(&conversation, &DeriveConfig {
     include_thinking: true,

@@ -675,12 +675,10 @@ fn harness_status_claude(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     let Some(mgr) = &bundle.claude else {
         return HarnessStatus::unresolved();
     };
-    match mgr.resolver().projects_dir() {
-        Ok(p) => HarnessStatus {
-            path: crate::config::home_relative(&p, home),
-            exists: p.exists(),
-        },
-        Err(_) => HarnessStatus::unresolved(),
+    let p = mgr.resolver().projects_dir();
+    HarnessStatus {
+        path: crate::config::home_relative(&p, home),
+        exists: p.exists(),
     }
 }
 
@@ -1042,7 +1040,7 @@ mod tests {
     fn claude_only_bundle(home: &Path) -> HarnessBundle {
         let claude_dir = home.join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = toolpath_claude::PathResolver::new(home).with_claude_dir(&claude_dir);
         HarnessBundle {
             claude: Some(toolpath_claude::ClaudeConvo::with_resolver(resolver)),
             ..Default::default()
@@ -1364,7 +1362,7 @@ mod tests {
         // it as missing rather than going through the `unresolved` branch.
         let temp = TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude"); // never created
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = toolpath_claude::PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let bundle = HarnessBundle {
             claude: Some(toolpath_claude::ClaudeConvo::with_resolver(resolver)),
             ..Default::default()
@@ -1383,7 +1381,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(claude_dir.join("projects")).unwrap();
-        let resolver = toolpath_claude::PathResolver::new().with_claude_dir(&claude_dir);
+        let resolver = toolpath_claude::PathResolver::new(temp.path()).with_claude_dir(&claude_dir);
         let bundle = HarnessBundle {
             claude: Some(toolpath_claude::ClaudeConvo::with_resolver(resolver)),
             ..Default::default()

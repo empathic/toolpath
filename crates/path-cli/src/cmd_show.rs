@@ -110,7 +110,10 @@ pub fn run(source: ShowSource, ansi: bool, config: &Config) -> Result<()> {
 fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path> {
     match source {
         ShowSource::Claude { project, session } => {
-            let manager = providers::claude_convo(config);
+            let manager = toolpath_claude::ClaudeConvo::with_resolver(
+                providers::require_claude_resolver(config)?,
+            )
+            .with_verbose_warnings(providers::claude_verbose_warnings(config));
             let convo = manager
                 .read_conversation(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
