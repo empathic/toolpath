@@ -1,9 +1,8 @@
-//! Provider resolver construction from [`Config`].
+//! Provider construction from [`Config`].
 //!
-//! Every provider construction site builds its `PathResolver` here, so
-//! the environment values a resolver consumes come from [`Config`].
-//! Call sites chain per-site overrides (e.g. `with_sessions_dir`) onto
-//! the returned resolver.
+//! A `*_convo` factory returns the harness's conversation manager
+//! with every environment value it consumes taken from [`Config`].
+//! Command modules construct managers through these factories.
 //!
 //! opencode, copilot, and cursor (Windows) get their directory
 //! injected, not just the home: their resolvers read `$XDG_DATA_HOME`
@@ -12,32 +11,33 @@
 #![cfg(not(target_os = "emscripten"))]
 
 use crate::config::Config;
+use std::path::Path;
 
-pub(crate) fn claude_resolver(config: &Config) -> toolpath_claude::PathResolver {
+pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
     let mut resolver = toolpath_claude::PathResolver::new();
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
     }
-    resolver
+    toolpath_claude::ClaudeConvo::with_resolver(resolver)
 }
 
-pub(crate) fn gemini_resolver(config: &Config) -> toolpath_gemini::PathResolver {
+pub(crate) fn gemini_convo(config: &Config) -> toolpath_gemini::GeminiConvo {
     let mut resolver = toolpath_gemini::PathResolver::new();
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
     }
-    resolver
+    toolpath_gemini::GeminiConvo::with_resolver(resolver)
 }
 
-pub(crate) fn codex_resolver(config: &Config) -> toolpath_codex::PathResolver {
+pub(crate) fn codex_convo(config: &Config) -> toolpath_codex::CodexConvo {
     let mut resolver = toolpath_codex::PathResolver::new();
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
     }
-    resolver
+    toolpath_codex::CodexConvo::with_resolver(resolver)
 }
 
-pub(crate) fn copilot_resolver(config: &Config) -> toolpath_copilot::PathResolver {
+pub(crate) fn copilot_convo(config: &Config) -> toolpath_copilot::CopilotConvo {
     let mut resolver = toolpath_copilot::PathResolver::new();
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
@@ -45,10 +45,10 @@ pub(crate) fn copilot_resolver(config: &Config) -> toolpath_copilot::PathResolve
     if let Some(dir) = &config.copilot_home {
         resolver = resolver.with_copilot_dir(dir);
     }
-    resolver
+    toolpath_copilot::CopilotConvo::with_resolver(resolver)
 }
 
-pub(crate) fn opencode_resolver(config: &Config) -> toolpath_opencode::PathResolver {
+pub(crate) fn opencode_convo(config: &Config) -> toolpath_opencode::OpencodeConvo {
     let mut resolver = toolpath_opencode::PathResolver::new();
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
@@ -56,10 +56,10 @@ pub(crate) fn opencode_resolver(config: &Config) -> toolpath_opencode::PathResol
     if let Some(xdg) = &config.xdg_data_home {
         resolver = resolver.with_data_dir(xdg.join("opencode"));
     }
-    resolver
+    toolpath_opencode::OpencodeConvo::with_resolver(resolver)
 }
 
-pub(crate) fn cursor_resolver(config: &Config) -> toolpath_cursor::PathResolver {
+pub(crate) fn cursor_convo(config: &Config) -> toolpath_cursor::CursorConvo {
     let mut resolver = toolpath_cursor::PathResolver::new();
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
@@ -70,15 +70,20 @@ pub(crate) fn cursor_resolver(config: &Config) -> toolpath_cursor::PathResolver 
     if let Some(appdata) = &config.appdata {
         resolver = resolver.with_user_data_dir(appdata.join("Cursor"));
     }
-    resolver
+    toolpath_cursor::CursorConvo::with_resolver(resolver)
 }
 
-pub(crate) fn pi_resolver(config: &Config) -> toolpath_pi::PathResolver {
+/// `base` replaces the sessions directory: `--base` wins over the
+/// config home.
+pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiConvo {
     let mut resolver = toolpath_pi::PathResolver::new();
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
     }
-    resolver
+    if let Some(dir) = base {
+        resolver = resolver.with_sessions_dir(dir);
+    }
+    toolpath_pi::PiConvo::with_resolver(resolver)
 }
 
 #[cfg(test)]
@@ -99,103 +104,109 @@ mod tests {
     }
 
     #[test]
-    fn claude_resolver_roots_at_config_home() {
-        let resolver = claude_resolver(&config_with_home());
+    fn claude_convo_roots_at_config_home() {
+        let manager = claude_convo(&config_with_home());
         assert_eq!(
-            resolver.projects_dir().unwrap(),
+            manager.resolver().projects_dir().unwrap(),
             PathBuf::from("/home/jailed/.claude/projects")
         );
     }
 
     #[test]
-    fn gemini_resolver_roots_at_config_home() {
-        let resolver = gemini_resolver(&config_with_home());
+    fn gemini_convo_roots_at_config_home() {
+        let manager = gemini_convo(&config_with_home());
         assert_eq!(
-            resolver.gemini_dir().unwrap(),
+            manager.resolver().gemini_dir().unwrap(),
             PathBuf::from("/home/jailed/.gemini")
         );
     }
 
     #[test]
-    fn codex_resolver_roots_at_config_home() {
-        let resolver = codex_resolver(&config_with_home());
+    fn codex_convo_roots_at_config_home() {
+        let manager = codex_convo(&config_with_home());
         assert_eq!(
-            resolver.sessions_root().unwrap(),
+            manager.resolver().sessions_root().unwrap(),
             PathBuf::from("/home/jailed/.codex/sessions")
         );
     }
 
     #[test]
-    fn copilot_resolver_injects_copilot_dir() {
+    fn copilot_convo_injects_copilot_dir() {
         let config = Config {
             home: Some(PathBuf::from("/home/jailed")),
             copilot_home: Some(PathBuf::from("/copilot/root")),
             ..Config::default()
         };
-        let resolver = copilot_resolver(&config);
+        let manager = copilot_convo(&config);
         assert_eq!(
-            resolver.copilot_dir().unwrap(),
+            manager.resolver().copilot_dir().unwrap(),
             PathBuf::from("/copilot/root")
         );
     }
 
     #[test]
-    fn opencode_resolver_injects_data_dir() {
+    fn opencode_convo_injects_data_dir() {
         let config = Config {
             home: Some(PathBuf::from("/home/jailed")),
             xdg_data_home: Some(PathBuf::from("/xdg/data")),
             ..Config::default()
         };
-        let resolver = opencode_resolver(&config);
+        let manager = opencode_convo(&config);
         assert_eq!(
-            resolver.db_path().unwrap(),
+            manager.resolver().db_path().unwrap(),
             PathBuf::from("/xdg/data/opencode/opencode.db")
         );
     }
 
     #[test]
-    fn cursor_resolver_roots_at_config_home() {
-        let resolver = cursor_resolver(&config_with_home());
+    fn cursor_convo_roots_at_config_home() {
+        let manager = cursor_convo(&config_with_home());
         assert_eq!(
-            resolver.anysphere_dir().unwrap(),
+            manager.resolver().anysphere_dir().unwrap(),
             PathBuf::from("/home/jailed/.cursor")
         );
     }
 
     #[test]
-    fn resolvers_fall_back_to_config_userprofile() {
+    fn convos_fall_back_to_config_userprofile() {
         let config = Config {
             userprofile: Some(PathBuf::from("/users/jailed")),
             ..Config::default()
         };
-        let resolver = claude_resolver(&config);
+        let manager = claude_convo(&config);
         assert_eq!(
-            resolver.projects_dir().unwrap(),
+            manager.resolver().projects_dir().unwrap(),
             PathBuf::from("/users/jailed/.claude/projects")
         );
     }
 
     #[cfg(windows)]
     #[test]
-    fn cursor_resolver_injects_user_data_dir_from_appdata() {
+    fn cursor_convo_injects_user_data_dir_from_appdata() {
         let config = Config {
             home: Some(PathBuf::from("/home/jailed")),
             appdata: Some(PathBuf::from("/appdata/roaming")),
             ..Config::default()
         };
-        let resolver = cursor_resolver(&config);
+        let manager = cursor_convo(&config);
         assert_eq!(
-            resolver.db_path().unwrap(),
+            manager.resolver().db_path().unwrap(),
             PathBuf::from("/appdata/roaming/Cursor/User/globalStorage/state.vscdb")
         );
     }
 
     #[test]
-    fn pi_resolver_roots_at_config_home() {
-        let resolver = pi_resolver(&config_with_home());
+    fn pi_convo_roots_at_config_home() {
+        let manager = pi_convo(&config_with_home(), None);
         assert_eq!(
-            resolver.sessions_dir(),
+            manager.resolver().sessions_dir(),
             PathBuf::from("/home/jailed/.pi/agent/sessions")
         );
+    }
+
+    #[test]
+    fn pi_convo_base_replaces_the_sessions_dir() {
+        let manager = pi_convo(&config_with_home(), Some(Path::new("/pi/base")));
+        assert_eq!(manager.resolver().sessions_dir(), PathBuf::from("/pi/base"));
     }
 }

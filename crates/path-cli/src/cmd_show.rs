@@ -110,8 +110,7 @@ pub fn run(source: ShowSource, ansi: bool, config: &Config) -> Result<()> {
 fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path> {
     match source {
         ShowSource::Claude { project, session } => {
-            let manager =
-                toolpath_claude::ClaudeConvo::with_resolver(providers::claude_resolver(config));
+            let manager = providers::claude_convo(config);
             let convo = manager
                 .read_conversation(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -122,8 +121,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             Ok(toolpath_claude::derive::derive_path(&convo, &cfg))
         }
         ShowSource::Gemini { project, session } => {
-            let manager =
-                toolpath_gemini::GeminiConvo::with_resolver(providers::gemini_resolver(config));
+            let manager = providers::gemini_convo(config);
             let convo = manager
                 .read_conversation(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -137,8 +135,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager =
-                toolpath_codex::CodexConvo::with_resolver(providers::codex_resolver(config));
+            let manager = providers::codex_convo(config);
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -149,8 +146,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager =
-                toolpath_copilot::CopilotConvo::with_resolver(providers::copilot_resolver(config));
+            let manager = providers::copilot_convo(config);
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -161,9 +157,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager = toolpath_opencode::OpencodeConvo::with_resolver(
-                providers::opencode_resolver(config),
-            );
+            let manager = providers::opencode_convo(config);
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -178,8 +172,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager =
-                toolpath_cursor::CursorConvo::with_resolver(providers::cursor_resolver(config));
+            let manager = providers::cursor_convo(config);
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -191,11 +184,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             base,
         } => {
-            let mut resolver = providers::pi_resolver(config);
-            if let Some(p) = base {
-                resolver = resolver.with_sessions_dir(&p);
-            }
-            let manager = toolpath_pi::PiConvo::with_resolver(resolver);
+            let manager = providers::pi_convo(config, base.as_deref());
             let s = manager
                 .read_session(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
