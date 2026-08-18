@@ -999,7 +999,11 @@ fn run_pi(
     fmt: ListFormat,
     config: &Config,
 ) -> Result<()> {
-    let manager = providers::pi_convo(config, base.as_deref());
+    let mut resolver = providers::require_pi_resolver(config)?;
+    if let Some(path) = base {
+        resolver = resolver.with_sessions_dir(&path);
+    }
+    let manager = toolpath_pi::PiConvo::with_resolver(resolver);
 
     match (project, fmt) {
         (None, ListFormat::Tsv) => list_pi_sessions_all(&manager, ListFormat::Tsv),
@@ -1416,7 +1420,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = toolpath_pi::PathResolver::new().with_sessions_dir(&sessions_dir);
+        let resolver = toolpath_pi::PathResolver::new(temp.path());
         let manager = toolpath_pi::PiConvo::with_resolver(resolver);
         (temp, manager)
     }
@@ -1441,7 +1445,7 @@ mod tests {
         let sessions_dir = temp.path().join(".pi/agent/sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
 
-        let resolver = toolpath_pi::PathResolver::new().with_sessions_dir(&sessions_dir);
+        let resolver = toolpath_pi::PathResolver::new(temp.path());
         let manager = toolpath_pi::PiConvo::with_resolver(resolver);
 
         let result = list_pi_projects(&manager, ListFormat::Pretty);

@@ -1180,7 +1180,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let sessions = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
-        let resolver = PathResolver::new().with_sessions_dir(&sessions);
+        let resolver = PathResolver::new("/tmp/fake-home").with_sessions_dir(&sessions);
         let proj = resolver.project_dir("/tmp/p");
         std::fs::create_dir_all(&proj).unwrap();
         write_session_file(&proj, "s1", "2026-04-16T00:00:00Z");
@@ -1195,7 +1195,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let sessions = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
-        let resolver = PathResolver::new().with_sessions_dir(&sessions);
+        let resolver = PathResolver::new("/tmp/fake-home").with_sessions_dir(&sessions);
         let proj = resolver.project_dir("/tmp/p");
         std::fs::create_dir_all(&proj).unwrap();
         write_session_file(&proj, "s1", "2026-04-16T00:00:00Z");
@@ -1212,7 +1212,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let sessions = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
-        let resolver = PathResolver::new().with_sessions_dir(&sessions);
+        let resolver = PathResolver::new("/tmp/fake-home").with_sessions_dir(&sessions);
         let proj = resolver.project_dir("/tmp/p");
         std::fs::create_dir_all(&proj).unwrap();
         let path = write_session_file(&proj, "s1", "2026-04-16T00:00:00Z");
@@ -1229,7 +1229,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let sessions = tmp.path().join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
-        let resolver = PathResolver::new().with_sessions_dir(&sessions);
+        let resolver = PathResolver::new("/tmp/fake-home").with_sessions_dir(&sessions);
         let proj = resolver.project_dir("/tmp/p");
         std::fs::create_dir_all(&proj).unwrap();
         write_session_file(&proj, "older", "2026-04-16T00:00:00Z");

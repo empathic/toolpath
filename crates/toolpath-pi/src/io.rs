@@ -255,7 +255,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn resolver_with(sessions_dir: &Path) -> PathResolver {
-        PathResolver::new().with_sessions_dir(sessions_dir)
+        PathResolver::new("/tmp/fake-home").with_sessions_dir(sessions_dir)
     }
 
     #[test]

@@ -18,7 +18,7 @@ the shared derivation in [`toolpath_convo::derive_path`].
 ```rust,no_run
 use toolpath_pi::PiConvo;
 
-let manager = PiConvo::new();
+let manager = PiConvo::new("/Users/alex");
 let session = manager
     .most_recent_session("/Users/alex/project")
     .unwrap()
@@ -36,7 +36,7 @@ user-prompt text). The last field is what makes the listing useful for
 ```rust,no_run
 use toolpath_pi::PiConvo;
 
-let manager = PiConvo::new();
+let manager = PiConvo::new("/Users/alex");
 for meta in manager.list_sessions("/Users/alex/project").unwrap() {
     println!(
         "{}: {}",

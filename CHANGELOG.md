@@ -31,6 +31,27 @@ cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
     drivers so the zero-file rule lives once.
   - The emscripten (playground) build keeps the sequential engine —
     no threads there.
+## `toolpath-pi`: the caller supplies the home directory — 2026-08-14
+
+- **`toolpath-pi`** (0.7.0): breaking. `PathResolver::new(home)` takes
+  the home directory as a required argument. The crate reads no
+  environment variable; it keeps the layout knowledge
+  (`<home>/.pi/agent/sessions`) and the caller owns "what is home".
+  `PiConvo::new(home)` takes the same argument.
+
+  Removed: the `Default` impls on `PathResolver` and `PiConvo`;
+  `PathResolver::with_home`. `with_sessions_dir` stays as the full
+  override, and it beats the home argument.
+
+  Behavior change: the resolver does not consult the current working
+  directory. It resolves the sessions directory from the home argument,
+  or from `with_sessions_dir`. The `./.pi/agent/sessions` fallback is
+  deleted.
+- **`path-cli`** (unreleased): `providers::pi_resolver` returns
+  `Option<PathResolver>`. `None` means the configuration carries no home
+  directory, so Pi is out of reach: the harness bundle omits it, and a
+  command that targets Pi reports "cannot determine the home
+  directory".
 ## `toolpath-cursor`: the caller supplies the home directory — 2026-08-14
 
 - **`toolpath-cursor`** (0.3.0): breaking. `PathResolver::new(home)`

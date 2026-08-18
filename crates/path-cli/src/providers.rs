@@ -24,7 +24,6 @@
 use crate::config::Config;
 #[cfg(not(target_os = "emscripten"))]
 use crate::harness::HarnessBundle;
-use std::path::Path;
 
 use anyhow::{Result, anyhow};
 
@@ -132,17 +131,13 @@ pub(crate) fn require_cursor_resolver(config: &Config) -> Result<toolpath_cursor
     cursor_resolver(config).ok_or_else(|| missing_home("Cursor"))
 }
 
-/// `base` replaces the sessions directory: `--base` wins over the
-/// config home.
-pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiConvo {
-    let mut resolver = toolpath_pi::PathResolver::new();
-    if let Some(home) = config.home_dir() {
-        resolver = resolver.with_home(home);
-    }
-    if let Some(dir) = base {
-        resolver = resolver.with_sessions_dir(dir);
-    }
-    toolpath_pi::PiConvo::with_resolver(resolver)
+pub(crate) fn pi_resolver(config: &Config) -> Option<toolpath_pi::PathResolver> {
+    config.home_dir().map(toolpath_pi::PathResolver::new)
+}
+
+/// [`pi_resolver`] for a command that targets Pi.
+pub(crate) fn require_pi_resolver(config: &Config) -> Result<toolpath_pi::PathResolver> {
+    pi_resolver(config).ok_or_else(|| missing_home("Pi"))
 }
 
 /// The production [`HarnessBundle`], every provider built from
@@ -165,7 +160,7 @@ pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
         }),
         opencode: opencode_resolver(config).map(toolpath_opencode::OpencodeConvo::with_resolver),
         cursor: cursor_resolver(config).map(toolpath_cursor::CursorConvo::with_resolver),
-        pi: Some(pi_convo(config, None)),
+        pi: pi_resolver(config).map(toolpath_pi::PiConvo::with_resolver),
     }
 }
 
@@ -362,21 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn pi_convo_roots_at_config_home() {
-        let manager = pi_convo(&config_with_home(), None);
-        assert_eq!(
-            manager.resolver().sessions_dir(),
-            PathBuf::from("/home/jailed/.pi/agent/sessions")
-        );
-    }
-
-    #[test]
-    fn pi_convo_base_replaces_the_sessions_dir() {
-        let manager = pi_convo(&config_with_home(), Some(Path::new("/pi/base")));
-        assert_eq!(manager.resolver().sessions_dir(), PathBuf::from("/pi/base"));
-    }
-
-    #[test]
     fn harness_bundle_roots_providers_at_config_home() {
         let bundle = harness_bundle(&config_with_home());
         assert_eq!(
@@ -387,5 +367,21 @@ mod tests {
             bundle.pi.unwrap().resolver().sessions_dir(),
             PathBuf::from("/home/jailed/.pi/agent/sessions")
         );
+    }
+
+    #[test]
+    fn pi_resolver_roots_at_config_home() {
+        let resolver = pi_resolver(&config_with_home()).unwrap();
+        assert_eq!(
+            resolver.sessions_dir(),
+            PathBuf::from("/home/jailed/.pi/agent/sessions")
+        );
+    }
+
+    #[test]
+    fn pi_resolver_is_none_without_a_home() {
+        assert!(pi_resolver(&Config::default()).is_none());
+        let err = require_pi_resolver(&Config::default()).unwrap_err();
+        assert!(err.to_string().contains("home directory"));
     }
 }

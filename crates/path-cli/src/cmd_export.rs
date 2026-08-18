@@ -1064,7 +1064,7 @@ fn write_into_pi_project(
     cwd: &str,
     config: &Config,
 ) -> Result<()> {
-    let resolver = providers::pi_resolver(config);
+    let resolver = providers::require_pi_resolver(config)?;
     let project_dir = resolver.project_dir(cwd);
     std::fs::create_dir_all(&project_dir)
         .with_context(|| format!("create {}", project_dir.display()))?;
@@ -2588,7 +2588,7 @@ mod tests {
         .expect("export pi");
 
         let canon_project = std::fs::canonicalize(&project_dir).unwrap();
-        let resolver = PathResolver::new().with_home(&fake_home);
+        let resolver = PathResolver::new(&fake_home);
         let project_dir_path = resolver.project_dir(canon_project.to_str().unwrap());
         let expected = project_dir_path.join(format!("{}.jsonl", session_uuid));
         assert!(expected.exists(), "expected JSONL at {:?}", expected);
