@@ -6,6 +6,8 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
+use crate::config::Config;
+
 #[derive(Subcommand, Debug)]
 pub enum InceptTarget {
     /// Incept a Toolpath document into a Claude Code session layout.
@@ -45,7 +47,7 @@ pub enum InceptTarget {
     },
 }
 
-pub fn run(target: InceptTarget) -> Result<()> {
+pub fn run(target: InceptTarget, config: &Config) -> Result<()> {
     match target {
         InceptTarget::Claude {
             input,
@@ -54,12 +56,15 @@ pub fn run(target: InceptTarget) -> Result<()> {
         } => {
             let input = resolve_input(input)?;
             let (project, output) = default_project(project, output);
-            crate::cmd_export::run(crate::cmd_export::ExportTarget::Claude {
-                input,
-                project,
-                output,
-                force: false,
-            })
+            crate::cmd_export::run(
+                crate::cmd_export::ExportTarget::Claude {
+                    input,
+                    project,
+                    output,
+                    force: false,
+                },
+                config,
+            )
         }
         InceptTarget::Cursor {
             input,
@@ -68,11 +73,14 @@ pub fn run(target: InceptTarget) -> Result<()> {
         } => {
             let input = resolve_input(input)?;
             let (project, output) = default_project(project, output);
-            crate::cmd_export::run(crate::cmd_export::ExportTarget::Cursor {
-                input,
-                project,
-                output,
-            })
+            crate::cmd_export::run(
+                crate::cmd_export::ExportTarget::Cursor {
+                    input,
+                    project,
+                    output,
+                },
+                config,
+            )
         }
     }
 }
