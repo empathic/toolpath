@@ -5,10 +5,11 @@ All notable changes to the Toolpath workspace are documented here.
 ## `path resume --remote` pushes a session to a remote host — 2026-08-17
 
 `path resume <input> --remote <ssh-destination> [-C <remote-dir>]
-[--dry-run]` projects a local Claude Code session onto a remote host
-and attaches to it under tmux. Re-running the same command reattaches
-to the live tmux session. Every push is a fork; the local original is
-never touched.
+[--dry-run] [--overwrite]` projects a local Claude Code session onto
+a remote host and attaches to it under tmux. Re-running the same
+command reattaches to the live tmux session, or relaunches the
+session from the existing remote file when tmux has exited. Every
+push is a fork; the local original is never touched.
 
 - **`path-cli`** (0.19.0):
   - The local host does all toolpath work: it projects the
@@ -29,6 +30,11 @@ never touched.
     re-pushing unchanged content targets the same remote file across
     invocations and input shapes. The tmux session is `path-<short8>`
     of the source session id.
+  - The ship step writes only when the target file is absent or
+    smaller than the local serialization (a partial earlier ship). An
+    existing file at full size or larger is kept with a notice and
+    the session launches on it, so remote-side progress survives a
+    re-push. `--overwrite` replaces the file unconditionally.
   - `-C` names the remote directory (absolute, physical; a symlinked
     value errors and names the physical path). The default is the
     local cwd with the local home prefix replaced by the remote
