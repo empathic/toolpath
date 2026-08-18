@@ -355,16 +355,14 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
 /// i.e. re-deriving would reproduce the cached doc byte-for-byte.
 /// Used by `share` to upload straight from the cache. The stat
 /// targets one artifact directly — no enumeration of its siblings.
-///
-/// Transitional: loads a [`Config`] per call. New code takes the
-/// config directory as a parameter.
 pub(crate) fn fresh_cache_id(
+    config: &Config,
     bundle: &HarnessBundle,
     artifact_type: ArtifactType,
     project: Option<&str>,
     id: &str,
 ) -> Option<String> {
-    let config_dir = Config::load().ok()?.config_dir().ok()?;
+    let config_dir = config.config_dir().ok()?;
     let manifest = load_manifest(&config_dir).ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
     let cache_id = rec.cache_id.clone()?;
@@ -478,7 +476,7 @@ mod tests {
     /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
     /// `f` receives the tempdir root for building provider fixtures and
     /// the config directory itself. The variable stays set because
-    /// the cache and the transitional record surfaces still read it.
+    /// the cache still reads it.
     fn with_cfg<F: FnOnce(&Path, &Path) -> R, R>(f: F) -> R {
         let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp = tempfile::tempdir().unwrap();
@@ -1078,10 +1076,15 @@ mod tests {
         with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
+            let config = &Config {
+                toolpath_config_dir: Some(config_dir.to_path_buf()),
+                ..Config::default()
+            };
 
             // Nothing synced yet: no fresh copy.
             assert!(
                 fresh_cache_id(
+                    config,
                     &bundle,
                     ArtifactType::Claude,
                     Some("/test/project"),
@@ -1092,6 +1095,7 @@ mod tests {
 
             sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             let cache_id = fresh_cache_id(
+                config,
                 &bundle,
                 ArtifactType::Claude,
                 Some("/test/project"),
@@ -1109,6 +1113,7 @@ mod tests {
             std::fs::write(&file, body).unwrap();
             assert!(
                 fresh_cache_id(
+                    config,
                     &bundle,
                     ArtifactType::Claude,
                     Some("/test/project"),
@@ -1119,6 +1124,7 @@ mod tests {
             sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             assert!(
                 fresh_cache_id(
+                    config,
                     &bundle,
                     ArtifactType::Claude,
                     Some("/test/project"),
@@ -1132,6 +1138,7 @@ mod tests {
             evict_cache_id(config_dir, &cache_id).unwrap();
             assert!(
                 fresh_cache_id(
+                    config,
                     &bundle,
                     ArtifactType::Claude,
                     Some("/test/project"),
