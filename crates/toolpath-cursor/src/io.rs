@@ -13,17 +13,11 @@ pub struct CursorIO {
     resolver: PathResolver,
 }
 
-impl Default for CursorIO {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl CursorIO {
-    pub fn new() -> Self {
-        Self {
-            resolver: PathResolver::new(),
-        }
+    /// Reads Cursor state under `home`, so the Anysphere directory is
+    /// `<home>/.cursor`.
+    pub fn new<P: Into<PathBuf>>(home: P) -> Self {
+        Self::with_resolver(PathResolver::new(home))
     }
 
     pub fn with_resolver(resolver: PathResolver) -> Self {
@@ -38,12 +32,12 @@ impl CursorIO {
         self.resolver.db_exists()
     }
 
-    pub fn db_path(&self) -> Result<PathBuf> {
+    pub fn db_path(&self) -> PathBuf {
         self.resolver.db_path()
     }
 
     fn open_db(&self) -> Result<DbReader> {
-        DbReader::open(self.resolver.db_path()?)
+        DbReader::open(self.resolver.db_path())
     }
 
     /// Read `composer.composerHeaders` verbatim.
@@ -135,7 +129,7 @@ impl CursorIO {
             return None;
         }
         let slug = paths::slug_from_abs_path(&abs);
-        let p = self.resolver.transcript_path(&slug, session.id()).ok()?;
+        let p = self.resolver.transcript_path(&slug, session.id());
         p.exists().then_some(p)
     }
 }
@@ -182,11 +176,21 @@ mod tests {
         // Pre-populate the DB.
         let src = fixture_db(BASIC_FIXTURE);
         fs::copy(src.path(), global.join("state.vscdb")).unwrap();
-        let resolver = PathResolver::new()
-            .with_home(temp.path())
+        let resolver = PathResolver::new(temp.path())
             .with_anysphere_dir(temp.path().join(".cursor"))
             .with_user_data_dir(user_data);
         (temp, CursorIO::with_resolver(resolver))
+    }
+
+    #[test]
+    fn new_roots_at_home() {
+        let temp = TempDir::new().unwrap();
+        let io = CursorIO::new(temp.path());
+        assert_eq!(
+            io.db_path(),
+            io.resolver().user_dir().join("globalStorage/state.vscdb")
+        );
+        assert_eq!(io.resolver().home_dir(), temp.path());
     }
 
     #[test]

@@ -1721,7 +1721,7 @@ fn build_cursor_session(
         // Cursor filters sidebar composers by `workspaceIdentifier.id`.
         // Reuse the existing id when present, otherwise pre-create a
         // workspaceStorage entry so Cursor adopts ours on next open.
-        let resolver = providers::cursor_resolver(config);
+        let resolver = providers::require_cursor_resolver(config)?;
         if let Ok(ensured) =
             resolver.ensure_workspace_storage_entry(&canonical, stable_workspace_id_for)
         {
@@ -1758,10 +1758,7 @@ fn write_into_cursor_db(
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
 
-    let resolver = providers::cursor_resolver(config);
-    let db_path = resolver
-        .db_path()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Cursor state.vscdb path: {}", e))?;
+    let db_path = providers::require_cursor_resolver(config)?.db_path();
     if !db_path.exists() {
         anyhow::bail!(
             "Cursor state.vscdb not found at {} — has Cursor.app been run on this machine?",

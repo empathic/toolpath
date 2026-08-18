@@ -887,7 +887,9 @@ fn run_cursor(project: Option<String>, fmt: ListFormat, config: &Config) -> Resu
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = providers::cursor_convo(config);
+        let manager = toolpath_cursor::CursorConvo::with_resolver(
+            providers::require_cursor_resolver(config)?,
+        );
         let mut metas = manager
             .io()
             .list_session_metadata()

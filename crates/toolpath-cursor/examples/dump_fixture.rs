@@ -76,7 +76,7 @@ fn capture_from_db(
     composer_override: Option<String>,
     bubble_limit: Option<usize>,
 ) -> CursorSession {
-    let mgr = CursorConvo::new();
+    let mgr = CursorConvo::new(home_dir().expect("$HOME (or $USERPROFILE) must be set"));
     let ids = mgr.io().list_composer_ids().expect("list composer ids");
     let chosen_id = composer_override.unwrap_or_else(|| {
         let mut chosen: Option<(String, usize)> = None;
@@ -143,6 +143,14 @@ fn referenced_blob_hashes(session: &CursorSession) -> std::collections::HashSet<
         }
     }
     needed
+}
+
+/// The home directory this example reads Cursor state under. The
+/// library takes it as an argument, so the caller supplies it.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 // ── Mode 2: from a cursor-agent CLI JSONL transcript ──────────────────

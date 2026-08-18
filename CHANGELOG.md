@@ -31,6 +31,39 @@ cache the same queries run ~4.7× faster (e.g. `length` 966 ms →
     drivers so the zero-file rule lives once.
   - The emscripten (playground) build keeps the sequential engine —
     no threads there.
+## `toolpath-cursor`: the caller supplies the home directory — 2026-08-14
+
+- **`toolpath-cursor`** (0.3.0): breaking. `PathResolver::new(home)`
+  takes the home directory as a required argument. The crate reads no
+  environment variable; it keeps the layout knowledge (`<home>/.cursor`
+  and the per-platform Electron user-data root) and the caller owns
+  "what is home". `CursorConvo::new(home)` and `CursorIO::new(home)`
+  take the same argument.
+
+  Removed: the `Default` impls on `PathResolver`, `CursorIO`, and
+  `CursorConvo`; `PathResolver::with_home`; the `NoHomeDirectory` error
+  variant. `with_anysphere_dir` and `with_user_data_dir` stay as the
+  full overrides.
+
+  `PathResolver::with_appdata(appdata)` sets the Windows
+  roaming-application-data root: the Windows default user-data
+  directory is `<appdata>/Cursor`. Every other platform ignores the
+  value.
+
+  The home directory is always present, so `home_dir()`,
+  `anysphere_dir()`, `projects_dir()`, `project_transcripts_dir()`,
+  `transcript_path()`, `user_data_dir()`, `user_dir()`,
+  `global_storage_dir()`, `db_path()`, `workspace_storage_dir()`, and
+  `CursorIO::db_path()` return a value instead of a `Result`.
+  `find_workspace_id` and `ensure_workspace_storage_entry` keep their
+  `Result`. Their error is a failed directory read or write, not a
+  missing home.
+- **`path-cli`** (unreleased): `providers::cursor_resolver` returns
+  `Option<PathResolver>`. `None` means the configuration carries no home
+  directory, so Cursor is out of reach: the harness bundle omits it, and
+  a command that targets Cursor reports "cannot determine the home
+  directory". `Config` reads `$APPDATA` and passes it to the resolver on
+  Windows.
 ## `toolpath-opencode`: the caller supplies the home directory — 2026-08-14
 
 - **`toolpath-opencode`** (0.6.0): breaking. `PathResolver::new(home)`

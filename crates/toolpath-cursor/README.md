@@ -61,7 +61,7 @@ IR has no `Turn.extra` slot. They round-trip to nothing.
 ```rust,no_run
 use toolpath_cursor::{CursorConvo, derive::{DeriveConfig, derive_path}};
 
-let manager = CursorConvo::new();
+let manager = CursorConvo::new("/Users/alex");
 let composer_id = "724686cd-875e-47da-a90b-dbc3e523efb8";
 let session = manager.read_session(composer_id)?;
 let path = derive_path(&session, &DeriveConfig::default());

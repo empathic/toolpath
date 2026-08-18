@@ -1165,8 +1165,9 @@ fn derive_cursor(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager =
-            toolpath_cursor::CursorConvo::with_resolver(providers::cursor_resolver(config));
+        let manager = toolpath_cursor::CursorConvo::with_resolver(
+            providers::require_cursor_resolver(config)?,
+        );
         let derive_one = |sid: &str| derive_cursor_session_with(&manager, sid);
 
         let workspace_filter = project
