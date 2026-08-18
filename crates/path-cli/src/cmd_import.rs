@@ -636,7 +636,8 @@ fn derive_gemini(
     all: bool,
     config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let manager = toolpath_gemini::GeminiConvo::with_resolver(providers::gemini_resolver(config));
+    let manager =
+        toolpath_gemini::GeminiConvo::with_resolver(providers::require_gemini_resolver(config)?);
     derive_gemini_with_manager(&manager, project, session, all)
 }
 

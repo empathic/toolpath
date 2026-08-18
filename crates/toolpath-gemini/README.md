@@ -36,7 +36,7 @@ and provides:
 ```rust,no_run
 use toolpath_gemini::{GeminiConvo, derive::{DeriveConfig, derive_path}};
 
-let manager = GeminiConvo::new();
+let manager = GeminiConvo::new("/Users/alex");
 let convo = manager.read_conversation(
     "/Users/alex/project",
     "session-uuid",
@@ -52,7 +52,7 @@ let path = derive_path(&convo, &config);
 ```rust,no_run
 use toolpath_gemini::GeminiConvo;
 
-let manager = GeminiConvo::new();
+let manager = GeminiConvo::new("/Users/alex");
 
 // List projects
 let projects = manager.list_projects()?;
@@ -92,7 +92,7 @@ Gemini-specific structures.
 use toolpath_gemini::GeminiConvo;
 use toolpath_convo::ConversationProvider;
 
-let provider = GeminiConvo::new();
+let provider = GeminiConvo::new("/Users/alex");
 let view = provider.load_conversation("/path/to/project", "session-uuid")?;
 
 for turn in &view.turns {

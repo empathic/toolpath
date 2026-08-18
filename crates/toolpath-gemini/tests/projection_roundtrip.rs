@@ -407,7 +407,7 @@ fn projected_conversation_loads_via_convo_io() {
         .unwrap();
     }
 
-    let resolver = PathResolver::new().with_gemini_dir(&gemini_dir);
+    let resolver = PathResolver::new(temp.path()).with_gemini_dir(&gemini_dir);
     let convo = GeminiConvo::with_resolver(resolver);
     let loaded = convo
         .read_conversation("/abs/toolpath", &rebuilt.session_uuid)

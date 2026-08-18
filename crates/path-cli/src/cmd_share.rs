@@ -688,12 +688,10 @@ fn harness_status_gemini(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     let Some(mgr) = &bundle.gemini else {
         return HarnessStatus::unresolved();
     };
-    match mgr.resolver().tmp_dir() {
-        Ok(p) => HarnessStatus {
-            path: crate::config::home_relative(&p, home),
-            exists: p.exists(),
-        },
-        Err(_) => HarnessStatus::unresolved(),
+    let p = mgr.resolver().tmp_dir();
+    HarnessStatus {
+        path: crate::config::home_relative(&p, home),
+        exists: p.exists(),
     }
 }
 

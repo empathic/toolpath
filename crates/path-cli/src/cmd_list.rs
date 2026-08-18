@@ -445,7 +445,8 @@ fn emit_claude_tsv(m: &toolpath_claude::ConversationMetadata) {
 // ── Gemini ──────────────────────────────────────────────────────────────────
 
 fn run_gemini(project: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
-    let manager = providers::gemini_convo(config);
+    let manager =
+        toolpath_gemini::GeminiConvo::with_resolver(providers::require_gemini_resolver(config)?);
 
     match (project, fmt) {
         (None, ListFormat::Tsv) => list_gemini_sessions_all(&manager, ListFormat::Tsv),
@@ -1482,7 +1483,7 @@ mod tests {
 ]}"#,
         )
         .unwrap();
-        let resolver = toolpath_gemini::PathResolver::new().with_gemini_dir(&gemini);
+        let resolver = toolpath_gemini::PathResolver::new(temp.path()).with_gemini_dir(&gemini);
         (temp, toolpath_gemini::GeminiConvo::with_resolver(resolver))
     }
 
@@ -1533,7 +1534,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let gemini = temp.path().join(".gemini");
         std::fs::create_dir_all(gemini.join("tmp/empty")).unwrap();
-        let resolver = toolpath_gemini::PathResolver::new().with_gemini_dir(&gemini);
+        let resolver = toolpath_gemini::PathResolver::new(temp.path()).with_gemini_dir(&gemini);
         let mgr = toolpath_gemini::GeminiConvo::with_resolver(resolver);
         let result = list_gemini_sessions(&mgr, "/nowhere", ListFormat::Pretty);
         assert!(result.is_ok());

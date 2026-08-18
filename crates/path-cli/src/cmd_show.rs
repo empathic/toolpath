@@ -121,7 +121,9 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             Ok(toolpath_claude::derive::derive_path(&convo, &cfg))
         }
         ShowSource::Gemini { project, session } => {
-            let manager = providers::gemini_convo(config);
+            let manager = toolpath_gemini::GeminiConvo::with_resolver(
+                providers::require_gemini_resolver(config)?,
+            );
             let convo = manager
                 .read_conversation(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;

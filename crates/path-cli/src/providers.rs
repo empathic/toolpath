@@ -4,6 +4,11 @@
 //! with every environment value it consumes taken from [`Config`].
 //! Command modules construct managers through these factories.
 //!
+//! A factory returns `Option` when its resolver takes the home
+//! directory as a required argument: `None` means [`Config`] carries no
+//! home, so the harness is out of reach. `require_*` turns that into an
+//! error for a command that targets one harness.
+//!
 //! opencode, copilot, and cursor (Windows) get their directory
 //! injected, not just the home: their resolvers read `$XDG_DATA_HOME`
 //! / `$COPILOT_HOME` / `$APPDATA` internally, and those reads win
@@ -14,6 +19,14 @@ use crate::config::Config;
 use crate::harness::HarnessBundle;
 use std::path::Path;
 
+use anyhow::{Result, anyhow};
+
+fn missing_home(harness: &str) -> anyhow::Error {
+    anyhow!(
+        "cannot determine the home directory; set $HOME ($USERPROFILE on Windows) to reach {harness} sessions"
+    )
+}
+
 pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
     let mut resolver = toolpath_claude::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -22,12 +35,13 @@ pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
     toolpath_claude::ClaudeConvo::with_resolver(resolver)
 }
 
-pub(crate) fn gemini_convo(config: &Config) -> toolpath_gemini::GeminiConvo {
-    let mut resolver = toolpath_gemini::PathResolver::new();
-    if let Some(home) = config.home_dir() {
-        resolver = resolver.with_home(home);
-    }
-    toolpath_gemini::GeminiConvo::with_resolver(resolver)
+pub(crate) fn gemini_resolver(config: &Config) -> Option<toolpath_gemini::PathResolver> {
+    config.home_dir().map(toolpath_gemini::PathResolver::new)
+}
+
+/// [`gemini_resolver`] for a command that targets Gemini.
+pub(crate) fn require_gemini_resolver(config: &Config) -> Result<toolpath_gemini::PathResolver> {
+    gemini_resolver(config).ok_or_else(|| missing_home("Gemini"))
 }
 
 pub(crate) fn codex_convo(config: &Config) -> toolpath_codex::CodexConvo {
@@ -90,14 +104,14 @@ pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiC
 }
 
 /// The production [`HarnessBundle`], every provider built from
-/// `config`. Each provider is included unconditionally (construction
-/// does not fail on a missing home dir); consumers skip the ones whose
-/// listing returns empty/NotFound.
+/// `config`. A provider whose resolver needs a home directory is
+/// present only when `config` carries one; consumers skip the ones
+/// whose listing returns empty/NotFound.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
     HarnessBundle {
         claude: Some(claude_convo(config)),
-        gemini: Some(gemini_convo(config)),
+        gemini: gemini_resolver(config).map(toolpath_gemini::GeminiConvo::with_resolver),
         codex: Some(codex_convo(config)),
         copilot: Some(copilot_convo(config)),
         opencode: Some(opencode_convo(config)),
@@ -133,12 +147,16 @@ mod tests {
     }
 
     #[test]
-    fn gemini_convo_roots_at_config_home() {
-        let manager = gemini_convo(&config_with_home());
-        assert_eq!(
-            manager.resolver().gemini_dir().unwrap(),
-            PathBuf::from("/home/jailed/.gemini")
-        );
+    fn gemini_resolver_roots_at_config_home() {
+        let resolver = gemini_resolver(&config_with_home()).unwrap();
+        assert_eq!(resolver.gemini_dir(), PathBuf::from("/home/jailed/.gemini"));
+    }
+
+    #[test]
+    fn gemini_resolver_is_none_without_a_home() {
+        assert!(gemini_resolver(&Config::default()).is_none());
+        let err = require_gemini_resolver(&Config::default()).unwrap_err();
+        assert!(err.to_string().contains("home directory"));
     }
 
     #[test]

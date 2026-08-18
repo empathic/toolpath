@@ -27,16 +27,10 @@ pub struct ConvoIO {
     resolver: PathResolver,
 }
 
-impl Default for ConvoIO {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ConvoIO {
-    pub fn new() -> Self {
+    pub fn new<P: Into<std::path::PathBuf>>(home: P) -> Self {
         Self {
-            resolver: PathResolver::new(),
+            resolver: PathResolver::new(home),
         }
     }
 
@@ -48,7 +42,7 @@ impl ConvoIO {
         &self.resolver
     }
 
-    pub fn gemini_dir_path(&self) -> Result<PathBuf> {
+    pub fn gemini_dir_path(&self) -> PathBuf {
         self.resolver.gemini_dir()
     }
 
@@ -372,7 +366,7 @@ mod tests {
 }"#;
         fs::write(session_dir.join("sub-s.json"), sub).unwrap();
 
-        let resolver = PathResolver::new().with_gemini_dir(&gemini);
+        let resolver = PathResolver::new(temp.path()).with_gemini_dir(&gemini);
         (temp, ConvoIO::with_resolver(resolver))
     }
 
@@ -498,7 +492,7 @@ mod tests {
         )
         .unwrap();
 
-        let io = ConvoIO::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
+        let io = ConvoIO::with_resolver(PathResolver::new(temp.path()).with_gemini_dir(&gemini));
         let convo = io.read_session("/p", "sess").unwrap();
         // Fell back to the first file as "main"
         assert_eq!(convo.sub_agents.len(), 1);
@@ -555,7 +549,7 @@ mod tests {
         )
         .unwrap();
 
-        let io = ConvoIO::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
+        let io = ConvoIO::with_resolver(PathResolver::new(temp.path()).with_gemini_dir(&gemini));
         (temp, io)
     }
 
@@ -613,7 +607,7 @@ mod tests {
         )
         .unwrap();
 
-        let io = ConvoIO::with_resolver(PathResolver::new().with_gemini_dir(&gemini));
+        let io = ConvoIO::with_resolver(PathResolver::new(temp.path()).with_gemini_dir(&gemini));
         let convo = io.read_session("/p", "session-solo").unwrap();
         assert_eq!(convo.main.session_id, "solo-uuid");
         assert!(convo.sub_agents.is_empty());
@@ -646,7 +640,7 @@ mod tests {
     #[test]
     fn test_gemini_dir_path_accessor() {
         let (temp, io) = setup();
-        let p = io.gemini_dir_path().unwrap();
+        let p = io.gemini_dir_path();
         assert_eq!(p, temp.path().join(".gemini"));
     }
 
@@ -654,7 +648,7 @@ mod tests {
     fn test_exists_accessor() {
         let (_t, io) = setup();
         assert!(io.exists());
-        let missing = ConvoIO::with_resolver(PathResolver::new().with_gemini_dir("/nowhere"));
+        let missing = ConvoIO::with_resolver(PathResolver::new("/nowhere"));
         assert!(!missing.exists());
     }
 
