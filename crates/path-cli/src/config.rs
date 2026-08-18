@@ -170,6 +170,16 @@ impl Config {
     }
 }
 
+/// The directories of `$PATH`, in order. Empty when `$PATH` is unset.
+///
+/// The environment is read here so consumers take the search path as a
+/// parameter.
+pub(crate) fn search_path() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default()
+}
+
 /// Display `path` as `~/relative/part` when it's under `home`, otherwise
 /// return its absolute lossy form. Pure helper — does no filesystem I/O.
 pub(crate) fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
@@ -198,9 +208,9 @@ mod tests {
     use super::*;
 
     /// `figment::Jail` restores the variables it sets, but it serializes
-    /// only against other Jail tests. Hold `TEST_ENV_LOCK` too: the
-    /// `$PATH` guard in `cmd_resume` mutates the environment under that
-    /// lock.
+    /// only against other Jail tests. Hold `TEST_ENV_LOCK` too: it
+    /// serializes against every other test that mutates the
+    /// environment.
     // result_large_err: the Jail closure returns figment's own
     // 208-byte error type.
     #[test]

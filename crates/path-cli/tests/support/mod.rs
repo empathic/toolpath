@@ -15,7 +15,7 @@ use path_cli::cmd_resume::ResumeArgs;
 use path_cli::config::Config;
 use path_cli::harness::Harness;
 
-/// Process-wide lock for tests that mutate `$HOME`, `$PATH`, or
+/// Process-wide lock for tests that mutate `$HOME` or
 /// `$TOOLPATH_CONFIG_DIR`. Integration tests under `tests/resume.rs`
 /// can't reach the library's internal `crate::config::TEST_ENV_LOCK`,
 /// so we use a separate lock here. Crucially, no library test holds
@@ -78,61 +78,22 @@ impl Drop for ScopedHome {
     }
 }
 
-/// RAII guard that prepends a tempdir of fake binaries to `$PATH`.
-pub struct ScopedPath {
-    _td: tempfile::TempDir,
-    prev: Option<OsString>,
-}
-
-impl ScopedPath {
-    pub fn with_binary(name: &str) -> Self {
-        Self::with_binaries(&[name])
-    }
-
-    pub fn with_binaries(names: &[&str]) -> Self {
-        let td = tempfile::tempdir().unwrap();
-        for n in names {
-            let p = td.path().join(n);
-            std::fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perm = std::fs::metadata(&p).unwrap().permissions();
-                perm.set_mode(0o755);
-                std::fs::set_permissions(&p, perm).unwrap();
-            }
-        }
-        let prev = std::env::var_os("PATH");
-        let new_path = std::env::join_paths(
-            std::iter::once(td.path().to_path_buf())
-                .chain(std::env::split_paths(&prev.clone().unwrap_or_default())),
-        )
-        .unwrap();
-        unsafe {
-            std::env::set_var("PATH", new_path);
-        }
-        Self { _td: td, prev }
-    }
-
-    pub fn empty() -> Self {
-        let td = tempfile::tempdir().unwrap();
-        let prev = std::env::var_os("PATH");
-        unsafe {
-            std::env::set_var("PATH", td.path());
-        }
-        Self { _td: td, prev }
-    }
-}
-
-impl Drop for ScopedPath {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.prev {
-                Some(v) => std::env::set_var("PATH", v),
-                None => std::env::remove_var("PATH"),
-            }
+/// A tempdir holding an executable stub per name in `names`. Pass its
+/// path as the search path the code under test probes.
+pub fn fake_bin_dir(names: &[&str]) -> tempfile::TempDir {
+    let td = tempfile::tempdir().unwrap();
+    for n in names {
+        let p = td.path().join(n);
+        std::fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = std::fs::metadata(&p).unwrap().permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&p, perm).unwrap();
         }
     }
+    td
 }
 
 /// Build a minimal `Path` whose single step has the given `actor`

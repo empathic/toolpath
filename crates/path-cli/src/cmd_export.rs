@@ -1676,7 +1676,12 @@ fn run_cursor(
         match (project, output) {
             (Some(project_dir), None) => {
                 let session = build_cursor_session(&path, Some(&project_dir), config)?;
-                write_into_cursor_db(&session, &project_dir, config)?;
+                write_into_cursor_db(
+                    &session,
+                    &project_dir,
+                    config,
+                    &crate::config::search_path(),
+                )?;
             }
             (None, Some(out_path)) => {
                 let session = build_cursor_session(&path, None, config)?;
@@ -1698,10 +1703,11 @@ pub(crate) fn project_cursor(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
     config: &Config,
+    search_path: &[PathBuf],
 ) -> Result<String> {
     let session = build_cursor_session(path, Some(project_dir), config)?;
     let id = session.data.composer_id.clone();
-    write_into_cursor_db(&session, project_dir, config)?;
+    write_into_cursor_db(&session, project_dir, config, search_path)?;
     Ok(id)
 }
 
@@ -1754,6 +1760,7 @@ fn write_into_cursor_db(
     session: &toolpath_cursor::CursorSession,
     project_dir: &std::path::Path,
     config: &Config,
+    search_path: &[PathBuf],
 ) -> Result<()> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
@@ -1819,18 +1826,15 @@ fn write_into_cursor_db(
     );
     eprintln!();
     eprintln!("Open the workspace in Cursor.app:");
-    for line in cursor_open_hints(&project_dir) {
+    for line in cursor_open_hints(&project_dir, search_path) {
         eprintln!("  {line}");
     }
     Ok(())
 }
 
-fn cursor_open_hints(workspace: &std::path::Path) -> Vec<String> {
+fn cursor_open_hints(workspace: &std::path::Path, search_path: &[PathBuf]) -> Vec<String> {
     let ws = workspace.display().to_string();
-    let cursor_on_path = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .any(|d| d.join("cursor").is_file());
+    let cursor_on_path = search_path.iter().any(|d| d.join("cursor").is_file());
     if cursor_on_path {
         return vec![format!("cursor {ws}")];
     }
