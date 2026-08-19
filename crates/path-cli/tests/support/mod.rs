@@ -184,6 +184,112 @@ pub fn args_explicit(input: PathBuf, cwd: &Path, harness: Harness) -> ResumeArgs
         input: input.to_string_lossy().to_string(),
         cwd: Some(cwd.to_path_buf()),
         harness: Some(harness),
+        remote: None,
+        dry_run: false,
+        no_cache: false,
+        force: false,
+        url: None,
+    }
+}
+
+/// A fake `ssh` binary on an injectable search path. It records argv
+/// (NUL-separated, so multi-line script arguments survive) to
+/// `argv-<n>` and stdin to `stdin-<n>` in the record dir, replies with
+/// the contents of `response-<n>` when present, and exits with the
+/// code in `exit-<n>` (default 0). `<n>` counts invocations from 0.
+pub struct SshShim {
+    bin: tempfile::TempDir,
+    records: tempfile::TempDir,
+}
+
+impl SshShim {
+    pub fn new() -> Self {
+        let bin = tempfile::tempdir().unwrap();
+        let records = tempfile::tempdir().unwrap();
+        let script = format!(
+            r#"#!/bin/sh
+d='{dir}'
+n=0
+while [ -e "$d/argv-$n" ]; do n=$((n+1)); done
+: > "$d/argv-$n"
+for a in "$@"; do printf '%s\0' "$a" >> "$d/argv-$n"; done
+cat > "$d/stdin-$n"
+if [ -e "$d/response-$n" ]; then cat "$d/response-$n"; fi
+if [ -e "$d/exit-$n" ]; then exit "$(cat "$d/exit-$n")"; fi
+exit 0
+"#,
+            dir = records.path().display()
+        );
+        let p = bin.path().join("ssh");
+        std::fs::write(&p, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = std::fs::metadata(&p).unwrap().permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&p, perm).unwrap();
+        }
+        Self { bin, records }
+    }
+
+    pub fn ssh_path(&self) -> PathBuf {
+        self.bin.path().join("ssh")
+    }
+
+    pub fn search_path(&self) -> Vec<PathBuf> {
+        vec![self.bin.path().to_path_buf()]
+    }
+
+    /// Stdout the shim prints on invocation `call`.
+    pub fn respond(&self, call: usize, body: &str) {
+        std::fs::write(self.records.path().join(format!("response-{call}")), body).unwrap();
+    }
+
+    /// Exit code the shim returns on invocation `call`.
+    pub fn exit_with(&self, call: usize, code: i32) {
+        std::fs::write(
+            self.records.path().join(format!("exit-{call}")),
+            code.to_string(),
+        )
+        .unwrap();
+    }
+
+    /// Number of recorded invocations.
+    pub fn calls(&self) -> usize {
+        (0..)
+            .take_while(|n| self.records.path().join(format!("argv-{n}")).exists())
+            .count()
+    }
+
+    /// Recorded argv of invocation `call` (without the binary name).
+    pub fn argv(&self, call: usize) -> Vec<String> {
+        let raw = std::fs::read(self.records.path().join(format!("argv-{call}"))).unwrap();
+        raw.split(|b| *b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| String::from_utf8(s.to_vec()).unwrap())
+            .collect()
+    }
+
+    /// Recorded stdin bytes of invocation `call`.
+    pub fn stdin_bytes(&self, call: usize) -> Vec<u8> {
+        std::fs::read(self.records.path().join(format!("stdin-{call}"))).unwrap()
+    }
+}
+
+impl Default for SshShim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Construct `ResumeArgs` for a `--remote` test.
+pub fn args_remote(input: &str, remote: &str, cwd: Option<&str>, dry_run: bool) -> ResumeArgs {
+    ResumeArgs {
+        input: input.to_string(),
+        cwd: cwd.map(PathBuf::from),
+        harness: None,
+        remote: Some(remote.to_string()),
+        dry_run,
         no_cache: false,
         force: false,
         url: None,

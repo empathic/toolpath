@@ -190,6 +190,44 @@ mod tests {
     }
 
     #[test]
+    fn test_conversation_file_foreign_home() {
+        // A resolver over another machine's home computes that machine's
+        // session-file layout; nothing here touches the local filesystem.
+        let resolver = PathResolver::new().with_home("/home/exedev");
+        assert_eq!(
+            resolver
+                .conversation_file(
+                    "/home/exedev/work/my_repo.rs",
+                    "0a1b2c3d-0000-4000-8000-000000000000"
+                )
+                .unwrap(),
+            PathBuf::from(
+                "/home/exedev/.claude/projects/-home-exedev-work-my-repo-rs/0a1b2c3d-0000-4000-8000-000000000000.jsonl"
+            )
+        );
+    }
+
+    #[test]
+    fn test_conversation_file_does_not_canonicalize() {
+        // The resolver slugs the string it is given: a symlinked logical
+        // path and its physical target map to different project dirs, so
+        // callers must pass the physical cwd.
+        let resolver = PathResolver::new().with_home("/Users/exedev");
+        let physical = resolver
+            .conversation_file("/private/var/proj", "s1")
+            .unwrap();
+        let logical = resolver.conversation_file("/var/proj", "s1").unwrap();
+        assert_eq!(
+            physical,
+            PathBuf::from("/Users/exedev/.claude/projects/-private-var-proj/s1.jsonl")
+        );
+        assert_eq!(
+            logical,
+            PathBuf::from("/Users/exedev/.claude/projects/-var-proj/s1.jsonl")
+        );
+    }
+
+    #[test]
     fn test_list_projects() {
         let temp = TempDir::new().unwrap();
         let projects_dir = temp.path().join("projects");

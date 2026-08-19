@@ -40,6 +40,8 @@
 
 #![cfg(not(target_os = "emscripten"))]
 
+pub mod remote;
+
 use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
@@ -57,12 +59,28 @@ pub struct ResumeArgs {
     /// Working directory to run the resumed harness from. Defaults to
     /// the current shell cwd. The on-disk projection is keyed on this
     /// directory and the harness will be exec'd with cwd set to it.
+    /// With --remote it is a directory on the remote host (absolute,
+    /// physical); the default is the local cwd with the local home
+    /// prefix replaced by the remote $HOME.
     #[arg(short = 'C', long)]
     pub cwd: Option<PathBuf>,
 
     /// Pin the resume target. Skips the interactive picker.
     #[arg(long, value_enum)]
     pub harness: Option<Harness>,
+
+    /// Push the session to a remote host over ssh and attach to it
+    /// under tmux there. The value is an ssh destination (user@host or
+    /// an ssh config alias), passed to ssh verbatim. Claude only; the
+    /// remote needs sshd, claude, and tmux. Re-running the same command
+    /// reattaches to the live tmux session.
+    #[arg(long)]
+    pub remote: Option<String>,
+
+    /// With --remote: run preflight, print the exact remote commands
+    /// and the target file path, and change nothing on the remote.
+    #[arg(long, requires = "remote")]
+    pub dry_run: bool,
 
     /// Skip the cache entirely when fetching from Pathbase: don't read
     /// an existing entry, don't write the fetched body. Useful for
@@ -89,6 +107,26 @@ pub fn run(args: ResumeArgs) -> Result<()> {
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
+    if args.remote.is_some() {
+        use std::io::IsTerminal;
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        let search_path: Vec<PathBuf> = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+        let local_home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from);
+        let local_cwd = std::env::current_dir()?;
+        return remote::run_remote(
+            &args,
+            exec,
+            local_home.as_deref(),
+            &local_cwd,
+            &search_path,
+            stdin_is_tty,
+        );
+    }
+
     let (graph, source_harness) = resolve_input(&args)?;
     let path = ensure_path_with_agent(&graph)?;
 
@@ -615,6 +653,8 @@ mod tests {
             no_cache: false,
             force: false,
             url: None,
+            remote: None,
+            dry_run: false,
         };
 
         let recorder = RecordingExec::default();
@@ -751,6 +791,8 @@ mod tests {
             no_cache: false,
             force: false,
             url: None,
+            remote: None,
+            dry_run: false,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
@@ -785,6 +827,8 @@ mod tests {
             no_cache: true, // skip cache write in tests
             force: false,
             url: None,
+            remote: None,
+            dry_run: false,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
@@ -846,6 +890,8 @@ mod tests {
             no_cache: false,
             force: false,
             url: None,
+            remote: None,
+            dry_run: false,
         };
         let result = resolve_input(&args);
 
@@ -874,6 +920,8 @@ mod tests {
             no_cache: false,
             force: false,
             url: None,
+            remote: None,
+            dry_run: false,
         };
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();
