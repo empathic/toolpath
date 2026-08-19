@@ -3,6 +3,7 @@ mod cache;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
 mod cmd_cache;
+#[cfg(not(target_os = "emscripten"))]
 mod cmd_config;
 mod cmd_derive;
 mod cmd_export;

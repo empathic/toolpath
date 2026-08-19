@@ -6,8 +6,6 @@
 //! at the next `share`. Field-level get/set and `[[project]]` rule
 //! management are meant to grow on top of this.
 
-#![cfg(not(target_os = "emscripten"))]
-
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use std::ffi::OsString;
@@ -51,7 +49,7 @@ fn edit() -> Result<()> {
     Ok(())
 }
 
-/// Create `path` from the template if it doesn't exist yet. Uses
+/// Create the file at `path` from the template if it doesn't exist yet. Uses
 /// `create_new` so a concurrently created file is never clobbered.
 fn ensure_config_file(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
