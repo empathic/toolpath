@@ -82,6 +82,13 @@ pub struct ResumeArgs {
     #[arg(long, requires = "remote")]
     pub dry_run: bool,
 
+    /// With --remote: replace an existing remote session file with
+    /// this push's content instead of keeping it. Without this flag
+    /// an existing file is kept (remote-side progress survives) and
+    /// the session launches on it.
+    #[arg(long, requires = "remote")]
+    pub overwrite: bool,
+
     /// Skip the cache entirely when fetching from Pathbase: don't read
     /// an existing entry, don't write the fetched body. Useful for
     /// ephemeral environments where you don't want the cache to grow.
@@ -655,6 +662,7 @@ mod tests {
             url: None,
             remote: None,
             dry_run: false,
+            overwrite: false,
         };
 
         let recorder = RecordingExec::default();
@@ -793,6 +801,7 @@ mod tests {
             url: None,
             remote: None,
             dry_run: false,
+            overwrite: false,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
@@ -829,6 +838,7 @@ mod tests {
             url: None,
             remote: None,
             dry_run: false,
+            overwrite: false,
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
@@ -892,6 +902,7 @@ mod tests {
             url: None,
             remote: None,
             dry_run: false,
+            overwrite: false,
         };
         let result = resolve_input(&args);
 
@@ -922,6 +933,7 @@ mod tests {
             url: None,
             remote: None,
             dry_run: false,
+            overwrite: false,
         };
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();

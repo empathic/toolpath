@@ -264,6 +264,7 @@ fn cache_id_input_loads_and_projects() {
         harness: Some(Harness::Claude),
         remote: None,
         dry_run: false,
+        overwrite: false,
         no_cache: false,
         force: false,
         url: None,

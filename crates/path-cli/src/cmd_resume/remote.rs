@@ -162,7 +162,15 @@ pub fn run_remote(
     let slug_dir = path_to_string(&resolver.project_dir(&project_path)?)?;
     let target = path_to_string(&resolver.conversation_file(&project_path, &remote_id)?)?;
 
-    let ship_cmd = ship_command(&slug_dir, &target);
+    let mut conv = conv;
+    conv.set_session_id_and_cwd(&remote_id, &project_path);
+    let jsonl = crate::projection::serialize_jsonl(&conv)?;
+
+    let ship_cmd = if args.overwrite {
+        ship_overwrite_command(&slug_dir, &target)
+    } else {
+        ship_command(&slug_dir, &target, jsonl.len())
+    };
     let launch_cmd = launch_command(&tmux_name, &project_path, &claude, &remote_id);
 
     if args.dry_run {
@@ -180,11 +188,6 @@ pub fn run_remote(
         return Ok(());
     }
 
-    let mut conv = conv;
-    conv.set_session_id_and_cwd(&remote_id, &project_path);
-    let jsonl = crate::projection::serialize_jsonl(&conv)?;
-
-    eprintln!("Shipping session {remote_id} to {remote}:{target}");
     let shipped = ssh.run(&ship_cmd, Some(jsonl.as_bytes()))?;
     if !shipped.status.success() {
         bail!(
@@ -193,6 +196,22 @@ pub fn run_remote(
             shipped.status,
             String::from_utf8_lossy(&shipped.stderr).trim_end()
         );
+    }
+    if args.overwrite {
+        eprintln!("Shipped session {remote_id} to {remote}:{target} (--overwrite)");
+    } else {
+        match parse_ship(&shipped)? {
+            ShipOutcome::Shipped => {
+                eprintln!("Shipped session {remote_id} to {remote}:{target}");
+            }
+            ShipOutcome::Kept => {
+                eprintln!(
+                    "Remote session file {target} on {remote} carries this push's \
+                     content or later progress; keeping it and launching without \
+                     a re-ship. Pass --overwrite to replace it."
+                );
+            }
+        }
     }
 
     eprintln!("Launching {tmux_name} in {project_path}");
@@ -407,12 +426,59 @@ fn validate_captured_path(value: &str, what: &str, output: &Output) -> Result<St
 
 // ── Remote commands ──────────────────────────────────────────────────
 
-pub(crate) fn ship_command(slug_dir: &str, target: &str) -> String {
+const TAG_SHIP: &str = "TP_SHIP";
+const SHIP_SHIPPED: &str = "shipped";
+const SHIP_KEPT: &str = "kept";
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ShipOutcome {
+    Shipped,
+    Kept,
+}
+
+/// Conditional ship: write only when the target is absent or smaller
+/// than `local_len` bytes (a partial earlier ship). A target at full
+/// size or larger keeps its bytes, so remote-side progress survives a
+/// re-push. Both branches drain stdin and report one
+/// `TP_SHIP=shipped` or `TP_SHIP=kept` line.
+pub(crate) fn ship_command(slug_dir: &str, target: &str, local_len: usize) -> String {
+    format!(
+        "umask 077; if [ ! -e {t} ] || [ $(wc -c < {t}) -lt {local_len} ]; then \
+         mkdir -p {d} && cat > {t} && printf '{tag}={shipped}\\n'; \
+         else cat > /dev/null; printf '{tag}={kept}\\n'; fi",
+        d = sh_quote(slug_dir),
+        t = sh_quote(target),
+        tag = TAG_SHIP,
+        shipped = SHIP_SHIPPED,
+        kept = SHIP_KEPT,
+    )
+}
+
+/// Unconditional ship for `--overwrite`: replace the target with the
+/// bytes on stdin.
+pub(crate) fn ship_overwrite_command(slug_dir: &str, target: &str) -> String {
     format!(
         "umask 077; mkdir -p {} && cat > {}",
         sh_quote(slug_dir),
         sh_quote(target)
     )
+}
+
+/// Parse the one `TP_SHIP=` line a conditional ship prints. Anything
+/// else errors with the output verbatim.
+pub(crate) fn parse_ship(output: &Output) -> Result<ShipOutcome> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.trim();
+    if line == format!("{TAG_SHIP}={SHIP_SHIPPED}") {
+        Ok(ShipOutcome::Shipped)
+    } else if line == format!("{TAG_SHIP}={SHIP_KEPT}") {
+        Ok(ShipOutcome::Kept)
+    } else {
+        bail!(
+            "unexpected ship output from the remote; output was:\n{}",
+            preflight_transcript(output)
+        );
+    }
 }
 
 pub(crate) fn launch_command(
@@ -794,8 +860,8 @@ mod tests {
     // ── remote command construction ──────────────────────────────────
 
     #[test]
-    fn ship_command_makes_dir_and_writes_under_umask() {
-        let cmd = ship_command(
+    fn ship_overwrite_command_makes_dir_and_writes_under_umask() {
+        let cmd = ship_overwrite_command(
             "/home/e/.claude/projects/-home-e-proj",
             "/home/e/.claude/projects/-home-e-proj/abc.jsonl",
         );
@@ -812,6 +878,70 @@ mod tests {
             attach_command("path-abcd1234"),
             "tmux attach-session -d -t '=path-abcd1234'"
         );
+    }
+
+    #[test]
+    fn ship_command_guards_the_write_and_quotes_paths() {
+        let cmd = ship_command("/d/it's", "/d/it's/abc.jsonl", 1234);
+        assert!(cmd.starts_with("umask 077;"), "cmd: {cmd}");
+        assert!(cmd.contains("! -e '/d/it'\\''s/abc.jsonl'"), "cmd: {cmd}");
+        assert!(cmd.contains("-lt 1234"), "cmd: {cmd}");
+        assert!(cmd.contains("TP_SHIP=shipped"), "cmd: {cmd}");
+        assert!(cmd.contains("TP_SHIP=kept"), "cmd: {cmd}");
+    }
+
+    #[test]
+    fn ship_command_semantics_through_sh() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let slug = dir.path().join("slug");
+        let target = slug.join("s.jsonl");
+        let local: &[u8] = b"line1\nline2\n";
+        let cmd = ship_command(
+            slug.to_str().unwrap(),
+            target.to_str().unwrap(),
+            local.len(),
+        );
+
+        let run = |input: &[u8]| {
+            let mut child = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(input).unwrap();
+            child.wait_with_output().unwrap()
+        };
+
+        // Absent target: shipped.
+        let out = run(local);
+        assert_eq!(parse_ship(&out).unwrap(), ShipOutcome::Shipped);
+        assert_eq!(std::fs::read(&target).unwrap(), local);
+
+        // Target grown past the local length: kept, bytes intact.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&target)
+            .unwrap();
+        f.write_all(b"line3\n").unwrap();
+        drop(f);
+        let out = run(local);
+        assert_eq!(parse_ship(&out).unwrap(), ShipOutcome::Kept);
+        assert_eq!(std::fs::read(&target).unwrap(), b"line1\nline2\nline3\n");
+
+        // Truncated target (a partial earlier ship): replaced.
+        std::fs::write(&target, b"line1\n").unwrap();
+        let out = run(local);
+        assert_eq!(parse_ship(&out).unwrap(), ShipOutcome::Shipped);
+        assert_eq!(std::fs::read(&target).unwrap(), local);
+    }
+
+    #[test]
+    fn parse_ship_rejects_unexpected_output() {
+        let err = parse_ship(&output_with_stdout("cat: disk full\n")).unwrap_err();
+        assert!(err.to_string().contains("disk full"), "actual: {err}");
     }
 
     #[test]

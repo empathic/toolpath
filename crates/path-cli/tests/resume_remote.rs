@@ -98,6 +98,7 @@ fn same_document_mints_the_same_id_across_serializations() {
         let home = TestHome::new();
         let shim = SshShim::new();
         shim.respond(0, &preflight_ok(PROJECT, "none"));
+        shim.respond(1, "TP_SHIP=shipped\n");
         let recorder = RecordingExec::default();
         run_remote(
             &args_remote(doc.to_str().unwrap(), REMOTE, Some(PROJECT), false),
@@ -125,6 +126,7 @@ fn fresh_push_ships_launches_and_attaches() {
     let doc_file = claude_doc(docs.path());
     let shim = SshShim::new();
     shim.respond(0, &preflight_ok(PROJECT, "none"));
+    shim.respond(1, "TP_SHIP=shipped\n");
 
     let recorder = RecordingExec::default();
     run_remote(
@@ -154,17 +156,29 @@ fn fresh_push_ships_launches_and_attaches() {
     let resolver = toolpath_claude::PathResolver::new().with_home(REMOTE_HOME);
     let slug_dir = resolver.project_dir(PROJECT).unwrap();
     let target = resolver.conversation_file(PROJECT, &remote_id).unwrap();
+    let expected = expected_shipped_jsonl(&doc_file, &remote_id, PROJECT);
     let ship = shim.argv(1);
     assert_eq!(ship[0], REMOTE);
-    assert_eq!(
-        ship[1],
-        format!(
-            "umask 077; mkdir -p '{}' && cat > '{}'",
+    assert!(ship[1].starts_with("umask 077;"), "ship: {}", ship[1]);
+    assert!(
+        ship[1].contains(&format!("! -e '{}'", target.display())),
+        "ship: {}",
+        ship[1]
+    );
+    assert!(
+        ship[1].contains(&format!("-lt {}", expected.len())),
+        "ship: {}",
+        ship[1]
+    );
+    assert!(
+        ship[1].contains(&format!(
+            "mkdir -p '{}' && cat > '{}'",
             slug_dir.display(),
             target.display()
-        )
+        )),
+        "ship: {}",
+        ship[1]
     );
-    let expected = expected_shipped_jsonl(&doc_file, &remote_id, PROJECT);
     assert_eq!(
         String::from_utf8(shim.stdin_bytes(1)).unwrap(),
         expected,
@@ -221,6 +235,102 @@ fn live_session_reattaches_without_ship_or_launch() {
     let cap = recorder.captured();
     assert_eq!(cap.binary, shim.ssh_path().to_string_lossy());
     assert!(cap.args[2].contains("attach-session"));
+}
+
+// ── Existing remote session file ────────────────────────────────────
+
+#[test]
+fn existing_remote_file_is_kept_and_launched() {
+    let home = TestHome::new();
+    let docs = tempfile::tempdir().unwrap();
+    let doc_file = claude_doc(docs.path());
+    let shim = SshShim::new();
+    shim.respond(0, &preflight_ok(PROJECT, "none"));
+    shim.respond(1, "TP_SHIP=kept\n");
+
+    let recorder = RecordingExec::default();
+    run_remote(
+        &args_remote(doc_file.to_str().unwrap(), REMOTE, Some(PROJECT), false),
+        &recorder,
+        Some(&home.home_dir()),
+        &home.home_dir(),
+        &shim.search_path(),
+        true,
+    )
+    .unwrap();
+
+    assert_eq!(shim.calls(), 3, "preflight, conditional ship, launch");
+    assert!(shim.argv(2)[1].contains("tmux new-session"));
+    let cap = recorder.captured();
+    assert!(cap.args[2].contains("attach-session"));
+}
+
+#[test]
+fn overwrite_ships_unconditionally() {
+    let home = TestHome::new();
+    let docs = tempfile::tempdir().unwrap();
+    let doc_file = claude_doc(docs.path());
+    let shim = SshShim::new();
+    shim.respond(0, &preflight_ok(PROJECT, "none"));
+
+    let mut args = args_remote(doc_file.to_str().unwrap(), REMOTE, Some(PROJECT), false);
+    args.overwrite = true;
+    let recorder = RecordingExec::default();
+    run_remote(
+        &args,
+        &recorder,
+        Some(&home.home_dir()),
+        &home.home_dir(),
+        &shim.search_path(),
+        true,
+    )
+    .unwrap();
+
+    assert_eq!(shim.calls(), 3, "preflight, ship, launch");
+    let raw_json = std::fs::read_to_string(&doc_file).unwrap();
+    let graph = toolpath::v1::Graph::from_json(&raw_json).unwrap();
+    let canonical = serde_json::to_string(&serde_json::to_value(&graph).unwrap()).unwrap();
+    let remote_id = mint_remote_id(&canonical);
+    let resolver = toolpath_claude::PathResolver::new().with_home(REMOTE_HOME);
+    let slug_dir = resolver.project_dir(PROJECT).unwrap();
+    let target = resolver.conversation_file(PROJECT, &remote_id).unwrap();
+    assert_eq!(
+        shim.argv(1)[1],
+        format!(
+            "umask 077; mkdir -p '{}' && cat > '{}'",
+            slug_dir.display(),
+            target.display()
+        )
+    );
+    assert_eq!(
+        String::from_utf8(shim.stdin_bytes(1)).unwrap(),
+        expected_shipped_jsonl(&doc_file, &remote_id, PROJECT)
+    );
+}
+
+#[test]
+fn unexpected_ship_output_errors_without_launch() {
+    let home = TestHome::new();
+    let docs = tempfile::tempdir().unwrap();
+    let doc_file = claude_doc(docs.path());
+    let shim = SshShim::new();
+    shim.respond(0, &preflight_ok(PROJECT, "none"));
+    shim.respond(1, "cat: write error\n");
+
+    let recorder = RecordingExec::default();
+    let err = run_remote(
+        &args_remote(doc_file.to_str().unwrap(), REMOTE, Some(PROJECT), false),
+        &recorder,
+        Some(&home.home_dir()),
+        &home.home_dir(),
+        &shim.search_path(),
+        true,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("ship output"), "actual: {err}");
+    assert_eq!(shim.calls(), 2, "preflight and ship only; no launch");
+    assert!(recorder.captured().binary.is_empty(), "no attach");
 }
 
 // ── Dry run ─────────────────────────────────────────────────────────
@@ -530,6 +640,7 @@ fn re_running_the_same_push_mints_the_same_id_and_target() {
     for _ in 0..2 {
         let shim = SshShim::new();
         shim.respond(0, &preflight_ok(PROJECT, "none"));
+        shim.respond(1, "TP_SHIP=shipped\n");
         run_remote(
             &args_remote(doc_file.to_str().unwrap(), REMOTE, Some(PROJECT), false),
             &RecordingExec::default(),
