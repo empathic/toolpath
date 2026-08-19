@@ -2,6 +2,17 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## `path config edit` — 2026-08-14
+
+- **`path-cli`** (0.18.0): new `path config` porcelain command, starting
+  with `path config edit`: opens `~/.toolpath/config.toml` in
+  `$VISUAL`/`$EDITOR` (multi-word values like `code --wait` work; `vi`
+  is the fallback), creating the file from a fully commented template
+  on first use. After the editor exits, the file is validated — TOML
+  parse plus the remote grammar of every `[[project]]` rule — so a typo
+  surfaces immediately instead of at the next `share`.
+- **`toolpath-cli`** (0.18.0): lockstep bump of the deprecated shim.
+
 ## Parallel `path query` execution — 2026-08-14
 
 `path query` now evaluates cache documents on a thread pool. For the
