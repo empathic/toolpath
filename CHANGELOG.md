@@ -4,12 +4,17 @@ All notable changes to the Toolpath workspace are documented here.
 
 ## path-cli 0.18.0 — 2026-08-17
 
-`path share` and `path p export pathbase` gain `--description`, which
-stamps `meta.description` onto the uploaded document's graph header
-(issue #182). The description travels inside the document, so it works
-on the anonymous endpoint too and needs no Pathbase API change; without
-the flag, upload bodies remain byte-identical to before. `path p merge`
-gains `--description` alongside the existing `--title`.
+`path share` and `path p export pathbase` gain `--title` and
+`--description`, which stamp `meta.title` and `meta.description` onto
+the uploaded document's graph header (issue #182). Both travel inside
+the document, so they work on the anonymous endpoint too and need no
+Pathbase API change; without the flags, upload bodies remain
+byte-identical to before. `path p merge` gains `--description`
+alongside the existing `--title`.
+
+The Claude Code plugin's `/path:share` and `/path:link-pr` now compose
+a short title and a one-sentence description of the shared session and
+pass them through these flags.
 
 ## toolpath 0.7.1 — 2026-08-14
 

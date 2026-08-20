@@ -1116,10 +1116,10 @@ fn export_pathbase_repo_flag_requires_login() {
 }
 
 #[test]
-fn export_pathbase_description_stamped_into_upload() {
-    // --description must land in the uploaded document's graph meta,
-    // not just a request parameter — the description travels inside
-    // the document.
+fn export_pathbase_title_and_description_stamped_into_upload() {
+    // --title/--description must land in the uploaded document's graph
+    // meta, not just a request parameter — they travel inside the
+    // document.
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc;
@@ -1175,6 +1175,8 @@ fn export_pathbase_description_stamped_into_upload() {
             "export",
             "pathbase",
             "--anon",
+            "--title",
+            "Rate limiter",
             "--description",
             "two attempts at the rate limiter",
             "--url",
@@ -1187,6 +1189,10 @@ fn export_pathbase_description_stamped_into_upload() {
 
     server.join().unwrap();
     let request = rx.recv().unwrap();
+    assert!(
+        request.contains(r#""title":"Rate limiter""#),
+        "uploaded body missing stamped title; request was:\n{request}"
+    );
     assert!(
         request.contains(r#""description":"two attempts at the rate limiter""#),
         "uploaded body missing stamped description; request was:\n{request}"
