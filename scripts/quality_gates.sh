@@ -8,7 +8,7 @@
 # Usage:
 #   scripts/quality_gates.sh [--verbose] [[-]gate ...]
 #
-# Gates: format, shellcheck, clippy, deny, test, doc, examples, plugin, site
+# Gates: format, shellcheck, clippy, deny, audit, test, doc, examples, plugin, site
 # No args runs all gates. Prefix with - to exclude a gate.
 #
 # Options:
@@ -43,7 +43,7 @@ trap 'rm -rf "${_tmpdir}"' EXIT
 # All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
 # run_gate; shellcheck can't see the call sites and flags them as unused.
 
-_all_gates=(format shellcheck clippy deny test doc examples plugin site)
+_all_gates=(format shellcheck clippy deny audit test doc examples plugin site)
 
 # shellcheck disable=SC2329
 gate_format() {
@@ -80,6 +80,15 @@ gate_deny() {
         return 1
     fi
     cargo deny --manifest-path "${_root}/Cargo.toml" check 2>&1
+}
+
+# shellcheck disable=SC2329
+gate_audit() {
+    if ! command -v cargo-audit >/dev/null 2>&1; then
+        echo "cargo-audit not found on PATH; install it (e.g. \`cargo install cargo-audit --locked\`)" >&2
+        return 1
+    fi
+    cargo audit --file "${_root}/Cargo.lock" 2>&1
 }
 
 # shellcheck disable=SC2329

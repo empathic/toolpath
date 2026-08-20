@@ -14,10 +14,10 @@ jobs:
       - name: Install Rust
         run: rustup show # installs toolchain from rust-toolchain.toml
 
-      - name: Install cargo-deny
+      - name: Install cargo-deny and cargo-audit
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny@0.20.2
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
 
       - name: Cache cargo
         uses: actions/cache@v4
