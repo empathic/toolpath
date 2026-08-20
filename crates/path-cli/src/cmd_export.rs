@@ -200,6 +200,12 @@ pub enum ExportTarget {
         #[arg(long)]
         public: bool,
 
+        /// Set `meta.title` on the uploaded document — a short
+        /// human-readable title for the graph, stored in the document
+        /// itself
+        #[arg(long)]
+        title: Option<String>,
+
         /// Set `meta.description` on the uploaded document — a
         /// human-readable summary of the graph, stored in the document
         /// itself
@@ -253,6 +259,7 @@ pub fn run(target: ExportTarget) -> Result<()> {
             repo,
             name,
             public,
+            title,
             description,
         } => run_pathbase(PathbaseExportArgs {
             input,
@@ -261,6 +268,7 @@ pub fn run(target: ExportTarget) -> Result<()> {
             repo,
             name,
             public,
+            title,
             description,
         }),
     }
@@ -274,6 +282,7 @@ struct PathbaseExportArgs {
     repo: Option<RepoSpec>,
     name: Option<String>,
     public: bool,
+    title: Option<String>,
     description: Option<String>,
 }
 
@@ -288,6 +297,7 @@ pub(crate) struct PathbaseUploadArgs {
     pub(crate) repo: Option<RepoSpec>,
     pub(crate) name: Option<String>,
     pub(crate) public: bool,
+    pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
 }
 
@@ -1925,6 +1935,7 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
             repo: args.repo,
             name: args.name,
             public: args.public,
+            title: args.title,
             description: args.description,
         };
         let base_url = resolve_upload_base_url(&upload);
@@ -1969,14 +1980,19 @@ pub(crate) fn run_pathbase_inner(
     let mut doc = toolpath::v1::Graph::from_json(body)
         .map_err(|e| anyhow::anyhow!("Invalid toolpath document: {}", e))?;
 
-    // Without --description the body is uploaded verbatim, so re-shares
-    // of an unchanged cache doc stay byte-identical.
-    let body: std::borrow::Cow<'_, str> = match args.description.as_deref() {
-        Some(d) => {
-            doc.meta.get_or_insert_default().description = Some(d.to_string());
-            std::borrow::Cow::Owned(doc.to_json()?)
+    // Without --title/--description the body is uploaded verbatim, so
+    // re-shares of an unchanged cache doc stay byte-identical.
+    let body: std::borrow::Cow<'_, str> = if args.title.is_some() || args.description.is_some() {
+        let meta = doc.meta.get_or_insert_default();
+        if let Some(t) = &args.title {
+            meta.title = Some(t.clone());
         }
-        None => std::borrow::Cow::Borrowed(body),
+        if let Some(d) = &args.description {
+            meta.description = Some(d.clone());
+        }
+        std::borrow::Cow::Owned(doc.to_json()?)
+    } else {
+        std::borrow::Cow::Borrowed(body)
     };
     let body = body.as_ref();
 
@@ -2936,6 +2952,7 @@ mod tests {
             }),
             name: None,
             public: false,
+            title: None,
             description: None,
         })
         .unwrap_err();

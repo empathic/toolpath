@@ -39,6 +39,12 @@ pub struct ShareArgs {
     #[arg(long)]
     pub public: bool,
 
+    /// Set `meta.title` on the uploaded document — a short
+    /// human-readable title for the graph, stored in the document
+    /// itself
+    #[arg(long)]
+    pub title: Option<String>,
+
     /// Set `meta.description` on the uploaded document — a
     /// human-readable summary of the graph, stored in the document
     /// itself
@@ -503,6 +509,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
         repo: args.repo.clone(),
         name: args.name.clone(),
         public: args.public,
+        title: args.title.clone(),
         description: args.description.clone(),
     };
     let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
@@ -578,6 +585,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
         repo: args.repo.clone(),
         name: args.name.clone(),
         public: args.public,
+        title: args.title.clone(),
         description: args.description.clone(),
         harness: h.harness(),
         session: None, // unused by share_explicit
@@ -816,6 +824,7 @@ fn share_explicit(
             repo: dest.repo,
             name: args.name.clone(),
             public: args.public,
+            title: args.title.clone(),
             description: args.description.clone(),
         };
         return crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary);
@@ -858,6 +867,7 @@ fn share_explicit(
         repo: dest.repo,
         name: args.name.clone(),
         public: args.public,
+        title: args.title.clone(),
         description: args.description.clone(),
     };
     crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)
@@ -1407,6 +1417,7 @@ mod tests {
             repo: None,
             name: None,
             public: false,
+            title: None,
             description: None,
             harness: None,
             session: None,
