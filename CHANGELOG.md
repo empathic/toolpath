@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## path-cli 0.19.0 — 2026-08-21
+## path-cli Unreleased
 
 `path share` and `path p export pathbase` gain `--title` and
 `--description`, which stamp `meta.title` and `meta.description` onto
