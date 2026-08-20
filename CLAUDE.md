@@ -69,6 +69,7 @@ toolpath-cli (deprecated shim, binary: path)
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
+cargo deny check   # advisories, licenses, bans, sources; config in deny.toml
 ```
 
 Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.

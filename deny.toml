@@ -1,0 +1,49 @@
+# cargo-deny configuration: `cargo deny check` (the `deny` quality gate).
+# Field reference: https://embarkstudios.github.io/cargo-deny/checks/cfg.html
+
+[graph]
+all-features = true
+
+[output]
+feature-depth = 1
+
+[advisories]
+# Every advisory is an error unless it is listed here with a reason.
+ignore = [
+    { id = "RUSTSEC-2026-0008", reason = "git2 0.19: the patched release is 0.20.4, a semver-major upgrade" },
+    { id = "RUSTSEC-2026-0183", reason = "git2 0.19: the patched release is 0.21.0, a semver-major upgrade" },
+    { id = "RUSTSEC-2026-0184", reason = "git2 0.19: the patched release is 0.21.0, a semver-major upgrade" },
+    { id = "RUSTSEC-2024-0384", reason = "instant is a transitive dependency of notify; no patched release exists" },
+]
+
+[licenses]
+# A crate passes when its SPDX expression is satisfiable from this list.
+# `Apache-2.0 OR GPL-2.0-only` passes via Apache-2.0; the GPL side is never selected.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
