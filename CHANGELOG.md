@@ -2,6 +2,14 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Claude Code plugin 0.3.0 — 2026-08-21
+
+`/path:share` and `/path:link-pr` now compose a short title and a one
+or two sentence description of the shared session and pass them via
+`path share`'s new `--title`/`--description` flags; user-supplied
+values win. `/path:link-pr` uses the composed title as the PR link
+text. `MIN_VERSION` moves to 0.19.0, the first CLI with the flags.
+
 ## path-cli 0.19.0 — 2026-08-21
 
 `path share` and `path p export pathbase` gain `--title` and
