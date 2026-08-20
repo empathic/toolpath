@@ -32,7 +32,7 @@ REPO="empathic/toolpath"
 INSTALL_DIR="${TOOLPATH_INSTALL_DIR:-$HOME/.local/bin}"
 FALLBACK_DIR="${TOOLPATH_CONFIG_DIR:-$HOME/.toolpath}/bin"
 # Oldest release whose CLI surface the plugin's commands are written against.
-MIN_VERSION="0.15.0"
+MIN_VERSION="0.18.0"
 TMPDIR_CLEANUP=""
 
 log() { echo "$@" >&2; }
