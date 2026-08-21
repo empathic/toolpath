@@ -281,6 +281,7 @@ paths.
 
 | Field         | Description                                        |
 | ------------- | -------------------------------------------------- |
+| `title`       | Short human-readable title                         |
 | `kind`        | Path kind — see [Document Kind](#document-kind) (paths only) |
 | `intent`      | The initial goal of the work                       |
 | `description` | Human-readable summary of the object itself        |
