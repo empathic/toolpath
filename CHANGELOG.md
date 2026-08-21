@@ -2,6 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.7.2 — 2026-08-21
+
+Adds an optional `title` field to `StepMeta`, completing the set:
+`GraphMeta` and `PathMeta` already had it. A short human-readable title
+for the step, first-class in the JSON Schema and typed structs; existing
+documents are unaffected.
+
 ## toolpath 0.7.1 — 2026-08-14
 
 Adds an optional `description` field to `StepMeta`, `PathMeta`, and
