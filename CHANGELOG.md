@@ -10,7 +10,8 @@ the uploaded document's graph header (issue #182). Both travel inside
 the document, so they work on the anonymous endpoint too and need no
 Pathbase API change; without the flags, upload bodies remain
 byte-identical to before. `path p merge` gains `--description`
-alongside the existing `--title`.
+alongside the existing `--title`. The deprecated `toolpath-cli` shim
+bumps to 0.19.0 in lockstep.
 
 ## toolpath 0.7.2 — 2026-08-21
 
