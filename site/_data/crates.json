@@ -1,7 +1,7 @@
 [
   {
     "name": "toolpath",
-    "version": "0.7.1",
+    "version": "0.7.2",
     "description": "Core types, builders, and query API",
     "docs": "https://docs.rs/toolpath",
     "crate": "https://crates.io/crates/toolpath",
@@ -113,7 +113,7 @@
   },
   {
     "name": "path-cli",
-    "version": "0.18.0",
+    "version": "0.19.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
@@ -121,7 +121,7 @@
   },
   {
     "name": "toolpath-cli",
-    "version": "0.18.0",
+    "version": "0.19.0",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

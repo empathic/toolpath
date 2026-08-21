@@ -199,6 +199,18 @@ pub enum ExportTarget {
         /// Mark the uploaded graph public (default: unlisted, addressable only by UUID)
         #[arg(long)]
         public: bool,
+
+        /// Set `meta.title` on the uploaded document — a short
+        /// human-readable title for the graph, stored in the document
+        /// itself
+        #[arg(long)]
+        title: Option<String>,
+
+        /// Set `meta.description` on the uploaded document — a
+        /// human-readable summary of the graph, stored in the document
+        /// itself
+        #[arg(long)]
+        description: Option<String>,
     },
 }
 
@@ -247,6 +259,8 @@ pub fn run(target: ExportTarget) -> Result<()> {
             repo,
             name,
             public,
+            title,
+            description,
         } => run_pathbase(PathbaseExportArgs {
             input,
             url,
@@ -254,6 +268,8 @@ pub fn run(target: ExportTarget) -> Result<()> {
             repo,
             name,
             public,
+            title,
+            description,
         }),
     }
 }
@@ -266,6 +282,8 @@ struct PathbaseExportArgs {
     repo: Option<RepoSpec>,
     name: Option<String>,
     public: bool,
+    title: Option<String>,
+    description: Option<String>,
 }
 
 /// Pathbase upload knobs that don't depend on where the body came from.
@@ -279,6 +297,8 @@ pub(crate) struct PathbaseUploadArgs {
     pub(crate) repo: Option<RepoSpec>,
     pub(crate) name: Option<String>,
     pub(crate) public: bool,
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
 }
 
 // ── pub(crate) project_<harness> wrappers ────────────────────────────
@@ -1915,6 +1935,8 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
             repo: args.repo,
             name: args.name,
             public: args.public,
+            title: args.title,
+            description: args.description,
         };
         let base_url = resolve_upload_base_url(&upload);
         let needs_auth = upload.repo.is_some() || upload.public || upload.name.is_some();
@@ -1955,8 +1977,24 @@ pub(crate) fn run_pathbase_inner(
 
     // Validate locally so we give a clean error rather than relying on
     // the server to reject malformed payloads.
-    let doc = toolpath::v1::Graph::from_json(body)
+    let mut doc = toolpath::v1::Graph::from_json(body)
         .map_err(|e| anyhow::anyhow!("Invalid toolpath document: {}", e))?;
+
+    // Without --title/--description the body is uploaded verbatim, so
+    // re-shares of an unchanged cache doc stay byte-identical.
+    let body: std::borrow::Cow<'_, str> = if args.title.is_some() || args.description.is_some() {
+        let meta = doc.meta.get_or_insert_default();
+        if let Some(t) = &args.title {
+            meta.title = Some(t.clone());
+        }
+        if let Some(d) = &args.description {
+            meta.description = Some(d.clone());
+        }
+        std::borrow::Cow::Owned(doc.to_json()?)
+    } else {
+        std::borrow::Cow::Borrowed(body)
+    };
+    let body = body.as_ref();
 
     let (token, username) = match auth {
         AuthMode::Anon => {
@@ -2914,6 +2952,8 @@ mod tests {
             }),
             name: None,
             public: false,
+            title: None,
+            description: None,
         })
         .unwrap_err();
         unsafe {
