@@ -2,6 +2,12 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.7.2 — 2026-08-21
+
+Adds an optional `title` field to `StepMeta`, completing the set:
+`GraphMeta` and `PathMeta` already had it. A short human-readable title
+for the step, first-class in the JSON Schema and typed structs; existing
+documents are unaffected.
 ## path-cli 0.21.0 — 2026-09-10
 
 - **`path-cli`** (0.21.0): `p export claude` takes `--content-addressed-session-id`
