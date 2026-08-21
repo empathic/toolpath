@@ -706,18 +706,9 @@ fn build_claude_conversation(path: &toolpath::v1::Path) -> Result<toolpath_claud
 
 #[cfg(not(target_os = "emscripten"))]
 fn serialize_jsonl(conv: &toolpath_claude::Conversation) -> Result<String> {
-    let mut lines = Vec::with_capacity(conv.preamble.len() + conv.entries.len());
-    for raw in &conv.preamble {
-        lines.push(serde_json::to_string(raw)?);
-    }
-    for entry in &conv.entries {
-        lines.push(serde_json::to_string(entry)?);
-    }
-    // Trailing newline matters: Claude Code appends to this file on resume,
-    // and without it the first appended entry lands on the last line.
-    let mut out = lines.join("\n");
-    out.push('\n');
-    Ok(out)
+    let mut buf = Vec::new();
+    toolpath_claude::ConversationWriter::write_conversation(conv, &mut buf)?;
+    Ok(String::from_utf8(buf).expect("serde_json emits UTF-8"))
 }
 
 #[cfg(not(target_os = "emscripten"))]
