@@ -279,13 +279,18 @@ identity and key information are provided in `meta.actors`.
 The `meta` object holds all optional metadata. It can appear on both steps and
 paths.
 
-| Field        | Description                                        |
-| ------------ | -------------------------------------------------- |
-| `kind`       | Path kind — see [Document Kind](#document-kind) (paths only) |
-| `intent`     | Human-readable description of purpose              |
-| `refs`       | Links to issues, docs, reasoning                   |
-| `actors`     | Actor definitions with identities and keys         |
-| `signatures` | Cryptographic signatures for verification          |
+| Field         | Description                                        |
+| ------------- | -------------------------------------------------- |
+| `kind`        | Path kind — see [Document Kind](#document-kind) (paths only) |
+| `intent`      | The initial goal of the work                       |
+| `description` | Human-readable summary of the object itself        |
+| `refs`        | Links to issues, docs, reasoning                   |
+| `actors`      | Actor definitions with identities and keys         |
+| `signatures`  | Cryptographic signatures for verification          |
+
+`intent` and `description` differ in what they describe: `intent` records
+what the work set out to do, fixed at the outset; `description` summarizes
+the object as it stands, and may be written or revised after the fact.
 
 #### Document Kind
 

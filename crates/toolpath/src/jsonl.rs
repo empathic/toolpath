@@ -106,6 +106,8 @@ pub struct PathOpenMeta {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<Ref>,
     #[serde(flatten, default)]
@@ -155,6 +157,8 @@ pub struct PathMetaPatch {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refs: Option<Vec<Ref>>,
     #[serde(flatten, default)]
@@ -354,6 +358,7 @@ impl Path {
                                 meta.kind = m.kind;
                                 meta.source = m.source;
                                 meta.intent = m.intent;
+                                meta.description = m.description;
                                 meta.refs = m.refs;
                                 meta.extra = m.extra;
                             }
@@ -518,6 +523,9 @@ fn apply_meta_patch(path_meta: &mut PathMeta, patch: PathMetaPatch) {
     if let Some(v) = patch.intent {
         path_meta.intent = Some(v);
     }
+    if let Some(v) = patch.description {
+        path_meta.description = Some(v);
+    }
     if let Some(v) = patch.refs {
         path_meta.refs = v;
     }
@@ -557,6 +565,7 @@ fn path_meta_is_empty(m: &PathMeta) -> bool {
         && m.kind.is_none()
         && m.source.is_none()
         && m.intent.is_none()
+        && m.description.is_none()
         && m.refs.is_empty()
         && m.actors.as_ref().is_none_or(|a| a.is_empty())
         && m.signatures.is_empty()
@@ -667,6 +676,7 @@ fn write_line<W: Write>(w: &mut W, line: &JsonlLine) -> Result<(), JsonlError> {
 
 fn step_meta_is_empty(m: &StepMeta) -> bool {
     m.intent.is_none()
+        && m.description.is_none()
         && m.source.is_none()
         && m.refs.is_empty()
         && m.actors.as_ref().is_none_or(|a| a.is_empty())
@@ -682,6 +692,7 @@ fn path_meta_for_open(m: &PathMeta) -> Option<PathOpenMeta> {
         kind: m.kind.clone(),
         source: m.source.clone(),
         intent: m.intent.clone(),
+        description: m.description.clone(),
         refs: m.refs.clone(),
         extra: m.extra.clone(),
     };
@@ -689,6 +700,7 @@ fn path_meta_for_open(m: &PathMeta) -> Option<PathOpenMeta> {
         && open.kind.is_none()
         && open.source.is_none()
         && open.intent.is_none()
+        && open.description.is_none()
         && open.refs.is_empty()
         && open.extra.is_empty()
     {
@@ -1198,6 +1210,57 @@ mod tests {
         let jsonl = p.to_jsonl_string().unwrap();
         let back = Path::from_jsonl_str(&jsonl).unwrap();
         assert_eq!(canonical_json(&p), canonical_json(&back));
+    }
+
+    #[test]
+    fn roundtrip_description() {
+        let mut step = make_step("s1", None);
+        step.meta = Some(StepMeta {
+            description: Some("renames the config field".into()),
+            ..Default::default()
+        });
+        let p = Path {
+            path: PathIdentity {
+                id: "p".into(),
+                base: None,
+                head: "s1".into(),
+                graph_ref: None,
+            },
+            steps: vec![step],
+            meta: Some(PathMeta {
+                intent: Some("fix the config bug".into()),
+                description: Some("a short session touching config parsing".into()),
+                ..Default::default()
+            }),
+        };
+        let jsonl = p.to_jsonl_string().unwrap();
+        let back = Path::from_jsonl_str(&jsonl).unwrap();
+        assert_eq!(canonical_json(&p), canonical_json(&back));
+        // Typed field, not the extra catch-all.
+        let meta = back.meta.unwrap();
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("a short session touching config parsing")
+        );
+        assert!(meta.extra.is_empty());
+    }
+
+    #[test]
+    fn reader_path_meta_patch_description() {
+        let input = concat!(
+            r#"{"PathOpen":{"version":"1","id":"p"}}"#,
+            "\n",
+            r#"{"Step":{"step":{"id":"s1","actor":"a","timestamp":"t"},"change":{}}}"#,
+            "\n",
+            r#"{"PathMeta":{"patch":{"description":"summary written later"}}}"#,
+            "\n",
+            r#"{"Head":{"step_id":"s1"}}"#,
+            "\n",
+        );
+        let path = Path::from_jsonl_str(input).unwrap();
+        let meta = path.meta.unwrap();
+        assert_eq!(meta.description.as_deref(), Some("summary written later"));
+        assert!(meta.extra.is_empty());
     }
 
     #[test]
