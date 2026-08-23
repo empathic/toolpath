@@ -2,6 +2,16 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.0 — 2026-08-23
+
+- **Breaking:** `Conversation.segment_ids` replaces `Conversation.session_ids`.
+  The field lists the JSONL segment ids merged into a chained
+  conversation, in chain order. The name matches the crate's segment
+  vocabulary (`read_segment`, `list_segments`) and is distinct from
+  `Conversation.session_id`, the chain head. Semantics are unchanged:
+  empty for single-segment conversations. `ConversationView.session_ids`
+  in `toolpath-convo` keeps its name.
+
 ## toolpath 0.7.1 — 2026-08-14
 
 Adds an optional `description` field to `StepMeta`, `PathMeta`, and
