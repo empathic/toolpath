@@ -8,7 +8,6 @@
 //! injected, not just the home: their resolvers read `$XDG_DATA_HOME`
 //! / `$COPILOT_HOME` / `$APPDATA` internally, and those reads win
 //! against `with_home`. The injected directory wins against both.
-#![cfg(not(target_os = "emscripten"))]
 
 use crate::config::Config;
 use std::path::Path;
@@ -48,6 +47,7 @@ pub(crate) fn copilot_convo(config: &Config) -> toolpath_copilot::CopilotConvo {
     toolpath_copilot::CopilotConvo::with_resolver(resolver)
 }
 
+#[cfg(not(target_os = "emscripten"))]
 pub(crate) fn opencode_convo(config: &Config) -> toolpath_opencode::OpencodeConvo {
     let mut resolver = toolpath_opencode::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -59,6 +59,7 @@ pub(crate) fn opencode_convo(config: &Config) -> toolpath_opencode::OpencodeConv
     toolpath_opencode::OpencodeConvo::with_resolver(resolver)
 }
 
+#[cfg(not(target_os = "emscripten"))]
 pub(crate) fn cursor_convo(config: &Config) -> toolpath_cursor::CursorConvo {
     let mut resolver = toolpath_cursor::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -86,7 +87,7 @@ pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiC
     toolpath_pi::PiConvo::with_resolver(resolver)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
     use super::*;
     use std::path::PathBuf;

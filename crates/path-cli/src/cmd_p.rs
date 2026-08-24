@@ -93,13 +93,13 @@ pub enum PCommand {
     },
 }
 
-pub fn run(command: PCommand, pretty: bool) -> Result<()> {
+pub fn run(command: PCommand, pretty: bool, config: &crate::config::Config) -> Result<()> {
     match command {
         PCommand::List {
             source,
             format,
             json,
-        } => crate::cmd_list::run(source, format, json),
+        } => crate::cmd_list::run(source, format, json, config),
         PCommand::Import { args } => crate::cmd_import::run(args, pretty),
         PCommand::Export { target } => crate::cmd_export::run(target),
         PCommand::Cache { op } => crate::cmd_cache::run(op),

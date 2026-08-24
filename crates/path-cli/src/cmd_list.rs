@@ -1,6 +1,9 @@
 #[cfg(not(target_os = "emscripten"))]
 use anyhow::Context;
 use anyhow::Result;
+
+use crate::config::Config;
+use crate::providers;
 use clap::{Subcommand, ValueEnum};
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -98,18 +101,23 @@ pub fn resolve_format(format: Option<ListFormat>, json_flag: bool) -> ListFormat
     }
 }
 
-pub fn run(source: ListSource, format: Option<ListFormat>, json_flag: bool) -> Result<()> {
+pub fn run(
+    source: ListSource,
+    format: Option<ListFormat>,
+    json_flag: bool,
+    config: &Config,
+) -> Result<()> {
     let fmt = resolve_format(format, json_flag);
     match source {
         ListSource::Git { repo, remote } => run_git(repo, remote, fmt),
         ListSource::Github { repo } => run_github(repo, fmt),
-        ListSource::Claude { project } => run_claude(project, fmt),
-        ListSource::Gemini { project } => run_gemini(project, fmt),
-        ListSource::Codex {} => run_codex(fmt),
-        ListSource::Copilot {} => run_copilot(fmt),
-        ListSource::Opencode { project } => run_opencode(project, fmt),
-        ListSource::Cursor { project } => run_cursor(project, fmt),
-        ListSource::Pi { project, base } => run_pi(project, base, fmt),
+        ListSource::Claude { project } => run_claude(project, fmt, config),
+        ListSource::Gemini { project } => run_gemini(project, fmt, config),
+        ListSource::Codex {} => run_codex(fmt, config),
+        ListSource::Copilot {} => run_copilot(fmt, config),
+        ListSource::Opencode { project } => run_opencode(project, fmt, config),
+        ListSource::Cursor { project } => run_cursor(project, fmt, config),
+        ListSource::Pi { project, base } => run_pi(project, base, fmt, config),
     }
 }
 
@@ -270,8 +278,8 @@ fn run_github(repo: String, fmt: ListFormat) -> Result<()> {
 
 // ── Claude ──────────────────────────────────────────────────────────────────
 
-fn run_claude(project: Option<String>, fmt: ListFormat) -> Result<()> {
-    let manager = toolpath_claude::ClaudeConvo::new();
+fn run_claude(project: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
+    let manager = providers::claude_convo(config);
 
     match (project, fmt) {
         // TSV/JSON without --project: emit sessions across every project so
@@ -436,8 +444,8 @@ fn emit_claude_tsv(m: &toolpath_claude::ConversationMetadata) {
 
 // ── Gemini ──────────────────────────────────────────────────────────────────
 
-fn run_gemini(project: Option<String>, fmt: ListFormat) -> Result<()> {
-    let manager = toolpath_gemini::GeminiConvo::new();
+fn run_gemini(project: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
+    let manager = providers::gemini_convo(config);
 
     match (project, fmt) {
         (None, ListFormat::Tsv) => list_gemini_sessions_all(&manager, ListFormat::Tsv),
@@ -610,8 +618,8 @@ fn emit_gemini_tsv(m: &toolpath_gemini::ConversationMetadata) {
 
 // ── Codex ───────────────────────────────────────────────────────────────────
 
-fn run_codex(fmt: ListFormat) -> Result<()> {
-    let manager = toolpath_codex::CodexConvo::new();
+fn run_codex(fmt: ListFormat, config: &Config) -> Result<()> {
+    let manager = providers::codex_convo(config);
     let sessions = manager
         .list_sessions()
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -694,8 +702,8 @@ fn run_codex(fmt: ListFormat) -> Result<()> {
 
 // ── Copilot (preview) ─────────────────────────────────────────────────────────
 
-fn run_copilot(fmt: ListFormat) -> Result<()> {
-    let manager = toolpath_copilot::CopilotConvo::new();
+fn run_copilot(fmt: ListFormat, config: &Config) -> Result<()> {
+    let manager = providers::copilot_convo(config);
     let sessions = manager
         .list_sessions()
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -769,10 +777,10 @@ fn run_copilot(fmt: ListFormat) -> Result<()> {
 
 // ── opencode ────────────────────────────────────────────────────────────────
 
-fn run_opencode(project: Option<String>, fmt: ListFormat) -> Result<()> {
+fn run_opencode(project: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (project, fmt);
+        let _ = (project, fmt, config);
         anyhow::bail!(
             "'path list opencode' requires a native environment (SQLite + git2 not available under wasm)"
         );
@@ -780,7 +788,7 @@ fn run_opencode(project: Option<String>, fmt: ListFormat) -> Result<()> {
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = toolpath_opencode::OpencodeConvo::new();
+        let manager = providers::opencode_convo(config);
         let metas = manager
             .io()
             .list_session_metadata(project.as_deref())
@@ -859,10 +867,10 @@ fn run_opencode(project: Option<String>, fmt: ListFormat) -> Result<()> {
 
 // ── Cursor ──────────────────────────────────────────────────────────────────
 
-fn run_cursor(project: Option<String>, fmt: ListFormat) -> Result<()> {
+fn run_cursor(project: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (project, fmt);
+        let _ = (project, fmt, config);
         anyhow::bail!(
             "'path list cursor' requires a native environment (SQLite not available under wasm)"
         );
@@ -870,7 +878,7 @@ fn run_cursor(project: Option<String>, fmt: ListFormat) -> Result<()> {
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = toolpath_cursor::CursorConvo::new();
+        let manager = providers::cursor_convo(config);
         let mut metas = manager
             .io()
             .list_session_metadata()
@@ -974,13 +982,13 @@ fn run_cursor(project: Option<String>, fmt: ListFormat) -> Result<()> {
 
 // ── Pi ──────────────────────────────────────────────────────────────────────
 
-fn run_pi(project: Option<String>, base: Option<PathBuf>, fmt: ListFormat) -> Result<()> {
-    let manager = if let Some(path) = base {
-        let resolver = toolpath_pi::PathResolver::new().with_sessions_dir(&path);
-        toolpath_pi::PiConvo::with_resolver(resolver)
-    } else {
-        toolpath_pi::PiConvo::new()
-    };
+fn run_pi(
+    project: Option<String>,
+    base: Option<PathBuf>,
+    fmt: ListFormat,
+    config: &Config,
+) -> Result<()> {
+    let manager = providers::pi_convo(config, base.as_deref());
 
     match (project, fmt) {
         (None, ListFormat::Tsv) => list_pi_sessions_all(&manager, ListFormat::Tsv),

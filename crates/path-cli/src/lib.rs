@@ -136,7 +136,6 @@ enum Commands {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    #[cfg_attr(target_os = "emscripten", expect(unused_variables))]
     let config = config::Config::load()?;
 
     #[cfg(not(target_os = "emscripten"))]
@@ -159,6 +158,6 @@ pub fn run() -> Result<()> {
         Commands::Auth { op } => cmd_auth::run(op),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Config { op } => cmd_config::run(op),
-        Commands::P { command } => cmd_p::run(command, cli.pretty),
+        Commands::P { command } => cmd_p::run(command, cli.pretty, &config),
     }
 }
