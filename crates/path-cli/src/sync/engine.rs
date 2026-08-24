@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::sources::{self, ArtifactSource};
 use crate::artifact::{ArtifactRef, ArtifactType};
 use crate::cache::write_cached;
-use crate::config::{MANIFEST_FILE_NAME, MANIFEST_LOCK_FILE_NAME, config_dir};
+use crate::config::{Config, MANIFEST_FILE_NAME, MANIFEST_LOCK_FILE_NAME};
 use crate::harness::HarnessBundle;
 
 /// How many manifest writes accumulate before a mid-run checkpoint.
@@ -94,12 +94,13 @@ impl SyncObserver for () {}
 /// (query auto-syncs, imports) union their records instead of
 /// clobbering each other.
 pub(crate) fn sync_bundle(
+    config_dir: &Path,
     bundle: &HarnessBundle,
     types: &[ArtifactType],
     project_under: Option<&Path>,
     observer: &mut dyn SyncObserver,
 ) -> Result<Vec<(ArtifactType, SyncOutcome)>> {
-    let manifest = load_manifest()?;
+    let manifest = load_manifest(config_dir)?;
     let mut out = Vec::with_capacity(types.len());
     for &artifact_type in types {
         // Types with no source in this bundle — an uninstalled
@@ -115,6 +116,7 @@ pub(crate) fn sync_bundle(
             .cloned()
             .unwrap_or_default();
         let outcome = sync_artifacts(
+            config_dir,
             source.as_ref(),
             artifact_type,
             &artifacts,
@@ -153,12 +155,15 @@ fn newest_first(artifacts: &[ArtifactRef]) -> Vec<&ArtifactRef> {
 
 /// Merge staged records into the manifest under the lock and clear
 /// the stage.
-fn flush_writes(pending: &mut BTreeMap<&'static str, BTreeMap<String, SyncRecord>>) -> Result<()> {
+fn flush_writes(
+    config_dir: &Path,
+    pending: &mut BTreeMap<&'static str, BTreeMap<String, SyncRecord>>,
+) -> Result<()> {
     if pending.is_empty() {
         return Ok(());
     }
     let batch = std::mem::take(pending);
-    update_manifest(move |manifest| {
+    update_manifest(config_dir, move |manifest| {
         for (name, records) in batch {
             manifest
                 .entry(name.to_string())
@@ -175,6 +180,7 @@ fn flush_writes(pending: &mut BTreeMap<&'static str, BTreeMap<String, SyncRecord
 /// failures are warned and tallied, not fatal; cache-write failures
 /// (disk, permissions) abort.
 fn sync_artifacts(
+    config_dir: &Path,
     source: &dyn ArtifactSource,
     artifact_type: ArtifactType,
     artifacts: &[ArtifactRef],
@@ -241,7 +247,7 @@ fn sync_artifacts(
                 }
                 observer.tick();
                 if unflushed >= MANIFEST_CHECKPOINT_EVERY_WRITES {
-                    flush_writes(&mut writes)?;
+                    flush_writes(config_dir, &mut writes)?;
                     unflushed = 0;
                 }
                 continue;
@@ -286,19 +292,23 @@ fn sync_artifacts(
         }
         observer.tick();
         if unflushed >= MANIFEST_CHECKPOINT_EVERY_WRITES {
-            flush_writes(&mut writes)?;
+            flush_writes(config_dir, &mut writes)?;
             unflushed = 0;
         }
     }
-    flush_writes(&mut writes)?;
+    flush_writes(config_dir, &mut writes)?;
     observer.end();
     Ok(outcome)
 }
 
 /// Record an externally-derived cache write (`p import`, `share`) in
 /// the manifest, so sync doesn't re-derive what was just written.
+///
+/// Transitional: loads a [`Config`] per call. New code takes the
+/// config directory as a parameter.
 pub(crate) fn record_artifact(artifact: &ArtifactRef, cache_id: &str) -> Result<()> {
-    update_manifest(|manifest| {
+    let config_dir = Config::load()?.config_dir()?;
+    update_manifest(&config_dir, |manifest| {
         manifest
             .entry(artifact.artifact_type.name().to_string())
             .or_default()
@@ -318,8 +328,17 @@ pub(crate) fn record_artifact(artifact: &ArtifactRef, cache_id: &str) -> Result<
 /// Whether the manifest already records exactly this artifact state
 /// under exactly this cache entry, with the doc present — i.e. a
 /// write would reproduce what's already there.
+///
+/// Transitional: loads a [`Config`] per call. New code takes the
+/// config directory as a parameter.
 pub(crate) fn record_is_current(artifact: &ArtifactRef, cache_id: &str) -> bool {
-    let Ok(manifest) = load_manifest() else {
+    let Ok(config) = Config::load() else {
+        return false;
+    };
+    let Ok(config_dir) = config.config_dir() else {
+        return false;
+    };
+    let Ok(manifest) = load_manifest(&config_dir) else {
         return false;
     };
     manifest
@@ -341,13 +360,17 @@ pub(crate) fn record_is_current(artifact: &ArtifactRef, cache_id: &str) -> bool 
 /// i.e. re-deriving would reproduce the cached doc byte-for-byte.
 /// Used by `share` to upload straight from the cache. The stat
 /// targets one artifact directly — no enumeration of its siblings.
+///
+/// Transitional: loads a [`Config`] per call. New code takes the
+/// config directory as a parameter.
 pub(crate) fn fresh_cache_id(
     bundle: &HarnessBundle,
     artifact_type: ArtifactType,
     project: Option<&str>,
     id: &str,
 ) -> Option<String> {
-    let manifest = load_manifest().ok()?;
+    let config_dir = Config::load().ok()?.config_dir().ok()?;
+    let manifest = load_manifest(&config_dir).ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
     let cache_id = rec.cache_id.clone()?;
     let (modified, size) = sources::source_for(bundle, artifact_type)?.stamp(project, id)?;
@@ -363,8 +386,8 @@ pub(crate) fn fresh_cache_id(
 /// `p cache rm` eviction: the doc is gone, so any record pointing
 /// at it downgrades to known-but-uncached (the artifact itself is
 /// still real; the next in-scope sync re-materializes it).
-pub(crate) fn evict_cache_id(cache_id: &str) -> Result<()> {
-    update_manifest(|manifest| {
+pub(crate) fn evict_cache_id(config_dir: &Path, cache_id: &str) -> Result<()> {
+    update_manifest(config_dir, |manifest| {
         for records in manifest.values_mut() {
             for rec in records.values_mut() {
                 if rec.cache_id.as_deref() == Some(cache_id) {
@@ -377,16 +400,16 @@ pub(crate) fn evict_cache_id(cache_id: &str) -> Result<()> {
 
 // ── manifest IO ────────────────────────────────────────────────────
 
-fn manifest_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join(MANIFEST_FILE_NAME))
+fn manifest_path(config_dir: &Path) -> PathBuf {
+    config_dir.join(MANIFEST_FILE_NAME)
 }
 
 /// Take the exclusive advisory lock serializing manifest writers
 /// across processes (query auto-syncs and imports can run
 /// concurrently). A sibling lock file — never renamed, unlike the
 /// manifest itself — held until the returned handle drops.
-fn lock_manifest() -> Result<std::fs::File> {
-    let path = manifest_path()?;
+fn lock_manifest(config_dir: &Path) -> Result<std::fs::File> {
+    let path = manifest_path(config_dir);
     let dir = path.parent().expect("manifest path has a parent");
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let lock_path = dir.join(MANIFEST_LOCK_FILE_NAME);
@@ -405,15 +428,15 @@ fn lock_manifest() -> Result<std::fs::File> {
 /// One locked read-modify-write cycle against the manifest. Every
 /// writer goes through here, so concurrent invocations merge their
 /// records instead of clobbering each other's.
-fn update_manifest(mutate: impl FnOnce(&mut Manifest)) -> Result<()> {
-    let _lock = lock_manifest()?;
-    let mut manifest = load_manifest()?;
+fn update_manifest(config_dir: &Path, mutate: impl FnOnce(&mut Manifest)) -> Result<()> {
+    let _lock = lock_manifest(config_dir)?;
+    let mut manifest = load_manifest(config_dir)?;
     mutate(&mut manifest);
-    save_manifest(&manifest)
+    save_manifest(config_dir, &manifest)
 }
 
-pub(crate) fn load_manifest() -> Result<Manifest> {
-    let path = manifest_path()?;
+pub(crate) fn load_manifest(config_dir: &Path) -> Result<Manifest> {
+    let path = manifest_path(config_dir);
     let json = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Manifest::default()),
@@ -429,8 +452,8 @@ pub(crate) fn load_manifest() -> Result<Manifest> {
 
 /// Write the manifest atomically (temp file + rename) with the same
 /// permissions as the rest of `$CONFIG_DIR`.
-fn save_manifest(manifest: &Manifest) -> Result<()> {
-    let path = manifest_path()?;
+fn save_manifest(config_dir: &Path, manifest: &Manifest) -> Result<()> {
+    let path = manifest_path(config_dir);
     let dir = path.parent().expect("manifest path has a parent");
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     #[cfg(unix)]
@@ -458,15 +481,18 @@ mod tests {
     use std::path::Path;
 
     /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
-    /// `f` receives the tempdir root for building provider fixtures.
-    fn with_cfg<F: FnOnce(&Path) -> R, R>(f: F) -> R {
+    /// `f` receives the tempdir root for building provider fixtures and
+    /// the config directory itself. The variable stays set because
+    /// the cache and the transitional record surfaces still read it.
+    fn with_cfg<F: FnOnce(&Path, &Path) -> R, R>(f: F) -> R {
         let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp = tempfile::tempdir().unwrap();
+        let config_root = temp.path().join(".toolpath");
         let prev = std::env::var_os(CONFIG_DIR_ENV);
         unsafe {
-            std::env::set_var(CONFIG_DIR_ENV, temp.path().join(".toolpath"));
+            std::env::set_var(CONFIG_DIR_ENV, &config_root);
         }
-        let result = f(temp.path());
+        let result = f(temp.path(), &config_root);
         unsafe {
             match prev {
                 Some(v) => std::env::set_var(CONFIG_DIR_ENV, v),
@@ -519,8 +545,8 @@ mod tests {
 
     #[test]
     fn manifest_roundtrips_and_missing_is_empty() {
-        with_cfg(|_| {
-            assert!(load_manifest().unwrap().is_empty());
+        with_cfg(|_, config_dir| {
+            assert!(load_manifest(config_dir).unwrap().is_empty());
 
             let mut manifest = Manifest::default();
             manifest.entry("claude".to_string()).or_default().insert(
@@ -533,8 +559,8 @@ mod tests {
                     synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
                 },
             );
-            save_manifest(&manifest).unwrap();
-            assert_eq!(load_manifest().unwrap(), manifest);
+            save_manifest(config_dir, &manifest).unwrap();
+            assert_eq!(load_manifest(config_dir).unwrap(), manifest);
         });
     }
 
@@ -542,9 +568,9 @@ mod tests {
     #[test]
     fn manifest_file_is_0600() {
         use std::os::unix::fs::PermissionsExt;
-        with_cfg(|_| {
-            save_manifest(&Manifest::default()).unwrap();
-            let mode = std::fs::metadata(manifest_path().unwrap())
+        with_cfg(|_, config_dir| {
+            save_manifest(config_dir, &Manifest::default()).unwrap();
+            let mode = std::fs::metadata(manifest_path(config_dir))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -555,17 +581,17 @@ mod tests {
 
     #[test]
     fn corrupt_manifest_errors_with_hint() {
-        with_cfg(|_| {
-            save_manifest(&Manifest::default()).unwrap();
-            std::fs::write(manifest_path().unwrap(), "not json").unwrap();
-            let err = load_manifest().unwrap_err();
+        with_cfg(|_, config_dir| {
+            save_manifest(config_dir, &Manifest::default()).unwrap();
+            std::fs::write(manifest_path(config_dir), "not json").unwrap();
+            let err = load_manifest(config_dir).unwrap_err();
             assert!(err.to_string().contains("re-sync from scratch"));
         });
     }
 
     #[test]
     fn enumerated_claude_sessions_are_stamped() {
-        with_cfg(|home| {
+        with_cfg(|home, _| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
             let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
@@ -583,12 +609,13 @@ mod tests {
 
     #[test]
     fn first_sync_ingests_then_second_is_unchanged() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             write_claude_session(home, "-test-project", "sess-bbb", "Fix a bug");
             let bundle = claude_bundle(home);
 
-            let outcomes = sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            let outcomes =
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             assert_eq!(outcomes.len(), 1);
             let (_, first) = outcomes[0];
             assert_eq!(
@@ -596,7 +623,7 @@ mod tests {
                 (2, 0, 0, 0)
             );
 
-            let manifest = load_manifest().unwrap();
+            let manifest = load_manifest(config_dir).unwrap();
             let records = manifest.get("claude").unwrap();
             assert_eq!(records.len(), 2);
             let rec = records.get("sess-aaa").unwrap();
@@ -613,7 +640,8 @@ mod tests {
             );
 
             let (_, second) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!(
                 (second.new, second.updated, second.unchanged, second.failed),
                 (0, 0, 2, 0)
@@ -623,12 +651,12 @@ mod tests {
 
     #[test]
     fn changed_session_is_rederived() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
 
-            let cache_id = load_manifest().unwrap()["claude"]["sess-aaa"]
+            let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                 .cache_id
                 .clone()
                 .expect("synced record is materialized");
@@ -645,7 +673,8 @@ mod tests {
             std::fs::write(&file, body).unwrap();
 
             let (_, outcome) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!(
                 (
                     outcome.new,
@@ -664,14 +693,15 @@ mod tests {
 
     #[test]
     fn sync_touches_only_requested_types() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
 
-            let outcomes = sync_bundle(&bundle, &[ArtifactType::Codex], None, &mut ()).unwrap();
+            let outcomes =
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Codex], None, &mut ()).unwrap();
             assert_eq!(outcomes[0].1, SyncOutcome::default());
             assert!(
-                load_manifest().unwrap().is_empty(),
+                load_manifest(config_dir).unwrap().is_empty(),
                 "codex-only sync must not ingest claude sessions"
             );
         });
@@ -679,24 +709,25 @@ mod tests {
 
     #[test]
     fn sync_overwrites_cache_entry_it_does_not_remember() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
 
             // Losing the manifest (or a prior manual `p import`) leaves a
             // cache entry sync doesn't know about; re-syncing must
             // overwrite it, not die on the exists-check.
-            std::fs::remove_file(manifest_path().unwrap()).unwrap();
+            std::fs::remove_file(manifest_path(config_dir)).unwrap();
             let (_, outcome) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!((outcome.new, outcome.failed), (1, 0));
         });
     }
 
     #[test]
     fn failed_derivation_is_tallied_and_skipped() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
             let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
@@ -704,6 +735,7 @@ mod tests {
             artifacts.push(make_ref(ArtifactType::Claude, "does-not-exist"));
 
             let outcome = sync_artifacts(
+                config_dir,
                 source.as_ref(),
                 ArtifactType::Claude,
                 &artifacts,
@@ -713,7 +745,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!((outcome.new, outcome.failed), (1, 1));
-            let records = &load_manifest().unwrap()["claude"];
+            let records = &load_manifest(config_dir).unwrap()["claude"];
             assert!(records.contains_key("sess-aaa"));
             assert!(
                 !records.contains_key("does-not-exist"),
@@ -724,11 +756,11 @@ mod tests {
 
     #[test]
     fn rotated_session_resyncs_under_its_head_id() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
-            let cache_id = load_manifest().unwrap()["claude"]["sess-aaa"]
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                 .cache_id
                 .clone()
                 .unwrap();
@@ -749,13 +781,14 @@ mod tests {
             .unwrap();
 
             let (_, outcome) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!(
                 (outcome.new, outcome.updated, outcome.unchanged),
                 (0, 1, 0),
                 "the chain must re-sync under its head id, not read as unchanged"
             );
-            let manifest = load_manifest().unwrap();
+            let manifest = load_manifest(config_dir).unwrap();
             assert!(
                 !manifest["claude"].contains_key("sess-bbb"),
                 "successor segments are not separate artifacts"
@@ -767,28 +800,30 @@ mod tests {
 
             // And the grown chain settles: a third sync is a no-op.
             let (_, again) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!((again.updated, again.unchanged), (0, 1));
         });
     }
 
     #[test]
     fn all_none_stamps_never_read_as_unchanged() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
 
             // A record whose stamps are all None (stat failed when it
             // was written) must not match a stub whose stat also
             // failed — unknowable freshness re-derives.
-            let mut records = load_manifest().unwrap()["claude"].clone();
+            let mut records = load_manifest(config_dir).unwrap()["claude"].clone();
             let rec = records.get_mut("sess-aaa").unwrap();
             rec.modified = None;
             rec.size = None;
             let artifact = make_ref(ArtifactType::Claude, "sess-aaa");
             let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
             let outcome = sync_artifacts(
+                config_dir,
                 source.as_ref(),
                 ArtifactType::Claude,
                 &[artifact],
@@ -803,7 +838,7 @@ mod tests {
 
     #[test]
     fn recorded_import_is_unchanged_to_the_next_sync() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
 
@@ -823,7 +858,8 @@ mod tests {
 
             // The import's stamp must match sync's own enumeration.
             let (_, outcome) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!(
                 (
                     outcome.new,
@@ -838,12 +874,13 @@ mod tests {
 
     #[test]
     fn project_under_scopes_path_keyed_enumeration() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-scope-alpha", "aaaa1111-x", "In alpha");
             write_claude_session(home, "-scope-beta", "bbbb2222-x", "In beta");
             let bundle = claude_bundle(home);
 
             let (_, scoped) = sync_bundle(
+                config_dir,
                 &bundle,
                 &[ArtifactType::Claude],
                 Some(Path::new("/scope/alpha")),
@@ -851,7 +888,7 @@ mod tests {
             )
             .unwrap()[0];
             assert_eq!((scoped.new, scoped.out_of_scope), (1, 0));
-            let manifest = load_manifest().unwrap();
+            let manifest = load_manifest(config_dir).unwrap();
             assert!(
                 !manifest["claude"].contains_key("bbbb2222-x"),
                 "pruned projects must not be enumerated or recorded"
@@ -859,7 +896,8 @@ mod tests {
 
             // Unscoped sync picks up the rest.
             let (_, full) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!((full.new, full.unchanged), (1, 1));
         });
     }
@@ -886,12 +924,13 @@ mod tests {
 
     #[test]
     fn out_of_scope_codex_peek_is_memoized_then_scope_match_derives() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             let bundle = codex_bundle(home, "/work/proj");
 
             // cwd lives outside the constraint: one bounded peek, a
             // known-but-uncached record, no derive.
             let (_, out) = sync_bundle(
+                config_dir,
                 &bundle,
                 &[ArtifactType::Codex],
                 Some(Path::new("/elsewhere")),
@@ -900,7 +939,8 @@ mod tests {
             .unwrap()[0];
             assert_eq!((out.new, out.out_of_scope), (0, 1));
             let rec =
-                load_manifest().unwrap()["codex"]["00000000-0000-0000-0000-0000000000aa"].clone();
+                load_manifest(config_dir).unwrap()["codex"]["00000000-0000-0000-0000-0000000000aa"]
+                    .clone();
             assert_eq!(
                 rec.path.as_deref(),
                 Some("/work/proj"),
@@ -911,6 +951,7 @@ mod tests {
             // Matching constraint: the memoized record answers the scope
             // question and the artifact derives.
             let (_, hit) = sync_bundle(
+                config_dir,
                 &bundle,
                 &[ArtifactType::Codex],
                 Some(Path::new("/work/proj")),
@@ -919,7 +960,8 @@ mod tests {
             .unwrap()[0];
             assert_eq!((hit.new, hit.updated, hit.out_of_scope), (0, 1, 0));
             let rec =
-                load_manifest().unwrap()["codex"]["00000000-0000-0000-0000-0000000000aa"].clone();
+                load_manifest(config_dir).unwrap()["codex"]["00000000-0000-0000-0000-0000000000aa"]
+                    .clone();
             assert!(rec.cache_id.is_some(), "materialized now");
             assert_eq!(
                 rec.path.as_deref(),
@@ -948,11 +990,12 @@ mod tests {
 
     #[test]
     fn copilot_syncs_and_scopes_via_memoized_peek() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             let bundle = copilot_bundle(home, "sess-cp", "/work/proj");
 
             // Out-of-scope first: one peek, a known record with the cwd.
             let (_, out) = sync_bundle(
+                config_dir,
                 &bundle,
                 &[ArtifactType::Copilot],
                 Some(Path::new("/elsewhere")),
@@ -960,12 +1003,13 @@ mod tests {
             )
             .unwrap()[0];
             assert_eq!((out.new, out.out_of_scope), (0, 1));
-            let rec = load_manifest().unwrap()["copilot"]["sess-cp"].clone();
+            let rec = load_manifest(config_dir).unwrap()["copilot"]["sess-cp"].clone();
             assert_eq!(rec.path.as_deref(), Some("/work/proj"));
             assert!(rec.cache_id.is_none());
 
             // In scope: derives; then a plain re-sync is a no-op.
             let (_, hit) = sync_bundle(
+                config_dir,
                 &bundle,
                 &[ArtifactType::Copilot],
                 Some(Path::new("/work")),
@@ -974,33 +1018,35 @@ mod tests {
             .unwrap()[0];
             assert_eq!((hit.updated, hit.out_of_scope), (1, 0));
             let (_, again) =
-                sync_bundle(&bundle, &[ArtifactType::Copilot], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Copilot], None, &mut ()).unwrap()
+                    [0];
             assert_eq!(again.unchanged, 1);
         });
     }
 
     #[test]
     fn evicted_cache_entry_rematerializes_on_next_sync() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
-            let cache_id = load_manifest().unwrap()["claude"]["sess-aaa"]
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                 .cache_id
                 .clone()
                 .unwrap();
 
             // `p cache rm`: doc removed, record downgraded to known.
             crate::cache::remove_cached(&cache_id).unwrap();
-            evict_cache_id(&cache_id).unwrap();
+            evict_cache_id(config_dir, &cache_id).unwrap();
             assert!(
-                load_manifest().unwrap()["claude"]["sess-aaa"]
+                load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                     .cache_id
                     .is_none()
             );
 
             let (_, outcome) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!((outcome.new, outcome.updated), (0, 1));
             assert!(
                 crate::cache::cache_path(&cache_id).unwrap().exists(),
@@ -1011,11 +1057,11 @@ mod tests {
 
     #[test]
     fn manually_deleted_doc_is_restored_even_with_stale_record() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
-            let cache_id = load_manifest().unwrap()["claude"]["sess-aaa"]
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
                 .cache_id
                 .clone()
                 .unwrap();
@@ -1025,7 +1071,8 @@ mod tests {
             let doc = crate::cache::cache_path(&cache_id).unwrap();
             std::fs::remove_file(&doc).unwrap();
             let (_, outcome) =
-                sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()[0];
+                sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
+                    [0];
             assert_eq!((outcome.new, outcome.updated), (0, 1));
             assert!(doc.exists());
         });
@@ -1033,7 +1080,7 @@ mod tests {
 
     #[test]
     fn fresh_cache_id_tracks_source_and_eviction() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
 
@@ -1048,7 +1095,7 @@ mod tests {
                 .is_none()
             );
 
-            sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             let cache_id = fresh_cache_id(
                 &bundle,
                 ArtifactType::Claude,
@@ -1074,7 +1121,7 @@ mod tests {
                 )
                 .is_none()
             );
-            sync_bundle(&bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             assert!(
                 fresh_cache_id(
                     &bundle,
@@ -1087,7 +1134,7 @@ mod tests {
 
             // Evicted: known but not materialized, so not fresh.
             crate::cache::remove_cached(&cache_id).unwrap();
-            evict_cache_id(&cache_id).unwrap();
+            evict_cache_id(config_dir, &cache_id).unwrap();
             assert!(
                 fresh_cache_id(
                     &bundle,
@@ -1102,7 +1149,7 @@ mod tests {
 
     #[test]
     fn copilot_peek_accepts_top_level_cwd() {
-        with_cfg(|home| {
+        with_cfg(|home, config_dir| {
             // Older CLIs store cwd at the payload top level, no
             // `context` object — the peek must still find it.
             let copilot_dir = home.join(".copilot");
@@ -1124,6 +1171,7 @@ mod tests {
                 ..Default::default()
             };
             let (_, out) = sync_bundle(
+                config_dir,
                 &bundle,
                 &[ArtifactType::Copilot],
                 Some(Path::new("/elsewhere")),
@@ -1131,7 +1179,7 @@ mod tests {
             )
             .unwrap()[0];
             assert_eq!(out.out_of_scope, 1);
-            let rec = load_manifest().unwrap()["copilot"]["sess-legacy"].clone();
+            let rec = load_manifest(config_dir).unwrap()["copilot"]["sess-legacy"].clone();
             assert_eq!(rec.path.as_deref(), Some("/work/proj"));
         });
     }

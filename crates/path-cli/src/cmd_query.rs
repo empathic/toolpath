@@ -130,8 +130,23 @@ fn sync_query_scope(args: &QueryArgs) {
     if types.is_empty() {
         return;
     }
+    // Transitional: `query` does not take `&Config` yet; load one for
+    // the config directory. A load failure degrades like a sync failure.
+    let config_dir = match crate::config::Config::load().and_then(|c| c.config_dir()) {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("warning: cache sync skipped: {e}");
+            return;
+        }
+    };
     let bundle = crate::harness::HarnessBundle::from_environment();
-    match crate::sync::sync_bundle(&bundle, &types, args.project_under.as_deref(), &mut ()) {
+    match crate::sync::sync_bundle(
+        &config_dir,
+        &bundle,
+        &types,
+        args.project_under.as_deref(),
+        &mut (),
+    ) {
         Ok(outcomes) => {
             for (t, o) in outcomes {
                 if o.new + o.updated + o.failed > 0 {
