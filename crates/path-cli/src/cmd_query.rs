@@ -11,6 +11,7 @@ use clap::Parser;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+use crate::config::Config;
 use crate::query::Scope;
 
 /// Each array element is a Toolpath step (`step`/`change`/`meta` verbatim)
@@ -99,10 +100,10 @@ Examples:
   path query -r '.[].cache_id' | sort -u            # raw ids, pipeable to xargs/grep
   path query -r '.[0].change[].structural.text'     # read a turn's text, unescaped";
 
-pub fn run(args: QueryArgs, pretty: bool) -> Result<()> {
+pub fn run(args: QueryArgs, pretty: bool, config: &Config) -> Result<()> {
     #[cfg(not(target_os = "emscripten"))]
     if !args.no_sync {
-        sync_query_scope(&args);
+        sync_query_scope(&args, config);
     }
 
     let scope = Scope {
@@ -118,28 +119,32 @@ pub fn run(args: QueryArgs, pretty: bool) -> Result<()> {
     // pretty on a TTY or when the global `--pretty` flag is set.
     let compact = args.compact || (!pretty && !std::io::stdout().is_terminal());
 
-    crate::query::run(&scope, &args.filter, compact, args.raw)
+    crate::query::run(
+        &scope,
+        &args.filter,
+        compact,
+        args.raw,
+        config.toolpath_query_explain.as_deref(),
+    )
 }
 
 /// Freshen the slice of the cache this query will read, before reading
 /// it. Quiet unless something was actually ingested; a sync failure
 /// degrades to querying the cache as-is.
 #[cfg(not(target_os = "emscripten"))]
-fn sync_query_scope(args: &QueryArgs) {
+fn sync_query_scope(args: &QueryArgs, config: &Config) {
     let types = sync_types_for(args.source.as_deref(), &args.ids, &args.input);
     if types.is_empty() {
         return;
     }
-    // Transitional: `query` does not take `&Config` yet; load one for
-    // the config directory. A load failure degrades like a sync failure.
-    let config_dir = match crate::config::Config::load().and_then(|c| c.config_dir()) {
+    let config_dir = match config.config_dir() {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("warning: cache sync skipped: {e}");
             return;
         }
     };
-    let bundle = crate::harness::HarnessBundle::from_environment();
+    let bundle = crate::providers::harness_bundle(config);
     match crate::sync::sync_bundle(
         &config_dir,
         &bundle,
