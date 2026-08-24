@@ -127,7 +127,7 @@ mod tests {
             preamble: vec![],
             started_at: None,
             last_activity: None,
-            session_ids: vec![],
+            segment_ids: vec![],
         }
     }
 

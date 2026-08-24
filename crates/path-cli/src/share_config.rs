@@ -138,6 +138,22 @@ fn global_rule(
     }))
 }
 
+/// Parse `text` as the personal config and check every rule's remote
+/// against the remote grammar. Returns the number of `[[project]]`
+/// rules. `origin` names the file for error messages. Used by
+/// `path config edit` so mistakes surface at edit time instead of at
+/// the next `share`.
+pub(crate) fn validate_config_text(text: &str, origin: &str) -> Result<usize> {
+    let config: GlobalConfig =
+        toml::from_str(text).with_context(|| format!("failed to parse {origin}"))?;
+    for rule in &config.project {
+        if let Some(remote) = rule.remote.as_deref() {
+            parse_remote(remote, &format!("{origin} (dir = {:?})", rule.dir))?;
+        }
+    }
+    Ok(config.project.len())
+}
+
 /// Read a config file that's allowed to be absent. A missing file is
 /// `None`; any other I/O failure is a real error.
 fn read_optional(path: &Path) -> Result<Option<String>> {
@@ -450,6 +466,32 @@ mod tests {
         );
         let found = resolve_remote_from(&config, None, &link).unwrap().unwrap();
         assert_eq!(repo_str(&found), "team/sessions");
+    }
+
+    #[test]
+    fn validate_counts_rules_and_accepts_remote_less_ones() {
+        let n = validate_config_text(
+            "[[project]]\ndir = \"~/a\"\nremote = \"team/sessions\"\n\n\
+             [[project]]\ndir = \"~/b\"\n",
+            "test config",
+        )
+        .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(validate_config_text("", "test config").unwrap(), 0);
+    }
+
+    #[test]
+    fn validate_rejects_bad_toml_and_bad_remotes_naming_the_origin() {
+        let err = validate_config_text("[[project]\ndir = broken", "my.toml").unwrap_err();
+        assert!(err.to_string().contains("my.toml"), "{err:#}");
+
+        let err = validate_config_text(
+            "[[project]]\ndir = \"~/a\"\nremote = \"ftp://x/u/a/b\"\n",
+            "my.toml",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("my.toml"), "{err:#}");
+        assert!(err.to_string().contains("~/a"), "{err:#}");
     }
 
     #[test]

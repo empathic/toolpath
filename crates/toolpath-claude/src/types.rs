@@ -395,7 +395,7 @@ pub struct Conversation {
     /// Segment IDs when this conversation spans multiple files.
     /// Empty for single-segment conversations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub session_ids: Vec<String>,
+    pub segment_ids: Vec<String>,
     /// Raw preamble entries (e.g., permission-mode) that precede
     /// conversation entries in the JSONL file. These are not
     /// `ConversationEntry` objects — they have different shapes.
@@ -411,7 +411,7 @@ impl Conversation {
             entries: Vec::new(),
             started_at: None,
             last_activity: None,
-            session_ids: Vec::new(),
+            segment_ids: Vec::new(),
             preamble: Vec::new(),
         }
     }

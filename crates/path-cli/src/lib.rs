@@ -3,6 +3,8 @@ mod cache;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
 mod cmd_cache;
+#[cfg(not(target_os = "emscripten"))]
+mod cmd_config;
 mod cmd_derive;
 mod cmd_export;
 mod cmd_haiku;
@@ -114,6 +116,12 @@ enum Commands {
         #[command(subcommand)]
         op: cmd_auth::AuthOp,
     },
+    /// Edit the user configuration (~/.toolpath/config.toml)
+    #[cfg(not(target_os = "emscripten"))]
+    Config {
+        #[command(subcommand)]
+        op: cmd_config::ConfigOp,
+    },
     /// Plumbing: lower-level operations on documents and sources
     /// (import, export, cache, list, render, merge, validate, derive,
     /// project, incept, track, query)
@@ -148,6 +156,8 @@ pub fn run() -> Result<()> {
         Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Auth { op } => cmd_auth::run(op),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::Config { op } => cmd_config::run(op),
         Commands::P { command } => cmd_p::run(command, cli.pretty, &config),
     }
 }

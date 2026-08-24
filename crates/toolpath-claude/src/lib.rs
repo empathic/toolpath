@@ -14,6 +14,7 @@ pub mod reader;
 pub mod types;
 #[cfg(feature = "watcher")]
 pub mod watcher;
+pub mod writer;
 
 #[cfg(feature = "watcher")]
 pub use async_watcher::{AsyncConversationWatcher, WatcherConfig, WatcherHandle};
@@ -30,6 +31,7 @@ pub use types::{
 };
 #[cfg(feature = "watcher")]
 pub use watcher::ConversationWatcher;
+pub use writer::ConversationWriter;
 
 /// High-level interface for reading Claude conversations.
 ///
@@ -126,7 +128,7 @@ impl ClaudeConvo {
     ///
     /// **Chain-aware:** if this session is part of a chain (file rotation),
     /// all segments are merged into a single `Conversation` with bridge
-    /// entries filtered out and `session_ids` populated.
+    /// entries filtered out and `segment_ids` populated.
     ///
     /// Use [`Self::read_segment`] for single-file access.
     pub fn read_conversation(&self, project_path: &str, session_id: &str) -> Result<Conversation> {
@@ -159,7 +161,7 @@ impl ClaudeConvo {
             }
         }
 
-        merged.session_ids = chain;
+        merged.segment_ids = chain;
         Ok(merged)
     }
 
@@ -688,7 +690,7 @@ mod tests {
             .unwrap();
         assert_eq!(convo.session_id, "session-a");
         assert_eq!(
-            convo.session_ids,
+            convo.segment_ids,
             vec!["session-a", "session-b", "session-c"]
         );
         // a1, b1, c1 (bridge entries b0 and c0 filtered out)
@@ -702,7 +704,7 @@ mod tests {
             .read_conversation("/test/project", "session-b")
             .unwrap();
         assert_eq!(
-            convo_b.session_ids,
+            convo_b.segment_ids,
             vec!["session-a", "session-b", "session-c"]
         );
         assert_eq!(convo_b.entries.len(), 3);
@@ -732,7 +734,7 @@ mod tests {
         let segment = manager.read_segment("/test/project", "session-b").unwrap();
         assert_eq!(segment.session_id, "session-b");
         assert_eq!(segment.entries.len(), 2); // b0 (bridge) + b1
-        assert!(segment.session_ids.is_empty());
+        assert!(segment.segment_ids.is_empty());
     }
 
     #[test]

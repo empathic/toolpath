@@ -207,7 +207,11 @@
       "properties": {
         "intent": {
           "type": "string",
-          "description": "Human-readable description of purpose"
+          "description": "The initial goal of the work"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable summary of the step itself"
         },
         "source": {
           "$ref": "#/$defs/vcsSource",
@@ -348,7 +352,11 @@
         },
         "intent": {
           "type": "string",
-          "description": "Human-readable description of purpose"
+          "description": "The initial goal of the work"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable summary of the path itself"
         },
         "refs": {
           "type": "array",
@@ -433,7 +441,11 @@
         },
         "intent": {
           "type": "string",
-          "description": "Human-readable description of purpose"
+          "description": "The initial goal of the work"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable summary of the graph itself"
         },
         "refs": {
           "type": "array",

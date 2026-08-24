@@ -46,6 +46,8 @@ pub struct GraphMeta {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<Ref>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,6 +169,8 @@ pub struct PathMeta {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<Ref>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -278,6 +282,8 @@ pub struct StructuralChange {
 pub struct StepMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<VcsSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

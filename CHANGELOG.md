@@ -2,6 +2,42 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.0 — 2026-08-23
+
+- **Breaking:** `Conversation.segment_ids` replaces `Conversation.session_ids`.
+  The field lists the JSONL segment ids merged into a chained
+  conversation, in chain order. The name matches the crate's segment
+  vocabulary (`read_segment`, `list_segments`) and is distinct from
+  `Conversation.session_id`, the chain head. Semantics are unchanged:
+  empty for single-segment conversations. `ConversationView.session_ids`
+  in `toolpath-convo` keeps its name.
+
+## toolpath-claude 0.12.3 — 2026-08-21
+
+- `ConversationWriter::write_conversation<W: Write>(&conv, w)` writes a conversation in Claude Code session-file layout: preamble lines, then entries, one JSON value per line, newline-terminated. It is the write-side counterpart of `ConversationReader::read_conversation`. `p export claude` writes through it.
+
+## toolpath 0.7.1 — 2026-08-14
+
+Adds an optional `description` field to `StepMeta`, `PathMeta`, and
+`GraphMeta` (issue #181): a human-readable summary of the object itself,
+distinct from `intent`, which records the initial goal of the work. The
+field is promoted from `additionalProperties` to a first-class key in
+the JSON Schema and typed structs, and carried through the JSONL
+`PathOpen`/`PathMeta` line kinds, so existing documents are unaffected.
+The schema and RFC descriptions of `intent` were reworded to match its
+actual definition.
+
+## `path config edit` — 2026-08-14
+
+- **`path-cli`** (0.18.0): new `path config` porcelain command, starting
+  with `path config edit`: opens `~/.toolpath/config.toml` in
+  `$VISUAL`/`$EDITOR` (multi-word values like `code --wait` work; `vi`
+  is the fallback), creating the file from a fully commented template
+  on first use. After the editor exits, the file is validated — TOML
+  parse plus the remote grammar of every `[[project]]` rule — so a typo
+  surfaces immediately instead of at the next `share`.
+- **`toolpath-cli`** (0.18.0): lockstep bump of the deprecated shim.
+
 ## Parallel `path query` execution — 2026-08-14
 
 `path query` now evaluates cache documents on a thread pool. For the

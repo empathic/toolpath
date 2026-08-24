@@ -179,25 +179,26 @@
       "",
       dim("CLI commands (run the real binary):"),
       "  " +
-        copperBold("path validate") +
-        " --input <file>         Validate document",
+        copperBold("path p validate") +
+        " --input <file>       Validate document",
       "  " +
-        copperBold("path query dead-ends") +
-        " --input <file>  Find abandoned branches",
+        copperBold("path query") +
+        " --input <file> '<filter>' Run a jq filter over steps",
+      "      " +
+        dim("e.g. 'map(select(.dead_end))'") +
+        "    Find abandoned branches",
+      "      " +
+        dim("e.g. 'map(select(.step.actor | startswith(\"agent:\")))'"),
       "  " +
-        copperBold("path query ancestors") +
+        copperBold("path p query ancestors") +
         " --input <file> --step-id <id>",
       "                                       Walk parent chain",
       "  " +
-        copperBold("path query filter") +
-        " --input <file> --actor <prefix>",
-      "                                       Filter steps by actor",
+        copperBold("path p render dot") +
+        " --input <file>     Generate DOT graph",
       "  " +
-        copperBold("path render dot") +
-        " --input <file>       Generate DOT graph",
-      "  " +
-        copperBold("path merge") +
-        " <files...>                Merge documents",
+        copperBold("path p merge") +
+        " <files...>              Merge documents",
       "  " +
         copperBold("path haiku") +
         "                           Random haiku",
@@ -1391,7 +1392,7 @@
         .then(function () {
           shell.term.write(copperBold("path") + " " + pencil("$") + " ");
           shell.autoType(
-            "path query dead-ends --input path-01-pr.path.json --pretty",
+            "path query --input path-01-pr.path.json --pretty 'map(select(.dead_end)) | map(.step.id)'",
             function () {
               shell.prompt();
             },

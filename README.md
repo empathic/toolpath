@@ -273,6 +273,7 @@ path
   kind        # list bundled kinds, or print a kind's schema
               [KIND[/VERSION]]
   auth        login | status | whoami | logout [--url URL]
+  config      edit    # open ~/.toolpath/config.toml in $VISUAL/$EDITOR, validate on exit
   p           # plumbing: lower-level building blocks
     query
       ancestors --input FILE --step-id ID
