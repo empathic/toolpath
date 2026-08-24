@@ -690,7 +690,7 @@ impl ConversationProvider for ClaudeConvo {
             .read_conversation(project, conversation_id)
             .map_err(|e| ConvoError::Provider(e.to_string()))?;
         let mut view = conversation_to_view(&convo);
-        view.session_ids = convo.session_ids.clone();
+        view.session_ids = convo.segment_ids.clone();
         Ok(view)
     }
 
