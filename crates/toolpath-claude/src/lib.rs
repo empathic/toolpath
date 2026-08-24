@@ -14,6 +14,7 @@ pub mod reader;
 pub mod types;
 #[cfg(feature = "watcher")]
 pub mod watcher;
+pub mod writer;
 
 #[cfg(feature = "watcher")]
 pub use async_watcher::{AsyncConversationWatcher, WatcherConfig, WatcherHandle};
@@ -30,6 +31,7 @@ pub use types::{
 };
 #[cfg(feature = "watcher")]
 pub use watcher::ConversationWatcher;
+pub use writer::ConversationWriter;
 
 /// High-level interface for reading Claude conversations.
 ///

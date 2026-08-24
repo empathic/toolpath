@@ -12,6 +12,10 @@ All notable changes to the Toolpath workspace are documented here.
   empty for single-segment conversations. `ConversationView.session_ids`
   in `toolpath-convo` keeps its name.
 
+## toolpath-claude 0.12.3 — 2026-08-21
+
+- `ConversationWriter::write_conversation<W: Write>(&conv, w)` writes a conversation in Claude Code session-file layout: preamble lines, then entries, one JSON value per line, newline-terminated. It is the write-side counterpart of `ConversationReader::read_conversation`. `p export claude` writes through it.
+
 ## toolpath 0.7.1 — 2026-08-14
 
 Adds an optional `description` field to `StepMeta`, `PathMeta`, and
