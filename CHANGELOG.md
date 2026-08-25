@@ -2,6 +2,18 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.1 — 2026-08-25
+
+- **Fix:** `.orphaned-*` rotation artifacts are no longer classified as
+  chain successors. Their mangled stems made every entry read as a
+  bridge entry, silently dropping the whole segment's turns and token
+  usage from the merged conversation (#236). Dotted stems now stand
+  alone as their own conversations.
+- **Fix:** bridge-entry filtering in `read_conversation` now skips only
+  the *leading* bridge run of a successor segment — the copied
+  predecessor tail — instead of every entry with a foreign `sessionId`.
+  A foreign id deeper in a segment is data and is kept.
+
 ## toolpath-claude 0.13.0 — 2026-08-23
 
 - **Breaking:** `Conversation.segment_ids` replaces `Conversation.session_ids`.
