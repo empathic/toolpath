@@ -152,15 +152,6 @@ impl Config {
     }
 }
 
-/// The configured toolpath config directory (default `~/.toolpath`,
-/// overridable via `$TOOLPATH_CONFIG_DIR`).
-///
-/// Transitional: loads a [`Config`] per call. New code takes `&Config`
-/// as a parameter and calls [`Config::config_dir`].
-pub(crate) fn config_dir() -> Result<PathBuf> {
-    Config::load()?.config_dir()
-}
-
 /// Cross-platform `$HOME` lookup matching the providers' internal helpers.
 /// Returns `None` only when neither `$HOME` nor `$USERPROFILE` is set.
 pub(crate) fn home_dir() -> Option<PathBuf> {
@@ -330,21 +321,6 @@ mod tests {
     fn config_dir_errors_without_override_or_home() {
         let err = Config::default().config_dir().unwrap_err();
         assert!(err.to_string().contains("$HOME"));
-    }
-
-    /// The transitional free function honors the env override
-    /// end-to-end.
-    #[test]
-    fn config_dir_honors_override() {
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::set_var(CONFIG_DIR_ENV, "/tmp/test-toolpath");
-        }
-        let dir = config_dir().unwrap();
-        unsafe {
-            std::env::remove_var(CONFIG_DIR_ENV);
-        }
-        assert_eq!(dir, PathBuf::from("/tmp/test-toolpath"));
     }
 
     #[test]

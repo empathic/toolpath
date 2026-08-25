@@ -781,20 +781,21 @@ fn share_explicit(
         ),
         (false, _) => None,
     };
+    let config_dir = config.config_dir()?;
 
     // Fast path: when the manifest shows this exact source state is
     // already in the cache, upload the cached doc instead of re-deriving
     // — a derive would reproduce it byte-for-byte anyway.
     if !args.no_cache
         && let Some(cache_id) = crate::sync::fresh_cache_id(
-            config,
+            &config_dir,
             &providers::harness_bundle(config),
             harness,
             project.as_deref(),
             session,
         )
     {
-        let doc_path = crate::cache::cache_path(&cache_id)?;
+        let doc_path = crate::cache::cache_path(&config_dir, &cache_id)?;
         let body = std::fs::read_to_string(&doc_path)
             .with_context(|| format!("Failed to read {}", doc_path.display()))?;
         eprintln!(
@@ -829,9 +830,9 @@ fn share_explicit(
         // the upload uses the fresh body, not the cache. Always
         // overwrite so cache and upload agree (use `--no-cache` to skip
         // the cache write entirely).
-        let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        let path = crate::cache::write_cached(&config_dir, &derived.cache_id, &derived.doc, true)?;
         if let Some(stub) = &derived.provenance
-            && let Err(e) = crate::sync::record_artifact(config, stub, &derived.cache_id)
+            && let Err(e) = crate::sync::record_artifact(&config_dir, stub, &derived.cache_id)
         {
             eprintln!("warning: sync manifest not updated: {e}");
         }

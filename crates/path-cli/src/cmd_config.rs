@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
 
-use crate::config::{CONFIG_FILE_NAME, config_dir, home_dir, home_relative};
+use crate::config::{CONFIG_FILE_NAME, Config, home_relative};
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigOp {
@@ -21,9 +21,9 @@ pub enum ConfigOp {
     Edit,
 }
 
-pub fn run(op: ConfigOp) -> Result<()> {
+pub fn run(op: ConfigOp, config: &Config) -> Result<()> {
     match op {
-        ConfigOp::Edit => edit(),
+        ConfigOp::Edit => edit(config),
     }
 }
 
@@ -31,14 +31,14 @@ pub fn run(op: ConfigOp) -> Result<()> {
 /// behaves exactly like no file.
 const TEMPLATE: &str = "# Toolpath user configuration.\n# https://toolpath.net/cli/\n";
 
-fn edit() -> Result<()> {
-    let path = config_dir()?.join(CONFIG_FILE_NAME);
+fn edit(config: &Config) -> Result<()> {
+    let path = config.config_dir()?.join(CONFIG_FILE_NAME);
     ensure_config_file(&path)?;
 
     let editor = resolve_editor(std::env::var_os("VISUAL"), std::env::var_os("EDITOR"));
     run_editor(&editor, &path)?;
 
-    let display = home_relative(&path, home_dir().as_deref());
+    let display = home_relative(&path, config.home_dir().map(|p| p.as_path()));
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {display} back after editing"))?;
     let rules = crate::share_config::validate_config_text(&text, &display).with_context(|| {

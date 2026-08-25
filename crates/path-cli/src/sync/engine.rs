@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::sources::{self, ArtifactSource};
 use crate::artifact::{ArtifactRef, ArtifactType};
 use crate::cache::write_cached;
-use crate::config::{Config, MANIFEST_FILE_NAME, MANIFEST_LOCK_FILE_NAME};
+use crate::config::{MANIFEST_FILE_NAME, MANIFEST_LOCK_FILE_NAME};
 use crate::harness::HarnessBundle;
 
 /// How many manifest writes accumulate before a mid-run checkpoint.
@@ -133,15 +133,14 @@ pub(crate) fn sync_bundle(
 /// artifact needs nothing — no read, no scope check. All-`None` stamps
 /// mean freshness is unknowable; only a real stamp can vouch
 /// (mirrors `record_is_current`).
-fn is_unchanged(rec: Option<&SyncRecord>, artifact: &ArtifactRef) -> bool {
+fn is_unchanged(config_dir: &Path, rec: Option<&SyncRecord>, artifact: &ArtifactRef) -> bool {
     rec.is_some_and(|rec| {
         (rec.modified.is_some() || rec.size.is_some())
             && rec.modified == artifact.modified
             && rec.size == artifact.size
-            && rec
-                .cache_id
-                .as_deref()
-                .is_some_and(|id| crate::cache::cache_path(id).is_ok_and(|p| p.exists()))
+            && rec.cache_id.as_deref().is_some_and(|id| {
+                crate::cache::cache_path(config_dir, id).is_ok_and(|p| p.exists())
+            })
     })
 }
 
@@ -193,7 +192,12 @@ fn sync_artifacts(
     // progress denominator and the loop's skip decision.
     let order: Vec<(&ArtifactRef, bool)> = newest_first(artifacts)
         .into_iter()
-        .map(|artifact| (artifact, is_unchanged(records.get(&artifact.id), artifact)))
+        .map(|artifact| {
+            (
+                artifact,
+                is_unchanged(config_dir, records.get(&artifact.id), artifact),
+            )
+        })
         .collect();
     let pending_total = order.iter().filter(|(_, unchanged)| !unchanged).count();
     observer.begin(artifact_type, pending_total);
@@ -264,7 +268,7 @@ fn sync_artifacts(
                 // force: sync owns refresh semantics — a re-sync or a
                 // prior manual `p import` of the same session must not
                 // error on the existing cache entry.
-                write_cached(&derived.cache_id, &derived.doc, true)?;
+                write_cached(config_dir, &derived.cache_id, &derived.doc, true)?;
                 stage(
                     &mut writes,
                     SyncRecord {
@@ -304,12 +308,11 @@ fn sync_artifacts(
 /// Record an externally-derived cache write (`p import`, `share`) in
 /// the manifest, so sync doesn't re-derive what was just written.
 pub(crate) fn record_artifact(
-    config: &Config,
+    config_dir: &Path,
     artifact: &ArtifactRef,
     cache_id: &str,
 ) -> Result<()> {
-    let config_dir = config.config_dir()?;
-    update_manifest(&config_dir, |manifest| {
+    update_manifest(config_dir, |manifest| {
         manifest
             .entry(artifact.artifact_type.name().to_string())
             .or_default()
@@ -329,11 +332,8 @@ pub(crate) fn record_artifact(
 /// Whether the manifest already records exactly this artifact state
 /// under exactly this cache entry, with the doc present — i.e. a
 /// write would reproduce what's already there.
-pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_id: &str) -> bool {
-    let Ok(config_dir) = config.config_dir() else {
-        return false;
-    };
-    let Ok(manifest) = load_manifest(&config_dir) else {
+pub(crate) fn record_is_current(config_dir: &Path, artifact: &ArtifactRef, cache_id: &str) -> bool {
+    let Ok(manifest) = load_manifest(config_dir) else {
         return false;
     };
     manifest
@@ -346,7 +346,7 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
                 && (rec.modified.is_some() || rec.size.is_some())
                 && rec.modified == artifact.modified
                 && rec.size == artifact.size
-                && crate::cache::cache_path(cache_id).is_ok_and(|p| p.exists())
+                && crate::cache::cache_path(config_dir, cache_id).is_ok_and(|p| p.exists())
         })
 }
 
@@ -356,14 +356,13 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
 /// Used by `share` to upload straight from the cache. The stat
 /// targets one artifact directly — no enumeration of its siblings.
 pub(crate) fn fresh_cache_id(
-    config: &Config,
+    config_dir: &Path,
     bundle: &HarnessBundle,
     artifact_type: ArtifactType,
     project: Option<&str>,
     id: &str,
 ) -> Option<String> {
-    let config_dir = config.config_dir().ok()?;
-    let manifest = load_manifest(&config_dir).ok()?;
+    let manifest = load_manifest(config_dir).ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
     let cache_id = rec.cache_id.clone()?;
     let (modified, size) = sources::source_for(bundle, artifact_type)?.stamp(project, id)?;
@@ -372,7 +371,7 @@ pub(crate) fn fresh_cache_id(
     ((rec.modified.is_some() || rec.size.is_some())
         && rec.modified == modified
         && rec.size == size
-        && crate::cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
+        && crate::cache::cache_path(config_dir, &cache_id).is_ok_and(|p| p.exists()))
     .then_some(cache_id)
 }
 
@@ -470,29 +469,15 @@ fn save_manifest(config_dir: &Path, manifest: &Manifest) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
     use std::path::Path;
 
-    /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
-    /// `f` receives the tempdir root for building provider fixtures and
-    /// the config directory itself. The variable stays set because
-    /// the cache still reads it.
+    /// Run `f` with a config directory at `<tempdir>/.toolpath`; `f`
+    /// receives the tempdir root for building provider fixtures and the
+    /// config directory itself.
     fn with_cfg<F: FnOnce(&Path, &Path) -> R, R>(f: F) -> R {
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let config_root = temp.path().join(".toolpath");
-        let prev = std::env::var_os(CONFIG_DIR_ENV);
-        unsafe {
-            std::env::set_var(CONFIG_DIR_ENV, &config_root);
-        }
-        let result = f(temp.path(), &config_root);
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var(CONFIG_DIR_ENV, v),
-                None => std::env::remove_var(CONFIG_DIR_ENV),
-            }
-        }
-        result
+        f(temp.path(), &config_root)
     }
 
     fn write_claude_session(home: &Path, project_slug: &str, session: &str, prompt: &str) {
@@ -519,8 +504,8 @@ mod tests {
         }
     }
 
-    fn cached_step_count(cache_id: &str) -> usize {
-        let path = crate::cache::cache_path(cache_id).unwrap();
+    fn cached_step_count(config_dir: &Path, cache_id: &str) -> usize {
+        let path = crate::cache::cache_path(config_dir, cache_id).unwrap();
         let json = std::fs::read_to_string(path).unwrap();
         let doc = toolpath::v1::Graph::from_json(&json).unwrap();
         doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
@@ -628,7 +613,9 @@ mod tests {
                 .as_deref()
                 .expect("synced record is materialized");
             assert!(
-                crate::cache::cache_path(cache_id).unwrap().exists(),
+                crate::cache::cache_path(config_dir, cache_id)
+                    .unwrap()
+                    .exists(),
                 "cache doc must exist for {cache_id}"
             );
 
@@ -653,7 +640,7 @@ mod tests {
                 .cache_id
                 .clone()
                 .expect("synced record is materialized");
-            let steps_before = cached_step_count(&cache_id);
+            let steps_before = cached_step_count(config_dir, &cache_id);
 
             // Session continues: a later user turn lands in the file,
             // changing its size (and mtime).
@@ -678,7 +665,7 @@ mod tests {
                 (0, 1, 0, 0)
             );
             assert!(
-                cached_step_count(&cache_id) > steps_before,
+                cached_step_count(config_dir, &cache_id) > steps_before,
                 "re-derived doc must contain the appended turn"
             );
         });
@@ -757,7 +744,7 @@ mod tests {
                 .cache_id
                 .clone()
                 .unwrap();
-            let steps_before = cached_step_count(&cache_id);
+            let steps_before = cached_step_count(config_dir, &cache_id);
 
             // The session rotates: a successor file whose first entry
             // carries the predecessor's sessionId (the bridge).
@@ -787,7 +774,7 @@ mod tests {
                 "successor segments are not separate artifacts"
             );
             assert!(
-                cached_step_count(&cache_id) > steps_before,
+                cached_step_count(config_dir, &cache_id) > steps_before,
                 "post-rotation turns must reach the cached doc"
             );
 
@@ -846,13 +833,8 @@ mod tests {
             let artifact = derived.provenance.as_ref().unwrap();
             assert_eq!(artifact.id, "sess-aaa");
             assert!(artifact.modified.is_some() && artifact.size.is_some());
-            crate::cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
-            let config = Config {
-                home: Some(home.to_path_buf()),
-                toolpath_config_dir: Some(config_dir.to_path_buf()),
-                ..Config::default()
-            };
-            record_artifact(&config, artifact, &derived.cache_id).unwrap();
+            crate::cache::write_cached(config_dir, &derived.cache_id, &derived.doc, true).unwrap();
+            record_artifact(config_dir, artifact, &derived.cache_id).unwrap();
 
             // The import's stamp must match sync's own enumeration.
             let (_, outcome) =
@@ -1034,7 +1016,7 @@ mod tests {
                 .unwrap();
 
             // `p cache rm`: doc removed, record downgraded to known.
-            crate::cache::remove_cached(&cache_id).unwrap();
+            crate::cache::remove_cached(config_dir, &cache_id).unwrap();
             evict_cache_id(config_dir, &cache_id).unwrap();
             assert!(
                 load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
@@ -1047,7 +1029,9 @@ mod tests {
                     [0];
             assert_eq!((outcome.new, outcome.updated), (0, 1));
             assert!(
-                crate::cache::cache_path(&cache_id).unwrap().exists(),
+                crate::cache::cache_path(config_dir, &cache_id)
+                    .unwrap()
+                    .exists(),
                 "evicted artifact re-materializes"
             );
         });
@@ -1066,7 +1050,7 @@ mod tests {
 
             // Doc deleted behind the CLI's back: the record still claims
             // materialization, but sync verifies the doc exists.
-            let doc = crate::cache::cache_path(&cache_id).unwrap();
+            let doc = crate::cache::cache_path(config_dir, &cache_id).unwrap();
             std::fs::remove_file(&doc).unwrap();
             let (_, outcome) =
                 sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap()
@@ -1081,15 +1065,11 @@ mod tests {
         with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
-            let config = &Config {
-                toolpath_config_dir: Some(config_dir.to_path_buf()),
-                ..Config::default()
-            };
 
             // Nothing synced yet: no fresh copy.
             assert!(
                 fresh_cache_id(
-                    config,
+                    config_dir,
                     &bundle,
                     ArtifactType::Claude,
                     Some("/test/project"),
@@ -1100,7 +1080,7 @@ mod tests {
 
             sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             let cache_id = fresh_cache_id(
-                config,
+                config_dir,
                 &bundle,
                 ArtifactType::Claude,
                 Some("/test/project"),
@@ -1118,7 +1098,7 @@ mod tests {
             std::fs::write(&file, body).unwrap();
             assert!(
                 fresh_cache_id(
-                    config,
+                    config_dir,
                     &bundle,
                     ArtifactType::Claude,
                     Some("/test/project"),
@@ -1129,7 +1109,7 @@ mod tests {
             sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
             assert!(
                 fresh_cache_id(
-                    config,
+                    config_dir,
                     &bundle,
                     ArtifactType::Claude,
                     Some("/test/project"),
@@ -1139,11 +1119,11 @@ mod tests {
             );
 
             // Evicted: known but not materialized, so not fresh.
-            crate::cache::remove_cached(&cache_id).unwrap();
+            crate::cache::remove_cached(config_dir, &cache_id).unwrap();
             evict_cache_id(config_dir, &cache_id).unwrap();
             assert!(
                 fresh_cache_id(
-                    config,
+                    config_dir,
                     &bundle,
                     ArtifactType::Claude,
                     Some("/test/project"),
