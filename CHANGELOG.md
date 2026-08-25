@@ -16,7 +16,8 @@ All notable changes to the Toolpath workspace are documented here.
   path in normalized form (no `.`, `..`, or empty component; one
   trailing `/` is dropped), does not have to exist on this machine, and
   conflicts with `--project`. Message content and tool results are not
-  touched.
+  touched. `scripts/resume-remote.sh` passes both flags, checks that
+  the output carries the remote cwd and ID, and ships it as is.
 - **`toolpath-cli`** (0.19.0): lockstep bump of the deprecated shim.
 
 ## toolpath-claude 0.13.0 — 2026-08-23

@@ -68,7 +68,6 @@
 #     the script quotes nothing and escapes nothing.
 #   - --session is a UUID. At least one Claude session exists for
 #     --project.
-#   - The projected JSONL records --project as its cwd.
 #   Remote (two read-only ssh calls):
 #   - Each reply is exactly the TP_* lines the probe prints. A login
 #     banner or a registration notice fails the run verbatim.
@@ -89,9 +88,10 @@
 #   3. Optional VM creation (--create).
 #   4. [shell] Call 1: remote home, claude path, tmux presence. Derive
 #      <remote-dir> from the remote home unless -C is given.
-#   5. `path p export claude` projects the document to JSONL.
-#      [shell] Rewrite the cwd and sessionId keys to the remote values
-#      (sed).
+#   5. `path p export claude --cwd <remote-dir> --session-id <ID>`
+#      projects the document to JSONL rooted at the remote project
+#      directory under the minted ID. [shell] Check the JSONL carries
+#      the remote cwd and ID.
 #      [shell] Compute the remote Claude project slug (/, _, and .
 #      become -).
 #   6. Optional remote seeding (--setup). rsync the working tree
@@ -355,25 +355,12 @@ echo "remote project dir: $REMOTE_DIR"
 # ── 5. Project the session ────────────────────────────────────────────────
 
 step "Project session $SESSION to JSONL"
-JSONL_SRC="$WORK_DIR/$SESSION.jsonl"
-run "$PATH_BIN" p export claude --input "$DOC" >"$JSONL_SRC"
-N_CWD="$(grep -cF "\"cwd\":\"$PROJECT\"" "$JSONL_SRC" || true)"
-[[ $N_CWD -gt 0 ]] || die "the projected JSONL has no cwd equal to $PROJECT; pass --project <dir> matching the session's recorded cwd"
-N_SID="$(grep -cF "\"sessionId\":\"$SESSION\"" "$JSONL_SRC" || true)"
-[[ $N_SID -gt 0 ]] || die "the projected JSONL has no sessionId equal to $SESSION"
-
-# [shell] Rewrite cwd and sessionId to the remote values. PROJECT and
-# REMOTE_DIR match PLAIN_PATH_RE, so `.` is the only sed-special
-# character in the pattern and `|` is a safe delimiter.
 JSONL="$WORK_DIR/$REMOTE_ID.jsonl"
-CWD_RE="${PROJECT//./\\.}"
-show "sed -e 's|\"cwd\":\"$PROJECT\"|\"cwd\":\"$REMOTE_DIR\"|g' -e 's|\"sessionId\":\"$SESSION\"|\"sessionId\":\"$REMOTE_ID\"|g' $JSONL_SRC > $JSONL"
-sed -e "s|\"cwd\":\"$CWD_RE\"|\"cwd\":\"$REMOTE_DIR\"|g" \
-    -e "s|\"sessionId\":\"$SESSION\"|\"sessionId\":\"$REMOTE_ID\"|g" \
-    "$JSONL_SRC" >"$JSONL"
-LEFT="$(grep -cF -e "\"cwd\":\"$PROJECT\"" -e "\"sessionId\":\"$SESSION\"" "$JSONL" || true)"
-[[ $LEFT -eq 0 ]] || die "$LEFT source cwd/sessionId keys survived the rewrite in $JSONL"
-[[ "$(wc -l <"$JSONL")" -eq "$(wc -l <"$JSONL_SRC")" ]] || die "line count changed during the rewrite"
+run "$PATH_BIN" p export claude --input "$DOC" --cwd "$REMOTE_DIR" --session-id "$REMOTE_ID" >"$JSONL"
+N_CWD="$(grep -cF "\"cwd\":\"$REMOTE_DIR\"" "$JSONL" || true)"
+[[ $N_CWD -gt 0 ]] || die "the projected JSONL has no cwd equal to $REMOTE_DIR"
+N_SID="$(grep -cF "\"sessionId\":\"$REMOTE_ID\"" "$JSONL" || true)"
+[[ $N_SID -gt 0 ]] || die "the projected JSONL has no sessionId equal to $REMOTE_ID"
 
 # [shell] Claude project slug: /, _, and . become -.
 SLUG="$(printf '%s' "$REMOTE_DIR" | tr '/_.' '---')"
@@ -490,7 +477,7 @@ cat <<EOF
   session id:    $REMOTE_ID (source $SESSION)
   session file:  $TARGET (exists: $TARGET_EXISTS)
   tmux session:  $TMUX_NAME ($TMUX_STATE)
-  jsonl:         $JSONL ($(wc -c <"$JSONL") bytes; $N_CWD cwd and $N_SID sessionId keys rewritten)
+  jsonl:         $JSONL ($(wc -c <"$JSONL") bytes; $N_CWD cwd and $N_SID sessionId keys)
   state:         $STATE: $STATE_NOTE
 EOF
 [[ $SHIP -eq 0 ]] || echo "  ship:    ssh $REMOTE \"$SHIP_CMD\" < $JSONL"
