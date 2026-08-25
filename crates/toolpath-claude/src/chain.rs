@@ -96,7 +96,8 @@ impl ChainIndex {
             // them in as successors, whereupon every entry of the segment read
             // as a bridge entry and the whole segment (turns, usage) silently
             // vanished from the merged conversation. A session stem never
-            // contains a dot; anything dotted stands alone instead.
+            // contains a dot; anything dotted is classified standalone here
+            // and excluded from chain_heads() below.
             if file_stem.contains('.') {
                 self.non_successors.insert(file_stem.clone());
                 continue;
@@ -141,10 +142,17 @@ impl ChainIndex {
     }
 
     /// All chain heads — file stems that are not successors of another.
+    ///
+    /// Dotted stems (`.orphaned-*` rotation artifacts) are excluded even
+    /// though they stand outside every chain: a head becomes a derived
+    /// document whose id truncates the stem to its first 8 characters,
+    /// which for an orphan equals its parent session's prefix — the two
+    /// documents would overwrite each other in the cache. Until ids can
+    /// carry the full stem, orphans are neither chained nor listed.
     pub(crate) fn chain_heads(&self) -> Vec<String> {
         self.known_files
             .iter()
-            .filter(|stem| !self.reverse.contains_key(stem.as_str()))
+            .filter(|stem| !self.reverse.contains_key(stem.as_str()) && !stem.contains('.'))
             .cloned()
             .collect()
     }
@@ -421,6 +429,12 @@ mod tests {
 
         assert!(index.successor_of("session-a").is_none());
         assert!(!index.is_successor("session-a.orphaned-1787626221622-ac84712d"));
+
+        // And it is not a listable head either: its derived id would
+        // truncate to the parent session's prefix and collide in the cache.
+        let heads = index.chain_heads();
+        assert!(heads.contains(&"session-a".to_string()));
+        assert!(!heads.iter().any(|h| h.contains(".orphaned-")));
     }
 
     #[test]

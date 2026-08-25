@@ -7,8 +7,12 @@ All notable changes to the Toolpath workspace are documented here.
 - **Fix:** `.orphaned-*` rotation artifacts are no longer classified as
   chain successors. Their mangled stems made every entry read as a
   bridge entry, silently dropping the whole segment's turns and token
-  usage from the merged conversation (#236). Dotted stems now stand
-  alone as their own conversations.
+  usage from the merged conversation (#236). Dotted stems are now
+  classified standalone — and deliberately excluded from
+  `list_conversations`, because a derived document id truncates the stem
+  to 8 characters, which for an orphan equals its parent session's
+  prefix and would collide in the cache. Ingesting orphans arrives with
+  the full-stem id work. `read_segment` reads them directly today.
 - **Fix:** bridge-entry filtering in `read_conversation` now skips only
   the *leading* bridge run of a successor segment — the copied
   predecessor tail — instead of every entry with a foreign `sessionId`.
