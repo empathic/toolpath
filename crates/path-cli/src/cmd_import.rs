@@ -226,26 +226,30 @@ fn emit(
             };
             println!("{}", json);
         } else {
+            let config_dir = config.config_dir()?;
             // The implicit sync in `path query` fills the cache under
             // these same IDs; re-importing an artifact whose record is
             // still fresh is a no-op, not an exists-error.
             #[cfg(not(target_os = "emscripten"))]
             if !force
                 && let Some(stub) = &d.provenance
-                && crate::sync::record_is_current(config, stub, &d.cache_id)
+                && crate::sync::record_is_current(&config_dir, stub, &d.cache_id)
             {
-                println!("{}", crate::cache::cache_path(&d.cache_id)?.display());
+                println!(
+                    "{}",
+                    crate::cache::cache_path(&config_dir, &d.cache_id)?.display()
+                );
                 eprintln!(
                     "{} is already up to date (pass --force to re-derive)",
                     d.cache_id
                 );
                 continue;
             }
-            let path = write_cached(&d.cache_id, &d.doc, force)?;
+            let path = write_cached(&config_dir, &d.cache_id, &d.doc, force)?;
             println!("{}", path.display());
             #[cfg(not(target_os = "emscripten"))]
             if let Some(stub) = &d.provenance
-                && let Err(e) = crate::sync::record_artifact(config, stub, &d.cache_id)
+                && let Err(e) = crate::sync::record_artifact(&config_dir, stub, &d.cache_id)
             {
                 eprintln!("warning: sync manifest not updated: {e}");
             }

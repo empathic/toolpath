@@ -119,7 +119,9 @@ pub fn run(args: QueryArgs, pretty: bool, config: &Config) -> Result<()> {
     // pretty on a TTY or when the global `--pretty` flag is set.
     let compact = args.compact || (!pretty && !std::io::stdout().is_terminal());
 
+    let config_dir = config.config_dir()?;
     crate::query::run(
+        &config_dir,
         &scope,
         &args.filter,
         compact,

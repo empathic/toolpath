@@ -457,7 +457,7 @@ fn run_copilot(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(&config.config_dir()?, &input)?;
         match (project, output) {
             (Some(project_dir), None) => {
                 let id = project_copilot(&path, &project_dir, config)?;
@@ -670,7 +670,7 @@ fn run_claude(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(&config.config_dir()?, &input)?;
         let conversation = build_claude_conversation(&path)?;
         let jsonl = serialize_jsonl(&conversation)?;
 
@@ -705,8 +705,8 @@ fn run_claude(
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn load_path_doc(input: &str) -> Result<toolpath::v1::Path> {
-    let file = cache_ref(input)?;
+fn load_path_doc(config_dir: &std::path::Path, input: &str) -> Result<toolpath::v1::Path> {
+    let file = cache_ref(config_dir, input)?;
     let json = std::fs::read_to_string(&file)
         .with_context(|| format!("Failed to read {}", file.display()))?;
     let doc = toolpath::v1::Graph::from_json(&json)
@@ -798,7 +798,7 @@ fn run_gemini(
         };
         let project_path = project_dir.to_string_lossy().to_string();
 
-        let conversation = build_gemini_conversation(&input, &project_path)?;
+        let conversation = build_gemini_conversation(&config.config_dir()?, &input, &project_path)?;
 
         match (project, output) {
             (Some(_), None) => write_into_gemini_project(&conversation, &project_path, config)?,
@@ -812,12 +812,13 @@ fn run_gemini(
 
 #[cfg(not(target_os = "emscripten"))]
 fn build_gemini_conversation(
+    config_dir: &std::path::Path,
     input: &str,
     project_path: &str,
 ) -> Result<toolpath_gemini::types::Conversation> {
     use toolpath_convo::ConversationProjector;
 
-    let path = load_path_doc(input)?;
+    let path = load_path_doc(config_dir, input)?;
     let view = toolpath_convo::extract_conversation(&path);
 
     // The projector bakes `projectHash` and `directories` into the
@@ -1028,7 +1029,7 @@ fn run_pi(
         };
         let cwd_str = project_dir.to_string_lossy().to_string();
 
-        let session = build_pi_session(&input, &cwd_str)?;
+        let session = build_pi_session(&config.config_dir()?, &input, &cwd_str)?;
 
         match (project, output) {
             (Some(_), None) => write_into_pi_project(&session, &cwd_str, config)?,
@@ -1041,10 +1042,14 @@ fn run_pi(
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn build_pi_session(input: &str, cwd: &str) -> Result<toolpath_pi::PiSession> {
+fn build_pi_session(
+    config_dir: &std::path::Path,
+    input: &str,
+    cwd: &str,
+) -> Result<toolpath_pi::PiSession> {
     use toolpath_convo::ConversationProjector;
 
-    let path = load_path_doc(input)?;
+    let path = load_path_doc(config_dir, input)?;
     let view = toolpath_convo::extract_conversation(&path);
 
     let projector = toolpath_pi::project::PiProjector::new().with_cwd(cwd.to_string());
@@ -1179,7 +1184,7 @@ fn run_codex(
         };
         let cwd_str = project_dir.to_string_lossy().to_string();
 
-        let session = build_codex_session(&input, &cwd_str)?;
+        let session = build_codex_session(&config.config_dir()?, &input, &cwd_str)?;
 
         match (project, output) {
             (Some(_), None) => write_into_codex_project(&session, config)?,
@@ -1192,10 +1197,14 @@ fn run_codex(
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn build_codex_session(input: &str, cwd: &str) -> Result<toolpath_codex::Session> {
+fn build_codex_session(
+    config_dir: &std::path::Path,
+    input: &str,
+    cwd: &str,
+) -> Result<toolpath_codex::Session> {
     use toolpath_convo::ConversationProjector;
 
-    let path = load_path_doc(input)?;
+    let path = load_path_doc(config_dir, input)?;
     let view = toolpath_convo::extract_conversation(&path);
 
     let projector = toolpath_codex::project::CodexProjector::new().with_cwd(cwd.to_string());
@@ -1438,7 +1447,7 @@ fn run_opencode(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(&config.config_dir()?, &input)?;
         match (project, output) {
             (Some(project_dir), None) => {
                 let session = build_opencode_session(&path, Some(&project_dir))?;
@@ -1684,7 +1693,7 @@ fn run_cursor(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(&config.config_dir()?, &input)?;
         match (project, output) {
             (Some(project_dir), None) => {
                 let session = build_cursor_session(&path, Some(&project_dir), config)?;
@@ -1959,7 +1968,7 @@ fn run_pathbase(args: PathbaseExportArgs, config: &Config) -> Result<()> {
     {
         use crate::cmd_pathbase::preflight_auth;
 
-        let file = cache_ref(&args.input)?;
+        let file = cache_ref(&config.config_dir()?, &args.input)?;
         let body = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read {}", file.display()))?;
         let upload = PathbaseUploadArgs {
@@ -2229,7 +2238,7 @@ mod tests {
             None,
             Some(output_path.clone()),
             false,
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .unwrap();
 
@@ -2278,7 +2287,7 @@ mod tests {
             None,
             None,
             false,
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .unwrap_err();
         assert!(err.to_string().contains("single-path graph"));
@@ -2294,7 +2303,7 @@ mod tests {
             None,
             None,
             false,
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .unwrap_err();
         assert!(err.to_string().contains("parse") || err.to_string().contains("Failed"));
@@ -2439,7 +2448,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             Some(project),
             None,
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .expect_err("should reject multi-path graph");
         assert!(err.to_string().contains("single-path graph"));
@@ -2504,7 +2513,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(out_path.clone()),
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .expect("export gemini --output");
 
@@ -2670,7 +2679,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             Some(project),
             None,
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .expect_err("should reject empty graph");
         assert!(err.to_string().contains("single-path"));
@@ -2726,7 +2735,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(out_path.clone()),
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .expect("export pi --output");
 
@@ -2792,7 +2801,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(out_path.clone()),
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .expect("export codex --output");
 
@@ -2934,7 +2943,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             Some(project),
             None,
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .expect_err("should reject empty graph");
         assert!(err.to_string().contains("single-path"));
@@ -3059,7 +3068,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(out_path.clone()),
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .unwrap();
 
@@ -3161,7 +3170,7 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             None,
-            &Config::default(),
+            &config_with_home(temp.path()),
         )
         .unwrap_err();
         assert!(err.to_string().contains("single-path"));

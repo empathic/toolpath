@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::path::PathBuf;
 use toolpath::v1::Graph;
 
-use crate::config::config_dir;
+use std::path::Path;
 
 /// An entry surfaced by `list_cached`.
 #[derive(Debug, Clone)]
@@ -21,16 +21,16 @@ pub(crate) struct CacheEntry {
 }
 
 /// The cache directory: `$CONFIG_DIR/documents/`.
-pub(crate) fn cache_dir() -> Result<PathBuf> {
-    Ok(config_dir()?.join(crate::config::DOCUMENTS_DIR_NAME))
+pub(crate) fn cache_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join(crate::config::DOCUMENTS_DIR_NAME)
 }
 
 /// Path for a given cache id (does not check existence).
-pub(crate) fn cache_path(id: &str) -> Result<PathBuf> {
+pub(crate) fn cache_path(config_dir: &Path, id: &str) -> Result<PathBuf> {
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.ends_with(".json") {
         bail!("invalid cache id: {id:?}");
     }
-    Ok(cache_dir()?.join(format!("{id}.json")))
+    Ok(cache_dir(config_dir).join(format!("{id}.json")))
 }
 
 /// Write a toolpath document to the cache under `id`. Errors if the
@@ -39,10 +39,15 @@ pub(crate) fn cache_path(id: &str) -> Result<PathBuf> {
 /// Uses `O_CREAT | O_EXCL` (`create_new`) when `force == false` so the
 /// exists-check and the write are atomic — two concurrent `path import`
 /// invocations racing the same id can't silently stomp each other.
-pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<PathBuf> {
+pub(crate) fn write_cached(
+    config_dir: &Path,
+    id: &str,
+    doc: &Graph,
+    force: bool,
+) -> Result<PathBuf> {
     use std::io::Write;
 
-    let dir = cache_dir()?;
+    let dir = cache_dir(config_dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     #[cfg(unix)]
     {
@@ -50,7 +55,7 @@ pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<PathBuf
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
     }
 
-    let path = cache_path(id)?;
+    let path = cache_path(config_dir, id)?;
     let json = doc.to_json_pretty()?;
 
     let mut opts = std::fs::OpenOptions::new();
@@ -87,7 +92,7 @@ pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<PathBuf
 /// Resolve a `<ref>` string to a filesystem path. A ref is either a
 /// bare cache id (looks up `$CACHE_DIR/<ref>.json`) or a file path
 /// (contains `/` or `\\`, or ends with `.json`).
-pub(crate) fn cache_ref(s: &str) -> Result<PathBuf> {
+pub(crate) fn cache_ref(config_dir: &Path, s: &str) -> Result<PathBuf> {
     if s.contains('/') || s.contains('\\') || s.ends_with(".json") {
         let p = PathBuf::from(s);
         if !p.exists() {
@@ -98,7 +103,7 @@ pub(crate) fn cache_ref(s: &str) -> Result<PathBuf> {
         }
         return Ok(p);
     }
-    let p = cache_path(s)?;
+    let p = cache_path(config_dir, s)?;
     if !p.exists() {
         bail!(
             "cache entry {s} not found at {}; run `path cache ls` to see what's cached",
@@ -108,8 +113,8 @@ pub(crate) fn cache_ref(s: &str) -> Result<PathBuf> {
     Ok(p)
 }
 
-pub(crate) fn list_cached() -> Result<Vec<CacheEntry>> {
-    let dir = cache_dir()?;
+pub(crate) fn list_cached(config_dir: &Path) -> Result<Vec<CacheEntry>> {
+    let dir = cache_dir(config_dir);
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -136,8 +141,8 @@ pub(crate) fn list_cached() -> Result<Vec<CacheEntry>> {
     Ok(out)
 }
 
-pub(crate) fn remove_cached(id: &str) -> Result<()> {
-    let path = cache_path(id)?;
+pub(crate) fn remove_cached(config_dir: &Path, id: &str) -> Result<()> {
+    let path = cache_path(config_dir, id)?;
     if !path.exists() {
         return Err(anyhow!("cache entry {id} not found"));
     }
@@ -173,19 +178,11 @@ pub(crate) fn pathbase_cache_id(owner: &str, repo: &str, id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
 
-    fn with_cfg<F: FnOnce(&std::path::Path) -> R, R>(f: F) -> R {
-        let temp = tempfile::tempdir().unwrap();
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::set_var(CONFIG_DIR_ENV, temp.path());
-        }
-        let result = f(temp.path());
-        unsafe {
-            std::env::remove_var(CONFIG_DIR_ENV);
-        }
-        result
+    /// A config directory in a fresh tempdir. Dropping the `TempDir`
+    /// removes it.
+    fn config_dir_in_tempdir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     fn sample_doc() -> Graph {
@@ -194,100 +191,94 @@ mod tests {
 
     #[test]
     fn write_and_read_cache_entry() {
-        with_cfg(|_| {
-            let doc = sample_doc();
-            let p = write_cached("claude-abc", &doc, false).unwrap();
-            assert!(p.exists());
-            assert_eq!(p.file_name().unwrap(), "claude-abc.json");
-        });
+        let temp = config_dir_in_tempdir();
+        let doc = sample_doc();
+        let p = write_cached(temp.path(), "claude-abc", &doc, false).unwrap();
+        assert!(p.exists());
+        assert_eq!(p.file_name().unwrap(), "claude-abc.json");
     }
 
     #[test]
     fn write_errors_if_exists_without_force() {
-        with_cfg(|_| {
-            let doc = sample_doc();
-            write_cached("claude-abc", &doc, false).unwrap();
-            let err = write_cached("claude-abc", &doc, false).unwrap_err();
-            assert!(err.to_string().contains("already exists"));
-        });
+        let temp = config_dir_in_tempdir();
+        let doc = sample_doc();
+        write_cached(temp.path(), "claude-abc", &doc, false).unwrap();
+        let err = write_cached(temp.path(), "claude-abc", &doc, false).unwrap_err();
+        assert!(err.to_string().contains("already exists"));
     }
 
     #[test]
     fn write_force_overwrites() {
-        with_cfg(|_| {
-            let doc = sample_doc();
-            write_cached("claude-abc", &doc, false).unwrap();
-            write_cached("claude-abc", &doc, true).unwrap();
-        });
+        let temp = config_dir_in_tempdir();
+        let doc = sample_doc();
+        write_cached(temp.path(), "claude-abc", &doc, false).unwrap();
+        write_cached(temp.path(), "claude-abc", &doc, true).unwrap();
     }
 
     #[test]
     fn cache_ref_finds_existing_cache_entry() {
-        with_cfg(|_| {
-            let doc = sample_doc();
-            let p = write_cached("claude-abc", &doc, false).unwrap();
-            let resolved = cache_ref("claude-abc").unwrap();
-            assert_eq!(resolved, p);
-        });
+        let temp = config_dir_in_tempdir();
+        let doc = sample_doc();
+        let p = write_cached(temp.path(), "claude-abc", &doc, false).unwrap();
+        let resolved = cache_ref(temp.path(), "claude-abc").unwrap();
+        assert_eq!(resolved, p);
     }
 
     #[test]
     fn cache_ref_returns_file_path_unchanged() {
+        let temp = config_dir_in_tempdir();
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), "{}").unwrap();
-        let resolved = cache_ref(tmp.path().to_str().unwrap()).unwrap();
+        let resolved = cache_ref(temp.path(), tmp.path().to_str().unwrap()).unwrap();
         assert_eq!(resolved, tmp.path());
     }
 
     #[test]
     fn cache_ref_errors_on_missing_id() {
-        with_cfg(|_| {
-            let err = cache_ref("does-not-exist").unwrap_err();
-            assert!(err.to_string().contains("not found"));
-        });
+        let temp = config_dir_in_tempdir();
+        let err = cache_ref(temp.path(), "does-not-exist").unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]
     fn cache_path_rejects_slashes_and_json_suffix() {
-        assert!(cache_path("foo/bar").is_err());
-        assert!(cache_path("foo.json").is_err());
-        assert!(cache_path("").is_err());
+        let temp = config_dir_in_tempdir();
+        assert!(cache_path(temp.path(), "foo/bar").is_err());
+        assert!(cache_path(temp.path(), "foo.json").is_err());
+        assert!(cache_path(temp.path(), "").is_err());
     }
 
     #[test]
     fn list_empty_when_dir_missing() {
-        with_cfg(|_| {
-            assert!(list_cached().unwrap().is_empty());
-        });
+        let temp = config_dir_in_tempdir();
+        assert!(list_cached(temp.path()).unwrap().is_empty());
     }
 
     #[test]
     fn list_and_remove_roundtrip() {
-        with_cfg(|_| {
-            let doc = sample_doc();
-            write_cached("a", &doc, false).unwrap();
-            write_cached("b", &doc, false).unwrap();
-            let entries = list_cached().unwrap();
-            assert_eq!(entries.len(), 2);
+        let temp = config_dir_in_tempdir();
+        let doc = sample_doc();
+        write_cached(temp.path(), "a", &doc, false).unwrap();
+        write_cached(temp.path(), "b", &doc, false).unwrap();
+        let entries = list_cached(temp.path()).unwrap();
+        assert_eq!(entries.len(), 2);
 
-            remove_cached("a").unwrap();
-            let entries = list_cached().unwrap();
-            assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].id, "b");
+        remove_cached(temp.path(), "a").unwrap();
+        let entries = list_cached(temp.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "b");
 
-            assert!(remove_cached("a").is_err());
-        });
+        assert!(remove_cached(temp.path(), "a").is_err());
     }
 
     #[cfg(unix)]
     #[test]
     fn writes_file_with_0600() {
         use std::os::unix::fs::PermissionsExt;
-        with_cfg(|_| {
-            let p = write_cached("claude-abc", &sample_doc(), false).unwrap();
-            let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
-        });
+        let temp = config_dir_in_tempdir();
+        let p = write_cached(temp.path(), "claude-abc", &sample_doc(), false).unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
@@ -306,7 +297,8 @@ mod tests {
     #[test]
     fn make_id_result_survives_cache_path() {
         // Regression: make_id output must be accepted by cache_path.
+        let temp = config_dir_in_tempdir();
         let id = make_id("pathbase", "trc_01H.json");
-        assert!(cache_path(&id).is_ok());
+        assert!(cache_path(temp.path(), &id).is_ok());
     }
 }
