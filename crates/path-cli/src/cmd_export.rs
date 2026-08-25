@@ -52,6 +52,15 @@ pub enum ExportTarget {
         #[arg(long, value_name = "UUID")]
         session_id: Option<String>,
 
+        /// Rename the session to an ID derived from the document: a
+        /// v4-shaped UUID from the first 128 bits of the SHA-256 of the
+        /// key-sorted compact JSON. The same document yields the same ID
+        /// on every run, so a second export of it into the same project
+        /// is refused instead of duplicated. --cwd does not change the
+        /// ID. Mutually exclusive with --session-id.
+        #[arg(long, conflicts_with = "session_id")]
+        derive_session_id: bool,
+
         /// Root the session at this directory: it becomes the `cwd` of
         /// every entry that carries one. Absolute POSIX path in
         /// normalized form; it does not have to exist on this machine.
@@ -228,9 +237,18 @@ pub fn run(target: ExportTarget) -> Result<()> {
             project,
             output,
             session_id,
+            derive_session_id,
             cwd,
             force,
-        } => run_claude(input, project, output, session_id, cwd, force),
+        } => run_claude(
+            input,
+            project,
+            output,
+            session_id,
+            derive_session_id,
+            cwd,
+            force,
+        ),
         ExportTarget::Gemini {
             input,
             project,
@@ -658,27 +676,39 @@ fn run_claude(
     project: Option<PathBuf>,
     output: Option<PathBuf>,
     session_id: Option<String>,
+    derive_session_id: bool,
     cwd: Option<String>,
     force: bool,
 ) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output, session_id, cwd, force);
+        let _ = (
+            input,
+            project,
+            output,
+            session_id,
+            derive_session_id,
+            cwd,
+            force,
+        );
         anyhow::bail!("'path export claude' requires a native environment");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let session_id = session_id
-            .as_deref()
-            .map(|raw| {
-                uuid::Uuid::parse_str(raw)
-                    .with_context(|| format!("--session-id must be a UUID (got {raw:?})"))
-            })
-            .transpose()?
-            .map(|id| id.hyphenated().to_string());
         let cwd = cwd.as_deref().map(parse_cwd_arg).transpose()?;
-        let path = load_path_doc(&input)?;
+        let json = read_doc_json(&input)?;
+        let path = parse_path_doc(&json)?;
+        let session_id = match session_id.as_deref() {
+            Some(raw) => Some(
+                uuid::Uuid::parse_str(raw)
+                    .with_context(|| format!("--session-id must be a UUID (got {raw:?})"))?
+                    .hyphenated()
+                    .to_string(),
+            ),
+            None if derive_session_id => Some(session_id_from_document_hash(&json)?),
+            None => None,
+        };
         let mut conversation = build_claude_conversation(&path)?;
         if let Some(id) = &session_id {
             conversation.session_id = id.clone();
@@ -723,7 +753,12 @@ fn run_claude(
             (None, Some(out_path)) => {
                 std::fs::write(&out_path, &jsonl)
                     .with_context(|| format!("write {}", out_path.display()))?;
-                eprintln!("Wrote {} bytes to {}", jsonl.len(), out_path.display());
+                eprintln!(
+                    "Wrote session {} ({} bytes) to {}",
+                    conversation.session_id,
+                    jsonl.len(),
+                    out_path.display()
+                );
             }
             (None, None) => {
                 println!("{}", jsonl);
@@ -737,16 +772,42 @@ fn run_claude(
 
 #[cfg(not(target_os = "emscripten"))]
 fn load_path_doc(input: &str) -> Result<toolpath::v1::Path> {
+    parse_path_doc(&read_doc_json(input)?)
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn read_doc_json(input: &str) -> Result<String> {
     let file = cache_ref(input)?;
-    let json = std::fs::read_to_string(&file)
-        .with_context(|| format!("Failed to read {}", file.display()))?;
-    let doc = toolpath::v1::Graph::from_json(&json)
+    std::fs::read_to_string(&file).with_context(|| format!("Failed to read {}", file.display()))
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn parse_path_doc(json: &str) -> Result<toolpath::v1::Path> {
+    let doc = toolpath::v1::Graph::from_json(json)
         .map_err(|e| anyhow::anyhow!("Failed to parse toolpath document: {}", e))?;
     doc.into_single_path().ok_or_else(|| {
         anyhow::anyhow!(
             "expected a single-path graph; the source graph holds zero or multiple paths"
         )
     })
+}
+
+/// The session ID derived from the document `json`: a v4-shaped UUID
+/// from the first 128 bits of the SHA-256 of the key-sorted compact
+/// JSON. Key order and whitespace in `json` do not change the ID.
+#[cfg(not(target_os = "emscripten"))]
+fn session_id_from_document_hash(json: &str) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let document: serde_json::Value =
+        serde_json::from_str(json).context("Failed to parse toolpath document")?;
+    let canonical = serde_json::to_string(&document).context("serialize document")?;
+    let digest = Sha256::digest(canonical.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Ok(uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .hyphenated()
+        .to_string())
 }
 
 /// Sets every `sessionId` key in `value`, at any depth, to `id`.
@@ -2246,6 +2307,7 @@ mod tests {
             None,
             Some(output_path.clone()),
             None,
+            false,
             None,
             false,
         )
@@ -2277,6 +2339,7 @@ mod tests {
     fn export_claude_lines(
         doc: &toolpath::v1::Graph,
         session_id: Option<&str>,
+        derive_session_id: bool,
         cwd: Option<&str>,
     ) -> Vec<serde_json::Value> {
         let temp = tempfile::tempdir().unwrap();
@@ -2288,6 +2351,7 @@ mod tests {
             None,
             Some(output_path.clone()),
             session_id.map(str::to_string),
+            derive_session_id,
             cwd.map(str::to_string),
             false,
         )
@@ -2306,12 +2370,12 @@ mod tests {
     #[test]
     fn claude_cwd_flag_rewrites_every_cwd() {
         let doc = make_path_doc_with_cwd("/old/project");
-        let plain = export_claude_lines(&doc, None, None);
+        let plain = export_claude_lines(&doc, None, false, None);
         let old = values_of(&plain, "cwd");
         assert!(!old.is_empty());
         assert!(old.iter().all(|c| *c == "/old/project"));
 
-        let rooted = export_claude_lines(&doc, None, Some("/new/dir/"));
+        let rooted = export_claude_lines(&doc, None, false, Some("/new/dir/"));
         assert_eq!(rooted.len(), plain.len());
         let new = values_of(&rooted, "cwd");
         assert_eq!(new.len(), old.len());
@@ -2321,12 +2385,12 @@ mod tests {
     #[test]
     fn claude_session_id_flag_rewrites_every_session_id() {
         let doc = make_path_doc();
-        let plain = export_claude_lines(&doc, None, None);
+        let plain = export_claude_lines(&doc, None, false, None);
         let old = values_of(&plain, "sessionId");
         assert_eq!(old.len(), plain.len(), "every line carries a sessionId");
 
         let id = "B7E1C0DE-0000-4000-8000-000000000001";
-        let renamed = export_claude_lines(&doc, Some(id), None);
+        let renamed = export_claude_lines(&doc, Some(id), false, None);
         assert_eq!(renamed.len(), plain.len());
         let new = values_of(&renamed, "sessionId");
         assert_eq!(new.len(), old.len());
@@ -2373,7 +2437,7 @@ mod tests {
         let doc = toolpath::v1::Graph::from_path(path);
 
         let id = "b7e1c0de-0000-4000-8000-000000000001";
-        let lines = export_claude_lines(&doc, Some(id), None);
+        let lines = export_claude_lines(&doc, Some(id), false, None);
         let line = lines
             .iter()
             .find(|v| v["type"] == "worktree-state")
@@ -2381,6 +2445,52 @@ mod tests {
         assert_eq!(line["sessionId"], id);
         assert_eq!(line["worktreeSession"]["sessionId"], id);
         assert_eq!(line["worktreeSession"]["worktreePath"], "/wt");
+    }
+
+    /// A fixed document and the ID `session_id_from_document_hash` returns for it.
+    /// `DOC_REORDERED` is the same document with other key order and
+    /// whitespace.
+    const DOC: &str = r#"{"a":1,"b":{"c":[1,2],"d":"x"}}"#;
+    const DOC_REORDERED: &str = "{ \"b\": {\"d\": \"x\", \"c\": [1, 2]}, \"a\": 1 }";
+    const DOC_DERIVED_ID: &str = "402a3ca5-2530-407e-9029-f96879adff54";
+
+    #[test]
+    fn session_id_from_document_hash_is_a_v4_uuid_of_the_key_sorted_document() {
+        let id = session_id_from_document_hash(DOC).unwrap();
+        assert_eq!(id, DOC_DERIVED_ID);
+        assert_eq!(
+            session_id_from_document_hash(DOC_REORDERED).unwrap(),
+            DOC_DERIVED_ID
+        );
+        assert_ne!(
+            session_id_from_document_hash(r#"{"a":2}"#).unwrap(),
+            DOC_DERIVED_ID
+        );
+        let uuid = uuid::Uuid::parse_str(&id).unwrap();
+        assert_eq!(uuid.get_version_num(), 4);
+        assert_eq!(uuid.get_variant(), uuid::Variant::RFC4122);
+        assert!(session_id_from_document_hash("not json").is_err());
+    }
+
+    #[test]
+    fn claude_derive_session_id_flag_stamps_the_derived_id() {
+        let doc = make_path_doc();
+        let plain = export_claude_lines(&doc, None, false, None);
+        let source_ids = values_of(&plain, "sessionId");
+        assert_eq!(
+            source_ids.len(),
+            plain.len(),
+            "every line carries a sessionId"
+        );
+
+        let expected =
+            session_id_from_document_hash(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert!(!source_ids.contains(&expected.as_str()));
+        let derived = export_claude_lines(&doc, None, true, None);
+        assert_eq!(derived.len(), plain.len());
+        let ids = values_of(&derived, "sessionId");
+        assert_eq!(ids.len(), source_ids.len());
+        assert!(ids.iter().all(|s| *s == expected));
     }
 
     #[test]
@@ -2406,6 +2516,7 @@ mod tests {
             None,
             Some(temp.path().join("out.jsonl")),
             Some("not-a-uuid".to_string()),
+            false,
             None,
             false,
         )
@@ -2440,6 +2551,7 @@ mod tests {
             Some(project_dir.clone()),
             None,
             Some(id.to_string()),
+            false,
             None,
             false,
         );
@@ -2498,6 +2610,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             false,
         )
@@ -2515,6 +2628,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             false,
         )
@@ -3591,9 +3705,43 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", &fake_home);
         }
-        let first = run_claude(input.clone(), Some(cwd.clone()), None, None, None, false);
-        let second = run_claude(input.clone(), Some(cwd.clone()), None, None, None, false);
-        let forced = run_claude(input, Some(cwd.clone()), None, None, None, true);
+        let first = run_claude(
+            input.clone(),
+            Some(cwd.clone()),
+            None,
+            None,
+            false,
+            None,
+            false,
+        );
+        let second = run_claude(
+            input.clone(),
+            Some(cwd.clone()),
+            None,
+            None,
+            false,
+            None,
+            false,
+        );
+        let forced = run_claude(
+            input.clone(),
+            Some(cwd.clone()),
+            None,
+            None,
+            false,
+            None,
+            true,
+        );
+        let derived_first = run_claude(
+            input.clone(),
+            Some(cwd.clone()),
+            None,
+            None,
+            true,
+            None,
+            false,
+        );
+        let derived_second = run_claude(input, Some(cwd.clone()), None, None, true, None, false);
         unsafe {
             match prior_home {
                 Some(v) => std::env::set_var("HOME", v),
@@ -3608,6 +3756,12 @@ mod tests {
             "unhelpful error: {err}"
         );
         forced.expect("re-export with --force should succeed");
+        derived_first.expect("first derived export should succeed");
+        let err = derived_second.expect_err("derived re-export without --force must fail");
+        assert!(
+            err.to_string().contains("--force"),
+            "unhelpful error: {err}"
+        );
     }
 
     #[test]

@@ -2,6 +2,17 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.20.0 — 2026-08-25
+
+- **`path-cli`** (0.20.0): `p export claude` takes `--derive-session-id`.
+  The flag renames the session to an ID derived from the input
+  document: a v4-shaped UUID from the first 128 bits of the SHA-256 of
+  the key-sorted compact JSON. The same document yields the same ID on
+  every run, so a second export of it into the same project is refused
+  instead of duplicated. It conflicts with `--session-id`. The
+  `--output` message names the session ID.
+- **`toolpath-cli`** (0.20.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.19.0 — 2026-08-24
 
 - **`path-cli`** (0.19.0): `p export claude` takes `--session-id <uuid>`

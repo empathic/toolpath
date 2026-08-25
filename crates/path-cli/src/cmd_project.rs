@@ -32,6 +32,7 @@ pub fn run(target: ProjectTarget) -> Result<()> {
                 project: None,
                 output,
                 session_id: None,
+                derive_session_id: false,
                 cwd: None,
                 force: false,
             })
