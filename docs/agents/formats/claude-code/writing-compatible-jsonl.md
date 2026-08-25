@@ -66,6 +66,12 @@ directory name under `projects/`. If you place a file in
 entries, Claude Code's behavior is inconsistent — the session may
 appear but tool invocations may fail.
 
+Two metadata lines carry absolute paths under other keys:
+`relocated.relocatedCwd`, and `originalCwd`, `preEnterOriginalCwd`,
+and `worktreePath` inside `worktree-state.worktreeSession`. How the
+loader uses them on resume is not known. A writer that moves a session
+to another directory decides for each whether to rewrite it.
+
 ## Strong conventions
 
 Real Claude Code entries always carry these envelope fields. The
@@ -79,7 +85,7 @@ downstream tools may behave oddly without them:
 | `cwd`         | Used for git/branch context and to validate project alignment. |
 | `version`     | Claude Code client version string. |
 | `gitBranch`   | Current branch; **empty string**, not null, when cwd isn't a repo. |
-| `sessionId`   | Must match the file's session UUID (or be a bridge entry — see below). |
+| `sessionId`   | Must match the file's session UUID (or be a bridge entry — see below). `worktree-state` lines carry a second copy in `worktreeSession.sessionId`; keep both equal. |
 | `uuid`        | UUIDv4 per entry. |
 | `timestamp`   | ISO-8601 with millisecond precision. |
 | `parentUuid`  | The prior entry's `uuid` (or `null` for the first entry). |
