@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use path_cli::cmd_resume::ResumeArgs;
+use path_cli::config::Config;
 use path_cli::harness::Harness;
 
 /// Process-wide lock for tests that mutate `$HOME`, `$PATH`, or
@@ -52,6 +53,13 @@ impl ScopedHome {
 
     pub fn home_dir(&self) -> PathBuf {
         PathBuf::from(self._td.path())
+    }
+
+    /// The `Config` the CLI extracts at its composition root. Loaded
+    /// under this guard, so every path it carries points into the
+    /// sandbox.
+    pub fn config(&self) -> Config {
+        Config::load().expect("load config")
     }
 }
 
