@@ -57,7 +57,7 @@
 # Preconditions. Each one is checked before the first remote write. A
 # failed check exits 1 with a message.
 #   Local:
-#   - cargo, git, ssh, jq, sha256sum are on PATH. rsync is on PATH
+#   - cargo, git, ssh, jq are on PATH. rsync is on PATH
 #     unless --no-sync. scp is on PATH with --setup.
 #   - stdin is a terminal unless --dry-run (tmux attach needs one).
 #   - <ssh-destination> matches [A-Za-z0-9][A-Za-z0-9@._-]*.
@@ -83,15 +83,15 @@
 #      not touch any installed `path`.
 #   2. Resolve the session. `path p import claude --no-cache` writes
 #      the document to $TMPDIR/path-resume-remote/.
-#      [shell] Mint the remote session id from the key-sorted document
-#      (jq -S | sha256sum, formatted as a v4 UUID).
 #   3. Optional VM creation (--create).
 #   4. [shell] Call 1: remote home, claude path, tmux presence. Derive
 #      <remote-dir> from the remote home unless -C is given.
-#   5. `path p export claude --cwd <remote-dir> --session-id <ID>`
+#   5. `path p export claude --cwd <remote-dir> --derive-session-id`
 #      projects the document to JSONL rooted at the remote project
-#      directory under the minted ID. [shell] Check the JSONL carries
-#      the remote cwd and ID.
+#      directory under an ID derived from the document (the same
+#      document yields the same ID on every run). [shell] Check the
+#      JSONL carries the remote cwd and one session ID; that ID is the
+#      remote session ID.
 #      [shell] Compute the remote Claude project slug (/, _, and .
 #      become -).
 #   6. Optional remote seeding (--setup). rsync the working tree
@@ -191,15 +191,6 @@ check_plain_path() {
     esac
 }
 
-# mint_uuid: stdin is the document bytes; stdout is a v4-shaped UUID
-# built from the first 128 bits of their SHA-256.
-mint_uuid() {
-    local h
-    h="$(sha256sum | cut -c1-32)"
-    printf '%s-%s-4%s-%x%s-%s\n' "${h:0:8}" "${h:8:4}" "${h:13:3}" \
-        $(( (16#${h:16:1} & 3) | 8 )) "${h:17:3}" "${h:20:12}"
-}
-
 # remote_facts <script> <tag>...: runs <script> on the remote in one
 # read-only ssh call and parses the reply into PF_VALS, one value per
 # tag, in order. Each reply line is `<tag>=<value>`. Any other reply
@@ -222,7 +213,7 @@ remote_facts() {
 # ── Preconditions (local) ─────────────────────────────────────────────────
 
 step "Preconditions"
-need cargo; need git; need ssh; need jq; need sha256sum
+need cargo; need git; need ssh; need jq
 [[ $SYNC -eq 0 ]] || need rsync
 [[ $SETUP -eq 0 ]] || need scp
 [[ $DRY_RUN -eq 1 || -t 0 ]] || die "stdin is not a terminal; tmux attach needs one (pass --dry-run to stop before attach)"
@@ -269,13 +260,7 @@ WORK_DIR="${TMPDIR:-/tmp}/path-resume-remote"
 DOC="$WORK_DIR/$SESSION.json"
 run "$PATH_BIN" p import claude --project "$PROJECT" --session "$SESSION" --no-cache >"$DOC"
 echo "doc: $DOC ($(wc -c <"$DOC") bytes)"
-
-# [shell] Mint the remote session id from the key-sorted document.
-REMOTE_ID="$(jq -cS . "$DOC" | mint_uuid)"
-[[ $REMOTE_ID =~ $UUID_RE ]] || die "minted id is not a UUID: $REMOTE_ID"
-[[ $REMOTE_ID != "$SESSION" ]] || die "minted id equals the source session id"
 TMUX_NAME="path-${SESSION:0:8}"
-echo "remote session id: $REMOTE_ID"
 
 # ── 3. Create the VM (optional) ───────────────────────────────────────────
 
@@ -355,12 +340,16 @@ echo "remote project dir: $REMOTE_DIR"
 # ── 5. Project the session ────────────────────────────────────────────────
 
 step "Project session $SESSION to JSONL"
-JSONL="$WORK_DIR/$REMOTE_ID.jsonl"
-run "$PATH_BIN" p export claude --input "$DOC" --cwd "$REMOTE_DIR" --session-id "$REMOTE_ID" >"$JSONL"
+JSONL="$WORK_DIR/$SESSION.jsonl"
+run "$PATH_BIN" p export claude --input "$DOC" --cwd "$REMOTE_DIR" --derive-session-id >"$JSONL"
 N_CWD="$(grep -cF "\"cwd\":\"$REMOTE_DIR\"" "$JSONL" || true)"
 [[ $N_CWD -gt 0 ]] || die "the projected JSONL has no cwd equal to $REMOTE_DIR"
-N_SID="$(grep -cF "\"sessionId\":\"$REMOTE_ID\"" "$JSONL" || true)"
-[[ $N_SID -gt 0 ]] || die "the projected JSONL has no sessionId equal to $REMOTE_ID"
+# [shell] The remote session ID is the one every line of the JSONL
+# carries. `sort -u` yields one line only when the lines agree.
+REMOTE_ID="$(jq -r '.sessionId // empty' "$JSONL" | sort -u)"
+[[ $REMOTE_ID =~ $UUID_RE ]] || die "the projected JSONL does not carry one sessionId (got '$REMOTE_ID')"
+[[ $REMOTE_ID != "$SESSION" ]] || die "derived id equals the source session id"
+echo "remote session id: $REMOTE_ID"
 
 # [shell] Claude project slug: /, _, and . become -.
 SLUG="$(printf '%s' "$REMOTE_DIR" | tr '/_.' '---')"
@@ -477,7 +466,7 @@ cat <<EOF
   session id:    $REMOTE_ID (source $SESSION)
   session file:  $TARGET (exists: $TARGET_EXISTS)
   tmux session:  $TMUX_NAME ($TMUX_STATE)
-  jsonl:         $JSONL ($(wc -c <"$JSONL") bytes; $N_CWD cwd and $N_SID sessionId keys)
+  jsonl:         $JSONL ($(wc -c <"$JSONL") bytes; $N_CWD cwd keys)
   state:         $STATE: $STATE_NOTE
 EOF
 [[ $SHIP -eq 0 ]] || echo "  ship:    ssh $REMOTE \"$SHIP_CMD\" < $JSONL"

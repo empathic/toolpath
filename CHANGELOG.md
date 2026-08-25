@@ -10,7 +10,9 @@ All notable changes to the Toolpath workspace are documented here.
   the key-sorted compact JSON. The same document yields the same ID on
   every run, so a second export of it into the same project is refused
   instead of duplicated. It conflicts with `--session-id`. The
-  `--output` message names the session ID.
+  `--output` message names the session ID. `scripts/resume-remote.sh`
+  exports with the flag and reads the remote session ID back from the
+  JSONL.
 - **`toolpath-cli`** (0.20.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.19.0 — 2026-08-24
