@@ -25,6 +25,12 @@ a profile, and the profile's region is used if you haven't set one. SSO,
 shelling out to `aws configure export-credentials` — the AWS CLI's own
 resolver, so refresh and every future profile type stay its problem.
 
+When an SSO session has expired, `path` offers to run
+`aws sso login --profile <name>` and retries once, rather than making
+you go run it and start over. It asks first — that command opens a
+browser and waits — and with no terminal to ask, it fails with the exact
+command instead of hanging.
+
 `object_store` alone would have covered only the server cases (EC2, ECS,
 EKS); it reads no `~/.aws` because it avoids the AWS SDK. Taking on
 `aws-config` to fix that would have meant 31 crates and an MSRV

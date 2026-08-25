@@ -105,6 +105,8 @@ impl S3Settings {
             home: std::env::var_os("HOME").map(PathBuf::from),
             var: &|k| std::env::var(k).ok(),
             aws_cli: &crate::aws_creds::run_aws_cli,
+            sso_login: &crate::aws_creds::run_sso_login,
+            confirm: &crate::aws_creds::confirm_on_tty,
         })
     }
 
