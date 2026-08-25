@@ -156,14 +156,6 @@ impl Config {
     }
 }
 
-/// Cross-platform `$HOME` lookup matching the providers' internal helpers.
-/// Returns `None` only when neither `$HOME` nor `$USERPROFILE` is set.
-pub(crate) fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 /// Display `path` as `~/relative/part` when it's under `home`, otherwise
 /// return its absolute lossy form. Pure helper — does no filesystem I/O.
 pub(crate) fn home_relative(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
@@ -180,10 +172,10 @@ pub(crate) fn home_relative(path: &std::path::Path, home: Option<&std::path::Pat
     path.display().to_string()
 }
 
-/// Shared lock for tests that manipulate `$TOOLPATH_CONFIG_DIR`. Every
-/// test module that calls `set_var` / `remove_var` on this env var should
-/// grab this lock first, otherwise parallel tests race and clobber each
-/// other's directories.
+/// Shared lock for tests that mutate the process environment. Every test
+/// that calls `set_var` / `remove_var`, or that runs a `figment::Jail`,
+/// grabs this lock first, otherwise parallel tests clobber each other's
+/// values.
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -192,8 +184,8 @@ mod tests {
     use super::*;
 
     /// `figment::Jail` restores the variables it sets, but it serializes
-    /// only against other Jail tests. Hold `TEST_ENV_LOCK` too: other
-    /// test modules mutate `$HOME` / `$TOOLPATH_CONFIG_DIR` under that
+    /// only against other Jail tests. Hold `TEST_ENV_LOCK` too: the
+    /// `$PATH` guard in `cmd_resume` mutates the environment under that
     /// lock.
     // result_large_err: the Jail closure returns figment's own
     // 208-byte error type.

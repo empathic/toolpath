@@ -7,16 +7,15 @@
 
 use anyhow::Result;
 
+use crate::config::Config;
+
 pub use crate::cmd_import::ImportSource as DeriveSource;
 
-pub fn run(source: DeriveSource, pretty: bool) -> Result<()> {
+pub fn run(source: DeriveSource, pretty: bool, config: &Config) -> Result<()> {
     let args = crate::cmd_import::ImportArgs {
         source,
         force: false,
         no_cache: true,
     };
-    // Transitional: `p derive` does not take `&Config` yet; load one
-    // for the import path.
-    let config = crate::config::Config::load()?;
-    crate::cmd_import::run(args, pretty, &config)
+    crate::cmd_import::run(args, pretty, config)
 }
