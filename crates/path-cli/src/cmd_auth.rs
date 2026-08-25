@@ -6,6 +6,7 @@ use crate::cmd_pathbase::{
     StoredSession, api_logout, api_me, api_redeem, clear_session, credentials_path, load_session,
     prompt_line, resolve_url, store_session,
 };
+use crate::config::Config;
 
 #[derive(Subcommand, Debug)]
 pub enum AuthOp {
@@ -27,18 +28,23 @@ pub enum AuthOp {
     Whoami,
 }
 
-pub fn run(op: AuthOp) -> Result<()> {
-    let path = credentials_path()?;
+pub fn run(op: AuthOp, config: &Config) -> Result<()> {
+    let path = credentials_path(config)?;
     match op {
-        AuthOp::Login { url, code } => login(&path, url, code),
+        AuthOp::Login { url, code } => login(config, &path, url, code),
         AuthOp::Logout => logout(&path),
         AuthOp::Status => status(&path),
         AuthOp::Whoami => whoami(&path),
     }
 }
 
-fn login(path: &Path, url: Option<String>, code_arg: Option<String>) -> Result<()> {
-    let base_url = resolve_url(url);
+fn login(
+    config: &Config,
+    path: &Path,
+    url: Option<String>,
+    code_arg: Option<String>,
+) -> Result<()> {
+    let base_url = resolve_url(config, url);
     let auth_url = format!("{base_url}/auth/cli");
 
     let code = match code_arg {

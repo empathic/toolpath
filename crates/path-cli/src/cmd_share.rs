@@ -500,13 +500,14 @@ pub fn run(args: ShareArgs, config: &Config) -> Result<()> {
         name: args.name.clone(),
         public: args.public,
     };
-    let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
+    let base_url = crate::cmd_export::resolve_upload_base_url(config, &upload_args);
     let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some();
 
     if let (Some(h), Some(session)) = (harness, &args.session) {
         // Explicit-args: validate creds before derive so a credential
         // failure doesn't waste the derive/cache work.
-        let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
+        let auth =
+            crate::cmd_pathbase::preflight_auth(config, &base_url, upload_args.anon, needs_auth)?;
         return share_explicit(h, session.as_str(), &args, auth, base_url, config);
     }
 
@@ -534,7 +535,8 @@ pub fn run(args: ShareArgs, config: &Config) -> Result<()> {
     // making the user pick a session. If preflight returns Anon (either
     // explicit --anon, no creds + no auth flags, or auth probe failed
     // and fell back), the picker still fires with that knowledge baked in.
-    let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
+    let auth =
+        crate::cmd_pathbase::preflight_auth(config, &base_url, upload_args.anon, needs_auth)?;
 
     let lines: Vec<String> = rows.iter().map(format_picker_row).collect();
     let header = format!("share an agent session (Enter = upload to {base_url})");
