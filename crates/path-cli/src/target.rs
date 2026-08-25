@@ -298,11 +298,13 @@ pub(crate) fn check_reachable(target: &Target, settings: &crate::store::S3Settin
     if dest.is_local() {
         return Ok(());
     }
-    if settings.access_key_id.is_none() {
-        // object_store will still try the AWS credential chain
-        // (instance role, web identity), so this is a note, not a
-        // failure.
-        eprintln!("note: no S3 credentials configured; falling back to the AWS credential chain.");
+    if let Some(r) = settings.resolved_credentials()
+        && r.credentials.is_none()
+    {
+        // Nothing local. object_store will still try instance metadata,
+        // ECS, and web identity, which is exactly right on a server —
+        // so this is a note, not a failure.
+        eprintln!("note: no local S3 credentials found ({}).", r.source);
     }
     dest.probe(settings)
 }

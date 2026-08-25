@@ -27,10 +27,19 @@ fn cmd(config_dir: &Path) -> Command {
         "AWS_DEFAULT_REGION",
         "AWS_ENDPOINT_URL",
         "AWS_ENDPOINT_URL_S3",
+        "AWS_PROFILE",
         "TOOLPATH_SHARE_TARGET",
     ] {
         c.env_remove(k);
     }
+    // Credential resolution reads `~/.aws` now, so point it at files
+    // that don't exist. Without this a developer's real default profile
+    // leaks in and the "no credentials" tests make real network calls.
+    c.env(
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "/nonexistent/toolpath-test/credentials",
+    );
+    c.env("AWS_CONFIG_FILE", "/nonexistent/toolpath-test/config");
     c
 }
 

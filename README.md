@@ -127,7 +127,9 @@ path p import pathbase https://pathbase.dev/alex/pathstash/path-pr-42
 
 # Send shares somewhere else instead. Designate it once, and bare
 # `path share` goes there from then on.
-path auth s3 login                      # credentials, if you're using a bucket
+# Your ~/.aws profiles are picked up automatically, SSO included —
+# `path auth s3 login` is only for endpoints AWS tooling doesn't know
+# about (MinIO, R2, Ceph).
 path target ~/Dropbox/toolpath-traces   # a folder — no credentials needed
 path target s3://my-bucket/traces       # or a bucket; checked before it's stored
 path share                              # → wherever you pointed it
@@ -189,7 +191,7 @@ path
   auth        login | status | whoami | logout [--url URL]
               s3 login [--region R] [--endpoint URL] [--access-key-id ID]
                        [--secret-access-key KEY] [--session-token TOK]
-                       [--virtual-hosted-style]
+                       [--profile NAME] [--virtual-hosted-style]
               s3 status | s3 logout
   target      # where `path share` uploads; no argument prints it.
               # Setting one writes a probe object to prove it works.

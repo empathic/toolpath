@@ -233,12 +233,38 @@ no Pathbase session, and no default is set, share **refuses** rather than
 falling through to the anonymous public Pathbase endpoint. Status commands
 use `target::describe_effective`, which never inherits that refusal.
 
+**S3 credentials** are resolved by `crate::aws_creds`, not by `object_store`
+alone. `object_store` covers the *server* cases (EKS/IRSA web identity, ECS
+task roles, EC2 instance metadata) and deliberately reads no `~/.aws` at all,
+because it avoids depending on the AWS SDK — which leaves out how nearly every
+developer actually has S3 access. `aws_creds` fills that in: static-key
+profiles are parsed straight out of `~/.aws/credentials` (trivial ini, no
+deps), and anything else — SSO, `role_arn` chains, `credential_process` — is
+delegated to `aws configure export-credentials --format process`, which runs
+the AWS CLI's own resolver. Anyone using SSO already has the CLI (`aws sso
+login` is how they authenticate), and delegating keeps refresh, cache layout,
+and future profile types the CLI's problem. Depending on `aws-config` instead
+would be 31 crates *and* an MSRV treadmill: its whole family currently requires
+rustc 1.94.1 while `rust-toolchain.toml` pins 1.94.0.
+
+Precedence (AWS's own, with our stored settings layered on top): `path auth s3
+login` → `--profile` / `$AWS_PROFILE` → `AWS_ACCESS_KEY_ID` → the `[default]`
+profile → `object_store`'s instance chain. Region falls back to the profile's,
+so `~/.aws/config` doesn't have to be retyped. `path auth s3 status` prints
+*which* source won — the first question when an upload fails is always which
+credential was tried, and a stored key, a profile, and nothing at all are three
+different fixes. `AWS_SHARED_CREDENTIALS_FILE` / `AWS_CONFIG_FILE` are honored,
+which is also how the integration tests stay off a developer's real profiles.
+
 `path auth s3 login` stores S3 *connection* settings at
 `~/.toolpath/s3.json` (0600, parent dir 0700, same `$TOOLPATH_CONFIG_DIR`
-root): region, endpoint, access key id, secret access key, session token,
-and an optional virtual-hosted-style toggle. Deliberately **not** a
-destination — that's the share target — so one stored credential serves any
-number of buckets, and a folder target needs no `auth s3` at all. It
+root): region, endpoint, access key id, secret access key, session token, an
+optional AWS `profile` name, and an optional virtual-hosted-style toggle.
+Storing a *profile name* is very different from storing a key — it's a pointer
+to credentials the AWS tooling already manages, so it can't go stale and costs
+nothing at rest. The file is deliberately **not** a destination — that's the
+share target — so one stored credential serves any number of buckets, and a
+folder target needs no `auth s3` at all. It
 **merges** into what's already stored — only the fields you pass change —
 so `path auth s3 login --region eu-west-1` is a valid tweak; run it bare in
 a terminal with nothing stored yet and it prompts, reading the secret
@@ -282,7 +308,7 @@ Tests live alongside the code (`#[cfg(test)] mod tests`), plus `path-cli` has in
 - `toolpath-cursor`: 78 unit + 8 integration round-trip + 1 real-DB sanity + 1 doc test (state.vscdb SQLite reader, bubble store + composer header parsing, content-addressed blob lookup, projector with full TOOL_TABLE coverage, JSONL transcript ingest in `examples/dump_fixture.rs`)
 - `toolpath-pi`: 133 unit + 26 integration + 5 doc tests (types, paths, error, reader, io, provider)
 - `toolpath-dot`: 30 unit + 2 doc tests (render, visual conventions, escaping)
-- `path-cli`: 413 unit + 154 integration tests (import/export/cache, track sessions, merge, validate, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, share targets over a local-folder backend — `path target` set/print/clear/env-precedence + the bare-relative rejection + write-verification at configuration time (unreachable bucket refused and not stored, `--no-verify` escape hatch, folder created with the probe cleaned up, unwritable folder refused), legible-name stability across re-shares, `auth s3 login/status/logout`, `p export object` → `p import object` round trip, Pathbase-flag interaction, resume-from-object-storage with cache/`--no-cache`/missing-object cases, and resume-from-a-destination (single-document short-circuit, empty-destination guidance, container-URL detection) — fzf-friendly TSV output, `path resume` orchestration with injectable `ExecStrategy`, `path query`/`path kind` jaq filters + kind-selector matching + step wrapping over a `$TOOLPATH_CONFIG_DIR` cache sandbox, streaming-planner recognition + streamed-output-equals-slurp equality checks, `p cache sync` incremental ingestion — stat fingerprints, refresh-overwrite, per-type filtering, failure tallying — over resolver-injected provider fixtures, and import/share manifest recording end-to-end). For an end-to-end check against a real Pathbase deployment, run `scripts/test-pathbase-live.sh <url>` — it does an anon round-trip in a sandboxed config dir and, if you're logged into that URL, an authed pathstash round-trip too.
+- `path-cli`: 429 unit + 154 integration tests (import/export/cache, track sessions, merge, validate, roundtrip, render-md snapshots, deprecation aliases, pathbase HTTP mock-server tests, share targets over a local-folder backend — `path target` set/print/clear/env-precedence + the bare-relative rejection + write-verification at configuration time (unreachable bucket refused and not stored, `--no-verify` escape hatch, folder created with the probe cleaned up, unwritable folder refused), legible-name stability across re-shares, `auth s3 login/status/logout`, AWS credential resolution (profile precedence, SSO delegated to a stubbed AWS CLI, static profiles never shelling out, unknown-profile errors, ini edge cases), `p export object` → `p import object` round trip, Pathbase-flag interaction, resume-from-object-storage with cache/`--no-cache`/missing-object cases, and resume-from-a-destination (single-document short-circuit, empty-destination guidance, container-URL detection) — fzf-friendly TSV output, `path resume` orchestration with injectable `ExecStrategy`, `path query`/`path kind` jaq filters + kind-selector matching + step wrapping over a `$TOOLPATH_CONFIG_DIR` cache sandbox, streaming-planner recognition + streamed-output-equals-slurp equality checks, `p cache sync` incremental ingestion — stat fingerprints, refresh-overwrite, per-type filtering, failure tallying — over resolver-injected provider fixtures, and import/share manifest recording end-to-end). For an end-to-end check against a real Pathbase deployment, run `scripts/test-pathbase-live.sh <url>` — it does an anon round-trip in a sandboxed config dir and, if you're logged into that URL, an authed pathstash round-trip too.
 - `toolpath-cli`: 0 tests (it's a one-line `path_cli::run()` shim crate that exists only so `cargo install toolpath-cli` keeps installing the `path` binary)
 
 Validate example documents: `for f in examples/*.json; do cargo run -p path-cli -- p validate --input "$f"; done`

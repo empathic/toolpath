@@ -1,4 +1,6 @@
 pub mod artifact;
+#[cfg(not(target_os = "emscripten"))]
+mod aws_creds;
 mod cache;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;

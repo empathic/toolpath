@@ -87,9 +87,30 @@ downloads under an `s3-<bucket>-<key>` id, so `--force` and
 `--no-cache` behave exactly as they do for Pathbase. A document shared
 to a folder is resumed with its plain path, which already worked.
 
-**S3 credentials.** `path auth s3 login` stores region, endpoint,
-addressing style, and credentials at `~/.toolpath/s3.json` (0600) —
-connection only, deliberately not a destination, so one stored
+**S3 credentials come from wherever you already keep them.** If you use
+the AWS CLI, `path` needs no configuration at all: `~/.aws/credentials`
+and `~/.aws/config` are read directly, `AWS_PROFILE` and `--profile`
+select a profile, and the profile's region is used if you haven't set
+one. SSO, `role_arn` chains, and `credential_process` profiles are
+resolved by shelling out to `aws configure export-credentials` — the
+AWS CLI's own resolver, so refresh and every future profile type stay
+its problem rather than ours.
+
+`object_store` alone would have covered only the server cases (EC2, ECS,
+EKS); it reads no `~/.aws` because it avoids the AWS SDK. Taking on
+`aws-config` to fix that would have meant 31 crates and an MSRV
+treadmill — its family requires rustc 1.94.1 against a repo pinned to
+1.94.0.
+
+`path auth s3 status` now reports *which* credential source won, because
+that's the first question when an upload fails.
+
+**Storing keys is now the fallback, not the happy path.** `path auth s3
+login` is for endpoints AWS tooling doesn't know about — MinIO, R2, Ceph
+— where a scoped long-lived token is the right answer. It stores region,
+endpoint,
+addressing style, an optional `profile` name, and credentials at
+`~/.toolpath/s3.json` (0600) — connection only, deliberately not a destination, so one stored
 credential serves any number of buckets. It merges rather than
 replaces, so `path auth s3 login --region eu-west-1` is a valid tweak;
 run it bare in a terminal and it prompts, without echoing the secret.
