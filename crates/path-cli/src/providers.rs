@@ -19,6 +19,9 @@ pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
     }
+    if let Some(dir) = &config.claude_config_dir {
+        resolver = resolver.with_claude_dir(dir.clone());
+    }
     toolpath_claude::ClaudeConvo::with_resolver(resolver)
 }
 
@@ -129,6 +132,19 @@ mod tests {
         assert_eq!(
             manager.resolver().projects_dir().unwrap(),
             PathBuf::from("/home/jailed/.claude/projects")
+        );
+    }
+
+    #[test]
+    fn claude_convo_honors_claude_config_dir() {
+        let config = Config {
+            claude_config_dir: Some(PathBuf::from("/home/jailed/.config/claude")),
+            ..config_with_home()
+        };
+        let manager = claude_convo(&config);
+        assert_eq!(
+            manager.resolver().projects_dir().unwrap(),
+            PathBuf::from("/home/jailed/.config/claude/projects")
         );
     }
 

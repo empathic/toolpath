@@ -47,6 +47,9 @@ pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
 pub(crate) struct Config {
     /// `$APPDATA`: Windows harness data root.
     pub(crate) appdata: Option<PathBuf>,
+    /// `$CLAUDE_CONFIG_DIR`: Claude Code config root override; session
+    /// transcripts live under `<dir>/projects` instead of `~/.claude/projects`.
+    pub(crate) claude_config_dir: Option<PathBuf>,
     /// `$COPILOT_HOME`: Copilot CLI session root override.
     pub(crate) copilot_home: Option<PathBuf>,
     /// `$HOME`: config-root fallback and the harness resolvers' root.
@@ -94,6 +97,7 @@ impl Config {
     /// influence a `Config`. Names match case-insensitively.
     const ENV_MAP: &'static [(&'static str, &'static str)] = &[
         ("APPDATA", "appdata"),
+        ("CLAUDE_CONFIG_DIR", "claude_config_dir"),
         ("COPILOT_HOME", "copilot_home"),
         ("HOME", "home"),
         (PATHBASE_URL_ENV, "pathbase_url"),
@@ -205,6 +209,7 @@ mod tests {
             jail.set_env("XDG_DATA_HOME", "/home/jailed/.local/share");
             jail.set_env("COPILOT_HOME", "/home/jailed/.copilot");
             jail.set_env("APPDATA", "/home/jailed/appdata");
+            jail.set_env("CLAUDE_CONFIG_DIR", "/home/jailed/.config/claude");
             jail.set_env(PATHBASE_URL_ENV, "https://pathbase.test");
             jail.set_env("TOOLPATH_QUERY_EXPLAIN", "1");
             jail.set_env("USERPROFILE", "/home/jailed-profile");
@@ -213,6 +218,7 @@ mod tests {
                 config,
                 Config {
                     appdata: Some(PathBuf::from("/home/jailed/appdata")),
+                    claude_config_dir: Some(PathBuf::from("/home/jailed/.config/claude")),
                     copilot_home: Some(PathBuf::from("/home/jailed/.copilot")),
                     home: Some(PathBuf::from("/home/jailed")),
                     pathbase_url: Some("https://pathbase.test".to_string()),

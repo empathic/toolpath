@@ -74,7 +74,10 @@ impl PathResolver {
         let mut projects = Vec::new();
         for entry in std::fs::read_dir(&projects_dir)? {
             let entry = entry?;
-            if entry.file_type()?.is_dir()
+            // `path().is_dir()` follows symlinks where
+            // `entry.file_type()` would report the link itself,
+            // silently dropping symlinked project dirs.
+            if entry.path().is_dir()
                 && let Some(name) = entry.file_name().to_str()
             {
                 projects.push(unsanitize_project_path(name));
@@ -149,6 +152,24 @@ mod tests {
 
         let history = resolver.history_file().unwrap();
         assert_eq!(history, temp.path().join(".claude/history.jsonl"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_project_dirs_follows_symlinked_dirs() {
+        let temp = TempDir::new().unwrap();
+        let projects = temp.path().join(".claude/projects");
+        fs::create_dir_all(projects.join("-Users-alex-real")).unwrap();
+        let elsewhere = temp.path().join("elsewhere/-Users-alex-linked");
+        fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, projects.join("-Users-alex-linked")).unwrap();
+
+        let resolver = PathResolver::new()
+            .with_home(temp.path())
+            .with_claude_dir(temp.path().join(".claude"));
+        let mut dirs = resolver.list_project_dirs().unwrap();
+        dirs.sort();
+        assert_eq!(dirs, vec!["/Users/alex/linked", "/Users/alex/real"]);
     }
 
     #[test]
