@@ -18,6 +18,14 @@
 //!   authenticate; and delegating means refresh, cache layout, and
 //!   every future profile type stay the CLI's problem, not ours.
 //!
+//! An expired SSO session is the one failure with an obvious next step,
+//! so it gets one: we offer to run `aws sso login` and retry, rather
+//! than making the user go do it and start the command over. Offer, not
+//! do — that command opens a browser and waits, which shouldn't happen
+//! because someone typed `path resume`. With no terminal to ask (CI),
+//! it fails with the exact command instead of blocking on a prompt
+//! nobody will answer.
+//!
 //! Depending on `aws-config` instead would be 31 crates, and its whole
 //! family currently requires rustc 1.94.1 while this repo pins 1.94.0
 //! — an MSRV treadmill on a toolchain we pin exactly.
@@ -93,6 +101,12 @@ pub(crate) struct Env<'a> {
     /// Runs `aws configure export-credentials --profile <name>`,
     /// returning its stdout.
     pub aws_cli: &'a dyn Fn(&str) -> Result<String>,
+    /// Runs `aws sso login --profile <name>`. Interactive: it opens a
+    /// browser and waits.
+    pub sso_login: &'a dyn Fn(&str) -> Result<()>,
+    /// Asks the user a yes/no question. `false` when there's nobody to
+    /// ask — a CI run must never block on a prompt.
+    pub confirm: &'a dyn Fn(&str) -> bool,
 }
 
 impl Env<'_> {
@@ -231,7 +245,28 @@ fn from_profile(name: &str, env: &Env<'_>) -> Result<Resolved> {
     // The profile exists but carries no static keys: SSO, an assume-role
     // chain, or credential_process. The AWS CLI already knows how to
     // resolve all of those, including refresh.
-    let raw = (env.aws_cli)(name)?;
+    let raw = match (env.aws_cli)(name) {
+        Ok(raw) => raw,
+        // An expired SSO session is the one failure with an obvious
+        // next step, and making the user go run it themselves and start
+        // over is a pointless round trip — so offer to run it here.
+        // Offer, not do: `aws sso login` opens a browser and waits, and
+        // that shouldn't happen because someone typed `path resume`.
+        Err(e) if is_expired_sso(&e) => {
+            let cmd = format!("aws sso login --profile {name}");
+            if !(env.confirm)(&format!(
+                "The SSO session for profile `{name}` has expired. Run `{cmd}` now?"
+            )) {
+                bail!("the SSO session has expired.\n\nRun `{cmd}`, then try again.");
+            }
+            (env.sso_login)(name)?;
+            // Exactly one retry. If a fresh login still doesn't yield
+            // credentials, looping won't help and the real error is
+            // whatever comes back now.
+            (env.aws_cli)(name).context("after `aws sso login`")?
+        }
+        Err(e) => return Err(e),
+    };
     let creds = parse_export_credentials(&raw)?;
     Ok(Resolved {
         credentials: Some(creds),
@@ -274,6 +309,57 @@ fn parse_export_credentials(raw: &str) -> Result<Credentials> {
     })
 }
 
+/// True when the AWS CLI failed because an SSO session needs renewing.
+///
+/// Matched on the message because the CLI reports it as a plain
+/// non-zero exit, and its wording varies by version — "Token has
+/// expired and refresh failed", "does not exist", and a direct
+/// instruction to run `aws sso login` have all been observed. Requiring
+/// `sso` alongside keeps unrelated failures out.
+fn is_expired_sso(err: &anyhow::Error) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("sso")
+        && (msg.contains("expired")
+            || msg.contains("does not exist")
+            || msg.contains("refresh failed")
+            || msg.contains("sso login"))
+}
+
+/// Run `aws sso login`, inheriting stdio so its device code and browser
+/// prompt reach the user. Kept behind [`Env::sso_login`] so tests don't.
+pub(crate) fn run_sso_login(profile: &str) -> Result<()> {
+    eprintln!("Running `aws sso login --profile {profile}`…");
+    let status = std::process::Command::new("aws")
+        .args(["sso", "login", "--profile", profile])
+        .status()
+        .context("running `aws sso login`")?;
+    if !status.success() {
+        bail!("`aws sso login --profile {profile}` did not complete");
+    }
+    Ok(())
+}
+
+/// Ask a yes/no question, defaulting to yes.
+///
+/// Returns `false` without asking when either stream isn't a terminal:
+/// a CI run must fail with instructions rather than block forever on a
+/// prompt nobody will answer. The question goes to stderr so stdout
+/// stays clean for piping.
+pub(crate) fn confirm_on_tty(question: &str) -> bool {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return false;
+    }
+    eprint!("{question} [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).is_err() {
+        return false;
+    }
+    let answer = line.trim().to_ascii_lowercase();
+    answer.is_empty() || answer == "y" || answer == "yes"
+}
+
 /// Run the real AWS CLI. Kept behind [`Env::aws_cli`] so tests don't.
 pub(crate) fn run_aws_cli(profile: &str) -> Result<String> {
     let out = std::process::Command::new("aws")
@@ -290,13 +376,8 @@ pub(crate) fn run_aws_cli(profile: &str) -> Result<String> {
         })?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let hint = if stderr.contains("sso") || stderr.contains("SSO") {
-            "\nIf this is an SSO profile, run `aws sso login` first."
-        } else {
-            ""
-        };
         bail!(
-            "the AWS CLI could not resolve this profile: {}{hint}",
+            "the AWS CLI could not resolve this profile: {}",
             stderr.trim()
         );
     }
@@ -353,6 +434,13 @@ mod tests {
         vars: HashMap<String, String>,
         cli_result: std::cell::RefCell<Result<String, String>>,
         cli_calls: std::cell::RefCell<Vec<String>>,
+        /// What `aws_cli` returns on the *second* call, once a login has
+        /// happened. `None` keeps returning `cli_result`.
+        cli_after_login: std::cell::RefCell<Option<String>>,
+        login_calls: std::cell::RefCell<Vec<String>>,
+        login_fails: std::cell::RefCell<bool>,
+        answer: std::cell::RefCell<bool>,
+        questions: std::cell::RefCell<Vec<String>>,
     }
 
     impl Fake {
@@ -364,6 +452,11 @@ mod tests {
                 vars: HashMap::new(),
                 cli_result: std::cell::RefCell::new(Err("aws CLI not stubbed".into())),
                 cli_calls: std::cell::RefCell::new(Vec::new()),
+                cli_after_login: std::cell::RefCell::new(None),
+                login_calls: std::cell::RefCell::new(Vec::new()),
+                login_fails: std::cell::RefCell::new(false),
+                answer: std::cell::RefCell::new(true),
+                questions: std::cell::RefCell::new(Vec::new()),
             }
         }
         fn credentials(self, body: &str) -> Self {
@@ -382,14 +475,48 @@ mod tests {
             *self.cli_result.borrow_mut() = Ok(out.to_string());
             self
         }
+        fn cli_err(self, msg: &str) -> Self {
+            *self.cli_result.borrow_mut() = Err(msg.to_string());
+            self
+        }
+        fn cli_after_login(self, out: &str) -> Self {
+            *self.cli_after_login.borrow_mut() = Some(out.to_string());
+            self
+        }
+        fn login_fails(self) -> Self {
+            *self.login_fails.borrow_mut() = true;
+            self
+        }
+        fn declines(self) -> Self {
+            *self.answer.borrow_mut() = false;
+            self
+        }
         fn resolve(&self, stored: Option<Credentials>, profile: Option<&str>) -> Result<Resolved> {
             let var = |k: &str| self.vars.get(k).cloned();
             let cli = |name: &str| {
                 self.cli_calls.borrow_mut().push(name.to_string());
+                // After a login, return the post-login result if one was
+                // staged — that's what a successful refresh looks like.
+                if !self.login_calls.borrow().is_empty()
+                    && let Some(out) = self.cli_after_login.borrow().clone()
+                {
+                    return Ok(out);
+                }
                 self.cli_result
                     .borrow()
                     .clone()
                     .map_err(|e| anyhow::anyhow!(e))
+            };
+            let login = |name: &str| {
+                self.login_calls.borrow_mut().push(name.to_string());
+                if *self.login_fails.borrow() {
+                    anyhow::bail!("`aws sso login --profile {name}` did not complete");
+                }
+                Ok(())
+            };
+            let confirm = |q: &str| {
+                self.questions.borrow_mut().push(q.to_string());
+                *self.answer.borrow()
             };
             resolve(
                 stored,
@@ -398,6 +525,8 @@ mod tests {
                     home: Some(self.dir.path().to_path_buf()),
                     var: &var,
                     aws_cli: &cli,
+                    sso_login: &login,
+                    confirm: &confirm,
                 },
             )
         }
@@ -559,6 +688,111 @@ aws_session_token = worktoken
                 .access_key_id,
             "AKIADEFAULT"
         );
+    }
+
+    // ── expired SSO ──────────────────────────────────────────────────
+
+    /// What the AWS CLI actually prints when an SSO session lapses.
+    const EXPIRED: &str = "the AWS CLI could not resolve this profile: \
+Error loading SSO Token: Token for https://corp.awsapps.com/start does not exist";
+
+    const FRESH: &str =
+        r#"{"Version":1,"AccessKeyId":"ASIAFRESH","SecretAccessKey":"s","SessionToken":"t"}"#;
+
+    fn sso_profile() -> Fake {
+        Fake::new().config("[profile sso-work]\nsso_session = corp\n")
+    }
+
+    #[test]
+    fn an_expired_sso_session_offers_to_log_in_and_retries_once() {
+        let f = sso_profile().cli_err(EXPIRED).cli_after_login(FRESH);
+        let r = f.resolve(None, Some("sso-work")).unwrap();
+
+        assert_eq!(r.credentials.unwrap().access_key_id, "ASIAFRESH");
+        assert_eq!(*f.login_calls.borrow(), vec!["sso-work".to_string()]);
+        // Asked before opening a browser, and named the command.
+        let q = f.questions.borrow().join("");
+        assert!(q.contains("aws sso login --profile sso-work"), "{q}");
+        // One retry, not a loop.
+        assert_eq!(f.cli_calls.borrow().len(), 2);
+    }
+
+    #[test]
+    fn declining_the_offer_prints_the_command_and_logs_in_to_nothing() {
+        let f = sso_profile().cli_err(EXPIRED).declines();
+        let err = format!("{:#}", f.resolve(None, Some("sso-work")).unwrap_err());
+
+        assert!(err.contains("aws sso login --profile sso-work"), "{err}");
+        assert!(
+            f.login_calls.borrow().is_empty(),
+            "declining must not open a browser"
+        );
+    }
+
+    #[test]
+    fn a_failed_login_surfaces_rather_than_retrying_blindly() {
+        let f = sso_profile().cli_err(EXPIRED).login_fails();
+        let err = format!("{:#}", f.resolve(None, Some("sso-work")).unwrap_err());
+        assert!(err.contains("did not complete"), "{err}");
+        assert_eq!(
+            f.cli_calls.borrow().len(),
+            1,
+            "no retry after a failed login"
+        );
+    }
+
+    #[test]
+    fn a_login_that_still_yields_nothing_reports_the_second_failure() {
+        // Logged in, still broken: the real error is whatever comes back
+        // now, and looping wouldn't help.
+        let f = sso_profile().cli_err(EXPIRED);
+        let err = format!("{:#}", f.resolve(None, Some("sso-work")).unwrap_err());
+        assert!(err.contains("after `aws sso login`"), "{err}");
+        assert_eq!(f.cli_calls.borrow().len(), 2);
+    }
+
+    #[test]
+    fn an_unrelated_cli_failure_never_offers_a_login() {
+        // Only an expired *SSO session* has this obvious next step.
+        let f = sso_profile().cli_err(
+            "the AWS CLI could not resolve this profile: \
+Unable to locate credentials for role arn:aws:iam::1:role/nope",
+        );
+        let err = format!("{:#}", f.resolve(None, Some("sso-work")).unwrap_err());
+        assert!(err.contains("Unable to locate credentials"), "{err}");
+        assert!(f.login_calls.borrow().is_empty());
+        assert!(f.questions.borrow().is_empty(), "nothing to ask about");
+    }
+
+    #[test]
+    fn a_working_sso_profile_is_not_asked_about() {
+        let f = sso_profile().cli(FRESH);
+        f.resolve(None, Some("sso-work")).unwrap();
+        assert!(f.questions.borrow().is_empty());
+        assert!(f.login_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn expired_sso_detection_covers_the_wordings_the_cli_uses() {
+        for msg in [
+            "Error loading SSO Token: Token for https://x/start does not exist",
+            "The SSO session associated with this profile has expired",
+            "Error when retrieving token from sso: Token has expired and refresh failed",
+            "To refresh this SSO session run aws sso login with the corresponding profile",
+        ] {
+            assert!(is_expired_sso(&anyhow::anyhow!("{msg}")), "missed: {msg}");
+        }
+        // And doesn't fire on failures with a different fix.
+        for msg in [
+            "Unable to locate credentials",
+            "An error occurred (AccessDenied) when calling AssumeRole",
+            "Could not connect to the endpoint URL",
+        ] {
+            assert!(
+                !is_expired_sso(&anyhow::anyhow!("{msg}")),
+                "false positive: {msg}"
+            );
+        }
     }
 
     // ── ini parsing ──────────────────────────────────────────────────
