@@ -1,4 +1,6 @@
 pub mod artifact;
+#[cfg(not(target_os = "emscripten"))]
+mod aws_creds;
 mod cache;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
@@ -44,6 +46,8 @@ mod schema;
 mod share_config;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
+#[cfg(not(target_os = "emscripten"))]
+mod store;
 mod sync;
 mod term;
 

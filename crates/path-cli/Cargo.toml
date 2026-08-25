@@ -1,6 +1,6 @@
 [package]
 name = "path-cli"
-version = "0.18.0"
+version = "0.19.0"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -43,6 +43,13 @@ jaq-json = "2.0.1"
 figment = { version = "0.10", features = ["env"] }
 
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
+# Share/resume over object storage. `aws` covers every S3-compatible
+# endpoint; the default `fs` feature gives `file://` for local
+# destinations and for the round-trip tests.
+object_store = { version = "0.14.1", features = ["aws"] }
+url = "2"
+# No-echo prompt for the S3 secret access key in `path auth s3 login`.
+rpassword = "7"
 toolpath-claude = { workspace = true, features = ["watcher"] }
 toolpath-gemini = { workspace = true, features = ["watcher"] }
 toolpath-codex = { workspace = true }

@@ -193,6 +193,131 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
     Ok(path)
 }
 
+/// Fetch an object, preferring an existing cache entry.
+///
+/// `--force` skips the probe and re-fetches; `--no-cache` skips both
+/// the probe AND the post-fetch write. The cache id comes from the URI
+/// alone, which is what makes a cache hit cost no round trip.
+fn fetch_object_cached(label: &str, cache_id: &str, args: &ResumeArgs, uri: &str) -> Result<Graph> {
+    if !args.force
+        && !args.no_cache
+        && let Ok(cache_path) = crate::cache::cache_path(cache_id)
+        && cache_path.exists()
+    {
+        let json = std::fs::read_to_string(&cache_path)
+            .with_context(|| format!("read {}", cache_path.display()))?;
+        eprintln!("Resolved {label} → {cache_id} (cached)");
+        return Graph::from_json(&json)
+            .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e));
+    }
+
+    let derived = crate::derive::object_fetch_to_doc(uri)?;
+    if !args.no_cache {
+        crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        eprintln!("Resolved {label} → {}", derived.cache_id);
+    }
+    Ok(derived.doc)
+}
+
+/// List a share destination and let the user pick one of its documents.
+///
+/// This is the other half of sharing to object storage: without it a
+/// destination is a write-only hole you can only read out of by already
+/// knowing a filename. Rows are built from object names alone — no
+/// downloads — which is what legible names buy.
+fn pick_from_destination(raw: &str) -> Result<crate::store::ObjectUri> {
+    let dest = crate::store::Destination::parse(raw)?;
+    let settings = crate::store::effective_settings()?;
+    let entries = dest.list(&settings)?;
+
+    if entries.is_empty() {
+        anyhow::bail!(
+            "no shared documents in {dest}. `path p export object --to {dest}` puts one there."
+        );
+    }
+
+    // One document is not a choice worth making the user confirm.
+    if entries.len() == 1 {
+        let only = &entries[0];
+        eprintln!("Resuming the only document in {dest}: {}", only.stem);
+        return Ok(only.uri.clone());
+    }
+
+    if !crate::fuzzy::available() {
+        eprintln!("{} documents in {dest}:", entries.len());
+        for e in entries.iter().take(20) {
+            eprintln!("  {}", e.uri);
+        }
+        if entries.len() > 20 {
+            eprintln!("  … and {} more", entries.len() - 20);
+        }
+        anyhow::bail!("picking needs `fzf` on PATH and a TTY; pass a full location instead");
+    }
+
+    let lines: Vec<String> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| format_object_row(i, e))
+        .collect();
+    let header = format!("resume a shared session from {dest}");
+    let opts = crate::fuzzy::PickOptions {
+        with_nth: "2..",
+        prompt: "resume> ",
+        preview: None,
+        preview_window: "up:60%:wrap-word",
+        header: Some(&header),
+        tiebreak: "index",
+        multi: false,
+    };
+    let line = match crate::fuzzy::pick(&lines, &opts)? {
+        crate::fuzzy::PickResult::Selected(v) => match v.into_iter().next() {
+            Some(l) => l,
+            None => std::process::exit(130),
+        },
+        crate::fuzzy::PickResult::NoMatch => std::process::exit(1),
+        // Esc / Ctrl-C: a deliberate cancel.
+        crate::fuzzy::PickResult::Cancelled => std::process::exit(130),
+    };
+    let idx: usize = line
+        .split('\t')
+        .next()
+        .and_then(|i| i.parse().ok())
+        .ok_or_else(|| anyhow::anyhow!("internal: failed to parse picker row"))?;
+    entries
+        .get(idx)
+        .map(|e| e.uri.clone())
+        .ok_or_else(|| anyhow::anyhow!("internal: picker returned an out-of-range row"))
+}
+
+/// `<index>\t<modified>  <size>  <name>` — a hidden index column so the
+/// selection maps back to its entry without reparsing the display.
+fn format_object_row(index: usize, entry: &crate::store::ObjectEntry) -> String {
+    let when = entry
+        .modified
+        .map(|t| t.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "          ".to_string());
+    format!(
+        "{index}\t{when}  {:>8}  {}",
+        human_size(entry.size),
+        entry.stem
+    )
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
 /// Resolve the user-supplied `<input>` argument into a parsed `Graph`
 /// plus the source harness inferred from its single inline path (if
 /// any). See spec § "Input resolution" for the order.
@@ -202,14 +327,31 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
     enum Shape<'a> {
         PathbaseUrl(&'a str),
         PathbaseShorthand(&'a str),
+        ObjectStore(&'a str),
+        /// A share destination rather than a single document: list it
+        /// and let the user pick.
+        ObjectContainer(&'a str),
         FilePath(&'a str),
         CacheId(&'a str),
     }
 
+    // A shared document is always `<name>.json`, so anything else that
+    // names a place — a bucket, a prefix, a directory — is a container
+    // to browse rather than a document to load.
+    let names_a_document = raw.trim_end_matches('/').ends_with(".json");
+
     let shape = if raw.starts_with("http://") || raw.starts_with("https://") {
         Shape::PathbaseUrl(raw)
+    } else if crate::store::looks_like_object_uri(raw) {
+        if names_a_document {
+            Shape::ObjectStore(raw)
+        } else {
+            Shape::ObjectContainer(raw)
+        }
     } else if looks_like_pathbase_shorthand(raw) {
         Shape::PathbaseShorthand(raw)
+    } else if std::path::Path::new(raw).is_dir() {
+        Shape::ObjectContainer(raw)
     } else if std::path::Path::new(raw).is_file() {
         Shape::FilePath(raw)
     } else {
@@ -246,6 +388,17 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
                 }
                 derived.doc
             }
+        }
+        Shape::ObjectStore(u) => {
+            // Same shape as Pathbase: the cache id falls out of the URI
+            // alone, so an already-downloaded object costs no request.
+            let cache_id = crate::store::ObjectUri::parse(u)?.cache_id();
+            fetch_object_cached(raw, &cache_id, args, u)?
+        }
+        Shape::ObjectContainer(c) => {
+            let picked = pick_from_destination(c)?;
+            let uri = picked.to_string();
+            fetch_object_cached(&uri, &picked.cache_id(), args, &uri)?
         }
         Shape::FilePath(p) => {
             let json = std::fs::read_to_string(p).with_context(|| format!("read {}", p))?;

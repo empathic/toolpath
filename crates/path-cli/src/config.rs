@@ -39,6 +39,9 @@ pub(crate) const MANIFEST_LOCK_FILE_NAME: &str = "manifest.json.lock";
 pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 /// The document cache directory (see `cache`).
 pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
+/// S3 connection settings, written by `path auth s3 login`
+/// (see `store`).
+pub(crate) const S3_SETTINGS_FILE_NAME: &str = "s3.json";
 
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root
@@ -177,6 +180,52 @@ pub(crate) fn home_relative(path: &std::path::Path, home: Option<&std::path::Pat
         return format!("~/{}", rest.display());
     }
     path.display().to_string()
+}
+
+/// Write `value` as pretty JSON to a user-private file: the parent
+/// directory is created `0700` and the file itself `0600`.
+///
+/// Every credential-bearing blob under the config dir goes through here
+/// (Pathbase sessions, S3 settings) so the permissions story is stated
+/// once instead of re-derived per call site.
+pub(crate) fn write_private_json<T: serde::Serialize>(
+    path: &std::path::Path,
+    value: &T,
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("config path has no parent: {}", path.display()))?;
+    std::fs::create_dir_all(parent).map_err(|e| anyhow!("create {}: {e}", parent.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+    }
+
+    let payload = serde_json::to_string_pretty(value)?;
+    std::fs::write(path, payload).map_err(|e| anyhow!("write {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| anyhow!("chmod 0600 {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Read a JSON blob written by [`write_private_json`]. A missing or
+/// empty file is `Ok(None)` — "not configured", not an error.
+pub(crate) fn read_private_json<T: serde::de::DeserializeOwned>(
+    path: &std::path::Path,
+) -> Result<Option<T>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) if s.trim().is_empty() => Ok(None),
+        Ok(s) => Ok(Some(
+            serde_json::from_str(&s).map_err(|e| anyhow!("decode {}: {e}", path.display()))?,
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow!("read {}: {e}", path.display())),
+    }
 }
 
 /// Shared lock for tests that manipulate `$TOOLPATH_CONFIG_DIR`. Every

@@ -200,6 +200,24 @@ pub enum ExportTarget {
         #[arg(long)]
         public: bool,
     },
+    /// Upload a toolpath document to object storage: an S3 bucket, an
+    /// S3-compatible endpoint, or a plain folder.
+    ///
+    /// S3 credentials come from your `~/.aws` profiles, the AWS
+    /// environment, or `path auth s3 login`; a folder needs none. The
+    /// object is named `<date>-<topic>-<cache-id>.json`, and the
+    /// printed location is what `path resume` takes.
+    #[command(alias = "s3")]
+    Object {
+        /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+        #[arg(short, long)]
+        input: String,
+
+        /// Destination: `s3://bucket/prefix`, or a folder (`~/traces`,
+        /// `file:///srv/traces`).
+        #[arg(long, value_name = "DESTINATION")]
+        to: String,
+    },
 }
 
 pub fn run(target: ExportTarget) -> Result<()> {
@@ -255,6 +273,7 @@ pub fn run(target: ExportTarget) -> Result<()> {
             name,
             public,
         }),
+        ExportTarget::Object { input, to } => run_object(input, to),
     }
 }
 
@@ -1894,6 +1913,41 @@ fn write_cursor_to_stdout(session: &toolpath_cursor::CursorSession) -> Result<()
 }
 
 // ── Pathbase ──────────────────────────────────────────────────────────
+
+// ── Object storage ────────────────────────────────────────────────────
+
+fn run_object(input: String, to: String) -> Result<()> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (input, to);
+        anyhow::bail!("'path p export object' requires a native environment with network access");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let file = cache_ref(&input)?;
+        let body = std::fs::read_to_string(&file)
+            .with_context(|| format!("Failed to read {}", file.display()))?;
+
+        let dest = crate::store::Destination::parse(&to)?;
+        let settings = crate::store::effective_settings()?;
+
+        // The object is named for the cache id, not the input string —
+        // `--input ./some/file.json` and `--input claude-abc` naming the
+        // same document should land on the same key.
+        let cache_id = file
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| input.clone());
+
+        let uri = dest.uri_for(&crate::store::name_for_body(&body, &cache_id));
+        uri.put(&settings, body.as_bytes())?;
+        println!("{uri}");
+        eprintln!("Uploaded {} bytes → {uri}", body.len());
+        eprintln!("Resume it with: path resume {uri}");
+        Ok(())
+    }
+}
 
 fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]

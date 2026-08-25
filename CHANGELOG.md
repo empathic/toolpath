@@ -2,6 +2,66 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Share and resume over object storage — 2026-08-25
+
+**`path-cli`** (0.19.0) can write toolpath documents to an S3 bucket, any
+S3-compatible endpoint (R2, MinIO, Ceph, B2), or a plain folder — and
+read them back.
+
+```bash
+path p export object --input claude-abc --to s3://my-bucket/traces
+path p export object --input claude-abc --to ~/Dropbox/toolpath-traces
+path p import object s3://my-bucket/traces/2026-08-07-fix-the-parser-claude-abc.json
+
+path resume s3://my-bucket/traces/2026-08-07-fix-the-parser-claude-abc.json
+path resume ~/Dropbox/toolpath-traces   # lists the folder, pick one
+```
+
+**Credentials come from wherever you already keep them.** If you use the
+AWS CLI, this needs no configuration: `~/.aws/credentials` and
+`~/.aws/config` are read directly, `AWS_PROFILE` and `--profile` select
+a profile, and the profile's region is used if you haven't set one. SSO,
+`role_arn` chains, and `credential_process` profiles are resolved by
+shelling out to `aws configure export-credentials` — the AWS CLI's own
+resolver, so refresh and every future profile type stay its problem.
+
+`object_store` alone would have covered only the server cases (EC2, ECS,
+EKS); it reads no `~/.aws` because it avoids the AWS SDK. Taking on
+`aws-config` to fix that would have meant 31 crates and an MSRV
+treadmill — its family requires rustc 1.94.1 against a repo pinned to
+1.94.0.
+
+`path auth s3 login` is the fallback for endpoints AWS tooling doesn't
+know about, where a scoped long-lived token is the right answer. It
+stores connection settings at `~/.toolpath/s3.json` (0600) —
+deliberately not a destination, so one credential serves any number of
+buckets — and merges rather than replaces. `path auth s3 status` reports
+which credential source actually won, because that's the first question
+when an upload fails.
+
+**Objects are named to be read.** A document lands at
+`<date>-<topic>-<cache-id>.json`, e.g.
+`2026-08-07-add-s3-support-claude-6f2a1c9e.json`. Every component is a
+pure function of the document, so re-exporting a session that grew
+overwrites its own object instead of leaving near-duplicates; the date
+is the session's *first* step, so it doesn't move as the conversation
+continues. That legibility is also what makes browsing cheap:
+`path resume <destination>` lists a bucket, prefix, or folder and offers
+a picker built from object names alone — no downloads. A destination
+holding one document skips the picker.
+
+A scheme-less destination is a **local path**; spell a bucket `s3://`. A
+*bare relative* value (`my-bucket/traces`) is rejected rather than
+quietly creating `./my-bucket/traces` and reporting success.
+`memory://` is rejected too: a fresh per-process store, so anything
+written there is gone before the command exits.
+
+Transport is the `object_store` crate, so one code path covers every
+backend. The folder backend is what the tests round-trip against, so
+export, import, and resume are exercised end to end without a network or
+a mock HTTP server.
+
+
 ## `path config edit` — 2026-08-14
 
 - **`path-cli`** (0.18.0): new `path config` porcelain command, starting
