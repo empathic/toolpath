@@ -58,6 +58,8 @@ pub fn run(target: InceptTarget) -> Result<()> {
                 input,
                 project,
                 output,
+                session_id: None,
+                cwd: None,
                 force: false,
             })
         }

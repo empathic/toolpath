@@ -44,6 +44,25 @@ pub enum ExportTarget {
         #[arg(short, long, conflicts_with = "project")]
         output: Option<PathBuf>,
 
+        /// Rename the session: this ID becomes every entry's `sessionId`
+        /// and every `sessionId` key in every preamble line, nested keys
+        /// included. Any UUID form is accepted; the output uses the
+        /// hyphenated lowercase form. With --project it names the
+        /// session file.
+        #[arg(long, value_name = "UUID")]
+        session_id: Option<String>,
+
+        /// Root the session at this directory: it becomes the `cwd` of
+        /// every entry that carries one. Absolute POSIX path in
+        /// normalized form; it does not have to exist on this machine.
+        /// Mutually exclusive with --project.
+        // `--project` files the session under the slug of the project
+        // directory, and Claude Code reads every entry's `cwd` as that
+        // directory. A second directory value can only repeat it or
+        // contradict it.
+        #[arg(long, value_name = "DIR", conflicts_with = "project")]
+        cwd: Option<String>,
+
         /// Overwrite the session file if this session id already exists in
         /// the target project. Without it the export refuses rather than
         /// clobbering local history.
@@ -208,8 +227,10 @@ pub fn run(target: ExportTarget) -> Result<()> {
             input,
             project,
             output,
+            session_id,
+            cwd,
             force,
-        } => run_claude(input, project, output, force),
+        } => run_claude(input, project, output, session_id, cwd, force),
         ExportTarget::Gemini {
             input,
             project,
@@ -636,18 +657,52 @@ fn run_claude(
     input: String,
     project: Option<PathBuf>,
     output: Option<PathBuf>,
+    session_id: Option<String>,
+    cwd: Option<String>,
     force: bool,
 ) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output, force);
+        let _ = (input, project, output, session_id, cwd, force);
         anyhow::bail!("'path export claude' requires a native environment");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
+        let session_id = session_id
+            .as_deref()
+            .map(|raw| {
+                uuid::Uuid::parse_str(raw)
+                    .with_context(|| format!("--session-id must be a UUID (got {raw:?})"))
+            })
+            .transpose()?
+            .map(|id| id.hyphenated().to_string());
+        let cwd = cwd.as_deref().map(parse_cwd_arg).transpose()?;
         let path = load_path_doc(&input)?;
-        let conversation = build_claude_conversation(&path)?;
+        let mut conversation = build_claude_conversation(&path)?;
+        if let Some(id) = &session_id {
+            conversation.session_id = id.clone();
+            for slot in conversation
+                .entries
+                .iter_mut()
+                .filter_map(|e| e.session_id.as_mut())
+            {
+                *slot = id.clone();
+            }
+            for raw in &mut conversation.preamble {
+                set_session_id_keys(raw, id);
+            }
+        }
+        if let Some(dir) = &cwd {
+            conversation.project_path = Some(dir.clone());
+            for slot in conversation
+                .entries
+                .iter_mut()
+                .filter_map(|e| e.cwd.as_mut())
+            {
+                *slot = dir.clone();
+            }
+        }
         let jsonl = serialize_jsonl(&conversation)?;
 
         match (project, output) {
@@ -692,6 +747,50 @@ fn load_path_doc(input: &str) -> Result<toolpath::v1::Path> {
             "expected a single-path graph; the source graph holds zero or multiple paths"
         )
     })
+}
+
+/// Sets every `sessionId` key in `value`, at any depth, to `id`.
+#[cfg(not(target_os = "emscripten"))]
+fn set_session_id_keys(value: &mut serde_json::Value, id: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "sessionId" {
+                    *child = serde_json::Value::String(id.to_string());
+                } else {
+                    set_session_id_keys(child, id);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                set_session_id_keys(child, id);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Claude Code keys a session on the exact `cwd` string, so the value
+/// must be an absolute POSIX path in normalized form: no `.`, `..`, or
+/// empty component. One trailing `/` is dropped. The directory may be
+/// on another machine, so it is not required to exist.
+#[cfg(not(target_os = "emscripten"))]
+fn parse_cwd_arg(raw: &str) -> Result<String> {
+    let Some(rest) = raw.strip_prefix('/') else {
+        anyhow::bail!("--cwd must be an absolute POSIX path (got {raw:?})");
+    };
+    if rest.is_empty() {
+        return Ok("/".to_string());
+    }
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    if rest
+        .split('/')
+        .any(|c| c.is_empty() || c == "." || c == "..")
+    {
+        anyhow::bail!("--cwd must not contain an empty, `.`, or `..` component (got {raw:?})");
+    }
+    Ok(format!("/{rest}"))
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -2146,6 +2245,8 @@ mod tests {
             input_path.to_string_lossy().to_string(),
             None,
             Some(output_path.clone()),
+            None,
+            None,
             false,
         )
         .unwrap();
@@ -2155,6 +2256,208 @@ mod tests {
         for line in out.lines() {
             serde_json::from_str::<serde_json::Value>(line).unwrap();
         }
+    }
+
+    /// `make_path_doc` with `cwd` recorded on every step.
+    fn make_path_doc_with_cwd(cwd: &str) -> toolpath::v1::Graph {
+        let mut path = make_path_doc().into_single_path().unwrap();
+        for step in &mut path.steps {
+            for change in step.change.values_mut() {
+                if let Some(structural) = change.structural.as_mut() {
+                    structural
+                        .extra
+                        .insert("cwd".to_string(), serde_json::json!(cwd));
+                }
+            }
+        }
+        toolpath::v1::Graph::from_path(path)
+    }
+
+    /// Runs `p export claude --output` on `doc` and parses the lines.
+    fn export_claude_lines(
+        doc: &toolpath::v1::Graph,
+        session_id: Option<&str>,
+        cwd: Option<&str>,
+    ) -> Vec<serde_json::Value> {
+        let temp = tempfile::tempdir().unwrap();
+        let input_path = temp.path().join("input.json");
+        let output_path = temp.path().join("out.jsonl");
+        std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
+        run_claude(
+            input_path.to_string_lossy().to_string(),
+            None,
+            Some(output_path.clone()),
+            session_id.map(str::to_string),
+            cwd.map(str::to_string),
+            false,
+        )
+        .unwrap();
+        std::fs::read_to_string(&output_path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn values_of<'a>(lines: &'a [serde_json::Value], key: &str) -> Vec<&'a str> {
+        lines.iter().filter_map(|v| v.get(key)?.as_str()).collect()
+    }
+
+    #[test]
+    fn claude_cwd_flag_rewrites_every_cwd() {
+        let doc = make_path_doc_with_cwd("/old/project");
+        let plain = export_claude_lines(&doc, None, None);
+        let old = values_of(&plain, "cwd");
+        assert!(!old.is_empty());
+        assert!(old.iter().all(|c| *c == "/old/project"));
+
+        let rooted = export_claude_lines(&doc, None, Some("/new/dir/"));
+        assert_eq!(rooted.len(), plain.len());
+        let new = values_of(&rooted, "cwd");
+        assert_eq!(new.len(), old.len());
+        assert!(new.iter().all(|c| *c == "/new/dir"));
+    }
+
+    #[test]
+    fn claude_session_id_flag_rewrites_every_session_id() {
+        let doc = make_path_doc();
+        let plain = export_claude_lines(&doc, None, None);
+        let old = values_of(&plain, "sessionId");
+        assert_eq!(old.len(), plain.len(), "every line carries a sessionId");
+
+        let id = "B7E1C0DE-0000-4000-8000-000000000001";
+        let renamed = export_claude_lines(&doc, Some(id), None);
+        assert_eq!(renamed.len(), plain.len());
+        let new = values_of(&renamed, "sessionId");
+        assert_eq!(new.len(), old.len());
+        assert!(new.iter().all(|s| *s == id.to_ascii_lowercase()));
+    }
+
+    #[test]
+    fn claude_session_id_flag_rewrites_nested_session_id() {
+        let mut path = make_path_doc().into_single_path().unwrap();
+        let artifact_key = path.steps[0].change.keys().next().unwrap().clone();
+        let mut extra = HashMap::new();
+        extra.insert(
+            "entry_type".to_string(),
+            serde_json::json!("worktree-state"),
+        );
+        extra.insert(
+            "raw".to_string(),
+            serde_json::json!({
+                "type": "worktree-state",
+                "sessionId": "test-session",
+                "worktreeSession": {"sessionId": "test-session", "worktreePath": "/wt"}
+            }),
+        );
+        path.steps.push(Step {
+            step: StepIdentity {
+                id: "step-003".to_string(),
+                parents: vec!["step-002".to_string()],
+                actor: "tool:claude-code".to_string(),
+                timestamp: "2024-01-01T00:00:02Z".to_string(),
+            },
+            change: HashMap::from([(
+                artifact_key,
+                ArtifactChange {
+                    raw: None,
+                    structural: Some(StructuralChange {
+                        change_type: "conversation.event".to_string(),
+                        extra,
+                    }),
+                },
+            )]),
+            meta: None,
+        });
+        path.path.head = "step-003".to_string();
+        let doc = toolpath::v1::Graph::from_path(path);
+
+        let id = "b7e1c0de-0000-4000-8000-000000000001";
+        let lines = export_claude_lines(&doc, Some(id), None);
+        let line = lines
+            .iter()
+            .find(|v| v["type"] == "worktree-state")
+            .expect("worktree-state line survives export");
+        assert_eq!(line["sessionId"], id);
+        assert_eq!(line["worktreeSession"]["sessionId"], id);
+        assert_eq!(line["worktreeSession"]["worktreePath"], "/wt");
+    }
+
+    #[test]
+    fn claude_cwd_flag_rejects_unnormalized_paths() {
+        for bad in ["relative/dir", "/a/../b", "/a/./b", "/a//b", "//", ""] {
+            assert!(parse_cwd_arg(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(parse_cwd_arg("/a/b/").unwrap(), "/a/b");
+        assert_eq!(parse_cwd_arg("/").unwrap(), "/");
+    }
+
+    #[test]
+    fn claude_session_id_flag_rejects_non_uuids() {
+        let temp = tempfile::tempdir().unwrap();
+        let input_path = temp.path().join("input.json");
+        std::fs::write(
+            &input_path,
+            serde_json::to_string(&make_path_doc()).unwrap(),
+        )
+        .unwrap();
+        let err = run_claude(
+            input_path.to_string_lossy().to_string(),
+            None,
+            Some(temp.path().join("out.jsonl")),
+            Some("not-a-uuid".to_string()),
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--session-id must be a UUID"));
+    }
+
+    #[test]
+    fn claude_session_id_with_project_names_the_session_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let input_path = temp.path().join("input.json");
+        std::fs::write(
+            &input_path,
+            serde_json::to_string(&make_path_doc()).unwrap(),
+        )
+        .unwrap();
+        let id = "b7e1c0de-0000-4000-8000-000000000001";
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+        let result = run_claude(
+            input_path.to_string_lossy().to_string(),
+            Some(project_dir.clone()),
+            None,
+            Some(id.to_string()),
+            None,
+            false,
+        );
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        result.expect("export claude");
+
+        let canon = std::fs::canonicalize(&project_dir).unwrap();
+        let file = toolpath_claude::PathResolver::new()
+            .with_home(&fake_home)
+            .project_dir(canon.to_str().unwrap())
+            .unwrap()
+            .join(format!("{id}.jsonl"));
+        assert!(file.is_file(), "{}", file.display());
     }
 
     #[test]
@@ -2190,8 +2493,15 @@ mod tests {
         };
         std::fs::write(&input_path, serde_json::to_string(&multi).unwrap()).unwrap();
 
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude(
+            input_path.to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("single-path graph"));
     }
 
@@ -2200,8 +2510,15 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(&input_path, "not json").unwrap();
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude(
+            input_path.to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("parse") || err.to_string().contains("Failed"));
     }
 
@@ -3274,9 +3591,9 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", &fake_home);
         }
-        let first = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let second = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let forced = run_claude(input, Some(cwd.clone()), None, true);
+        let first = run_claude(input.clone(), Some(cwd.clone()), None, None, None, false);
+        let second = run_claude(input.clone(), Some(cwd.clone()), None, None, None, false);
+        let forced = run_claude(input, Some(cwd.clone()), None, None, None, true);
         unsafe {
             match prior_home {
                 Some(v) => std::env::set_var("HOME", v),

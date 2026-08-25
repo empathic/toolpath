@@ -2,6 +2,23 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.19.0 — 2026-08-24
+
+- **`path-cli`** (0.19.0): `p export claude` takes `--session-id <uuid>`
+  and `--cwd <dir>`. `--session-id` renames the session: the ID becomes
+  the conversation's session ID, every entry's `sessionId`, and every
+  `sessionId` key in every preamble line, nested keys included (Claude
+  Code copies the ID into `worktreeSession.sessionId` on
+  `worktree-state` lines); any UUID form is accepted and the output
+  uses the hyphenated lowercase form; with `--project` it names the
+  session file. `--cwd` roots the session: the directory becomes the
+  `cwd` of every entry that carries one; it must be an absolute POSIX
+  path in normalized form (no `.`, `..`, or empty component; one
+  trailing `/` is dropped), does not have to exist on this machine, and
+  conflicts with `--project`. Message content and tool results are not
+  touched.
+- **`toolpath-cli`** (0.19.0): lockstep bump of the deprecated shim.
+
 ## toolpath-claude 0.13.0 — 2026-08-23
 
 - **Breaking:** `Conversation.segment_ids` replaces `Conversation.session_ids`.

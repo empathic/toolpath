@@ -31,6 +31,8 @@ pub fn run(target: ProjectTarget) -> Result<()> {
                 input,
                 project: None,
                 output,
+                session_id: None,
+                cwd: None,
                 force: false,
             })
         }
