@@ -33,7 +33,7 @@
   },
   {
     "name": "toolpath-claude",
-    "version": "0.13.0",
+    "version": "0.13.1",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",
@@ -73,7 +73,7 @@
   },
   {
     "name": "toolpath-pi",
-    "version": "0.6.1",
+    "version": "0.6.2",
     "description": "Derive Toolpath provenance documents from Pi (pi.dev) agent session logs",
     "docs": "https://docs.rs/toolpath-pi",
     "crate": "https://crates.io/crates/toolpath-pi",
@@ -113,7 +113,7 @@
   },
   {
     "name": "path-cli",
-    "version": "0.18.0",
+    "version": "0.19.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",

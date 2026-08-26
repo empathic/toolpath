@@ -22,6 +22,10 @@ pub struct SessionMeta {
     /// human-readable title for picker UIs (e.g. `path list pi --format tsv`
     /// piped into fzf). `None` if the session has no parseable user message.
     pub first_user_message: Option<String>,
+    /// The working directory from the session header. Unlike the
+    /// project string decoded from the session directory name, which
+    /// turns every `-` into `/`, this is the real path.
+    pub cwd: Option<String>,
 }
 
 /// In-memory representation of a Pi session file (plus optional parent).

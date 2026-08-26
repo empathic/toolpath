@@ -2033,7 +2033,7 @@ pub(crate) fn run_pathbase_inner(
 /// hash the canonical JSON and use a short hex prefix so re-uploads
 /// of the same content produce the same display label.
 #[cfg(not(target_os = "emscripten"))]
-fn derive_name(doc: &toolpath::v1::Graph) -> String {
+pub(crate) fn derive_name(doc: &toolpath::v1::Graph) -> String {
     let raw = match doc.single_path() {
         Some(p) => p.path.id.as_str(),
         None => doc.graph.id.as_str(),
