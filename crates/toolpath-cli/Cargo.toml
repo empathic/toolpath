@@ -1,6 +1,6 @@
 [package]
 name = "toolpath-cli"
-version = "0.20.0"
+version = "0.21.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/empathic/toolpath"
@@ -14,7 +14,7 @@ name = "path"
 path = "src/main.rs"
 
 [dependencies]
-path-cli = { path = "../path-cli", version = "0.20.0" }
+path-cli = { path = "../path-cli", version = "0.21.0" }
 anyhow = "1.0"
 
 [workspace]
