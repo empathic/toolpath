@@ -1,46 +1,47 @@
-//! Provider construction from [`Config`].
+//! Provider construction from [`ProjectionConfig`].
 //!
 //! A `*_convo` factory returns the harness's conversation manager
-//! with every environment value it consumes taken from [`Config`].
-//! Command modules construct managers through these factories.
+//! with every environment value it consumes taken from
+//! [`ProjectionConfig`]. Command modules construct managers through
+//! these factories.
 //!
 //! opencode, copilot, and cursor (Windows) get their directory
 //! injected, not just the home: their resolvers read `$XDG_DATA_HOME`
 //! / `$COPILOT_HOME` / `$APPDATA` internally, and those reads win
 //! against `with_home`. The injected directory wins against both.
 
-use crate::config::Config;
+use crate::config::ProjectionConfig;
 #[cfg(not(target_os = "emscripten"))]
 use crate::harness::HarnessBundle;
 use std::path::Path;
 
-pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
+pub(crate) fn claude_convo(config: &ProjectionConfig) -> toolpath_claude::ClaudeConvo {
     let mut resolver = toolpath_claude::PathResolver::new();
-    if let Some(home) = config.home_dir() {
+    if let Some(home) = &config.home {
         resolver = resolver.with_home(home);
     }
     toolpath_claude::ClaudeConvo::with_resolver(resolver)
 }
 
-pub(crate) fn gemini_convo(config: &Config) -> toolpath_gemini::GeminiConvo {
+pub(crate) fn gemini_convo(config: &ProjectionConfig) -> toolpath_gemini::GeminiConvo {
     let mut resolver = toolpath_gemini::PathResolver::new();
-    if let Some(home) = config.home_dir() {
+    if let Some(home) = &config.home {
         resolver = resolver.with_home(home);
     }
     toolpath_gemini::GeminiConvo::with_resolver(resolver)
 }
 
-pub(crate) fn codex_convo(config: &Config) -> toolpath_codex::CodexConvo {
+pub(crate) fn codex_convo(config: &ProjectionConfig) -> toolpath_codex::CodexConvo {
     let mut resolver = toolpath_codex::PathResolver::new();
-    if let Some(home) = config.home_dir() {
+    if let Some(home) = &config.home {
         resolver = resolver.with_home(home);
     }
     toolpath_codex::CodexConvo::with_resolver(resolver)
 }
 
-pub(crate) fn copilot_convo(config: &Config) -> toolpath_copilot::CopilotConvo {
+pub(crate) fn copilot_convo(config: &ProjectionConfig) -> toolpath_copilot::CopilotConvo {
     let mut resolver = toolpath_copilot::PathResolver::new();
-    if let Some(home) = config.home_dir() {
+    if let Some(home) = &config.home {
         resolver = resolver.with_home(home);
     }
     if let Some(dir) = &config.copilot_home {
@@ -50,9 +51,9 @@ pub(crate) fn copilot_convo(config: &Config) -> toolpath_copilot::CopilotConvo {
 }
 
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn opencode_convo(config: &Config) -> toolpath_opencode::OpencodeConvo {
+pub(crate) fn opencode_convo(config: &ProjectionConfig) -> toolpath_opencode::OpencodeConvo {
     let mut resolver = toolpath_opencode::PathResolver::new();
-    if let Some(home) = config.home_dir() {
+    if let Some(home) = &config.home {
         resolver = resolver.with_home(home);
     }
     if let Some(xdg) = &config.xdg_data_home {
@@ -62,9 +63,9 @@ pub(crate) fn opencode_convo(config: &Config) -> toolpath_opencode::OpencodeConv
 }
 
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn cursor_convo(config: &Config) -> toolpath_cursor::CursorConvo {
+pub(crate) fn cursor_convo(config: &ProjectionConfig) -> toolpath_cursor::CursorConvo {
     let mut resolver = toolpath_cursor::PathResolver::new();
-    if let Some(home) = config.home_dir() {
+    if let Some(home) = &config.home {
         resolver = resolver.with_home(home);
     }
     // The resolver consults $APPDATA only on Windows; injecting it on
@@ -78,9 +79,9 @@ pub(crate) fn cursor_convo(config: &Config) -> toolpath_cursor::CursorConvo {
 
 /// `base` replaces the sessions directory: `--base` wins over the
 /// config home.
-pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiConvo {
+pub(crate) fn pi_convo(config: &ProjectionConfig, base: Option<&Path>) -> toolpath_pi::PiConvo {
     let mut resolver = toolpath_pi::PathResolver::new();
-    if let Some(home) = config.home_dir() {
+    if let Some(home) = &config.home {
         resolver = resolver.with_home(home);
     }
     if let Some(dir) = base {
@@ -94,7 +95,7 @@ pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiC
 /// does not fail on a missing home dir); consumers skip the ones whose
 /// listing returns empty/NotFound.
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
+pub(crate) fn harness_bundle(config: &ProjectionConfig) -> HarnessBundle {
     HarnessBundle {
         claude: Some(claude_convo(config)),
         gemini: Some(gemini_convo(config)),
@@ -109,6 +110,7 @@ pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
 #[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use std::path::PathBuf;
 
     // Assertions stay on paths fully determined by injected values;
@@ -116,10 +118,10 @@ mod tests {
     // fallbacks, `$XDG_DATA_HOME` when no directory is injected) are
     // not asserted here.
 
-    fn config_with_home() -> Config {
-        Config {
+    fn config_with_home() -> ProjectionConfig {
+        ProjectionConfig {
             home: Some(PathBuf::from("/home/jailed")),
-            ..Config::default()
+            ..ProjectionConfig::default()
         }
     }
 
@@ -152,10 +154,10 @@ mod tests {
 
     #[test]
     fn copilot_convo_injects_copilot_dir() {
-        let config = Config {
+        let config = ProjectionConfig {
             home: Some(PathBuf::from("/home/jailed")),
             copilot_home: Some(PathBuf::from("/copilot/root")),
-            ..Config::default()
+            ..ProjectionConfig::default()
         };
         let manager = copilot_convo(&config);
         assert_eq!(
@@ -166,10 +168,10 @@ mod tests {
 
     #[test]
     fn opencode_convo_injects_data_dir() {
-        let config = Config {
+        let config = ProjectionConfig {
             home: Some(PathBuf::from("/home/jailed")),
             xdg_data_home: Some(PathBuf::from("/xdg/data")),
-            ..Config::default()
+            ..ProjectionConfig::default()
         };
         let manager = opencode_convo(&config);
         assert_eq!(
@@ -193,7 +195,7 @@ mod tests {
             userprofile: Some(PathBuf::from("/users/jailed")),
             ..Config::default()
         };
-        let manager = claude_convo(&config);
+        let manager = claude_convo(&config.projection());
         assert_eq!(
             manager.resolver().projects_dir().unwrap(),
             PathBuf::from("/users/jailed/.claude/projects")

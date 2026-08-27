@@ -144,7 +144,7 @@ fn sync_query_scope(args: &QueryArgs, config: &Config) {
             return;
         }
     };
-    let bundle = crate::providers::harness_bundle(config);
+    let bundle = crate::providers::harness_bundle(&config.projection());
     match crate::sync::sync_bundle(
         &config_dir,
         &bundle,

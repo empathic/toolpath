@@ -44,7 +44,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
-use crate::config::Config;
+use crate::config::{Config, ProjectionConfig};
 use crate::harness::Harness;
 
 #[derive(Args, Debug)]
@@ -113,7 +113,7 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
 
     // Transitional: `resume` does not take `&Config` yet; load one for
     // the export path.
-    let config = Config::load()?;
+    let config = Config::load()?.projection();
     let session_id = project_into_harness(path, target, &cwd, &config)?;
     let (binary, argv) = invocation_for(target, &session_id, &cwd);
     exec_harness(&binary, &argv, &cwd, exec)
@@ -462,7 +462,7 @@ pub(crate) fn project_into_harness(
     path: &TPath,
     harness: Harness,
     cwd: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<String> {
     match harness {
         Harness::Claude => match crate::cmd_export::project_claude(path, cwd, config)? {
@@ -992,7 +992,7 @@ mod tests {
         let cwd = tempfile::tempdir().unwrap();
         let path = make_convo_path_for_resume("claude-code://resume-test-session");
 
-        let config = Config::load().unwrap();
+        let config = Config::load().unwrap().projection();
         let session_id = project_into_harness(&path, Harness::Claude, cwd.path(), &config).unwrap();
         assert!(!session_id.is_empty());
     }

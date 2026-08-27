@@ -26,6 +26,8 @@ use std::path::PathBuf;
 use crate::cache::cache_ref;
 use crate::config::Config;
 #[cfg(not(target_os = "emscripten"))]
+use crate::config::ProjectionConfig;
+#[cfg(not(target_os = "emscripten"))]
 use crate::providers;
 use crate::remote::RepoSpec;
 
@@ -310,7 +312,7 @@ pub(crate) enum ClaudeProjection {
 pub(crate) fn project_claude(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<ClaudeProjection> {
     let conv = build_claude_conversation(path)?;
     if claude_session_file(&conv.session_id, project_dir, config)?.is_some() {
@@ -331,7 +333,7 @@ pub(crate) fn project_claude(
 fn claude_session_file(
     session_id: &str,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<Option<PathBuf>> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
@@ -350,7 +352,7 @@ fn claude_session_file(
 pub(crate) fn project_gemini(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<String> {
     use toolpath_convo::ConversationProjector;
     let project_dir = std::fs::canonicalize(project_dir)
@@ -377,7 +379,7 @@ pub(crate) fn project_gemini(
 pub(crate) fn project_codex(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<String> {
     use toolpath_convo::ConversationProjector;
     let project_dir = std::fs::canonicalize(project_dir)
@@ -431,7 +433,7 @@ pub(crate) fn build_copilot_session(
 pub(crate) fn project_copilot(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<String> {
     let session = build_copilot_session(path, project_dir)?;
     write_into_copilot_project(&session, config)?;
@@ -457,7 +459,7 @@ fn run_copilot(
         let path = load_path_doc(&input)?;
         match (project, output) {
             (Some(project_dir), None) => {
-                let id = project_copilot(&path, &project_dir, config)?;
+                let id = project_copilot(&path, &project_dir, &config.projection())?;
                 eprintln!();
                 eprintln!("Resume with:");
                 eprintln!("  copilot --resume {id}");
@@ -492,7 +494,10 @@ fn run_copilot(
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_copilot_project(session: &toolpath_copilot::Session, config: &Config) -> Result<()> {
+fn write_into_copilot_project(
+    session: &toolpath_copilot::Session,
+    config: &ProjectionConfig,
+) -> Result<()> {
     let manager = providers::copilot_convo(config);
     let resolver = manager.resolver();
     let state_dir = resolver
@@ -619,7 +624,7 @@ fn copilot_first_user_message(session: &toolpath_copilot::Session) -> String {
 pub(crate) fn project_opencode(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<String> {
     let session = build_opencode_session(path, Some(project_dir))?;
     let id = session.id.clone();
@@ -633,7 +638,7 @@ pub(crate) fn project_opencode(
 pub(crate) fn project_pi(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<String> {
     use toolpath_convo::ConversationProjector;
     let project_dir = std::fs::canonicalize(project_dir)
@@ -673,8 +678,13 @@ fn run_claude(
 
         match (project, output) {
             (Some(project_dir), None) => {
-                let out_path =
-                    write_into_claude_project(&conversation, &jsonl, &project_dir, force, config)?;
+                let out_path = write_into_claude_project(
+                    &conversation,
+                    &jsonl,
+                    &project_dir,
+                    force,
+                    &config.projection(),
+                )?;
                 let session_id = &conversation.session_id;
                 eprintln!(
                     "Exported session {} ({} entries) → {}",
@@ -738,7 +748,7 @@ fn write_into_claude_project(
     jsonl: &str,
     project_dir: &std::path::Path,
     force: bool,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<PathBuf> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
@@ -798,7 +808,9 @@ fn run_gemini(
         let conversation = build_gemini_conversation(&input, &project_path)?;
 
         match (project, output) {
-            (Some(_), None) => write_into_gemini_project(&conversation, &project_path, config)?,
+            (Some(_), None) => {
+                write_into_gemini_project(&conversation, &project_path, &config.projection())?
+            }
             (None, Some(out_path)) => write_to_output_path(&conversation, &out_path)?,
             (None, None) => write_to_stdout(&conversation)?,
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
@@ -840,7 +852,7 @@ fn build_gemini_conversation(
 fn write_into_gemini_project(
     conversation: &toolpath_gemini::types::Conversation,
     project_path: &str,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<()> {
     let manager = providers::gemini_convo(config);
     let resolver = manager.resolver();
@@ -1028,7 +1040,7 @@ fn run_pi(
         let session = build_pi_session(&input, &cwd_str)?;
 
         match (project, output) {
-            (Some(_), None) => write_into_pi_project(&session, &cwd_str, config)?,
+            (Some(_), None) => write_into_pi_project(&session, &cwd_str, &config.projection())?,
             (None, Some(out_path)) => write_pi_to_output_path(&session, &out_path)?,
             (None, None) => write_pi_to_stdout(&session)?,
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
@@ -1061,7 +1073,7 @@ fn build_pi_session(input: &str, cwd: &str) -> Result<toolpath_pi::PiSession> {
 fn write_into_pi_project(
     session: &toolpath_pi::PiSession,
     cwd: &str,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<()> {
     let manager = providers::pi_convo(config, None);
     let resolver = manager.resolver();
@@ -1179,7 +1191,7 @@ fn run_codex(
         let session = build_codex_session(&input, &cwd_str)?;
 
         match (project, output) {
-            (Some(_), None) => write_into_codex_project(&session, config)?,
+            (Some(_), None) => write_into_codex_project(&session, &config.projection())?,
             (None, Some(out_path)) => write_codex_to_output_path(&session, &out_path)?,
             (None, None) => write_codex_to_stdout(&session)?,
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
@@ -1211,7 +1223,10 @@ fn build_codex_session(input: &str, cwd: &str) -> Result<toolpath_codex::Session
 /// matches Codex's own filing convention; the timestamp prefix is
 /// derived from the session's first event time.
 #[cfg(not(target_os = "emscripten"))]
-fn write_into_codex_project(session: &toolpath_codex::Session, config: &Config) -> Result<()> {
+fn write_into_codex_project(
+    session: &toolpath_codex::Session,
+    config: &ProjectionConfig,
+) -> Result<()> {
     let session_ts = codex_session_timestamp(session)?;
     let manager = providers::codex_convo(config);
     let resolver = manager.resolver();
@@ -1439,7 +1454,7 @@ fn run_opencode(
         match (project, output) {
             (Some(project_dir), None) => {
                 let session = build_opencode_session(&path, Some(&project_dir))?;
-                write_into_opencode_db(&session, &project_dir, config)?;
+                write_into_opencode_db(&session, &project_dir, &config.projection())?;
             }
             (None, Some(out_path)) => {
                 let session = build_opencode_session(&path, None)?;
@@ -1479,7 +1494,7 @@ fn build_opencode_session(
 fn write_into_opencode_db(
     session: &toolpath_opencode::Session,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<()> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
@@ -1682,18 +1697,19 @@ fn run_cursor(
     #[cfg(not(target_os = "emscripten"))]
     {
         let path = load_path_doc(&input)?;
+        let projection = config.projection();
         match (project, output) {
             (Some(project_dir), None) => {
-                let session = build_cursor_session(&path, Some(&project_dir), config)?;
-                write_into_cursor_db(&session, &project_dir, config)?;
+                let session = build_cursor_session(&path, Some(&project_dir), &projection)?;
+                write_into_cursor_db(&session, &project_dir, &projection)?;
             }
             (None, Some(out_path)) => {
-                let session = build_cursor_session(&path, None, config)?;
+                let session = build_cursor_session(&path, None, &projection)?;
                 write_cursor_to_output_path(&session, &out_path)?;
             }
             (None, None) => {
                 let cwd = std::env::current_dir().ok();
-                let session = build_cursor_session(&path, cwd.as_deref(), config)?;
+                let session = build_cursor_session(&path, cwd.as_deref(), &projection)?;
                 write_cursor_to_stdout(&session)?;
             }
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
@@ -1706,7 +1722,7 @@ fn run_cursor(
 pub(crate) fn project_cursor(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<String> {
     let session = build_cursor_session(path, Some(project_dir), config)?;
     let id = session.data.composer_id.clone();
@@ -1718,7 +1734,7 @@ pub(crate) fn project_cursor(
 fn build_cursor_session(
     path: &toolpath::v1::Path,
     project_dir: Option<&std::path::Path>,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<toolpath_cursor::CursorSession> {
     use toolpath_convo::ConversationProjector;
     use toolpath_cursor::CursorProjector;
@@ -1763,7 +1779,7 @@ fn stable_workspace_id_for(folder: &std::path::Path) -> String {
 fn write_into_cursor_db(
     session: &toolpath_cursor::CursorSession,
     project_dir: &std::path::Path,
-    config: &Config,
+    config: &ProjectionConfig,
 ) -> Result<()> {
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
@@ -3223,7 +3239,7 @@ mod tests {
         let session_id = "claude-wrapper-test-session";
         let path = make_convo_path(&format!("claude-code://{}", session_id));
 
-        let result = project_claude(&path, &cwd, &config_with_home(&fake_home));
+        let result = project_claude(&path, &cwd, &config_with_home(&fake_home).projection());
 
         let returned_id = match result.expect("project_claude should succeed") {
             ClaudeProjection::Written { session_id } => session_id,
@@ -3249,7 +3265,7 @@ mod tests {
         let session_id = "claude-clobber-test-session";
         let path = make_convo_path(&format!("claude-code://{}", session_id));
 
-        let config = config_with_home(&fake_home);
+        let config = config_with_home(&fake_home).projection();
         let first = project_claude(&path, &cwd, &config);
         // Simulate local divergence: the session gained content after the
         // first projection.
@@ -3317,7 +3333,7 @@ mod tests {
         let session_uuid = "11111111-2222-3333-4444-aaaaaaaaaaaa";
         let path = make_convo_path(&format!("gemini-cli://{}", session_uuid));
 
-        let result = project_gemini(&path, &cwd, &config_with_home(&fake_home));
+        let result = project_gemini(&path, &cwd, &config_with_home(&fake_home).projection());
 
         let returned_id = result.expect("project_gemini should succeed");
         assert_eq!(returned_id, session_uuid);
@@ -3337,7 +3353,7 @@ mod tests {
         let session_uuid = "019dabc6-cccc-dddd-eeee-ffffffffffff";
         let path = make_convo_path(&format!("codex://{}", session_uuid));
 
-        let result = project_codex(&path, &cwd, &config_with_home(&fake_home));
+        let result = project_codex(&path, &cwd, &config_with_home(&fake_home).projection());
 
         let returned_id = result.expect("project_codex should succeed");
         assert_eq!(returned_id, session_uuid);
@@ -3397,7 +3413,11 @@ mod tests {
         // which adds the `ses_` prefix if not already present.
         let path = make_convo_path("opencode://ses_wrapper-test");
 
-        let result = project_opencode(&path, &cwd, &config_with_opencode_home(&fake_home));
+        let result = project_opencode(
+            &path,
+            &cwd,
+            &config_with_opencode_home(&fake_home).projection(),
+        );
 
         let returned_id = result.expect("project_opencode should succeed");
         assert_eq!(returned_id, "ses_wrapper-test");
@@ -3424,7 +3444,7 @@ mod tests {
         let session_id = "pi-wrapper-test-session";
         let path = make_convo_path(&format!("pi://{}", session_id));
 
-        let result = project_pi(&path, &cwd, &config_with_home(&fake_home));
+        let result = project_pi(&path, &cwd, &config_with_home(&fake_home).projection());
 
         let returned_id = result.expect("project_pi should succeed");
         assert_eq!(returned_id, session_id);

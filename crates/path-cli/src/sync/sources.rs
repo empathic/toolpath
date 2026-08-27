@@ -563,7 +563,7 @@ mod tests {
             ..Default::default()
         };
         let with_claude = HarnessBundle {
-            claude: Some(crate::providers::claude_convo(&config)),
+            claude: Some(crate::providers::claude_convo(&config.projection())),
             ..Default::default()
         };
         assert!(source_for(&with_claude, ArtifactType::Claude).is_some());
