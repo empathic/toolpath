@@ -1,5 +1,7 @@
 pub mod artifact;
 mod cache;
+#[cfg(all(not(target_os = "emscripten"), feature = "resume-remote"))]
+mod claude_session;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
 mod cmd_cache;
@@ -45,7 +47,6 @@ mod share_config;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
 #[cfg(all(not(target_os = "emscripten"), feature = "resume-remote"))]
-#[allow(dead_code)]
 mod ssh;
 mod sync;
 mod term;

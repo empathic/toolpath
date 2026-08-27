@@ -184,9 +184,7 @@ pub fn args_explicit(input: PathBuf, cwd: &Path, harness: Harness) -> ResumeArgs
         input: input.to_string_lossy().to_string(),
         cwd: Some(cwd.to_path_buf()),
         harness: Some(harness),
-        no_cache: false,
-        force: false,
-        url: None,
+        ..Default::default()
     }
 }
 

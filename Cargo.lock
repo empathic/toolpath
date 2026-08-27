@@ -3118,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "path-cli"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -5317,7 +5317,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-claude"
-version = "0.13.2"
+version = "0.13.3"
 dependencies = [
  "anyhow",
  "chrono",

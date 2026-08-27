@@ -151,7 +151,7 @@ Tests live alongside the code (`#[cfg(test)] mod tests`); provider crates also h
 
 - `toolpath-claude` has a `watcher` feature (default: on) gating `notify`/`tokio` dependencies for filesystem watching
 - `toolpath-gemini` has a `watcher` feature (default: on) gating the polling-based `ConversationWatcher` module
-- `path-cli` has `embedded-picker` (default: on; the skim picker) and `resume-remote` (default: off) gating the `p export claude` flags `--derive-session-id` and `--cwd` and the code behind them (`crates/path-cli/src/cmd_export/remote_session.rs`); `scripts/resume-remote.sh` builds with it. The gate is `all(feature = "resume-remote", not(target_os = "emscripten"))`: the feature has no effect on the wasm build. Test both states: `cargo test -p path-cli` and `cargo test -p path-cli --features resume-remote`.
+- `path-cli` has `embedded-picker` (default: on; the skim picker) and `resume-remote` (default: off) gating the `p export claude` flags `--derive-session-id` and `--cwd`, `path resume --remote` and `--dry-run`, and the code behind them (`crates/path-cli/src/claude_session.rs`, `crates/path-cli/src/cmd_export/remote_session.rs`, `crates/path-cli/src/ssh.rs`, `crates/path-cli/src/cmd_resume/remote.rs` and its two `.sh` probe scripts); the `russh` and `shlex` dependencies are optional on it; `scripts/resume-remote.sh` builds with it. The gate is `all(feature = "resume-remote", not(target_os = "emscripten"))`: the feature has no effect on the wasm build. Test both states: `cargo test -p path-cli` and `cargo test -p path-cli --features resume-remote`.
 
 ## Desktop app
 

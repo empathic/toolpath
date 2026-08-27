@@ -262,9 +262,7 @@ fn cache_id_input_loads_and_projects() {
         input: cache_id.to_string(),
         cwd: Some(cwd.path().to_path_buf()),
         harness: Some(Harness::Claude),
-        no_cache: false,
-        force: false,
-        url: None,
+        ..Default::default()
     };
 
     let recorder = RecordingExec::default();
