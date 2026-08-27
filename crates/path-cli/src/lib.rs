@@ -46,6 +46,9 @@ mod schema;
 mod share_config;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
+#[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
+#[allow(dead_code)]
+mod ssh;
 mod sync;
 mod term;
 

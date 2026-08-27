@@ -57,6 +57,8 @@ pathbase-client = { workspace = true }
 git2 = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
+shlex = { workspace = true, optional = true }
+russh = { workspace = true, optional = true }
 rusqlite = { workspace = true }
 rayon = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
@@ -88,8 +90,10 @@ vendored-openssl = ["git2/vendored-openssl"]
 # (`--no-default-features`) for the minimal build.
 embedded-picker = ["dep:skim", "dep:regex"]
 # Remote resume (scripts/resume-remote.sh): experimental, off by
-# default. Gates `p export claude --content-addressed-session-id` and `--cwd`.
-resume-remote = ["dep:serde_json_canonicalizer"]
+# default. Gates `p export claude --content-addressed-session-id`,
+# `--cwd`, and the ssh transport module. Pulls in the in-process SSH
+# client.
+resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh"]
 
 [dev-dependencies]
 assert_cmd = "2"
