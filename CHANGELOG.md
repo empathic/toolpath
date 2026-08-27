@@ -11,7 +11,8 @@ All notable changes to the Toolpath workspace are documented here.
   The same document yields the same ID on every run, so a second
   export of it into the same project is refused instead of duplicated.
   `--cwd` does not change the ID. The `--output` message names the
-  session ID.
+  session ID. `scripts/resume-remote.sh` exports with the flag and
+  reads the remote session ID back from the JSONL.
 - **`toolpath-cli`** (0.20.0): lockstep bump of the deprecated shim.
 
 ## toolpath-claude 0.13.2 — 2026-08-27
