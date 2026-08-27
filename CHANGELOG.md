@@ -2,6 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.1 — 2026-08-27
+
+- **`toolpath-claude`** (0.13.1): `Conversation::reroot(dir)` sets the
+  directory everywhere the format carries it: `project_path`, every
+  entry's `cwd` that is present, and a top-level `cwd` on a preamble
+  line.
+
 ## toolpath-claude 0.13.0 — 2026-08-23
 
 - **Breaking:** `Conversation.segment_ids` replaces `Conversation.session_ids`.
