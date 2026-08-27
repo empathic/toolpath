@@ -647,11 +647,16 @@ fn run_claude(args: ClaudeArgs) -> Result<()> {
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&args.input)?;
+        let document_json = read_doc_json(&args.input)?;
+        let path = parse_path_doc(&document_json)?;
         let conversation = build_claude_conversation(&path)?;
         #[cfg(feature = "resume-remote")]
         let conversation = {
             let mut conversation = conversation;
+            if args.remote.derive_session_id {
+                let id = remote_session::session_id_from_document_hash(&document_json)?;
+                conversation.rename_session(&id);
+            }
             if let Some(dir) = &args.remote.cwd {
                 conversation.reroot(dir);
             }
@@ -677,7 +682,12 @@ fn run_claude(args: ClaudeArgs) -> Result<()> {
             (None, Some(out_path)) => {
                 std::fs::write(&out_path, &jsonl)
                     .with_context(|| format!("write {}", out_path.display()))?;
-                eprintln!("Wrote {} bytes to {}", jsonl.len(), out_path.display());
+                eprintln!(
+                    "Wrote session {} ({} bytes) to {}",
+                    conversation.session_id,
+                    jsonl.len(),
+                    out_path.display()
+                );
             }
             (None, None) => {
                 println!("{}", jsonl);
@@ -691,10 +701,18 @@ fn run_claude(args: ClaudeArgs) -> Result<()> {
 
 #[cfg(not(target_os = "emscripten"))]
 fn load_path_doc(input: &str) -> Result<toolpath::v1::Path> {
+    parse_path_doc(&read_doc_json(input)?)
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn read_doc_json(input: &str) -> Result<String> {
     let file = cache_ref(input)?;
-    let json = std::fs::read_to_string(&file)
-        .with_context(|| format!("Failed to read {}", file.display()))?;
-    let doc = toolpath::v1::Graph::from_json(&json)
+    std::fs::read_to_string(&file).with_context(|| format!("Failed to read {}", file.display()))
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn parse_path_doc(json: &str) -> Result<toolpath::v1::Path> {
+    let doc = toolpath::v1::Graph::from_json(json)
         .map_err(|e| anyhow::anyhow!("Failed to parse toolpath document: {}", e))?;
     doc.into_single_path().ok_or_else(|| {
         anyhow::anyhow!(
@@ -3503,7 +3521,7 @@ mod tests {
     #[cfg(feature = "resume-remote")]
     mod resume_remote {
         use super::*;
-        use crate::cmd_export::remote_session::RemoteSessionArgs;
+        use crate::cmd_export::remote_session::{RemoteSessionArgs, session_id_from_document_hash};
 
         /// `make_path_doc` with `cwd` recorded on every step, plus one
         /// headerless line that carries a `cwd`.
@@ -3551,6 +3569,7 @@ mod tests {
         /// Runs `p export claude --output` on `doc` and parses the lines.
         fn export_claude_lines(
             doc: &toolpath::v1::Graph,
+            derive_session_id: bool,
             cwd: Option<&str>,
         ) -> Vec<serde_json::Value> {
             let temp = tempfile::tempdir().unwrap();
@@ -3561,6 +3580,7 @@ mod tests {
                 input: input_path.to_string_lossy().to_string(),
                 output: Some(output_path.clone()),
                 remote: RemoteSessionArgs {
+                    derive_session_id,
                     cwd: cwd.map(str::to_string),
                 },
                 ..Default::default()
@@ -3580,12 +3600,12 @@ mod tests {
         #[test]
         fn cwd_flag_rewrites_every_cwd() {
             let doc = make_path_doc_with_cwd("/old/project");
-            let plain = export_claude_lines(&doc, None);
+            let plain = export_claude_lines(&doc, false, None);
             let old = values_of(&plain, "cwd");
             assert!(!old.is_empty());
             assert!(old.iter().all(|c| *c == "/old/project"));
 
-            let rooted = export_claude_lines(&doc, Some("/new/dir"));
+            let rooted = export_claude_lines(&doc, false, Some("/new/dir"));
             assert_eq!(rooted.len(), plain.len());
             let new = values_of(&rooted, "cwd");
             assert_eq!(new.len(), old.len());
@@ -3600,12 +3620,94 @@ mod tests {
         #[test]
         fn cwd_flag_leaves_session_ids_alone() {
             let doc = make_path_doc_with_cwd("/old/project");
-            let plain = export_claude_lines(&doc, None);
-            let rooted = export_claude_lines(&doc, Some("/new/dir"));
+            let plain = export_claude_lines(&doc, false, None);
+            let rooted = export_claude_lines(&doc, false, Some("/new/dir"));
             assert_eq!(
                 values_of(&plain, "sessionId"),
                 values_of(&rooted, "sessionId")
             );
+        }
+
+        #[test]
+        fn derive_session_id_flag_stamps_the_derived_id() {
+            let doc = make_path_doc();
+            let plain = export_claude_lines(&doc, false, None);
+            let source_ids = values_of(&plain, "sessionId");
+            assert_eq!(
+                source_ids.len(),
+                plain.len(),
+                "every line carries a sessionId"
+            );
+
+            let expected =
+                session_id_from_document_hash(&serde_json::to_string(&doc).unwrap()).unwrap();
+            assert!(!source_ids.contains(&expected.as_str()));
+            let derived = export_claude_lines(&doc, true, None);
+            assert_eq!(derived.len(), plain.len());
+            let ids = values_of(&derived, "sessionId");
+            assert_eq!(ids.len(), source_ids.len());
+            assert!(ids.iter().all(|s| *s == expected));
+        }
+
+        #[test]
+        fn cwd_flag_does_not_change_the_derived_id() {
+            let doc = make_path_doc_with_cwd("/old/project");
+            let derived = export_claude_lines(&doc, true, None);
+            let rerooted = export_claude_lines(&doc, true, Some("/new/dir"));
+            assert_eq!(
+                values_of(&derived, "sessionId"),
+                values_of(&rerooted, "sessionId")
+            );
+        }
+
+        #[test]
+        fn derived_export_names_the_project_file() {
+            let temp = tempfile::tempdir().unwrap();
+            let fake_home = temp.path().join("home");
+            std::fs::create_dir_all(&fake_home).unwrap();
+            let cwd = temp.path().join("proj");
+            std::fs::create_dir_all(&cwd).unwrap();
+
+            let path = make_convo_path("claude-code://claude-derived-file-test-session");
+            let input_path = temp.path().join("input.json");
+            let doc = toolpath::v1::Graph::from_path(path);
+            std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
+            let args = ClaudeArgs {
+                input: input_path.to_string_lossy().to_string(),
+                project: Some(cwd.clone()),
+                remote: RemoteSessionArgs {
+                    derive_session_id: true,
+                    cwd: None,
+                },
+                ..Default::default()
+            };
+
+            let _g = crate::config::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let prior_home = std::env::var_os("HOME");
+            unsafe {
+                std::env::set_var("HOME", &fake_home);
+            }
+            let result = run_claude(args);
+            unsafe {
+                match prior_home {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+
+            result.expect("derived export should succeed");
+            let expected =
+                session_id_from_document_hash(&std::fs::read_to_string(&input_path).unwrap())
+                    .unwrap();
+            let canon = std::fs::canonicalize(&cwd).unwrap();
+            let file = toolpath_claude::PathResolver::new()
+                .with_home(&fake_home)
+                .project_dir(canon.to_str().unwrap())
+                .unwrap()
+                .join(format!("{expected}.jsonl"));
+            assert!(file.is_file(), "{}", file.display());
         }
     }
 }

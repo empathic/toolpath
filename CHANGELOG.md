@@ -2,6 +2,18 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.20.0 — 2026-08-27
+
+- **`path-cli`** (0.20.0): `p export claude` takes `--derive-session-id`
+  behind the `resume-remote` cargo feature. The flag renames the
+  session to an ID derived from the input document: a v4-shaped UUID
+  from the first 128 bits of the SHA-256 of its RFC 8785 (JCS) form.
+  The same document yields the same ID on every run, so a second
+  export of it into the same project is refused instead of duplicated.
+  `--cwd` does not change the ID. The `--output` message names the
+  session ID.
+- **`toolpath-cli`** (0.20.0): lockstep bump of the deprecated shim.
+
 ## toolpath-claude 0.13.2 — 2026-08-27
 
 - **`toolpath-claude`** (0.13.2): `Conversation::rename_session(id)` sets

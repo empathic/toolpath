@@ -558,12 +558,13 @@ mod resume_remote {
     use super::*;
 
     #[test]
-    fn export_claude_help_lists_cwd_under_remote_session() {
+    fn export_claude_help_lists_the_remote_session_flags() {
         cmd()
             .args(["p", "export", "claude", "--help"])
             .assert()
             .success()
             .stdout(predicate::str::contains("Remote session:"))
+            .stdout(predicate::str::contains("--derive-session-id"))
             .stdout(predicate::str::contains("--cwd <DIR>"));
     }
 
@@ -594,12 +595,13 @@ mod resume_remote {
 
 #[cfg(not(feature = "resume-remote"))]
 #[test]
-fn export_claude_help_omits_cwd() {
+fn export_claude_help_omits_the_remote_session_flags() {
     cmd()
         .args(["p", "export", "claude", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Remote session").not())
+        .stdout(predicate::str::contains("--derive-session-id").not())
         .stdout(predicate::str::contains("--cwd").not());
 }
 
