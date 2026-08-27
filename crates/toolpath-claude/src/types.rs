@@ -403,6 +403,28 @@ pub struct Conversation {
     pub preamble: Vec<serde_json::Value>,
 }
 
+/// Sets every string-valued `sessionId` key in `value`, at any depth,
+/// to `id`.
+fn set_session_id_keys(value: &mut serde_json::Value, id: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "sessionId" && child.is_string() {
+                    *child = serde_json::Value::String(id.to_string());
+                } else {
+                    set_session_id_keys(child, id);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                set_session_id_keys(child, id);
+            }
+        }
+        _ => {}
+    }
+}
+
 impl Conversation {
     pub fn new(session_id: String) -> Self {
         Self {
@@ -431,6 +453,28 @@ impl Conversation {
         }
 
         self.entries.push(entry);
+    }
+
+    /// Sets the session ID everywhere the format carries it:
+    /// `session_id`, every entry's top-level `sessionId` that is
+    /// present, and every string-valued `sessionId` key in preamble
+    /// lines at any depth. Claude Code copies the ID into
+    /// `worktreeSession.sessionId` on `worktree-state` lines. A
+    /// `sessionId` nested inside an entry (a tool result, a snapshot,
+    /// an extra key) is content that names another session, such as a
+    /// sub-agent's, and stays as it is.
+    pub fn rename_session(&mut self, id: &str) {
+        self.session_id = id.to_string();
+        for slot in self
+            .entries
+            .iter_mut()
+            .filter_map(|e| e.session_id.as_mut())
+        {
+            *slot = id.to_string();
+        }
+        for raw in &mut self.preamble {
+            set_session_id_keys(raw, id);
+        }
     }
 
     /// Sets the directory everywhere the format carries it:
@@ -565,6 +609,42 @@ mod tests {
 
     fn entry(json: &str) -> ConversationEntry {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn rename_session_sets_every_session_id_key() {
+        let mut convo = Conversation::new("old".to_string());
+        convo.preamble.push(serde_json::json!({
+            "type": "permission-mode", "permissionMode": "default", "sessionId": "old"
+        }));
+        convo.preamble.push(serde_json::json!({
+            "type": "worktree-state", "sessionId": "old",
+            "worktreeSession": {"sessionId": "old", "worktreePath": "/wt"}
+        }));
+        convo
+            .preamble
+            .push(serde_json::json!({"type": "odd", "sessionId": 7}));
+        convo.add_entry(entry(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"old","message":{"role":"user","content":"hi"}}"#,
+        ));
+        convo.add_entry(entry(
+            r#"{"uuid":"u2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","sessionId":"old","message":{"role":"assistant","content":"yo"}}"#,
+        ));
+
+        convo.rename_session("new");
+
+        assert_eq!(convo.session_id, "new");
+        assert!(
+            convo
+                .entries
+                .iter()
+                .all(|e| e.session_id.as_deref() == Some("new"))
+        );
+        assert_eq!(convo.preamble[0]["sessionId"], "new");
+        assert_eq!(convo.preamble[1]["sessionId"], "new");
+        assert_eq!(convo.preamble[1]["worktreeSession"]["sessionId"], "new");
+        assert_eq!(convo.preamble[1]["worktreeSession"]["worktreePath"], "/wt");
+        assert_eq!(convo.preamble[2]["sessionId"], 7);
     }
 
     #[test]
