@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Resume a Claude Code session on a remote host. Builds `path`
-# from this checkout, projects one local Claude session to JSONL, ships
-# the JSONL to an ssh host, launches claude under tmux there, and
-# attaches.
+# from this checkout, seeds and syncs the host, hands off to
+# `path resume --remote`, which plans, ships, and launches claude
+# under tmux, then attaches.
 #
-# `path` does the local projection (`p import claude`, `p export
-# claude`). This script does every other remote-resume step in shell,
-# behind strict preconditions. Each step marked [shell] is a candidate
-# to move into `path`.
+# `path` does the resume (`p import claude`, `resume --remote`). This
+# script does the host bootstrap in shell: VM creation, credential
+# seeding, and the working-tree sync. Each step marked [shell] is a
+# candidate to move into `path`.
 #
 # Usage:
-#   scripts/resume-remote.sh <ssh-destination> [options]
+#   scripts/resume-remote.sh <user@host> [options]
 #   scripts/resume-remote.sh --create <vm-name> [options]
 #
 # Options:
@@ -34,11 +34,11 @@
 #                      project directory. Idempotent.
 #   --no-sync          Do not push the working tree to the remote.
 #   --no-pause         Do not wait for Enter between steps.
-#   --dry-run          Print the plan, including the setup, sync, ship,
-#                      launch, and attach commands, and stop. Every
-#                      remote call is read-only. With --create, the run
-#                      stops after printing the create command unless the
-#                      VM already exists.
+#   --dry-run          Print the setup and sync commands instead of
+#                      running them, and stop after the `path resume`
+#                      plan. Every remote call is read-only. With
+#                      --create, the run stops after printing the
+#                      create command unless the VM already exists.
 #
 # Preconditions. Each one is checked before the first remote write. A
 # failed check exits 1 with a message.
@@ -46,7 +46,15 @@
 #   - cargo, git, ssh, jq are on PATH. rsync is on PATH
 #     unless --no-sync. scp is on PATH with --setup.
 #   - stdin is a terminal unless --dry-run (tmux attach needs one).
-#   - <ssh-destination> matches [A-Za-z0-9][A-Za-z0-9@._-]*.
+#   - <user@host> has both parts, each matching
+#     [A-Za-z0-9][A-Za-z0-9._-]*. `path resume --remote` requires the
+#     user part.
+#   - `ssh -G <user@host>` resolves to the value itself: the hostname
+#     is its host part, the port is 22, the user is its user part, and
+#     no ProxyCommand, ProxyJump, or CertificateFile is set. `path
+#     resume --remote` reads no ~/.ssh/config, so a destination that
+#     needs one seeds and syncs over OpenSSH and then fails at the
+#     handoff.
 #   - --project and -C are absolute, physical (no symlink components,
 #     no `..`, `.`, or empty component; a trailing `/` is stripped),
 #     and match [A-Za-z0-9/._-]+. Every value this script
@@ -54,52 +62,40 @@
 #     the script quotes nothing and escapes nothing.
 #   - --session is a UUID. At least one Claude session exists for
 #     --project.
-#   Remote (two read-only ssh calls, both before any remote write):
-#   - Each reply is exactly the TP_* lines the probe prints. A login
+#   Remote (one read-only ssh call before any remote write; `path
+#   resume --remote` runs its own read-only probes after it):
+#   - The reply is exactly the TP_* lines the probe prints. A login
 #     banner or a registration notice fails the run verbatim.
-#   - Call 1: $HOME is absolute, claude is on PATH or in a probed
-#     location, tmux is on PATH.
-#   - Call 2: <remote-dir> is physical (pwd -P returns it) when it
-#     exists; when it is missing, --setup or a sync on a run that ships
-#     creates it, else the run fails. Whether the tmux session for the
-#     shipped ID is live and whether the target session file exists are
-#     known.
+#   - The probe reports $HOME and whether the target session file
+#     exists. The file's absence means the run ships, which gates the
+#     sync.
 #
 # Steps (always in this order):
 #   1. cargo build -p path-cli --features resume-remote; the script runs
 #      target/debug/path and does not touch any installed `path`.
 #   2. Resolve the session. `path p import claude --no-cache` writes
-#      the document to $TMPDIR/path-resume-remote/.
+#      the document to $TMPDIR/path-resume-remote/. The remote session
+#      ID comes from `p export claude --content-addressed-session-id`:
+#      the same document yields the same ID on every run.
 #   3. Optional VM creation (--create).
-#   4. [shell] Call 1: remote home, claude path, tmux presence. Derive
-#      <remote-dir> from the remote home unless -C is given.
-#   5. `path p export claude --cwd <remote-dir> --content-addressed-session-id`
-#      projects the document to JSONL rooted at the remote project
-#      directory under a content-addressed ID (the same document
-#      yields the same ID on every run). [shell] Check the
-#      JSONL carries the remote cwd and one session ID; that ID is the
-#      remote session ID.
-#      [shell] Compute the remote Claude project slug (/, _, and .
-#      become -).
-#   6. [shell] Call 2: the physical project dir, whether the tmux
-#      session for the shipped ID is live, and whether the target
-#      session file exists. The remote wins once it exists: a live
-#      tmux session is attached to as is, a present session file is
-#      launched as is, and only an absent file is shipped. To reset a
-#      remote session, delete its file on the remote and re-run.
-#   7. Print the plan. --dry-run stops here.
-#   8. Optional remote seeding (--setup). When the run ships, rsync
+#   4. [shell] The probe: remote home and whether the target session
+#      file exists. Derive <remote-dir> from the remote home unless
+#      -C is given. An absent file means the run ships.
+#   5. Optional remote seeding (--setup). When the run ships, rsync
 #      the working tree (tracked, untracked, and uncommitted files,
 #      plus .git; minus target/ and anything .gitignore lists) into the
 #      remote project dir. --delete makes the remote mirror the local
-#      tree. The remote has no Rust toolchain.
-#   9. [shell] Ship the JSONL over ssh stdin (0600 via umask 077) when
-#      the file is absent: the remote writes <target>.tmp, checks its
-#      byte count against the local file, and renames it to <target>,
-#      so a present file is a complete file. Launch `claude -r <id>` in
-#      a detached tmux session unless it is live, attach. Detach with
-#      ctrl-b d.
-#  10. Print the reattach command.
+#      tree. The remote has no Rust toolchain. --dry-run prints these
+#      commands instead of running them.
+#   6. Hand off: `path resume <doc> --remote <dest> -C <remote-dir>`.
+#      It re-probes read-only, prints the plan, and does what the
+#      remote state asks: a live tmux session is left as is, a
+#      present session file is launched as is, an absent file is
+#      shipped first. To reset a remote session, delete its file on
+#      the remote and re-run. --dry-run stops after its plan.
+#   7. [shell] Attach: `ssh -t <dest> tmux attach-session -d -t
+#      =path-<first 8 of the ID>`. Detach with ctrl-b d; re-run the
+#      script to reattach.
 
 set -euo pipefail
 
@@ -144,7 +140,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$VM_NAME" && -n "$REMOTE" ]]; then
-    echo "pass either <ssh-destination> or --create <vm-name>, not both" >&2; exit 2
+    echo "pass either <user@host> or --create <vm-name>, not both" >&2; exit 2
 fi
 if [[ -n "$VM_NAME" ]]; then
     case "$VM_NAME" in
@@ -169,7 +165,7 @@ pause() {
 
 PLAIN_PATH_RE='^/[A-Za-z0-9/._-]*$'
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-DEST_RE='^[A-Za-z0-9][A-Za-z0-9@._-]*$'
+DEST_RE='^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$'
 
 # check_plain_path <value> <what>
 check_plain_path() {
@@ -207,7 +203,20 @@ need cargo; need git; need ssh; need jq
 [[ $SYNC -eq 0 ]] || need rsync
 [[ $SETUP -eq 0 ]] || need scp
 [[ $DRY_RUN -eq 1 || -t 0 ]] || die "stdin is not a terminal; tmux attach needs one (pass --dry-run to stop before attach)"
-[[ $REMOTE =~ $DEST_RE ]] || die "<ssh-destination> must match $DEST_RE (got '$REMOTE')"
+[[ $REMOTE =~ $DEST_RE ]] || die "<user@host> must match $DEST_RE (got '$REMOTE')"
+# `path resume --remote` reads no ~/.ssh/config, so the destination must
+# mean the same thing to OpenSSH (which seeds and syncs) as to the
+# command: its own host, port 22, its own user, and no proxy or
+# certificate. `ssh -G` prints proxycommand, proxyjump, and
+# certificatefile lines only when they are set.
+SSH_CONFIG="$(ssh -G "$REMOTE" 2>/dev/null)" || die "ssh -G $REMOTE failed"
+ssh_option() { awk -v key="$1" '$1 == key { print $2; exit }' <<<"$SSH_CONFIG"; }
+[[ $(ssh_option hostname) == "${REMOTE#*@}" ]] || die "ssh resolves $REMOTE to host $(ssh_option hostname); path resume --remote reads no ~/.ssh/config"
+[[ $(ssh_option port) == 22 ]] || die "ssh resolves $REMOTE to port $(ssh_option port); path resume --remote reads no ~/.ssh/config"
+[[ $(ssh_option user) == "${REMOTE%@*}" ]] || die "ssh resolves $REMOTE to user $(ssh_option user); path resume --remote reads no ~/.ssh/config"
+for key in proxycommand proxyjump certificatefile; do
+    [[ -z $(ssh_option "$key") ]] || die "ssh sets $key for $REMOTE; path resume --remote reads no ~/.ssh/config"
+done
 [[ $HOME == /* ]] || die "local \$HOME is not absolute (got '$HOME')"
 [[ -d $PROJECT ]] || die "--project is not a directory: $PROJECT"
 PROJECT="$(cd "$PROJECT" && pwd -P)"
@@ -237,7 +246,7 @@ PATH_BIN="$ROOT/target/debug/path"
 step "Resolve session"
 if [[ -z "$SESSION" ]]; then
     # TSV columns: project, session id, last activity, messages, first message.
-    ROW="$("$PATH_BIN" p list claude --project "$PROJECT" --format tsv | sort -t $'\t' -k3,3r | head -n 1)"
+    ROW="$("$PATH_BIN" p list claude --project "$PROJECT" --format tsv | sort -t $'\t' -k3,3r | sed -n 1p)"
     [[ -n "$ROW" ]] || die "no Claude sessions found for $PROJECT"
     SESSION="$(cut -f2 <<<"$ROW")"
     [[ $SESSION =~ $UUID_RE ]] || die "session id from p list is not a UUID (got '$SESSION')"
@@ -287,215 +296,119 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tmux
     fi
 fi
 
-# ── 4. [shell] Call 1: remote home, claude, tmux ──────────────────────────
+# ── 4. [shell] Probe: remote home, target session file ───────────────────
 
-# probe_script: read-only. Prints one `TP_<NAME>=<value>` line per fact.
-probe_script() {
-    cat <<'EOF'
-set -u
-printf 'TP_HOME=%s\n' "$HOME"
-c=''
-if command -v claude >/dev/null 2>&1; then c=$(command -v claude); fi
-for p in .local/bin/claude .claude/local/claude .npm-global/bin/claude; do
-    if [ -z "$c" ] && [ -x "$HOME/$p" ]; then c="$HOME/$p"; fi
-done
-printf 'TP_CLAUDE=%s\n' "$c"
-if command -v tmux >/dev/null 2>&1; then t=ok; else t=missing; fi
-printf 'TP_TMUX=%s\n' "$t"
-EOF
-}
-
-step "Probe $REMOTE (read-only)"
-show "ssh -n $REMOTE <probe script>"
-remote_facts "$(probe_script)" TP_HOME TP_CLAUDE TP_TMUX
-REMOTE_HOME="${PF_VALS[0]}"
-check_plain_path "$REMOTE_HOME" "remote \$HOME"
-REMOTE_CLAUDE="${PF_VALS[1]}"
-[[ -n $REMOTE_CLAUDE ]] || die "claude not found on $REMOTE; probed PATH, ~/.local/bin, ~/.claude/local, ~/.npm-global/bin"
-check_plain_path "$REMOTE_CLAUDE" "remote claude path"
-[[ ${PF_VALS[2]} == ok ]] || die "tmux not found on $REMOTE"
-
-if [[ -z "$REMOTE_DIR" ]]; then
-    case "$PROJECT" in
-        "$HOME"/*) REMOTE_DIR="$REMOTE_HOME/${PROJECT#"$HOME"/}" ;;
-        "$HOME")   REMOTE_DIR="$REMOTE_HOME" ;;
-        *) die "local project $PROJECT is not under \$HOME; pass -C <remote-dir>" ;;
-    esac
-    check_plain_path "$REMOTE_DIR" "the derived remote project dir"
-fi
-echo "ok: home=$REMOTE_HOME claude=$REMOTE_CLAUDE tmux=ok"
-echo "remote project dir: $REMOTE_DIR"
-
-# ── 5. Project the session ────────────────────────────────────────────────
-
-step "Project session $SESSION to JSONL"
+step "Derive the remote session id"
 JSONL="$WORK_DIR/$SESSION.jsonl"
-run "$PATH_BIN" p export claude --input "$DOC" --cwd "$REMOTE_DIR" --content-addressed-session-id >"$JSONL"
-N_CWD="$(grep -cF "\"cwd\":\"$REMOTE_DIR\"" "$JSONL" || true)"
-[[ $N_CWD -gt 0 ]] || die "the projected JSONL carries no cwd key; the document records no cwd"
-# [shell] The remote session ID is the sessionId every line that
-# carries one agrees on. `sort -u` yields one line only when they agree.
+run "$PATH_BIN" p export claude --input "$DOC" --content-addressed-session-id >"$JSONL"
+# The remote session ID is the sessionId every line that carries one
+# agrees on. `sort -u` yields one line only when they agree. The ID
+# hashes the document, so it is independent of --cwd.
 REMOTE_ID="$(jq -r '.sessionId // empty' "$JSONL" | sort -u)"
 [[ $REMOTE_ID =~ $UUID_RE ]] || die "the projected JSONL does not carry one sessionId (got '$REMOTE_ID')"
 echo "remote session id: $REMOTE_ID"
-TMUX_NAME="path-${REMOTE_ID:0:8}"
 
-# [shell] Claude project slug: /, _, and . become -.
-SLUG="$(printf '%s' "$REMOTE_DIR" | tr '/_.' '---')"
-SLUG_DIR="$REMOTE_HOME/.claude/projects/$SLUG"
-TARGET="$SLUG_DIR/$REMOTE_ID.jsonl"
-
-JSONL_BYTES="$(wc -c <"$JSONL")"
-SHIP_CMD="umask 077; mkdir -p $SLUG_DIR && cat > $TARGET.tmp && [ \$(wc -c < $TARGET.tmp) -eq $JSONL_BYTES ] && mv $TARGET.tmp $TARGET || { rm -f $TARGET.tmp; exit 1; }"
-LAUNCH_CMD="tmux new-session -d -s $TMUX_NAME -c $REMOTE_DIR 'env LANG=C.UTF-8 $REMOTE_CLAUDE -r $REMOTE_ID'"
-ATTACH_CMD="tmux attach-session -d -t =$TMUX_NAME"
-
-# ── 6. [shell] Call 2: project dir, tmux state ────────────────────────────
-
-# preflight_script: read-only. Prints one `TP_<NAME>=<value>` line per fact.
-preflight_script() {
-    sed "s|__DIR__|$REMOTE_DIR|; s|__TMUX__|$TMUX_NAME|; s|__TARGET__|$TARGET|" <<'EOF'
+# probe_script: read-only. `path resume --remote` re-checks everything
+# it plans on; this probe only feeds the pre-steps: the remote home
+# (for -C derivation and the --setup trust entry) and whether the
+# target session file exists (an absent file means the run ships,
+# which gates the sync). __SUFFIX__ is the project path relative to
+# the local home ('.' for the home itself); __DIR__ is the -C value or
+# empty. Both match $PLAIN_PATH_RE or are empty, so plain substitution
+# is safe. The slug must match `sanitize_project_path` in
+# crates/toolpath-claude/src/paths.rs (/, _, and . become -).
+probe_script() {
+    sed "s|__DIR__|$REMOTE_DIR|; s|__SUFFIX__|$1|; s|__ID__|$REMOTE_ID|" <<'EOF'
 set -u
-if cd __DIR__ 2>/dev/null; then p=$(pwd -P); else p=''; fi
-printf 'TP_PWD=%s\n' "$p"
-if tmux has-session -t =__TMUX__ 2>/dev/null; then s=live; else s=none; fi
-printf 'TP_SESSION=%s\n' "$s"
-if [ -e __TARGET__ ]; then e=yes; else e=no; fi
+printf 'TP_HOME=%s\n' "$HOME"
+d='__DIR__'
+if [ -z "$d" ]; then d="$HOME/__SUFFIX__"; d="${d%/.}"; fi
+slug=$(printf '%s' "$d" | tr '/_.' '---')
+if [ -e "$HOME/.claude/projects/$slug/__ID__.jsonl" ]; then e=yes; else e=no; fi
 printf 'TP_TARGET=%s\n' "$e"
 EOF
 }
 
-step "Preflight $REMOTE (read-only)"
-show "ssh -n $REMOTE <preflight script>"
-remote_facts "$(preflight_script)" TP_PWD TP_SESSION TP_TARGET
-TMUX_STATE="${PF_VALS[1]}"
-[[ $TMUX_STATE == live || $TMUX_STATE == none ]] || die "bad tmux state '$TMUX_STATE'"
-TARGET_EXISTS="${PF_VALS[2]}"
+SUFFIX=""
+if [[ -z $REMOTE_DIR ]]; then
+    case "$PROJECT" in
+        "$HOME"/*) SUFFIX="${PROJECT#"$HOME"/}" ;;
+        "$HOME")   SUFFIX="." ;;
+        *) die "local project $PROJECT is not under \$HOME; pass -C <remote-dir>" ;;
+    esac
+fi
+
+step "Probe $REMOTE (read-only)"
+show "ssh -n $REMOTE <probe script>"
+remote_facts "$(probe_script "$SUFFIX")" TP_HOME TP_TARGET
+REMOTE_HOME="${PF_VALS[0]}"
+check_plain_path "$REMOTE_HOME" "remote \$HOME"
+if [[ -z $REMOTE_DIR ]]; then
+    if [[ $SUFFIX == . ]]; then REMOTE_DIR="$REMOTE_HOME"; else REMOTE_DIR="$REMOTE_HOME/$SUFFIX"; fi
+    check_plain_path "$REMOTE_DIR" "the derived remote project dir"
+fi
+TARGET_EXISTS="${PF_VALS[1]}"
 [[ $TARGET_EXISTS == yes || $TARGET_EXISTS == no ]] || die "bad target state '$TARGET_EXISTS'"
+SHIP=1
+[[ $TARGET_EXISTS == no ]] || SHIP=0
+echo "ok: home=$REMOTE_HOME dir=$REMOTE_DIR target=$TARGET_EXISTS"
 
-# The remote wins once it exists: nothing here overwrites a remote
-# session file or touches the tree of a live session.
-if [[ $TMUX_STATE == live ]]; then
-    SHIP=0
-    LAUNCH=0
-    RUN_NOTE="attach to the live session. The remote tree and turns are kept."
-elif [[ $TARGET_EXISTS == yes ]]; then
-    SHIP=0
-    LAUNCH=1
-    RUN_NOTE="launch on the remote file, attach. The remote tree and turns are kept. To reset the remote session: ssh $REMOTE rm $TARGET, then re-run."
-else
-    SHIP=1
-    LAUNCH=1
-    RUN_NOTE="ship, launch, attach."
-fi
-
-DIR_NOTE=""
-case "${PF_VALS[0]}" in
-    "$REMOTE_DIR") ;;
-    "")
-        if [[ $SETUP -eq 1 ]]; then
-            DIR_NOTE="missing; --setup creates it"
-        elif [[ $SYNC -eq 1 && $SHIP -eq 1 ]]; then
-            DIR_NOTE="missing; sync creates it"
-        elif [[ $SHIP -eq 1 ]]; then
-            die "project directory $REMOTE_DIR does not exist on $REMOTE; pass --setup, drop --no-sync, or pass -C"
-        else
-            die "project directory $REMOTE_DIR does not exist on $REMOTE and this run does not ship, so the sync does not create it; pass --setup or -C"
-        fi
-        ;;
-    *) die "project directory $REMOTE_DIR is not physical on $REMOTE (it resolves to ${PF_VALS[0]}); pass -C ${PF_VALS[0]}" ;;
-esac
-echo "ok: dir=$REMOTE_DIR${DIR_NOTE:+ ($DIR_NOTE)} session=$TMUX_STATE target=$TARGET_EXISTS"
-
-# ── 7. Plan ───────────────────────────────────────────────────────────────
-
-step "Plan"
-cat <<EOF
-  remote:        $REMOTE
-  remote home:   $REMOTE_HOME
-  claude:        $REMOTE_CLAUDE
-  project dir:   $REMOTE_DIR${DIR_NOTE:+ ($DIR_NOTE)}
-  session id:    $REMOTE_ID (source $SESSION)
-  session file:  $TARGET (exists: $TARGET_EXISTS)
-  tmux session:  $TMUX_NAME ($TMUX_STATE)
-  jsonl:         $JSONL ($JSONL_BYTES bytes; $N_CWD cwd keys)
-  run:           $RUN_NOTE
-EOF
-[[ $SETUP -eq 0 ]] || echo "  setup:   ssh -n $REMOTE mkdir -p ~/.claude $REMOTE_DIR; scp -pq $CREDS $REMOTE:.claude/; jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
-[[ $SYNC -eq 0 || $SHIP -eq 0 ]] || echo "  sync:    rsync -az --delete --exclude=target/ --filter=':- .gitignore' $PROJECT/ $REMOTE:$REMOTE_DIR/"
-[[ $SHIP -eq 0 ]] || echo "  ship:    ssh $REMOTE \"$SHIP_CMD\" < $JSONL"
-[[ $LAUNCH -eq 0 ]] || echo "  launch:  ssh $REMOTE \"$LAUNCH_CMD\""
-echo "  attach:  ssh -t $REMOTE \"$ATTACH_CMD\""
-if [[ $DRY_RUN -eq 1 ]]; then
-    echo "Dry run: nothing was written or launched."
-    exit 0
-fi
-pause
-
-# ── 8. Seed (optional) and sync ───────────────────────────────────────────
+# ── 5. Seed (optional) and sync ───────────────────────────────────────────
 
 if [[ $SETUP -eq 1 ]]; then
     step "Seed $REMOTE"
-    run ssh -n "$REMOTE" "mkdir -p ~/.claude $REMOTE_DIR"
-    run scp -pq "$CREDS" "$REMOTE:.claude/"
-    show "jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
-    jq --arg dir "$REMOTE_DIR" '{
-        hasCompletedOnboarding: true,
-        theme: (.theme // "dark"),
-        oauthAccount,
-        projects: { ($dir): { hasTrustDialogAccepted: true } }
-    }' "$HOME/.claude.json" | ssh "$REMOTE" 'umask 077; cat > ~/.claude.json'
-    echo "seeded ~/.claude/.credentials.json and ~/.claude.json"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        skip "ssh -n $REMOTE mkdir -p ~/.claude $REMOTE_DIR"
+        skip "scp -pq $CREDS $REMOTE:.claude/"
+        skip "jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
+    else
+        run ssh -n "$REMOTE" "mkdir -p ~/.claude $REMOTE_DIR"
+        run scp -pq "$CREDS" "$REMOTE:.claude/"
+        show "jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
+        jq --arg dir "$REMOTE_DIR" '{
+            hasCompletedOnboarding: true,
+            theme: (.theme // "dark"),
+            oauthAccount,
+            projects: { ($dir): { hasTrustDialogAccepted: true } }
+        }' "$HOME/.claude.json" | ssh "$REMOTE" 'umask 077; cat > ~/.claude.json'
+        echo "seeded ~/.claude/.credentials.json and ~/.claude.json"
+    fi
 fi
 
 if [[ $SYNC -eq 1 && $SHIP -eq 1 ]]; then
     step "Sync $PROJECT to $REMOTE:$REMOTE_DIR"
-    run ssh -n "$REMOTE" "mkdir -p $REMOTE_DIR"
-    run rsync -az --delete --stats \
-        --exclude=target/ --filter=':- .gitignore' \
-        "$PROJECT/" "$REMOTE:$REMOTE_DIR/" | grep -E '^(Number of (regular )?files|Total transferred)'
+    if [[ $DRY_RUN -eq 1 ]]; then
+        skip "ssh -n $REMOTE mkdir -p $REMOTE_DIR"
+        skip "rsync -az --delete --exclude=target/ --filter=':- .gitignore' $PROJECT/ $REMOTE:$REMOTE_DIR/"
+    else
+        run ssh -n "$REMOTE" "mkdir -p $REMOTE_DIR"
+        run rsync -az --delete --stats \
+            --exclude=target/ --filter=':- .gitignore' \
+            "$PROJECT/" "$REMOTE:$REMOTE_DIR/" | grep -E '^(Number of (regular )?files|Total transferred)'
+    fi
+elif [[ $SYNC -eq 1 ]]; then
+    echo "sync skipped: the remote session file exists, so the run does not ship"
 fi
 
-# ── 9. [shell] Ship, launch, attach ───────────────────────────────────────
+# ── 6. Hand off to path resume ────────────────────────────────────────────
 
-if [[ $SHIP -eq 1 ]]; then
-    step "Ship $JSONL to $REMOTE:$TARGET"
-    show "ssh $REMOTE \"$SHIP_CMD\" < $JSONL"
-    ssh -o BatchMode=yes "$REMOTE" "$SHIP_CMD" <"$JSONL"
-fi
-if [[ $LAUNCH -eq 1 ]]; then
-    step "Launch $TMUX_NAME in $REMOTE_DIR"
-    show "ssh $REMOTE \"$LAUNCH_CMD\""
-    ssh -n -o BatchMode=yes "$REMOTE" "$LAUNCH_CMD"
-else
-    echo "tmux session $TMUX_NAME is live on $REMOTE; attaching"
-fi
-
-step "Attach (detach with ctrl-b d)"
-show "ssh -t $REMOTE \"$ATTACH_CMD\""
-set +e
-ssh -t "$REMOTE" "$ATTACH_CMD"
-STATUS=$?
-set -e
-
-# ── 10. Reattach ──────────────────────────────────────────────────────────
-
-step "Detached (exit $STATUS)"
-cat <<EOF
-Reattach (the live tmux session is reused, nothing is re-shipped):
-  ssh -t $REMOTE "$ATTACH_CMD"
-
-Inspect on the remote:
-  ssh $REMOTE tmux ls
-  ssh $REMOTE ls -la $SLUG_DIR
-
-The remote has the working tree but no Rust toolchain. To build there, ask
-the remote session to install rustup (rust-toolchain.toml pins the version).
-EOF
+RESUME_ARGS=(resume "$DOC" --remote "$REMOTE" -C "$REMOTE_DIR")
+[[ $DRY_RUN -eq 0 ]] || RESUME_ARGS+=(--dry-run)
+step "path ${RESUME_ARGS[*]}"
+echo "After a detach (ctrl-b d), re-run this script to reattach; the live tmux session is reused and nothing is re-shipped."
 if [[ -n "$VM_NAME" ]]; then
     cat <<EOF
-
 Tear down the VM when finished:
   ssh exe.dev rm $VM_NAME
 EOF
 fi
+pause
+run "$PATH_BIN" "${RESUME_ARGS[@]}"
+[[ $DRY_RUN -eq 0 ]] || exit 0
+
+# ── 7. [shell] Attach ─────────────────────────────────────────────────────
+
+TMUX_NAME="path-${REMOTE_ID:0:8}"
+step "Attach to $TMUX_NAME (detach with ctrl-b d)"
+show "ssh -t $REMOTE tmux attach-session -d -t =$TMUX_NAME"
+exec ssh -t "$REMOTE" "tmux attach-session -d -t =$TMUX_NAME"
