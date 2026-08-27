@@ -10,7 +10,8 @@ All notable changes to the Toolpath workspace are documented here.
   one; it must be an absolute POSIX path in normalized form (no `.`,
   `..`, or empty component; one trailing `/` is dropped), does not have
   to exist on this machine, and conflicts with `--project`. Message
-  content and tool results are not touched.
+  content and tool results are not touched. `scripts/resume-remote.sh`
+  builds with the feature and passes the flag.
 - **`toolpath-cli`** (0.19.0): lockstep bump of the deprecated shim.
 
 ## toolpath-claude 0.13.1 — 2026-08-27
