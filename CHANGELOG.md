@@ -2,6 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.2 — 2026-08-27
+
+- **`toolpath-claude`** (0.13.2): `Conversation::rename_session(id)` sets
+  the session ID everywhere the format carries it: `session_id`, every
+  entry's `sessionId` that is present, and every string-valued
+  `sessionId` key in preamble lines at any depth.
+
 ## path-cli 0.19.0 — 2026-08-27
 
 - **`path-cli`** (0.19.0): new cargo feature `resume-remote`, off by
