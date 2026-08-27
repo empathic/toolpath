@@ -2,6 +2,17 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.19.0 — 2026-08-27
+
+- **`path-cli`** (0.19.0): new cargo feature `resume-remote`, off by
+  default. It gates `p export claude --cwd <dir>`, which roots the
+  session: the directory becomes the `cwd` of every line that carries
+  one; it must be an absolute POSIX path in normalized form (no `.`,
+  `..`, or empty component; one trailing `/` is dropped), does not have
+  to exist on this machine, and conflicts with `--project`. Message
+  content and tool results are not touched.
+- **`toolpath-cli`** (0.19.0): lockstep bump of the deprecated shim.
+
 ## toolpath-claude 0.13.1 — 2026-08-27
 
 - **`toolpath-claude`** (0.13.1): `Conversation::reroot(dir)` sets the

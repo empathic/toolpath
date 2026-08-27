@@ -26,6 +26,11 @@ use std::path::PathBuf;
 use crate::cache::cache_ref;
 use crate::remote::RepoSpec;
 
+#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+mod remote_session;
+#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+pub use remote_session::RemoteSessionArgs;
+
 #[derive(Subcommand, Debug)]
 pub enum ExportTarget {
     /// Project a toolpath document into a Claude Code session
@@ -49,6 +54,10 @@ pub enum ExportTarget {
         /// clobbering local history.
         #[arg(long)]
         force: bool,
+
+        #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+        #[command(flatten)]
+        remote: RemoteSessionArgs,
     },
     /// Project a toolpath document into a Gemini CLI session
     Gemini {
@@ -209,7 +218,16 @@ pub fn run(target: ExportTarget) -> Result<()> {
             project,
             output,
             force,
-        } => run_claude(input, project, output, force),
+            #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+            remote,
+        } => run_claude(
+            input,
+            project,
+            output,
+            force,
+            #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+            remote,
+        ),
         ExportTarget::Gemini {
             input,
             project,
@@ -637,6 +655,7 @@ fn run_claude(
     project: Option<PathBuf>,
     output: Option<PathBuf>,
     force: bool,
+    #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))] remote: RemoteSessionArgs,
 ) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
@@ -648,6 +667,14 @@ fn run_claude(
     {
         let path = load_path_doc(&input)?;
         let conversation = build_claude_conversation(&path)?;
+        #[cfg(feature = "resume-remote")]
+        let conversation = {
+            let mut conversation = conversation;
+            if let Some(dir) = &remote.cwd {
+                conversation.reroot(dir);
+            }
+            conversation
+        };
         let jsonl = serialize_jsonl(&conversation)?;
 
         match (project, output) {
@@ -2065,7 +2092,7 @@ mod tests {
     use std::collections::HashMap;
     use toolpath::v1::{ArtifactChange, PathIdentity, Step, StepIdentity, StructuralChange};
 
-    fn make_path_doc() -> toolpath::v1::Graph {
+    pub(super) fn make_path_doc() -> toolpath::v1::Graph {
         let artifact_key = "agent://claude/test-session";
 
         let init_step = Step {
@@ -2133,6 +2160,23 @@ mod tests {
         toolpath::v1::Graph::from_path(path)
     }
 
+    /// `run_claude` with no remote-session flag set.
+    fn run_claude_without_remote_session(
+        input: String,
+        project: Option<PathBuf>,
+        output: Option<PathBuf>,
+        force: bool,
+    ) -> Result<()> {
+        run_claude(
+            input,
+            project,
+            output,
+            force,
+            #[cfg(feature = "resume-remote")]
+            RemoteSessionArgs::default(),
+        )
+    }
+
     #[test]
     fn claude_output_to_file() {
         let temp = tempfile::tempdir().unwrap();
@@ -2142,7 +2186,7 @@ mod tests {
         let doc = make_path_doc();
         std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
 
-        run_claude(
+        run_claude_without_remote_session(
             input_path.to_string_lossy().to_string(),
             None,
             Some(output_path.clone()),
@@ -2190,8 +2234,13 @@ mod tests {
         };
         std::fs::write(&input_path, serde_json::to_string(&multi).unwrap()).unwrap();
 
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude_without_remote_session(
+            input_path.to_string_lossy().to_string(),
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("single-path graph"));
     }
 
@@ -2200,8 +2249,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(&input_path, "not json").unwrap();
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude_without_remote_session(
+            input_path.to_string_lossy().to_string(),
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("parse") || err.to_string().contains("Failed"));
     }
 
@@ -3274,9 +3328,11 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", &fake_home);
         }
-        let first = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let second = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let forced = run_claude(input, Some(cwd.clone()), None, true);
+        let first =
+            run_claude_without_remote_session(input.clone(), Some(cwd.clone()), None, false);
+        let second =
+            run_claude_without_remote_session(input.clone(), Some(cwd.clone()), None, false);
+        let forced = run_claude_without_remote_session(input, Some(cwd.clone()), None, true);
         unsafe {
             match prior_home {
                 Some(v) => std::env::set_var("HOME", v),

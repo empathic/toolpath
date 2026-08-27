@@ -553,6 +553,54 @@ fn export_help_lists_claude_and_pathbase() {
         .stdout(predicate::str::contains("pathbase"));
 }
 
+#[cfg(feature = "resume-remote")]
+#[test]
+fn export_claude_help_lists_cwd_under_remote_session() {
+    cmd()
+        .args(["p", "export", "claude", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Remote session:"))
+        .stdout(predicate::str::contains("--cwd <DIR>"));
+}
+
+#[cfg(feature = "resume-remote")]
+#[test]
+fn export_claude_cwd_conflicts_with_project() {
+    cmd()
+        .args(["p", "export", "claude", "--input", "doc.json"])
+        .args(["--project", ".", "--cwd", "/remote/project"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[cfg(feature = "resume-remote")]
+#[test]
+fn export_claude_rejects_an_unnormalized_cwd() {
+    cmd()
+        .args([
+            "p", "export", "claude", "--input", "doc.json", "--cwd", "rel/dir",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "invalid value 'rel/dir' for '--cwd <DIR>'",
+        ))
+        .stderr(predicate::str::contains("absolute POSIX path"));
+}
+
+#[cfg(not(feature = "resume-remote"))]
+#[test]
+fn export_claude_help_omits_cwd() {
+    cmd()
+        .args(["p", "export", "claude", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Remote session").not())
+        .stdout(predicate::str::contains("--cwd").not());
+}
+
 #[test]
 fn import_git_no_cache_emits_stdout_json() {
     let (dir, branch) = git_fixture();

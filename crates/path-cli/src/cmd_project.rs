@@ -32,6 +32,8 @@ pub fn run(target: ProjectTarget) -> Result<()> {
                 project: None,
                 output,
                 force: false,
+                #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+                remote: crate::cmd_export::RemoteSessionArgs::default(),
             })
         }
     }
