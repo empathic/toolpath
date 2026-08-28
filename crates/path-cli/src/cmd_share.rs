@@ -1103,7 +1103,7 @@ struct BulkGroup {
     rows: Vec<usize>,
     /// Manifest classification per row, parallel to `rows`.
     states: Vec<UploadClass>,
-    /// Per-harness counts, most first.
+    /// Per-harness counts of the rows that will upload (`New`), most first.
     by_harness: Vec<(ArtifactType, usize)>,
     /// A remote configured for this directory, when one resolved and
     /// no `--repo` overrides it.
@@ -1129,8 +1129,17 @@ fn plan_bulk(
     }
     let mut groups = Vec::with_capacity(by_dir.len());
     for (dir, idxs) in by_dir {
+        let configured = match &dir {
+            Some(d) => remote(d)?,
+            None => None,
+        };
+        let target = configured.as_ref().unwrap_or(default_target);
+        let states: Vec<UploadClass> = idxs.iter().map(|&i| state(&rows[i], target)).collect();
         let mut by_harness: Vec<(ArtifactType, usize)> = Vec::new();
-        for &i in &idxs {
+        for (&i, st) in idxs.iter().zip(&states) {
+            if *st != UploadClass::New {
+                continue;
+            }
             let t = rows[i].artifact_type;
             match by_harness.iter_mut().find(|(h, _)| *h == t) {
                 Some((_, n)) => *n += 1,
@@ -1138,12 +1147,6 @@ fn plan_bulk(
             }
         }
         by_harness.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name().cmp(b.0.name())));
-        let configured = match &dir {
-            Some(d) => remote(d)?,
-            None => None,
-        };
-        let target = configured.as_ref().unwrap_or(default_target);
-        let states = idxs.iter().map(|&i| state(&rows[i], target)).collect();
         groups.push(BulkGroup {
             dir,
             rows: idxs,
@@ -1166,9 +1169,10 @@ fn plan_bulk(
     Ok(groups)
 }
 
-/// The pre-upload summary: one line per project directory with its
-/// session count, harness breakdown, and configured remote (if any),
-/// followed by the fallback destination.
+/// The pre-upload summary: one line per project directory with the
+/// number of sessions that will upload, their harness breakdown, what
+/// is being skipped (already uploaded / changed since), and the
+/// configured remote (if any), followed by the fallback destination.
 fn render_bulk_summary(
     groups: &[BulkGroup],
     total: usize,
@@ -1176,24 +1180,14 @@ fn render_bulk_summary(
     default_target: &BulkTarget,
     home: Option<&std::path::Path>,
 ) -> String {
-    let mut out = match project_under {
-        Some(p) => format!(
-            "Found {total} sessions under {}",
-            crate::config::home_relative(p, home)
-        ),
-        None => format!("Found {total} sessions"),
-    };
-    let (mut uploaded, mut changed, mut new) = (0, 0, 0);
-    for g in groups {
-        for st in &g.states {
-            match st {
-                UploadClass::Uploaded(_) => uploaded += 1,
-                UploadClass::Changed(_) => changed += 1,
-                UploadClass::New => new += 1,
-            }
-        }
+    fn tally(states: &[UploadClass]) -> (usize, usize, usize) {
+        states.iter().fold((0, 0, 0), |(n, u, c), st| match st {
+            UploadClass::New => (n + 1, u, c),
+            UploadClass::Uploaded(_) => (n, u + 1, c),
+            UploadClass::Changed(_) => (n, u, c + 1),
+        })
     }
-    if uploaded + changed > 0 {
+    fn skip_note(uploaded: usize, changed: usize) -> Option<String> {
         let mut parts = Vec::new();
         if uploaded > 0 {
             parts.push(format!("{uploaded} already uploaded"));
@@ -1201,10 +1195,22 @@ fn render_bulk_summary(
         if changed > 0 {
             parts.push(format!("{changed} changed since upload"));
         }
-        parts.push(format!("{new} new"));
-        out.push_str(&format!(" ({})", parts.join(", ")));
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+
+    let mut out = match project_under {
+        Some(p) => format!(
+            "Found {total} sessions under {}",
+            crate::config::home_relative(p, home)
+        ),
+        None => format!("Found {total} sessions"),
+    };
+    let to_upload: usize = groups.iter().map(|g| tally(&g.states).0).sum();
+    if to_upload != total {
+        out.push_str(&format!(", {to_upload} to upload"));
     }
     out.push('\n');
+
     let labels: Vec<String> = groups
         .iter()
         .map(|g| match &g.dir {
@@ -1213,9 +1219,10 @@ fn render_bulk_summary(
         })
         .collect();
     let label_width = labels.iter().map(|l| l.len()).max().unwrap_or(0);
-    let count_width = groups
+    let counts: Vec<usize> = groups.iter().map(|g| tally(&g.states).0).collect();
+    let count_width = counts
         .iter()
-        .map(|g| g.rows.len().to_string().len())
+        .map(|n| n.to_string().len())
         .max()
         .unwrap_or(1);
     let breakdowns: Vec<String> = groups
@@ -1229,11 +1236,15 @@ fn render_bulk_summary(
         })
         .collect();
     let breakdown_width = breakdowns.iter().map(|b| b.len()).max().unwrap_or(0);
-    for ((g, label), breakdown) in groups.iter().zip(&labels).zip(&breakdowns) {
+    for (((g, label), breakdown), count) in groups.iter().zip(&labels).zip(&breakdowns).zip(&counts)
+    {
         let mut line = format!(
-            "  {label:<label_width$}  {:>count_width$}   {breakdown:<breakdown_width$}",
-            g.rows.len()
+            "  {label:<label_width$}  {count:>count_width$}   {breakdown:<breakdown_width$}"
         );
+        let (_, uploaded, changed) = tally(&g.states);
+        if let Some(note) = skip_note(uploaded, changed) {
+            line.push_str(&format!("   ({note})"));
+        }
         if let Some(t) = &g.configured {
             line.push_str(&format!("   (→ {})", t.display()));
         }
@@ -2038,35 +2049,30 @@ mod tests {
         let rows = vec![
             bulk_row(ArtifactType::Claude, Some("/p"), "a"),
             bulk_row(ArtifactType::Claude, Some("/p"), "b"),
-            bulk_row(ArtifactType::Claude, Some("/p"), "c"),
+            bulk_row(ArtifactType::Codex, Some("/p"), "c"),
             bulk_row(ArtifactType::Claude, Some("/p"), "d"),
+            bulk_row(ArtifactType::Claude, Some("/q"), "e"),
         ];
         let groups = plan_bulk(
             &rows,
             &target("me", "pathstash"),
             |_| Ok(None),
             |row, _| match row.session_id.as_str() {
-                "a" | "b" => UploadClass::Uploaded("u".into()),
+                "a" | "b" | "e" => UploadClass::Uploaded("u".into()),
                 "c" => UploadClass::Changed("u".into()),
                 _ => UploadClass::New,
             },
         )
         .unwrap();
-        let out = render_bulk_summary(&groups, 4, None, &target("me", "pathstash"), None);
-        assert!(
-            out.starts_with(
-                "Found 4 sessions (2 already uploaded, 1 changed since upload, 1 new)\n"
-            ),
-            "{out}"
-        );
+        let out = render_bulk_summary(&groups, 5, None, &target("me", "pathstash"), None);
         assert_eq!(
-            groups[0]
-                .states
-                .iter()
-                .filter(|s| **s == UploadClass::New)
-                .count(),
-            1
+            out,
+            "Found 5 sessions, 1 to upload\n\
+             \x20 /p  1   claude 1   (2 already uploaded, 1 changed since upload)\n\
+             \x20 /q  0              (1 already uploaded)\n\
+             Destination: me/pathstash\n"
         );
+        assert_eq!(groups[0].by_harness, vec![(ArtifactType::Claude, 1)]);
     }
 
     #[test]
