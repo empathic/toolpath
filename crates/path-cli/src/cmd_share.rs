@@ -57,6 +57,15 @@ pub struct ShareArgs {
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Seconds to allow the upload before giving up (default 300).
+    ///
+    /// A long session derives to several MB and goes up in one request, so
+    /// the ceiling that suits every other call is the wrong one here. Sets
+    /// `PATH_HTTP_TIMEOUT_SECS` for this invocation; export that directly for
+    /// commands that have no flag, or for an agent that runs `share` for you.
+    #[arg(long, value_name = "SECS")]
+    pub timeout: Option<u64>,
 }
 
 /// One artifact surfaced by a provider — today always an agent session.
@@ -482,6 +491,15 @@ fn collect_cursor(
 }
 
 pub fn run(args: ShareArgs) -> Result<()> {
+    // Set before any client is built: `http_timeout` reads this, and every
+    // pathbase call in this process goes through one client constructor. Doing
+    // it here rather than threading a Duration keeps the eight call sites — all
+    // of them small requests that never needed a knob — untouched.
+    if let Some(secs) = args.timeout {
+        // SAFETY: single-threaded startup, before any client or task exists.
+        unsafe { std::env::set_var("PATH_HTTP_TIMEOUT_SECS", secs.to_string()) };
+    }
+
     let harness = args.harness.map(|h| h.artifact_type());
 
     if args.session.is_some() && harness.is_none() {
@@ -579,6 +597,9 @@ pub fn run(args: ShareArgs) -> Result<()> {
             None
         },
         no_cache: args.no_cache,
+        // Already applied to the environment by `run`, so this is only carried
+        // for completeness — the picker path uploads through the same client.
+        timeout: args.timeout,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
