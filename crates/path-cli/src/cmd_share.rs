@@ -842,6 +842,13 @@ fn share_explicit(
 
     let loaded = load_session(harness, project.as_deref(), session, args.no_cache)?;
     let summary = format!("{} session {}", harness.name(), loaded.cache_id);
+    match &loaded.origin {
+        LoadOrigin::Cache => {
+            eprintln!("Cache is current for {summary}; uploading without re-deriving")
+        }
+        LoadOrigin::Derived(path) => eprintln!("Cached {summary} ({})", path.display()),
+        LoadOrigin::DerivedUncached => {}
+    }
     let session_dir = session_dir
         .or_else(|| project.as_deref().map(PathBuf::from))
         .or_else(|| {
@@ -1009,6 +1016,26 @@ struct LoadedSession {
     /// The parsed document when this load derived it; `None` when the
     /// body was read straight from the cache.
     doc: Option<toolpath::v1::Graph>,
+    /// Where the load came from, for the caller's status line.
+    origin: LoadOrigin,
+}
+
+enum LoadOrigin {
+    /// Read from the cache: the manifest showed the source unchanged.
+    Cache,
+    /// Derived from the source and written to the cache at this path.
+    Derived(PathBuf),
+    /// Derived in memory only (`--no-cache`).
+    DerivedUncached,
+}
+
+impl LoadOrigin {
+    fn short(&self) -> &'static str {
+        match self {
+            LoadOrigin::Cache => "cached",
+            LoadOrigin::Derived(_) | LoadOrigin::DerivedUncached => "derived",
+        }
+    }
 }
 
 /// The current document for one session: read from the cache when the
@@ -1032,18 +1059,16 @@ fn load_session(
         let doc_path = crate::cache::cache_path(&cache_id)?;
         let body = std::fs::read_to_string(&doc_path)
             .with_context(|| format!("Failed to read {}", doc_path.display()))?;
-        eprintln!(
-            "Cache is current for {} session {cache_id}; uploading without re-deriving",
-            harness.name()
-        );
         return Ok(LoadedSession {
             cache_id,
             body,
             doc: None,
+            origin: LoadOrigin::Cache,
         });
     }
 
     let derived = derive_session(harness, project, session)?;
+    let mut origin = LoadOrigin::DerivedUncached;
     if !no_cache {
         // Always overwrite: `share` ships the current state of the
         // session, and a stale cache file from a prior share would
@@ -1058,18 +1083,14 @@ fn load_session(
         {
             eprintln!("warning: sync manifest not updated: {e}");
         }
-        eprintln!(
-            "Cached {} session → {} ({})",
-            harness.name(),
-            derived.cache_id,
-            path.display()
-        );
+        origin = LoadOrigin::Derived(path);
     }
     let body = derived.doc.to_json()?;
     Ok(LoadedSession {
         cache_id: derived.cache_id,
         body,
         doc: Some(derived.doc),
+        origin,
     })
 }
 
@@ -1403,8 +1424,14 @@ fn share_all(
             n += 1;
             let row = &rows[i];
             let project = row_project(row);
-            let label = format!("{} {}", row.artifact_type.name(), row.session_id);
-            eprintln!("[{n}/{total}] {label}");
+            // One line per session, completed in place: the prefix goes
+            // out before the (possibly slow) derive so progress is
+            // visible, the outcome finishes it.
+            eprint!(
+                "[{n}/{total}] {} {}",
+                row.artifact_type.name(),
+                row.session_id
+            );
             let stamp = source_stamp(bundle, row.artifact_type, project, &row.session_id);
             let result = load_session(row.artifact_type, project, &row.session_id, args.no_cache)
                 .and_then(|loaded| {
@@ -1414,7 +1441,7 @@ fn share_all(
                         .name
                         .clone()
                         .unwrap_or_else(|| crate::cmd_export::derive_name(&doc));
-                    crate::cmd_pathbase::graphs_post(
+                    let created = crate::cmd_pathbase::graphs_post(
                         &target.base_url,
                         &token,
                         &target.owner,
@@ -1422,11 +1449,12 @@ fn share_all(
                         Some(&name),
                         &loaded.body,
                         args.public,
-                    )
+                    )?;
+                    Ok((loaded.origin, created))
                 });
             match result {
-                Ok(created) => {
-                    eprintln!("  → {}", created.url);
+                Ok((origin, created)) => {
+                    eprintln!(" ({}) → {}", origin.short(), created.url);
                     record_upload(
                         row.artifact_type,
                         &row.session_id,
@@ -1438,7 +1466,7 @@ fn share_all(
                     *uploaded.entry(target.clone()).or_default() += 1;
                 }
                 Err(e) => {
-                    eprintln!("  warning: {label} failed: {e:#}");
+                    eprintln!(" failed: {e:#}");
                     failed += 1;
                 }
             }
