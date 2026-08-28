@@ -54,14 +54,14 @@ pub fn run(target: InceptTarget) -> Result<()> {
         } => {
             let input = resolve_input(input)?;
             let (project, output) = default_project(project, output);
-            crate::cmd_export::run(crate::cmd_export::ExportTarget::Claude {
-                input,
-                project,
-                output,
-                force: false,
-                #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
-                remote: crate::cmd_export::RemoteSessionArgs::default(),
-            })
+            crate::cmd_export::run(crate::cmd_export::ExportTarget::Claude(
+                crate::cmd_export::ClaudeArgs {
+                    input,
+                    project,
+                    output,
+                    ..Default::default()
+                },
+            ))
         }
         InceptTarget::Cursor {
             input,

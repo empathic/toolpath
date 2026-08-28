@@ -28,37 +28,39 @@ use crate::remote::RepoSpec;
 
 #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
 mod remote_session;
-#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
-pub use remote_session::RemoteSessionArgs;
+
+/// Arguments of `p export claude`.
+#[derive(clap::Args, Debug, Default)]
+pub struct ClaudeArgs {
+    /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+    #[arg(short, long)]
+    pub(crate) input: String,
+
+    /// Target project directory. With this flag, writes the JSONL into
+    /// `~/.claude/projects/<sanitized>/<session>.jsonl` so `claude -r <id>`
+    /// can resume it. Defaults to cwd when no `--output` is given.
+    #[arg(short, long)]
+    pub(crate) project: Option<PathBuf>,
+
+    /// Output JSONL to this file. Mutually exclusive with --project.
+    #[arg(short, long, conflicts_with = "project")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Overwrite the session file if this session id already exists in
+    /// the target project. Without it the export refuses rather than
+    /// clobbering local history.
+    #[arg(long)]
+    pub(crate) force: bool,
+
+    #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+    #[command(flatten)]
+    pub(crate) remote: remote_session::RemoteSessionArgs,
+}
 
 #[derive(Subcommand, Debug)]
 pub enum ExportTarget {
     /// Project a toolpath document into a Claude Code session
-    Claude {
-        /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
-        #[arg(short, long)]
-        input: String,
-
-        /// Target project directory. With this flag, writes the JSONL into
-        /// `~/.claude/projects/<sanitized>/<session>.jsonl` so `claude -r <id>`
-        /// can resume it. Defaults to cwd when no `--output` is given.
-        #[arg(short, long)]
-        project: Option<PathBuf>,
-
-        /// Output JSONL to this file. Mutually exclusive with --project.
-        #[arg(short, long, conflicts_with = "project")]
-        output: Option<PathBuf>,
-
-        /// Overwrite the session file if this session id already exists in
-        /// the target project. Without it the export refuses rather than
-        /// clobbering local history.
-        #[arg(long)]
-        force: bool,
-
-        #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
-        #[command(flatten)]
-        remote: RemoteSessionArgs,
-    },
+    Claude(ClaudeArgs),
     /// Project a toolpath document into a Gemini CLI session
     Gemini {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
@@ -213,21 +215,7 @@ pub enum ExportTarget {
 
 pub fn run(target: ExportTarget) -> Result<()> {
     match target {
-        ExportTarget::Claude {
-            input,
-            project,
-            output,
-            force,
-            #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
-            remote,
-        } => run_claude(
-            input,
-            project,
-            output,
-            force,
-            #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
-            remote,
-        ),
+        ExportTarget::Claude(args) => run_claude(args),
         ExportTarget::Gemini {
             input,
             project,
@@ -650,37 +638,31 @@ pub(crate) fn project_pi(
     Ok(session.header.id)
 }
 
-fn run_claude(
-    input: String,
-    project: Option<PathBuf>,
-    output: Option<PathBuf>,
-    force: bool,
-    #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))] remote: RemoteSessionArgs,
-) -> Result<()> {
+fn run_claude(args: ClaudeArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output, force);
+        let _ = args;
         anyhow::bail!("'path export claude' requires a native environment");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(&args.input)?;
         let conversation = build_claude_conversation(&path)?;
         #[cfg(feature = "resume-remote")]
         let conversation = {
             let mut conversation = conversation;
-            if let Some(dir) = &remote.cwd {
+            if let Some(dir) = &args.remote.cwd {
                 conversation.reroot(dir);
             }
             conversation
         };
         let jsonl = serialize_jsonl(&conversation)?;
 
-        match (project, output) {
+        match (args.project, args.output) {
             (Some(project_dir), None) => {
                 let out_path =
-                    write_into_claude_project(&conversation, &jsonl, &project_dir, force)?;
+                    write_into_claude_project(&conversation, &jsonl, &project_dir, args.force)?;
                 let session_id = &conversation.session_id;
                 eprintln!(
                     "Exported session {} ({} entries) → {}",
@@ -2160,23 +2142,6 @@ mod tests {
         toolpath::v1::Graph::from_path(path)
     }
 
-    /// `run_claude` with no remote-session flag set.
-    fn run_claude_without_remote_session(
-        input: String,
-        project: Option<PathBuf>,
-        output: Option<PathBuf>,
-        force: bool,
-    ) -> Result<()> {
-        run_claude(
-            input,
-            project,
-            output,
-            force,
-            #[cfg(feature = "resume-remote")]
-            RemoteSessionArgs::default(),
-        )
-    }
-
     #[test]
     fn claude_output_to_file() {
         let temp = tempfile::tempdir().unwrap();
@@ -2186,12 +2151,11 @@ mod tests {
         let doc = make_path_doc();
         std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
 
-        run_claude_without_remote_session(
-            input_path.to_string_lossy().to_string(),
-            None,
-            Some(output_path.clone()),
-            false,
-        )
+        run_claude(ClaudeArgs {
+            input: input_path.to_string_lossy().to_string(),
+            output: Some(output_path.clone()),
+            ..Default::default()
+        })
         .unwrap();
 
         let out = std::fs::read_to_string(&output_path).unwrap();
@@ -2234,12 +2198,10 @@ mod tests {
         };
         std::fs::write(&input_path, serde_json::to_string(&multi).unwrap()).unwrap();
 
-        let err = run_claude_without_remote_session(
-            input_path.to_string_lossy().to_string(),
-            None,
-            None,
-            false,
-        )
+        let err = run_claude(ClaudeArgs {
+            input: input_path.to_string_lossy().to_string(),
+            ..Default::default()
+        })
         .unwrap_err();
         assert!(err.to_string().contains("single-path graph"));
     }
@@ -2249,12 +2211,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(&input_path, "not json").unwrap();
-        let err = run_claude_without_remote_session(
-            input_path.to_string_lossy().to_string(),
-            None,
-            None,
-            false,
-        )
+        let err = run_claude(ClaudeArgs {
+            input: input_path.to_string_lossy().to_string(),
+            ..Default::default()
+        })
         .unwrap_err();
         assert!(err.to_string().contains("parse") || err.to_string().contains("Failed"));
     }
@@ -3328,11 +3288,17 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", &fake_home);
         }
-        let first =
-            run_claude_without_remote_session(input.clone(), Some(cwd.clone()), None, false);
-        let second =
-            run_claude_without_remote_session(input.clone(), Some(cwd.clone()), None, false);
-        let forced = run_claude_without_remote_session(input, Some(cwd.clone()), None, true);
+        let export = |input: String, force: bool| {
+            run_claude(ClaudeArgs {
+                input,
+                project: Some(cwd.clone()),
+                force,
+                ..Default::default()
+            })
+        };
+        let first = export(input.clone(), false);
+        let second = export(input.clone(), false);
+        let forced = export(input, true);
         unsafe {
             match prior_home {
                 Some(v) => std::env::set_var("HOME", v),

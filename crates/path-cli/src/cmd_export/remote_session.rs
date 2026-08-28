@@ -44,8 +44,8 @@ fn parse_cwd_arg(raw: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cmd_export::run_claude;
     use crate::cmd_export::tests::make_path_doc;
+    use crate::cmd_export::{ClaudeArgs, run_claude};
     use std::collections::HashMap;
     use toolpath::v1::{ArtifactChange, Step, StepIdentity, StructuralChange};
 
@@ -98,15 +98,14 @@ mod tests {
         let input_path = temp.path().join("input.json");
         let output_path = temp.path().join("out.jsonl");
         std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
-        run_claude(
-            input_path.to_string_lossy().to_string(),
-            None,
-            Some(output_path.clone()),
-            false,
-            RemoteSessionArgs {
+        run_claude(ClaudeArgs {
+            input: input_path.to_string_lossy().to_string(),
+            output: Some(output_path.clone()),
+            remote: RemoteSessionArgs {
                 cwd: cwd.map(str::to_string),
             },
-        )
+            ..Default::default()
+        })
         .unwrap();
         std::fs::read_to_string(&output_path)
             .unwrap()
