@@ -349,10 +349,34 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// supplied. Progenitor doesn't expose a bearer-token setter, so we
 /// pre-bake the header into the http client and hand it via
 /// `Client::new_with_client`.
+/// How long any pathbase request may take.
+///
+/// One flat value covered every call, and 30s is a fine ceiling for the
+/// small ones — auth, listing repos, deleting a graph. It is the wrong
+/// ceiling for an upload: a long agent session derives to several MB, and
+/// the whole document goes up in one request. A real session hit this
+/// against a *loopback* server, which is the case that should never time
+/// out, and the error it produced — "request timed out after 30s — try
+/// again, or shrink the upload" — invites you to shrink a conversation
+/// that already happened.
+///
+/// So the default is generous and the value is settable. `PATH_HTTP_TIMEOUT_SECS`
+/// covers every command, including the ones with no flag of their own — which
+/// is what a launchd agent or a cron sweep can reach.
+pub(crate) fn http_timeout() -> std::time::Duration {
+    const DEFAULT_SECS: u64 = 300;
+    let secs = std::env::var("PATH_HTTP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(DEFAULT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
 fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_client::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(30));
+        .timeout(http_timeout());
     if let Some(t) = token {
         let mut headers = reqwest::header::HeaderMap::new();
         let mut auth = reqwest::header::HeaderValue::from_str(&format!("Bearer {t}"))
