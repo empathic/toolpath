@@ -1429,6 +1429,11 @@ mod tests {
             session: None,
             project: None,
             no_cache: false,
+            // `run` applies this to the environment before any client exists,
+            // so it is never read on this path; None keeps these tests on the
+            // default timeout rather than asserting against a knob they do not
+            // exercise.
+            timeout: None,
         }
     }
 
