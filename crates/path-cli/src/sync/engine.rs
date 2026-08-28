@@ -53,13 +53,11 @@ pub(crate) struct SyncRecord {
 
 /// One upload of an artifact to a Pathbase repo, with the source
 /// fingerprint at upload time so a later run can tell "unchanged
-/// since" from "changed since".
+/// since" from "changed since". The destination is not stored
+/// separately: the graph URL the server returned is
+/// `<server>/u/<owner>/<name>/graphs/<id>`, so it names the repo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct UploadRecord {
-    /// Server base URL as used for the upload.
-    pub(crate) server: String,
-    /// `owner/name`.
-    pub(crate) repo: String,
     pub(crate) graph_id: String,
     pub(crate) url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,10 +68,22 @@ pub(crate) struct UploadRecord {
 }
 
 impl UploadRecord {
-    fn same_destination(&self, server: &str, repo: &str) -> bool {
-        crate::cmd_pathbase::host_of(&self.server) == crate::cmd_pathbase::host_of(server)
-            && self.repo == repo
+    /// Whether this upload landed in the repo at `repo_url`
+    /// (`<server>/u/<owner>/<name>`). Hosts are compared as written;
+    /// the graph URL must be `<repo_url>/graphs/…`, so a parent path
+    /// (`/u/<owner>`) never matches.
+    fn in_repo(&self, repo_url: &str) -> bool {
+        let repo_url = repo_url.trim_end_matches('/');
+        let (host, path) = split_host(&self.url);
+        let (repo_host, repo_path) = split_host(repo_url);
+        host == repo_host && path.starts_with(&format!("{repo_path}/graphs/"))
     }
+}
+
+/// `("https://host", "/rest")` — the authority and everything after it.
+fn split_host(url: &str) -> (&str, &str) {
+    let host = crate::cmd_pathbase::host_of(url);
+    (host, &url[host.len()..])
 }
 
 /// What the manifest knows about an artifact relative to one upload
@@ -89,25 +99,20 @@ pub(crate) enum UploadState<'a> {
     Changed(&'a UploadRecord),
 }
 
-/// The artifact's upload state for `server`/`repo`, judged against the
-/// current source stamp. Only a real, matching stamp can vouch for
+/// The artifact's upload state for the repo at `repo_url`
+/// (`<server>/u/<owner>/<name>`), judged against the current source stamp. Only a real, matching stamp can vouch for
 /// "unchanged"; a `None` stamp on either side reads as changed.
 pub(crate) fn upload_state<'a>(
     manifest: &'a Manifest,
     artifact_type: ArtifactType,
     id: &str,
-    server: &str,
-    repo: &str,
+    repo_url: &str,
     current: sources::Stamp,
 ) -> UploadState<'a> {
     let Some(rec) = manifest
         .get(artifact_type.name())
         .and_then(|records| records.get(id))
-        .and_then(|rec| {
-            rec.uploads
-                .iter()
-                .find(|u| u.same_destination(server, repo))
-        })
+        .and_then(|rec| rec.uploads.iter().find(|u| u.in_repo(repo_url)))
     else {
         return UploadState::New;
     };
@@ -122,14 +127,15 @@ pub(crate) fn upload_state<'a>(
     }
 }
 
-/// Record a successful upload. Replaces any prior record for the same
-/// server+repo. Creates a known-but-uncached record when the artifact
+/// Record a successful upload to the repo at `repo_url`. Replaces any
+/// prior record in that repo. Creates a known-but-uncached record when the artifact
 /// has none yet (e.g. a `--no-cache` share).
 pub(crate) fn record_upload(
     config_dir: &Path,
     artifact_type: ArtifactType,
     id: &str,
     path: Option<&str>,
+    repo_url: &str,
     upload: UploadRecord,
 ) -> Result<()> {
     update_manifest(config_dir, |manifest| {
@@ -145,8 +151,7 @@ pub(crate) fn record_upload(
                 synced_at: Utc::now(),
                 uploads: Vec::new(),
             });
-        rec.uploads
-            .retain(|u| !u.same_destination(&upload.server, &upload.repo));
+        rec.uploads.retain(|u| !u.in_repo(repo_url));
         rec.uploads.push(upload);
     })
 }
@@ -618,8 +623,6 @@ mod tests {
 
     fn upload(server: &str, repo: &str, graph_id: &str) -> UploadRecord {
         UploadRecord {
-            server: server.to_string(),
-            repo: repo.to_string(),
             graph_id: graph_id.to_string(),
             url: format!("{server}/u/{repo}/graphs/{graph_id}"),
             modified: Some("2026-01-01T00:00:00Z".parse().unwrap()),
@@ -631,31 +634,17 @@ mod tests {
     #[test]
     fn record_upload_creates_and_replaces_per_destination() {
         with_cfg(|_, cfg| {
-            record_upload(
-                cfg,
-                ArtifactType::Claude,
-                "s1",
+            let put = |path: Option<&str>, repo_url: &str, u: UploadRecord| {
+                record_upload(cfg, ArtifactType::Claude, "s1", path, repo_url, u).unwrap()
+            };
+            put(
                 Some("/p"),
+                "https://a/u/me/x",
                 upload("https://a", "me/x", "g1"),
-            )
-            .unwrap();
-            record_upload(
-                cfg,
-                ArtifactType::Claude,
-                "s1",
-                None,
-                upload("https://a", "me/y", "g2"),
-            )
-            .unwrap();
-            // Same host, trailing slash: replaces the me/x record.
-            record_upload(
-                cfg,
-                ArtifactType::Claude,
-                "s1",
-                None,
-                upload("https://a/", "me/x", "g3"),
-            )
-            .unwrap();
+            );
+            put(None, "https://a/u/me/y", upload("https://a", "me/y", "g2"));
+            // Trailing slash on the repo URL: still replaces the me/x record.
+            put(None, "https://a/u/me/x/", upload("https://a", "me/x", "g3"));
             let m = load_manifest(cfg).unwrap();
             let rec = &m["claude"]["s1"];
             assert_eq!(rec.path.as_deref(), Some("/p"));
@@ -673,6 +662,7 @@ mod tests {
                 ArtifactType::Claude,
                 "s1",
                 None,
+                "https://a/u/me/x",
                 upload("https://a", "me/x", "g1"),
             )
             .unwrap();
@@ -733,40 +723,25 @@ mod tests {
             },
         );
         let same = (Some("2026-01-01T00:00:00Z".parse().unwrap()), Some(10));
+        let st = |id: &str, repo_url: &str, stamp| {
+            upload_state(&m, ArtifactType::Claude, id, repo_url, stamp)
+        };
         assert!(matches!(
-            upload_state(&m, ArtifactType::Claude, "s1", "https://a", "me/x", same),
+            st("s1", "https://a/u/me/x", same),
             UploadState::Uploaded(u) if u.graph_id == "g1"
         ));
         assert!(matches!(
-            upload_state(
-                &m,
-                ArtifactType::Claude,
-                "s1",
-                "https://a",
-                "me/x",
-                (same.0, Some(11))
-            ),
+            st("s1", "https://a/u/me/x", (same.0, Some(11))),
             UploadState::Changed(_)
         ));
         assert!(matches!(
-            upload_state(
-                &m,
-                ArtifactType::Claude,
-                "s1",
-                "https://a",
-                "me/x",
-                (None, None)
-            ),
+            st("s1", "https://a/u/me/x", (None, None)),
             UploadState::Changed(_)
         ));
-        assert_eq!(
-            upload_state(&m, ArtifactType::Claude, "s1", "https://b", "me/x", same),
-            UploadState::New
-        );
-        assert_eq!(
-            upload_state(&m, ArtifactType::Claude, "s2", "https://a", "me/x", same),
-            UploadState::New
-        );
+        assert_eq!(st("s1", "https://b/u/me/x", same), UploadState::New);
+        assert_eq!(st("s1", "https://a/u/me/xy", same), UploadState::New);
+        assert_eq!(st("s1", "https://a/u/me", same), UploadState::New);
+        assert_eq!(st("s2", "https://a/u/me/x", same), UploadState::New);
     }
 
     fn write_claude_session(home: &Path, project_slug: &str, session: &str, prompt: &str) {

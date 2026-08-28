@@ -870,7 +870,8 @@ fn share_explicit(
             .as_ref()
             .map(|r| format!("{}/{}", r.owner, r.name))
             .unwrap_or_else(|| format!("{username}/pathstash"));
-        match upload_class(harness, session, &dest.base_url, &repo, stamp) {
+        let repo_url = repo_url(&dest.base_url, &repo);
+        match upload_class(harness, session, &repo_url, stamp) {
             UploadClass::Uploaded(url) if !args.force => {
                 eprintln!(
                     "Already uploaded to {repo}, unchanged since; pass --force to upload again"
@@ -905,8 +906,7 @@ fn share_explicit(
             harness,
             session,
             project.as_deref(),
-            &base_url,
-            &format!("{}/{}", done.owner, done.repo),
+            &repo_url(&base_url, &format!("{}/{}", done.owner, done.repo)),
             &done.created,
             stamp,
         );
@@ -922,6 +922,11 @@ fn row_project(row: &ArtifactRow) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// `<server>/u/<owner>/<name>` — the key upload records match on.
+fn repo_url(base_url: &str, repo: &str) -> String {
+    format!("{}/u/{repo}", base_url.trim_end_matches('/'))
 }
 
 /// The manifest's view of one session relative to one destination.
@@ -950,25 +955,23 @@ fn source_stamp(
 fn upload_class(
     harness: ArtifactType,
     session: &str,
-    server: &str,
-    repo: &str,
+    repo_url: &str,
     stamp: crate::sync::sources::Stamp,
 ) -> UploadClass {
     let manifest = crate::config::config_dir()
         .and_then(|dir| crate::sync::load_manifest(&dir))
         .unwrap_or_default();
-    classify(&manifest, harness, session, server, repo, stamp)
+    classify(&manifest, harness, session, repo_url, stamp)
 }
 
 fn classify(
     manifest: &crate::sync::Manifest,
     harness: ArtifactType,
     session: &str,
-    server: &str,
-    repo: &str,
+    repo_url: &str,
     stamp: crate::sync::sources::Stamp,
 ) -> UploadClass {
-    match crate::sync::upload_state(manifest, harness, session, server, repo, stamp) {
+    match crate::sync::upload_state(manifest, harness, session, repo_url, stamp) {
         crate::sync::UploadState::New => UploadClass::New,
         crate::sync::UploadState::Uploaded(u) => UploadClass::Uploaded(u.url.clone()),
         crate::sync::UploadState::Changed(u) => UploadClass::Changed(u.url.clone()),
@@ -981,23 +984,20 @@ fn record_upload(
     harness: ArtifactType,
     session: &str,
     project: Option<&str>,
-    server: &str,
-    repo: &str,
+    repo_url: &str,
     created: &crate::cmd_pathbase::CreatedGraph,
     stamp: crate::sync::sources::Stamp,
 ) {
     let record = crate::sync::UploadRecord {
-        server: server.trim_end_matches('/').to_string(),
-        repo: repo.to_string(),
         graph_id: created.id.clone(),
         url: created.url.clone(),
         modified: stamp.0,
         size: stamp.1,
         uploaded_at: Utc::now(),
     };
-    if let Err(e) = crate::config::config_dir()
-        .and_then(|dir| crate::sync::record_upload(&dir, harness, session, project, record))
-    {
+    if let Err(e) = crate::config::config_dir().and_then(|dir| {
+        crate::sync::record_upload(&dir, harness, session, project, repo_url, record)
+    }) {
         eprintln!("warning: upload not recorded in sync manifest: {e}");
     }
 }
@@ -1326,8 +1326,7 @@ fn share_all(
                 &manifest,
                 row.artifact_type,
                 &row.session_id,
-                &target.base_url,
-                &target.display(),
+                &target.url(),
                 stamp,
             )
         },
@@ -1411,8 +1410,7 @@ fn share_all(
                         row.artifact_type,
                         &row.session_id,
                         project,
-                        &target.base_url,
-                        &target.display(),
+                        &target.url(),
                         &created,
                         stamp,
                     );
@@ -2076,8 +2074,6 @@ mod tests {
         use crate::sync::{Manifest, SyncRecord, UploadRecord};
         let stamp = (Some("2026-01-01T00:00:00Z".parse().unwrap()), Some(10u64));
         let upload = UploadRecord {
-            server: "https://pb.test".into(),
-            repo: "me/foo".into(),
             graph_id: "g1".into(),
             url: "https://pb.test/u/me/foo/graphs/g1".into(),
             modified: stamp.0,
@@ -2096,38 +2092,21 @@ mod tests {
                 uploads: vec![upload.clone()],
             },
         );
-        let c = |repo: &str, st| {
-            classify(
-                &manifest,
-                ArtifactType::Claude,
-                "s1",
-                "https://pb.test/",
-                repo,
-                st,
-            )
-        };
+        let c = |repo_url: &str, st| classify(&manifest, ArtifactType::Claude, "s1", repo_url, st);
+        let foo = repo_url("https://pb.test/", "me/foo");
+        assert_eq!(foo, "https://pb.test/u/me/foo");
+        assert_eq!(c(&foo, stamp), UploadClass::Uploaded(upload.url.clone()));
         assert_eq!(
-            c("me/foo", stamp),
-            UploadClass::Uploaded(upload.url.clone())
-        );
-        assert_eq!(
-            c("me/foo", (stamp.0, Some(11))),
+            c(&foo, (stamp.0, Some(11))),
             UploadClass::Changed(upload.url.clone())
         );
         assert_eq!(
-            c("me/foo", (None, None)),
+            c(&foo, (None, None)),
             UploadClass::Changed(upload.url.clone())
         );
-        assert_eq!(c("me/bar", stamp), UploadClass::New);
+        assert_eq!(c("https://pb.test/u/me/bar", stamp), UploadClass::New);
         assert_eq!(
-            classify(
-                &manifest,
-                ArtifactType::Codex,
-                "s1",
-                "https://pb.test",
-                "me/foo",
-                stamp
-            ),
+            classify(&manifest, ArtifactType::Codex, "s1", &foo, stamp),
             UploadClass::New
         );
     }
