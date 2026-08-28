@@ -69,21 +69,15 @@ pub(crate) struct UploadRecord {
 
 impl UploadRecord {
     /// Whether this upload landed in the repo at `repo_url`
-    /// (`<server>/u/<owner>/<name>`). Hosts are compared as written;
-    /// the graph URL must be `<repo_url>/graphs/…`, so a parent path
-    /// (`/u/<owner>`) never matches.
+    /// (`<server>/u/<owner>/<name>`, built from the base URL and the
+    /// repo the upload targets): the graph URL must be
+    /// `<repo_url>/graphs/…`. A plain string match — a base URL that
+    /// differs from what the server echoes (scheme, host case) just
+    /// means one extra upload.
     fn in_repo(&self, repo_url: &str) -> bool {
-        let repo_url = repo_url.trim_end_matches('/');
-        let (host, path) = split_host(&self.url);
-        let (repo_host, repo_path) = split_host(repo_url);
-        host == repo_host && path.starts_with(&format!("{repo_path}/graphs/"))
+        self.url
+            .starts_with(&format!("{}/graphs/", repo_url.trim_end_matches('/')))
     }
-}
-
-/// `("https://host", "/rest")` — the authority and everything after it.
-fn split_host(url: &str) -> (&str, &str) {
-    let host = crate::cmd_pathbase::host_of(url);
-    (host, &url[host.len()..])
 }
 
 /// What the manifest knows about an artifact relative to one upload
