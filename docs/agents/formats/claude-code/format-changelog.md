@@ -24,8 +24,8 @@ later than") unless the note says otherwise.
 ## Format-revision stamp
 
 This reference tracks Claude Code **2.1.x**. First-hand samples span
-client versions 2.1.37, 2.1.90, 2.1.110, and 2.1.112. Reference
-revision: **2026-04-23**.
+client versions 2.1.37, 2.1.90, 2.1.110, and 2.1.112, plus a local
+store spanning 2.1.215 – 2.1.245. Reference revision: **2026-08-25**.
 
 ---
 
@@ -58,6 +58,11 @@ See [jsonl-envelope.md](jsonl-envelope.md) for field definitions.
 | `queue-operation` (typed-ahead message enqueue/dequeue)| 2.1.x+ (origin unclear)                            |
 | `progress` (streaming tool output)                     | 2.1.x+ (origin unclear)                            |
 | `last-prompt`                                          | 2.1.x+ (origin unclear)                            |
+| `ai-title`, `mode`                                     | Observed across 2.1.215 – 2.1.245; origin unclear  |
+| `relocated`, `worktree-state`                          | Observed from 2.1.218                              |
+| `custom-title`, `agent-name`, `pr-link`                | Observed from 2.1.220                              |
+| `frame-link`                                           | Observed at 2.1.231 (1 sample)                     |
+| `atis-latch`                                           | Observed from 2.1.235                              |
 | `compact_boundary` as top-level `type`                 | Newer variant; coexists with older `type: "system"` + `subtype: "compact_boundary"` |
 | `system.subtype` values: `turn_duration`, `stop_hook_summary`, `task_started`/`task_progress`/`task_notification` | 2.1.x+ (origin unclear) |
 

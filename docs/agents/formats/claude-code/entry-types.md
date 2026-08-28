@@ -17,6 +17,15 @@ a large fraction of the file.
 | `permission-mode`       | no             | no          | Records the active permission mode. |
 | `queue-operation`       | no             | no          | Enqueue/dequeue of a typed-ahead message while an assistant turn is in flight. |
 | `last-prompt`           | no             | no          | Cached last user prompt. |
+| `ai-title`              | no             | no          | Generated session title. |
+| `custom-title`          | no             | no          | Explicitly set session title. |
+| `agent-name`            | no             | no          | Agent name for the session. |
+| `mode`                  | no             | no          | Active mode. Only `"normal"` observed. |
+| `atis-latch`            | no             | no          | Opaque latch value. Purpose unknown. |
+| `pr-link`               | no             | no          | Pull request linked to the session. |
+| `frame-link`            | no             | no          | Frame URL linked to a local file. |
+| `relocated`             | no             | no          | New working directory for the session. |
+| `worktree-state`        | no             | no          | Git worktree the session is in; `null` after it leaves. |
 | `summary`               | no             | no          | Conversation summary. May live in a different JSONL file than the conversation it describes. |
 | `compact_boundary`      | no (usually)   | yes         | Marks an autocompaction event. Also appears as `system.subtype` in some versions. |
 | `progress`              | no             | yes         | Long-running tool progress event. Should be skipped when reconstructing a transcript. |
@@ -294,6 +303,131 @@ Cached last user prompt, for resume / history purposes:
 ```json
 {"type": "last-prompt", "lastPrompt": "the repo is…", "sessionId": "..."}
 ```
+
+---
+
+## Session metadata lines
+
+The line types below share one shape: `type`, `sessionId`, and one
+payload key. None carries `uuid`, `timestamp` (except where noted),
+`cwd`, or `parentUuid`. All are observed in a local store spanning
+client versions 2.1.215 – 2.1.245; the first version that writes each
+one is not known.
+
+### `ai-title`
+
+Generated session title. Rewritten as the session progresses.
+
+```json
+{"type": "ai-title", "aiTitle": "Fix the flaky test", "sessionId": "..."}
+```
+
+### `custom-title`
+
+Explicitly set session title.
+
+```json
+{"type": "custom-title", "customTitle": "config-export", "sessionId": "..."}
+```
+
+### `agent-name`
+
+Agent name for the session. In observed data it carries the same value
+as the session's `custom-title`.
+
+```json
+{"type": "agent-name", "agentName": "config-export", "sessionId": "..."}
+```
+
+### `mode`
+
+Active mode. Only `"normal"` is observed.
+
+```json
+{"type": "mode", "mode": "normal", "sessionId": "..."}
+```
+
+### `atis-latch`
+
+Opaque latch value. `atis` is an empty string, a 16-character hex
+string, or a ~190-character string. Its purpose is unknown.
+
+```json
+{"type": "atis-latch", "atis": "", "sessionId": "..."}
+```
+
+### `pr-link`
+
+Pull request linked to the session. Carries a `timestamp`.
+
+```json
+{
+  "type": "pr-link",
+  "sessionId": "...",
+  "prNumber": 233,
+  "prUrl": "https://github.com/owner/repo/pull/233",
+  "prRepository": "owner/repo",
+  "timestamp": "2026-08-25T15:10:16.000Z"
+}
+```
+
+### `frame-link`
+
+Frame URL linked to a local file. Carries a `timestamp`. One sample
+observed.
+
+```json
+{
+  "type": "frame-link",
+  "sessionId": "...",
+  "path": "/home/user/project/design.html",
+  "frameUrl": "https://...",
+  "title": "...",
+  "timestamp": "2026-08-25T15:10:16.000Z"
+}
+```
+
+### `relocated`
+
+New working directory for the session. `relocatedCwd` is an absolute
+path.
+
+```json
+{"type": "relocated", "relocatedCwd": "/home/user/project", "sessionId": "..."}
+```
+
+### `worktree-state`
+
+Git worktree the session is in. `worktreeSession` is an object on
+entry and `null` after the session leaves the worktree.
+
+```json
+{
+  "type": "worktree-state",
+  "sessionId": "...",
+  "worktreeSession": {
+    "originalCwd": "/home/user/project",
+    "preEnterOriginalCwd": "/home/user/project",
+    "worktreePath": "/home/user/project/.claude/worktrees/topic",
+    "worktreeName": "topic",
+    "worktreeBranch": "user/topic",
+    "originalBranch": "main",
+    "originalHeadCommit": "b31f2c5...",
+    "sessionId": "..."
+  }
+}
+```
+
+`originalBranch` and `originalHeadCommit` appear when the worktree was
+created for the session. `enteredExisting: true` replaces them when
+the session entered a worktree that already existed. The three path
+fields are absolute. `worktreeSession.sessionId` equals the line's
+`sessionId` in every observed sample.
+
+A writer that moves a session to another directory or renames it must
+decide what to do with `relocatedCwd`, the three `worktreeSession`
+paths, and the inner `sessionId`. See
+[writing-compatible-jsonl.md](writing-compatible-jsonl.md).
 
 ---
 
