@@ -75,6 +75,11 @@ pub struct ShareArgs {
     /// With --all: skip the confirmation prompt
     #[arg(long, short = 'y', requires = "all")]
     pub yes: bool,
+
+    /// Upload even if the session was already uploaded to this
+    /// destination (recorded in the sync manifest)
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// Which sessions `gather_artifacts` keeps, by project directory.
@@ -543,7 +548,8 @@ pub fn run(args: ShareArgs) -> Result<()> {
     let bundle = HarnessBundle::from_environment();
 
     if args.all {
-        let auth = crate::cmd_pathbase::preflight_auth(&base_url, false, true)?;
+        let auth = crate::cmd_pathbase::preflight_auth(&base_url, false, true)
+            .context("`share --all` requires an authenticated upload")?;
         return share_all(&args, harness, &bundle, &cwd, auth, base_url);
     }
 
@@ -621,6 +627,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
         project_under: None,
         dry_run: false,
         yes: false,
+        force: args.force,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
@@ -850,6 +857,39 @@ fn share_explicit(
                 .and_then(|doc| doc_session_dir(&doc))
         });
     let dest = resolve_destination(args, &auth, base_url, session_dir)?;
+
+    let stamp = source_stamp(
+        &HarnessBundle::from_environment(),
+        harness,
+        project.as_deref(),
+        session,
+    );
+    if let crate::cmd_pathbase::AuthMode::Authed { username, .. } = &auth {
+        let repo = dest
+            .repo
+            .as_ref()
+            .map(|r| format!("{}/{}", r.owner, r.name))
+            .unwrap_or_else(|| format!("{username}/pathstash"));
+        match upload_class(harness, session, &dest.base_url, &repo, stamp) {
+            UploadClass::Uploaded(url) if !args.force => {
+                eprintln!(
+                    "Already uploaded to {repo}, unchanged since; pass --force to upload again"
+                );
+                println!("{url}");
+                return Ok(());
+            }
+            UploadClass::Uploaded(url) => {
+                eprintln!("Already uploaded to {repo} ({url}); uploading again");
+            }
+            UploadClass::Changed(url) => {
+                eprintln!(
+                    "Previously uploaded to {repo} ({url}); session changed since, uploading a new graph"
+                );
+            }
+            UploadClass::New => {}
+        }
+    }
+
     let upload = crate::cmd_export::PathbaseUploadArgs {
         url: args.url.clone(),
         anon: args.anon,
@@ -857,7 +897,109 @@ fn share_explicit(
         name: args.name.clone(),
         public: args.public,
     };
-    crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &loaded.body, &summary)
+    let base_url = dest.base_url.clone();
+    let done =
+        crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &loaded.body, &summary)?;
+    if let Some(done) = done {
+        record_upload(
+            harness,
+            session,
+            project.as_deref(),
+            &base_url,
+            &format!("{}/{}", done.owner, done.repo),
+            &done.created,
+            stamp,
+        );
+    }
+    Ok(())
+}
+
+/// The provider's project key for a row — what derive and stamp take
+/// as `project`; `None` for session-keyed harnesses.
+fn row_project(row: &ArtifactRow) -> Option<&str> {
+    if row.artifact_type.path_keyed() {
+        row.path.as_deref()
+    } else {
+        None
+    }
+}
+
+/// The manifest's view of one session relative to one destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UploadClass {
+    New,
+    /// Uploaded and unchanged since; carries the graph URL.
+    Uploaded(String),
+    /// Uploaded but the source changed since; carries the graph URL.
+    Changed(String),
+}
+
+/// Current source fingerprint for a session; `(None, None)` when the
+/// provider can't stat it, which reads as "changed".
+fn source_stamp(
+    bundle: &HarnessBundle,
+    harness: ArtifactType,
+    project: Option<&str>,
+    session: &str,
+) -> crate::sync::sources::Stamp {
+    crate::sync::sources::source_for(bundle, harness)
+        .and_then(|s| s.stamp(project, session))
+        .unwrap_or((None, None))
+}
+
+fn upload_class(
+    harness: ArtifactType,
+    session: &str,
+    server: &str,
+    repo: &str,
+    stamp: crate::sync::sources::Stamp,
+) -> UploadClass {
+    let manifest = crate::config::config_dir()
+        .and_then(|dir| crate::sync::load_manifest(&dir))
+        .unwrap_or_default();
+    classify(&manifest, harness, session, server, repo, stamp)
+}
+
+fn classify(
+    manifest: &crate::sync::Manifest,
+    harness: ArtifactType,
+    session: &str,
+    server: &str,
+    repo: &str,
+    stamp: crate::sync::sources::Stamp,
+) -> UploadClass {
+    match crate::sync::upload_state(manifest, harness, session, server, repo, stamp) {
+        crate::sync::UploadState::New => UploadClass::New,
+        crate::sync::UploadState::Uploaded(u) => UploadClass::Uploaded(u.url.clone()),
+        crate::sync::UploadState::Changed(u) => UploadClass::Changed(u.url.clone()),
+    }
+}
+
+/// Remember a successful authed upload in the manifest. A failure
+/// here only costs a future skip, so it warns instead of erroring.
+fn record_upload(
+    harness: ArtifactType,
+    session: &str,
+    project: Option<&str>,
+    server: &str,
+    repo: &str,
+    created: &crate::cmd_pathbase::CreatedGraph,
+    stamp: crate::sync::sources::Stamp,
+) {
+    let record = crate::sync::UploadRecord {
+        server: server.trim_end_matches('/').to_string(),
+        repo: repo.to_string(),
+        graph_id: created.id.clone(),
+        url: created.url.clone(),
+        modified: stamp.0,
+        size: stamp.1,
+        uploaded_at: Utc::now(),
+    };
+    if let Err(e) = crate::config::config_dir()
+        .and_then(|dir| crate::sync::record_upload(&dir, harness, session, project, record))
+    {
+        eprintln!("warning: upload not recorded in sync manifest: {e}");
+    }
 }
 
 /// A session's document as it should be uploaded.
@@ -959,6 +1101,8 @@ struct BulkGroup {
     dir: Option<String>,
     /// Row indices into the gathered artifacts.
     rows: Vec<usize>,
+    /// Manifest classification per row, parallel to `rows`.
+    states: Vec<UploadClass>,
     /// Per-harness counts, most first.
     by_harness: Vec<(ArtifactType, usize)>,
     /// A remote configured for this directory, when one resolved and
@@ -968,11 +1112,14 @@ struct BulkGroup {
 
 /// Group `rows` by session directory — the recorded cwd when known,
 /// else the provider's project key — resolving each directory's
-/// configured remote once through `remote`. Groups sort by descending
+/// configured remote once through `remote` and classifying each row
+/// against its destination through `state`. Groups sort by descending
 /// session count, then directory; the no-directory group sorts last.
 fn plan_bulk(
     rows: &[ArtifactRow],
+    default_target: &BulkTarget,
     mut remote: impl FnMut(&str) -> Result<Option<BulkTarget>>,
+    mut state: impl FnMut(&ArtifactRow, &BulkTarget) -> UploadClass,
 ) -> Result<Vec<BulkGroup>> {
     use std::collections::BTreeMap;
     let mut by_dir: BTreeMap<Option<String>, Vec<usize>> = BTreeMap::new();
@@ -995,9 +1142,12 @@ fn plan_bulk(
             Some(d) => remote(d)?,
             None => None,
         };
+        let target = configured.as_ref().unwrap_or(default_target);
+        let states = idxs.iter().map(|&i| state(&rows[i], target)).collect();
         groups.push(BulkGroup {
             dir,
             rows: idxs,
+            states,
             by_harness,
             configured,
         });
@@ -1028,11 +1178,33 @@ fn render_bulk_summary(
 ) -> String {
     let mut out = match project_under {
         Some(p) => format!(
-            "Found {total} sessions under {}\n",
+            "Found {total} sessions under {}",
             crate::config::home_relative(p, home)
         ),
-        None => format!("Found {total} sessions\n"),
+        None => format!("Found {total} sessions"),
     };
+    let (mut uploaded, mut changed, mut new) = (0, 0, 0);
+    for g in groups {
+        for st in &g.states {
+            match st {
+                UploadClass::Uploaded(_) => uploaded += 1,
+                UploadClass::Changed(_) => changed += 1,
+                UploadClass::New => new += 1,
+            }
+        }
+    }
+    if uploaded + changed > 0 {
+        let mut parts = Vec::new();
+        if uploaded > 0 {
+            parts.push(format!("{uploaded} already uploaded"));
+        }
+        if changed > 0 {
+            parts.push(format!("{changed} changed since upload"));
+        }
+        parts.push(format!("{new} new"));
+        out.push_str(&format!(" ({})", parts.join(", ")));
+    }
+    out.push('\n');
     let labels: Vec<String> = groups
         .iter()
         .map(|g| match &g.dir {
@@ -1115,27 +1287,55 @@ fn share_all(
         base_url: base_url.clone(),
     };
 
+    let manifest = if args.force {
+        crate::sync::Manifest::default()
+    } else {
+        crate::sync::load_manifest(&crate::config::config_dir()?)?
+    };
     let mut resolved: std::collections::HashMap<String, Option<BulkTarget>> = Default::default();
-    let groups = plan_bulk(&rows, |dir| {
-        if args.repo.is_some() {
-            return Ok(None);
-        }
-        if let Some(t) = resolved.get(dir) {
-            return Ok(t.clone());
-        }
-        let target = crate::share_config::resolve_remote(std::path::Path::new(dir))?.map(|found| {
-            BulkTarget {
-                owner: found.repo.owner,
-                repo: found.repo.name,
-                base_url: match (&args.url, found.base_url) {
-                    (None, Some(remote_url)) => remote_url,
-                    _ => base_url.clone(),
-                },
+    let groups = plan_bulk(
+        &rows,
+        &default_target,
+        |dir| {
+            if args.repo.is_some() {
+                return Ok(None);
             }
-        });
-        resolved.insert(dir.to_string(), target.clone());
-        Ok(target)
-    })?;
+            if let Some(t) = resolved.get(dir) {
+                return Ok(t.clone());
+            }
+            let target =
+                crate::share_config::resolve_remote(std::path::Path::new(dir))?.map(|found| {
+                    BulkTarget {
+                        owner: found.repo.owner,
+                        repo: found.repo.name,
+                        base_url: match (&args.url, found.base_url) {
+                            (None, Some(remote_url)) => remote_url,
+                            _ => base_url.clone(),
+                        },
+                    }
+                });
+            resolved.insert(dir.to_string(), target.clone());
+            Ok(target)
+        },
+        |row, target| {
+            if args.force {
+                return UploadClass::New;
+            }
+            let stamp = source_stamp(bundle, row.artifact_type, row_project(row), &row.session_id);
+            classify(
+                &manifest,
+                row.artifact_type,
+                &row.session_id,
+                &target.base_url,
+                &target.display(),
+                stamp,
+            )
+        },
+    )?;
+    let to_upload: usize = groups
+        .iter()
+        .map(|g| g.states.iter().filter(|s| **s == UploadClass::New).count())
+        .sum();
 
     let home = crate::config::home_dir();
     eprint!(
@@ -1148,12 +1348,16 @@ fn share_all(
             home.as_deref(),
         )
     );
+    if to_upload == 0 {
+        eprintln!("Nothing to upload; pass --force to upload everything again.");
+        return Ok(());
+    }
     if args.dry_run {
         return Ok(());
     }
     if !args.yes {
         let answer =
-            crate::cmd_pathbase::prompt_line(&format!("Upload {} sessions? [y/N] ", rows.len()))?;
+            crate::cmd_pathbase::prompt_line(&format!("Upload {to_upload} sessions? [y/N] "))?;
         if !matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes") {
             eprintln!("Aborted.");
             std::process::exit(130);
@@ -1168,46 +1372,50 @@ fn share_all(
 
     let mut uploaded: std::collections::BTreeMap<BulkTarget, usize> = Default::default();
     let mut failed = 0usize;
-    let total = rows.len();
+    let total = to_upload;
     let mut n = 0usize;
     for group in &groups {
         let target = group.configured.as_ref().unwrap_or(&default_target);
-        for &i in &group.rows {
+        for (&i, state) in group.rows.iter().zip(&group.states) {
+            if *state != UploadClass::New {
+                continue;
+            }
             n += 1;
             let row = &rows[i];
-            let project = row
-                .artifact_type
-                .path_keyed()
-                .then(|| row.path.clone())
-                .flatten();
+            let project = row_project(row);
             let label = format!("{} {}", row.artifact_type.name(), row.session_id);
             eprintln!("[{n}/{total}] {label}");
-            let result = load_session(
-                row.artifact_type,
-                project.as_deref(),
-                &row.session_id,
-                args.no_cache,
-            )
-            .and_then(|loaded| {
-                let doc = toolpath::v1::Graph::from_json(&loaded.body)
-                    .map_err(|e| anyhow::anyhow!("Invalid toolpath document: {e}"))?;
-                let name = args
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| crate::cmd_export::derive_name(&doc));
-                crate::cmd_pathbase::graphs_post(
-                    &target.base_url,
-                    &token,
-                    &target.owner,
-                    &target.repo,
-                    Some(&name),
-                    &loaded.body,
-                    args.public,
-                )
-            });
+            let stamp = source_stamp(bundle, row.artifact_type, project, &row.session_id);
+            let result = load_session(row.artifact_type, project, &row.session_id, args.no_cache)
+                .and_then(|loaded| {
+                    let doc = toolpath::v1::Graph::from_json(&loaded.body)
+                        .map_err(|e| anyhow::anyhow!("Invalid toolpath document: {e}"))?;
+                    let name = args
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| crate::cmd_export::derive_name(&doc));
+                    crate::cmd_pathbase::graphs_post(
+                        &target.base_url,
+                        &token,
+                        &target.owner,
+                        &target.repo,
+                        Some(&name),
+                        &loaded.body,
+                        args.public,
+                    )
+                });
             match result {
                 Ok(created) => {
                     eprintln!("  → {}", created.url);
+                    record_upload(
+                        row.artifact_type,
+                        &row.session_id,
+                        project,
+                        &target.base_url,
+                        &target.display(),
+                        &created,
+                        stamp,
+                    );
                     *uploaded.entry(target.clone()).or_default() += 1;
                 }
                 Err(e) => {
@@ -1709,7 +1917,13 @@ mod tests {
         a.cwd = Some("/w/my_app".to_string());
         let mut b = bulk_row(ArtifactType::Pi, Some("/w/my/app"), "b");
         b.cwd = Some("/w/my_app".to_string());
-        let groups = plan_bulk(&[a, b], |_| Ok(None)).unwrap();
+        let groups = plan_bulk(
+            &[a, b],
+            &target("me", "pathstash"),
+            |_| Ok(None),
+            |_, _| UploadClass::New,
+        )
+        .unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].dir.as_deref(), Some("/w/my_app"));
     }
@@ -1726,10 +1940,19 @@ mod tests {
             bulk_row(ArtifactType::Cursor, Some("/w/bar"), "b3"),
         ];
         let mut asked = Vec::new();
-        let groups = plan_bulk(&rows, |dir| {
-            asked.push(dir.to_string());
-            Ok((dir == "/w/foo").then(|| target("me", "foo")))
-        })
+        let mut classified = Vec::new();
+        let groups = plan_bulk(
+            &rows,
+            &target("me", "pathstash"),
+            |dir| {
+                asked.push(dir.to_string());
+                Ok((dir == "/w/foo").then(|| target("me", "foo")))
+            },
+            |row, t| {
+                classified.push((row.session_id.clone(), t.display()));
+                UploadClass::New
+            },
+        )
         .unwrap();
 
         let dirs: Vec<Option<&str>> = groups.iter().map(|g| g.dir.as_deref()).collect();
@@ -1747,6 +1970,20 @@ mod tests {
         assert_eq!(groups[0].configured, None);
         assert_eq!(groups[2].configured, None);
         assert_eq!(asked.len(), 2, "one resolve per directory, none for no-dir");
+        classified.sort();
+        assert_eq!(
+            classified,
+            vec![
+                ("b1".to_string(), "me/pathstash".to_string()),
+                ("b2".to_string(), "me/pathstash".to_string()),
+                ("b3".to_string(), "me/pathstash".to_string()),
+                ("f1".to_string(), "me/foo".to_string()),
+                ("f2".to_string(), "me/foo".to_string()),
+                ("f3".to_string(), "me/foo".to_string()),
+                ("n1".to_string(), "me/pathstash".to_string()),
+            ],
+            "each row is classified against its own destination"
+        );
     }
 
     #[test]
@@ -1757,9 +1994,12 @@ mod tests {
             bulk_row(ArtifactType::Claude, Some("/home/me/work/bar"), "b1"),
             bulk_row(ArtifactType::Cursor, None, "n1"),
         ];
-        let groups = plan_bulk(&rows, |dir| {
-            Ok((dir == "/home/me/work/foo").then(|| target("me", "foo")))
-        })
+        let groups = plan_bulk(
+            &rows,
+            &target("me", "pathstash"),
+            |dir| Ok((dir == "/home/me/work/foo").then(|| target("me", "foo"))),
+            |_, _| UploadClass::New,
+        )
         .unwrap();
         let out = render_bulk_summary(
             &groups,
@@ -1781,11 +2021,114 @@ mod tests {
     #[test]
     fn render_bulk_summary_without_configured_remotes() {
         let rows = vec![bulk_row(ArtifactType::Claude, Some("/p"), "s")];
-        let groups = plan_bulk(&rows, |_| Ok(None)).unwrap();
+        let groups = plan_bulk(
+            &rows,
+            &target("me", "pathstash"),
+            |_| Ok(None),
+            |_, _| UploadClass::New,
+        )
+        .unwrap();
         let out = render_bulk_summary(&groups, 1, None, &target("me", "pathstash"), None);
         assert_eq!(
             out,
             "Found 1 sessions\n  /p  1   claude 1\nDestination: me/pathstash\n"
+        );
+    }
+
+    #[test]
+    fn render_bulk_summary_reports_upload_classes() {
+        let rows = vec![
+            bulk_row(ArtifactType::Claude, Some("/p"), "a"),
+            bulk_row(ArtifactType::Claude, Some("/p"), "b"),
+            bulk_row(ArtifactType::Claude, Some("/p"), "c"),
+            bulk_row(ArtifactType::Claude, Some("/p"), "d"),
+        ];
+        let groups = plan_bulk(
+            &rows,
+            &target("me", "pathstash"),
+            |_| Ok(None),
+            |row, _| match row.session_id.as_str() {
+                "a" | "b" => UploadClass::Uploaded("u".into()),
+                "c" => UploadClass::Changed("u".into()),
+                _ => UploadClass::New,
+            },
+        )
+        .unwrap();
+        let out = render_bulk_summary(&groups, 4, None, &target("me", "pathstash"), None);
+        assert!(
+            out.starts_with(
+                "Found 4 sessions (2 already uploaded, 1 changed since upload, 1 new)\n"
+            ),
+            "{out}"
+        );
+        assert_eq!(
+            groups[0]
+                .states
+                .iter()
+                .filter(|s| **s == UploadClass::New)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn classify_reads_manifest_uploads() {
+        use crate::sync::{Manifest, SyncRecord, UploadRecord};
+        let stamp = (Some("2026-01-01T00:00:00Z".parse().unwrap()), Some(10u64));
+        let upload = UploadRecord {
+            server: "https://pb.test".into(),
+            repo: "me/foo".into(),
+            graph_id: "g1".into(),
+            url: "https://pb.test/u/me/foo/graphs/g1".into(),
+            modified: stamp.0,
+            size: stamp.1,
+            uploaded_at: "2026-01-02T00:00:00Z".parse().unwrap(),
+        };
+        let mut manifest = Manifest::default();
+        manifest.entry("claude".into()).or_default().insert(
+            "s1".into(),
+            SyncRecord {
+                path: None,
+                cache_id: None,
+                modified: None,
+                size: None,
+                synced_at: "2026-01-02T00:00:00Z".parse().unwrap(),
+                uploads: vec![upload.clone()],
+            },
+        );
+        let c = |repo: &str, st| {
+            classify(
+                &manifest,
+                ArtifactType::Claude,
+                "s1",
+                "https://pb.test/",
+                repo,
+                st,
+            )
+        };
+        assert_eq!(
+            c("me/foo", stamp),
+            UploadClass::Uploaded(upload.url.clone())
+        );
+        assert_eq!(
+            c("me/foo", (stamp.0, Some(11))),
+            UploadClass::Changed(upload.url.clone())
+        );
+        assert_eq!(
+            c("me/foo", (None, None)),
+            UploadClass::Changed(upload.url.clone())
+        );
+        assert_eq!(c("me/bar", stamp), UploadClass::New);
+        assert_eq!(
+            classify(
+                &manifest,
+                ArtifactType::Codex,
+                "s1",
+                "https://pb.test",
+                "me/foo",
+                stamp
+            ),
+            UploadClass::New
         );
     }
 
@@ -1933,6 +2276,7 @@ mod tests {
             project_under: None,
             dry_run: false,
             yes: false,
+            force: false,
         }
     }
 

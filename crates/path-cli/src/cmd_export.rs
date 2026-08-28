@@ -1911,7 +1911,7 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         let needs_auth = upload.repo.is_some() || upload.public || upload.name.is_some();
         let auth = preflight_auth(&base_url, upload.anon, needs_auth)?;
         let summary_source = file.display().to_string();
-        run_pathbase_inner(auth, base_url, upload, &body, &summary_source)
+        run_pathbase_inner(auth, base_url, upload, &body, &summary_source).map(|_| ())
     }
 }
 
@@ -1934,13 +1934,23 @@ pub(crate) fn resolve_upload_base_url(args: &PathbaseUploadArgs) -> String {
 }
 
 #[cfg(not(target_os = "emscripten"))]
+/// An authed upload's result: where it landed and what the server
+/// returned. `run_pathbase_inner` yields `None` for anonymous uploads.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) struct UploadedGraph {
+    pub(crate) owner: String,
+    pub(crate) repo: String,
+    pub(crate) created: crate::cmd_pathbase::CreatedGraph,
+}
+
+#[cfg(not(target_os = "emscripten"))]
 pub(crate) fn run_pathbase_inner(
     auth: crate::cmd_pathbase::AuthMode,
     base_url: String,
     args: PathbaseUploadArgs,
     body: &str,
     summary_source: &str,
-) -> Result<()> {
+) -> Result<Option<UploadedGraph>> {
     use crate::cmd_pathbase::{AuthMode, anon_graphs_post, graphs_post, repos_post};
     use pathbase_client::types::Visibility;
 
@@ -1969,7 +1979,7 @@ pub(crate) fn run_pathbase_inner(
                 body.len()
             );
             println!("{printable}");
-            return Ok(());
+            return Ok(None);
         }
         AuthMode::Authed { token, username } => (token, username),
     };
@@ -2021,7 +2031,11 @@ pub(crate) fn run_pathbase_inner(
         body.len()
     );
     println!("{}", created.url);
-    Ok(())
+    Ok(Some(UploadedGraph {
+        owner,
+        repo,
+        created,
+    }))
 }
 
 /// Default display label for a graph uploaded via `export pathbase`.

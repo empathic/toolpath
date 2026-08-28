@@ -16,8 +16,17 @@ All notable changes to the Toolpath workspace are documented here.
   `--repo` for everything, else each directory's configured remote,
   else `<you>/pathstash`. Requires login; `--anon` is rejected. Uploads
   are sequential, failures warn and continue, and the run exits
-  non-zero if any failed. Nothing records what was already shared, so
-  re-running uploads everything again.
+  non-zero if any failed.
+- **`path-cli`**: authed uploads from `share` are recorded in the sync
+  manifest (`uploads` on the artifact's record: server, repo, graph id,
+  URL, and the source fingerprint at upload time). `share --all` skips
+  sessions already uploaded to their destination and, since there is no
+  graph update endpoint, also skips ones that changed since — the
+  summary heading reports both counts. Single-session `share` on an
+  unchanged session prints the existing URL instead of uploading a
+  duplicate. `--force` uploads regardless. Sync and import rewrite the
+  fingerprint but keep the upload history; anonymous uploads are not
+  recorded.
 - **`toolpath-claude`** (0.13.1): `ConversationMetadata.cwd` — the
   working directory the session recorded, captured during the metadata
   pass. `project_path` is decoded from the directory slug, which is
