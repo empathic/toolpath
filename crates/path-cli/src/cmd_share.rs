@@ -1103,8 +1103,6 @@ struct BulkGroup {
     rows: Vec<usize>,
     /// Manifest classification per row, parallel to `rows`.
     states: Vec<UploadClass>,
-    /// Per-harness counts of the rows that will upload (`New`), most first.
-    by_harness: Vec<(ArtifactType, usize)>,
     /// A remote configured for this directory, when one resolved and
     /// no `--repo` overrides it.
     configured: Option<BulkTarget>,
@@ -1134,24 +1132,11 @@ fn plan_bulk(
             None => None,
         };
         let target = configured.as_ref().unwrap_or(default_target);
-        let states: Vec<UploadClass> = idxs.iter().map(|&i| state(&rows[i], target)).collect();
-        let mut by_harness: Vec<(ArtifactType, usize)> = Vec::new();
-        for (&i, st) in idxs.iter().zip(&states) {
-            if *st != UploadClass::New {
-                continue;
-            }
-            let t = rows[i].artifact_type;
-            match by_harness.iter_mut().find(|(h, _)| *h == t) {
-                Some((_, n)) => *n += 1,
-                None => by_harness.push((t, 1)),
-            }
-        }
-        by_harness.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name().cmp(b.0.name())));
+        let states = idxs.iter().map(|&i| state(&rows[i], target)).collect();
         groups.push(BulkGroup {
             dir,
             rows: idxs,
             states,
-            by_harness,
             configured,
         });
     }
@@ -1169,35 +1154,64 @@ fn plan_bulk(
     Ok(groups)
 }
 
-/// The pre-upload summary: one line per project directory with the
-/// number of sessions that will upload, their harness breakdown, what
-/// is being skipped (already uploaded / changed since), and the
-/// configured remote (if any), followed by the fallback destination.
-fn render_bulk_summary(
-    groups: &[BulkGroup],
-    total: usize,
+/// Per-harness session counts, most first, then by name.
+fn harness_totals(rows: &[ArtifactRow]) -> Vec<(ArtifactType, usize)> {
+    let mut totals: Vec<(ArtifactType, usize)> = Vec::new();
+    for row in rows {
+        match totals.iter_mut().find(|(h, _)| *h == row.artifact_type) {
+            Some((_, n)) => *n += 1,
+            None => totals.push((row.artifact_type, 1)),
+        }
+    }
+    totals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name().cmp(b.0.name())));
+    totals
+}
+
+/// How a group's directory is shown: relative to `--project-under`
+/// when given (`.` for the root itself), else `~`-relative.
+fn group_label(
+    dir: Option<&str>,
     project_under: Option<&std::path::Path>,
-    default_target: &BulkTarget,
     home: Option<&std::path::Path>,
 ) -> String {
-    fn tally(states: &[UploadClass]) -> (usize, usize, usize) {
-        states.iter().fold((0, 0, 0), |(n, u, c), st| match st {
-            UploadClass::New => (n + 1, u, c),
-            UploadClass::Uploaded(_) => (n, u + 1, c),
-            UploadClass::Changed(_) => (n, u, c + 1),
-        })
-    }
-    fn skip_note(uploaded: usize, changed: usize) -> Option<String> {
-        let mut parts = Vec::new();
-        if uploaded > 0 {
-            parts.push(format!("{uploaded} already uploaded"));
+    let Some(dir) = dir else {
+        return "(no project)".to_string();
+    };
+    let path = std::path::Path::new(dir);
+    if let Some(under) = project_under {
+        let candidates = [under.to_path_buf(), canonicalize_or_self(under)];
+        if let Some(rest) = candidates.iter().find_map(|u| path.strip_prefix(u).ok()) {
+            return if rest.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                rest.display().to_string()
+            };
         }
-        if changed > 0 {
-            parts.push(format!("{changed} changed since upload"));
-        }
-        (!parts.is_empty()).then(|| parts.join(", "))
     }
+    crate::config::home_relative(path, home)
+}
 
+/// (new, already uploaded, changed since upload) for one group.
+fn tally(states: &[UploadClass]) -> (usize, usize, usize) {
+    states.iter().fold((0, 0, 0), |(n, u, c), st| match st {
+        UploadClass::New => (n + 1, u, c),
+        UploadClass::Uploaded(_) => (n, u + 1, c),
+        UploadClass::Changed(_) => (n, u, c + 1),
+    })
+}
+
+/// The pre-upload summary: a heading with what was found and what
+/// will upload, harness totals, then one line per project directory
+/// with the number of sessions that will upload, what is being skipped
+/// (already uploaded / changed since), and the configured remote if
+/// any. The prompt line is the caller's.
+fn render_bulk_summary(
+    groups: &[BulkGroup],
+    rows: &[ArtifactRow],
+    project_under: Option<&std::path::Path>,
+    home: Option<&std::path::Path>,
+) -> String {
+    let total = rows.len();
     let mut out = match project_under {
         Some(p) => format!(
             "Found {total} sessions under {}",
@@ -1210,13 +1224,15 @@ fn render_bulk_summary(
         out.push_str(&format!(", {to_upload} to upload"));
     }
     out.push('\n');
+    let totals: Vec<String> = harness_totals(rows)
+        .iter()
+        .map(|(t, n)| format!("{} {n}", t.name()))
+        .collect();
+    out.push_str(&format!("  {}\n\n", totals.join(", ")));
 
     let labels: Vec<String> = groups
         .iter()
-        .map(|g| match &g.dir {
-            Some(d) => crate::config::home_relative(std::path::Path::new(d), home),
-            None => "(no project)".to_string(),
-        })
+        .map(|g| group_label(g.dir.as_deref(), project_under, home))
         .collect();
     let label_width = labels.iter().map(|l| l.len()).max().unwrap_or(0);
     let counts: Vec<usize> = groups.iter().map(|g| tally(&g.states).0).collect();
@@ -1225,42 +1241,36 @@ fn render_bulk_summary(
         .map(|n| n.to_string().len())
         .max()
         .unwrap_or(1);
-    let breakdowns: Vec<String> = groups
-        .iter()
-        .map(|g| {
-            g.by_harness
-                .iter()
-                .map(|(t, n)| format!("{} {n}", t.name()))
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .collect();
-    let breakdown_width = breakdowns.iter().map(|b| b.len()).max().unwrap_or(0);
-    for (((g, label), breakdown), count) in groups.iter().zip(&labels).zip(&breakdowns).zip(&counts)
-    {
-        let mut line = format!(
-            "  {label:<label_width$}  {count:>count_width$}   {breakdown:<breakdown_width$}"
-        );
+    for ((g, label), count) in groups.iter().zip(&labels).zip(&counts) {
+        let mut line = format!("  {label:<label_width$}  {count:>count_width$}");
         let (_, uploaded, changed) = tally(&g.states);
-        if let Some(note) = skip_note(uploaded, changed) {
-            line.push_str(&format!("   ({note})"));
+        let mut notes = Vec::new();
+        if uploaded > 0 {
+            notes.push(format!("{uploaded} already uploaded"));
+        }
+        if changed > 0 {
+            notes.push(format!("{changed} changed since upload"));
+        }
+        if !notes.is_empty() {
+            line.push_str(&format!("  ({})", notes.join(", ")));
         }
         if let Some(t) = &g.configured {
-            line.push_str(&format!("   (→ {})", t.display()));
+            line.push_str(&format!("  → {}", t.display()));
         }
-        out.push_str(line.trim_end());
+        out.push_str(&line);
         out.push('\n');
     }
-    let any_configured = groups.iter().any(|g| g.configured.is_some());
-    if any_configured {
-        out.push_str(&format!(
-            "Destination: {} unless noted\n",
-            default_target.display()
-        ));
-    } else {
-        out.push_str(&format!("Destination: {}\n", default_target.display()));
-    }
+    out.push('\n');
     out
+}
+
+/// "N sessions to <repo>" for the prompt and dry-run lines.
+fn upload_phrase(to_upload: usize, groups: &[BulkGroup], default_target: &BulkTarget) -> String {
+    let mut phrase = format!("{to_upload} sessions to {}", default_target.display());
+    if groups.iter().any(|g| g.configured.is_some()) {
+        phrase.push_str(" (or the noted remote)");
+    }
+    phrase
 }
 
 fn share_all(
@@ -1352,9 +1362,8 @@ fn share_all(
         "{}",
         render_bulk_summary(
             &groups,
-            rows.len(),
+            &rows,
             args.project_under.as_deref(),
-            &default_target,
             home.as_deref(),
         )
     );
@@ -1362,12 +1371,13 @@ fn share_all(
         eprintln!("Nothing to upload; pass --force to upload everything again.");
         return Ok(());
     }
+    let phrase = upload_phrase(to_upload, &groups, &default_target);
     if args.dry_run {
+        eprintln!("Would upload {phrase}");
         return Ok(());
     }
     if !args.yes {
-        let answer =
-            crate::cmd_pathbase::prompt_line(&format!("Upload {to_upload} sessions? [y/N] "))?;
+        let answer = crate::cmd_pathbase::prompt_line(&format!("Upload {phrase}? [y/N] "))?;
         if !matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes") {
             eprintln!("Aborted.");
             std::process::exit(130);
@@ -1967,14 +1977,6 @@ mod tests {
         let dirs: Vec<Option<&str>> = groups.iter().map(|g| g.dir.as_deref()).collect();
         assert_eq!(dirs, [Some("/w/bar"), Some("/w/foo"), None]);
         assert_eq!(groups[0].rows.len(), 3);
-        assert_eq!(
-            groups[0].by_harness,
-            vec![(ArtifactType::Cursor, 2), (ArtifactType::Claude, 1)]
-        );
-        assert_eq!(
-            groups[1].by_harness,
-            vec![(ArtifactType::Claude, 2), (ArtifactType::Codex, 1)]
-        );
         assert_eq!(groups[1].configured, Some(target("me", "foo")));
         assert_eq!(groups[0].configured, None);
         assert_eq!(groups[2].configured, None);
@@ -2001,6 +2003,7 @@ mod tests {
             bulk_row(ArtifactType::Claude, Some("/home/me/work/foo"), "f1"),
             bulk_row(ArtifactType::Codex, Some("/home/me/work/foo"), "f2"),
             bulk_row(ArtifactType::Claude, Some("/home/me/work/bar"), "b1"),
+            bulk_row(ArtifactType::Claude, Some("/home/me/work"), "r1"),
             bulk_row(ArtifactType::Cursor, None, "n1"),
         ];
         let groups = plan_bulk(
@@ -2012,24 +2015,30 @@ mod tests {
         .unwrap();
         let out = render_bulk_summary(
             &groups,
-            rows.len(),
+            &rows,
             Some(Path::new("/home/me/work")),
-            &target("me", "pathstash"),
             Some(Path::new("/home/me")),
         );
         assert_eq!(
             out,
-            "Found 4 sessions under ~/work\n\
-             \x20 ~/work/foo    2   claude 1, codex 1   (→ me/foo)\n\
-             \x20 ~/work/bar    1   claude 1\n\
-             \x20 (no project)  1   cursor 1\n\
-             Destination: me/pathstash unless noted\n"
+            "Found 5 sessions under ~/work\n\
+             \x20 claude 3, codex 1, cursor 1\n\
+             \n\
+             \x20 foo           2  → me/foo\n\
+             \x20 .             1\n\
+             \x20 bar           1\n\
+             \x20 (no project)  1\n\
+             \n"
+        );
+        assert_eq!(
+            upload_phrase(5, &groups, &target("me", "pathstash")),
+            "5 sessions to me/pathstash (or the noted remote)"
         );
     }
 
     #[test]
-    fn render_bulk_summary_without_configured_remotes() {
-        let rows = vec![bulk_row(ArtifactType::Claude, Some("/p"), "s")];
+    fn render_bulk_summary_without_project_under_uses_home_relative() {
+        let rows = vec![bulk_row(ArtifactType::Claude, Some("/home/me/p"), "s")];
         let groups = plan_bulk(
             &rows,
             &target("me", "pathstash"),
@@ -2037,10 +2046,11 @@ mod tests {
             |_, _| UploadClass::New,
         )
         .unwrap();
-        let out = render_bulk_summary(&groups, 1, None, &target("me", "pathstash"), None);
+        let out = render_bulk_summary(&groups, &rows, None, Some(Path::new("/home/me")));
+        assert_eq!(out, "Found 1 sessions\n  claude 1\n\n  ~/p  1\n\n");
         assert_eq!(
-            out,
-            "Found 1 sessions\n  /p  1   claude 1\nDestination: me/pathstash\n"
+            upload_phrase(1, &groups, &target("me", "pathstash")),
+            "1 sessions to me/pathstash"
         );
     }
 
@@ -2056,7 +2066,7 @@ mod tests {
         let groups = plan_bulk(
             &rows,
             &target("me", "pathstash"),
-            |_| Ok(None),
+            |dir| Ok((dir == "/q").then(|| target("me", "q"))),
             |row, _| match row.session_id.as_str() {
                 "a" | "b" | "e" => UploadClass::Uploaded("u".into()),
                 "c" => UploadClass::Changed("u".into()),
@@ -2064,15 +2074,16 @@ mod tests {
             },
         )
         .unwrap();
-        let out = render_bulk_summary(&groups, 5, None, &target("me", "pathstash"), None);
+        let out = render_bulk_summary(&groups, &rows, None, None);
         assert_eq!(
             out,
             "Found 5 sessions, 1 to upload\n\
-             \x20 /p  1   claude 1   (2 already uploaded, 1 changed since upload)\n\
-             \x20 /q  0              (1 already uploaded)\n\
-             Destination: me/pathstash\n"
+             \x20 claude 4, codex 1\n\
+             \n\
+             \x20 /p  1  (2 already uploaded, 1 changed since upload)\n\
+             \x20 /q  0  (1 already uploaded)  → me/q\n\
+             \n"
         );
-        assert_eq!(groups[0].by_harness, vec![(ArtifactType::Claude, 1)]);
     }
 
     #[test]
