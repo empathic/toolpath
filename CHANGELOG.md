@@ -2,6 +2,43 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Bulk share with `path share --all` — 2026-08-26
+
+- **`path-cli`** (0.19.0): `path share --all` uploads every session
+  across the installed harnesses instead of opening the picker.
+  `--project-under <dir>` restricts it to sessions whose project
+  directory is under that subtree (same matching as `p cache sync`);
+  `--harness` narrows to one harness. Before uploading it prints one
+  line per project directory — session count, per-harness breakdown,
+  and the configured remote where a `[[project]]` rule resolves — and
+  asks for confirmation (`--yes` skips the prompt, `--dry-run` stops
+  after the summary). Destinations follow the single-session rules:
+  `--repo` for everything, else each directory's configured remote,
+  else `<you>/pathstash`. Requires login; `--anon` is rejected. Uploads
+  are sequential, failures warn and continue, and the run exits
+  non-zero if any failed.
+- **`path-cli`**: authed uploads from `share` are recorded in the sync
+  manifest (`uploads` on the artifact's record: graph id, URL — which
+  names the server and repo — and the source fingerprint at upload
+  time). `share --all` skips
+  sessions already uploaded to their destination and, since there is no
+  graph update endpoint, also skips ones that changed since — the
+  summary heading reports both counts. Single-session `share` on an
+  unchanged session prints the existing URL instead of uploading a
+  duplicate. `--force` uploads regardless. Sync and import rewrite the
+  fingerprint but keep the upload history; anonymous uploads are not
+  recorded.
+- **`toolpath-claude`** (0.13.1): `ConversationMetadata.cwd` — the
+  working directory the session recorded, captured during the metadata
+  pass. `project_path` is decoded from the directory slug, which is
+  lossy (`_` and `.` come back as `/`); `cwd` is the real path.
+- **`toolpath-pi`** (0.6.2): `SessionMeta.cwd` from the session header,
+  for the same reason — the session-dir name turns every `-` into `/`.
+- **`path-cli`**: `share` (the picker and `--all`) groups, displays,
+  and resolves configured remotes for claude and pi sessions by their
+  recorded cwd rather than the slug-decoded project, so `[[project]]`
+  rules on directories containing `_`, `.`, or `-` match them.
+
 ## toolpath-claude 0.13.0 — 2026-08-23
 
 - **Breaking:** `Conversation.segment_ids` replaces `Conversation.session_ids`.

@@ -186,6 +186,7 @@ impl ClaudeConvo {
         let mut last_activity = None;
         let mut file_path = std::path::PathBuf::new();
         let mut first_user_message: Option<String> = None;
+        let mut cwd: Option<String> = None;
 
         for (i, segment_id) in chain.iter().enumerate() {
             let meta = self
@@ -206,6 +207,9 @@ impl ClaudeConvo {
             if first_user_message.is_none() && meta.first_user_message.is_some() {
                 first_user_message = meta.first_user_message;
             }
+            if cwd.is_none() {
+                cwd = meta.cwd;
+            }
         }
 
         Ok(ConversationMetadata {
@@ -216,6 +220,7 @@ impl ClaudeConvo {
             started_at,
             last_activity,
             first_user_message,
+            cwd,
         })
     }
 
