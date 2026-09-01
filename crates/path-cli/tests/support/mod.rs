@@ -27,11 +27,22 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// RAII guard that pins `$HOME` and `$TOOLPATH_CONFIG_DIR` to a tempdir.
+/// RAII guard that pins `$HOME` and `$TOOLPATH_CONFIG_DIR` to a tempdir, and
+/// clears `$CLAUDE_CONFIG_DIR`.
+///
+/// `$CLAUDE_CONFIG_DIR` is *cleared* rather than pinned. The Claude reader
+/// prefers it over `$HOME/.claude`, so on a machine that exports it — every
+/// Claude Code user, since the variable is how a custom config root is
+/// selected at all — pinning `$HOME` no longer sandboxes anything: the CLI
+/// walks out to the developer's real config and reports the fixture session
+/// missing. Clearing it puts the reader back on its `$HOME`-relative
+/// default, which is the sandbox. A test that wants to exercise the override
+/// should set the variable deliberately, itself.
 pub struct ScopedHome {
     _td: tempfile::TempDir,
     prev_home: Option<OsString>,
     prev_config: Option<OsString>,
+    prev_claude_config: Option<OsString>,
 }
 
 impl ScopedHome {
@@ -39,14 +50,17 @@ impl ScopedHome {
         let td = tempfile::tempdir().unwrap();
         let prev_home = std::env::var_os("HOME");
         let prev_config = std::env::var_os("TOOLPATH_CONFIG_DIR");
+        let prev_claude_config = std::env::var_os("CLAUDE_CONFIG_DIR");
         unsafe {
             std::env::set_var("HOME", td.path());
             std::env::set_var("TOOLPATH_CONFIG_DIR", td.path().join(".toolpath"));
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
         }
         Self {
             _td: td,
             prev_home,
             prev_config,
+            prev_claude_config,
         }
     }
 
@@ -65,6 +79,10 @@ impl Drop for ScopedHome {
             match &self.prev_config {
                 Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
                 None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
+            }
+            match &self.prev_claude_config {
+                Some(v) => std::env::set_var("CLAUDE_CONFIG_DIR", v),
+                None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
             }
         }
     }
