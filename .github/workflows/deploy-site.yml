@@ -2,7 +2,12 @@ name: CI + Deploy
 
 on:
   push:
-    branches: [main]
+    # bdelanghe/wip gets the ci job and nothing else: a consumer that follows
+    # that branch (bdelanghe/home's auto-updater) only moves to a rev whose
+    # checks are green, and a rev with no checks at all is not green. The
+    # deploy job below is gated to main and pull requests, so a wip push
+    # never publishes the site.
+    branches: [main, bdelanghe/wip]
   pull_request:
 
 jobs:
@@ -39,6 +44,10 @@ jobs:
 
   deploy:
     needs: ci
+    # Not on a wip push — see the trigger comment above. The wrangler step
+    # below would otherwise publish a wip build under the `main` branch name,
+    # since a push has no head_ref.
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
