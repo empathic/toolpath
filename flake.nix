@@ -7,25 +7,65 @@
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
+      # The crate's own version, so a release bump is one edit, not two.
+      pathCliVersion = (builtins.fromTOML (builtins.readFile ./crates/path-cli/Cargo.toml)).package.version;
     in
     {
+      # The `path` binary, built from this checkout. This is what a consumer
+      # that wants to follow a branch of this repo pins — bdelanghe/home tracks
+      # lobby that way (its flake exports a package and a module, home's input
+      # names a ref and no rev, and an auto-updater bumps it whenever CI is
+      # green on the new tip). Until now the only nix build of path-cli lived in
+      # bdelanghe/empathic-nix, pinned to a rev of this repo by hand; that pin
+      # stays valid, it just stops being the only route.
+      packages = forAll (pkgs: rec {
+        toolpath = pkgs.rustPlatform.buildRustPackage {
+          pname = "toolpath-path";
+          version = pathCliVersion;
+          src = self;
+          cargoLock.lockFile = ./Cargo.lock;
+          # Just the CLI. The workspace excludes the deprecated toolpath-cli
+          # shim (both produce a binary named `path`), and the library crates
+          # are pulled in as path-cli's dependencies.
+          cargoBuildFlags = [ "-p" "path-cli" ];
+
+          # openssl is not a direct dependency — it arrives under git2
+          # (libgit2-sys → libssh2-sys → openssl-sys), and openssl-sys refuses
+          # to build unless pkg-config finds the dev output. OPENSSL_NO_VENDOR
+          # keeps it off the bundled-source path.
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+          env.OPENSSL_NO_VENDOR = "1";
+
+          # The workspace test surface is large, spawns harnesses, and reaches
+          # for the network; CI runs it with the pinned toolchain. The package
+          # is the binary.
+          doCheck = false;
+
+          meta = {
+            description = "Toolpath provenance CLI (binary: path)";
+            mainProgram = "path";
+          };
+        };
+        default = toolpath;
+      });
+
+      # `programs.toolpath` — enable, package, devBin — for a home-manager
+      # config that takes this flake as an input.
+      homeManagerModules.toolpath = import ./modules/toolpath.nix self;
+      homeManagerModules.default = self.homeManagerModules.toolpath;
+
       # `nix develop` gives you what the justfile and scripts/quality_gates.sh
       # already assume is on PATH — for working in the checkout itself, rather
       # than building it. There is no rustup on the machines this runs on, so
       # without this shell `cargo` is simply absent and every just recipe fails
       # at `command not found`.
-      #
-      # The package build deliberately does not live here: bdelanghe/empathic-nix
-      # already builds path-cli by pinning a rev of this repo. A second recipe
-      # would be a second thing to keep in step.
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          # openssl is not a direct dependency — it arrives under git2
-          # (libgit2-sys → libssh2-sys → openssl-sys), and openssl-sys refuses
-          # to build unless pkg-config finds the dev output. Splitting these two
-          # across nativeBuildInputs and buildInputs is what wires
-          # PKG_CONFIG_PATH up; listing them both in `packages` puts the
-          # binaries on PATH and still fails the build.
+          # Same openssl wiring as the package above, for the same reason.
+          # Splitting these two across nativeBuildInputs and buildInputs is
+          # what wires PKG_CONFIG_PATH up; listing them both in `packages`
+          # puts the binaries on PATH and still fails the build.
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.openssl ];
 
