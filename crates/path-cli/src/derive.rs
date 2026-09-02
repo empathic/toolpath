@@ -37,7 +37,11 @@ pub(crate) fn derive_claude_session(
     project: &str,
     session: &str,
 ) -> Result<DerivedDoc> {
-    derive_claude_session_with(&providers::claude_convo(config), project, session)
+    derive_claude_session_with(
+        &providers::claude_convo(&config.projection()),
+        project,
+        session,
+    )
 }
 
 /// [`derive_claude_session`] against a caller-supplied manager, so sync
@@ -100,7 +104,11 @@ pub(crate) fn derive_gemini_session(
     project: &str,
     session: &str,
 ) -> Result<DerivedDoc> {
-    derive_gemini_session_with(&providers::gemini_convo(config), project, session)
+    derive_gemini_session_with(
+        &providers::gemini_convo(&config.projection()),
+        project,
+        session,
+    )
 }
 
 /// [`derive_gemini_session`] against a caller-supplied manager.
@@ -150,7 +158,7 @@ pub(crate) fn derive_gemini_session_with(
 
 /// Derive a single Codex session given an explicit session id.
 pub(crate) fn derive_codex_session(config: &Config, session: &str) -> Result<DerivedDoc> {
-    derive_codex_session_with(&providers::codex_convo(config), session)
+    derive_codex_session_with(&providers::codex_convo(&config.projection()), session)
 }
 
 /// [`derive_codex_session`] against a caller-supplied manager.
@@ -187,7 +195,7 @@ pub(crate) fn derive_codex_session_with(
 
 /// Derive a single Copilot session given an explicit session id.
 pub(crate) fn derive_copilot_session(config: &Config, session: &str) -> Result<DerivedDoc> {
-    derive_copilot_session_with(&providers::copilot_convo(config), session)
+    derive_copilot_session_with(&providers::copilot_convo(&config.projection()), session)
 }
 
 /// [`derive_copilot_session`] against a caller-supplied manager.
@@ -227,7 +235,7 @@ pub(crate) fn derive_opencode_session(
     no_snapshot_diffs: bool,
 ) -> Result<DerivedDoc> {
     derive_opencode_session_with(
-        &providers::opencode_convo(config),
+        &providers::opencode_convo(&config.projection()),
         session,
         no_snapshot_diffs,
     )
@@ -272,7 +280,7 @@ pub(crate) fn derive_opencode_session_with(
 /// Derive a single cursor composer given an explicit composer id.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn derive_cursor_session(config: &Config, session: &str) -> Result<DerivedDoc> {
-    derive_cursor_session_with(&providers::cursor_convo(config), session)
+    derive_cursor_session_with(&providers::cursor_convo(&config.projection()), session)
 }
 
 /// [`derive_cursor_session`] against a caller-supplied manager.
@@ -318,7 +326,7 @@ pub(crate) fn derive_pi_session(
     base: Option<PathBuf>,
 ) -> Result<DerivedDoc> {
     derive_pi_session_with(
-        &providers::pi_convo(config, base.as_deref()),
+        &providers::pi_convo(&config.projection(), base.as_deref()),
         project,
         session,
     )
