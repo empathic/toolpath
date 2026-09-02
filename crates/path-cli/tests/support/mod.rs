@@ -28,7 +28,7 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// RAII guard that pins `$HOME`, `$TOOLPATH_CONFIG_DIR`, and
-/// `$XDG_DATA_HOME` to a tempdir.
+/// `$XDG_DATA_HOME` to a tempdir, and clears `$CLAUDE_CONFIG_DIR`.
 ///
 /// `$XDG_DATA_HOME` matters because the opencode `PathResolver` prefers it
 /// over `$HOME` when locating `opencode.db`. Without pinning it, a machine
@@ -36,11 +36,21 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// would send the opencode projector to the *real* user database — the
 /// test would fail with "table … already exists" and, worse, mutate the
 /// user's live opencode data. Pinning it keeps every harness sandboxed.
+///
+/// `$CLAUDE_CONFIG_DIR` is *cleared* rather than pinned. The Claude reader
+/// prefers it over `$HOME/.claude`, so on a machine that exports it — every
+/// Claude Code user, since the variable is how a custom config root is
+/// selected at all — pinning `$HOME` no longer sandboxes anything: the CLI
+/// walks out to the developer's real config and reports the fixture session
+/// missing. Clearing it puts the reader back on its `$HOME`-relative
+/// default, which is the sandbox. A test that wants to exercise the override
+/// should set the variable deliberately, itself.
 pub struct ScopedHome {
     _td: tempfile::TempDir,
     prev_home: Option<OsString>,
     prev_config: Option<OsString>,
     prev_xdg_data: Option<OsString>,
+    prev_claude_config: Option<OsString>,
 }
 
 impl ScopedHome {
@@ -49,16 +59,19 @@ impl ScopedHome {
         let prev_home = std::env::var_os("HOME");
         let prev_config = std::env::var_os("TOOLPATH_CONFIG_DIR");
         let prev_xdg_data = std::env::var_os("XDG_DATA_HOME");
+        let prev_claude_config = std::env::var_os("CLAUDE_CONFIG_DIR");
         unsafe {
             std::env::set_var("HOME", td.path());
             std::env::set_var("TOOLPATH_CONFIG_DIR", td.path().join(".toolpath"));
             std::env::set_var("XDG_DATA_HOME", td.path().join(".local/share"));
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
         }
         Self {
             _td: td,
             prev_home,
             prev_config,
             prev_xdg_data,
+            prev_claude_config,
         }
     }
 
@@ -81,6 +94,10 @@ impl Drop for ScopedHome {
             match &self.prev_xdg_data {
                 Some(v) => std::env::set_var("XDG_DATA_HOME", v),
                 None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+            match &self.prev_claude_config {
+                Some(v) => std::env::set_var("CLAUDE_CONFIG_DIR", v),
+                None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
             }
         }
     }
