@@ -90,6 +90,19 @@ impl ChainIndex {
             }
             self.known_files.insert(file_stem.clone());
 
+            // Rotation artifacts (`<uuid>.orphaned-<ts>-<hash>`) open with a
+            // foreign-looking `sessionId` — their entries' own uuid, which the
+            // mangled stem no longer equals — so the old classifier chained
+            // them in as successors, whereupon every entry of the segment read
+            // as a bridge entry and the whole segment (turns, usage) silently
+            // vanished from the merged conversation. A session stem never
+            // contains a dot; anything dotted is classified standalone here
+            // and excluded from chain_heads() below.
+            if file_stem.contains('.') {
+                self.non_successors.insert(file_stem.clone());
+                continue;
+            }
+
             let path = resolver.conversation_file(project_path, file_stem)?;
             if let Some(first_sid) = ConversationReader::read_first_session_id(&path) {
                 if first_sid != *file_stem {
@@ -129,10 +142,17 @@ impl ChainIndex {
     }
 
     /// All chain heads — file stems that are not successors of another.
+    ///
+    /// Dotted stems (`.orphaned-*` rotation artifacts) are excluded even
+    /// though they stand outside every chain: a head becomes a derived
+    /// document whose id truncates the stem to its first 8 characters,
+    /// which for an orphan equals its parent session's prefix — the two
+    /// documents would overwrite each other in the cache. Until ids can
+    /// carry the full stem, orphans are neither chained nor listed.
     pub(crate) fn chain_heads(&self) -> Vec<String> {
         self.known_files
             .iter()
-            .filter(|stem| !self.reverse.contains_key(stem.as_str()))
+            .filter(|stem| !self.reverse.contains_key(stem.as_str()) && !stem.contains('.'))
             .cloned()
             .collect()
     }
@@ -380,6 +400,41 @@ mod tests {
 
         // Entry with matching session_id is not a bridge
         assert!(!is_bridge_entry(&entry, "session-a"));
+    }
+
+    #[test]
+    fn test_orphaned_stem_is_not_a_successor() {
+        let (_temp, resolver) = setup_chain_env();
+
+        write_session(
+            &resolver,
+            "session-a",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Hello"}}"#,
+            ],
+        );
+
+        // A rotation artifact: mangled stem, every entry carrying the
+        // original session's id. Must never be chained onto session-a.
+        write_session(
+            &resolver,
+            "session-a.orphaned-1787626221622-ac84712d",
+            &[
+                r#"{"type":"user","uuid":"u2","timestamp":"2024-01-01T02:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Orphaned"}}"#,
+            ],
+        );
+
+        let mut index = ChainIndex::new();
+        index.refresh(&resolver, "/test/project").unwrap();
+
+        assert!(index.successor_of("session-a").is_none());
+        assert!(!index.is_successor("session-a.orphaned-1787626221622-ac84712d"));
+
+        // And it is not a listable head either: its derived id would
+        // truncate to the parent session's prefix and collide in the cache.
+        let heads = index.chain_heads();
+        assert!(heads.contains(&"session-a".to_string()));
+        assert!(!heads.iter().any(|h| h.contains(".orphaned-")));
     }
 
     #[test]
