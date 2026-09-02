@@ -20,7 +20,7 @@ pub mod writer;
 pub use async_watcher::{AsyncConversationWatcher, WatcherConfig, WatcherHandle};
 pub use error::{ConvoError, Result};
 pub use io::ConvoIO;
-pub use paths::PathResolver;
+pub use paths::{PathResolver, sanitize_project_path};
 pub use project::ClaudeProjector;
 pub use query::{ConversationQuery, HistoryQuery};
 pub use reader::ConversationReader;

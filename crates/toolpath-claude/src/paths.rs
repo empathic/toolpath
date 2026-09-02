@@ -110,10 +110,11 @@ impl PathResolver {
     }
 }
 
-fn sanitize_project_path(path: &str) -> String {
-    // Claude Code maps '/', '_', and '.' to '-' when creating project
-    // directories. Notably, paths under dotdirs like `.claude/worktrees/…`
-    // double-up the dash (the leading `/.` becomes `--`).
+/// The directory name under `~/.claude/projects` for a project path.
+/// Claude Code maps `/`, `_`, and `.` to `-`, so a path under a dotdir
+/// like `.claude/worktrees/…` carries a double dash (the `/.` becomes
+/// `--`).
+pub fn sanitize_project_path(path: &str) -> String {
     path.replace(['/', '_', '.'], "-")
 }
 

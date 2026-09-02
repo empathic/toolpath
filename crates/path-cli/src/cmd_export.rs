@@ -654,7 +654,7 @@ fn run_claude(args: ClaudeArgs) -> Result<()> {
         let conversation = {
             let mut conversation = conversation;
             if args.remote.derive_session_id {
-                let id = remote_session::session_id_from_document_hash(&document_json)?;
+                let id = crate::claude_session::session_id_from_document_hash(&document_json)?;
                 conversation.rename_session(&id);
             }
             if let Some(dir) = &args.remote.cwd {
@@ -3521,7 +3521,8 @@ mod tests {
     #[cfg(feature = "resume-remote")]
     mod resume_remote {
         use super::*;
-        use crate::cmd_export::remote_session::{RemoteSessionArgs, session_id_from_document_hash};
+        use crate::claude_session::session_id_from_document_hash;
+        use crate::cmd_export::remote_session::RemoteSessionArgs;
 
         /// `make_path_doc` with `cwd` recorded on every step, plus one
         /// headerless line that carries a `cwd`.

@@ -2,6 +2,30 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.21.0 — 2026-08-27
+
+- **`path-cli`** (0.21.0): `path resume` takes `--remote <user@host>`
+  (Claude only) and `--dry-run` behind the `resume-remote` cargo
+  feature. The command plans a resume on an ssh host: two read-only
+  ssh calls report the remote home, the claude path, tmux, the physical
+  project directory, the tmux session state, and the session file's
+  existence. `-C` names the remote project directory; the default is
+  the local cwd with the local home swapped for the remote home. The
+  session ID is the one `p export claude --derive-session-id` derives.
+  The plan prints what a run does (attach, launch, or ship).
+  `--dry-run` stops after the plan; without it the command stops with
+  an error, because ship, launch, and attach are not implemented yet.
+  The transport is a new internal ssh module, an in-process SSH client
+  (`russh`) compiled only with the feature; each probe has a 60s
+  wall-clock timeout.
+- **`toolpath-cli`** (0.21.0): lockstep bump of the deprecated shim.
+
+## toolpath-claude 0.13.3 — 2026-08-27
+
+- **`toolpath-claude`** (0.13.3): `sanitize_project_path(path)` is
+  public. It returns the directory name under `~/.claude/projects` for
+  a project path: `/`, `_`, and `.` become `-`.
+
 ## path-cli 0.20.0 — 2026-08-27
 
 - **`path-cli`** (0.20.0): `p export claude` takes `--derive-session-id`
