@@ -1,6 +1,6 @@
 [package]
 name = "path-cli"
-version = "0.18.0"
+version = "0.19.0"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -86,6 +86,9 @@ vendored-openssl = ["git2/vendored-openssl"]
 # isn't on PATH. Adds ~2 MB to the release binary; turn off
 # (`--no-default-features`) for the minimal build.
 embedded-picker = ["dep:skim", "dep:regex"]
+# Remote resume (scripts/resume-remote.sh): experimental, off by
+# default. Gates `p export claude --cwd`.
+resume-remote = []
 
 [dev-dependencies]
 assert_cmd = "2"

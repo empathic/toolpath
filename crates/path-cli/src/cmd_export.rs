@@ -26,30 +26,41 @@ use std::path::PathBuf;
 use crate::cache::cache_ref;
 use crate::remote::RepoSpec;
 
+#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+mod remote_session;
+
+/// Arguments of `p export claude`.
+#[derive(clap::Args, Debug, Default)]
+pub struct ClaudeArgs {
+    /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+    #[arg(short, long)]
+    pub(crate) input: String,
+
+    /// Target project directory. With this flag, writes the JSONL into
+    /// `~/.claude/projects/<sanitized>/<session>.jsonl` so `claude -r <id>`
+    /// can resume it. Defaults to cwd when no `--output` is given.
+    #[arg(short, long)]
+    pub(crate) project: Option<PathBuf>,
+
+    /// Output JSONL to this file. Mutually exclusive with --project.
+    #[arg(short, long, conflicts_with = "project")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Overwrite the session file if this session id already exists in
+    /// the target project. Without it the export refuses rather than
+    /// clobbering local history.
+    #[arg(long)]
+    pub(crate) force: bool,
+
+    #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+    #[command(flatten)]
+    pub(crate) remote: remote_session::RemoteSessionArgs,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum ExportTarget {
     /// Project a toolpath document into a Claude Code session
-    Claude {
-        /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
-        #[arg(short, long)]
-        input: String,
-
-        /// Target project directory. With this flag, writes the JSONL into
-        /// `~/.claude/projects/<sanitized>/<session>.jsonl` so `claude -r <id>`
-        /// can resume it. Defaults to cwd when no `--output` is given.
-        #[arg(short, long)]
-        project: Option<PathBuf>,
-
-        /// Output JSONL to this file. Mutually exclusive with --project.
-        #[arg(short, long, conflicts_with = "project")]
-        output: Option<PathBuf>,
-
-        /// Overwrite the session file if this session id already exists in
-        /// the target project. Without it the export refuses rather than
-        /// clobbering local history.
-        #[arg(long)]
-        force: bool,
-    },
+    Claude(ClaudeArgs),
     /// Project a toolpath document into a Gemini CLI session
     Gemini {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
@@ -204,12 +215,7 @@ pub enum ExportTarget {
 
 pub fn run(target: ExportTarget) -> Result<()> {
     match target {
-        ExportTarget::Claude {
-            input,
-            project,
-            output,
-            force,
-        } => run_claude(input, project, output, force),
+        ExportTarget::Claude(args) => run_claude(args),
         ExportTarget::Gemini {
             input,
             project,
@@ -632,28 +638,31 @@ pub(crate) fn project_pi(
     Ok(session.header.id)
 }
 
-fn run_claude(
-    input: String,
-    project: Option<PathBuf>,
-    output: Option<PathBuf>,
-    force: bool,
-) -> Result<()> {
+fn run_claude(args: ClaudeArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output, force);
+        let _ = args;
         anyhow::bail!("'path export claude' requires a native environment");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
+        let path = load_path_doc(&args.input)?;
         let conversation = build_claude_conversation(&path)?;
+        #[cfg(feature = "resume-remote")]
+        let conversation = {
+            let mut conversation = conversation;
+            if let Some(dir) = &args.remote.cwd {
+                conversation.reroot(dir);
+            }
+            conversation
+        };
         let jsonl = serialize_jsonl(&conversation)?;
 
-        match (project, output) {
+        match (args.project, args.output) {
             (Some(project_dir), None) => {
                 let out_path =
-                    write_into_claude_project(&conversation, &jsonl, &project_dir, force)?;
+                    write_into_claude_project(&conversation, &jsonl, &project_dir, args.force)?;
                 let session_id = &conversation.session_id;
                 eprintln!(
                     "Exported session {} ({} entries) → {}",
@@ -2142,12 +2151,11 @@ mod tests {
         let doc = make_path_doc();
         std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
 
-        run_claude(
-            input_path.to_string_lossy().to_string(),
-            None,
-            Some(output_path.clone()),
-            false,
-        )
+        run_claude(ClaudeArgs {
+            input: input_path.to_string_lossy().to_string(),
+            output: Some(output_path.clone()),
+            ..Default::default()
+        })
         .unwrap();
 
         let out = std::fs::read_to_string(&output_path).unwrap();
@@ -2190,8 +2198,11 @@ mod tests {
         };
         std::fs::write(&input_path, serde_json::to_string(&multi).unwrap()).unwrap();
 
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude(ClaudeArgs {
+            input: input_path.to_string_lossy().to_string(),
+            ..Default::default()
+        })
+        .unwrap_err();
         assert!(err.to_string().contains("single-path graph"));
     }
 
@@ -2200,8 +2211,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(&input_path, "not json").unwrap();
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude(ClaudeArgs {
+            input: input_path.to_string_lossy().to_string(),
+            ..Default::default()
+        })
+        .unwrap_err();
         assert!(err.to_string().contains("parse") || err.to_string().contains("Failed"));
     }
 
@@ -3274,9 +3288,17 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", &fake_home);
         }
-        let first = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let second = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let forced = run_claude(input, Some(cwd.clone()), None, true);
+        let export = |input: String, force: bool| {
+            run_claude(ClaudeArgs {
+                input,
+                project: Some(cwd.clone()),
+                force,
+                ..Default::default()
+            })
+        };
+        let first = export(input.clone(), false);
+        let second = export(input.clone(), false);
+        let forced = export(input, true);
         unsafe {
             match prior_home {
                 Some(v) => std::env::set_var("HOME", v),
@@ -3476,5 +3498,114 @@ mod tests {
 
         let pi_sessions = fake_home.join(".pi/agent/sessions");
         assert!(pi_sessions.exists(), "pi sessions dir missing");
+    }
+
+    #[cfg(feature = "resume-remote")]
+    mod resume_remote {
+        use super::*;
+        use crate::cmd_export::remote_session::RemoteSessionArgs;
+
+        /// `make_path_doc` with `cwd` recorded on every step, plus one
+        /// headerless line that carries a `cwd`.
+        fn make_path_doc_with_cwd(cwd: &str) -> toolpath::v1::Graph {
+            let mut path = make_path_doc().into_single_path().unwrap();
+            for step in &mut path.steps {
+                for change in step.change.values_mut() {
+                    if let Some(structural) = change.structural.as_mut() {
+                        structural
+                            .extra
+                            .insert("cwd".to_string(), serde_json::json!(cwd));
+                    }
+                }
+            }
+            let artifact_key = path.steps[0].change.keys().next().unwrap().clone();
+            let mut extra = HashMap::new();
+            extra.insert("entry_type".to_string(), serde_json::json!("custom-title"));
+            extra.insert(
+                "raw".to_string(),
+                serde_json::json!({"type": "custom-title", "cwd": cwd, "customTitle": "x"}),
+            );
+            path.steps.push(Step {
+                step: StepIdentity {
+                    id: "step-003".to_string(),
+                    parents: vec!["step-002".to_string()],
+                    actor: "tool:claude-code".to_string(),
+                    timestamp: "2024-01-01T00:00:02Z".to_string(),
+                },
+                change: HashMap::from([(
+                    artifact_key,
+                    ArtifactChange {
+                        raw: None,
+                        structural: Some(StructuralChange {
+                            change_type: "conversation.event".to_string(),
+                            extra,
+                        }),
+                    },
+                )]),
+                meta: None,
+            });
+            path.path.head = "step-003".to_string();
+            toolpath::v1::Graph::from_path(path)
+        }
+
+        /// Runs `p export claude --output` on `doc` and parses the lines.
+        fn export_claude_lines(
+            doc: &toolpath::v1::Graph,
+            cwd: Option<&str>,
+        ) -> Vec<serde_json::Value> {
+            let temp = tempfile::tempdir().unwrap();
+            let input_path = temp.path().join("input.json");
+            let output_path = temp.path().join("out.jsonl");
+            std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
+            run_claude(ClaudeArgs {
+                input: input_path.to_string_lossy().to_string(),
+                output: Some(output_path.clone()),
+                remote: RemoteSessionArgs {
+                    cwd: cwd.map(str::to_string),
+                },
+                ..Default::default()
+            })
+            .unwrap();
+            std::fs::read_to_string(&output_path)
+                .unwrap()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        }
+
+        fn values_of<'a>(lines: &'a [serde_json::Value], key: &str) -> Vec<&'a str> {
+            lines.iter().filter_map(|v| v.get(key)?.as_str()).collect()
+        }
+
+        #[test]
+        fn cwd_flag_rewrites_every_cwd() {
+            let doc = make_path_doc_with_cwd("/old/project");
+            let plain = export_claude_lines(&doc, None);
+            let old = values_of(&plain, "cwd");
+            assert!(!old.is_empty());
+            assert!(old.iter().all(|c| *c == "/old/project"));
+
+            let rooted = export_claude_lines(&doc, Some("/new/dir"));
+            assert_eq!(rooted.len(), plain.len());
+            let new = values_of(&rooted, "cwd");
+            assert_eq!(new.len(), old.len());
+            assert!(new.iter().all(|c| *c == "/new/dir"));
+            let preamble = rooted
+                .iter()
+                .find(|v| v["type"] == "custom-title")
+                .expect("the headerless line survives export");
+            assert_eq!(preamble["cwd"], "/new/dir");
+        }
+
+        #[test]
+        fn cwd_flag_leaves_session_ids_alone() {
+            let doc = make_path_doc_with_cwd("/old/project");
+            let plain = export_claude_lines(&doc, None);
+            let rooted = export_claude_lines(&doc, Some("/new/dir"));
+            assert_eq!(
+                values_of(&plain, "sessionId"),
+                values_of(&rooted, "sessionId")
+            );
+        }
     }
 }

@@ -433,6 +433,21 @@ impl Conversation {
         self.entries.push(entry);
     }
 
+    /// Sets the directory everywhere the format carries it:
+    /// `project_path`, every entry's `cwd` that is present, and a
+    /// top-level `cwd` on a preamble line.
+    pub fn reroot(&mut self, dir: &str) {
+        self.project_path = Some(dir.to_string());
+        for slot in self.entries.iter_mut().filter_map(|e| e.cwd.as_mut()) {
+            *slot = dir.to_string();
+        }
+        for raw in &mut self.preamble {
+            if let Some(slot) = raw.get_mut("cwd").filter(|v| v.is_string()) {
+                *slot = serde_json::Value::String(dir.to_string());
+            }
+        }
+    }
+
     pub fn user_messages(&self) -> Vec<&ConversationEntry> {
         self.entries
             .iter()
@@ -547,6 +562,36 @@ pub struct ConversationMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(json: &str) -> ConversationEntry {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn reroot_sets_project_path_and_every_present_cwd() {
+        let mut convo = Conversation::new("s".to_string());
+        convo.preamble.push(serde_json::json!({
+            "type": "custom-title", "cwd": "/old", "customTitle": "x"
+        }));
+        convo
+            .preamble
+            .push(serde_json::json!({"type": "last-prompt", "lastPrompt": "hi"}));
+        convo.add_entry(entry(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","cwd":"/old","message":{"role":"user","content":"hi"}}"#,
+        ));
+        convo.add_entry(entry(
+            r#"{"uuid":"u2","type":"user","timestamp":"2024-01-01T00:00:01Z","message":{"role":"user","content":"hi"}}"#,
+        ));
+        assert_eq!(convo.project_path.as_deref(), Some("/old"));
+
+        convo.reroot("/new");
+
+        assert_eq!(convo.project_path.as_deref(), Some("/new"));
+        assert_eq!(convo.entries[0].cwd.as_deref(), Some("/new"));
+        assert_eq!(convo.entries[1].cwd, None);
+        assert_eq!(convo.preamble[0]["cwd"], "/new");
+        assert!(convo.preamble[1].get("cwd").is_none());
+    }
 
     fn create_test_conversation() -> Conversation {
         let mut convo = Conversation::new("test-session".to_string());

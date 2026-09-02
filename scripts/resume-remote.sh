@@ -54,7 +54,6 @@
 #     the script quotes nothing and escapes nothing.
 #   - --session is a UUID. At least one Claude session exists for
 #     --project.
-#   - The projected JSONL records --project as its cwd.
 #   Remote (two read-only ssh calls, both before any remote write):
 #   - Each reply is exactly the TP_* lines the probe prints. A login
 #     banner or a registration notice fails the run verbatim.
@@ -67,8 +66,8 @@
 #     known.
 #
 # Steps (always in this order):
-#   1. cargo build -p path-cli; the script runs target/debug/path and does
-#      not touch any installed `path`.
+#   1. cargo build -p path-cli --features resume-remote; the script runs
+#      target/debug/path and does not touch any installed `path`.
 #   2. Resolve the session. `path p import claude --no-cache` writes
 #      the document to $TMPDIR/path-resume-remote/.
 #      [shell] Mint the remote session id from the key-sorted document
@@ -76,9 +75,9 @@
 #   3. Optional VM creation (--create).
 #   4. [shell] Call 1: remote home, claude path, tmux presence. Derive
 #      <remote-dir> from the remote home unless -C is given.
-#   5. `path p export claude` projects the document to JSONL.
-#      [shell] Rewrite the cwd and sessionId keys to the remote values
-#      (sed).
+#   5. `path p export claude --cwd <remote-dir>` projects the document
+#      to JSONL rooted at the remote project directory.
+#      [shell] Rewrite the sessionId keys to the minted ID (sed).
 #      [shell] Compute the remote Claude project slug (/, _, and .
 #      become -).
 #   6. [shell] Call 2: the physical project dir, whether the tmux
@@ -237,7 +236,7 @@ echo "ok: local tools, $REMOTE, $PROJECT"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 step "Build path from $(git -C "$ROOT" rev-parse --short HEAD) ($(git -C "$ROOT" branch --show-current))"
-run cargo build -q -p path-cli --manifest-path "$ROOT/Cargo.toml"
+run cargo build -q -p path-cli --features resume-remote --manifest-path "$ROOT/Cargo.toml"
 PATH_BIN="$ROOT/target/debug/path"
 "$PATH_BIN" --version
 
@@ -346,23 +345,19 @@ echo "remote project dir: $REMOTE_DIR"
 
 step "Project session $SESSION to JSONL"
 JSONL_SRC="$WORK_DIR/$SESSION.jsonl"
-run "$PATH_BIN" p export claude --input "$DOC" >"$JSONL_SRC"
-N_CWD="$(grep -cF "\"cwd\":\"$PROJECT\"" "$JSONL_SRC" || true)"
-[[ $N_CWD -gt 0 ]] || die "the projected JSONL has no cwd equal to $PROJECT; pass --project <dir> matching the session's recorded cwd"
+run "$PATH_BIN" p export claude --input "$DOC" --cwd "$REMOTE_DIR" >"$JSONL_SRC"
+N_CWD="$(grep -cF "\"cwd\":\"$REMOTE_DIR\"" "$JSONL_SRC" || true)"
+[[ $N_CWD -gt 0 ]] || die "the projected JSONL carries no cwd key; the document records no cwd"
 N_SID="$(grep -cF "\"sessionId\":\"$SESSION\"" "$JSONL_SRC" || true)"
 [[ $N_SID -gt 0 ]] || die "the projected JSONL has no sessionId equal to $SESSION"
 
-# [shell] Rewrite cwd and sessionId to the remote values. PROJECT and
-# REMOTE_DIR match PLAIN_PATH_RE, so `.` is the only sed-special
-# character in the pattern and `|` is a safe delimiter.
+# [shell] Rewrite sessionId to the minted ID. Both values are UUIDs, so
+# `|` is a safe delimiter.
 JSONL="$WORK_DIR/$REMOTE_ID.jsonl"
-CWD_RE="${PROJECT//./\\.}"
-show "sed -e 's|\"cwd\":\"$PROJECT\"|\"cwd\":\"$REMOTE_DIR\"|g' -e 's|\"sessionId\":\"$SESSION\"|\"sessionId\":\"$REMOTE_ID\"|g' $JSONL_SRC > $JSONL"
-sed -e "s|\"cwd\":\"$CWD_RE\"|\"cwd\":\"$REMOTE_DIR\"|g" \
-    -e "s|\"sessionId\":\"$SESSION\"|\"sessionId\":\"$REMOTE_ID\"|g" \
-    "$JSONL_SRC" >"$JSONL"
-LEFT="$(grep -cF -e "\"cwd\":\"$PROJECT\"" -e "\"sessionId\":\"$SESSION\"" "$JSONL" || true)"
-[[ $LEFT -eq 0 ]] || die "$LEFT source cwd/sessionId keys survived the rewrite in $JSONL"
+show "sed -e 's|\"sessionId\":\"$SESSION\"|\"sessionId\":\"$REMOTE_ID\"|g' $JSONL_SRC > $JSONL"
+sed -e "s|\"sessionId\":\"$SESSION\"|\"sessionId\":\"$REMOTE_ID\"|g" "$JSONL_SRC" >"$JSONL"
+LEFT="$(grep -cF "\"sessionId\":\"$SESSION\"" "$JSONL" || true)"
+[[ $LEFT -eq 0 ]] || die "$LEFT source sessionId keys survived the rewrite in $JSONL"
 [[ "$(wc -l <"$JSONL")" -eq "$(wc -l <"$JSONL_SRC")" ]] || die "line count changed during the rewrite"
 
 # [shell] Claude project slug: /, _, and . become -.
@@ -443,7 +438,7 @@ cat <<EOF
   session id:    $REMOTE_ID (source $SESSION)
   session file:  $TARGET (exists: $TARGET_EXISTS)
   tmux session:  $TMUX_NAME ($TMUX_STATE)
-  jsonl:         $JSONL ($JSONL_BYTES bytes; $N_CWD cwd and $N_SID sessionId keys rewritten)
+  jsonl:         $JSONL ($JSONL_BYTES bytes; $N_CWD cwd keys; $N_SID sessionId keys rewritten)
   run:           $RUN_NOTE
 EOF
 [[ $SETUP -eq 0 ]] || echo "  setup:   ssh -n $REMOTE mkdir -p ~/.claude $REMOTE_DIR; scp -pq $CREDS $REMOTE:.claude/; jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"

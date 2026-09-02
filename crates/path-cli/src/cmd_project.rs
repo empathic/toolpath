@@ -26,13 +26,12 @@ pub enum ProjectTarget {
 
 pub fn run(target: ProjectTarget) -> Result<()> {
     match target {
-        ProjectTarget::Claude { input, output } => {
-            crate::cmd_export::run(crate::cmd_export::ExportTarget::Claude {
+        ProjectTarget::Claude { input, output } => crate::cmd_export::run(
+            crate::cmd_export::ExportTarget::Claude(crate::cmd_export::ClaudeArgs {
                 input,
-                project: None,
                 output,
-                force: false,
-            })
-        }
+                ..Default::default()
+            }),
+        ),
     }
 }
