@@ -252,14 +252,17 @@ pub fn run(target: ExportTarget, config: &Config) -> Result<()> {
             repo,
             name,
             public,
-        } => run_pathbase(PathbaseExportArgs {
-            input,
-            url,
-            anon,
-            repo,
-            name,
-            public,
-        }),
+        } => run_pathbase(
+            PathbaseExportArgs {
+                input,
+                url,
+                anon,
+                repo,
+                name,
+                public,
+            },
+            config,
+        ),
     }
 }
 
@@ -1961,10 +1964,10 @@ fn write_cursor_to_stdout(session: &toolpath_cursor::CursorSession) -> Result<()
 
 // ── Pathbase ──────────────────────────────────────────────────────────
 
-fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
+fn run_pathbase(args: PathbaseExportArgs, config: &Config) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = args;
+        let _ = (args, config);
         anyhow::bail!("'path export pathbase' requires a native environment with network access");
     }
 
@@ -1982,9 +1985,9 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
             name: args.name,
             public: args.public,
         };
-        let base_url = resolve_upload_base_url(&upload);
+        let base_url = resolve_upload_base_url(config, &upload);
         let needs_auth = upload.repo.is_some() || upload.public || upload.name.is_some();
-        let auth = preflight_auth(&base_url, upload.anon, needs_auth)?;
+        let auth = preflight_auth(config, &base_url, upload.anon, needs_auth)?;
         let summary_source = file.display().to_string();
         run_pathbase_inner(auth, base_url, upload, &body, &summary_source)
     }
@@ -1994,18 +1997,18 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
 /// or the default. Mirrors the order used inside `run_pathbase_inner` so
 /// `cmd_share`'s pre-flight resolution agrees with the eventual upload.
 #[cfg(not(target_os = "emscripten"))]
-pub(crate) fn resolve_upload_base_url(args: &PathbaseUploadArgs) -> String {
+pub(crate) fn resolve_upload_base_url(config: &Config, args: &PathbaseUploadArgs) -> String {
     use crate::cmd_pathbase::{credentials_path, load_session, resolve_url};
 
     if let Some(u) = &args.url {
-        return resolve_url(Some(u.clone()));
+        return resolve_url(config, Some(u.clone()));
     }
-    if let Ok(path) = credentials_path()
+    if let Ok(path) = credentials_path(config)
         && let Ok(Some(s)) = load_session(&path)
     {
         return s.url;
     }
-    resolve_url(None)
+    resolve_url(config, None)
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -2966,27 +2969,25 @@ mod tests {
         )
         .unwrap();
 
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::set_var(crate::config::CONFIG_DIR_ENV, temp.path());
-        }
-        let err = run_pathbase(PathbaseExportArgs {
-            input: input_path.to_string_lossy().to_string(),
-            url: Some("http://127.0.0.1:1".to_string()),
-            anon: false,
-            repo: Some(RepoSpec {
-                owner: "alex".to_string(),
-                name: "pathstash".to_string(),
-            }),
-            name: None,
-            public: false,
-        })
+        let config = Config {
+            toolpath_config_dir: Some(temp.path().to_path_buf()),
+            ..Config::default()
+        };
+        let err = run_pathbase(
+            PathbaseExportArgs {
+                input: input_path.to_string_lossy().to_string(),
+                url: Some("http://127.0.0.1:1".to_string()),
+                anon: false,
+                repo: Some(RepoSpec {
+                    owner: "alex".to_string(),
+                    name: "pathstash".to_string(),
+                }),
+                name: None,
+                public: false,
+            },
+            &config,
+        )
         .unwrap_err();
-        unsafe {
-            std::env::remove_var(crate::config::CONFIG_DIR_ENV);
-        }
         assert!(
             err.to_string().contains("Not logged in"),
             "expected `Not logged in` error, got: {err}"
