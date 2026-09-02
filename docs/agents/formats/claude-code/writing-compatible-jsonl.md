@@ -93,6 +93,46 @@ downstream tools may behave oddly without them:
 
 ## Structural rules
 
+### Write one chain
+
+Write every line of a session file into one `parentUuid` chain. Each
+line names the line written before it, whatever its type, so
+`attachment` and `system` lines sit on the chain between the `user`
+and `assistant` lines. The last line of the file is the tip of the
+chain.
+
+`claude -r` follows parent links from a leaf to the root. The rule
+that picks the leaf is not known. A file whose attachment runs sit
+after the messages, each run with its source parent, resumes one reply
+short: the transcript stops at the last tool call. One chain gives the
+loader no choice.
+
+Claude Code forks its own chain in three places. A writer does not
+need to reproduce them. A reader must accept them.
+
+- A PreToolUse `hook_success` line hangs off the last line written
+  when the hook ran, and the `tool_result` line hangs off the
+  `tool_use` line, so the hook line is a side leaf. In a 378-session
+  sample, 97% of PreToolUse hook lines are side leaves.
+- A parallel tool call has one assistant line per `tool_use`, chained,
+  and every `tool_result` line after the last one, each hanging off its
+  own `tool_use` line. 46% of the sample has one.
+- A replaced prompt (`/rewind`, or a cancelled prompt sent again) hangs
+  off the same parent as the prompt it replaced. The replaced prompt,
+  its attachments, and any reply stay in the file as a side branch.
+
+Rules for a writer:
+
+- Every line except the first names the line before it. The one other
+  line with `parentUuid: null` is a `compact_boundary`, whose
+  `logicalParentUuid` names the line it follows. Write it in its place
+  and continue the chain from it.
+- An `attachment` or `system` line that follows a message stays between
+  that message and the next one.
+- A `tool_result` line follows its `tool_use` line. For a parallel
+  call, write the `tool_use` lines first and the `tool_result` lines
+  after the last one.
+
 ### Preserve `tool_use` / `tool_result` pairing
 
 Every `tool_use` part in an assistant entry must be followed by a
