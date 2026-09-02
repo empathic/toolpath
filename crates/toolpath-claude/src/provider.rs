@@ -273,6 +273,23 @@ fn find_tool_result_in_parts(msg: &Message, tool_use_id: &str) -> Option<ToolRes
 
 /// Returns true if this entry is a tool-result-only user message
 /// (no human-authored text, only tool_result parts).
+/// Event type of a tool-result-only user line kept beside the turn
+/// stream. The line's results are folded into the assistant turn; the
+/// event keeps the line itself so the projector writes it back in place.
+pub(crate) const TOOL_RESULT_USER_EVENT: &str = "tool_result_user";
+
+fn tool_result_entry_to_event(
+    entry: &ConversationEntry,
+    msg: &Message,
+) -> toolpath_convo::ConversationEvent {
+    let mut event = entry_to_event(entry);
+    event.event_type = TOOL_RESULT_USER_EVENT.to_string();
+    if let Ok(v) = serde_json::to_value(msg) {
+        event.data.insert("message".into(), v);
+    }
+    event
+}
+
 fn is_tool_result_only(entry: &ConversationEntry) -> bool {
     let Some(msg) = &entry.message else {
         return false;
@@ -322,6 +339,7 @@ fn entry_to_turn(entry: &ConversationEntry) -> Option<Turn> {
 /// turn's `ToolInvocation.result` fields rather than emitted as separate turns.
 fn conversation_to_view(convo: &Conversation) -> ConversationView {
     let mut turns: Vec<Turn> = Vec::new();
+    let mut turn_ids: HashSet<String> = HashSet::new();
     let mut events: Vec<toolpath_convo::ConversationEvent> = Vec::new();
 
     // Headerless preamble lines (ai-title, last-prompt, queue-operation,
@@ -339,13 +357,8 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // chain intact for `derive_path`. The original UUID is preserved
     // via the `tool_result_user` event.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
-    // Tool-result entry UUID → the assistant turn that absorbed it. An
-    // event whose parent is such an entry is re-parented onto the turn:
-    // `derive_path` resolves event parents against turns only, so a parent
-    // that names an absorbed entry would not survive the round-trip.
-    let mut absorbed_tool_results: HashMap<String, String> = HashMap::new();
-    let mut turn_ids: HashSet<String> = HashSet::new();
     let mut last_turn_uuid: Option<String> = None;
+    let mut last_event_uuid: Option<String> = events.last().map(|e| e.id.clone());
 
     for entry in &convo.entries {
         let Some(msg) = &entry.message else {
@@ -361,11 +374,8 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
                     last_turn_uuid.as_deref(),
                 );
             }
-            if let Some(pid) = event.parent_id.as_deref()
-                && let Some(turn) = absorbed_tool_results.get(pid)
-            {
-                event.parent_id = Some(turn.clone());
-            }
+            record_source_parent(&mut event, entry, &turn_ids, last_event_uuid.as_deref());
+            last_event_uuid = Some(entry.uuid.clone());
             events.push(event);
             if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
@@ -375,18 +385,19 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
 
         // Tool-result-only user entries get merged into the preceding
         // assistant's tool_uses[i].result and dropped from the turn
-        // stream. The next assistant entry's wire parentUuid points at
+        // stream. The line itself survives as a `tool_result_user` event
+        // with its UUID and parent, so the projector writes it back in
+        // place. The next assistant entry's wire parentUuid points at
         // this entry; we record a rewrite so the IR's turn-to-turn chain
-        // stays connected. (The projector re-synthesizes the wire-level
-        // tool-result entries on the way out from tool_uses[i].result —
-        // their original UUIDs aren't preserved across the roundtrip,
-        // but the Claude UI walks the chain by parentUuid, not by
-        // specific UUIDs, so that's fine.)
+        // stays connected.
         if is_tool_result_only(entry) {
             merge_tool_results(&mut turns, msg);
+            let mut event = tool_result_entry_to_event(entry, msg);
+            record_source_parent(&mut event, entry, &turn_ids, last_event_uuid.as_deref());
+            last_event_uuid = Some(entry.uuid.clone());
+            events.push(event);
             if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
-                absorbed_tool_results.insert(entry.uuid.clone(), prev.clone());
             }
             continue;
         }
@@ -395,6 +406,14 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         if let Some(pid) = turn.parent_id.as_ref()
             && let Some(real) = parent_rewrites.get(pid)
         {
+            if last_event_uuid.as_deref() != Some(pid.as_str())
+                && let Some(event) = events.iter_mut().rev().find(|e| e.id == *pid)
+            {
+                event.data.insert(
+                    NEXT_TURN_KEY.into(),
+                    serde_json::Value::String(turn.id.clone()),
+                );
+            }
             turn.parent_id = Some(real.clone());
         }
         turn_ids.insert(turn.id.clone());
@@ -553,6 +572,38 @@ impl SourceRoot {
             serde_json::Value::String(self.as_str().into()),
         );
     }
+}
+
+/// Event data key for a source parent the document round-trip would
+/// lose: `derive_path` keeps an event parent that names a turn, and
+/// gives every other event the step before it as parent, which is the
+/// source parent only when that is the previous event.
+pub(crate) const SOURCE_PARENT_KEY: &str = "source_parent";
+
+/// Event data key naming the turn whose `parentUuid` is this line, set
+/// when the line is not the last event before that turn. The IR keeps
+/// turn-to-turn parents only, so the projector otherwise hangs the turn
+/// off the last line written before it. The fact is on the line, not on
+/// the turn: `Turn.extra` does not survive `derive_path`, event data
+/// does.
+pub(crate) const NEXT_TURN_KEY: &str = "next_turn";
+
+fn record_source_parent(
+    event: &mut toolpath_convo::ConversationEvent,
+    entry: &ConversationEntry,
+    turn_ids: &HashSet<String>,
+    last_event_uuid: Option<&str>,
+) {
+    let Some(parent) = entry.parent_uuid.as_deref() else {
+        return;
+    };
+    if turn_ids.contains(parent) || last_event_uuid == Some(parent) {
+        return;
+    }
+    event.data.insert(
+        SOURCE_PARENT_KEY.into(),
+        serde_json::Value::String(parent.to_string()),
+    );
 }
 
 /// Mark a message-less entry that has no `parentUuid`. Before the first
@@ -1055,7 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn event_parented_on_a_tool_result_line_hangs_off_the_absorbing_turn() {
+    fn event_parented_on_a_tool_result_line_keeps_its_parent() {
         let temp = TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         let project_dir = claude_dir.join("projects/-test-project");
@@ -1075,14 +1126,101 @@ mod tests {
         let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
             .unwrap();
 
-        let parent = |id: &str| {
+        let event = |id: &str| view.events.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(event("r1").event_type, TOOL_RESULT_USER_EVENT);
+        assert_eq!(event("r1").parent_id.as_deref(), Some("a1"));
+        assert_eq!(event("n1").parent_id.as_deref(), Some("r1"));
+        assert_eq!(event("n2").parent_id.as_deref(), Some("n1"));
+        assert_eq!(view.turns[2].parent_id.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn an_event_parent_that_is_not_the_previous_line_is_recorded() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Go"}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"model":"claude-x","stop_reason":"tool_use"}}"#,
+            r#"{"uuid":"r1","type":"user","parentUuid":"a1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a.rs","is_error":false}]}}"#,
+            r#"{"uuid":"hp","type":"attachment","parentUuid":"a1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_success","hookEvent":"PostToolUse"}}"#,
+            r#"{"uuid":"n1","type":"attachment","parentUuid":"r1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"total_tokens_reminder","totalTokens":1}}"#,
+            r#"{"uuid":"n2","type":"attachment","parentUuid":"n1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"batching_reminder_sent","model":"claude-x","text":""}}"#,
+            r#"{"uuid":"a2","type":"assistant","parentUuid":"n2","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","content":"One file.","model":"claude-x","stop_reason":"end_turn"}}"#,
+        ];
+        fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        let recorded = |id: &str| {
             view.events
                 .iter()
                 .find(|e| e.id == id)
-                .and_then(|e| e.parent_id.clone())
+                .unwrap()
+                .data
+                .get(SOURCE_PARENT_KEY)
+                .and_then(|v| v.as_str())
         };
-        assert_eq!(parent("n1").as_deref(), Some("a1"));
-        assert_eq!(parent("n2").as_deref(), Some("n1"));
+        assert_eq!(
+            recorded("r1"),
+            None,
+            "a turn parent survives the round trip"
+        );
+        assert_eq!(
+            recorded("hp"),
+            None,
+            "a turn parent survives the round trip"
+        );
+        assert_eq!(
+            recorded("n1"),
+            Some("r1"),
+            "the previous line is hp, not r1"
+        );
+        assert_eq!(recorded("n2"), None, "the previous line is the parent");
+    }
+
+    #[test]
+    fn a_turn_parent_that_is_not_the_previous_line_tags_that_line() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Go"}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"model":"claude-x","stop_reason":"tool_use"}}"#,
+            r#"{"uuid":"r1","type":"user","parentUuid":"a1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a.rs","is_error":false}]}}"#,
+            r#"{"uuid":"hp","type":"attachment","parentUuid":"a1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"hook_success","hookEvent":"PostToolUse"}}"#,
+            r#"{"uuid":"a2","type":"assistant","parentUuid":"r1","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","content":"One file.","model":"claude-x","stop_reason":"end_turn"}}"#,
+            r#"{"uuid":"n1","type":"attachment","parentUuid":"a2","timestamp":"2024-01-01T00:00:03Z","attachment":{"type":"total_tokens_reminder","totalTokens":1}}"#,
+            r#"{"uuid":"u2","type":"user","parentUuid":"n1","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":"Thanks"}}"#,
+        ];
+        fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        let tag = |id: &str| {
+            view.events
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap()
+                .data
+                .get(NEXT_TURN_KEY)
+                .and_then(|v| v.as_str())
+        };
+        assert_eq!(
+            tag("r1"),
+            Some("a2"),
+            "a2 hangs off r1, and hp is the line before a2"
+        );
+        assert_eq!(tag("hp"), None);
+        assert_eq!(tag("n1"), None, "u2 hangs off the line before it");
         assert_eq!(view.turns[2].parent_id.as_deref(), Some("a1"));
     }
 
