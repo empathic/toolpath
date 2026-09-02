@@ -86,6 +86,16 @@ The shell's Rust comes from nixpkgs and is **ahead of** the 1.94.0 pin — `rust
 is read by rustup, which the shell does not provide. Clippy gains lints between releases, so
 green in the shell is evidence, not proof; the pinned toolchain is the real gate.
 
+The same flake builds the binary and exports a home-manager module, so a nix consumer can
+take this repo as a flake input and follow a ref of it instead of pinning a rev by hand:
+
+```bash
+nix build .#toolpath          # → result/bin/path; version read from crates/path-cli/Cargo.toml
+# programs.toolpath.{enable,package,devBin} via homeManagerModules.toolpath (modules/toolpath.nix)
+```
+
+The package skips the workspace tests (`doCheck = false`); CI is the gate.
+
 ## CLI usage
 
 The binary is called `path` (package: `path-cli`; the older `toolpath-cli` package is a deprecated shim that still installs the same binary for users running `cargo install toolpath-cli`).
