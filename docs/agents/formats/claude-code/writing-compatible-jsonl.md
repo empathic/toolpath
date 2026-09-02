@@ -93,6 +93,29 @@ downstream tools may behave oddly without them:
 
 ## Structural rules
 
+### Write one chain
+
+Claude Code writes every line of a session file into one `parentUuid`
+chain. Each line names the line written before it, whatever its type:
+`attachment` and `system` lines are on the chain with the `user` and
+`assistant` lines.
+
+`claude -r` reads one chain from a leaf to the root. When the file has
+a second leaf, the resume can start from that leaf and stop where its
+chain leaves the message chain: a side chain of attachments off the
+last tool call renders the transcript up to that tool call and drops
+the tool result and the reply after it. The rule that picks the leaf is
+not known, so the file must not give it a choice.
+
+- Every line except the first names the line before it. The one other
+  line with `parentUuid: null` is a `compact_boundary`, whose
+  `logicalParentUuid` names the line it follows. Write it in its place
+  and continue the chain from it.
+- An `attachment` or `system` line that follows a message stays between
+  that message and the next one.
+- A one-line `hook_success` side leaf off a `tool_use` line occurs in
+  native files and loads. Do not depend on it for other types.
+
 ### Preserve `tool_use` / `tool_result` pairing
 
 Every `tool_use` part in an assistant entry must be followed by a

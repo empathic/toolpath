@@ -5,7 +5,7 @@
 //! pairs them by `tool_use_id` so consumers get complete `Turn` values
 //! with `ToolInvocation.result` populated.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ClaudeConvo;
 use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
@@ -339,13 +339,34 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // chain intact for `derive_path`. The original UUID is preserved
     // via the `tool_result_user` event.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
+    // Tool-result entry UUID → the assistant turn that absorbed it. An
+    // event whose parent is such an entry is re-parented onto the turn:
+    // `derive_path` resolves event parents against turns only, so a parent
+    // that names an absorbed entry would not survive the round-trip.
+    let mut absorbed_tool_results: HashMap<String, String> = HashMap::new();
+    let mut turn_ids: HashSet<String> = HashSet::new();
     let mut last_turn_uuid: Option<String> = None;
 
     for entry in &convo.entries {
         let Some(msg) = &entry.message else {
             // Message-less entries (attachments, snapshots) survive as
             // events so the projector can re-emit them.
-            events.push(entry_to_event(entry));
+            let mut event = entry_to_event(entry);
+            if entry.parent_uuid.is_none() {
+                mark_source_root(
+                    &mut event,
+                    entry,
+                    &turn_ids,
+                    &parent_rewrites,
+                    last_turn_uuid.as_deref(),
+                );
+            }
+            if let Some(pid) = event.parent_id.as_deref()
+                && let Some(turn) = absorbed_tool_results.get(pid)
+            {
+                event.parent_id = Some(turn.clone());
+            }
+            events.push(event);
             if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
             }
@@ -365,6 +386,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             merge_tool_results(&mut turns, msg);
             if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
+                absorbed_tool_results.insert(entry.uuid.clone(), prev.clone());
             }
             continue;
         }
@@ -375,6 +397,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         {
             turn.parent_id = Some(real.clone());
         }
+        turn_ids.insert(turn.id.clone());
         last_turn_uuid = Some(turn.id.clone());
         turns.push(turn);
     }
@@ -482,6 +505,85 @@ fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::Con
         event_type,
         data,
     }
+}
+
+/// Event data key for a line with no `parentUuid`. `derive_path` gives a
+/// parentless event the last step as its parent, so the key is what
+/// survives the document round-trip. The value is a [`SourceRoot`].
+pub(crate) const SOURCE_ROOT_KEY: &str = "source_root";
+
+/// Why a line has no `parentUuid`. The projected line has none either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceRoot {
+    /// The first line of a session.
+    Session,
+    /// A compaction boundary. The event's `parent_id` is the turn it
+    /// follows.
+    Reset,
+}
+
+impl SourceRoot {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Reset => "reset",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "session" => Some(Self::Session),
+            "reset" => Some(Self::Reset),
+            _ => None,
+        }
+    }
+
+    /// The mark `to_view` put on the event, if any.
+    pub(crate) fn of(event: &toolpath_convo::ConversationEvent) -> Option<Self> {
+        event
+            .data
+            .get(SOURCE_ROOT_KEY)
+            .and_then(|v| v.as_str())
+            .and_then(Self::parse)
+    }
+
+    pub(crate) fn mark(self, event: &mut toolpath_convo::ConversationEvent) {
+        event.data.insert(
+            SOURCE_ROOT_KEY.into(),
+            serde_json::Value::String(self.as_str().into()),
+        );
+    }
+}
+
+/// Mark a message-less entry that has no `parentUuid`. Before the first
+/// turn it opens the session. After a turn it is a compaction boundary:
+/// its place in the chain is its `logicalParentUuid`, resolved to a
+/// turn, or the last turn before it.
+fn mark_source_root(
+    event: &mut toolpath_convo::ConversationEvent,
+    entry: &ConversationEntry,
+    turn_ids: &HashSet<String>,
+    parent_rewrites: &HashMap<String, String>,
+    last_turn_uuid: Option<&str>,
+) {
+    let Some(last_turn) = last_turn_uuid else {
+        SourceRoot::Session.mark(event);
+        return;
+    };
+    let anchor = entry
+        .extra
+        .get("logicalParentUuid")
+        .and_then(|v| v.as_str())
+        .and_then(|id| {
+            if turn_ids.contains(id) {
+                Some(id.to_string())
+            } else {
+                parent_rewrites.get(id).cloned()
+            }
+        })
+        .unwrap_or_else(|| last_turn.to_string());
+    event.parent_id = Some(anchor);
+    SourceRoot::Reset.mark(event);
 }
 
 /// Build an event from a message-less ConversationEntry (attachment, snapshot).
@@ -950,6 +1052,66 @@ mod tests {
 
         let resolver = PathResolver::new().with_claude_dir(&claude_dir);
         (temp, ClaudeConvo::with_resolver(resolver))
+    }
+
+    #[test]
+    fn event_parented_on_a_tool_result_line_hangs_off_the_absorbing_turn() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Go"}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"model":"claude-x","stop_reason":"tool_use"}}"#,
+            r#"{"uuid":"r1","type":"user","parentUuid":"a1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a.rs","is_error":false}]}}"#,
+            r#"{"uuid":"n1","type":"attachment","parentUuid":"r1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"total_tokens_reminder","totalTokens":1}}"#,
+            r#"{"uuid":"n2","type":"attachment","parentUuid":"n1","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"batching_reminder_sent","model":"claude-x","text":""}}"#,
+            r#"{"uuid":"a2","type":"assistant","parentUuid":"n2","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","content":"One file.","model":"claude-x","stop_reason":"end_turn"}}"#,
+        ];
+        fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        let parent = |id: &str| {
+            view.events
+                .iter()
+                .find(|e| e.id == id)
+                .and_then(|e| e.parent_id.clone())
+        };
+        assert_eq!(parent("n1").as_deref(), Some("a1"));
+        assert_eq!(parent("n2").as_deref(), Some("n1"));
+        assert_eq!(view.turns[2].parent_id.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn lines_without_a_parent_are_marked_by_their_place() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let entries = [
+            r#"{"uuid":"r1","type":"attachment","parentUuid":null,"timestamp":"2024-01-01T00:00:00Z","attachment":{"type":"hook_success","hookEvent":"SessionStart"}}"#,
+            r#"{"uuid":"u1","type":"user","parentUuid":"r1","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Go"}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Reply","model":"claude-x","stop_reason":"end_turn"}}"#,
+            r#"{"uuid":"cb1","type":"system","subtype":"compact_boundary","parentUuid":null,"logicalParentUuid":"a1","timestamp":"2024-01-01T00:00:02Z","compactMetadata":{"trigger":"auto","preTokens":1}}"#,
+            r#"{"uuid":"u2","type":"user","parentUuid":"cb1","timestamp":"2024-01-01T00:00:03Z","isCompactSummary":true,"message":{"role":"user","content":"[summary]"}}"#,
+        ];
+        fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        let event = |id: &str| view.events.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(SourceRoot::of(event("r1")), Some(SourceRoot::Session));
+        assert_eq!(event("r1").parent_id, None);
+        assert_eq!(SourceRoot::of(event("cb1")), Some(SourceRoot::Reset));
+        assert_eq!(event("cb1").parent_id.as_deref(), Some("a1"));
+        assert_eq!(view.turns[2].parent_id.as_deref(), Some("a1"));
     }
 
     /// A session whose first assistant API message is split across three

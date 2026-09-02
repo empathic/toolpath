@@ -2,6 +2,32 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.2 — 2026-09-03
+
+- **Fix:** `ClaudeProjector` writes attachments and message-less `system`
+  lines into the `parentUuid` chain at the position they came from: each
+  run follows the turn it hangs off, and the next turn hangs off the
+  run's last line. Lines before the first prompt open the chain, and a
+  line whose parent names nothing in the view, or that has no parent and
+  comes from another harness, hangs off the last turn at or before its
+  timestamp. The projector appended these lines after the
+  last turn with their source parents, so each run was a side chain with
+  a leaf of its own, and `claude -r` on the file rendered the transcript
+  up to the last tool call and dropped the tool result and the reply
+  after it. A hook line the source wrote as a side leaf off its tool
+  call is chained after the tool result.
+- `to_view` parents an attachment that follows a tool-result line on the
+  assistant turn that absorbed the result, so the parent survives the
+  document round-trip and the projector keeps the attachment after the
+  tool call.
+- `to_view` marks a line with no `parentUuid`: the first line of a
+  session opens the projected chain, and a compaction boundary is
+  written in its place with `parentUuid: null`, after the line its
+  `logicalParentUuid` names. `derive_path` gives a parentless event the
+  last step as its parent, so a file that opens with an attachment and
+  no headerless line projected that attachment after the last turn, and
+  a boundary lost its place.
+
 ## path-cli 0.19.0 — 2026-09-03
 
 - `[[project]]` rules in `~/.toolpath/config.toml` can select by

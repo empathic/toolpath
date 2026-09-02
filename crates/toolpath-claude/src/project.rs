@@ -5,12 +5,13 @@
 //! reads a Claude JSONL conversation into a provider-agnostic view,
 //! `ClaudeProjector` serializes that view back into the Claude wire format.
 
+use crate::provider::SourceRoot;
 use crate::types::{
     ContentPart, Conversation, ConversationEntry, Message, MessageContent, MessageRole,
     ToolResultContent, Usage,
 };
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use toolpath_convo::{
     ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
@@ -97,13 +98,15 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 .push(event);
         }
     }
-    let mut consumed_event_ids: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    // For cross-harness sources whose IR doesn't model intermediate tool-
-    // result turns, the next assistant's `parent_id` points at the prior
-    // assistant. Claude expects it to point at the tool_result entry that
-    // ran in between. Track those rewrites so we can patch the chain.
+    let mut consumed_event_ids: HashSet<String> = HashSet::new();
+    // Claude Code writes one chain: every line's `parentUuid` names the
+    // line written before it, whatever its type. The IR keeps turn-to-turn
+    // parents only, so the last entry written for a turn (its tool
+    // results, then the passthrough run that followed them) is recorded
+    // here and the next turn hangs off that.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
+    let mut runs = PassthroughRuns::new(view);
+    let root_tail = emit_run(&mut convo, runs.before_first_turn(), None, &view.id);
 
     // Message-group accounting. The IR carries a message's total
     // `token_usage` only on the group's final turn; real Claude JSONL stamps
@@ -123,15 +126,19 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    for turn in &view.turns {
-        // Pre-rewrite this turn's parent_id if a synthesized tool_result
-        // was emitted between it and its IR-recorded parent.
-        let effective_parent = turn
-            .parent_id
-            .as_ref()
-            .and_then(|pid| parent_rewrites.get(pid).cloned())
-            .or_else(|| turn.parent_id.clone());
+    for (idx, turn) in view.turns.iter().enumerate() {
+        let effective_parent = match (idx, turn.parent_id.as_ref()) {
+            (0, None) => root_tail.clone(),
+            (_, Some(pid)) => parent_rewrites
+                .get(pid)
+                .cloned()
+                .or_else(|| Some(pid.clone())),
+            (_, None) => None,
+        };
 
+        // The last line written for this turn: its own line, then its
+        // tool results, then the passthrough run that follows them.
+        let mut tail = turn.id.clone();
         match &turn.role {
             Role::User => {
                 let mut entry = user_turn_to_entry(turn, &view.id);
@@ -157,33 +164,26 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 // as events with their source UUIDs) over synthesizing.
                 // Synthesizing rewrites the UUID, which breaks the
                 // parentUuid chain on every subsequent assistant turn.
-                let real = tool_result_events_by_parent.remove(&turn.id);
-                if let Some(events) = real {
-                    let mut last_uuid = turn.id.clone();
-                    for event in events {
-                        let entry = tool_result_event_to_entry(event, &view.id);
-                        last_uuid = entry.uuid.clone();
-                        convo.add_entry(entry);
-                        consumed_event_ids.insert(event.id.clone());
-                    }
-                    // Anything in the IR that pointed at this assistant
-                    // turn should now point at the last tool-result entry
-                    // we emitted, matching Claude's wire convention.
-                    if last_uuid != turn.id {
-                        parent_rewrites.insert(turn.id.clone(), last_uuid);
-                    }
-                } else {
-                    // Cross-harness fallback: synthesize per-tool-use
-                    // result entries.
-                    let mut last_uuid = turn.id.clone();
-                    for mut result_entry in tool_result_entries(turn, &view.id) {
-                        apply_turn_metadata(&mut result_entry, turn);
-                        last_uuid = result_entry.uuid.clone();
-                        convo.add_entry(result_entry);
-                    }
-                    if last_uuid != turn.id {
-                        parent_rewrites.insert(turn.id.clone(), last_uuid);
-                    }
+                let result_entries: Vec<ConversationEntry> =
+                    match tool_result_events_by_parent.remove(&turn.id) {
+                        Some(events) => events
+                            .into_iter()
+                            .map(|event| {
+                                consumed_event_ids.insert(event.id.clone());
+                                tool_result_event_to_entry(event, &view.id)
+                            })
+                            .collect(),
+                        None => tool_result_entries(turn, &view.id)
+                            .into_iter()
+                            .map(|mut entry| {
+                                apply_turn_metadata(&mut entry, turn);
+                                entry
+                            })
+                            .collect(),
+                    };
+                for entry in result_entries {
+                    tail = entry.uuid.clone();
+                    convo.add_entry(entry);
                 }
             }
             Role::System => {
@@ -199,28 +199,143 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 convo.add_entry(entry);
             }
         }
+        if let Some(last) = emit_run(&mut convo, runs.after(&turn.id), Some(&tail), &view.id) {
+            tail = last;
+        }
+        if tail != turn.id {
+            parent_rewrites.insert(turn.id.clone(), tail);
+        }
     }
 
-    // Emit non-preamble events (attachments, etc.) as entries.
+    // Leftovers: tool-result events whose assistant turn is absent.
     for event in &view.events {
-        if event.data.contains_key("raw") {
-            continue; // headerless line — already pushed onto convo.preamble
-        }
-        if consumed_event_ids.contains(&event.id) {
+        if event.event_type != TOOL_RESULT_USER_EVENT || consumed_event_ids.contains(&event.id) {
             continue;
         }
-        // Tool-result events without a matching parent turn — emit them
-        // anyway (rare; happens when the assistant turn is dropped).
-        if event.event_type == TOOL_RESULT_USER_EVENT {
-            let entry = tool_result_event_to_entry(event, &view.id);
-            convo.add_entry(entry);
-            continue;
-        }
-        let entry = project_event(event, &view.id);
-        convo.add_entry(entry);
+        convo.add_entry(tool_result_event_to_entry(event, &view.id));
     }
 
     Ok(convo)
+}
+
+/// Passthrough events (attachments, message-less system lines) grouped by
+/// the turn they hang off, in view order. `None` holds the run before the
+/// first turn.
+struct PassthroughRuns<'a> {
+    by_anchor: HashMap<Option<&'a str>, Vec<&'a toolpath_convo::ConversationEvent>>,
+}
+
+impl<'a> PassthroughRuns<'a> {
+    fn new(view: &'a ConversationView) -> Self {
+        let turn_ids: HashSet<&str> = view.turns.iter().map(|t| t.id.as_str()).collect();
+        let mut root_ids: HashSet<&str> = HashSet::new();
+        let mut event_parent: HashMap<&str, Option<&str>> = HashMap::new();
+        for event in &view.events {
+            let preamble = event.data.contains_key("raw");
+            if preamble || SourceRoot::of(event) == Some(SourceRoot::Session) {
+                root_ids.insert(event.id.as_str());
+            }
+            if !preamble {
+                event_parent.insert(event.id.as_str(), event.parent_id.as_deref());
+            }
+        }
+        let mut by_anchor: HashMap<Option<&'a str>, Vec<&'a toolpath_convo::ConversationEvent>> =
+            HashMap::new();
+        for event in &view.events {
+            if event.data.contains_key("raw") || event.event_type == TOOL_RESULT_USER_EVENT {
+                continue;
+            }
+            let anchor = anchor_turn(&view.turns, event, &turn_ids, &root_ids, &event_parent);
+            by_anchor.entry(anchor).or_default().push(event);
+        }
+        Self { by_anchor }
+    }
+
+    /// The run before the first turn.
+    fn before_first_turn(&mut self) -> Vec<&'a toolpath_convo::ConversationEvent> {
+        self.by_anchor.remove(&None).unwrap_or_default()
+    }
+
+    /// The run that follows the turn and its tool results.
+    fn after(&mut self, turn_id: &'a str) -> Vec<&'a toolpath_convo::ConversationEvent> {
+        self.by_anchor.remove(&Some(turn_id)).unwrap_or_default()
+    }
+}
+
+/// The turn an event hangs off: follow `parent_id` through other events
+/// until a turn. A source root (a line that opens the session, or one
+/// whose parent is a headerless preamble line) belongs to the run before
+/// the first turn. An event whose parent chain ends without a turn (no
+/// parent, or a parent that names nothing in the view) falls back to
+/// the last turn at or before the event's timestamp.
+fn anchor_turn<'a>(
+    turns: &'a [toolpath_convo::Turn],
+    event: &'a toolpath_convo::ConversationEvent,
+    turn_ids: &HashSet<&'a str>,
+    root_ids: &HashSet<&'a str>,
+    event_parent: &HashMap<&'a str, Option<&'a str>>,
+) -> Option<&'a str> {
+    if root_ids.contains(event.id.as_str()) {
+        return None;
+    }
+    let mut pid = event.parent_id.as_deref();
+    for _ in 0..=event_parent.len() {
+        let Some(p) = pid else {
+            break;
+        };
+        if turn_ids.contains(p) {
+            return Some(p);
+        }
+        if root_ids.contains(p) {
+            return None;
+        }
+        match event_parent.get(p) {
+            Some(next) => pid = *next,
+            None => break,
+        }
+    }
+    turns
+        .iter()
+        .rev()
+        .find(|t| at_or_before(&t.timestamp, &event.timestamp))
+        .map(|t| t.id.as_str())
+}
+
+/// `turn_ts <= event_ts` on RFC 3339 timestamps. An event timestamp that
+/// does not parse matches every turn, so the last turn wins; a turn
+/// timestamp that does not parse compares as text.
+fn at_or_before(turn_ts: &str, event_ts: &str) -> bool {
+    use chrono::DateTime;
+    let Ok(event) = DateTime::parse_from_rfc3339(event_ts) else {
+        return true;
+    };
+    match DateTime::parse_from_rfc3339(turn_ts) {
+        Ok(turn) => turn <= event,
+        Err(_) => turn_ts <= event_ts,
+    }
+}
+
+/// Write a passthrough run as a chain: the first entry hangs off `prev`,
+/// each later entry off the one before it. A source root has no parent
+/// and the chain continues from it. Returns the last entry written, if
+/// the run wrote any.
+fn emit_run(
+    convo: &mut Conversation,
+    run: Vec<&toolpath_convo::ConversationEvent>,
+    prev: Option<&str>,
+    session_id: &str,
+) -> Option<String> {
+    let mut last: Option<String> = None;
+    for event in run {
+        let mut entry = project_event(event, session_id);
+        entry.parent_uuid = match SourceRoot::of(event) {
+            Some(_) => None,
+            None => last.as_deref().or(prev).map(str::to_string),
+        };
+        last = Some(entry.uuid.clone());
+        convo.add_entry(entry);
+    }
+    last
 }
 
 /// Rebuild a Claude tool-result user entry verbatim from a preserved event.
@@ -1414,6 +1529,228 @@ mod tests {
         assert_eq!(entries[0].parent_uuid, None);
         assert_eq!(entries[1].parent_uuid.as_deref(), Some("u1"));
         assert_eq!(entries[2].parent_uuid.as_deref(), Some("a1"));
+    }
+
+    // ── Passthrough runs rejoin the chain ─────────────────────────────
+
+    fn attachment(id: &str, parent: Option<&str>, ts: &str) -> toolpath_convo::ConversationEvent {
+        toolpath_convo::ConversationEvent {
+            id: id.to_string(),
+            timestamp: ts.to_string(),
+            parent_id: parent.map(str::to_string),
+            event_type: "attachment".to_string(),
+            data: HashMap::new(),
+        }
+    }
+
+    fn tool_use_with_result(id: &str) -> ToolInvocation {
+        ToolInvocation {
+            id: id.to_string(),
+            name: "Bash".to_string(),
+            input: json!({"command": "ls"}),
+            result: Some(toolpath_convo::ToolResult {
+                content: "a.rs".to_string(),
+                is_error: false,
+            }),
+            category: None,
+        }
+    }
+
+    fn ids(convo: &Conversation) -> Vec<&str> {
+        convo.entries.iter().map(|e| e.uuid.as_str()).collect()
+    }
+
+    fn parent_of<'a>(convo: &'a Conversation, id: &str) -> Option<&'a str> {
+        convo
+            .entries
+            .iter()
+            .find(|e| e.uuid == id)
+            .and_then(|e| e.parent_uuid.as_deref())
+    }
+
+    /// One chain: the first entry has no parent, every other entry names
+    /// the entry before it, so no entry is a leaf except the last.
+    fn assert_one_chain(convo: &Conversation) {
+        let entries = &convo.entries;
+        assert_eq!(entries[0].parent_uuid, None);
+        for pair in entries.windows(2) {
+            assert_eq!(
+                pair[1].parent_uuid.as_deref(),
+                Some(pair[0].uuid.as_str()),
+                "{} must hang off {}",
+                pair[1].uuid,
+                pair[0].uuid
+            );
+        }
+    }
+
+    #[test]
+    fn test_passthrough_runs_rejoin_the_chain_in_source_order() {
+        // Source order, `<-` reads "is the parent of":
+        // r1 <- u1 <- n1 <- n2 <- a1 <- (tool result) <- h1 <- n3 <- a2 <- s1 <- u2
+        let mut a1 = assistant_turn("a1", "");
+        a1.parent_id = Some("u1".into());
+        a1.tool_uses = vec![tool_use_with_result("t1")];
+        let mut a2 = assistant_turn("a2", "Done.");
+        a2.parent_id = Some("a1".into());
+        a2.timestamp = "2024-01-01T00:00:02Z".into();
+        let mut u2 = user_turn("u2", "Next");
+        u2.parent_id = Some("a2".into());
+        u2.timestamp = "2024-01-01T00:00:03Z".into();
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2, u2]);
+        let mut r1 = attachment("r1", None, "2024-01-01T00:00:00Z");
+        SourceRoot::Session.mark(&mut r1);
+        view.events = vec![
+            r1,
+            attachment("n1", Some("u1"), "2024-01-01T00:00:00Z"),
+            attachment("n2", Some("n1"), "2024-01-01T00:00:00Z"),
+            attachment("h1", Some("a1"), "2024-01-01T00:00:01Z"),
+            attachment("n3", Some("h1"), "2024-01-01T00:00:01Z"),
+            attachment("s1", Some("a2"), "2024-01-01T00:00:02Z"),
+        ];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(
+            ids(&convo),
+            [
+                "r1",
+                "u1",
+                "n1",
+                "n2",
+                "a1",
+                "a1-result-t1",
+                "h1",
+                "n3",
+                "a2",
+                "s1",
+                "u2"
+            ]
+        );
+        assert_one_chain(&convo);
+    }
+
+    #[test]
+    fn test_forked_turns_both_hang_off_the_run_tail() {
+        let mut a1 = assistant_turn("a1", "First try");
+        a1.parent_id = Some("u1".into());
+        let mut a1b = assistant_turn("a1b", "Second try");
+        a1b.parent_id = Some("u1".into());
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a1b]);
+        view.events = vec![
+            attachment("n1", Some("u1"), "2024-01-01T00:00:00Z"),
+            attachment("n2", Some("n1"), "2024-01-01T00:00:00Z"),
+        ];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["u1", "n1", "n2", "a1", "a1b"]);
+        assert_eq!(parent_of(&convo, "a1"), Some("n2"));
+        assert_eq!(parent_of(&convo, "a1b"), Some("n2"));
+    }
+
+    #[test]
+    fn test_event_with_unknown_parent_hangs_off_the_last_turn_before_it() {
+        let mut a1 = assistant_turn("a1", "Reply");
+        a1.parent_id = Some("u1".into());
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1]);
+        view.events = vec![attachment("n1", Some("gone"), "2024-01-01T00:00:00.500Z")];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["u1", "n1", "a1"]);
+        assert_one_chain(&convo);
+    }
+
+    /// Cross-harness sources give events no parent and no mark.
+    #[test]
+    fn test_event_with_no_parent_and_no_mark_hangs_off_the_last_turn_before_it() {
+        let mut a1 = assistant_turn("a1", "Reply");
+        a1.parent_id = Some("u1".into());
+        let mut u2 = user_turn("u2", "Next");
+        u2.parent_id = Some("a1".into());
+        u2.timestamp = "2024-01-01T00:00:02Z".into();
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, u2]);
+        view.events = vec![
+            attachment("e0", None, "2023-12-31T00:00:00Z"),
+            attachment("e1", None, "2024-01-01T00:00:01.500Z"),
+        ];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["e0", "u1", "a1", "e1", "u2"]);
+        assert_one_chain(&convo);
+    }
+
+    #[test]
+    fn test_source_root_event_opens_the_chain_after_the_round_trip() {
+        // derive_path hands a parentless event the last step as parent.
+        let mut a1 = assistant_turn("a1", "Reply");
+        a1.parent_id = Some("u1".into());
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1]);
+        let mut r1 = attachment("r1", Some("a1"), "2024-01-01T00:00:00Z");
+        SourceRoot::Session.mark(&mut r1);
+        view.events = vec![r1, attachment("r2", Some("r1"), "2024-01-01T00:00:00Z")];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["r1", "r2", "u1", "a1"]);
+        assert_one_chain(&convo);
+    }
+
+    #[test]
+    fn test_compaction_boundary_is_written_in_place_with_no_parent() {
+        // Source: u1 <- a1, then cb1 with parentUuid null and
+        // logicalParentUuid a1, then the summary u2 <- cb1.
+        let mut a1 = assistant_turn("a1", "Reply");
+        a1.parent_id = Some("u1".into());
+        let mut u2 = user_turn("u2", "[summary]");
+        u2.parent_id = Some("a1".into());
+        u2.timestamp = "2024-01-01T00:00:02Z".into();
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, u2]);
+        let mut cb1 = attachment("cb1", Some("a1"), "2024-01-01T00:00:01Z");
+        cb1.event_type = "compact_boundary".to_string();
+        SourceRoot::Reset.mark(&mut cb1);
+        view.events = vec![cb1];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["u1", "a1", "cb1", "u2"]);
+        assert_eq!(parent_of(&convo, "cb1"), None);
+        assert_eq!(parent_of(&convo, "u2"), Some("cb1"));
+    }
+
+    #[test]
+    fn test_event_with_unknown_parent_and_no_timestamp_hangs_off_the_last_turn() {
+        let mut a1 = assistant_turn("a1", "Reply");
+        a1.parent_id = Some("u1".into());
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1]);
+        view.events = vec![attachment("n1", Some("gone"), "")];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["u1", "a1", "n1"]);
+        assert_one_chain(&convo);
+    }
+
+    #[test]
+    fn test_event_parented_on_a_preamble_line_opens_the_chain() {
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go")]);
+        let mut preamble = attachment("claude-preamble-0", None, "");
+        preamble.event_type = "permission-mode".to_string();
+        preamble.data.insert(
+            "raw".to_string(),
+            json!({"type": "permission-mode", "permissionMode": "default", "sessionId": "sess-1"}),
+        );
+        view.events = vec![
+            preamble,
+            attachment("r1", Some("claude-preamble-0"), "2024-01-01T00:00:00Z"),
+        ];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["r1", "u1"]);
+        assert_one_chain(&convo);
     }
 
     // ── Test 9: Stop reason and model preserved ───────────────────────
