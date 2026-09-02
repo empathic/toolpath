@@ -9,10 +9,12 @@ use clap::Args;
 use std::path::PathBuf;
 
 use crate::artifact::ArtifactType;
+use crate::config::Config;
 use crate::harness::{
     Harness, HarnessBundle, is_not_found_claude, is_not_found_codex, is_not_found_copilot,
     is_not_found_cursor, is_not_found_gemini, is_not_found_opencode, is_not_found_pi,
 };
+use crate::providers;
 use crate::remote::RepoSpec;
 
 #[derive(Args, Debug)]
@@ -481,7 +483,7 @@ fn collect_cursor(
     }
 }
 
-pub fn run(args: ShareArgs) -> Result<()> {
+pub fn run(args: ShareArgs, config: &Config) -> Result<()> {
     let harness = args.harness.map(|h| h.artifact_type());
 
     if args.session.is_some() && harness.is_none() {
@@ -505,11 +507,11 @@ pub fn run(args: ShareArgs) -> Result<()> {
         // Explicit-args: validate creds before derive so a credential
         // failure doesn't waste the derive/cache work.
         let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
-        return share_explicit(h, session.as_str(), &args, auth, base_url);
+        return share_explicit(h, session.as_str(), &args, auth, base_url, config);
     }
 
     let cwd = std::env::current_dir()?;
-    let bundle = HarnessBundle::from_environment();
+    let bundle = providers::harness_bundle(config);
     let project_filter = args.project.as_deref();
     let rows = gather_artifacts(&bundle, &cwd, harness, project_filter);
 
@@ -584,7 +586,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
     // is opaque and doesn't help the user verify they picked the right
     // thing. `{:?}` adds the surrounding quotes per the spec.
     eprintln!("Picked {} session {:?}", h.name(), title);
-    share_explicit(h, &session, &explicit, auth, base_url)
+    share_explicit(h, &session, &explicit, auth, base_url, config)
 }
 
 fn bail_no_sessions(
@@ -767,6 +769,7 @@ fn share_explicit(
     args: &ShareArgs,
     auth: crate::cmd_pathbase::AuthMode,
     base_url: String,
+    config: &Config,
 ) -> Result<()> {
     let project = match (harness.path_keyed(), args.project.as_ref()) {
         (true, Some(p)) => Some(p.to_string_lossy().into_owned()),
@@ -782,7 +785,8 @@ fn share_explicit(
     // — a derive would reproduce it byte-for-byte anyway.
     if !args.no_cache
         && let Some(cache_id) = crate::sync::fresh_cache_id(
-            &HarnessBundle::from_environment(),
+            config,
+            &providers::harness_bundle(config),
             harness,
             project.as_deref(),
             session,
@@ -800,7 +804,7 @@ fn share_explicit(
                 .ok()
                 .and_then(|doc| doc_session_dir(&doc))
         });
-        let dest = resolve_destination(args, &auth, base_url, session_dir)?;
+        let dest = resolve_destination(args, &auth, base_url, session_dir, config)?;
         let summary = format!("{} session {}", harness.name(), cache_id);
         let upload = crate::cmd_export::PathbaseUploadArgs {
             url: args.url.clone(),
@@ -812,7 +816,7 @@ fn share_explicit(
         return crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary);
     }
 
-    let derived = derive_session(harness, project.as_deref(), session)?;
+    let derived = derive_session(harness, project.as_deref(), session, config)?;
     let summary = format!("{} session {}", harness.name(), derived.cache_id);
 
     if !args.no_cache {
@@ -824,12 +828,8 @@ fn share_explicit(
         // overwrite so cache and upload agree (use `--no-cache` to skip
         // the cache write entirely).
         let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
-        // Transitional: `share` does not take `&Config` yet; load one
-        // for the engine. A load failure degrades like a manifest-write
-        // failure.
         if let Some(stub) = &derived.provenance
-            && let Err(e) = crate::config::Config::load()
-                .and_then(|config| crate::sync::record_artifact(&config, stub, &derived.cache_id))
+            && let Err(e) = crate::sync::record_artifact(config, stub, &derived.cache_id)
         {
             eprintln!("warning: sync manifest not updated: {e}");
         }
@@ -845,7 +845,7 @@ fn share_explicit(
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| doc_session_dir(&derived.doc));
-    let dest = resolve_destination(args, &auth, base_url, session_dir)?;
+    let dest = resolve_destination(args, &auth, base_url, session_dir, config)?;
     let body = derived.doc.to_json()?;
     let upload = crate::cmd_export::PathbaseUploadArgs {
         url: args.url.clone(),
@@ -893,6 +893,7 @@ fn resolve_destination(
     auth: &crate::cmd_pathbase::AuthMode,
     base_url: String,
     session_dir: Option<PathBuf>,
+    config: &Config,
 ) -> Result<ShareDestination> {
     if args.repo.is_some() || args.anon {
         return Ok(ShareDestination {
@@ -906,7 +907,7 @@ fn resolve_destination(
             base_url,
         });
     };
-    let Some(found) = crate::share_config::resolve_remote(&dir)? else {
+    let Some(found) = crate::share_config::resolve_remote(config, &dir)? else {
         return Ok(ShareDestination {
             repo: None,
             base_url,
@@ -997,24 +998,22 @@ fn derive_session(
     harness: ArtifactType,
     project: Option<&str>,
     session: &str,
+    config: &Config,
 ) -> Result<crate::derive::DerivedDoc> {
-    // Transitional: `share` does not take `&Config` yet; load one for
-    // the derive helpers.
-    let config = crate::config::Config::load()?;
     match harness {
         ArtifactType::Claude => {
-            crate::derive::derive_claude_session(&config, project.expect("path_keyed"), session)
+            crate::derive::derive_claude_session(config, project.expect("path_keyed"), session)
         }
         ArtifactType::Gemini => {
-            crate::derive::derive_gemini_session(&config, project.expect("path_keyed"), session)
+            crate::derive::derive_gemini_session(config, project.expect("path_keyed"), session)
         }
-        ArtifactType::Copilot => crate::derive::derive_copilot_session(&config, session),
+        ArtifactType::Copilot => crate::derive::derive_copilot_session(config, session),
         ArtifactType::Pi => {
-            crate::derive::derive_pi_session(&config, project.expect("path_keyed"), session, None)
+            crate::derive::derive_pi_session(config, project.expect("path_keyed"), session, None)
         }
-        ArtifactType::Codex => crate::derive::derive_codex_session(&config, session),
-        ArtifactType::Opencode => crate::derive::derive_opencode_session(&config, session, false),
-        ArtifactType::Cursor => crate::derive::derive_cursor_session(&config, session),
+        ArtifactType::Codex => crate::derive::derive_codex_session(config, session),
+        ArtifactType::Opencode => crate::derive::derive_opencode_session(config, session, false),
+        ArtifactType::Cursor => crate::derive::derive_cursor_session(config, session),
         ArtifactType::Git => {
             anyhow::bail!("share only handles agent sessions; git artifacts go through `p import`")
         }
@@ -1457,6 +1456,7 @@ mod tests {
             &authed(),
             DEFAULT_BASE.to_string(),
             Some(PathBuf::from("/anywhere")),
+            &Config::default(),
         )
         .unwrap();
         let repo = dest.repo.unwrap();
@@ -1473,6 +1473,7 @@ mod tests {
             &crate::cmd_pathbase::AuthMode::Anon,
             DEFAULT_BASE.to_string(),
             Some(PathBuf::from("/anywhere")),
+            &Config::default(),
         )
         .unwrap();
         assert!(dest.repo.is_none());
@@ -1486,20 +1487,18 @@ mod tests {
             &crate::cmd_pathbase::AuthMode::Anon,
             DEFAULT_BASE.to_string(),
             None,
+            &Config::default(),
         )
         .unwrap();
         assert!(dest.repo.is_none());
     }
 
-    /// One env-scoped run covering the remote forms: bare `owner/name`
-    /// (auth required when logged out, resolves when authed, base URL
+    /// One run covering the remote forms: bare `owner/name` (auth
+    /// required when logged out, resolves when authed, base URL
     /// untouched) and full URL (base URL replaced, `--url` flag wins,
     /// logged-out hint names the remote's server).
     #[test]
     fn destination_applies_configured_remote() {
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         let cfg = TempDir::new().unwrap();
         let bare = cfg.path().join("bare-proj");
         let url = cfg.path().join("url-proj");
@@ -1515,32 +1514,37 @@ mod tests {
             ),
         )
         .unwrap();
-        unsafe {
-            std::env::set_var(crate::config::CONFIG_DIR_ENV, cfg.path());
-        }
+        let config = Config {
+            toolpath_config_dir: Some(cfg.path().to_path_buf()),
+            ..Config::default()
+        };
         let bare_unauthed = resolve_destination(
             &share_args(),
             &crate::cmd_pathbase::AuthMode::Anon,
             DEFAULT_BASE.to_string(),
             Some(bare.clone()),
+            &config,
         );
         let bare_authed = resolve_destination(
             &share_args(),
             &authed(),
             DEFAULT_BASE.to_string(),
             Some(bare),
+            &config,
         );
         let url_unauthed = resolve_destination(
             &share_args(),
             &crate::cmd_pathbase::AuthMode::Anon,
             DEFAULT_BASE.to_string(),
             Some(url.clone()),
+            &config,
         );
         let url_authed = resolve_destination(
             &share_args(),
             &authed(),
             DEFAULT_BASE.to_string(),
             Some(url.clone()),
+            &config,
         );
         let mut flag_args = share_args();
         flag_args.url = Some("https://flag.example".to_string());
@@ -1549,10 +1553,8 @@ mod tests {
             &authed(),
             "https://flag.example".to_string(),
             Some(url),
+            &config,
         );
-        unsafe {
-            std::env::remove_var(crate::config::CONFIG_DIR_ENV);
-        }
 
         let err = bare_unauthed.unwrap_err().to_string();
         assert!(err.contains("team/sessions"), "got: {err}");
