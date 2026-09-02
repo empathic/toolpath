@@ -2,6 +2,46 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.14.0 — 2026-09-14
+
+- `to_view` keeps each tool-result line of a Claude session as a
+  `tool_result_user` event beside the turn stream: the line's UUID,
+  parent, message, and `toolUseResult`. The results still fold into the
+  assistant turn's `tool_uses[i].result`.
+- `ClaudeProjector` writes the tool-result line back in its place and
+  keeps every passthrough line's source parent when that parent is in
+  the output. A projected session has the harness file's lines, order,
+  UUIDs, and `parentUuid` links, including a hook line as a side leaf
+  off its tool call and the result lines of a parallel call after the
+  last call's line, each on its own call. A view without the tool-result
+  line (a cross-harness source, or a document from an earlier derive)
+  still gets one synthesized result line per tool use, with the run
+  chained after it. The decision is per tool-use ID, so no call gets a
+  second result.
+- The event carries the line's message and nothing else of the results:
+  the text already sits on the turn's tool invocation.
+- `to_view` records an event's source parent in the event data
+  (`source_parent`) when the document round-trip would lose it: a
+  parent that is neither a turn nor the previous line. `derive_path`
+  gives such an event the step before it as parent, and a reminder
+  whose parent is the tool-result line, with a hook line between them,
+  came back parented on the hook line, which left the tool result off
+  the chain. The projector reads the recorded parent back. In the same
+  way, `to_view` tags the line a turn hangs off (`next_turn`) when that
+  line is not the last line before the turn, since the IR keeps
+  turn-to-turn parents only and the projector otherwise hangs the turn
+  off the last line of the run, which a side leaf can be. This covers a
+  prompt whose parent is a line before the first turn, such as the
+  second send of a cancelled first prompt. `to_view` also tags a line
+  with the last turn before it (`after_turn`) when that is not the turn
+  its parent chain leads to, which is where the result lines of a
+  parallel call sit; the projector places the line by that tag.
+- `ToolResultPart` keeps every field of an array-valued
+  `tool_result.content` part: `text`, plus the rest in the public
+  `extra` map. An image part came out as `{"text": null}`, and the API
+  rejected the resumed session's next request with a 400. The new public
+  field is the reason for the minor bump.
+
 ## toolpath-claude 0.13.4 — 2026-09-14
 
 - **Fix:** `ClaudeProjector` writes attachments and message-less `system`

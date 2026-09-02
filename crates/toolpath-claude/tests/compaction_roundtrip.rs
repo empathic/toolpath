@@ -67,7 +67,7 @@ fn boundary_is_written_in_place_with_no_parent_after_the_round_trip() {
         .iter()
         .position(|id| *id == "uuid-boundary")
         .expect("boundary projected");
-    assert_eq!(ids[at - 1], "uuid-pre-2-result-t-pre-1");
+    assert_eq!(ids[at - 1], "uuid-pre-3");
     assert_eq!(ids[at + 1], "uuid-summary");
     let entry = |id: &str| convo.entries.iter().find(|e| e.uuid == id).unwrap();
     assert_eq!(entry("uuid-boundary").parent_uuid, None);
