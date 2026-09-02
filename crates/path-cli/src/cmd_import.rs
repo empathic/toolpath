@@ -590,7 +590,7 @@ fn pick_claude_global(
             metas.extend(ms);
         }
     }
-    metas.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    metas.sort_by_key(|m| std::cmp::Reverse(m.last_activity));
     if metas.is_empty() {
         return Ok(None);
     }
@@ -782,7 +782,7 @@ fn pick_gemini_global(
             metas.extend(ms);
         }
     }
-    metas.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    metas.sort_by_key(|m| std::cmp::Reverse(m.last_activity));
     if metas.is_empty() {
         return Ok(None);
     }

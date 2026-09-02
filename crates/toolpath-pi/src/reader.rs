@@ -356,7 +356,11 @@ pub fn list_session_files(resolver: &PathResolver, project: &str) -> Result<Vec<
             .unwrap_or(std::time::UNIX_EPOCH);
         entries.push((path, mtime));
     }
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    // Newest first. Reverse() rather than a flipped comparator: clippy 1.95+
+    // rejects the latter as `unnecessary_sort_by`, and the key form says
+    // "sort by mtime, descending" without the reader having to work out which
+    // side of the comparison was swapped.
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
     Ok(entries.into_iter().map(|(p, _)| p).collect())
 }
 
