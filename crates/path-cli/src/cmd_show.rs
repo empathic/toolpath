@@ -110,7 +110,7 @@ pub fn run(source: ShowSource, ansi: bool, config: &Config) -> Result<()> {
 fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path> {
     match source {
         ShowSource::Claude { project, session } => {
-            let manager = providers::claude_convo(config);
+            let manager = providers::claude_convo(&config.projection());
             let convo = manager
                 .read_conversation(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -121,7 +121,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             Ok(toolpath_claude::derive::derive_path(&convo, &cfg))
         }
         ShowSource::Gemini { project, session } => {
-            let manager = providers::gemini_convo(config);
+            let manager = providers::gemini_convo(&config.projection());
             let convo = manager
                 .read_conversation(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -135,7 +135,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager = providers::codex_convo(config);
+            let manager = providers::codex_convo(&config.projection());
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -146,7 +146,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager = providers::copilot_convo(config);
+            let manager = providers::copilot_convo(&config.projection());
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -157,7 +157,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager = providers::opencode_convo(config);
+            let manager = providers::opencode_convo(&config.projection());
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -172,7 +172,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             project: _,
         } => {
-            let manager = providers::cursor_convo(config);
+            let manager = providers::cursor_convo(&config.projection());
             let s = manager
                 .read_session(&session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -184,7 +184,7 @@ fn derive_one(source: ShowSource, config: &Config) -> Result<toolpath::v1::Path>
             session,
             base,
         } => {
-            let manager = providers::pi_convo(config, base.as_deref());
+            let manager = providers::pi_convo(&config.projection(), base.as_deref());
             let s = manager
                 .read_session(&project, &session)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;

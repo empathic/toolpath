@@ -147,6 +147,31 @@ impl Config {
     pub(crate) fn home_dir(&self) -> Option<&PathBuf> {
         self.home.as_ref().or(self.userprofile.as_ref())
     }
+
+    /// The subset of this configuration that builds a provider manager.
+    pub(crate) fn projection(&self) -> ProjectionConfig {
+        ProjectionConfig {
+            home: self.home_dir().cloned(),
+            xdg_data_home: self.xdg_data_home.clone(),
+            copilot_home: self.copilot_home.clone(),
+            appdata: self.appdata.clone(),
+        }
+    }
+}
+
+/// The subset of [`Config`] that builds a provider manager: the
+/// harness store roots the path resolvers read. [`Config::projection`]
+/// builds it; `providers` consumes it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct ProjectionConfig {
+    /// The resolvers' home: `$HOME`, falling back to `$USERPROFILE`.
+    pub(crate) home: Option<PathBuf>,
+    /// `$XDG_DATA_HOME`: opencode's data root (Linux).
+    pub(crate) xdg_data_home: Option<PathBuf>,
+    /// `$COPILOT_HOME`: Copilot CLI session root override.
+    pub(crate) copilot_home: Option<PathBuf>,
+    /// `$APPDATA`: Windows harness data root.
+    pub(crate) appdata: Option<PathBuf>,
 }
 
 /// The configured toolpath config directory (default `~/.toolpath`,
