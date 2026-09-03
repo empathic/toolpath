@@ -2,6 +2,32 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.19.0 — 2026-09-03
+
+- `[[project]]` rules in `~/.toolpath/config.toml` can select by
+  `origin` — the `owner/name` of the `origin` remote of the repository
+  enclosing the session's directory — instead of, or as well as, `dir`.
+  A rule that names the repository rather than a place it sits follows
+  the checkout when it moves or is renamed, covers every worktree
+  without naming one, and is the same on every machine, so a
+  version-controlled config need not carry a directory layout.
+  Matching is case-insensitive, and the URL forms git accepts
+  (`https://`, scp-style `git@host:owner/name`, `ssh://` with a port,
+  with or without `.git`) all resolve to the same pair.
+- Precedence: any matching `origin` rule beats every `dir` rule —
+  identity over location — and among `origin` rules the first in the
+  file wins, since they match exactly. `dir` ranking is unchanged. A
+  rule carrying both selectors must satisfy both. The repository is
+  looked up at most once per resolve and only when a rule asks for it,
+  so a config of pure `dir` rules touches no repository.
+- The two selectors differ in what they survive: `dir` is pure path
+  logic and still matches a checkout that has been deleted, while
+  `origin` needs the checkout to exist.
+- `path config edit` now rejects a `[[project]]` rule with neither
+  `dir` nor `origin`, and one whose `origin` is not a bare
+  `owner/name`. Previously a rule without `dir` failed to parse with a
+  serde message; the error now names the rule and what it is missing.
+
 ## toolpath-claude 0.13.1 — 2026-08-25
 
 - **Fix:** `.orphaned-*` rotation artifacts are no longer classified as
