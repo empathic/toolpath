@@ -47,7 +47,7 @@ in
       example = lib.literalExpression ''
         {
           project = [
-            { dir = "~/src"; remote = "dev/pathstash"; }
+            { origin = "acme/widget"; remote = "dev/pathstash"; }
             { dir = "~/src/client"; remote = "dev/client-paths"; }
           ];
         }
@@ -60,16 +60,20 @@ in
         The schema is toolpath's own and is not typed here, deliberately:
         the CLI ignores unknown keys so an older binary tolerates config
         written for a newer one, and a typed Nix layer would fork a schema
-        that lives in the Rust. Today the only key is `project`, a list of
-        `{ dir, remote }` rules routing `path share` by the session's
-        directory — most specific `dir` subtree wins, `remote` is a bare
-        `owner/name` or a canonical Pathbase repo URL.
+        that lives in the Rust. Today the only key is `project`, a list
+        of rules routing `path share`, each selecting sessions by `dir`
+        (a subtree of the session's directory, most specific wins) or by
+        `origin` (the `owner/name` of the enclosing repository's `origin`
+        remote), and naming a `remote` — a bare `owner/name` or a
+        canonical Pathbase repo URL.
 
-        `dir` takes a leading `~/`, which toolpath expands when it reads
-        the file. If this config is version-controlled, prefer
-        interpolating `config.home.homeDirectory` and mapping checkout
-        names onto one `repoRoot` binding over spelling each path out —
-        a machine's directory layout then stays out of the repository.
+        Prefer `origin` when this config is version-controlled: it names
+        the repository rather than a place on one machine, so nothing
+        about your directory layout is committed and the same rule works
+        on every checkout, clone and worktree. `dir` takes a leading
+        `~/`, expanded by toolpath when it reads the file; if you need it
+        anyway, interpolate `config.home.homeDirectory` and map checkout
+        names onto one `repoRoot` binding rather than spelling out paths.
 
         Two consequences of managing the file from here.
 
