@@ -127,10 +127,16 @@ pub enum ToolResultContent {
     Parts(Vec<ToolResultPart>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One part of an array-valued `tool_result.content`: a text part, an
+/// image part, or any other shape the API accepts. Every field is kept
+/// so a projected line replays through the API unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolResultPart {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 impl ToolResultContent {
@@ -818,10 +824,15 @@ mod tests {
         let c = ToolResultContent::Parts(vec![
             ToolResultPart {
                 text: Some("line1".to_string()),
+                ..Default::default()
             },
-            ToolResultPart { text: None },
+            ToolResultPart {
+                text: None,
+                ..Default::default()
+            },
             ToolResultPart {
                 text: Some("line2".to_string()),
+                ..Default::default()
             },
         ]);
         assert_eq!(c.text(), "line1\nline2");

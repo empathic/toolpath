@@ -5,7 +5,7 @@
 //! reads a Claude JSONL conversation into a provider-agnostic view,
 //! `ClaudeProjector` serializes that view back into the Claude wire format.
 
-use crate::provider::SourceRoot;
+use crate::provider::{NEXT_TURN_KEY, SOURCE_PARENT_KEY, SourceRoot};
 use crate::types::{
     ContentPart, Conversation, ConversationEntry, Message, MessageContent, MessageRole,
     ToolResultContent, Usage,
@@ -21,9 +21,9 @@ use toolpath_convo::{
 /// Project a [`ConversationView`] into a Claude [`Conversation`].
 ///
 /// Maps the provider-agnostic view back into Claude's JSONL wire format.
-/// Assistant turns with tool uses will produce a separate tool-result user
-/// entry after each assistant entry (one entry per assistant turn that has
-/// tool uses with results).
+/// A source tool-result line kept as a `tool_result_user` event is written
+/// in its place; a tool use without one gets a synthesized tool-result
+/// user entry after its assistant entry.
 ///
 /// # Example
 ///
@@ -52,13 +52,10 @@ impl ConversationProjector for ClaudeProjector {
 
 // ── Projection logic ─────────────────────────────────────────────────
 
-/// Marker used by Claude's derive to preserve tool-result user entries as
-/// events. Their UUID is what the next assistant turn's `parentUuid`
-/// points at — synthesizing a new one breaks the chain.
-const TOOL_RESULT_USER_EVENT: &str = "tool_result_user";
+use crate::provider::TOOL_RESULT_USER_EVENT;
 
 fn project_view(view: &ConversationView) -> std::result::Result<Conversation, String> {
-    let mut convo = Conversation::new(view.id.clone());
+    let mut out = Output::new(view.id.clone());
 
     // Headerless lines (the JSONL "preamble": ai-title, last-prompt,
     // queue-operation, permission-mode, file-history-snapshot, and anything
@@ -68,45 +65,34 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     let mut emitted_preamble = false;
     for event in &view.events {
         if let Some(raw) = event.data.get("raw") {
-            convo.preamble.push(raw.clone());
+            out.convo.preamble.push(raw.clone());
             emitted_preamble = true;
         }
     }
     // Cross-harness views won't carry a Claude preamble; emit a default
     // permission-mode line so Claude Code can resume them.
     if !emitted_preamble {
-        convo.preamble.push(json!({
+        out.convo.preamble.push(json!({
             "type": "permission-mode",
             "permissionMode": "default",
             "sessionId": view.id,
         }));
     }
 
-    // Index tool_result_user events by parent_id so we can re-emit them
-    // inline right after the assistant turn they responded to. This keeps
-    // every downstream `parentUuid` reference valid.
-    let mut tool_result_events_by_parent: HashMap<String, Vec<&toolpath_convo::ConversationEvent>> =
-        HashMap::new();
-    for event in &view.events {
-        if event.event_type != TOOL_RESULT_USER_EVENT {
-            continue;
-        }
-        if let Some(pid) = &event.parent_id {
-            tool_result_events_by_parent
-                .entry(pid.clone())
-                .or_default()
-                .push(event);
-        }
-    }
-    let mut consumed_event_ids: HashSet<String> = HashSet::new();
     // Claude Code writes one chain: every line's `parentUuid` names the
     // line written before it, whatever its type. The IR keeps turn-to-turn
     // parents only, so the last entry written for a turn (its tool
     // results, then the passthrough run that followed them) is recorded
     // here and the next turn hangs off that.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
+    let with_source_line = tool_uses_with_source_line(view);
     let mut runs = PassthroughRuns::new(view);
-    let root_tail = emit_run(&mut convo, runs.before_first_turn(), None, &view.id);
+    let root_tail = emit_run(
+        &mut out,
+        runs.before_first_turn(),
+        None,
+        ParentPolicy::Source,
+    );
 
     // Message-group accounting. The IR carries a message's total
     // `token_usage` only on the group's final turn; real Claude JSONL stamps
@@ -126,15 +112,28 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
+    // The line a turn hangs off when it is not the last line written
+    // before the turn.
+    let next_turn_parent: HashMap<&str, &str> = view
+        .events
+        .iter()
+        .filter_map(|e| Some((e.data.get(NEXT_TURN_KEY)?.as_str()?, e.id.as_str())))
+        .collect();
+
     for (idx, turn) in view.turns.iter().enumerate() {
-        let effective_parent = match (idx, turn.parent_id.as_ref()) {
-            (0, None) => root_tail.clone(),
-            (_, Some(pid)) => parent_rewrites
-                .get(pid)
-                .cloned()
-                .or_else(|| Some(pid.clone())),
-            (_, None) => None,
-        };
+        let effective_parent = next_turn_parent
+            .get(turn.id.as_str())
+            .filter(|p| out.has(p))
+            .map(|p| p.to_string())
+            .or_else(|| match (idx, turn.parent_id.as_ref()) {
+                (0, None) => root_tail.clone(),
+                (_, Some(pid)) => parent_rewrites
+                    .get(pid)
+                    .cloned()
+                    .or_else(|| Some(pid.clone())),
+                (_, None) => None,
+            });
+        let mut synthesized = false;
 
         // The last line written for this turn: its own line, then its
         // tool results, then the passthrough run that follows them.
@@ -144,7 +143,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 let mut entry = user_turn_to_entry(turn, &view.id);
                 apply_turn_metadata(&mut entry, turn);
                 entry.parent_uuid = effective_parent;
-                convo.add_entry(entry);
+                out.push(entry);
             }
             Role::Assistant => {
                 // Grouped: the message total on every line of the split.
@@ -158,48 +157,37 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     assistant_turn_to_entry_with_usage(turn, &view.id, wire_usage.as_ref());
                 apply_turn_metadata(&mut assistant_entry, turn);
                 assistant_entry.parent_uuid = effective_parent;
-                convo.add_entry(assistant_entry);
+                out.push(assistant_entry);
 
-                // Prefer the original tool-result user entries (preserved
-                // as events with their source UUIDs) over synthesizing.
-                // Synthesizing rewrites the UUID, which breaks the
-                // parentUuid chain on every subsequent assistant turn.
-                let result_entries: Vec<ConversationEntry> =
-                    match tool_result_events_by_parent.remove(&turn.id) {
-                        Some(events) => events
-                            .into_iter()
-                            .map(|event| {
-                                consumed_event_ids.insert(event.id.clone());
-                                tool_result_event_to_entry(event, &view.id)
-                            })
-                            .collect(),
-                        None => tool_result_entries(turn, &view.id)
-                            .into_iter()
-                            .map(|mut entry| {
-                                apply_turn_metadata(&mut entry, turn);
-                                entry
-                            })
-                            .collect(),
-                    };
-                for entry in result_entries {
-                    tail = entry.uuid.clone();
-                    convo.add_entry(entry);
+                // A source tool-result line is written in its place by the
+                // run it belongs to. A tool use without one gets a
+                // synthesized result line here.
+                for mut result_entry in tool_result_entries(turn, &view.id, &with_source_line) {
+                    apply_turn_metadata(&mut result_entry, turn);
+                    tail = result_entry.uuid.clone();
+                    out.push(result_entry);
+                    synthesized = true;
                 }
             }
             Role::System => {
                 let mut entry = system_turn_to_entry(turn, &view.id);
                 apply_turn_metadata(&mut entry, turn);
                 entry.parent_uuid = effective_parent;
-                convo.add_entry(entry);
+                out.push(entry);
             }
             Role::Other(_) => {
                 let mut entry = other_turn_to_entry(turn, &view.id);
                 apply_turn_metadata(&mut entry, turn);
                 entry.parent_uuid = effective_parent;
-                convo.add_entry(entry);
+                out.push(entry);
             }
         }
-        if let Some(last) = emit_run(&mut convo, runs.after(&turn.id), Some(&tail), &view.id) {
+        let policy = if synthesized {
+            ParentPolicy::Chain
+        } else {
+            ParentPolicy::Source
+        };
+        if let Some(last) = emit_run(&mut out, runs.after(&turn.id), Some(&tail), policy) {
             tail = last;
         }
         if tail != turn.id {
@@ -207,20 +195,38 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    // Leftovers: tool-result events whose assistant turn is absent.
-    for event in &view.events {
-        if event.event_type != TOOL_RESULT_USER_EVENT || consumed_event_ids.contains(&event.id) {
-            continue;
-        }
-        convo.add_entry(tool_result_event_to_entry(event, &view.id));
-    }
-
-    Ok(convo)
+    Ok(out.convo)
 }
 
-/// Passthrough events (attachments, message-less system lines) grouped by
-/// the turn they hang off, in view order. `None` holds the run before the
-/// first turn.
+/// The projected conversation and the UUIDs written into it so far. A
+/// passthrough line keeps its source parent only when that parent is
+/// already written.
+struct Output {
+    convo: Conversation,
+    written: HashSet<String>,
+}
+
+impl Output {
+    fn new(session_id: String) -> Self {
+        Self {
+            convo: Conversation::new(session_id),
+            written: HashSet::new(),
+        }
+    }
+
+    fn push(&mut self, entry: ConversationEntry) {
+        self.written.insert(entry.uuid.clone());
+        self.convo.add_entry(entry);
+    }
+
+    fn has(&self, uuid: &str) -> bool {
+        self.written.contains(uuid)
+    }
+}
+
+/// Passthrough events (attachments, message-less system lines, source
+/// tool-result lines) grouped by the turn they hang off, in view order.
+/// `None` holds the run before the first turn.
 struct PassthroughRuns<'a> {
     by_anchor: HashMap<Option<&'a str>, Vec<&'a toolpath_convo::ConversationEvent>>,
 }
@@ -236,13 +242,13 @@ impl<'a> PassthroughRuns<'a> {
                 root_ids.insert(event.id.as_str());
             }
             if !preamble {
-                event_parent.insert(event.id.as_str(), event.parent_id.as_deref());
+                event_parent.insert(event.id.as_str(), source_parent(event));
             }
         }
         let mut by_anchor: HashMap<Option<&'a str>, Vec<&'a toolpath_convo::ConversationEvent>> =
             HashMap::new();
         for event in &view.events {
-            if event.data.contains_key("raw") || event.event_type == TOOL_RESULT_USER_EVENT {
+            if event.data.contains_key("raw") {
                 continue;
             }
             let anchor = anchor_turn(&view.turns, event, &turn_ids, &root_ids, &event_parent);
@@ -262,6 +268,40 @@ impl<'a> PassthroughRuns<'a> {
     }
 }
 
+/// Tool-use IDs whose result line the view kept as a `tool_result_user`
+/// event. Every other tool use gets a synthesized result line.
+fn tool_uses_with_source_line(view: &ConversationView) -> HashSet<String> {
+    view.events
+        .iter()
+        .filter(|e| e.event_type == TOOL_RESULT_USER_EVENT)
+        .filter_map(source_message)
+        .flat_map(|msg| {
+            msg.tool_results()
+                .into_iter()
+                .map(|tr| tr.tool_use_id.to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The source line's message, when the event carries it.
+fn source_message(event: &toolpath_convo::ConversationEvent) -> Option<Message> {
+    event
+        .data
+        .get("message")
+        .and_then(|v| serde_json::from_value::<Message>(v.clone()).ok())
+}
+
+/// The event's source parent: the one `to_view` recorded when the
+/// document round-trip would lose it, else `parent_id`.
+fn source_parent(event: &toolpath_convo::ConversationEvent) -> Option<&str> {
+    event
+        .data
+        .get(SOURCE_PARENT_KEY)
+        .and_then(|v| v.as_str())
+        .or(event.parent_id.as_deref())
+}
+
 /// The turn an event hangs off: follow `parent_id` through other events
 /// until a turn. A source root (a line that opens the session, or one
 /// whose parent is a headerless preamble line) belongs to the run before
@@ -278,7 +318,7 @@ fn anchor_turn<'a>(
     if root_ids.contains(event.id.as_str()) {
         return None;
     }
-    let mut pid = event.parent_id.as_deref();
+    let mut pid = source_parent(event);
     for _ in 0..=event_parent.len() {
         let Some(p) = pid else {
             break;
@@ -315,61 +355,58 @@ fn at_or_before(turn_ts: &str, event_ts: &str) -> bool {
     }
 }
 
-/// Write a passthrough run as a chain: the first entry hangs off `prev`,
-/// each later entry off the one before it. A source root has no parent
-/// and the chain continues from it. Returns the last entry written, if
-/// the run wrote any.
+/// How a passthrough entry picks its `parentUuid`.
+#[derive(Clone, Copy)]
+enum ParentPolicy {
+    /// The source parent when that line is already written, which
+    /// reproduces the harness's own shape (a hook line as a side leaf off
+    /// a tool call). Otherwise the line written before it.
+    Source,
+    /// The line written before it, always. Used after a synthesized
+    /// tool-result line: a hook line that kept the tool-use line as its
+    /// parent would leave the synthesized line a leaf, and the loader can
+    /// start from any leaf.
+    Chain,
+}
+
+/// Write a passthrough run after `prev`: the first entry hangs off `prev`
+/// and each later entry off the one before it, unless `policy` keeps a
+/// source parent. A source root has no parent and the chain continues
+/// from it. Returns the last entry written, if the run wrote any.
 fn emit_run(
-    convo: &mut Conversation,
+    out: &mut Output,
     run: Vec<&toolpath_convo::ConversationEvent>,
     prev: Option<&str>,
-    session_id: &str,
+    policy: ParentPolicy,
 ) -> Option<String> {
     let mut last: Option<String> = None;
     for event in run {
-        let mut entry = project_event(event, session_id);
+        let mut entry = if event.event_type == TOOL_RESULT_USER_EVENT {
+            tool_result_event_to_entry(event, &out.convo.session_id)
+        } else {
+            project_event(event, &out.convo.session_id)
+        };
+        let kept = match policy {
+            ParentPolicy::Source => source_parent(event).filter(|p| out.has(p)),
+            ParentPolicy::Chain => None,
+        };
         entry.parent_uuid = match SourceRoot::of(event) {
             Some(_) => None,
-            None => last.as_deref().or(prev).map(str::to_string),
+            None => kept.or(last.as_deref()).or(prev).map(str::to_string),
         };
         last = Some(entry.uuid.clone());
-        convo.add_entry(entry);
+        out.push(entry);
     }
     last
 }
 
-/// Rebuild a Claude tool-result user entry verbatim from a preserved event.
-///
-/// The event was emitted by [`crate::derive::derive_path`] when reading the
-/// source JSONL — it carries the original UUID, parent UUID, the
-/// `toolUseResult` blob, and any `entry_extra` fields (promptId, slug, …).
-/// Reconstructing those preserves the UUID chain that Claude's UI traverses.
+/// Rebuild a Claude tool-result user entry from a preserved event: the
+/// source UUID, parent UUID, `toolUseResult` blob, `entry_extra` fields,
+/// and the message.
 fn tool_result_event_to_entry(
     event: &toolpath_convo::ConversationEvent,
     session_id: &str,
 ) -> ConversationEntry {
-    let mut content_parts: Vec<ContentPart> = Vec::new();
-    if let Some(arr) = event.data.get("tool_results").and_then(|v| v.as_array()) {
-        for v in arr {
-            let tool_use_id = v
-                .get("tool_use_id")
-                .and_then(|x| x.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let content_text = v
-                .get("content")
-                .and_then(|x| x.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let is_error = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
-            content_parts.push(ContentPart::ToolResult {
-                tool_use_id,
-                content: ToolResultContent::Text(content_text),
-                is_error,
-            });
-        }
-    }
-
     let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
     if let Some(map) = event.data.get("entry_extra").and_then(|v| v.as_object()) {
         for (k, v) in map {
@@ -394,16 +431,7 @@ fn tool_result_event_to_entry(
             .get("git_branch")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        message: Some(Message {
-            role: MessageRole::User,
-            content: Some(MessageContent::Parts(content_parts)),
-            model: None,
-            id: None,
-            message_type: None,
-            stop_reason: None,
-            stop_sequence: None,
-            usage: None,
-        }),
+        message: source_message(event),
         version: event
             .data
             .get("version")
@@ -417,7 +445,11 @@ fn tool_result_event_to_entry(
         request_id: None,
         tool_use_result: event.data.get("tool_use_result").cloned(),
         snapshot: None,
-        message_id: None,
+        message_id: event
+            .data
+            .get("message_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         extra,
     }
 }
@@ -712,9 +744,14 @@ fn canonical_claude_tool_input(tu: &ToolInvocation, claude_name: &str) -> serde_
 /// Claude's wire format uses a separate user entry per tool result so that
 /// the top-level `toolUseResult` field (which carries the rich UI display
 /// blob — Bash stdout/stderr, Edit's structuredPatch, etc.) is unambiguous.
-fn tool_result_entries(turn: &Turn, session_id: &str) -> Vec<ConversationEntry> {
+fn tool_result_entries(
+    turn: &Turn,
+    session_id: &str,
+    with_source_line: &HashSet<String>,
+) -> Vec<ConversationEntry> {
     turn.tool_uses
         .iter()
+        .filter(|tu| !with_source_line.contains(&tu.id))
         .filter_map(|tu| {
             let result = tu.result.as_ref()?;
             let part = ContentPart::ToolResult {
@@ -1628,6 +1665,104 @@ mod tests {
             ]
         );
         assert_one_chain(&convo);
+    }
+
+    #[test]
+    fn test_parallel_tool_calls_get_no_synthesized_result_line() {
+        // Claude Code writes each tool_use of one message as its own
+        // assistant line and every result after the last one:
+        // u1 <- a1 <- a2 <- t1 <- t2 <- a3
+        let mut a1 = assistant_turn("a1", "");
+        a1.parent_id = Some("u1".into());
+        a1.tool_uses = vec![tool_use_with_result("toolu_1")];
+        let mut a2 = assistant_turn("a2", "");
+        a2.parent_id = Some("a1".into());
+        a2.tool_uses = vec![tool_use_with_result("toolu_2")];
+        let mut a3 = assistant_turn("a3", "Done.");
+        a3.parent_id = Some("a2".into());
+        a3.timestamp = "2024-01-01T00:00:02Z".into();
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2, a3]);
+        view.events = vec![
+            tool_result_event("t1", "a2", "toolu_1"),
+            tool_result_event("t2", "t1", "toolu_2"),
+        ];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["u1", "a1", "a2", "t1", "t2", "a3"]);
+        assert_one_chain(&convo);
+    }
+
+    /// A `tool_result_user` event as the derive writes it: the source
+    /// line's message.
+    fn tool_result_event(
+        id: &str,
+        parent: &str,
+        tool_use_id: &str,
+    ) -> toolpath_convo::ConversationEvent {
+        let mut tr = attachment(id, Some(parent), "2024-01-01T00:00:01Z");
+        tr.event_type = TOOL_RESULT_USER_EVENT.to_string();
+        tr.data.insert(
+            "message".into(),
+            json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "a.rs"}]}),
+        );
+        tr
+    }
+
+    #[test]
+    fn test_turn_hangs_off_the_line_the_source_named_not_the_run_tail() {
+        // Source: u1 <- a1 <- t1 (result), a1 <- hp (side leaf, written
+        // after t1), t1 <- a2. The run for a1 ends in the side leaf.
+        let mut a1 = assistant_turn("a1", "");
+        a1.parent_id = Some("u1".into());
+        a1.tool_uses = vec![tool_use_with_result("t")];
+        let mut a2 = assistant_turn("a2", "Done.");
+        a2.parent_id = Some("a1".into());
+        a2.timestamp = "2024-01-01T00:00:02Z".into();
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2]);
+        let mut t1 = tool_result_event("t1", "a1", "t");
+        t1.data.insert(NEXT_TURN_KEY.into(), json!("a2"));
+        view.events = vec![t1, attachment("hp", Some("a1"), "2024-01-01T00:00:01Z")];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["u1", "a1", "t1", "hp", "a2"]);
+        assert_eq!(parent_of(&convo, "t1"), Some("a1"));
+        assert_eq!(parent_of(&convo, "hp"), Some("a1"));
+        assert_eq!(parent_of(&convo, "a2"), Some("t1"));
+    }
+
+    #[test]
+    fn test_source_tool_result_line_is_written_in_place() {
+        // Source: u1 <- a1 <- h1 (side leaf), a1 <- tr1 <- n3 <- a2
+        let mut a1 = assistant_turn("a1", "");
+        a1.parent_id = Some("u1".into());
+        a1.tool_uses = vec![tool_use_with_result("t")];
+        let mut a2 = assistant_turn("a2", "Done.");
+        a2.parent_id = Some("a1".into());
+        a2.timestamp = "2024-01-01T00:00:02Z".into();
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2]);
+        view.events = vec![
+            attachment("h1", Some("a1"), "2024-01-01T00:00:01Z"),
+            tool_result_event("tr1", "a1", "t"),
+            attachment("n3", Some("tr1"), "2024-01-01T00:00:01Z"),
+        ];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        assert_eq!(ids(&convo), ["u1", "a1", "h1", "tr1", "n3", "a2"]);
+        assert_eq!(parent_of(&convo, "h1"), Some("a1"));
+        assert_eq!(parent_of(&convo, "tr1"), Some("a1"));
+        assert_eq!(parent_of(&convo, "n3"), Some("tr1"));
+        assert_eq!(parent_of(&convo, "a2"), Some("n3"));
+        let result = convo
+            .entries
+            .iter()
+            .find(|e| e.uuid == "tr1")
+            .and_then(|e| e.message.as_ref())
+            .map(|m| m.tool_results())
+            .expect("tool-result line is a user message");
+        assert_eq!(result[0].tool_use_id, "t");
     }
 
     #[test]
