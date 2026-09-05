@@ -28,11 +28,15 @@ Inside Claude Code:
 Both commands run the CLI through `scripts/ensure-path.sh`, which resolves in
 order:
 
-1. `path` already on `PATH`, if it identifies as the Toolpath CLI (an
+1. `$TOOLPATH_BIN`, when set — an explicit override that wins over
+   everything else. Point it at a working tree's `target/release/path` to
+   run the plugin against a build you have not installed. Set but unusable
+   is a warning, not a silent fall-through.
+2. `path` already on `PATH`, if it identifies as the Toolpath CLI (an
    existing cargo / Homebrew / install.sh install is always preferred)
-2. `~/.local/bin/path` (or `$TOOLPATH_INSTALL_DIR/path`)
-3. `~/.toolpath/bin/path` (or `$TOOLPATH_CONFIG_DIR/bin/path`)
-4. Otherwise it downloads the latest GitHub release for your platform,
+3. `~/.local/bin/path` (or `$TOOLPATH_INSTALL_DIR/path`)
+4. `~/.toolpath/bin/path` (or `$TOOLPATH_CONFIG_DIR/bin/path`)
+5. Otherwise it downloads the latest GitHub release for your platform,
    verifies the sha256 checksum, and installs to `~/.local/bin` — falling
    back to `~/.toolpath/bin` if an unrelated binary named `path` already
    claims the `~/.local/bin` name.
