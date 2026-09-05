@@ -13,7 +13,7 @@ let client = Client::new("https://pathbase.dev");
 // `client.health()`, `client.create_anon_path(...)`, `client.create_path(...)`, etc.
 ```
 
-The full surface mirrors the OpenAPI document. Only the operations actually documented there are available. The CLI auth-redeem endpoint (`POST /api/v1/auth/cli/redeem`) is real in production but absent from the spec, so it is **not** present in this client — `path-cli` keeps a hand-rolled redeem implementation.
+The full surface mirrors the OpenAPI document. Only the operations actually documented there are available — including the CLI auth-redeem endpoint (`POST /api/v1/auth/cli/redeem`), which is generated as `cli_redeem` and is what `path-cli` calls.
 
 ## Build pipeline
 
