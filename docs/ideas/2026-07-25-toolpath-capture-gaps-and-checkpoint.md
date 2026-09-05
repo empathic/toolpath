@@ -42,6 +42,29 @@ NOT a format gap (correction to the surface-read):
   emitting signed steps when effects happen. That's the prx↔toolpath sentence,
   and it's an implementation gap, not a schema one.
 
+  **Amended 2026-09-05 — a prerequisite this note assumed away.** The line above
+  says the schema has "a canonicalization algorithm". It has a *specification* of
+  one: `RFC.md:709-710` names JCS (RFC 8785) and `:731-822` gives the per-scope
+  digests. Nothing implements it. A workspace grep for `jcs|8785|canonicaliz`
+  finds only `std::fs::canonicalize` and a test-only camelCase renamer, and the
+  core crate carries no crypto dependency at all — no `sha2`, `ed25519`, `ring`.
+
+  That alone is consistent with the "implementation gap" framing. What is not:
+  **the bytes a signer would sign are not deterministic.** The JSONL writer calls
+  `serde_json::to_string(line)` (`jsonl.rs:667`) directly on the structs, and
+  `Step.change` is a `std::collections::HashMap` (`types.rs:228`) with
+  `preserve_order` off, so a step touching two or more artifacts serializes its
+  keys in a different order per process. The round-trip test named
+  `canonical_json` (`jsonl.rs:733-735`) goes through `to_value`, whose `Map` is
+  `BTreeMap`-backed and therefore sorted, so it compares sorted values and
+  structurally cannot observe the writer's nondeterminism. Its name asserts a
+  property the code does not have.
+
+  So capture-time signing is not one project but two, in order: make the
+  serialization byte-stable (or canonicalize before digesting, and stop relying on
+  a test that cannot fail), *then* build the gate. Doing the second first produces
+  signatures that verify on the machine that made them and nowhere else.
+
 Sequencing: effects + coverage + environment + authorization are small schema
 additions; results is importer work (unbounded if you let it be); capture-time
 signing is the prx integration (the deep one). Lane check before building any of
