@@ -52,17 +52,31 @@ readings of unfamiliar code are wrong about a third of the time, and they are
 wrong in a way that reads fluently. The reproducing command is what separates the
 two.
 
-Two failure modes worth naming, both seen in that audit:
+Three failure modes worth naming, all seen in that audit:
 
 - **Inferring a consequence the code does not support.** The observation is
   correct, the "and therefore" is not. Trace the consequence to source too.
 - **Verifying against a built artifact.** A compiled or vendored bundle is
   authoritative for what *ran*, and silently lags what is being written. Scope the
   claim to what you actually checked, not to the project as a whole.
+- **A zero that came from a selector, not from the data.** A filter on a field
+  that does not exist yields an empty result rather than an error, so it reports
+  a confident zero. Any finding of the form "the count of X is zero" must name
+  the field it selected on and show that the field exists. The concrete instance:
+  a wrapped step has `.step.actor`, and no `.role` — so
+  `select(.role == "user")` returns `[]` and "zero user steps" looks measured.
+  This is the most dangerous of the three, because a zero is the one result
+  nobody thinks to sanity-check: an unexpected number invites a second look and
+  an expected absence does not.
 
 When two careful readings disagree, no amount of re-reading resolves it. Find a
 value the system has already produced that both readings predict differently, and
 let it arbitrate.
+
+**A finding you relayed is not a finding you verified.** A number that arrives
+from a subagent, a colleague, or your own earlier notes carries no evidence about
+the method that produced it. Before it goes in an issue, re-derive it — or say
+plainly in the issue that you did not.
 
 ## Public-repo rule
 
