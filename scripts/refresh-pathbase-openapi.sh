@@ -64,8 +64,8 @@ jq '
   # operations that use non-JSON content types (e.g. application/x-ndjson
   # for streaming endpoints) so the build doesnt panic on
   # `UnexpectedFormat("unexpected content type: ...")`. The CLI doesnt
-  # use these surfaces; if it ever needs them, switch to a hand-rolled
-  # call (see api_redeem for the pattern).
+  # use these surfaces; if it ever needs them, add a hand-rolled reqwest
+  # call in cmd_pathbase.rs alongside the generated client.
   def has_unsupported_content(op):
     ((op.requestBody.content // {}) | keys | any(. != "application/json"))
     or ((op.responses // {}) | to_entries | any(

@@ -21,7 +21,7 @@ set -euo pipefail
 #
 # Dependency order:
 #   1. toolpath           (no workspace deps)
-#      pathbase-client    (no workspace deps; built from schema/pathbase-openapi.json)
+#      pathbase-client    (no workspace deps; built from crates/pathbase-client/openapi.json)
 #   2a. toolpath-convo    (depends on toolpath)
 #   2b. toolpath-git      (depends on toolpath)
 #       toolpath-github   (depends on toolpath)

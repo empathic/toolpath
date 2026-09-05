@@ -109,7 +109,7 @@
     "description": "Auto-generated typed client for the Pathbase HTTP API",
     "docs": "https://docs.rs/pathbase-client",
     "crate": "https://crates.io/crates/pathbase-client",
-    "role": "Progenitor-derived typed client for `pathbase.dev`'s HTTP surface, generated at build time from `schema/pathbase-openapi.json`. Spec drift surfaces as a build failure rather than runtime HTML-instead-of-JSON. The CLI auth-redeem endpoint isn't in the spec; that one call stays hand-rolled."
+    "role": "Progenitor-derived typed client for `pathbase.dev`'s HTTP surface, generated at build time from `crates/pathbase-client/openapi.json` (the spec lives inside the crate so `cargo publish` packages it with the source). Spec drift surfaces as a build failure rather than runtime HTML-instead-of-JSON."
   },
   {
     "name": "path-cli",

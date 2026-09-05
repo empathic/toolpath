@@ -25,7 +25,7 @@ path-cli (binary: path)
  +-- toolpath-dot     -> toolpath
  +-- toolpath-md      -> toolpath
 
-pathbase-client      (no toolpath deps; built from schema/pathbase-openapi.json)
+pathbase-client      (no toolpath deps; built from crates/pathbase-client/openapi.json)
 
 toolpath-cli (deprecated shim, binary: path)
  +-- path-cli
