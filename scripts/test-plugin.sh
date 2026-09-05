@@ -80,6 +80,31 @@ out="$(PATH="$STUB1:$PATH" "$ENSURE")"
 [ "$out" = "$STUB1/path" ] || fail "expected $STUB1/path, got $out"
 ok "prefers an existing Toolpath binary on PATH"
 
+# 1b. $TOOLPATH_BIN beats a Toolpath binary already on PATH. Both stubs are
+# valid here, so this can only pass if the override is consulted first.
+STUB_OVERRIDE="$SANDBOX/stub-override"
+make_fake_path "$STUB_OVERRIDE/path" "8.8.8"
+out="$(TOOLPATH_BIN="$STUB_OVERRIDE/path" PATH="$STUB1:$PATH" "$ENSURE")"
+[ "$out" = "$STUB_OVERRIDE/path" ] || fail "expected \$TOOLPATH_BIN to win, got $out"
+ok "\$TOOLPATH_BIN wins over a Toolpath binary on PATH"
+
+# 1c. An unusable $TOOLPATH_BIN warns and falls through rather than failing
+# or resolving silently — a stale override (usually `cargo clean`) must not
+# be indistinguishable from having set none.
+err="$(TOOLPATH_BIN="$SANDBOX/gone/path" PATH="$STUB1:$PATH" "$ENSURE" 2>&1 >/dev/null)"
+out="$(TOOLPATH_BIN="$SANDBOX/gone/path" PATH="$STUB1:$PATH" "$ENSURE" 2>/dev/null)"
+case "$err" in *"TOOLPATH_BIN"*) ;; *) fail "expected a warning naming TOOLPATH_BIN, got: $err" ;; esac
+[ "$out" = "$STUB1/path" ] || fail "expected fall-through to $STUB1/path, got $out"
+ok "an unusable \$TOOLPATH_BIN warns and falls through"
+
+# 1d. A non-Toolpath binary named by $TOOLPATH_BIN is rejected like any other
+# foreign `path`, rather than trusted because it was named explicitly.
+STUB_FOREIGN_OVERRIDE="$SANDBOX/stub-foreign-override"
+make_fake_path "$STUB_FOREIGN_OVERRIDE/path" "1.0" "SomethingElse"
+out="$(TOOLPATH_BIN="$STUB_FOREIGN_OVERRIDE/path" PATH="$STUB1:$PATH" "$ENSURE" 2>/dev/null)"
+[ "$out" = "$STUB1/path" ] || fail "expected a foreign \$TOOLPATH_BIN to be rejected, got $out"
+ok "a foreign binary named by \$TOOLPATH_BIN is rejected"
+
 # 2. exec mode runs the resolved binary.
 out="$(PATH="$STUB1:$PATH" "$ENSURE" exec --version)"
 [ "$out" = "path 9.9.9" ] || fail "exec mode: expected 'path 9.9.9', got '$out'"
