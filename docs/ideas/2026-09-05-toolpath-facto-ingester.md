@@ -196,3 +196,36 @@ than to "abandoned work". Storing it as `deadEndCount` before that is settled
 would put a number in the graph whose name promises more than it measures — the
 exact failure the identity rules above exist to prevent. **Resolve the toolpath
 side first.**
+
+### Sharpened, same day, by direct measurement
+
+The four-session figure above came from an agent's report. Re-measured by hand
+over one 10,168-step session, grouping on `.step.actor` (the wrapped-step field;
+there is no `.role`, and a filter on one silently yields an empty array rather
+than an error — the trap that makes "zero turns" easy to produce spuriously):
+
+    total 10168 · dead 6352 (62.5%)
+    dead_by_actor:  { tool: 6346, agent: 6 }
+    live_by_actor:  { agent: 3546, human: 266, tool: 4 }
+
+The conclusion survives and gets stronger. It is not merely that turns are never
+dead ends — **6346 of the 6352 dead ends are `tool:` steps, and only 4 of the
+6350 tool steps are live.** No `human:` step is ever a dead end. To three
+significant figures `dead_end` is a synonym for "is a tool call", which is not a
+sense of "dead end" any person means.
+
+### Two things, and the second must not borrow the first's name
+
+The honest decomposition is two separate predicates:
+
+1. **Steps off the head's ancestry.** Cheap, exactly what the code computes
+   today, and uninteresting — it is close to a restatement of "is a tool step".
+2. **Work genuinely started and abandoned.** The signal anyone actually wants,
+   and the one `deadEndCount` was reaching for. It does not exist yet, because
+   it needs a real definition of abandonment — a tool call that ran and returned
+   is not abandoned, whereas an edit superseded before it was committed, or a
+   branch of reasoning the session walked back from, is.
+
+Only (2) belongs on the session vertex. Until it is defined, ingest neither:
+shipping (1) under the name `deadEndCount` is precisely the stored lie this
+caveat exists to prevent.
