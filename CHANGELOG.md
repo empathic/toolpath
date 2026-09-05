@@ -2,6 +2,17 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-cli 0.19.0 — 2026-09-05
+
+- Follow `path-cli` to 0.19.0. The shim's dependency was still pinned to
+  `version = "0.18.0"`, which for a `0.y.z` crate means `>=0.18.0, <0.19.0`
+  — unsatisfiable once `path-cli` reached 0.19.0, so the shim could not
+  resolve at all. Because `toolpath-cli` is excluded from the workspace
+  (it and `path-cli` both build a binary named `path`), neither
+  `cargo build --workspace` nor CI ever saw it, and the break would first
+  have surfaced in `scripts/release.sh` at the Tier 4 publish — after the
+  other crates had already gone to crates.io.
+
 ## path-cli 0.19.0 — 2026-09-03
 
 - `[[project]]` rules in `~/.toolpath/config.toml` can select by
