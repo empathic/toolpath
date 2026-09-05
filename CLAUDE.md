@@ -57,7 +57,7 @@ path-cli (binary: path)
  ├── toolpath-dot     → toolpath
  └── toolpath-md      → toolpath
 
-pathbase-client      (no toolpath deps; built from schema/pathbase-openapi.json)
+pathbase-client      (no toolpath deps; built from crates/pathbase-client/openapi.json)
 
 toolpath-cli (deprecated shim, binary: path)
  └── path-cli
@@ -153,7 +153,7 @@ cargo run -p path-cli -- config edit  # $VISUAL/$EDITOR on ~/.toolpath/config.to
 
 The **cache** at `~/.toolpath/documents/<cache-id>.json` is the single landing zone for every `import` (and for `import pathbase` downloads). Cache id is `<source>-<inner-id>` — e.g. `claude-abc123`, `git-main` (Pathbase paths key on `<owner>-<repo>-<slug>`, anon paths on `anon-pathstash-<uuid>`). Files are `0600`, parent directory `0700`. `$TOOLPATH_CONFIG_DIR` overrides the root. Imports error on cache hit (`--force` overwrites); `--no-cache` sends the JSON to stdout for shell composition. `p cache sync` fills the cache incrementally from the installed agent harnesses (see "Things to know") and always overwrites what it re-derives.
 
-`path auth login` prints `<base>/auth/cli`; the user logs in there and pastes the 8-character code back, which the CLI redeems (`POST /api/v1/auth/cli/redeem`) for a bearer token stored at `~/.toolpath/credentials.json` (`0600`; `$TOOLPATH_CONFIG_DIR` overrides). Server URL comes from `--url`, then `$PATHBASE_URL`, then `https://pathbase.dev`. The redeem endpoint is real but absent from `schema/pathbase-openapi.json` — so the progenitor-derived `pathbase-client` has no `redeem` method; the hand-rolled call in `cmd_pathbase.rs` is the source of truth.
+`path auth login` prints `<base>/auth/cli`; the user logs in there and pastes the 8-character code back, which the CLI redeems (`POST /api/v1/auth/cli/redeem`) for a bearer token stored at `~/.toolpath/credentials.json` (`0600`; `$TOOLPATH_CONFIG_DIR` overrides). Server URL comes from `--url`, then `$PATHBASE_URL`, then `https://pathbase.dev`. The redeem endpoint (`operationId: cli_redeem`) is in `crates/pathbase-client/openapi.json`, so the progenitor-derived `pathbase-client` generates it and `cmd_pathbase.rs` calls `client.cli_redeem(&body)` like any other operation — nothing about the auth flow is hand-rolled.
 
 ## Key conventions
 
