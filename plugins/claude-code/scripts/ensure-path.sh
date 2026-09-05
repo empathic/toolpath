@@ -15,14 +15,20 @@
 # Everything except the resolved path / exec'd command output goes to stderr.
 #
 # Resolution order:
-#   1. `path` on PATH that identifies as the Toolpath CLI
-#   2. $TOOLPATH_INSTALL_DIR/path (default ~/.local/bin/path)
-#   3. $TOOLPATH_CONFIG_DIR/bin/path (default ~/.toolpath/bin/path)
-#   4. Download the latest GitHub release, verify its checksum, and install
+#   1. $TOOLPATH_BIN, when set and usable
+#   2. `path` on PATH that identifies as the Toolpath CLI
+#   3. $TOOLPATH_INSTALL_DIR/path (default ~/.local/bin/path)
+#   4. $TOOLPATH_CONFIG_DIR/bin/path (default ~/.toolpath/bin/path)
+#   5. Download the latest GitHub release, verify its checksum, and install
 #      to ~/.local/bin — or to ~/.toolpath/bin when an unrelated binary
 #      named `path` would shadow the ~/.local/bin name.
 #
 # Environment variables:
+#   TOOLPATH_BIN          Absolute path to a specific `path` to use, ahead of
+#                         every other candidate. Intended for running a build
+#                         from a working tree (target/release/path) without
+#                         installing it. Set but unusable is a warning, not a
+#                         silent fall-through.
 #   TOOLPATH_INSTALL_DIR  Override the global install directory
 #   TOOLPATH_CONFIG_DIR   Override ~/.toolpath (fallback bin lives under it)
 
@@ -53,6 +59,22 @@ warn_if_old() {
 
 resolve_existing() {
     local candidate
+    # An explicit $TOOLPATH_BIN wins over everything, including a `path`
+    # already on PATH: it is how you point the plugin at a working tree's
+    # `target/release/path` without installing anything.
+    #
+    # If it is set but unusable, warn rather than fall through quietly. A
+    # stale override (the usual cause is `cargo clean`) would otherwise be
+    # indistinguishable from having no override at all, and the commands
+    # would keep working against a *different* binary than the one you
+    # believe you are testing — the failure that costs an afternoon.
+    if [ -n "${TOOLPATH_BIN:-}" ]; then
+        if [ -x "$TOOLPATH_BIN" ] && is_toolpath "$TOOLPATH_BIN"; then
+            echo "$TOOLPATH_BIN"
+            return 0
+        fi
+        log "warning: \$TOOLPATH_BIN is set to '${TOOLPATH_BIN}' but is not a usable Toolpath CLI; ignoring it."
+    fi
     if candidate="$(command -v path 2>/dev/null)" && is_toolpath "$candidate"; then
         echo "$candidate"
         return 0
