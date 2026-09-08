@@ -93,7 +93,7 @@ fn run_sync(
     let explicit = !types.is_empty();
     let types = resolve_types(&types);
     let config_dir = config.config_dir()?;
-    let bundle = providers::harness_bundle(config);
+    let bundle = providers::harness_bundle(&config.projection());
     let outcomes = sync_bundle(
         &config_dir,
         &bundle,

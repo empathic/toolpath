@@ -279,7 +279,7 @@ fn run_github(repo: String, fmt: ListFormat) -> Result<()> {
 // ── Claude ──────────────────────────────────────────────────────────────────
 
 fn run_claude(project: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
-    let manager = providers::claude_convo(config);
+    let manager = providers::claude_convo(&config.projection());
 
     match (project, fmt) {
         // TSV/JSON without --project: emit sessions across every project so
@@ -445,7 +445,7 @@ fn emit_claude_tsv(m: &toolpath_claude::ConversationMetadata) {
 // ── Gemini ──────────────────────────────────────────────────────────────────
 
 fn run_gemini(project: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
-    let manager = providers::gemini_convo(config);
+    let manager = providers::gemini_convo(&config.projection());
 
     match (project, fmt) {
         (None, ListFormat::Tsv) => list_gemini_sessions_all(&manager, ListFormat::Tsv),
@@ -619,7 +619,7 @@ fn emit_gemini_tsv(m: &toolpath_gemini::ConversationMetadata) {
 // ── Codex ───────────────────────────────────────────────────────────────────
 
 fn run_codex(fmt: ListFormat, config: &Config) -> Result<()> {
-    let manager = providers::codex_convo(config);
+    let manager = providers::codex_convo(&config.projection());
     let sessions = manager
         .list_sessions()
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -703,7 +703,7 @@ fn run_codex(fmt: ListFormat, config: &Config) -> Result<()> {
 // ── Copilot (preview) ─────────────────────────────────────────────────────────
 
 fn run_copilot(fmt: ListFormat, config: &Config) -> Result<()> {
-    let manager = providers::copilot_convo(config);
+    let manager = providers::copilot_convo(&config.projection());
     let sessions = manager
         .list_sessions()
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -788,7 +788,7 @@ fn run_opencode(project: Option<String>, fmt: ListFormat, config: &Config) -> Re
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = providers::opencode_convo(config);
+        let manager = providers::opencode_convo(&config.projection());
         let metas = manager
             .io()
             .list_session_metadata(project.as_deref())
@@ -878,7 +878,7 @@ fn run_cursor(project: Option<String>, fmt: ListFormat, config: &Config) -> Resu
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = providers::cursor_convo(config);
+        let manager = providers::cursor_convo(&config.projection());
         let mut metas = manager
             .io()
             .list_session_metadata()
@@ -988,7 +988,7 @@ fn run_pi(
     fmt: ListFormat,
     config: &Config,
 ) -> Result<()> {
-    let manager = providers::pi_convo(config, base.as_deref());
+    let manager = providers::pi_convo(&config.projection(), base.as_deref());
 
     match (project, fmt) {
         (None, ListFormat::Tsv) => list_pi_sessions_all(&manager, ListFormat::Tsv),

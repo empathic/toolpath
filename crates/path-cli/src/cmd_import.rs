@@ -435,7 +435,7 @@ fn derive_claude(
     all: bool,
     config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let manager = providers::claude_convo(config);
+    let manager = providers::claude_convo(&config.projection());
     derive_claude_with_manager(&manager, project, session, all)
 }
 
@@ -633,7 +633,7 @@ fn derive_gemini(
     all: bool,
     config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let manager = providers::gemini_convo(config);
+    let manager = providers::gemini_convo(&config.projection());
     derive_gemini_with_manager(&manager, project, session, all)
 }
 
@@ -820,7 +820,7 @@ fn pick_gemini_global(
 }
 
 fn derive_codex(session: Option<String>, all: bool, config: &Config) -> Result<Vec<DerivedDoc>> {
-    let manager = providers::codex_convo(config);
+    let manager = providers::codex_convo(&config.projection());
 
     let session_ids: Vec<String> = match (session, all) {
         (Some(s), _) => vec![s],
@@ -921,7 +921,7 @@ fn pick_codex(manager: &toolpath_codex::CodexConvo) -> Result<Option<Vec<String>
 }
 
 fn derive_copilot(session: Option<String>, all: bool, config: &Config) -> Result<Vec<DerivedDoc>> {
-    let manager = providers::copilot_convo(config);
+    let manager = providers::copilot_convo(&config.projection());
 
     let session_ids: Vec<String> = match (session, all) {
         (Some(s), _) => vec![s],
@@ -1040,7 +1040,7 @@ fn derive_opencode(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = providers::opencode_convo(config);
+        let manager = providers::opencode_convo(&config.projection());
         let derive_one = |sid: &str| derive_opencode_session_with(&manager, sid, no_snapshot_diffs);
 
         let session_ids: Vec<String> = match (session, all) {
@@ -1153,7 +1153,7 @@ fn derive_cursor(
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let manager = providers::cursor_convo(config);
+        let manager = providers::cursor_convo(&config.projection());
         let derive_one = |sid: &str| derive_cursor_session_with(&manager, sid);
 
         let workspace_filter = project
@@ -1296,7 +1296,7 @@ fn derive_pi(
     base: Option<PathBuf>,
     config: &Config,
 ) -> Result<Vec<DerivedDoc>> {
-    let manager = providers::pi_convo(config, base.as_deref());
+    let manager = providers::pi_convo(&config.projection(), base.as_deref());
     derive_pi_with_manager(&manager, project, session, all)
 }
 

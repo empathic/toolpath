@@ -44,6 +44,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
+use crate::config::{Config, ProjectionConfig};
 use crate::harness::Harness;
 
 #[derive(Args, Debug)]
@@ -110,7 +111,10 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
         }
     );
 
-    let session_id = project_into_harness(path, target, &cwd)?;
+    // Transitional: `resume` does not take `&Config` yet; load one for
+    // the export path.
+    let config = Config::load()?.projection();
+    let session_id = project_into_harness(path, target, &cwd, &config)?;
     let (binary, argv) = invocation_for(target, &session_id, &cwd);
     exec_harness(&binary, &argv, &cwd, exec)
 }
@@ -458,9 +462,10 @@ pub(crate) fn project_into_harness(
     path: &TPath,
     harness: Harness,
     cwd: &std::path::Path,
+    config: &ProjectionConfig,
 ) -> Result<String> {
     match harness {
-        Harness::Claude => match crate::cmd_export::project_claude(path, cwd)? {
+        Harness::Claude => match crate::cmd_export::project_claude(path, cwd, config)? {
             crate::cmd_export::ClaudeProjection::Written { session_id } => Ok(session_id),
             crate::cmd_export::ClaudeProjection::AlreadyLocal { session_id } => {
                 eprintln!(
@@ -469,12 +474,12 @@ pub(crate) fn project_into_harness(
                 Ok(session_id)
             }
         },
-        Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
-        Harness::Codex => crate::cmd_export::project_codex(path, cwd),
-        Harness::Copilot => crate::cmd_export::project_copilot(path, cwd),
-        Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
-        Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
-        Harness::Pi => crate::cmd_export::project_pi(path, cwd),
+        Harness::Gemini => crate::cmd_export::project_gemini(path, cwd, config),
+        Harness::Codex => crate::cmd_export::project_codex(path, cwd, config),
+        Harness::Copilot => crate::cmd_export::project_copilot(path, cwd, config),
+        Harness::Opencode => crate::cmd_export::project_opencode(path, cwd, config),
+        Harness::Cursor => crate::cmd_export::project_cursor(path, cwd, config),
+        Harness::Pi => crate::cmd_export::project_pi(path, cwd, config),
     }
 }
 
@@ -987,7 +992,8 @@ mod tests {
         let cwd = tempfile::tempdir().unwrap();
         let path = make_convo_path_for_resume("claude-code://resume-test-session");
 
-        let session_id = project_into_harness(&path, Harness::Claude, cwd.path()).unwrap();
+        let config = Config::load().unwrap().projection();
+        let session_id = project_into_harness(&path, Harness::Claude, cwd.path(), &config).unwrap();
         assert!(!session_id.is_empty());
     }
 
