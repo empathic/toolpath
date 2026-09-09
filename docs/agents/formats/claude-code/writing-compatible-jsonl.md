@@ -182,6 +182,10 @@ If you read a session and want to write it back out losslessly:
 - **Preserve `content` array ordering.** Text-before-tool_use and
   thinking-before-text within a single assistant entry matter for
   replay semantics.
+- **Reproduce the topology.** Write the lines in source order with
+  their source parents, side leaves included. `ClaudeProjector` does
+  this when the view carries the source lines, and writes one chain
+  only for the lines it synthesizes.
 
 ## Starting a fresh session file
 

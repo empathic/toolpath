@@ -5,10 +5,13 @@
 //! reads a Claude JSONL conversation into a provider-agnostic view,
 //! `ClaudeProjector` serializes that view back into the Claude wire format.
 
-use crate::provider::{AFTER_TURN_KEY, NEXT_TURN_KEY, SOURCE_PARENT_KEY, SourceRoot};
+use crate::provider::{
+    CHILD_TURN_KEY, MESSAGE_KEY, SOURCE_PARENT_KEY, SourceRoot, TOOL_RESULT_USER_EVENT,
+    TOOL_RESULTS_KEY, WRITTEN_AFTER_TURN_KEY,
+};
 use crate::types::{
     ContentPart, Conversation, ConversationEntry, Message, MessageContent, MessageRole,
-    ToolResultContent, Usage,
+    ToolResultContent, ToolResultPart, Usage,
 };
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -52,8 +55,6 @@ impl ConversationProjector for ClaudeProjector {
 
 // ── Projection logic ─────────────────────────────────────────────────
 
-use crate::provider::TOOL_RESULT_USER_EVENT;
-
 fn project_view(view: &ConversationView) -> std::result::Result<Conversation, String> {
     let mut out = Output::new(view.id.clone());
 
@@ -85,13 +86,15 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // results, then the passthrough run that followed them) is recorded
     // here and the next turn hangs off that.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
-    let with_source_line = tool_uses_with_source_line(view);
-    let mut runs = PassthroughRuns::new(view);
+    let source_lines = SourceLines::new(view);
+    let with_source_line = source_lines.tool_use_ids();
+    let mut runs = PassthroughRuns::new(view, &source_lines);
     let root_tail = emit_run(
         &mut out,
-        runs.before_first_turn(),
+        runs.take_before_first_turn(),
         None,
         ParentPolicy::Source,
+        &source_lines,
     );
 
     // Message-group accounting. The IR carries a message's total
@@ -112,16 +115,16 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    // The line a turn hangs off when it is not the last line written
-    // before the turn.
-    let next_turn_parent: HashMap<&str, &str> = view
+    // Turn ID to the line it hangs off, for a turn whose parent line is
+    // not the last line written before it.
+    let line_of_child_turn: HashMap<&str, &str> = view
         .events
         .iter()
-        .filter_map(|e| Some((e.data.get(NEXT_TURN_KEY)?.as_str()?, e.id.as_str())))
+        .filter_map(|e| Some((e.data.get(CHILD_TURN_KEY)?.as_str()?, e.id.as_str())))
         .collect();
 
     for (idx, turn) in view.turns.iter().enumerate() {
-        let effective_parent = next_turn_parent
+        let effective_parent = line_of_child_turn
             .get(turn.id.as_str())
             .filter(|p| out.has(p))
             .map(|p| p.to_string())
@@ -187,7 +190,13 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         } else {
             ParentPolicy::Source
         };
-        if let Some(last) = emit_run(&mut out, runs.after(&turn.id), Some(&tail), policy) {
+        if let Some(last) = emit_run(
+            &mut out,
+            runs.take_after(&turn.id),
+            Some(&tail),
+            policy,
+            &source_lines,
+        ) {
             tail = last;
         }
         if tail != turn.id {
@@ -232,7 +241,7 @@ struct PassthroughRuns<'a> {
 }
 
 impl<'a> PassthroughRuns<'a> {
-    fn new(view: &'a ConversationView) -> Self {
+    fn new(view: &'a ConversationView, lines: &SourceLines<'a>) -> Self {
         let turn_ids: HashSet<&str> = view.turns.iter().map(|t| t.id.as_str()).collect();
         let mut root_ids: HashSet<&str> = HashSet::new();
         let mut event_parent: HashMap<&str, Option<&str>> = HashMap::new();
@@ -249,13 +258,13 @@ impl<'a> PassthroughRuns<'a> {
             HashMap::new();
         for event in &view.events {
             if event.data.contains_key("raw")
-                || (event.event_type == TOOL_RESULT_USER_EVENT && source_message(event).is_none())
+                || (event.event_type == TOOL_RESULT_USER_EVENT && lines.get(&event.id).is_none())
             {
                 continue;
             }
             let anchor = event
                 .data
-                .get(AFTER_TURN_KEY)
+                .get(WRITTEN_AFTER_TURN_KEY)
                 .and_then(|v| v.as_str())
                 .filter(|t| turn_ids.contains(*t))
                 .or_else(|| anchor_turn(&view.turns, event, &turn_ids, &root_ids, &event_parent));
@@ -264,39 +273,190 @@ impl<'a> PassthroughRuns<'a> {
         Self { by_anchor }
     }
 
-    /// The run before the first turn.
-    fn before_first_turn(&mut self) -> Vec<&'a toolpath_convo::ConversationEvent> {
+    /// Remove and return the run before the first turn.
+    fn take_before_first_turn(&mut self) -> Vec<&'a toolpath_convo::ConversationEvent> {
         self.by_anchor.remove(&None).unwrap_or_default()
     }
 
-    /// The run that follows the turn and its tool results.
-    fn after(&mut self, turn_id: &'a str) -> Vec<&'a toolpath_convo::ConversationEvent> {
+    /// Remove and return the run that follows the turn and its tool
+    /// results. A second call for the same turn returns nothing.
+    fn take_after(&mut self, turn_id: &'a str) -> Vec<&'a toolpath_convo::ConversationEvent> {
         self.by_anchor.remove(&Some(turn_id)).unwrap_or_default()
     }
 }
 
-/// Tool-use IDs whose result line the view kept as a `tool_result_user`
-/// event. Every other tool use gets a synthesized result line.
-fn tool_uses_with_source_line(view: &ConversationView) -> HashSet<String> {
-    view.events
-        .iter()
-        .filter(|e| e.event_type == TOOL_RESULT_USER_EVENT)
-        .filter_map(source_message)
-        .flat_map(|msg| {
-            msg.tool_results()
-                .into_iter()
-                .map(|tr| tr.tool_use_id.to_string())
-                .collect::<Vec<_>>()
-        })
-        .collect()
+/// The source tool-result lines the view kept, read once: each line's
+/// parts, its stored message when it has one, and the tool invocation
+/// each part's text comes from.
+struct SourceLines<'a> {
+    by_event: HashMap<&'a str, SourceLine>,
+    invocations: HashMap<&'a str, &'a ToolInvocation>,
 }
 
-/// The source line's message, when the event carries it.
-fn source_message(event: &toolpath_convo::ConversationEvent) -> Option<Message> {
-    event
-        .data
-        .get("message")
-        .and_then(|v| serde_json::from_value::<Message>(v.clone()).ok())
+/// One kept tool-result line.
+struct SourceLine {
+    parts: Vec<SourcePart>,
+    /// The line's message, present only when a part cannot be rebuilt
+    /// from the invocation text.
+    message: Option<Message>,
+}
+
+struct SourcePart {
+    tool_use_id: String,
+    is_error: bool,
+    /// The source content was an array of one text part rather than a
+    /// string.
+    as_text_part: bool,
+}
+
+impl<'a> SourceLines<'a> {
+    fn new(view: &'a ConversationView) -> Self {
+        let invocations = view
+            .turns
+            .iter()
+            .flat_map(|t| t.tool_uses.iter())
+            .map(|tu| (tu.id.as_str(), tu))
+            .collect();
+        let mut by_event = HashMap::new();
+        for event in &view.events {
+            if event.event_type != TOOL_RESULT_USER_EVENT {
+                continue;
+            }
+            match SourceLine::read(event) {
+                Some(line) => {
+                    by_event.insert(event.id.as_str(), line);
+                }
+                None => eprintln!(
+                    "Warning: tool-result line {} carries no parts and no message; a synthesized line replaces it",
+                    event.id
+                ),
+            }
+        }
+        Self {
+            by_event,
+            invocations,
+        }
+    }
+
+    fn get(&self, event_id: &str) -> Option<&SourceLine> {
+        self.by_event.get(event_id)
+    }
+
+    /// Tool-use IDs whose result line the view kept. Every other tool
+    /// use gets a synthesized result line.
+    fn tool_use_ids(&self) -> HashSet<String> {
+        self.by_event
+            .values()
+            .flat_map(|line| line.parts.iter().map(|p| p.tool_use_id.clone()))
+            .collect()
+    }
+
+    fn invocation(&self, tool_use_id: &str) -> Option<&'a ToolInvocation> {
+        self.invocations.get(tool_use_id).copied()
+    }
+}
+
+impl SourceLine {
+    /// Read the line from its event. A document from an earlier
+    /// version carries the message and no parts list; the parts come
+    /// from the message then.
+    fn read(event: &toolpath_convo::ConversationEvent) -> Option<Self> {
+        let message = match event.data.get(MESSAGE_KEY) {
+            Some(v) => match serde_json::from_value::<Message>(v.clone()) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: tool-result line {}: message does not parse ({e}); the line is rebuilt from its parts",
+                        event.id
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
+        let parts: Vec<SourcePart> =
+            match event.data.get(TOOL_RESULTS_KEY).and_then(|v| v.as_array()) {
+                Some(arr) => arr
+                    .iter()
+                    .filter_map(|p| {
+                        Some(SourcePart {
+                            tool_use_id: p.get("tool_use_id")?.as_str()?.to_string(),
+                            is_error: p.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
+                            as_text_part: p.get("content").and_then(|v| v.as_str())
+                                == Some("text_part"),
+                        })
+                    })
+                    .collect(),
+                None => message
+                    .as_ref()
+                    .map(|m| {
+                        m.tool_results()
+                            .iter()
+                            .map(|tr| SourcePart {
+                                tool_use_id: tr.tool_use_id.to_string(),
+                                is_error: tr.is_error,
+                                as_text_part: false,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+        if parts.is_empty() && message.is_none() {
+            return None;
+        }
+        Some(Self { parts, message })
+    }
+
+    /// The line's message: the stored one, else each part rebuilt from
+    /// its invocation's result text.
+    fn message(&self, lines: &SourceLines) -> Message {
+        if let Some(m) = &self.message {
+            return m.clone();
+        }
+        let parts = self
+            .parts
+            .iter()
+            .map(|p| {
+                let text = lines
+                    .invocation(&p.tool_use_id)
+                    .and_then(|tu| tu.result.as_ref())
+                    .map(|r| r.content.clone())
+                    .unwrap_or_default();
+                let content = if p.as_text_part {
+                    ToolResultContent::Parts(vec![ToolResultPart {
+                        text: Some(text),
+                        extra: HashMap::from([("type".to_string(), json!("text"))]),
+                    }])
+                } else {
+                    ToolResultContent::Text(text)
+                };
+                ContentPart::ToolResult {
+                    tool_use_id: p.tool_use_id.clone(),
+                    content,
+                    is_error: p.is_error,
+                }
+            })
+            .collect();
+        Message {
+            role: MessageRole::User,
+            content: Some(MessageContent::Parts(parts)),
+            model: None,
+            id: None,
+            message_type: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+        }
+    }
+
+    /// The line's `toolUseResult`, rebuilt per tool from the first
+    /// part's invocation, as for a synthesized line.
+    fn tool_use_result(&self, lines: &SourceLines) -> Option<serde_json::Value> {
+        self.parts
+            .first()
+            .and_then(|p| lines.invocation(&p.tool_use_id))
+            .and_then(tool_use_result_from_invocation)
+    }
 }
 
 /// The event's source parent: the one `to_view` recorded when the
@@ -385,11 +545,15 @@ fn emit_run(
     run: Vec<&toolpath_convo::ConversationEvent>,
     prev: Option<&str>,
     policy: ParentPolicy,
+    lines: &SourceLines,
 ) -> Option<String> {
     let mut last: Option<String> = None;
     for event in run {
         let mut entry = if event.event_type == TOOL_RESULT_USER_EVENT {
-            tool_result_event_to_entry(event, &out.convo.session_id)
+            let Some(line) = lines.get(&event.id) else {
+                continue;
+            };
+            tool_result_event_to_entry(event, &out.convo.session_id, line, lines)
         } else {
             project_event(event, &out.convo.session_id)
         };
@@ -407,12 +571,15 @@ fn emit_run(
     last
 }
 
-/// Rebuild a Claude tool-result user entry from a preserved event: the
-/// source UUID, parent UUID, `toolUseResult` blob, `entry_extra` fields,
-/// and the message.
+/// Rebuild a Claude tool-result user entry from a kept line: the source
+/// UUID, parent UUID, and `entry_extra` fields from the event; the
+/// message from the line's parts and the turn's invocation text; the
+/// `toolUseResult` blob rebuilt per tool.
 fn tool_result_event_to_entry(
     event: &toolpath_convo::ConversationEvent,
     session_id: &str,
+    line: &SourceLine,
+    lines: &SourceLines,
 ) -> ConversationEntry {
     let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
     if let Some(map) = event.data.get("entry_extra").and_then(|v| v.as_object()) {
@@ -438,7 +605,7 @@ fn tool_result_event_to_entry(
             .get("git_branch")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        message: source_message(event),
+        message: Some(line.message(lines)),
         version: event
             .data
             .get("version")
@@ -450,7 +617,7 @@ fn tool_result_event_to_entry(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         request_id: None,
-        tool_use_result: event.data.get("tool_use_result").cloned(),
+        tool_use_result: line.tool_use_result(lines),
         snapshot: None,
         message_id: event
             .data
@@ -1694,9 +1861,9 @@ mod tests {
         a3.timestamp = "2024-01-01T00:00:02Z".into();
         let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2, a3]);
         let mut t1 = tool_result_event("t1", "a1", "toolu_1");
-        t1.data.insert(AFTER_TURN_KEY.into(), json!("a2"));
+        t1.data.insert(WRITTEN_AFTER_TURN_KEY.into(), json!("a2"));
         let mut h2 = attachment("h2", Some("t1"), "2024-01-01T00:00:01Z");
-        h2.data.insert(AFTER_TURN_KEY.into(), json!("a2"));
+        h2.data.insert(WRITTEN_AFTER_TURN_KEY.into(), json!("a2"));
         view.events = vec![
             attachment("h1", Some("a2"), "2024-01-01T00:00:01Z"),
             t1,
@@ -1729,7 +1896,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_result_event_without_a_message_is_not_written() {
+    fn test_tool_result_event_without_parts_or_message_is_not_written() {
         let mut a1 = assistant_turn("a1", "");
         a1.parent_id = Some("u1".into());
         a1.tool_uses = vec![tool_use_with_result("t")];
@@ -1744,8 +1911,54 @@ mod tests {
         assert!(convo.entries.iter().all(|e| e.message.is_some()));
     }
 
-    /// A `tool_result_user` event as the derive writes it: the source
-    /// line's message.
+    /// The kept line's message is rebuilt from the invocation's result
+    /// text, and its `toolUseResult` per tool.
+    #[test]
+    fn test_kept_tool_result_line_is_rebuilt_from_the_invocation() {
+        let mut a1 = assistant_turn("a1", "");
+        a1.parent_id = Some("u1".into());
+        a1.tool_uses = vec![tool_use_with_result("t")];
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1]);
+        view.events = vec![tool_result_event("tr1", "a1", "t")];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        let line = convo.entries.iter().find(|e| e.uuid == "tr1").unwrap();
+        assert_eq!(
+            serde_json::to_value(&line.message).unwrap(),
+            json!({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t", "content": "a.rs", "is_error": false}
+            ]})
+        );
+        assert_eq!(
+            line.tool_use_result.as_ref().and_then(|v| v.get("stdout")),
+            Some(&json!("a.rs"))
+        );
+    }
+
+    /// A stored message (an image part) is written as it was.
+    #[test]
+    fn test_kept_tool_result_line_with_a_stored_message_writes_it() {
+        let mut a1 = assistant_turn("a1", "");
+        a1.parent_id = Some("u1".into());
+        a1.tool_uses = vec![tool_use_with_result("t")];
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1]);
+        let message = json!({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "is_error": false,
+             "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}]}
+        ]});
+        let mut tr = tool_result_event("tr1", "a1", "t");
+        tr.data.insert(MESSAGE_KEY.into(), message.clone());
+        view.events = vec![tr];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        let line = convo.entries.iter().find(|e| e.uuid == "tr1").unwrap();
+        assert_eq!(serde_json::to_value(&line.message).unwrap(), message);
+    }
+
+    /// A `tool_result_user` event as `to_view` writes it: the line's
+    /// parts, with the text on the turn's invocation.
     fn tool_result_event(
         id: &str,
         parent: &str,
@@ -1754,8 +1967,8 @@ mod tests {
         let mut tr = attachment(id, Some(parent), "2024-01-01T00:00:01Z");
         tr.event_type = TOOL_RESULT_USER_EVENT.to_string();
         tr.data.insert(
-            "message".into(),
-            json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "a.rs"}]}),
+            TOOL_RESULTS_KEY.into(),
+            json!([{"tool_use_id": tool_use_id, "is_error": false, "content": "string"}]),
         );
         tr
     }
@@ -1772,7 +1985,7 @@ mod tests {
         a2.timestamp = "2024-01-01T00:00:02Z".into();
         let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1, a2]);
         let mut t1 = tool_result_event("t1", "a1", "t");
-        t1.data.insert(NEXT_TURN_KEY.into(), json!("a2"));
+        t1.data.insert(CHILD_TURN_KEY.into(), json!("a2"));
         view.events = vec![t1, attachment("hp", Some("a1"), "2024-01-01T00:00:01Z")];
 
         let convo = ClaudeProjector.project(&view).unwrap();

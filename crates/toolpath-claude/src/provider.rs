@@ -8,7 +8,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ClaudeConvo;
-use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
+use crate::types::{
+    Conversation, ConversationEntry, Message, MessageContent, MessageRole, ToolResultContent,
+    ToolResultPart,
+};
 #[cfg(any(feature = "watcher", test))]
 use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
@@ -271,12 +274,22 @@ fn find_tool_result_in_parts(msg: &Message, tool_use_id: &str) -> Option<ToolRes
     })
 }
 
-/// Returns true if this entry is a tool-result-only user message
-/// (no human-authored text, only tool_result parts).
 /// Event type of a tool-result-only user line kept beside the turn
 /// stream. The line's results are folded into the assistant turn; the
 /// event keeps the line itself so the projector writes it back in place.
 pub(crate) const TOOL_RESULT_USER_EVENT: &str = "tool_result_user";
+
+/// Event data key on a `tool_result_user` event: the line's parts as
+/// `[{tool_use_id, is_error, content}]`, where `content` is `"string"`,
+/// `"text_part"`, or `"parts"`. The text is on the turn's tool
+/// invocation, and the projector rebuilds a string or text-part result
+/// from there.
+pub(crate) const TOOL_RESULTS_KEY: &str = "tool_results";
+
+/// Event data key on a `tool_result_user` event: the line's message,
+/// stored only when a part cannot be rebuilt from the invocation text
+/// (an image, a document, a tool reference, or several text parts).
+pub(crate) const MESSAGE_KEY: &str = "message";
 
 fn tool_result_entry_to_event(
     entry: &ConversationEntry,
@@ -284,12 +297,47 @@ fn tool_result_entry_to_event(
 ) -> toolpath_convo::ConversationEvent {
     let mut event = entry_to_event(entry);
     event.event_type = TOOL_RESULT_USER_EVENT.to_string();
-    if let Ok(v) = serde_json::to_value(msg) {
-        event.data.insert("message".into(), v);
+    event.data.remove("tool_use_result");
+    let mut rebuildable = true;
+    let parts: Vec<serde_json::Value> = msg
+        .tool_results()
+        .iter()
+        .map(|tr| {
+            let content = match tr.content {
+                ToolResultContent::Text(_) => "string",
+                ToolResultContent::Parts(parts) if is_one_text_part(parts) => "text_part",
+                ToolResultContent::Parts(_) => {
+                    rebuildable = false;
+                    "parts"
+                }
+            };
+            serde_json::json!({
+                "tool_use_id": tr.tool_use_id,
+                "is_error": tr.is_error,
+                "content": content,
+            })
+        })
+        .collect();
+    event
+        .data
+        .insert(TOOL_RESULTS_KEY.into(), serde_json::Value::Array(parts));
+    if !rebuildable && let Ok(v) = serde_json::to_value(msg) {
+        event.data.insert(MESSAGE_KEY.into(), v);
     }
     event
 }
 
+/// A content array of exactly one plain text part, which
+/// `ToolResultContent::text` reproduces byte for byte.
+fn is_one_text_part(parts: &[ToolResultPart]) -> bool {
+    parts.len() == 1
+        && parts[0].text.is_some()
+        && parts[0].extra.len() == 1
+        && parts[0].extra.get("type").and_then(|v| v.as_str()) == Some("text")
+}
+
+/// Returns true if this entry is a tool-result-only user message
+/// (no human-authored text, only tool_result parts).
 fn is_tool_result_only(entry: &ConversationEntry) -> bool {
     let Some(msg) = &entry.message else {
         return false;
@@ -358,8 +406,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // via the `tool_result_user` event.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
     let mut last_turn_uuid: Option<String> = None;
-    let mut last_event_uuid: Option<String> = events.last().map(|e| e.id.clone());
-    let mut chain_anchor: HashMap<String, Option<String>> = HashMap::new();
+    let mut lines = PassthroughLines::new(events);
 
     for entry in &convo.entries {
         let Some(msg) = &entry.message else {
@@ -375,19 +422,13 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
                     last_turn_uuid.as_deref(),
                 );
             }
-            record_source_parent(&mut event, entry, &turn_ids, last_event_uuid.as_deref());
-            record_after_turn(
-                &mut event,
+            lines.push(
+                event,
                 entry,
                 &turn_ids,
-                &mut chain_anchor,
                 last_turn_uuid.as_deref(),
+                &mut parent_rewrites,
             );
-            last_event_uuid = Some(entry.uuid.clone());
-            events.push(event);
-            if let Some(prev) = &last_turn_uuid {
-                parent_rewrites.insert(entry.uuid.clone(), prev.clone());
-            }
             continue;
         };
 
@@ -400,33 +441,21 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         // stays connected.
         if is_tool_result_only(entry) {
             merge_tool_results(&mut turns, msg);
-            let mut event = tool_result_entry_to_event(entry, msg);
-            record_source_parent(&mut event, entry, &turn_ids, last_event_uuid.as_deref());
-            record_after_turn(
-                &mut event,
+            let event = tool_result_entry_to_event(entry, msg);
+            lines.push(
+                event,
                 entry,
                 &turn_ids,
-                &mut chain_anchor,
                 last_turn_uuid.as_deref(),
+                &mut parent_rewrites,
             );
-            last_event_uuid = Some(entry.uuid.clone());
-            events.push(event);
-            if let Some(prev) = &last_turn_uuid {
-                parent_rewrites.insert(entry.uuid.clone(), prev.clone());
-            }
             continue;
         }
 
         let mut turn = message_to_turn(entry, msg);
         if let Some(pid) = turn.parent_id.clone() {
-            if !turn_ids.contains(&pid)
-                && last_event_uuid.as_deref() != Some(pid.as_str())
-                && let Some(event) = events.iter_mut().rev().find(|e| e.id == pid)
-            {
-                event.data.insert(
-                    NEXT_TURN_KEY.into(),
-                    serde_json::Value::String(turn.id.clone()),
-                );
+            if !turn_ids.contains(&pid) {
+                lines.tag_child_turn(&pid, &turn.id);
             }
             if let Some(real) = parent_rewrites.get(&pid) {
                 turn.parent_id = Some(real.clone());
@@ -436,6 +465,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         last_turn_uuid = Some(turn.id.clone());
         turns.push(turn);
     }
+    let events = lines.events;
 
     canonicalize_message_usage(&mut turns);
 
@@ -596,22 +626,81 @@ impl SourceRoot {
 /// source parent only when that is the previous event.
 pub(crate) const SOURCE_PARENT_KEY: &str = "source_parent";
 
-/// Event data key naming the turn whose `parentUuid` is this line, set
-/// when the line is not the last event before that turn. The IR keeps
-/// turn-to-turn parents only, so the projector otherwise hangs the turn
-/// off the last line written before it. The fact is on the line, not on
-/// the turn: `Turn.extra` does not survive `derive_path`, event data
-/// does.
-pub(crate) const NEXT_TURN_KEY: &str = "next_turn";
+/// Event data key naming the turn whose `parentUuid` is this line (the
+/// line's child), set when the line is not the last event before that
+/// turn. The IR keeps turn-to-turn parents only, so the projector
+/// otherwise hangs the turn off the last line written before it. The
+/// fact is on the line, not on the turn: `Turn` has no field that
+/// survives `derive_path`, event data does.
+pub(crate) const CHILD_TURN_KEY: &str = "child_turn";
 
-/// Event data key naming the last turn before the line in the file,
-/// set when that is not the turn the line's parent chain leads to. The
-/// harness writes every result line of a parallel tool call after the
-/// last call's line, each parented on its own call, so the parent chain
-/// alone places such a line after the wrong turn.
-pub(crate) const AFTER_TURN_KEY: &str = "after_turn";
+/// Event data key naming the last turn written before this line in the
+/// file, set when that is not the turn the line's parent chain leads
+/// to. The harness writes every result line of a parallel tool call
+/// after the last call's line, each parented on its own call, so the
+/// parent chain alone places such a line after the wrong turn.
+pub(crate) const WRITTEN_AFTER_TURN_KEY: &str = "written_after_turn";
 
-fn record_after_turn(
+/// The passthrough events of a session in file order, with the facts
+/// the document round-trip would lose recorded on each as it is added.
+struct PassthroughLines {
+    events: Vec<toolpath_convo::ConversationEvent>,
+    last_event_uuid: Option<String>,
+    chain_anchor: HashMap<String, Option<String>>,
+}
+
+impl PassthroughLines {
+    fn new(events: Vec<toolpath_convo::ConversationEvent>) -> Self {
+        let last_event_uuid = events.last().map(|e| e.id.clone());
+        Self {
+            events,
+            last_event_uuid,
+            chain_anchor: HashMap::new(),
+        }
+    }
+
+    /// Add a line's event. The line is folded into no turn, so a turn
+    /// whose `parentUuid` names it is rewritten to the last turn before
+    /// it.
+    fn push(
+        &mut self,
+        mut event: toolpath_convo::ConversationEvent,
+        entry: &ConversationEntry,
+        turn_ids: &HashSet<String>,
+        last_turn_uuid: Option<&str>,
+        parent_rewrites: &mut HashMap<String, String>,
+    ) {
+        record_source_parent(&mut event, entry, turn_ids, self.last_event_uuid.as_deref());
+        record_written_after_turn(
+            &mut event,
+            entry,
+            turn_ids,
+            &mut self.chain_anchor,
+            last_turn_uuid,
+        );
+        self.last_event_uuid = Some(entry.uuid.clone());
+        self.events.push(event);
+        if let Some(prev) = last_turn_uuid {
+            parent_rewrites.insert(entry.uuid.clone(), prev.to_string());
+        }
+    }
+
+    /// Tag the line a turn hangs off, when that line is not the last
+    /// event before the turn.
+    fn tag_child_turn(&mut self, line: &str, turn: &str) {
+        if self.last_event_uuid.as_deref() == Some(line) {
+            return;
+        }
+        if let Some(event) = self.events.iter_mut().rev().find(|e| e.id == line) {
+            event.data.insert(
+                CHILD_TURN_KEY.into(),
+                serde_json::Value::String(turn.to_string()),
+            );
+        }
+    }
+}
+
+fn record_written_after_turn(
     event: &mut toolpath_convo::ConversationEvent,
     entry: &ConversationEntry,
     turn_ids: &HashSet<String>,
@@ -627,7 +716,7 @@ fn record_after_turn(
         && anchor.as_deref() != Some(turn)
     {
         event.data.insert(
-            AFTER_TURN_KEY.into(),
+            WRITTEN_AFTER_TURN_KEY.into(),
             serde_json::Value::String(turn.to_string()),
         );
     }
@@ -1184,6 +1273,49 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_result_line_keeps_its_part_shape_and_its_message_only_when_needed() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Go"}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","id":"msg_1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"model":"claude-x","stop_reason":"tool_use"}}"#,
+            r#"{"uuid":"r1","type":"user","parentUuid":"a1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a.rs","is_error":false}]},"toolUseResult":{"stdout":"a.rs","stderr":"","interrupted":false,"isImage":false}}"#,
+            r#"{"uuid":"a2","type":"assistant","parentUuid":"r1","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","id":"msg_2","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"x.png"}}],"model":"claude-x","stop_reason":"tool_use"}}"#,
+            r#"{"uuid":"r2","type":"user","parentUuid":"a2","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}],"is_error":false}]},"toolUseResult":{"type":"image"}}"#,
+            r#"{"uuid":"a3","type":"assistant","parentUuid":"r2","timestamp":"2024-01-01T00:00:05Z","message":{"role":"assistant","id":"msg_3","content":"Done.","model":"claude-x","stop_reason":"end_turn"}}"#,
+        ];
+        fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        let event = |id: &str| view.events.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(
+            event("r1").data.get(TOOL_RESULTS_KEY),
+            Some(&serde_json::json!([
+                {"tool_use_id": "t1", "is_error": false, "content": "string"}
+            ]))
+        );
+        assert!(!event("r1").data.contains_key(MESSAGE_KEY));
+        assert!(!event("r1").data.contains_key("tool_use_result"));
+        assert_eq!(
+            event("r2").data.get(TOOL_RESULTS_KEY),
+            Some(&serde_json::json!([
+                {"tool_use_id": "t2", "is_error": false, "content": "parts"}
+            ]))
+        );
+        assert!(
+            event("r2").data.contains_key(MESSAGE_KEY),
+            "an image part cannot be rebuilt from the invocation text"
+        );
+        assert!(!event("r2").data.contains_key("tool_use_result"));
+    }
+
+    #[test]
     fn an_event_parent_that_is_not_the_previous_line_is_recorded() {
         let temp = TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
@@ -1260,7 +1392,7 @@ mod tests {
                 .find(|e| e.id == id)
                 .unwrap()
                 .data
-                .get(NEXT_TURN_KEY)
+                .get(CHILD_TURN_KEY)
                 .and_then(|v| v.as_str())
         };
         assert_eq!(
@@ -1301,7 +1433,7 @@ mod tests {
                 .find(|e| e.id == id)
                 .unwrap()
                 .data
-                .get(NEXT_TURN_KEY)
+                .get(CHILD_TURN_KEY)
                 .and_then(|v| v.as_str())
         };
         assert_eq!(tag("r1"), Some("u2"));
@@ -1341,7 +1473,7 @@ mod tests {
                 .find(|e| e.id == id)
                 .unwrap()
                 .data
-                .get(AFTER_TURN_KEY)
+                .get(WRITTEN_AFTER_TURN_KEY)
                 .and_then(|v| v.as_str())
         };
         assert_eq!(tag("h1"), None);
