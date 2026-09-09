@@ -268,7 +268,7 @@ fn find_tool_result_in_parts(msg: &Message, tool_use_id: &str) -> Option<ToolRes
             is_error,
         } if id == tool_use_id => Some(ToolResult {
             content: content.text(),
-            is_error: *is_error,
+            is_error: is_error.unwrap_or(false),
         }),
         _ => None,
     })
@@ -281,9 +281,9 @@ pub(crate) const TOOL_RESULT_USER_EVENT: &str = "tool_result_user";
 
 /// Event data key on a `tool_result_user` event: the line's parts as
 /// `[{tool_use_id, is_error, content}]`, where `content` is `"string"`,
-/// `"text_part"`, or `"parts"`. The text is on the turn's tool
-/// invocation, and the projector rebuilds a string or text-part result
-/// from there.
+/// `"text_part"`, or `"parts"`, and `is_error` is present only when the
+/// source part carried it. The text is on the turn's tool invocation,
+/// and the projector rebuilds a string or text-part result from there.
 pub(crate) const TOOL_RESULTS_KEY: &str = "tool_results";
 
 /// Event data key on a `tool_result_user` event: the line's message,
@@ -316,11 +316,14 @@ fn tool_result_entry_to_event(
                     "parts"
                 }
             };
-            serde_json::json!({
+            let mut part = serde_json::json!({
                 "tool_use_id": tr.tool_use_id,
-                "is_error": tr.is_error,
                 "content": content,
-            })
+            });
+            if let Some(is_error) = tr.is_error {
+                part["is_error"] = serde_json::Value::Bool(is_error);
+            }
+            part
         })
         .collect();
     event
@@ -369,7 +372,7 @@ fn merge_tool_results(turns: &mut [Turn], msg: &Message) -> bool {
             {
                 invocation.result = Some(ToolResult {
                     content: tr.content.text(),
-                    is_error: tr.is_error,
+                    is_error: tr.is_error.unwrap_or(false),
                 });
                 merged = true;
                 break;
@@ -1326,6 +1329,33 @@ mod tests {
             "an image part cannot be rebuilt from the invocation text"
         );
         assert!(!event("r2").data.contains_key("tool_use_result"));
+    }
+
+    #[test]
+    fn a_tool_result_part_without_is_error_records_none() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Go"}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","id":"msg_1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"model":"claude-x","stop_reason":"tool_use"}}"#,
+            r#"{"uuid":"r1","type":"user","parentUuid":"a1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a.rs"}]}}"#,
+            r#"{"uuid":"a2","type":"assistant","parentUuid":"r1","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","id":"msg_2","content":"Done.","model":"claude-x","stop_reason":"end_turn"}}"#,
+        ];
+        fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        let event = view.events.iter().find(|e| e.id == "r1").unwrap();
+        assert_eq!(
+            event.data.get(TOOL_RESULTS_KEY),
+            Some(&serde_json::json!([{"tool_use_id": "t1", "content": "string"}]))
+        );
+        assert!(!view.turns[1].tool_uses[0].result.as_ref().unwrap().is_error);
     }
 
     #[test]

@@ -301,7 +301,8 @@ struct KeptLine {
 
 struct KeptPart {
     tool_use_id: String,
-    is_error: bool,
+    /// `None` when the source part carried no `is_error`.
+    is_error: Option<bool>,
     /// The source content was an array of one text part rather than a
     /// string.
     as_text_part: bool,
@@ -365,7 +366,7 @@ impl KeptLine {
                 .filter_map(|p| {
                     Some(KeptPart {
                         tool_use_id: p.get("tool_use_id")?.as_str()?.to_string(),
-                        is_error: p.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
+                        is_error: p.get("is_error").and_then(|v| v.as_bool()),
                         as_text_part: p.get("content").and_then(|v| v.as_str())
                             == Some("text_part"),
                     })
@@ -918,7 +919,7 @@ fn tool_result_entries(
             let part = ContentPart::ToolResult {
                 tool_use_id: tu.id.clone(),
                 content: ToolResultContent::Text(result.content.clone()),
-                is_error: result.is_error,
+                is_error: Some(result.is_error),
             };
 
             let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
@@ -1650,7 +1651,7 @@ mod tests {
                     } => {
                         assert_eq!(tool_use_id, "t1");
                         assert_eq!(content.text(), "fn main() {}");
-                        assert!(!is_error);
+                        assert_eq!(*is_error, Some(false));
                     }
                     other => panic!("Expected ToolResult, got {:?}", other),
                 }
@@ -1936,6 +1937,32 @@ mod tests {
         assert_eq!(
             line.tool_use_result.as_ref().and_then(|v| v.get("stdout")),
             Some(&json!("a.rs"))
+        );
+    }
+
+    /// A part the source wrote without `is_error` is written without it.
+    #[test]
+    fn test_kept_tool_result_part_without_is_error_omits_it() {
+        let mut a1 = assistant_turn("a1", "");
+        a1.parent_id = Some("u1".into());
+        a1.tool_uses = vec![tool_use_with_result("t")];
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1]);
+        let mut tr = attachment("tr1", Some("a1"), "2024-01-01T00:00:01Z");
+        tr.event_type = TOOL_RESULT_USER_EVENT.to_string();
+        tr.data.insert(
+            TOOL_RESULTS_KEY.into(),
+            json!([{"tool_use_id": "t", "content": "string"}]),
+        );
+        view.events = vec![tr];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        let line = convo.entries.iter().find(|e| e.uuid == "tr1").unwrap();
+        assert_eq!(
+            serde_json::to_value(&line.message).unwrap(),
+            json!({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t", "content": "a.rs"}
+            ]})
         );
     }
 
@@ -2260,7 +2287,7 @@ mod tests {
                     } => {
                         assert_eq!(tool_use_id, "t1");
                         assert_eq!(content.text(), "file a");
-                        assert!(!is_error);
+                        assert_eq!(*is_error, Some(false));
                     }
                     _ => panic!("Expected ToolResult at index 0"),
                 }
@@ -2280,7 +2307,7 @@ mod tests {
                     } => {
                         assert_eq!(tool_use_id, "t2");
                         assert_eq!(content.text(), "file b");
-                        assert!(is_error);
+                        assert_eq!(*is_error, Some(true));
                     }
                     _ => panic!("Expected ToolResult at index 0"),
                 }

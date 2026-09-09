@@ -106,7 +106,7 @@ impl<'a> ConversationQuery<'a> {
                 {
                     return parts.iter().any(|p| {
                         if let ContentPart::ToolResult { is_error, .. } = p {
-                            *is_error
+                            is_error.unwrap_or(false)
                         } else {
                             false
                         }
@@ -355,7 +355,7 @@ mod tests {
                 content: Some(MessageContent::Parts(vec![ContentPart::ToolResult {
                     tool_use_id: "t1".to_string(),
                     content: crate::types::ToolResultContent::Text("failed!".to_string()),
-                    is_error: true,
+                    is_error: Some(true),
                 }])),
                 model: None,
                 id: None,

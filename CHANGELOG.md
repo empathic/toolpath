@@ -52,6 +52,9 @@ All notable changes to the Toolpath workspace are documented here.
   `extra` map. An image part came out as `{"text": null}`, and the API
   rejected the resumed session's next request with a 400. The new public
   field is the reason for the minor bump.
+- `ContentPart::ToolResult.is_error` and `ToolResultRef.is_error` are
+  `Option<bool>`: a part the harness wrote without `is_error` is written
+  without it. The API reads absent as false.
 
 ## toolpath-claude 0.13.4 — 2026-09-14
 
