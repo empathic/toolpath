@@ -16,8 +16,11 @@ All notable changes to the Toolpath workspace are documented here.
   `tool_uses[i].result`, and the projector rebuilds each part from it.
   The event carries the line's `message` only when a part cannot be
   rebuilt from that text: an image, a document, a tool reference, or
-  several text parts. `toolUseResult` is not stored; the projector
-  rebuilds it per tool, as it does for a synthesized line.
+  several text parts, or when the line's tool use is not in the view.
+  `toolUseResult` is not stored; the projector rebuilds it per tool, as
+  it does for a synthesized line. A kept line whose message does not
+  parse, or that carries neither parts nor a message, is an error at
+  projection.
 - `ClaudeProjector` writes the tool-result line back in its place and
   keeps every passthrough line's source parent when that parent is in
   the output. A projected session has the harness file's lines, order,
@@ -30,7 +33,7 @@ All notable changes to the Toolpath workspace are documented here.
   second result.
 - `to_view` records an event's source parent in the event data
   (`source_parent`) when the document round-trip would lose it: a
-  parent that is neither a turn nor the previous line. `derive_path`
+  parent that is neither a turn nor the previous event. `derive_path`
   gives such an event the step before it as parent, and a reminder
   whose parent is the tool-result line, with a hook line between them,
   came back parented on the hook line, which left the tool result off

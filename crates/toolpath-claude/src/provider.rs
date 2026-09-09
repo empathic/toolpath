@@ -288,17 +288,22 @@ pub(crate) const TOOL_RESULTS_KEY: &str = "tool_results";
 
 /// Event data key on a `tool_result_user` event: the line's message,
 /// stored only when a part cannot be rebuilt from the invocation text
-/// (an image, a document, a tool reference, or several text parts).
+/// (an image, a document, a tool reference, or several text parts), or
+/// when the line's tool use is not in the view.
 pub(crate) const MESSAGE_KEY: &str = "message";
 
+/// `merged` says whether the line's results folded into a turn's tool
+/// invocation. A line whose tool use is not in the view keeps its
+/// message, since no invocation text exists to rebuild it from.
 fn tool_result_entry_to_event(
     entry: &ConversationEntry,
     msg: &Message,
+    merged: bool,
 ) -> toolpath_convo::ConversationEvent {
     let mut event = entry_to_event(entry);
     event.event_type = TOOL_RESULT_USER_EVENT.to_string();
     event.data.remove("tool_use_result");
-    let mut rebuildable = true;
+    let mut rebuildable = merged;
     let parts: Vec<serde_json::Value> = msg
         .tool_results()
         .iter()
@@ -406,7 +411,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // via the `tool_result_user` event.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
     let mut last_turn_uuid: Option<String> = None;
-    let mut lines = PassthroughLines::new(events);
+    let mut lines = RecordedLines::new(events);
 
     for entry in &convo.entries {
         let Some(msg) = &entry.message else {
@@ -440,8 +445,8 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         // this entry; we record a rewrite so the IR's turn-to-turn chain
         // stays connected.
         if is_tool_result_only(entry) {
-            merge_tool_results(&mut turns, msg);
-            let event = tool_result_entry_to_event(entry, msg);
+            let merged = merge_tool_results(&mut turns, msg);
+            let event = tool_result_entry_to_event(entry, msg, merged);
             lines.push(
                 event,
                 entry,
@@ -550,6 +555,10 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
 /// a headerless line is identified by the presence of `data["raw"]`, not by
 /// an enumerated `type` list. `event_type` carries the line's `type`, purely
 /// informational.
+/// Event data key that marks a headerless preamble line and holds it
+/// verbatim.
+pub(crate) const PREAMBLE_KEY: &str = "raw";
+
 fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::ConversationEvent {
     let event_type = raw
         .get("type")
@@ -562,7 +571,7 @@ fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::Con
         .unwrap_or("")
         .to_string();
     let mut data: HashMap<String, serde_json::Value> = HashMap::new();
-    data.insert("raw".to_string(), raw.clone());
+    data.insert(PREAMBLE_KEY.to_string(), raw.clone());
     toolpath_convo::ConversationEvent {
         id: format!("claude-preamble-{idx}"),
         timestamp,
@@ -643,13 +652,13 @@ pub(crate) const WRITTEN_AFTER_TURN_KEY: &str = "written_after_turn";
 
 /// The passthrough events of a session in file order, with the facts
 /// the document round-trip would lose recorded on each as it is added.
-struct PassthroughLines {
+struct RecordedLines {
     events: Vec<toolpath_convo::ConversationEvent>,
     last_event_uuid: Option<String>,
     chain_anchor: HashMap<String, Option<String>>,
 }
 
-impl PassthroughLines {
+impl RecordedLines {
     fn new(events: Vec<toolpath_convo::ConversationEvent>) -> Self {
         let last_event_uuid = events.last().map(|e| e.id.clone());
         Self {
@@ -723,6 +732,10 @@ fn record_written_after_turn(
     chain_anchor.insert(entry.uuid.clone(), anchor);
 }
 
+/// Record the line's parent when `derive_path` would not reproduce it:
+/// a parent that is neither a turn nor the previous event. Turns between
+/// the two events do not matter, since `derive_path` chains events
+/// among themselves.
 fn record_source_parent(
     event: &mut toolpath_convo::ConversationEvent,
     entry: &ConversationEntry,
@@ -1313,6 +1326,31 @@ mod tests {
             "an image part cannot be rebuilt from the invocation text"
         );
         assert!(!event("r2").data.contains_key("tool_use_result"));
+    }
+
+    #[test]
+    fn a_tool_result_line_without_its_tool_use_keeps_its_message() {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Go"}}"#,
+            r#"{"uuid":"r1","type":"user","parentUuid":"u1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t-gone","content":"a.rs","is_error":false}]}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"r1","timestamp":"2024-01-01T00:00:03Z","message":{"role":"assistant","content":"Reply","model":"claude-x","stop_reason":"end_turn"}}"#,
+        ];
+        fs::write(project_dir.join("session-1.jsonl"), entries.join("\n")).unwrap();
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+
+        let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
+            .unwrap();
+
+        let event = view.events.iter().find(|e| e.id == "r1").unwrap();
+        assert!(
+            event.data.contains_key(MESSAGE_KEY),
+            "no invocation text exists to rebuild the line from"
+        );
     }
 
     #[test]

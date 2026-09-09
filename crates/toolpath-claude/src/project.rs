@@ -6,8 +6,8 @@
 //! `ClaudeProjector` serializes that view back into the Claude wire format.
 
 use crate::provider::{
-    CHILD_TURN_KEY, MESSAGE_KEY, SOURCE_PARENT_KEY, SourceRoot, TOOL_RESULT_USER_EVENT,
-    TOOL_RESULTS_KEY, WRITTEN_AFTER_TURN_KEY,
+    CHILD_TURN_KEY, MESSAGE_KEY, PREAMBLE_KEY, SOURCE_PARENT_KEY, SourceRoot,
+    TOOL_RESULT_USER_EVENT, TOOL_RESULTS_KEY, WRITTEN_AFTER_TURN_KEY,
 };
 use crate::types::{
     ContentPart, Conversation, ConversationEntry, Message, MessageContent, MessageRole,
@@ -56,7 +56,7 @@ impl ConversationProjector for ClaudeProjector {
 // ── Projection logic ─────────────────────────────────────────────────
 
 fn project_view(view: &ConversationView) -> std::result::Result<Conversation, String> {
-    let mut out = Output::new(view.id.clone());
+    let mut written = Written::new(view.id.clone());
 
     // Headerless lines (the JSONL "preamble": ai-title, last-prompt,
     // queue-operation, permission-mode, file-history-snapshot, and anything
@@ -65,15 +65,15 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // identified by that `raw` key — no enumerated type list.
     let mut emitted_preamble = false;
     for event in &view.events {
-        if let Some(raw) = event.data.get("raw") {
-            out.convo.preamble.push(raw.clone());
+        if let Some(raw) = event.data.get(PREAMBLE_KEY) {
+            written.convo.preamble.push(raw.clone());
             emitted_preamble = true;
         }
     }
     // Cross-harness views won't carry a Claude preamble; emit a default
     // permission-mode line so Claude Code can resume them.
     if !emitted_preamble {
-        out.convo.preamble.push(json!({
+        written.convo.preamble.push(json!({
             "type": "permission-mode",
             "permissionMode": "default",
             "sessionId": view.id,
@@ -86,15 +86,15 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // results, then the passthrough run that followed them) is recorded
     // here and the next turn hangs off that.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
-    let source_lines = SourceLines::new(view);
-    let with_source_line = source_lines.tool_use_ids();
-    let mut runs = PassthroughRuns::new(view, &source_lines);
+    let kept = KeptLines::new(view)?;
+    let with_source_line = kept.tool_use_ids();
+    let mut runs = PassthroughRuns::new(view);
     let root_tail = emit_run(
-        &mut out,
+        &mut written,
         runs.take_before_first_turn(),
         None,
         ParentPolicy::Source,
-        &source_lines,
+        &kept,
     );
 
     // Message-group accounting. The IR carries a message's total
@@ -126,7 +126,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     for (idx, turn) in view.turns.iter().enumerate() {
         let effective_parent = line_of_child_turn
             .get(turn.id.as_str())
-            .filter(|p| out.has(p))
+            .filter(|p| written.has(p))
             .map(|p| p.to_string())
             .or_else(|| match (idx, turn.parent_id.as_ref()) {
                 (0, None) => root_tail.clone(),
@@ -146,7 +146,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 let mut entry = user_turn_to_entry(turn, &view.id);
                 apply_turn_metadata(&mut entry, turn);
                 entry.parent_uuid = effective_parent;
-                out.push(entry);
+                written.push(entry);
             }
             Role::Assistant => {
                 // Grouped: the message total on every line of the split.
@@ -160,7 +160,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     assistant_turn_to_entry_with_usage(turn, &view.id, wire_usage.as_ref());
                 apply_turn_metadata(&mut assistant_entry, turn);
                 assistant_entry.parent_uuid = effective_parent;
-                out.push(assistant_entry);
+                written.push(assistant_entry);
 
                 // A source tool-result line is written in its place by the
                 // run it belongs to. A tool use without one gets a
@@ -168,7 +168,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 for mut result_entry in tool_result_entries(turn, &view.id, &with_source_line) {
                     apply_turn_metadata(&mut result_entry, turn);
                     tail = result_entry.uuid.clone();
-                    out.push(result_entry);
+                    written.push(result_entry);
                     synthesized = true;
                 }
             }
@@ -176,13 +176,13 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 let mut entry = system_turn_to_entry(turn, &view.id);
                 apply_turn_metadata(&mut entry, turn);
                 entry.parent_uuid = effective_parent;
-                out.push(entry);
+                written.push(entry);
             }
             Role::Other(_) => {
                 let mut entry = other_turn_to_entry(turn, &view.id);
                 apply_turn_metadata(&mut entry, turn);
                 entry.parent_uuid = effective_parent;
-                out.push(entry);
+                written.push(entry);
             }
         }
         let policy = if synthesized {
@@ -191,11 +191,11 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
             ParentPolicy::Source
         };
         if let Some(last) = emit_run(
-            &mut out,
+            &mut written,
             runs.take_after(&turn.id),
             Some(&tail),
             policy,
-            &source_lines,
+            &kept,
         ) {
             tail = last;
         }
@@ -204,32 +204,32 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    Ok(out.convo)
+    Ok(written.convo)
 }
 
 /// The projected conversation and the UUIDs written into it so far. A
 /// passthrough line keeps its source parent only when that parent is
 /// already written.
-struct Output {
+struct Written {
     convo: Conversation,
-    written: HashSet<String>,
+    uuids: HashSet<String>,
 }
 
-impl Output {
+impl Written {
     fn new(session_id: String) -> Self {
         Self {
             convo: Conversation::new(session_id),
-            written: HashSet::new(),
+            uuids: HashSet::new(),
         }
     }
 
     fn push(&mut self, entry: ConversationEntry) {
-        self.written.insert(entry.uuid.clone());
+        self.uuids.insert(entry.uuid.clone());
         self.convo.add_entry(entry);
     }
 
     fn has(&self, uuid: &str) -> bool {
-        self.written.contains(uuid)
+        self.uuids.contains(uuid)
     }
 }
 
@@ -241,12 +241,12 @@ struct PassthroughRuns<'a> {
 }
 
 impl<'a> PassthroughRuns<'a> {
-    fn new(view: &'a ConversationView, lines: &SourceLines<'a>) -> Self {
+    fn new(view: &'a ConversationView) -> Self {
         let turn_ids: HashSet<&str> = view.turns.iter().map(|t| t.id.as_str()).collect();
         let mut root_ids: HashSet<&str> = HashSet::new();
         let mut event_parent: HashMap<&str, Option<&str>> = HashMap::new();
         for event in &view.events {
-            let preamble = event.data.contains_key("raw");
+            let preamble = event.data.contains_key(PREAMBLE_KEY);
             if preamble || SourceRoot::of(event) == Some(SourceRoot::Session) {
                 root_ids.insert(event.id.as_str());
             }
@@ -257,9 +257,7 @@ impl<'a> PassthroughRuns<'a> {
         let mut by_anchor: HashMap<Option<&'a str>, Vec<&'a toolpath_convo::ConversationEvent>> =
             HashMap::new();
         for event in &view.events {
-            if event.data.contains_key("raw")
-                || (event.event_type == TOOL_RESULT_USER_EVENT && lines.get(&event.id).is_none())
-            {
+            if event.data.contains_key(PREAMBLE_KEY) {
                 continue;
             }
             let anchor = event
@@ -288,20 +286,20 @@ impl<'a> PassthroughRuns<'a> {
 /// The source tool-result lines the view kept, read once: each line's
 /// parts, its stored message when it has one, and the tool invocation
 /// each part's text comes from.
-struct SourceLines<'a> {
-    by_event: HashMap<&'a str, SourceLine>,
+struct KeptLines<'a> {
+    by_event: HashMap<&'a str, KeptLine>,
     invocations: HashMap<&'a str, &'a ToolInvocation>,
 }
 
 /// One kept tool-result line.
-struct SourceLine {
-    parts: Vec<SourcePart>,
+struct KeptLine {
+    parts: Vec<KeptPart>,
     /// The line's message, present only when a part cannot be rebuilt
     /// from the invocation text.
     message: Option<Message>,
 }
 
-struct SourcePart {
+struct KeptPart {
     tool_use_id: String,
     is_error: bool,
     /// The source content was an array of one text part rather than a
@@ -309,8 +307,10 @@ struct SourcePart {
     as_text_part: bool,
 }
 
-impl<'a> SourceLines<'a> {
-    fn new(view: &'a ConversationView) -> Self {
+impl<'a> KeptLines<'a> {
+    /// Read every kept line. A line that cannot be read is an error:
+    /// the document is not one `to_view` wrote.
+    fn new(view: &'a ConversationView) -> std::result::Result<Self, String> {
         let invocations = view
             .turns
             .iter()
@@ -322,23 +322,15 @@ impl<'a> SourceLines<'a> {
             if event.event_type != TOOL_RESULT_USER_EVENT {
                 continue;
             }
-            match SourceLine::read(event) {
-                Some(line) => {
-                    by_event.insert(event.id.as_str(), line);
-                }
-                None => eprintln!(
-                    "Warning: tool-result line {} carries no parts and no message; a synthesized line replaces it",
-                    event.id
-                ),
-            }
+            by_event.insert(event.id.as_str(), KeptLine::read(event)?);
         }
-        Self {
+        Ok(Self {
             by_event,
             invocations,
-        }
+        })
     }
 
-    fn get(&self, event_id: &str) -> Option<&SourceLine> {
+    fn get(&self, event_id: &str) -> Option<&KeptLine> {
         self.by_event.get(event_id)
     }
 
@@ -356,60 +348,55 @@ impl<'a> SourceLines<'a> {
     }
 }
 
-impl SourceLine {
-    /// Read the line from its event. A document from an earlier
-    /// version carries the message and no parts list; the parts come
-    /// from the message then.
-    fn read(event: &toolpath_convo::ConversationEvent) -> Option<Self> {
+impl KeptLine {
+    /// Read the line from its event. A line with a message and no parts
+    /// list takes its parts from the message.
+    fn read(event: &toolpath_convo::ConversationEvent) -> std::result::Result<Self, String> {
         let message = match event.data.get(MESSAGE_KEY) {
-            Some(v) => match serde_json::from_value::<Message>(v.clone()) {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    eprintln!(
-                        "Warning: tool-result line {}: message does not parse ({e}); the line is rebuilt from its parts",
-                        event.id
-                    );
-                    None
-                }
-            },
+            Some(v) => Some(serde_json::from_value::<Message>(v.clone()).map_err(|e| {
+                format!("tool-result line {}: message does not parse: {e}", event.id)
+            })?),
             None => None,
         };
-        let parts: Vec<SourcePart> =
-            match event.data.get(TOOL_RESULTS_KEY).and_then(|v| v.as_array()) {
-                Some(arr) => arr
-                    .iter()
-                    .filter_map(|p| {
-                        Some(SourcePart {
-                            tool_use_id: p.get("tool_use_id")?.as_str()?.to_string(),
-                            is_error: p.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
-                            as_text_part: p.get("content").and_then(|v| v.as_str())
-                                == Some("text_part"),
+        let parts: Vec<KeptPart> = match event.data.get(TOOL_RESULTS_KEY).and_then(|v| v.as_array())
+        {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|p| {
+                    Some(KeptPart {
+                        tool_use_id: p.get("tool_use_id")?.as_str()?.to_string(),
+                        is_error: p.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
+                        as_text_part: p.get("content").and_then(|v| v.as_str())
+                            == Some("text_part"),
+                    })
+                })
+                .collect(),
+            None => message
+                .as_ref()
+                .map(|m| {
+                    m.tool_results()
+                        .iter()
+                        .map(|tr| KeptPart {
+                            tool_use_id: tr.tool_use_id.to_string(),
+                            is_error: tr.is_error,
+                            as_text_part: false,
                         })
-                    })
-                    .collect(),
-                None => message
-                    .as_ref()
-                    .map(|m| {
-                        m.tool_results()
-                            .iter()
-                            .map(|tr| SourcePart {
-                                tool_use_id: tr.tool_use_id.to_string(),
-                                is_error: tr.is_error,
-                                as_text_part: false,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            };
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
         if parts.is_empty() && message.is_none() {
-            return None;
+            return Err(format!(
+                "tool-result line {} carries neither parts nor a message",
+                event.id
+            ));
         }
-        Some(Self { parts, message })
+        Ok(Self { parts, message })
     }
 
     /// The line's message: the stored one, else each part rebuilt from
     /// its invocation's result text.
-    fn message(&self, lines: &SourceLines) -> Message {
+    fn message(&self, lines: &KeptLines) -> Message {
         if let Some(m) = &self.message {
             return m.clone();
         }
@@ -451,7 +438,7 @@ impl SourceLine {
 
     /// The line's `toolUseResult`, rebuilt per tool from the first
     /// part's invocation, as for a synthesized line.
-    fn tool_use_result(&self, lines: &SourceLines) -> Option<serde_json::Value> {
+    fn tool_use_result(&self, lines: &KeptLines) -> Option<serde_json::Value> {
         self.parts
             .first()
             .and_then(|p| lines.invocation(&p.tool_use_id))
@@ -541,11 +528,11 @@ enum ParentPolicy {
 /// source parent. A source root has no parent and the chain continues
 /// from it. Returns the last entry written, if the run wrote any.
 fn emit_run(
-    out: &mut Output,
+    written: &mut Written,
     run: Vec<&toolpath_convo::ConversationEvent>,
     prev: Option<&str>,
     policy: ParentPolicy,
-    lines: &SourceLines,
+    lines: &KeptLines,
 ) -> Option<String> {
     let mut last: Option<String> = None;
     for event in run {
@@ -553,12 +540,12 @@ fn emit_run(
             let Some(line) = lines.get(&event.id) else {
                 continue;
             };
-            tool_result_event_to_entry(event, &out.convo.session_id, line, lines)
+            tool_result_event_to_entry(event, &written.convo.session_id, line, lines)
         } else {
-            project_event(event, &out.convo.session_id)
+            project_event(event, &written.convo.session_id)
         };
         let kept = match policy {
-            ParentPolicy::Source => source_parent(event).filter(|p| out.has(p)),
+            ParentPolicy::Source => source_parent(event).filter(|p| written.has(p)),
             ParentPolicy::Chain => None,
         };
         entry.parent_uuid = match SourceRoot::of(event) {
@@ -566,7 +553,7 @@ fn emit_run(
             None => kept.or(last.as_deref()).or(prev).map(str::to_string),
         };
         last = Some(entry.uuid.clone());
-        out.push(entry);
+        written.push(entry);
     }
     last
 }
@@ -578,8 +565,8 @@ fn emit_run(
 fn tool_result_event_to_entry(
     event: &toolpath_convo::ConversationEvent,
     session_id: &str,
-    line: &SourceLine,
-    lines: &SourceLines,
+    line: &KeptLine,
+    lines: &KeptLines,
 ) -> ConversationEntry {
     let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
     if let Some(map) = event.data.get("entry_extra").and_then(|v| v.as_object()) {
@@ -1896,7 +1883,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_result_event_without_parts_or_message_is_not_written() {
+    fn test_tool_result_event_without_parts_or_message_is_an_error() {
         let mut a1 = assistant_turn("a1", "");
         a1.parent_id = Some("u1".into());
         a1.tool_uses = vec![tool_use_with_result("t")];
@@ -1905,10 +1892,26 @@ mod tests {
         bare.event_type = TOOL_RESULT_USER_EVENT.to_string();
         view.events = vec![bare];
 
-        let convo = ClaudeProjector.project(&view).unwrap();
+        let err = ClaudeProjector.project(&view).unwrap_err().to_string();
 
-        assert_eq!(ids(&convo), ["u1", "a1", "a1-result-t"]);
-        assert!(convo.entries.iter().all(|e| e.message.is_some()));
+        assert!(err.contains("tr1"), "{err}");
+        assert!(err.contains("neither parts nor a message"), "{err}");
+    }
+
+    #[test]
+    fn test_tool_result_event_with_a_malformed_message_is_an_error() {
+        let mut a1 = assistant_turn("a1", "");
+        a1.parent_id = Some("u1".into());
+        a1.tool_uses = vec![tool_use_with_result("t")];
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a1]);
+        let mut tr = tool_result_event("tr1", "a1", "t");
+        tr.data.insert(MESSAGE_KEY.into(), json!("not a message"));
+        view.events = vec![tr];
+
+        let err = ClaudeProjector.project(&view).unwrap_err().to_string();
+
+        assert!(err.contains("tr1"), "{err}");
+        assert!(err.contains("does not parse"), "{err}");
     }
 
     /// The kept line's message is rebuilt from the invocation's result
@@ -2138,7 +2141,7 @@ mod tests {
         let mut preamble = attachment("claude-preamble-0", None, "");
         preamble.event_type = "permission-mode".to_string();
         preamble.data.insert(
-            "raw".to_string(),
+            PREAMBLE_KEY.to_string(),
             json!({"type": "permission-mode", "permissionMode": "default", "sessionId": "sess-1"}),
         );
         view.events = vec![
