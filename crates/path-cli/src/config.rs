@@ -43,6 +43,8 @@ pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
 /// Staged sync mutations awaiting acknowledgement (see `sync::journal`).
 pub(crate) const PENDING_DIR_NAME: &str = "pending";
+/// Per-session sync state: current graph and frozen boundary (see `sync::state`).
+pub(crate) const SYNC_STATE_DIR_NAME: &str = "sync-state";
 
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root
