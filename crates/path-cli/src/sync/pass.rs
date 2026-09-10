@@ -228,7 +228,11 @@ pub(crate) fn sync_session(
         .as_ref()
         .filter(|c| c.state == GraphState::Mutable)
         .map(|c| c.owned_ids.iter().cloned().collect());
-    let (kind, doc, owned_ids) = match segment(&doc, boundary.as_ref(), baseline.as_ref()) {
+    let (kind, doc, owned_ids, main_line) = match segment(
+        &doc,
+        boundary.as_ref(),
+        baseline.as_ref(),
+    ) {
         Segmentation::NoNewSteps => {
             if current_mutable && idle {
                 return freeze(ctx, session, destination, &mut activity, &mut state, restat);
@@ -255,7 +259,8 @@ pub(crate) fn sync_session(
             kind,
             doc,
             owned_ids,
-        } => (kind, *doc, owned_ids),
+            main_line,
+        } => (kind, *doc, owned_ids, main_line),
     };
     let path = doc
         .single_path()
@@ -340,6 +345,7 @@ pub(crate) fn sync_session(
         modified: session.stamp.0,
         size: session.stamp.1,
         owned_ids,
+        main_line,
         head: Some(head),
         base_from,
         body_sha256: journal::sha256_hex(&body),
@@ -419,6 +425,7 @@ fn freeze(
         modified: session.stamp.0,
         size: session.stamp.1,
         owned_ids: Vec::new(),
+        main_line: Vec::new(),
         head: Some(current.head.clone()),
         base_from: current.base_from.clone(),
         body_sha256: journal::sha256_hex(&body),
@@ -490,9 +497,18 @@ fn acknowledge(
                     meta.url
                 )));
             }
-            let head = stored
+            let (head, main_line) = stored
                 .single_path()
-                .map(|p| p.path.head.clone())
+                .map(|p| {
+                    let ancestry = toolpath::v1::query::ancestors(&p.steps, &p.path.head);
+                    let main_line = p
+                        .steps
+                        .iter()
+                        .map(|s| s.step.id.clone())
+                        .filter(|id| ancestry.contains(id))
+                        .collect();
+                    (p.path.head.clone(), main_line)
+                })
                 .unwrap_or_default();
             state.current = Some(CurrentGraph {
                 graph_id: meta.id.clone(),
@@ -502,6 +518,7 @@ fn acknowledge(
                 generation: meta.generation,
                 owned_ids: existing,
                 head,
+                main_line,
                 base_from: op.base_from.clone(),
             });
             if meta.state == GraphState::Frozen {
@@ -518,6 +535,7 @@ fn acknowledge(
                 generation: meta.generation,
                 owned_ids: op.owned_ids.clone(),
                 head: op.head.clone().unwrap_or_default(),
+                main_line: op.main_line.clone(),
                 base_from: op.base_from.clone(),
             });
             if meta.state == GraphState::Frozen {
@@ -598,6 +616,7 @@ fn adopt(
             ),
         });
     };
+    let ancestry = toolpath::v1::query::ancestors(&path.steps, &path.path.head);
     state.current = Some(CurrentGraph {
         graph_id: meta.id.clone(),
         url: meta.url.clone(),
@@ -606,6 +625,12 @@ fn adopt(
         generation: meta.generation,
         owned_ids: path.steps.iter().map(|s| s.step.id.clone()).collect(),
         head: path.path.head.clone(),
+        main_line: path
+            .steps
+            .iter()
+            .map(|s| s.step.id.clone())
+            .filter(|id| ancestry.contains(id))
+            .collect(),
         base_from: path
             .path
             .base

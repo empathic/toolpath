@@ -55,6 +55,9 @@ pub(crate) struct PendingOperation {
     /// Owned step ids in the body; empty for a freeze.
     #[serde(default)]
     pub(crate) owned_ids: Vec<String>,
+    /// Owned steps on the head's ancestry.
+    #[serde(default)]
+    pub(crate) main_line: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) head: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,6 +191,7 @@ mod tests {
             modified: None,
             size: Some(1),
             owned_ids: vec!["a".into()],
+            main_line: vec!["a".into()],
             head: Some("a".into()),
             base_from: None,
             body_sha256: sha256_hex(body),

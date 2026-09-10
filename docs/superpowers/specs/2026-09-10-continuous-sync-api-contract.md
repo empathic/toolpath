@@ -132,10 +132,13 @@ Create, or discover, the main-line continuation of a frozen path.
 - `{id}` must be `frozen`; a mutable source → `409 source_not_frozen`.
 - `source_path` is the Toolpath path id inside the source graph. The
   document must contain exactly one path, with `base.from` equal to
-  `<this server's URL for {id}>#<source_path>/<source path head>` and at
-  least one owned step. `400 invalid_base` when the reference names another
-  document, host, path, or step, or when the head does not match;
-  `400 empty_continuation` when no owned steps are present.
+  `<this server's URL for {id}>#<source_path>/<step>` where `<step>` is the
+  source path's head or an ancestor of it (a step on the frozen main line;
+  derives such as Claude's put trailing sidecar steps after the last turn,
+  so resumed work hangs off an ancestor of the head), and at least one
+  owned step. `400 invalid_base` when the reference names another document,
+  host, path, or step, or a frozen dead end that is not on the head's
+  ancestry; `400 empty_continuation` when no owned steps are present.
 - `expected_generation`, when present, must match the source graph's
   generation (protects against racing with a late visibility edit only; it is
   optional because a frozen graph's document cannot change).
@@ -207,7 +210,7 @@ Authenticated sync clients send `Idempotency-Key: <opaque, ≤ 128 chars>` on
 | `idempotency_conflict` | 409 | Key reused with a different request. |
 | `graph_has_dependents` | 409 | Delete refused; a continuation references this graph. |
 | `source_not_frozen` | 409 | Continuation source must be frozen. |
-| `invalid_base` | 400 | `base.from` malformed, foreign, unresolvable on this host, or head mismatch. |
+| `invalid_base` | 400 | `base.from` malformed, foreign, unresolvable on this host, or not on the source head's ancestry. |
 | `base_retargeted` | 400 | PUT changed a stored `base.from`. |
 | `inherited_step_redefined` | 400 | PUT resubmitted an inherited step id as an owned step. |
 | `invalid_document` | 400 | Path set, ids, heads, or parents fail scoped validation. |

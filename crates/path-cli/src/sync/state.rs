@@ -25,6 +25,9 @@ pub(crate) struct CurrentGraph {
     /// Owned step ids the server acknowledged, in document order.
     pub(crate) owned_ids: Vec<String>,
     pub(crate) head: String,
+    /// Owned steps on the head's ancestry (see `segment::Segmentation`).
+    #[serde(default)]
+    pub(crate) main_line: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) base_from: Option<String>,
 }
@@ -38,6 +41,9 @@ pub(crate) struct FrozenRecord {
     pub(crate) path_id: String,
     pub(crate) head: String,
     pub(crate) step_ids: Vec<String>,
+    /// The frozen head's ancestry along the whole chain.
+    #[serde(default)]
+    pub(crate) main_line: Vec<String>,
 }
 
 impl FrozenRecord {
@@ -47,6 +53,7 @@ impl FrozenRecord {
             path_id: self.path_id.clone(),
             head: self.head.clone(),
             step_ids: self.step_ids.iter().cloned().collect(),
+            main_line: self.main_line.iter().cloned().collect(),
         }
     }
 }
@@ -66,23 +73,32 @@ impl SessionState {
         let Some(current) = self.current.take() else {
             return;
         };
-        let mut step_ids: Vec<String> = self.frozen.take().map(|f| f.step_ids).unwrap_or_default();
-        let known: HashSet<&str> = step_ids.iter().map(String::as_str).collect();
-        let mut added: Vec<String> = current
-            .owned_ids
-            .iter()
-            .filter(|id| !known.contains(id.as_str()))
-            .cloned()
-            .collect();
-        step_ids.append(&mut added);
+        let (mut step_ids, mut main_line) = self
+            .frozen
+            .take()
+            .map(|f| (f.step_ids, f.main_line))
+            .unwrap_or_default();
+        append_new(&mut step_ids, &current.owned_ids);
+        append_new(&mut main_line, &current.main_line);
         self.frozen = Some(FrozenRecord {
             graph_id: current.graph_id,
             url: current.url,
             path_id: path_id.to_string(),
             head: current.head,
             step_ids,
+            main_line,
         });
     }
+}
+
+fn append_new(into: &mut Vec<String>, ids: &[String]) {
+    let known: HashSet<&str> = into.iter().map(String::as_str).collect();
+    let mut added: Vec<String> = ids
+        .iter()
+        .filter(|id| !known.contains(id.as_str()))
+        .cloned()
+        .collect();
+    into.append(&mut added);
 }
 
 fn state_path(config_dir: &Path, harness: ArtifactType, session: &str) -> Result<PathBuf> {
@@ -154,6 +170,7 @@ mod tests {
             generation: 4,
             owned_ids: ids.iter().map(|s| s.to_string()).collect(),
             head: head.into(),
+            main_line: ids.iter().map(|s| s.to_string()).collect(),
             base_from: None,
         }
     }
@@ -168,6 +185,7 @@ mod tests {
                 path_id: "p".into(),
                 head: "b".into(),
                 step_ids: vec!["a".into(), "b".into()],
+                main_line: vec!["a".into(), "b".into()],
             }),
         };
         state.freeze_current("p");
@@ -176,6 +194,7 @@ mod tests {
         assert_eq!(frozen.graph_id, "g2");
         assert_eq!(frozen.head, "d");
         assert_eq!(frozen.step_ids, ["a", "b", "c", "d"]);
+        assert_eq!(frozen.main_line, ["a", "b", "c", "d"]);
         let boundary = frozen.boundary();
         assert_eq!(boundary.document_url, "https://h/u/o/r/graphs/g2");
         assert!(boundary.step_ids.contains("a"));
