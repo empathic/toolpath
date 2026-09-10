@@ -45,6 +45,10 @@ mod share_config;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
 mod sync;
+#[cfg(not(target_os = "emscripten"))]
+mod sync_config;
+#[cfg(not(target_os = "emscripten"))]
+mod sync_service;
 mod term;
 
 use anyhow::Result;
