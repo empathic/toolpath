@@ -291,6 +291,7 @@ fn main() -> Result<()> {
         path: PathIdentity {
             id: format!("synthetic-{}-steps", n),
             base: Some(Base {
+                from: None,
                 uri: "file:///synthetic".into(),
                 ref_str: None,
                 branch: None,
