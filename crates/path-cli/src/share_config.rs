@@ -70,7 +70,7 @@ fn resolve_remote_from(
 /// which would leave a session dir with a deleted tail un-normalized
 /// while an existing rule dir normalizes (macOS: `/var` → `/private/var`)
 /// — and subtree matching needs both sides in the same form.
-fn canonicalize_prefix(p: &Path) -> PathBuf {
+pub(crate) fn canonicalize_prefix(p: &Path) -> PathBuf {
     for ancestor in p.ancestors() {
         if let Ok(canon) = std::fs::canonicalize(ancestor) {
             let rest = p.strip_prefix(ancestor).expect("ancestors are prefixes");
@@ -104,13 +104,15 @@ struct GlobalConfig {
 /// key is a git repository, while `ConfiguredRemote::origin` is the
 /// human-readable provenance of a resolved rule.
 #[derive(Debug, Deserialize)]
-struct ProjectRule {
+pub(crate) struct ProjectRule {
     #[serde(default)]
-    dir: Option<String>,
+    pub(crate) dir: Option<String>,
     #[serde(default)]
-    origin: Option<String>,
+    pub(crate) origin: Option<String>,
     #[serde(default)]
-    remote: Option<String>,
+    pub(crate) remote: Option<String>,
+    #[serde(default)]
+    pub(crate) sync: Option<bool>,
 }
 
 impl ProjectRule {
@@ -131,6 +133,9 @@ impl ProjectRule {
 /// owner/name tail — is `None`: an `origin` rule then simply does not
 /// match, the same as a `dir` rule pointing somewhere else.
 fn git_origin_spec(dir: &Path) -> Option<RepoSpec> {
+    if !dir.is_absolute() {
+        return None;
+    }
     let repo = git2::Repository::discover(dir).ok()?;
     let url = repo.find_remote("origin").ok()?.url()?.to_string();
     parse_git_url_spec(&url)
@@ -172,53 +177,14 @@ fn global_rule(
     let config: GlobalConfig = toml::from_str(&text)
         .with_context(|| format!("failed to parse {}", config_path.display()))?;
 
-    // An `origin` rule names the repository itself, a `dir` rule names
-    // a place it happens to sit, so identity wins over location: any
-    // matching `origin` rule beats every `dir` rule. Among `origin`
-    // rules the first in the file wins — they match exactly, so a
-    // second match is a duplicate, not a refinement. Among `dir` rules
-    // the most specific wins, and among equally deep dirs the first.
-    //
-    // The repository lookup is done at most once, and only if some rule
-    // actually asks for it: a config of pure `dir` rules touches no git
-    // repository at all.
-    let mut session_origin: Option<Option<RepoSpec>> = None;
-    let mut best_origin: Option<&ProjectRule> = None;
-    let mut best_dir: Option<(usize, &ProjectRule)> = None;
-
-    for rule in &config.project {
-        if rule.remote.is_none() || (rule.dir.is_none() && rule.origin.is_none()) {
-            continue;
-        }
-        if let Some(want) = &rule.origin {
-            let Ok(want) = parse_repo_spec(want) else {
-                continue;
-            };
-            let have = session_origin.get_or_insert_with(|| git_origin_spec(session_dir));
-            if !have.as_ref().is_some_and(|have| spec_eq(have, &want)) {
-                continue;
-            }
-        }
-        let mut dir_depth = None;
-        if let Some(dir) = &rule.dir {
-            let rule_dir = canonicalize_prefix(&expand_tilde(dir, home));
-            if !session_dir.starts_with(&rule_dir) {
-                continue;
-            }
-            dir_depth = Some(rule_dir.components().count());
-        }
-        // Everything the rule asked for matched.
-        if rule.origin.is_some() {
-            best_origin.get_or_insert(rule);
-        } else if let Some(depth) = dir_depth
-            && best_dir.is_none_or(|(d, _)| depth > d)
-        {
-            best_dir = Some((depth, rule));
-        }
-    }
-    let Some(rule) = best_origin.or(best_dir.map(|(_, rule)| rule)) else {
-        return Ok(None);
-    };
+    let (remote, _) = resolve_project_fields(
+        &config.project,
+        home,
+        Some(session_dir),
+        false,
+        |dir, root| canonicalize_prefix(Path::new(dir)).starts_with(root),
+    );
+    let Some(rule) = remote else { return Ok(None) };
     let origin = format!("{} ({})", home_relative(config_path, home), rule.label());
     let value = rule
         .remote
@@ -231,6 +197,63 @@ fn global_rule(
         display: value.to_string(),
         origin,
     }))
+}
+
+/// Resolve fields independently. Origin identity retains the existing routing
+/// precedence. Automatic sync refines an identity by directory depth; manual
+/// share preserves its existing first-matching-origin behavior.
+/// Equal specificity retains the first configured rule.
+pub(crate) fn resolve_project_fields<'a>(
+    rules: &'a [ProjectRule],
+    home: Option<&Path>,
+    session_dir: Option<&Path>,
+    refine_origin_by_dir: bool,
+    matches_dir: impl Fn(&str, &Path) -> bool,
+) -> (Option<&'a ProjectRule>, Option<&'a ProjectRule>) {
+    let Some(session_dir) = session_dir else {
+        return (None, None);
+    };
+    let mut session_origin = None;
+    let mut remote = None;
+    let mut sync = None;
+    for rule in rules {
+        if rule.dir.is_none() && rule.origin.is_none() {
+            continue;
+        }
+        if let Some(want) = &rule.origin {
+            let Ok(want) = parse_repo_spec(want) else {
+                continue;
+            };
+            let have = session_origin.get_or_insert_with(|| git_origin_spec(session_dir));
+            if !have.as_ref().is_some_and(|have| spec_eq(have, &want)) {
+                continue;
+            }
+        }
+        let depth = if let Some(dir) = &rule.dir {
+            let root = canonicalize_prefix(&expand_tilde(dir, home));
+            if !matches_dir(&session_dir.to_string_lossy(), &root) {
+                continue;
+            }
+            root.components().count()
+        } else {
+            0
+        };
+        let specificity = (
+            rule.origin.is_some(),
+            if rule.origin.is_some() && !refine_origin_by_dir {
+                0
+            } else {
+                depth
+            },
+        );
+        if rule.remote.is_some() && remote.is_none_or(|(rank, _)| specificity > rank) {
+            remote = Some((specificity, rule));
+        }
+        if rule.sync.is_some() && sync.is_none_or(|(rank, _)| specificity > rank) {
+            sync = Some((specificity, rule));
+        }
+    }
+    (remote.map(|(_, rule)| rule), sync.map(|(_, rule)| rule))
 }
 
 /// Parse `text` as the personal config and check every rule: it must
@@ -273,7 +296,7 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
 
 /// Expand a leading `~` or `~/` against `home`; everything else passes
 /// through untouched.
-fn expand_tilde(dir: &str, home: Option<&Path>) -> PathBuf {
+pub(crate) fn expand_tilde(dir: &str, home: Option<&Path>) -> PathBuf {
     if let Some(home) = home {
         if dir == "~" {
             return home.to_path_buf();
@@ -757,6 +780,35 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(repo_str(&found), "me/first");
+    }
+
+    #[test]
+    fn manual_share_keeps_the_first_origin_rule_over_a_narrower_origin_and_dir_rule() {
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.toml");
+        let checkout = temp.path().join("work/checkout");
+        init_repo_with_origin(&checkout, "git@github.com:empathic/toolpath.git");
+        write(
+            &config,
+            &format!(
+                "[[project]]\norigin = \"empathic/toolpath\"\nremote = \"me/broad\"\n\n\
+                 [[project]]\norigin = \"empathic/toolpath\"\ndir = {dir:?}\nremote = \"me/narrow\"\n",
+                dir = checkout.display().to_string(),
+            ),
+        );
+        let found = resolve_remote_from(&config, None, &checkout)
+            .unwrap()
+            .unwrap();
+        assert_eq!(repo_str(&found), "me/broad");
+
+        // Automatic sync refines a matching identity by directory depth.
+        let parsed: GlobalConfig =
+            toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        let (remote, _) =
+            resolve_project_fields(&parsed.project, None, Some(&checkout), true, |dir, root| {
+                canonicalize_prefix(Path::new(dir)).starts_with(root)
+            });
+        assert_eq!(remote.unwrap().remote.as_deref(), Some("me/narrow"));
     }
 
     #[test]
