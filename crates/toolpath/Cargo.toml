@@ -1,6 +1,6 @@
 [package]
 name = "toolpath"
-version = "0.7.1"
+version = "0.8.0"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -11,3 +11,4 @@ categories = ["development-tools"]
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+url = "2"

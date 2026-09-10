@@ -129,9 +129,13 @@ pub struct PathIdentity {
 /// Root context for a path
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Base {
+    /// Structural ancestry in an immutable graph document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<crate::reference::BaseReference>,
     /// Origin identifier: repo (e.g., "github:org/repo"), filesystem
     /// location ("file:///…"), or another toolpath step
     /// ("toolpath:path-id/step-id").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub uri: String,
     /// State identifier the origin uses to name a specific reproducible
     /// state — commit hash, revision number, tag, changeset ID, etc.
@@ -449,6 +453,7 @@ impl Base {
     /// Create a VCS base reference
     pub fn vcs(uri: impl Into<String>, ref_str: impl Into<String>) -> Self {
         Self {
+            from: None,
             uri: uri.into(),
             ref_str: Some(ref_str.into()),
             branch: None,
@@ -458,7 +463,18 @@ impl Base {
     /// Create a toolpath base reference (branching from another path's step)
     pub fn toolpath(path_id: impl Into<String>, step_id: impl Into<String>) -> Self {
         Self {
+            from: None,
             uri: format!("toolpath:{}/{}", path_id.into(), step_id.into()),
+            ref_str: None,
+            branch: None,
+        }
+    }
+
+    /// Create a structural base without VCS context.
+    pub fn from_reference(from: crate::reference::BaseReference) -> Self {
+        Self {
+            from: Some(from),
+            uri: String::new(),
             ref_str: None,
             branch: None,
         }
@@ -583,6 +599,7 @@ mod tests {
     #[test]
     fn test_base_branch_roundtrip() {
         let base = Base {
+            from: None,
             uri: "github:org/repo".into(),
             ref_str: Some("abc123def456".into()),
             branch: Some("main".into()),
@@ -600,6 +617,7 @@ mod tests {
     #[test]
     fn test_base_branch_omitted_when_none() {
         let base = Base {
+            from: None,
             uri: "github:org/repo".into(),
             ref_str: Some("abc123".into()),
             branch: None,

@@ -2,6 +2,10 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.8.0 — 2026-09-10
+
+- Add validated portable `BaseReference` and `Base.from` structural ancestry. References preserve immutable document URIs and encode scoped IDs individually. `Base` struct literals must initialize the new optional field. Structural-only bases may omit VCS `uri`.
+
 ## toolpath-cli 0.19.0 — 2026-09-05
 
 - Follow `path-cli` to 0.19.0. The shim's dependency was still pinned to
