@@ -348,9 +348,6 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     // Track the last emitted step id so events without an explicit
     // `parent_id` can chain off whatever step came before them.
     let mut last_step_id: Option<String> = steps.last().map(|s| s.step.id.clone());
-    // The head is the newest turn. Events come after the turns and hang
-    // off the turn they belong to; letting the last of them be the head
-    // would make later turns read as dead ends.
     let last_turn_id = last_step_id.clone();
     for (idx, event) in view.events.iter().enumerate() {
         // Event step id: prefer the event's native id so it round-trips.
@@ -428,9 +425,22 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         last_step_id = Some(push_step_and_dedup(&mut steps, &mut by_id, step));
     }
 
-    let head = last_turn_id
-        .or_else(|| steps.last().map(|s| s.step.id.clone()))
-        .unwrap_or_default();
+    // Events are emitted after the turns. When they chain off the newest
+    // turn the last of them is the head and every turn is on its ancestry;
+    // when they hang off older turns (file snapshots attached to the turn
+    // that produced them), that would make later turns read as dead ends,
+    // so the newest turn is the head instead.
+    let head = match (steps.last().map(|s| s.step.id.clone()), last_turn_id) {
+        (Some(last), Some(turn)) if last != turn => {
+            let ancestry = toolpath::v1::query::ancestors(&steps, &last);
+            if turn_to_step.values().all(|id| ancestry.contains(id)) {
+                last
+            } else {
+                turn
+            }
+        }
+        (last, _) => last.unwrap_or_default(),
+    };
 
     // Meta
     let title = config
@@ -1544,6 +1554,22 @@ mod tests {
         let active = toolpath::v1::query::ancestors(&path.steps, &path.path.head);
         assert!(active.contains("t2"));
         assert!(!active.iter().any(|id| id.starts_with("snapshot")));
+
+        // Events chaining off the newest turn keep the last of them as head.
+        let mut t2 = base_turn("t2", Role::User);
+        t2.parent_id = Some("t1".into());
+        let mut view = view_with(vec![base_turn("t1", Role::User), t2]);
+        view.events.push(crate::ConversationEvent {
+            id: "trailer".into(),
+            event_type: "session-meta".into(),
+            timestamp: "2026-01-01T00:00:03Z".into(),
+            parent_id: None,
+            data: HashMap::new(),
+        });
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_ne!(path.path.head, "t2");
+        let active = toolpath::v1::query::ancestors(&path.steps, &path.path.head);
+        assert_eq!(active.len(), path.steps.len());
     }
 
     #[test]

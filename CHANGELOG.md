@@ -25,11 +25,13 @@ All notable changes to the Toolpath workspace are documented here.
 
 ## toolpath-convo 0.11.2 — 2026-09-10
 
-- The derived path's `head` is the newest turn, not the last emitted
-  step. Conversation events (attachments, preamble lines, file-history
-  snapshots) are emitted after the turns and hang off the turn they belong
-  to; with the last of them as head, every later turn rendered as a dead end
-  in `md`/`dot` and sync could not tell a continuation from a fork.
+- The derived path's `head` no longer lands on a conversation event that
+  leaves turns off its ancestry. Events (attachments, preamble lines,
+  file-history snapshots) are emitted after the turns; when they chain off
+  the newest turn the last of them stays the head, but when they hang off
+  older turns, as Claude's snapshots do, the newest turn is the head.
+  Previously every turn after the last snapshot rendered as a dead end in
+  `md`/`dot`, and sync could not tell a continuation from a fork.
 
 ## toolpath 0.8.0 — 2026-09-10
 
