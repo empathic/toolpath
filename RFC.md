@@ -594,15 +594,17 @@ The path provides:
 
 ### Base Context
 
-The `path.base` object anchors the path to a specific state. The `uri`
-field identifies the origin (repository, filesystem, or another toolpath
-document). All other fields are optional.
+The `path.base` object anchors the path to a specific state. `uri`
+identifies the VCS or filesystem origin; `from` identifies an immutable
+structural ancestor in another graph document. A base must contain at
+least one of the two; every other field is optional.
 
 | Field    | Description                                              |
 | -------- | -------------------------------------------------------- |
 | `uri`    | Origin identifier                                        |
 | `ref`    | State identifier (e.g., commit hash, revision, tag)      |
 | `branch` | Branch name the path was opened against, if applicable   |
+| `from`   | Immutable structural base: `<document-uri>#<path-id>/<step-id>` |
 
 #### VCS Base
 
@@ -655,6 +657,50 @@ occur between VCS commits.
   }
 }
 ```
+
+#### Structural Base (`from`)
+
+
+`path.base.from` references an immutable graph document and one scoped step:
+`<absolute-document-uri>#<encoded-path-id>/<encoded-step-id>`. VCS `uri`,
+`ref`, and `branch` remain independent context; a structural-only base may omit
+`uri`. A base must contain `uri` or `from`.
+
+Examples:
+
+```text
+https://host/u/owner/repo/graphs/graph-id#path-id/step-id
+s3://bucket/sessions/graph.json?versionId=v1#path-id/step-id
+file:///archives/graph.json#path-id/step-id
+https://host/graph.json#path%2Fone/step%252F%23two
+```
+
+Preserve the document URI's scheme, authority, path, and query verbatim. It
+must be absolute, fragment-free, and contain no credentials, whitespace, or
+malformed percent escapes. Storage version selectors belong in its query.
+Encode each ID as UTF-8 bytes, retaining only ASCII unreserved characters
+(`A-Z a-z 0-9 - . _ ~`) and percent-encoding every other byte. Split the
+fragment on its single literal slash **before** decoding each component once.
+IDs must be nonempty valid UTF-8 without control characters. Reject extra
+literal slashes/hashes, malformed escapes, and invalid UTF-8. Display uses
+uppercase escapes; parse/display preserves decoded IDs and the document URI.
+The last example identifies path `path/one` and step `step%2F#two`.
+
+The source must have stable immutable identity: a frozen graph URL, immutable
+object location, or resolver-supported version-pinned object URI. Offline
+validation checks syntax only; it cannot establish immutability or access.
+Portable producers preserve HTTPS, S3, file, and other absolute URI schemes.
+Pathbase MVP resolves only document URIs on the same Pathbase host, verifying
+source authorization, frozen state, path, and step. Unsupported resolvers fail
+explicitly; they must never silently discard ancestry or fetch arbitrary URLs.
+
+A stored segment owns only new steps. Its parentless roots attach through
+`base.from`; its head may identify an owned step or the selected frozen base
+step. Composed readers recursively inherit the selected step and its ancestors,
+not unrelated frozen dead ends, then restore explicit parents for exported
+self-contained paths. Changes or omissions in a later source derive cannot
+replace frozen steps. Continuation lineage is explicit, while `meta.refs`
+annotations are human-facing and create no structural edges.
 
 ### Graph Object
 
@@ -981,47 +1027,3 @@ open design decisions.
 - **Sigstore**: Keyless signing for software artifacts
 - **in-toto**: Software supply chain integrity
 - **JCS (RFC 8785)**: JSON Canonicalization Scheme for deterministic serialization
-
-
-### Immutable structural bases (`base.from`)
-
-`path.base.from` references an immutable graph document and one scoped step:
-`<absolute-document-uri>#<encoded-path-id>/<encoded-step-id>`. VCS `uri`,
-`ref`, and `branch` remain independent context; a structural-only base may omit
-`uri`. A base must contain `uri` or `from`.
-
-Examples:
-
-```text
-https://host/u/owner/repo/graphs/graph-id#path-id/step-id
-s3://bucket/sessions/graph.json?versionId=v1#path-id/step-id
-file:///archives/graph.json#path-id/step-id
-https://host/graph.json#path%2Fone/step%252F%23two
-```
-
-Preserve the document URI's scheme, authority, path, and query verbatim. It
-must be absolute, fragment-free, and contain no credentials, whitespace, or
-malformed percent escapes. Storage version selectors belong in its query.
-Encode each ID as UTF-8 bytes, retaining only ASCII unreserved characters
-(`A-Z a-z 0-9 - . _ ~`) and percent-encoding every other byte. Split the
-fragment on its single literal slash **before** decoding each component once.
-IDs must be nonempty valid UTF-8 without control characters. Reject extra
-literal slashes/hashes, malformed escapes, and invalid UTF-8. Display uses
-uppercase escapes; parse/display preserves decoded IDs and the document URI.
-The last example identifies path `path/one` and step `step%2F#two`.
-
-The source must have stable immutable identity: a frozen graph URL, immutable
-object location, or resolver-supported version-pinned object URI. Offline
-validation checks syntax only; it cannot establish immutability or access.
-Portable producers preserve HTTPS, S3, file, and other absolute URI schemes.
-Pathbase MVP resolves only document URIs on the same Pathbase host, verifying
-source authorization, frozen state, path, and step. Unsupported resolvers fail
-explicitly; they must never silently discard ancestry or fetch arbitrary URLs.
-
-A stored segment owns only new steps. Its parentless roots attach through
-`base.from`; its head may identify an owned step or the selected frozen base
-step. Composed readers recursively inherit the selected step and its ancestors,
-not unrelated frozen dead ends, then restore explicit parents for exported
-self-contained paths. Changes or omissions in a later source derive cannot
-replace frozen steps. Continuation lineage is explicit, while `meta.refs`
-annotations are human-facing and create no structural edges.
