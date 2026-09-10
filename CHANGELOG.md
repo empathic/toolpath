@@ -2,6 +2,27 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.20.0 — 2026-09-10
+
+- `path sync`: automatic upload of the sessions in scope to Pathbase. One
+  pass replays any staged operation, creates or updates each session's
+  mutable graph, freezes a graph after two hours of source inactivity, and
+  continues a frozen graph in a new one that references the frozen head
+  through `base.from`. `--dry-run` plans without writing. `path sync status`,
+  `install` (writes `[sync]` and a launchd agent or systemd user timer), and
+  `uninstall`.
+- `[sync]` section in `config.toml` (`enabled`, `include`, `harnesses`,
+  `remote`, `interval`); `[[project]]` rules gain `sync = false`, and their
+  `remote` and `sync` fields resolve independently. `config edit` validates
+  the section.
+- `path share --timeout <SECS>` and `PATH_HTTP_TIMEOUT_SECS`; the Pathbase
+  request timeout default is now 300s.
+- State under the config dir: `pending/` (staged operations), `sync-state/`
+  (per-session current graph and frozen boundary), `sync-status.json`,
+  `upload.lock`. The manifest record gains `activity`.
+- Requires a Pathbase with the sync API (graph state, `meta`, guarded `PUT`,
+  `freeze`, `continuations`).
+
 ## toolpath 0.8.0 — 2026-09-10
 
 - Add validated portable `BaseReference` and `Base.from` structural ancestry. References preserve immutable document URIs and encode scoped IDs individually. `Base` struct literals must initialize the new optional field. Structural-only bases may omit VCS `uri`.
