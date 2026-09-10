@@ -233,7 +233,7 @@ pub(crate) fn sync_session(
             if current_mutable && idle {
                 return freeze(ctx, session, destination, &mut activity, &mut state, restat);
             }
-            if !ctx.dry_run && current_mutable {
+            if !ctx.dry_run {
                 acknowledge_stamp(ctx, session, &repo_url, &state)?;
             }
             return Ok(Outcome::Unchanged);
@@ -272,6 +272,15 @@ pub(crate) fn sync_session(
     let freeze_after = idle && restat() == session.stamp;
     if idle && !freeze_after {
         activity.observe(ctx.now, restat());
+        if !ctx.dry_run {
+            super::record_activity(
+                ctx.config_dir,
+                session.harness,
+                &session.id,
+                session.path.as_deref(),
+                activity.clone(),
+            )?;
+        }
     }
     let (kind, body) = match kind {
         SegmentKind::Independent => (
@@ -548,8 +557,10 @@ fn acknowledge_stamp(
     repo_url: &str,
     state: &SessionState,
 ) -> Result<()> {
-    let Some(current) = state.current.as_ref() else {
-        return Ok(());
+    let (graph_id, url) = match (&state.current, &state.frozen) {
+        (Some(current), _) => (&current.graph_id, &current.url),
+        (None, Some(frozen)) => (&frozen.graph_id, &frozen.url),
+        (None, None) => return Ok(()),
     };
     super::record_upload(
         ctx.config_dir,
@@ -558,8 +569,8 @@ fn acknowledge_stamp(
         session.project.as_deref(),
         repo_url,
         super::UploadRecord {
-            graph_id: current.graph_id.clone(),
-            url: current.url.clone(),
+            graph_id: graph_id.clone(),
+            url: url.clone(),
             modified: session.stamp.0,
             size: session.stamp.1,
             uploaded_at: ctx.now,
@@ -1021,6 +1032,29 @@ mod tests {
         edited.single_path_mut_steps()[0].step.actor = "human:late".into();
         assert_eq!(h.run(t(3 * H + 1), 1, edited, false), Outcome::Unchanged);
         assert_eq!(h.api.graphs.borrow().len(), 1);
+        // That stamp is now acknowledged: the next pass does not even derive.
+        let ctx = PassContext {
+            config_dir: h.dir.path(),
+            api: &h.api,
+            now: t(3 * H + 2),
+            dry_run: false,
+        };
+        let session = Session {
+            harness: ArtifactType::Codex,
+            id: "s1".into(),
+            project: None,
+            path: None,
+            stamp: (Some(t(1)), Some(1)),
+        };
+        let out = sync_session(
+            &ctx,
+            &session,
+            &h.dest,
+            &|| panic!("derived again"),
+            &|| (Some(t(1)), Some(1)),
+        )
+        .unwrap();
+        assert_eq!(out, Outcome::Unchanged);
         // Resumed work continues from the frozen head.
         assert!(matches!(
             h.run(t(4 * H), 2, chain(&["a", "b", "c"]), false),
