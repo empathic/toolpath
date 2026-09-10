@@ -55,7 +55,7 @@ pub fn run(target: InceptTarget) -> Result<()> {
             let input = resolve_input(input)?;
             let (project, output) = default_project(project, output);
             crate::cmd_export::run(crate::cmd_export::ExportTarget::Claude(
-                crate::cmd_export::ClaudeArgs {
+                crate::cmd_export::ClaudeExportArgs {
                     input,
                     project,
                     output,

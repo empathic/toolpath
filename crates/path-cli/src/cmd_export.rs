@@ -31,7 +31,7 @@ mod remote_session;
 
 /// Arguments of `p export claude`.
 #[derive(clap::Args, Debug, Default)]
-pub struct ClaudeArgs {
+pub struct ClaudeExportArgs {
     /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
     #[arg(short, long)]
     pub(crate) input: String,
@@ -60,7 +60,7 @@ pub struct ClaudeArgs {
 #[derive(Subcommand, Debug)]
 pub enum ExportTarget {
     /// Project a toolpath document into a Claude Code session
-    Claude(ClaudeArgs),
+    Claude(ClaudeExportArgs),
     /// Project a toolpath document into a Gemini CLI session
     Gemini {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
@@ -638,7 +638,7 @@ pub(crate) fn project_pi(
     Ok(session.header.id)
 }
 
-fn run_claude(args: ClaudeArgs) -> Result<()> {
+fn run_claude(args: ClaudeExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
         let _ = args;
@@ -2151,7 +2151,7 @@ mod tests {
         let doc = make_path_doc();
         std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
 
-        run_claude(ClaudeArgs {
+        run_claude(ClaudeExportArgs {
             input: input_path.to_string_lossy().to_string(),
             output: Some(output_path.clone()),
             ..Default::default()
@@ -2198,7 +2198,7 @@ mod tests {
         };
         std::fs::write(&input_path, serde_json::to_string(&multi).unwrap()).unwrap();
 
-        let err = run_claude(ClaudeArgs {
+        let err = run_claude(ClaudeExportArgs {
             input: input_path.to_string_lossy().to_string(),
             ..Default::default()
         })
@@ -2211,7 +2211,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(&input_path, "not json").unwrap();
-        let err = run_claude(ClaudeArgs {
+        let err = run_claude(ClaudeExportArgs {
             input: input_path.to_string_lossy().to_string(),
             ..Default::default()
         })
@@ -3289,7 +3289,7 @@ mod tests {
             std::env::set_var("HOME", &fake_home);
         }
         let export = |input: String, force: bool| {
-            run_claude(ClaudeArgs {
+            run_claude(ClaudeExportArgs {
                 input,
                 project: Some(cwd.clone()),
                 force,
@@ -3557,7 +3557,7 @@ mod tests {
             let input_path = temp.path().join("input.json");
             let output_path = temp.path().join("out.jsonl");
             std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
-            run_claude(ClaudeArgs {
+            run_claude(ClaudeExportArgs {
                 input: input_path.to_string_lossy().to_string(),
                 output: Some(output_path.clone()),
                 remote: RemoteSessionArgs {
