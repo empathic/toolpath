@@ -99,9 +99,9 @@ Replace the document **owned** by a mutable graph.
 - Steps are matched to existing rows by `(path id, step id)`; server UUIDs
   are preserved. Changed payloads are updated, new steps inserted in document
   order, absent owned steps deleted, parent edges rebuilt for affected rows.
-- A step id that belongs to inherited history (reachable through `base.from`)
-  is rejected with `400 inherited_step_redefined`, with or without any force
-  flag. The path's `base.from` must equal the stored one (`400 base_retargeted`
+- A step id stored anywhere along the base chain (inherited or not; frozen
+  ids are reserved along the whole chain) is rejected with
+  `400 inherited_step_redefined`, with or without any force flag. The path's `base.from` must equal the stored one (`400 base_retargeted`
   otherwise).
 - `expected_generation` mismatch → `409 generation_conflict`. Frozen graph →
   `409 frozen`. Both are checked under the graph lock.
@@ -138,7 +138,10 @@ Create, or discover, the main-line continuation of a frozen path.
   so resumed work hangs off an ancestor of the head), and at least one
   owned step. `400 invalid_base` when the reference names another document,
   host, path, or step, or a frozen dead end that is not on the head's
-  ancestry; `400 empty_continuation` when no owned steps are present.
+  ancestry; `400 empty_continuation` when no owned steps are present;
+  `400 invalid_document` when an owned step reuses an id stored anywhere
+  in the source path or its own base chain (frozen ids are reserved along
+  the whole chain, dead ends included).
 - `expected_generation`, when present, must match the source graph's
   generation (protects against racing with a late visibility edit only; it is
   optional because a frozen graph's document cannot change).
