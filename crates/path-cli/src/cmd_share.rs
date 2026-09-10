@@ -57,6 +57,56 @@ pub struct ShareArgs {
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Upload every session instead of picking one. Requires login.
+    /// Every run uploads everything in scope — there is no record of
+    /// what was shared before, so re-running creates duplicate graphs.
+    #[arg(long, conflicts_with_all = ["session", "anon", "project"])]
+    pub all: bool,
+
+    /// With --all: only sessions whose project directory is under this path
+    #[arg(long, requires = "all", value_name = "DIR")]
+    pub project_under: Option<PathBuf>,
+
+    /// With --all: print what would be uploaded and exit
+    #[arg(long, requires = "all")]
+    pub dry_run: bool,
+
+    /// With --all: skip the confirmation prompt
+    #[arg(long, short = 'y', requires = "all")]
+    pub yes: bool,
+
+    /// Upload even if the session was already uploaded to this
+    /// destination (recorded in the sync manifest)
+    #[arg(long)]
+    pub force: bool,
+}
+
+/// Which sessions `gather_artifacts` keeps, by project directory.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ProjectScope<'a> {
+    /// Sessions tied to exactly this directory (`--project`).
+    Exact(&'a std::path::Path),
+    /// Sessions whose directory is this one or below it (`--project-under`).
+    Under(&'a std::path::Path),
+}
+
+impl ProjectScope<'_> {
+    fn admits(&self, t: ArtifactType, dir: &str) -> bool {
+        match self {
+            ProjectScope::Exact(p) => paths_match(std::path::Path::new(dir), p),
+            ProjectScope::Under(p) => crate::sync::sources::project_in_scope(t, dir, p),
+        }
+    }
+}
+
+/// `None` scope admits everything, including sessions with no known
+/// directory; any scope excludes those.
+fn admits(scope: Option<&ProjectScope<'_>>, t: ArtifactType, dir: Option<&str>) -> bool {
+    match scope {
+        None => true,
+        Some(s) => dir.is_some_and(|d| s.admits(t, d)),
+    }
 }
 
 /// One artifact surfaced by a provider — today always an agent session.
@@ -64,9 +114,12 @@ pub struct ShareArgs {
 #[derive(Debug, Clone)]
 pub(crate) struct ArtifactRow {
     pub(crate) artifact_type: ArtifactType,
-    /// Project path for keyed providers; `None` for codex/opencode.
+    /// Project path for keyed providers, as the provider keys it
+    /// (claude and pi decode theirs from a lossy slug); `None` for
+    /// session-keyed providers.
     pub(crate) path: Option<String>,
-    /// Recorded cwd from the session (codex/opencode only).
+    /// Working directory the session recorded. The real directory
+    /// wherever the provider reports one; `None` when it doesn't.
     pub(crate) cwd: Option<String>,
     pub(crate) session_id: String,
     pub(crate) title: String,
@@ -81,55 +134,54 @@ pub(crate) struct ArtifactRow {
 /// rows whose project (or recorded cwd) canonicalizes to `cwd` come
 /// first, sorted by descending `last_activity`.
 ///
-/// Filters: `harness_filter` keeps only rows from one harness; `project_filter`
+/// Filters: `harness_filter` keeps only rows from one harness; `scope`
 /// keeps only rows whose project (for keyed) or cwd (for session-keyed)
-/// canonicalizes to that path.
+/// the scope admits.
 pub(crate) fn gather_artifacts(
     bundle: &HarnessBundle,
     cwd: &std::path::Path,
     harness_filter: Option<ArtifactType>,
-    project_filter: Option<&std::path::Path>,
+    scope: Option<&ProjectScope<'_>>,
 ) -> Vec<ArtifactRow> {
     let mut rows = Vec::new();
     let canonical_cwd = canonicalize_or_self(cwd);
-    let canonical_project = project_filter.map(canonicalize_or_self);
 
     let want = |h: ArtifactType| harness_filter.is_none_or(|f| f == h);
 
     if want(ArtifactType::Claude)
         && let Some(mgr) = &bundle.claude
     {
-        collect_claude(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+        collect_claude(mgr, &canonical_cwd, scope, &mut rows);
     }
     if want(ArtifactType::Gemini)
         && let Some(mgr) = &bundle.gemini
     {
-        collect_gemini(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+        collect_gemini(mgr, &canonical_cwd, scope, &mut rows);
     }
     if want(ArtifactType::Pi)
         && let Some(mgr) = &bundle.pi
     {
-        collect_pi(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+        collect_pi(mgr, &canonical_cwd, scope, &mut rows);
     }
     if want(ArtifactType::Codex)
         && let Some(mgr) = &bundle.codex
     {
-        collect_codex(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+        collect_codex(mgr, &canonical_cwd, scope, &mut rows);
     }
     if want(ArtifactType::Copilot)
         && let Some(mgr) = &bundle.copilot
     {
-        collect_copilot(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+        collect_copilot(mgr, &canonical_cwd, scope, &mut rows);
     }
     if want(ArtifactType::Opencode)
         && let Some(mgr) = &bundle.opencode
     {
-        collect_opencode(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+        collect_opencode(mgr, &canonical_cwd, scope, &mut rows);
     }
     if want(ArtifactType::Cursor)
         && let Some(mgr) = &bundle.cursor
     {
-        collect_cursor(mgr, &canonical_cwd, canonical_project.as_deref(), &mut rows);
+        collect_cursor(mgr, &canonical_cwd, scope, &mut rows);
     }
 
     rows.sort_by(|a, b| {
@@ -151,7 +203,7 @@ fn paths_match(a: &std::path::Path, b: &std::path::Path) -> bool {
 fn collect_claude(
     mgr: &toolpath_claude::ClaudeConvo,
     canonical_cwd: &std::path::Path,
-    project_filter: Option<&std::path::Path>,
+    scope: Option<&ProjectScope<'_>>,
     out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
@@ -165,9 +217,7 @@ fn collect_claude(
     };
     for project in projects {
         let project_path = std::path::Path::new(&project);
-        if let Some(filter) = project_filter
-            && !paths_match(project_path, filter)
-        {
+        if !admits(scope, ArtifactType::Claude, Some(&project)) {
             continue;
         }
         let metas = match mgr.list_conversation_metadata(&project) {
@@ -179,10 +229,13 @@ fn collect_claude(
         };
         let matches_cwd = paths_match(project_path, canonical_cwd);
         for m in metas {
+            // The slug-decoded project is what the provider keys on;
+            // the recorded cwd is the real directory for display,
+            // grouping, and remote lookup.
             out.push(ArtifactRow {
                 artifact_type: ArtifactType::Claude,
                 path: Some(m.project_path),
-                cwd: None,
+                cwd: m.cwd,
                 session_id: m.session_id,
                 title: m
                     .first_user_message
@@ -198,7 +251,7 @@ fn collect_claude(
 fn collect_gemini(
     mgr: &toolpath_gemini::GeminiConvo,
     canonical_cwd: &std::path::Path,
-    project_filter: Option<&std::path::Path>,
+    scope: Option<&ProjectScope<'_>>,
     out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
@@ -212,9 +265,7 @@ fn collect_gemini(
     };
     for project in projects {
         let project_path = std::path::Path::new(&project);
-        if let Some(filter) = project_filter
-            && !paths_match(project_path, filter)
-        {
+        if !admits(scope, ArtifactType::Gemini, Some(&project)) {
             continue;
         }
         let metas = match mgr.list_conversation_metadata(&project) {
@@ -245,7 +296,7 @@ fn collect_gemini(
 fn collect_pi(
     mgr: &toolpath_pi::PiConvo,
     canonical_cwd: &std::path::Path,
-    project_filter: Option<&std::path::Path>,
+    scope: Option<&ProjectScope<'_>>,
     out: &mut Vec<ArtifactRow>,
 ) {
     let projects = match mgr.list_projects() {
@@ -259,9 +310,7 @@ fn collect_pi(
     };
     for project in projects {
         let project_path = std::path::Path::new(&project);
-        if let Some(filter) = project_filter
-            && !paths_match(project_path, filter)
-        {
+        if !admits(scope, ArtifactType::Pi, Some(&project)) {
             continue;
         }
         let metas = match mgr.list_sessions(&project) {
@@ -289,7 +338,7 @@ fn collect_pi(
             out.push(ArtifactRow {
                 artifact_type: ArtifactType::Pi,
                 path: Some(project.clone()),
-                cwd: None,
+                cwd: m.cwd,
                 session_id: m.id,
                 title: m
                     .first_user_message
@@ -305,7 +354,7 @@ fn collect_pi(
 fn collect_codex(
     mgr: &toolpath_codex::CodexConvo,
     canonical_cwd: &std::path::Path,
-    project_filter: Option<&std::path::Path>,
+    scope: Option<&ProjectScope<'_>>,
     out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.list_sessions() {
@@ -319,14 +368,8 @@ fn collect_codex(
     };
     for m in metas {
         let cwd_str = m.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
-        if let Some(filter) = project_filter {
-            let stored = match cwd_str.as_deref() {
-                Some(s) => std::path::PathBuf::from(s),
-                None => continue,
-            };
-            if !paths_match(&stored, filter) {
-                continue;
-            }
+        if !admits(scope, ArtifactType::Codex, cwd_str.as_deref()) {
+            continue;
         }
         let matches_cwd = m
             .cwd
@@ -351,7 +394,7 @@ fn collect_codex(
 fn collect_copilot(
     mgr: &toolpath_copilot::CopilotConvo,
     canonical_cwd: &std::path::Path,
-    project_filter: Option<&std::path::Path>,
+    scope: Option<&ProjectScope<'_>>,
     out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.list_sessions() {
@@ -366,11 +409,8 @@ fn collect_copilot(
     for m in metas {
         // Copilot stores cwd as a String (from session.start `context.cwd`).
         let stored = m.cwd.as_deref().map(std::path::PathBuf::from);
-        if let Some(filter) = project_filter {
-            match &stored {
-                Some(p) if paths_match(p, filter) => {}
-                _ => continue,
-            }
+        if !admits(scope, ArtifactType::Copilot, m.cwd.as_deref()) {
+            continue;
         }
         let matches_cwd = stored
             .as_deref()
@@ -394,7 +434,7 @@ fn collect_copilot(
 fn collect_opencode(
     mgr: &toolpath_opencode::OpencodeConvo,
     canonical_cwd: &std::path::Path,
-    project_filter: Option<&std::path::Path>,
+    scope: Option<&ProjectScope<'_>>,
     out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.io().list_session_metadata(None) {
@@ -407,13 +447,11 @@ fn collect_opencode(
         }
     };
     for m in metas {
-        if let Some(filter) = project_filter
-            && !paths_match(&m.directory, filter)
-        {
+        let cwd_str = m.directory.to_string_lossy().into_owned();
+        if !admits(scope, ArtifactType::Opencode, Some(&cwd_str)) {
             continue;
         }
         let matches_cwd = paths_match(&m.directory, canonical_cwd);
-        let cwd_str = m.directory.to_string_lossy().into_owned();
         let title = match (&m.first_user_message, m.title.is_empty()) {
             (Some(s), _) if !s.is_empty() => s.clone(),
             (_, false) => m.title.clone(),
@@ -435,7 +473,7 @@ fn collect_opencode(
 fn collect_cursor(
     mgr: &toolpath_cursor::CursorConvo,
     canonical_cwd: &std::path::Path,
-    project_filter: Option<&std::path::Path>,
+    scope: Option<&ProjectScope<'_>>,
     out: &mut Vec<ArtifactRow>,
 ) {
     let metas = match mgr.io().list_session_metadata() {
@@ -456,13 +494,11 @@ fn collect_cursor(
         let Some(workspace) = m.workspace_path.as_ref() else {
             continue;
         };
-        if let Some(filter) = project_filter
-            && !paths_match(workspace, filter)
-        {
+        let cwd_str = workspace.to_string_lossy().into_owned();
+        if !admits(scope, ArtifactType::Cursor, Some(&cwd_str)) {
             continue;
         }
         let matches_cwd = paths_match(workspace, canonical_cwd);
-        let cwd_str = workspace.to_string_lossy().into_owned();
         let title = match (&m.first_user_message, &m.name) {
             (Some(s), _) if !s.is_empty() => s.clone(),
             (_, Some(n)) if !n.is_empty() => n.clone(),
@@ -505,13 +541,21 @@ pub fn run(args: ShareArgs) -> Result<()> {
         // Explicit-args: validate creds before derive so a credential
         // failure doesn't waste the derive/cache work.
         let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
-        return share_explicit(h, session.as_str(), &args, auth, base_url);
+        return share_explicit(h, session.as_str(), &args, auth, base_url, None);
     }
 
     let cwd = std::env::current_dir()?;
     let bundle = HarnessBundle::from_environment();
+
+    if args.all {
+        let auth = crate::cmd_pathbase::preflight_auth(&base_url, false, true)
+            .context("`share --all` requires an authenticated upload")?;
+        return share_all(&args, harness, &bundle, &cwd, auth, base_url);
+    }
+
     let project_filter = args.project.as_deref();
-    let rows = gather_artifacts(&bundle, &cwd, harness, project_filter);
+    let scope = project_filter.map(ProjectScope::Exact);
+    let rows = gather_artifacts(&bundle, &cwd, harness, scope.as_ref());
 
     if rows.is_empty() {
         return bail_no_sessions(&bundle, project_filter);
@@ -579,12 +623,26 @@ pub fn run(args: ShareArgs) -> Result<()> {
             None
         },
         no_cache: args.no_cache,
+        all: false,
+        project_under: None,
+        dry_run: false,
+        yes: false,
+        force: args.force,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
     // thing. `{:?}` adds the surrounding quotes per the spec.
     eprintln!("Picked {} session {:?}", h.name(), title);
-    share_explicit(h, &session, &explicit, auth, base_url)
+    // The picker line carries the provider's project key, which for
+    // claude and pi is decoded from a lossy slug. The row still has
+    // the session's recorded cwd; that is the directory the configured
+    // remote should be looked up under.
+    let session_dir = rows
+        .iter()
+        .find(|r| r.artifact_type == h && r.session_id == session)
+        .and_then(|r| r.cwd.clone())
+        .map(PathBuf::from);
+    share_explicit(h, &session, &explicit, auth, base_url, session_dir)
 }
 
 fn bail_no_sessions(
@@ -761,12 +819,17 @@ fn harness_status_cursor(bundle: &HarnessBundle, home: Option<&std::path::Path>)
     }
 }
 
+/// `session_dir` is the directory to resolve a configured remote
+/// under when the caller knows it (the picker passes the row's
+/// recorded cwd); otherwise it comes from `--project`, then from the
+/// derived document's `path.base`.
 fn share_explicit(
     harness: ArtifactType,
     session: &str,
     args: &ShareArgs,
     auth: crate::cmd_pathbase::AuthMode,
     base_url: String,
+    session_dir: Option<PathBuf>,
 ) -> Result<()> {
     let project = match (harness.path_keyed(), args.project.as_ref()) {
         (true, Some(p)) => Some(p.to_string_lossy().into_owned()),
@@ -777,52 +840,239 @@ fn share_explicit(
         (false, _) => None,
     };
 
-    // Fast path: when the manifest shows this exact source state is
-    // already in the cache, upload the cached doc instead of re-deriving
-    // — a derive would reproduce it byte-for-byte anyway.
-    if !args.no_cache
+    let loaded = load_session(harness, project.as_deref(), session, args.no_cache)?;
+    let summary = format!("{} session {}", harness.name(), loaded.cache_id);
+    match &loaded.origin {
+        LoadOrigin::Cache => {
+            eprintln!("Cache is current for {summary}; uploading without re-deriving")
+        }
+        LoadOrigin::Derived(path) => eprintln!("Cached {summary} ({})", path.display()),
+        LoadOrigin::DerivedUncached => {}
+    }
+    let session_dir = session_dir
+        .or_else(|| project.as_deref().map(PathBuf::from))
+        .or_else(|| {
+            loaded
+                .doc
+                .as_ref()
+                .map(std::borrow::Cow::Borrowed)
+                .or_else(|| {
+                    toolpath::v1::Graph::from_json(&loaded.body)
+                        .ok()
+                        .map(std::borrow::Cow::Owned)
+                })
+                .and_then(|doc| doc_session_dir(&doc))
+        });
+    let dest = resolve_destination(args, &auth, base_url, session_dir)?;
+
+    let stamp = source_stamp(
+        &HarnessBundle::from_environment(),
+        harness,
+        project.as_deref(),
+        session,
+    );
+    if let crate::cmd_pathbase::AuthMode::Authed { username, .. } = &auth {
+        let repo = dest
+            .repo
+            .as_ref()
+            .map(|r| format!("{}/{}", r.owner, r.name))
+            .unwrap_or_else(|| format!("{username}/pathstash"));
+        let repo_url = repo_url(&dest.base_url, &repo);
+        match upload_class(harness, session, &repo_url, stamp) {
+            UploadClass::Uploaded(url) if !args.force => {
+                eprintln!(
+                    "Already uploaded to {repo}, unchanged since; pass --force to upload again"
+                );
+                println!("{url}");
+                return Ok(());
+            }
+            UploadClass::Uploaded(url) => {
+                eprintln!("Already uploaded to {repo} ({url}); uploading again");
+            }
+            UploadClass::Changed(url) => {
+                eprintln!(
+                    "Previously uploaded to {repo} ({url}); session changed since, uploading a new graph"
+                );
+            }
+            UploadClass::New => {}
+        }
+    }
+
+    let upload = crate::cmd_export::PathbaseUploadArgs {
+        url: args.url.clone(),
+        anon: args.anon,
+        repo: dest.repo,
+        name: args.name.clone(),
+        public: args.public,
+    };
+    let base_url = dest.base_url.clone();
+    let done =
+        crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &loaded.body, &summary)?;
+    if let Some(done) = done {
+        record_upload(
+            harness,
+            session,
+            project.as_deref(),
+            &repo_url(&base_url, &format!("{}/{}", done.owner, done.repo)),
+            &done.created,
+            stamp,
+        );
+    }
+    Ok(())
+}
+
+/// The provider's project key for a row — what derive and stamp take
+/// as `project`; `None` for session-keyed harnesses.
+fn row_project(row: &ArtifactRow) -> Option<&str> {
+    if row.artifact_type.path_keyed() {
+        row.path.as_deref()
+    } else {
+        None
+    }
+}
+
+/// `<server>/u/<owner>/<name>` — the key upload records match on.
+fn repo_url(base_url: &str, repo: &str) -> String {
+    format!("{}/u/{repo}", base_url.trim_end_matches('/'))
+}
+
+/// The manifest's view of one session relative to one destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UploadClass {
+    New,
+    /// Uploaded and unchanged since; carries the graph URL.
+    Uploaded(String),
+    /// Uploaded but the source changed since; carries the graph URL.
+    Changed(String),
+}
+
+/// Current source fingerprint for a session; `(None, None)` when the
+/// provider can't stat it, which reads as "changed".
+fn source_stamp(
+    bundle: &HarnessBundle,
+    harness: ArtifactType,
+    project: Option<&str>,
+    session: &str,
+) -> crate::sync::sources::Stamp {
+    crate::sync::sources::source_for(bundle, harness)
+        .and_then(|s| s.stamp(project, session))
+        .unwrap_or((None, None))
+}
+
+fn upload_class(
+    harness: ArtifactType,
+    session: &str,
+    repo_url: &str,
+    stamp: crate::sync::sources::Stamp,
+) -> UploadClass {
+    let manifest = crate::config::config_dir()
+        .and_then(|dir| crate::sync::load_manifest(&dir))
+        .unwrap_or_default();
+    classify(&manifest, harness, session, repo_url, stamp)
+}
+
+fn classify(
+    manifest: &crate::sync::Manifest,
+    harness: ArtifactType,
+    session: &str,
+    repo_url: &str,
+    stamp: crate::sync::sources::Stamp,
+) -> UploadClass {
+    match crate::sync::upload_state(manifest, harness, session, repo_url, stamp) {
+        crate::sync::UploadState::New => UploadClass::New,
+        crate::sync::UploadState::Uploaded(u) => UploadClass::Uploaded(u.url.clone()),
+        crate::sync::UploadState::Changed(u) => UploadClass::Changed(u.url.clone()),
+    }
+}
+
+/// Remember a successful authed upload in the manifest. A failure
+/// here only costs a future skip, so it warns instead of erroring.
+fn record_upload(
+    harness: ArtifactType,
+    session: &str,
+    project: Option<&str>,
+    repo_url: &str,
+    created: &crate::cmd_pathbase::CreatedGraph,
+    stamp: crate::sync::sources::Stamp,
+) {
+    let record = crate::sync::UploadRecord {
+        graph_id: created.id.clone(),
+        url: created.url.clone(),
+        modified: stamp.0,
+        size: stamp.1,
+        uploaded_at: Utc::now(),
+    };
+    if let Err(e) = crate::config::config_dir().and_then(|dir| {
+        crate::sync::record_upload(&dir, harness, session, project, repo_url, record)
+    }) {
+        eprintln!("warning: upload not recorded in sync manifest: {e}");
+    }
+}
+
+/// A session's document as it should be uploaded.
+struct LoadedSession {
+    cache_id: String,
+    body: String,
+    /// The parsed document when this load derived it; `None` when the
+    /// body was read straight from the cache.
+    doc: Option<toolpath::v1::Graph>,
+    /// Where the load came from, for the caller's status line.
+    origin: LoadOrigin,
+}
+
+enum LoadOrigin {
+    /// Read from the cache: the manifest showed the source unchanged.
+    Cache,
+    /// Derived from the source and written to the cache at this path.
+    Derived(PathBuf),
+    /// Derived in memory only (`--no-cache`).
+    DerivedUncached,
+}
+
+impl LoadOrigin {
+    fn short(&self) -> &'static str {
+        match self {
+            LoadOrigin::Cache => "cached",
+            LoadOrigin::Derived(_) | LoadOrigin::DerivedUncached => "derived",
+        }
+    }
+}
+
+/// The current document for one session: read from the cache when the
+/// manifest shows the source unchanged since it was written (a derive
+/// would reproduce it byte-for-byte), otherwise derived — and, unless
+/// `no_cache`, written to the cache so cache and upload agree.
+fn load_session(
+    harness: ArtifactType,
+    project: Option<&str>,
+    session: &str,
+    no_cache: bool,
+) -> Result<LoadedSession> {
+    if !no_cache
         && let Some(cache_id) = crate::sync::fresh_cache_id(
             &HarnessBundle::from_environment(),
             harness,
-            project.as_deref(),
+            project,
             session,
         )
     {
         let doc_path = crate::cache::cache_path(&cache_id)?;
         let body = std::fs::read_to_string(&doc_path)
             .with_context(|| format!("Failed to read {}", doc_path.display()))?;
-        eprintln!(
-            "Cache is current for {} session {cache_id}; uploading without re-deriving",
-            harness.name()
-        );
-        let session_dir = project.as_deref().map(PathBuf::from).or_else(|| {
-            toolpath::v1::Graph::from_json(&body)
-                .ok()
-                .and_then(|doc| doc_session_dir(&doc))
+        return Ok(LoadedSession {
+            cache_id,
+            body,
+            doc: None,
+            origin: LoadOrigin::Cache,
         });
-        let dest = resolve_destination(args, &auth, base_url, session_dir)?;
-        let summary = format!("{} session {}", harness.name(), cache_id);
-        let upload = crate::cmd_export::PathbaseUploadArgs {
-            url: args.url.clone(),
-            anon: args.anon,
-            repo: dest.repo,
-            name: args.name.clone(),
-            public: args.public,
-        };
-        return crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary);
     }
 
-    let derived = derive_session(harness, project.as_deref(), session)?;
-    let summary = format!("{} session {}", harness.name(), derived.cache_id);
-
-    if !args.no_cache {
-        // The cache entry should always reflect what was just uploaded.
-        // `path share` is "ship the current state of this session"; if
-        // the conversation has grown since a prior share, the in-memory
-        // body has the new turns but a stale cache file would not — and
-        // the upload uses the fresh body, not the cache. Always
-        // overwrite so cache and upload agree (use `--no-cache` to skip
-        // the cache write entirely).
+    let derived = derive_session(harness, project, session)?;
+    let mut origin = LoadOrigin::DerivedUncached;
+    if !no_cache {
+        // Always overwrite: `share` ships the current state of the
+        // session, and a stale cache file from a prior share would
+        // otherwise disagree with what was uploaded.
         let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
         // Transitional: `share` does not take `&Config` yet; load one
         // for the engine. A load failure degrades like a manifest-write
@@ -833,28 +1083,418 @@ fn share_explicit(
         {
             eprintln!("warning: sync manifest not updated: {e}");
         }
-        eprintln!(
-            "Cached {} session → {} ({})",
-            harness.name(),
-            derived.cache_id,
-            path.display()
-        );
+        origin = LoadOrigin::Derived(path);
+    }
+    let body = derived.doc.to_json()?;
+    Ok(LoadedSession {
+        cache_id: derived.cache_id,
+        body,
+        doc: Some(derived.doc),
+        origin,
+    })
+}
+
+// ── `share --all` ───────────────────────────────────────────────────
+
+/// Where one bulk-uploaded session goes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct BulkTarget {
+    owner: String,
+    repo: String,
+    base_url: String,
+}
+
+impl BulkTarget {
+    fn display(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
     }
 
-    let session_dir = project
-        .as_deref()
-        .map(PathBuf::from)
-        .or_else(|| doc_session_dir(&derived.doc));
-    let dest = resolve_destination(args, &auth, base_url, session_dir)?;
-    let body = derived.doc.to_json()?;
-    let upload = crate::cmd_export::PathbaseUploadArgs {
-        url: args.url.clone(),
-        anon: args.anon,
-        repo: dest.repo,
-        name: args.name.clone(),
-        public: args.public,
+    fn url(&self) -> String {
+        format!("{}/u/{}/{}", self.base_url, self.owner, self.repo)
+    }
+}
+
+/// One project directory's worth of sessions in the bulk summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BulkGroup {
+    /// Session directory as reported by the providers; `None` for
+    /// sessions with no recorded cwd.
+    dir: Option<String>,
+    /// Row indices into the gathered artifacts.
+    rows: Vec<usize>,
+    /// Manifest classification per row, parallel to `rows`.
+    states: Vec<UploadClass>,
+    /// A remote configured for this directory, when one resolved and
+    /// no `--repo` overrides it.
+    configured: Option<BulkTarget>,
+}
+
+/// Group `rows` by session directory — the recorded cwd when known,
+/// else the provider's project key — resolving each directory's
+/// configured remote once through `remote` and classifying each row
+/// against its destination through `state`. Groups sort by descending
+/// session count, then directory; the no-directory group sorts last.
+fn plan_bulk(
+    rows: &[ArtifactRow],
+    default_target: &BulkTarget,
+    mut remote: impl FnMut(&str) -> Result<Option<BulkTarget>>,
+    mut state: impl FnMut(&ArtifactRow, &BulkTarget) -> UploadClass,
+) -> Result<Vec<BulkGroup>> {
+    use std::collections::BTreeMap;
+    let mut by_dir: BTreeMap<Option<String>, Vec<usize>> = BTreeMap::new();
+    for (i, row) in rows.iter().enumerate() {
+        let dir = row.cwd.clone().or_else(|| row.path.clone());
+        by_dir.entry(dir).or_default().push(i);
+    }
+    let mut groups = Vec::with_capacity(by_dir.len());
+    for (dir, idxs) in by_dir {
+        let configured = match &dir {
+            Some(d) => remote(d)?,
+            None => None,
+        };
+        let target = configured.as_ref().unwrap_or(default_target);
+        let states = idxs.iter().map(|&i| state(&rows[i], target)).collect();
+        groups.push(BulkGroup {
+            dir,
+            rows: idxs,
+            states,
+            configured,
+        });
+    }
+    groups.sort_by(|a, b| {
+        b.rows
+            .len()
+            .cmp(&a.rows.len())
+            .then_with(|| match (&a.dir, &b.dir) {
+                (Some(x), Some(y)) => x.cmp(y),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+    });
+    Ok(groups)
+}
+
+/// Per-harness session counts, most first, then by name.
+fn harness_totals(rows: &[ArtifactRow]) -> Vec<(ArtifactType, usize)> {
+    let mut totals: Vec<(ArtifactType, usize)> = Vec::new();
+    for row in rows {
+        match totals.iter_mut().find(|(h, _)| *h == row.artifact_type) {
+            Some((_, n)) => *n += 1,
+            None => totals.push((row.artifact_type, 1)),
+        }
+    }
+    totals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name().cmp(b.0.name())));
+    totals
+}
+
+/// How a group's directory is shown: relative to `--project-under`
+/// when given (`.` for the root itself), else `~`-relative.
+fn group_label(
+    dir: Option<&str>,
+    project_under: Option<&std::path::Path>,
+    home: Option<&std::path::Path>,
+) -> String {
+    let Some(dir) = dir else {
+        return "(no project)".to_string();
     };
-    crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)
+    let path = std::path::Path::new(dir);
+    if let Some(under) = project_under {
+        let candidates = [under.to_path_buf(), canonicalize_or_self(under)];
+        if let Some(rest) = candidates.iter().find_map(|u| path.strip_prefix(u).ok()) {
+            return if rest.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                rest.display().to_string()
+            };
+        }
+    }
+    crate::config::home_relative(path, home)
+}
+
+/// (new, already uploaded, changed since upload) for one group.
+fn tally(states: &[UploadClass]) -> (usize, usize, usize) {
+    states.iter().fold((0, 0, 0), |(n, u, c), st| match st {
+        UploadClass::New => (n + 1, u, c),
+        UploadClass::Uploaded(_) => (n, u + 1, c),
+        UploadClass::Changed(_) => (n, u, c + 1),
+    })
+}
+
+/// The pre-upload summary: a heading with what was found and what
+/// will upload, harness totals, then one line per project directory
+/// with the number of sessions that will upload, what is being skipped
+/// (already uploaded / changed since), and the configured remote if
+/// any. The prompt line is the caller's.
+fn render_bulk_summary(
+    groups: &[BulkGroup],
+    rows: &[ArtifactRow],
+    project_under: Option<&std::path::Path>,
+    home: Option<&std::path::Path>,
+) -> String {
+    let total = rows.len();
+    let mut out = match project_under {
+        Some(p) => format!(
+            "Found {total} sessions under {}",
+            crate::config::home_relative(p, home)
+        ),
+        None => format!("Found {total} sessions"),
+    };
+    let to_upload: usize = groups.iter().map(|g| tally(&g.states).0).sum();
+    if to_upload != total {
+        out.push_str(&format!(", {to_upload} to upload"));
+    }
+    out.push('\n');
+    let totals: Vec<String> = harness_totals(rows)
+        .iter()
+        .map(|(t, n)| format!("{} {n}", t.name()))
+        .collect();
+    out.push_str(&format!("  {}\n\n", totals.join(", ")));
+
+    let labels: Vec<String> = groups
+        .iter()
+        .map(|g| group_label(g.dir.as_deref(), project_under, home))
+        .collect();
+    let label_width = labels.iter().map(|l| l.len()).max().unwrap_or(0);
+    let counts: Vec<usize> = groups.iter().map(|g| tally(&g.states).0).collect();
+    let count_width = counts
+        .iter()
+        .map(|n| n.to_string().len())
+        .max()
+        .unwrap_or(1);
+    for ((g, label), count) in groups.iter().zip(&labels).zip(&counts) {
+        let mut line = format!("  {label:<label_width$}  {count:>count_width$}");
+        let (_, uploaded, changed) = tally(&g.states);
+        let mut notes = Vec::new();
+        if uploaded > 0 {
+            notes.push(format!("{uploaded} already uploaded"));
+        }
+        if changed > 0 {
+            notes.push(format!("{changed} changed since upload"));
+        }
+        if !notes.is_empty() {
+            line.push_str(&format!("  ({})", notes.join(", ")));
+        }
+        if let Some(t) = &g.configured {
+            line.push_str(&format!("  → {}", t.display()));
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push('\n');
+    out
+}
+
+/// "N sessions to <repo>" for the prompt and dry-run lines.
+fn upload_phrase(to_upload: usize, groups: &[BulkGroup], default_target: &BulkTarget) -> String {
+    let mut phrase = format!("{to_upload} sessions to {}", default_target.display());
+    if groups.iter().any(|g| g.configured.is_some()) {
+        phrase.push_str(" (or the noted remote)");
+    }
+    phrase
+}
+
+fn share_all(
+    args: &ShareArgs,
+    harness: Option<ArtifactType>,
+    bundle: &HarnessBundle,
+    cwd: &std::path::Path,
+    auth: crate::cmd_pathbase::AuthMode,
+    base_url: String,
+) -> Result<()> {
+    let crate::cmd_pathbase::AuthMode::Authed { token, username } = auth else {
+        anyhow::bail!("`share --all` requires login. Run `path auth login`.");
+    };
+
+    let scope = args.project_under.as_deref().map(ProjectScope::Under);
+    let rows = gather_artifacts(bundle, cwd, harness, scope.as_ref());
+    if rows.is_empty() {
+        match args.project_under.as_deref() {
+            Some(p) => anyhow::bail!("No agent sessions found under {}.", p.display()),
+            None => return bail_no_sessions(bundle, None),
+        }
+    }
+
+    let default_target = BulkTarget {
+        owner: args
+            .repo
+            .as_ref()
+            .map(|r| r.owner.clone())
+            .unwrap_or_else(|| username.clone()),
+        repo: args
+            .repo
+            .as_ref()
+            .map(|r| r.name.clone())
+            .unwrap_or_else(|| "pathstash".to_string()),
+        base_url: base_url.clone(),
+    };
+
+    let manifest = if args.force {
+        crate::sync::Manifest::default()
+    } else {
+        crate::sync::load_manifest(&crate::config::config_dir()?)?
+    };
+    let mut resolved: std::collections::HashMap<String, Option<BulkTarget>> = Default::default();
+    let groups = plan_bulk(
+        &rows,
+        &default_target,
+        |dir| {
+            if args.repo.is_some() {
+                return Ok(None);
+            }
+            if let Some(t) = resolved.get(dir) {
+                return Ok(t.clone());
+            }
+            let target =
+                crate::share_config::resolve_remote(std::path::Path::new(dir))?.map(|found| {
+                    BulkTarget {
+                        owner: found.repo.owner,
+                        repo: found.repo.name,
+                        base_url: match (&args.url, found.base_url) {
+                            (None, Some(remote_url)) => remote_url,
+                            _ => base_url.clone(),
+                        },
+                    }
+                });
+            resolved.insert(dir.to_string(), target.clone());
+            Ok(target)
+        },
+        |row, target| {
+            if args.force {
+                return UploadClass::New;
+            }
+            let stamp = source_stamp(bundle, row.artifact_type, row_project(row), &row.session_id);
+            classify(
+                &manifest,
+                row.artifact_type,
+                &row.session_id,
+                &target.url(),
+                stamp,
+            )
+        },
+    )?;
+    let to_upload: usize = groups
+        .iter()
+        .map(|g| g.states.iter().filter(|s| **s == UploadClass::New).count())
+        .sum();
+
+    let home = crate::config::home_dir();
+    eprint!(
+        "{}",
+        render_bulk_summary(
+            &groups,
+            &rows,
+            args.project_under.as_deref(),
+            home.as_deref(),
+        )
+    );
+    if to_upload == 0 {
+        eprintln!("Nothing to upload; pass --force to upload everything again.");
+        return Ok(());
+    }
+    let phrase = upload_phrase(to_upload, &groups, &default_target);
+    if args.dry_run {
+        eprintln!("Would upload {phrase}");
+        return Ok(());
+    }
+    if !args.yes {
+        let answer = crate::cmd_pathbase::prompt_line(&format!("Upload {phrase}? [y/N] "))?;
+        if !matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes") {
+            eprintln!("Aborted.");
+            std::process::exit(130);
+        }
+    }
+
+    // Ensure the pathstash repo exists once, not once per upload. A
+    // configured remote is expected to exist already.
+    if args.repo.is_none() {
+        crate::cmd_pathbase::repos_post(&base_url, &token, &username, "pathstash")?;
+    }
+
+    let mut uploaded: std::collections::BTreeMap<BulkTarget, usize> = Default::default();
+    let mut failed = 0usize;
+    let total = to_upload;
+    let mut n = 0usize;
+    for group in &groups {
+        let target = group.configured.as_ref().unwrap_or(&default_target);
+        for (&i, state) in group.rows.iter().zip(&group.states) {
+            if *state != UploadClass::New {
+                continue;
+            }
+            n += 1;
+            let row = &rows[i];
+            let project = row_project(row);
+            // One line per session, completed in place: the prefix goes
+            // out before the (possibly slow) derive so progress is
+            // visible, the outcome finishes it.
+            eprint!(
+                "[{n}/{total}] {} {}",
+                row.artifact_type.name(),
+                row.session_id
+            );
+            let stamp = source_stamp(bundle, row.artifact_type, project, &row.session_id);
+            let result = load_session(row.artifact_type, project, &row.session_id, args.no_cache)
+                .and_then(|loaded| {
+                    let doc = toolpath::v1::Graph::from_json(&loaded.body)
+                        .map_err(|e| anyhow::anyhow!("Invalid toolpath document: {e}"))?;
+                    let name = args
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| crate::cmd_export::derive_name(&doc));
+                    let created = crate::cmd_pathbase::graphs_post(
+                        &target.base_url,
+                        &token,
+                        &target.owner,
+                        &target.repo,
+                        Some(&name),
+                        &loaded.body,
+                        args.public,
+                    )?;
+                    Ok((loaded.origin, created))
+                });
+            match result {
+                Ok((origin, created)) => {
+                    eprintln!(" ({}) → {}", origin.short(), created.url);
+                    record_upload(
+                        row.artifact_type,
+                        &row.session_id,
+                        project,
+                        &target.url(),
+                        &created,
+                        stamp,
+                    );
+                    *uploaded.entry(target.clone()).or_default() += 1;
+                }
+                Err(e) => {
+                    eprintln!(" failed: {e:#}");
+                    failed += 1;
+                }
+            }
+        }
+    }
+
+    let ok = total - failed;
+    if failed > 0 {
+        eprintln!("Uploaded {ok} of {total} sessions ({failed} failed)");
+    } else {
+        eprintln!("Uploaded {ok} sessions");
+    }
+    let width = uploaded
+        .keys()
+        .map(|t| t.display().len())
+        .max()
+        .unwrap_or(0);
+    for (target, count) in &uploaded {
+        println!(
+            "  {:<width$}  {count:>4}   {}",
+            target.display(),
+            target.url()
+        );
+    }
+    if failed > 0 {
+        anyhow::bail!("{failed} of {total} uploads failed");
+    }
+    Ok(())
 }
 
 /// The directory a derived session document belongs to: its single
@@ -1268,6 +1908,254 @@ mod tests {
         );
     }
 
+    fn bulk_row(t: ArtifactType, dir: Option<&str>, session: &str) -> ArtifactRow {
+        let (path, cwd) = if t.path_keyed() {
+            (dir.map(str::to_string), None)
+        } else {
+            (None, dir.map(str::to_string))
+        };
+        ArtifactRow {
+            artifact_type: t,
+            path,
+            cwd,
+            session_id: session.to_string(),
+            title: "t".to_string(),
+            last_activity: None,
+            message_count: Some(1),
+            matches_cwd: false,
+        }
+    }
+
+    fn target(owner: &str, repo: &str) -> BulkTarget {
+        BulkTarget {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            base_url: "https://pb.test".to_string(),
+        }
+    }
+
+    #[test]
+    fn gather_artifacts_project_under_admits_subtree() {
+        let temp = TempDir::new().unwrap();
+        let claude = temp.path().join(".claude");
+        write_claude_session(&claude, "-work-foo", "s1", "a");
+        write_claude_session(&claude, "-work-foo-sub", "s2", "b");
+        write_claude_session(&claude, "-other", "s3", "c");
+        let bundle = claude_only_bundle(temp.path());
+        let scope = ProjectScope::Under(Path::new("/work"));
+        let mut rows = gather_artifacts(&bundle, Path::new("/x"), None, Some(&scope));
+        rows.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        let ids: Vec<&str> = rows.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(ids, ["s1", "s2"]);
+    }
+
+    #[test]
+    fn gather_artifacts_claude_rows_carry_recorded_cwd() {
+        let temp = TempDir::new().unwrap();
+        write_claude_session(&temp.path().join(".claude"), "-test-project", "s1", "a");
+        let bundle = claude_only_bundle(temp.path());
+        let rows = gather_artifacts(&bundle, Path::new("/x"), None, None);
+        assert_eq!(rows[0].cwd.as_deref(), Some("/test/project"));
+    }
+
+    #[test]
+    fn plan_bulk_groups_by_recorded_cwd_over_project_key() {
+        let mut a = bulk_row(ArtifactType::Claude, Some("/w/my/app"), "a");
+        a.cwd = Some("/w/my_app".to_string());
+        let mut b = bulk_row(ArtifactType::Pi, Some("/w/my/app"), "b");
+        b.cwd = Some("/w/my_app".to_string());
+        let groups = plan_bulk(
+            &[a, b],
+            &target("me", "pathstash"),
+            |_| Ok(None),
+            |_, _| UploadClass::New,
+        )
+        .unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].dir.as_deref(), Some("/w/my_app"));
+    }
+
+    #[test]
+    fn plan_bulk_groups_by_dir_and_sorts_by_count() {
+        let rows = vec![
+            bulk_row(ArtifactType::Codex, None, "n1"),
+            bulk_row(ArtifactType::Claude, Some("/w/bar"), "b1"),
+            bulk_row(ArtifactType::Claude, Some("/w/foo"), "f1"),
+            bulk_row(ArtifactType::Codex, Some("/w/foo"), "f2"),
+            bulk_row(ArtifactType::Claude, Some("/w/foo"), "f3"),
+            bulk_row(ArtifactType::Cursor, Some("/w/bar"), "b2"),
+            bulk_row(ArtifactType::Cursor, Some("/w/bar"), "b3"),
+        ];
+        let mut asked = Vec::new();
+        let mut classified = Vec::new();
+        let groups = plan_bulk(
+            &rows,
+            &target("me", "pathstash"),
+            |dir| {
+                asked.push(dir.to_string());
+                Ok((dir == "/w/foo").then(|| target("me", "foo")))
+            },
+            |row, t| {
+                classified.push((row.session_id.clone(), t.display()));
+                UploadClass::New
+            },
+        )
+        .unwrap();
+
+        let dirs: Vec<Option<&str>> = groups.iter().map(|g| g.dir.as_deref()).collect();
+        assert_eq!(dirs, [Some("/w/bar"), Some("/w/foo"), None]);
+        assert_eq!(groups[0].rows.len(), 3);
+        assert_eq!(groups[1].configured, Some(target("me", "foo")));
+        assert_eq!(groups[0].configured, None);
+        assert_eq!(groups[2].configured, None);
+        assert_eq!(asked.len(), 2, "one resolve per directory, none for no-dir");
+        classified.sort();
+        assert_eq!(
+            classified,
+            vec![
+                ("b1".to_string(), "me/pathstash".to_string()),
+                ("b2".to_string(), "me/pathstash".to_string()),
+                ("b3".to_string(), "me/pathstash".to_string()),
+                ("f1".to_string(), "me/foo".to_string()),
+                ("f2".to_string(), "me/foo".to_string()),
+                ("f3".to_string(), "me/foo".to_string()),
+                ("n1".to_string(), "me/pathstash".to_string()),
+            ],
+            "each row is classified against its own destination"
+        );
+    }
+
+    #[test]
+    fn render_bulk_summary_layout() {
+        let rows = vec![
+            bulk_row(ArtifactType::Claude, Some("/home/me/work/foo"), "f1"),
+            bulk_row(ArtifactType::Codex, Some("/home/me/work/foo"), "f2"),
+            bulk_row(ArtifactType::Claude, Some("/home/me/work/bar"), "b1"),
+            bulk_row(ArtifactType::Claude, Some("/home/me/work"), "r1"),
+            bulk_row(ArtifactType::Cursor, None, "n1"),
+        ];
+        let groups = plan_bulk(
+            &rows,
+            &target("me", "pathstash"),
+            |dir| Ok((dir == "/home/me/work/foo").then(|| target("me", "foo"))),
+            |_, _| UploadClass::New,
+        )
+        .unwrap();
+        let out = render_bulk_summary(
+            &groups,
+            &rows,
+            Some(Path::new("/home/me/work")),
+            Some(Path::new("/home/me")),
+        );
+        assert_eq!(
+            out,
+            "Found 5 sessions under ~/work\n\
+             \x20 claude 3, codex 1, cursor 1\n\
+             \n\
+             \x20 foo           2  → me/foo\n\
+             \x20 .             1\n\
+             \x20 bar           1\n\
+             \x20 (no project)  1\n\
+             \n"
+        );
+        assert_eq!(
+            upload_phrase(5, &groups, &target("me", "pathstash")),
+            "5 sessions to me/pathstash (or the noted remote)"
+        );
+    }
+
+    #[test]
+    fn render_bulk_summary_without_project_under_uses_home_relative() {
+        let rows = vec![bulk_row(ArtifactType::Claude, Some("/home/me/p"), "s")];
+        let groups = plan_bulk(
+            &rows,
+            &target("me", "pathstash"),
+            |_| Ok(None),
+            |_, _| UploadClass::New,
+        )
+        .unwrap();
+        let out = render_bulk_summary(&groups, &rows, None, Some(Path::new("/home/me")));
+        assert_eq!(out, "Found 1 sessions\n  claude 1\n\n  ~/p  1\n\n");
+        assert_eq!(
+            upload_phrase(1, &groups, &target("me", "pathstash")),
+            "1 sessions to me/pathstash"
+        );
+    }
+
+    #[test]
+    fn render_bulk_summary_reports_upload_classes() {
+        let rows = vec![
+            bulk_row(ArtifactType::Claude, Some("/p"), "a"),
+            bulk_row(ArtifactType::Claude, Some("/p"), "b"),
+            bulk_row(ArtifactType::Codex, Some("/p"), "c"),
+            bulk_row(ArtifactType::Claude, Some("/p"), "d"),
+            bulk_row(ArtifactType::Claude, Some("/q"), "e"),
+        ];
+        let groups = plan_bulk(
+            &rows,
+            &target("me", "pathstash"),
+            |dir| Ok((dir == "/q").then(|| target("me", "q"))),
+            |row, _| match row.session_id.as_str() {
+                "a" | "b" | "e" => UploadClass::Uploaded("u".into()),
+                "c" => UploadClass::Changed("u".into()),
+                _ => UploadClass::New,
+            },
+        )
+        .unwrap();
+        let out = render_bulk_summary(&groups, &rows, None, None);
+        assert_eq!(
+            out,
+            "Found 5 sessions, 1 to upload\n\
+             \x20 claude 4, codex 1\n\
+             \n\
+             \x20 /p  1  (2 already uploaded, 1 changed since upload)\n\
+             \x20 /q  0  (1 already uploaded)  → me/q\n\
+             \n"
+        );
+    }
+
+    #[test]
+    fn classify_reads_manifest_uploads() {
+        use crate::sync::{Manifest, SyncRecord, UploadRecord};
+        let stamp = (Some("2026-01-01T00:00:00Z".parse().unwrap()), Some(10u64));
+        let upload = UploadRecord {
+            graph_id: "g1".into(),
+            url: "https://pb.test/u/me/foo/graphs/g1".into(),
+            modified: stamp.0,
+            size: stamp.1,
+            uploaded_at: "2026-01-02T00:00:00Z".parse().unwrap(),
+        };
+        let mut manifest = Manifest::default();
+        manifest.entry("claude".into()).or_default().insert(
+            "s1".into(),
+            SyncRecord {
+                path: None,
+                cache_id: None,
+                modified: None,
+                size: None,
+                synced_at: "2026-01-02T00:00:00Z".parse().unwrap(),
+                uploads: vec![upload.clone()],
+            },
+        );
+        let c = |repo_url: &str, st| classify(&manifest, ArtifactType::Claude, "s1", repo_url, st);
+        let foo = repo_url("https://pb.test/", "me/foo");
+        assert_eq!(foo, "https://pb.test/u/me/foo");
+        assert_eq!(c(&foo, stamp), UploadClass::Uploaded(upload.url.clone()));
+        assert_eq!(
+            c(&foo, (stamp.0, Some(11))),
+            UploadClass::Changed(upload.url.clone())
+        );
+        assert_eq!(
+            c(&foo, (None, None)),
+            UploadClass::Changed(upload.url.clone())
+        );
+        assert_eq!(c("https://pb.test/u/me/bar", stamp), UploadClass::New);
+        assert_eq!(
+            classify(&manifest, ArtifactType::Codex, "s1", &foo, stamp),
+            UploadClass::New
+        );
+    }
+
     #[test]
     fn parse_picker_row_roundtrips_keyed() {
         let row = ArtifactRow {
@@ -1408,6 +2296,11 @@ mod tests {
             session: None,
             project: None,
             no_cache: false,
+            all: false,
+            project_under: None,
+            dry_run: false,
+            yes: false,
+            force: false,
         }
     }
 

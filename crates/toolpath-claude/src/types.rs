@@ -542,6 +542,11 @@ pub struct ConversationMetadata {
     /// First non-empty user-prompt text. Used as a human-readable title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_user_message: Option<String>,
+    /// The working directory the session recorded (`cwd` on its first
+    /// entry that carries one). Unlike `project_path`, which is decoded
+    /// from the lossy directory slug, this is the real path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[cfg(test)]

@@ -69,9 +69,7 @@ pub fn list_sessions(resolver: &PathResolver, project: &str) -> Result<Vec<Sessi
             }
         };
 
-        let parsed = header_line
-            .as_deref()
-            .and_then(parse_header_id_and_timestamp);
+        let parsed = header_line.as_deref().and_then(parse_header);
 
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
@@ -83,15 +81,15 @@ pub fn list_sessions(resolver: &PathResolver, project: &str) -> Result<Vec<Sessi
             }
         };
 
-        let (id, timestamp, entry_count) = match parsed {
-            Some((id, ts)) => {
+        let (id, timestamp, entry_count, cwd) = match parsed {
+            Some((id, ts, cwd)) => {
                 let ec = total_nonempty.saturating_sub(1);
-                (id, ts, ec)
+                (id, ts, ec, cwd)
             }
             None => {
                 let id = fallback_id_from_stem(stem);
                 let ts = file_mtime_rfc3339(&path).unwrap_or_else(|| String::from(""));
-                (id, ts, total_nonempty)
+                (id, ts, total_nonempty, None)
             }
         };
 
@@ -118,6 +116,7 @@ pub fn list_sessions(resolver: &PathResolver, project: &str) -> Result<Vec<Sessi
                 file_path: path,
                 entry_count,
                 first_user_message,
+                cwd,
             },
             mtime,
         ));
@@ -147,7 +146,9 @@ fn extract_header_line(path: &Path) -> std::io::Result<Option<String>> {
 }
 
 /// If the line is a `{"type":"session", ...}` header, return `(id, timestamp)`.
-fn parse_header_id_and_timestamp(line: &str) -> Option<(String, String)> {
+/// (id, timestamp, cwd) from a session header line; `None` when the
+/// line is not a header or lacks id/timestamp.
+fn parse_header(line: &str) -> Option<(String, String, Option<String>)> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     let obj = v.as_object()?;
     if obj.get("type").and_then(|t| t.as_str()) != Some("session") {
@@ -155,7 +156,12 @@ fn parse_header_id_and_timestamp(line: &str) -> Option<(String, String)> {
     }
     let id = obj.get("id")?.as_str()?.to_string();
     let timestamp = obj.get("timestamp")?.as_str()?.to_string();
-    Some((id, timestamp))
+    let cwd = obj
+        .get("cwd")
+        .and_then(|c| c.as_str())
+        .filter(|c| !c.is_empty())
+        .map(str::to_string);
+    Some((id, timestamp, cwd))
 }
 
 /// Strip a leading timestamp prefix from a filename stem.
@@ -324,6 +330,7 @@ mod tests {
         assert_eq!(s.id, "s1");
         assert_eq!(s.timestamp, "2026-04-16T10:00:00Z");
         assert_eq!(s.entry_count, 2);
+        assert_eq!(s.cwd.as_deref(), Some("/p"));
         assert!(s.file_path.to_string_lossy().ends_with(".jsonl"));
     }
 
