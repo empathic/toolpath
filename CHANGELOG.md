@@ -23,6 +23,14 @@ All notable changes to the Toolpath workspace are documented here.
 - Requires a Pathbase with the sync API (graph state, `meta`, guarded `PUT`,
   `freeze`, `continuations`).
 
+## toolpath-convo 0.11.2 — 2026-09-10
+
+- The derived path's `head` is the newest turn, not the last emitted
+  step. Conversation events (attachments, preamble lines, file-history
+  snapshots) are emitted after the turns and hang off the turn they belong
+  to; with the last of them as head, every later turn rendered as a dead end
+  in `md`/`dot` and sync could not tell a continuation from a fork.
+
 ## toolpath 0.8.0 — 2026-09-10
 
 - Add validated portable `BaseReference` and `Base.from` structural ancestry. References preserve immutable document URIs and encode scoped IDs individually. `Base` struct literals must initialize the new optional field. Structural-only bases may omit VCS `uri`.

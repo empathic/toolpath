@@ -348,6 +348,10 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     // Track the last emitted step id so events without an explicit
     // `parent_id` can chain off whatever step came before them.
     let mut last_step_id: Option<String> = steps.last().map(|s| s.step.id.clone());
+    // The head is the newest turn. Events come after the turns and hang
+    // off the turn they belong to; letting the last of them be the head
+    // would make later turns read as dead ends.
+    let last_turn_id = last_step_id.clone();
     for (idx, event) in view.events.iter().enumerate() {
         // Event step id: prefer the event's native id so it round-trips.
         let step_id = if event.id.is_empty() {
@@ -424,7 +428,9 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         last_step_id = Some(push_step_and_dedup(&mut steps, &mut by_id, step));
     }
 
-    let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
+    let head = last_turn_id
+        .or_else(|| steps.last().map(|s| s.step.id.clone()))
+        .unwrap_or_default();
 
     // Meta
     let title = config
@@ -1511,7 +1517,7 @@ mod tests {
     }
 
     #[test]
-    fn test_head_is_last_step_id() {
+    fn test_head_is_last_turn_step_id() {
         let turns = vec![
             base_turn("t1", Role::User),
             base_turn("t2", Role::User),
@@ -1520,6 +1526,24 @@ mod tests {
         let view = view_with(turns);
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.path.head, "t3");
+    }
+
+    #[test]
+    fn test_events_after_the_turns_do_not_take_the_head() {
+        let turns = vec![base_turn("t1", Role::User), base_turn("t2", Role::User)];
+        let mut view = view_with(turns);
+        view.events.push(crate::ConversationEvent {
+            id: "snapshot-1".into(),
+            event_type: "file-history-snapshot".into(),
+            timestamp: "2026-01-01T00:00:03Z".into(),
+            parent_id: Some("t1".into()),
+            data: HashMap::new(),
+        });
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.path.head, "t2");
+        let active = toolpath::v1::query::ancestors(&path.steps, &path.path.head);
+        assert!(active.contains("t2"));
+        assert!(!active.iter().any(|id| id.starts_with("snapshot")));
     }
 
     #[test]
