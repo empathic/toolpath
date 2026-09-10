@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## path-cli 0.20.0 — 2026-09-10
+## path-cli 0.20.0 + toolpath-cli 0.20.0 — 2026-09-10
 
 - `path sync`: automatic upload of the sessions in scope to Pathbase. One
   pass replays any staged operation, creates or updates each session's
