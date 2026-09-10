@@ -208,6 +208,7 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
 
     let manifest = crate::sync::load_manifest(&config_dir)?;
     let mut apis: HashMap<String, PathbaseSync> = HashMap::new();
+    let mut ensured_pathstash: std::collections::HashSet<String> = Default::default();
     let mut counts = Counts::default();
     let mut errors = Vec::new();
     let mut destinations: BTreeMap<String, usize> = BTreeMap::new();
@@ -255,6 +256,19 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
                     &credentials.token,
                 )?),
             };
+            // The user's pathstash is created on first use; configured
+            // remotes are expected to exist.
+            if remote.origin == "authenticated pathstash"
+                && !args.dry_run
+                && ensured_pathstash.insert(destination.base_url.clone())
+            {
+                crate::cmd_pathbase::repos_post(
+                    &destination.base_url,
+                    &credentials.token,
+                    &username,
+                    "pathstash",
+                )?;
+            }
             let project = harness.path_keyed().then(|| rec.path.clone()).flatten();
             let session = Session {
                 harness,
