@@ -18,3 +18,10 @@ mod engine;
 
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) mod sources;
+
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) mod activity;
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) mod journal;
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) mod segment;

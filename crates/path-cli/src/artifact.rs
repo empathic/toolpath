@@ -13,8 +13,11 @@
 /// repos to enumerate — so sync never re-derives them. Github and
 /// pathbase are absent on purpose: they are remote services, not
 /// local artifact sources.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, clap::ValueEnum)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
 #[value(rename_all = "lower")]
+#[serde(rename_all = "lowercase")]
 pub enum ArtifactType {
     Claude,
     Gemini,

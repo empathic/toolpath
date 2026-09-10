@@ -41,6 +41,8 @@ pub(crate) const MANIFEST_LOCK_FILE_NAME: &str = "manifest.json.lock";
 pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 /// The document cache directory (see `cache`).
 pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
+/// Staged sync mutations awaiting acknowledgement (see `sync::journal`).
+pub(crate) const PENDING_DIR_NAME: &str = "pending";
 
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root
