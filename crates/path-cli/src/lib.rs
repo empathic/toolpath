@@ -26,6 +26,8 @@ pub mod cmd_resume;
 mod cmd_share;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_show;
+#[cfg(not(target_os = "emscripten"))]
+mod cmd_sync;
 mod cmd_track;
 mod cmd_validate;
 mod config;
@@ -120,6 +122,13 @@ enum Commands {
         #[command(subcommand)]
         op: cmd_auth::AuthOp,
     },
+    /// Upload the sessions in scope to Pathbase and freeze the ones that
+    /// have been idle for two hours; `status`, `install`, `uninstall`
+    #[cfg(not(target_os = "emscripten"))]
+    Sync {
+        #[command(flatten)]
+        args: cmd_sync::SyncArgs,
+    },
     /// Edit the user configuration (~/.toolpath/config.toml)
     #[cfg(not(target_os = "emscripten"))]
     Config {
@@ -160,6 +169,8 @@ pub fn run() -> Result<()> {
         Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Auth { op } => cmd_auth::run(op),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::Sync { args } => cmd_sync::run(args, &config),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Config { op } => cmd_config::run(op),
         Commands::P { command } => cmd_p::run(command, cli.pretty, &config),

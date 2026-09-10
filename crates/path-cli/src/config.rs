@@ -45,6 +45,10 @@ pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
 pub(crate) const PENDING_DIR_NAME: &str = "pending";
 /// Per-session sync state: current graph and frozen boundary (see `sync::state`).
 pub(crate) const SYNC_STATE_DIR_NAME: &str = "sync-state";
+/// What the last `path sync` pass did (see `cmd_sync`).
+pub(crate) const SYNC_STATUS_FILE_NAME: &str = "sync-status.json";
+/// Advisory lock serializing uploads across `share` and `sync`.
+pub(crate) const UPLOAD_LOCK_FILE_NAME: &str = "upload.lock";
 
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root

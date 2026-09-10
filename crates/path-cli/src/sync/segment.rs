@@ -35,7 +35,7 @@ pub(crate) enum Segmentation {
     NoNewSteps,
     Document {
         kind: SegmentKind,
-        doc: Graph,
+        doc: Box<Graph>,
         owned_ids: Vec<String>,
     },
     /// Steps the current graph was acknowledged to own are gone from the source.
@@ -71,7 +71,7 @@ pub(crate) fn segment(
         };
         return Segmentation::Document {
             kind,
-            doc: live.clone(),
+            doc: Box::new(live.clone()),
             owned_ids,
         };
     };
@@ -164,7 +164,7 @@ pub(crate) fn segment(
     };
     Segmentation::Document {
         kind,
-        doc,
+        doc: Box::new(doc),
         owned_ids,
     }
 }
@@ -219,7 +219,7 @@ mod tests {
                 kind,
                 doc,
                 owned_ids,
-            } => (kind, doc, owned_ids),
+            } => (kind, *doc, owned_ids),
             other => panic!("expected a document, got {other:?}"),
         }
     }

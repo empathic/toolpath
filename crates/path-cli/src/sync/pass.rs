@@ -63,12 +63,6 @@ pub(crate) enum Outcome {
     Failed(String),
 }
 
-impl Outcome {
-    pub(crate) fn is_failure(&self) -> bool {
-        matches!(self, Outcome::Failed(_) | Outcome::Pending(_))
-    }
-}
-
 pub(crate) struct PassContext<'a> {
     pub(crate) config_dir: &'a Path,
     pub(crate) api: &'a dyn SyncApi,
@@ -261,7 +255,7 @@ pub(crate) fn sync_session(
             kind,
             doc,
             owned_ids,
-        } => (kind, doc, owned_ids),
+        } => (kind, *doc, owned_ids),
     };
     let path = doc
         .single_path()
