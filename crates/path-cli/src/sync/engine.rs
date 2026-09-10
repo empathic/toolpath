@@ -44,6 +44,9 @@ pub(crate) struct SyncRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) size: Option<u64>,
     pub(crate) synced_at: DateTime<Utc>,
+    /// Source activity as `path sync` last observed it (see `sync::activity`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) activity: Option<super::activity::Activity>,
     /// Pathbase uploads of this artifact, one per server+repo. Only
     /// authed uploads are recorded — anonymous ones have no repo to
     /// key on and cannot be listed later.
@@ -143,6 +146,7 @@ pub(crate) fn record_upload(
                 modified: None,
                 size: None,
                 synced_at: Utc::now(),
+                activity: None,
                 uploads: Vec::new(),
             });
         rec.uploads.retain(|u| !u.in_repo(repo_url));
@@ -260,12 +264,41 @@ fn newest_first(artifacts: &[ArtifactRef]) -> Vec<&ArtifactRef> {
 /// Replace `id`'s record, carrying over its upload history — sync and
 /// import rewrite the source fingerprint, never what was uploaded.
 fn put_record(records: &mut BTreeMap<String, SyncRecord>, id: String, mut rec: SyncRecord) {
-    if rec.uploads.is_empty()
-        && let Some(prev) = records.get_mut(&id)
-    {
-        rec.uploads = std::mem::take(&mut prev.uploads);
+    if let Some(prev) = records.get_mut(&id) {
+        if rec.uploads.is_empty() {
+            rec.uploads = std::mem::take(&mut prev.uploads);
+        }
+        if rec.activity.is_none() {
+            rec.activity = prev.activity.take();
+        }
     }
     records.insert(id, rec);
+}
+
+/// Remember what `path sync` observed of an artifact's source activity.
+pub(crate) fn record_activity(
+    config_dir: &Path,
+    artifact_type: ArtifactType,
+    id: &str,
+    path: Option<&str>,
+    activity: super::activity::Activity,
+) -> Result<()> {
+    update_manifest(config_dir, |manifest| {
+        let rec = manifest
+            .entry(artifact_type.name().to_string())
+            .or_default()
+            .entry(id.to_string())
+            .or_insert_with(|| SyncRecord {
+                path: path.map(str::to_string),
+                cache_id: None,
+                modified: None,
+                size: None,
+                synced_at: Utc::now(),
+                activity: None,
+                uploads: Vec::new(),
+            });
+        rec.activity = Some(activity);
+    })
 }
 
 /// Merge staged records into the manifest under the lock and clear
@@ -356,6 +389,7 @@ fn sync_artifacts(
                             modified: artifact.modified,
                             size: artifact.size,
                             synced_at: Utc::now(),
+                            activity: None,
                             uploads: Vec::new(),
                         },
                     );
@@ -392,6 +426,7 @@ fn sync_artifacts(
                         modified: artifact.modified,
                         size: artifact.size,
                         synced_at: Utc::now(),
+                        activity: None,
                         uploads: Vec::new(),
                     },
                 );
@@ -438,6 +473,7 @@ pub(crate) fn record_artifact(
                 modified: artifact.modified,
                 size: artifact.size,
                 synced_at: Utc::now(),
+                activity: None,
                 uploads: Vec::new(),
             },
         );
@@ -691,6 +727,7 @@ mod tests {
                         modified: None,
                         size: Some(100),
                         synced_at: Utc::now(),
+                        activity: None,
                         uploads: Vec::new(),
                     },
                 );
@@ -713,6 +750,7 @@ mod tests {
                 modified: None,
                 size: None,
                 synced_at: Utc::now(),
+                activity: None,
                 uploads: vec![upload("https://a", "me/x", "g1")],
             },
         );
@@ -793,6 +831,7 @@ mod tests {
                     modified: Some("2024-01-02T00:00:01.123456789Z".parse().unwrap()),
                     size: Some(4096),
                     synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
+                    activity: None,
                     uploads: Vec::new(),
                 },
             );

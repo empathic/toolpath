@@ -26,6 +26,8 @@ pub(crate) mod api;
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) mod journal;
 #[cfg(not(target_os = "emscripten"))]
+pub(crate) mod pass;
+#[cfg(not(target_os = "emscripten"))]
 pub(crate) mod segment;
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) mod state;

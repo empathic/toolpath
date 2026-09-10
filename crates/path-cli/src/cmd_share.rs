@@ -2146,6 +2146,7 @@ mod tests {
                 modified: None,
                 size: None,
                 synced_at: "2026-01-02T00:00:00Z".parse().unwrap(),
+                activity: None,
                 uploads: vec![upload.clone()],
             },
         );
