@@ -149,7 +149,7 @@ fn is_unchanged(rec: Option<&SyncRecord>, artifact: &ArtifactRef) -> bool {
 /// spent its time on the sessions the user most likely wants.
 fn newest_first(artifacts: &[ArtifactRef]) -> Vec<&ArtifactRef> {
     let mut order: Vec<&ArtifactRef> = artifacts.iter().collect();
-    order.sort_by(|a, b| b.modified.cmp(&a.modified));
+    order.sort_by_key(|a| std::cmp::Reverse(a.modified));
     order
 }
 

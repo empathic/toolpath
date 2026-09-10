@@ -328,9 +328,9 @@ fn short_body(body: &str) -> String {
 // The generated client is async; the rest of path-cli is sync, so we
 // tunnel through a `OnceLock`-cached current-thread tokio runtime via
 // [`block_on`]. The whole module — auth, paths, downloads, async upload
-// — runs on a single reqwest version (0.13). The auth flow stays
-// hand-rolled only because the redeem endpoint isn't in the OpenAPI
-// spec, not because of any HTTP-stack difference.
+// — runs on a single reqwest version (0.13), the auth flow included:
+// `cli_redeem` is in the spec, so `api_redeem` calls the generated
+// method like any other operation.
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::sync::OnceLock;

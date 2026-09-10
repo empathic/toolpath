@@ -153,10 +153,18 @@ impl ClaudeConvo {
                 merged.project_path = convo.project_path.clone();
             }
 
+            // Bridge entries are the predecessor's tail copied to the TOP of
+            // a successor file — skip only that leading run. A foreign
+            // `sessionId` deeper in the segment is data, not a bridge; the
+            // old every-entry filter could erase a whole segment's turns and
+            // usage when all its entries carried one (the `.orphaned-*`
+            // failure shape).
+            let mut past_bridge = false;
             for entry in &convo.entries {
-                if chain::is_bridge_entry(entry, segment_id) {
+                if !past_bridge && chain::is_bridge_entry(entry, segment_id) {
                     continue;
                 }
+                past_bridge = true;
                 merged.add_entry(entry.clone());
             }
         }
@@ -714,6 +722,39 @@ mod tests {
             .read_conversation("/test/project", "session-c")
             .unwrap();
         assert_eq!(convo_c.entries.len(), 3);
+    }
+
+    #[test]
+    fn test_bridge_skip_is_leading_run_only() {
+        // A foreign sessionId deeper in a segment is data, not a bridge —
+        // resumed sessions can interleave entries stamped with a prior id.
+        // Only the leading run at the top of a successor file is the copied
+        // predecessor tail.
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        fs::write(
+            project_dir.join("session-a.jsonl"),
+            r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Start"}}"#,
+        ).unwrap();
+        let b = [
+            r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+            r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"Own"}}"#,
+            r#"{"uuid":"b2","type":"user","timestamp":"2024-01-01T01:00:02Z","sessionId":"session-a","message":{"role":"user","content":"Foreign but kept"}}"#,
+        ];
+        fs::write(project_dir.join("session-b.jsonl"), b.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(claude_dir);
+        let manager = ClaudeConvo::with_resolver(resolver);
+        let convo = manager
+            .read_conversation("/test/project", "session-a")
+            .unwrap();
+
+        // b0 (leading bridge) filtered; b2 (mid-segment foreign id) kept.
+        let uuids: Vec<&str> = convo.entries.iter().map(|e| e.uuid.as_str()).collect();
+        assert_eq!(uuids, vec!["a1", "b1", "b2"]);
     }
 
     #[test]

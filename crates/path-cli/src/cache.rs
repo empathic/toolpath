@@ -132,7 +132,7 @@ pub(crate) fn list_cached() -> Result<Vec<CacheEntry>> {
             modified: meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
         });
     }
-    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out.sort_by_key(|e| std::cmp::Reverse(e.modified));
     Ok(out)
 }
 

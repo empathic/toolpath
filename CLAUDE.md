@@ -57,7 +57,7 @@ path-cli (binary: path)
  ├── toolpath-dot     → toolpath
  └── toolpath-md      → toolpath
 
-pathbase-client      (no toolpath deps; built from schema/pathbase-openapi.json)
+pathbase-client      (no toolpath deps; built from crates/pathbase-client/openapi.json)
 
 toolpath-cli (deprecated shim, binary: path)
  └── path-cli
@@ -72,6 +72,29 @@ cargo clippy --workspace -- -D warnings
 ```
 
 Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
+
+If `cargo` is not on your PATH, `flake.nix` carries a devShell with everything the
+justfile and `scripts/quality_gates.sh` assume — the Rust toolchain plus shellcheck,
+node/pnpm, jq, curl and fzf, with openssl wired up for `openssl-sys`:
+
+```bash
+nix develop                                   # or: nix develop --command <cmd>
+nix develop --command ./scripts/quality_gates.sh
+```
+
+The shell's Rust comes from nixpkgs and is **ahead of** the 1.94.0 pin — `rust-toolchain.toml`
+is read by rustup, which the shell does not provide. Clippy gains lints between releases, so
+green in the shell is evidence, not proof; the pinned toolchain is the real gate.
+
+The same flake builds the binary and exports a home-manager module, so a nix consumer can
+take this repo as a flake input and follow a ref of it instead of pinning a rev by hand:
+
+```bash
+nix build .#toolpath          # → result/bin/path; version read from crates/path-cli/Cargo.toml
+# programs.toolpath.{enable,package,devBin} via homeManagerModules.toolpath (modules/toolpath.nix)
+```
+
+The package skips the workspace tests (`doCheck = false`); CI is the gate.
 
 ## CLI usage
 
@@ -130,7 +153,7 @@ cargo run -p path-cli -- config edit  # $VISUAL/$EDITOR on ~/.toolpath/config.to
 
 The **cache** at `~/.toolpath/documents/<cache-id>.json` is the single landing zone for every `import` (and for `import pathbase` downloads). Cache id is `<source>-<inner-id>` — e.g. `claude-abc123`, `git-main` (Pathbase paths key on `<owner>-<repo>-<slug>`, anon paths on `anon-pathstash-<uuid>`). Files are `0600`, parent directory `0700`. `$TOOLPATH_CONFIG_DIR` overrides the root. Imports error on cache hit (`--force` overwrites); `--no-cache` sends the JSON to stdout for shell composition. `p cache sync` fills the cache incrementally from the installed agent harnesses (see "Things to know") and always overwrites what it re-derives.
 
-`path auth login` prints `<base>/auth/cli`; the user logs in there and pastes the 8-character code back, which the CLI redeems (`POST /api/v1/auth/cli/redeem`) for a bearer token stored at `~/.toolpath/credentials.json` (`0600`; `$TOOLPATH_CONFIG_DIR` overrides). Server URL comes from `--url`, then `$PATHBASE_URL`, then `https://pathbase.dev`. The redeem endpoint is real but absent from `schema/pathbase-openapi.json` — so the progenitor-derived `pathbase-client` has no `redeem` method; the hand-rolled call in `cmd_pathbase.rs` is the source of truth.
+`path auth login` prints `<base>/auth/cli`; the user logs in there and pastes the 8-character code back, which the CLI redeems (`POST /api/v1/auth/cli/redeem`) for a bearer token stored at `~/.toolpath/credentials.json` (`0600`; `$TOOLPATH_CONFIG_DIR` overrides). Server URL comes from `--url`, then `$PATHBASE_URL`, then `https://pathbase.dev`. The redeem endpoint (`operationId: cli_redeem`) is in `crates/pathbase-client/openapi.json`, so the progenitor-derived `pathbase-client` generates it and `cmd_pathbase.rs` calls `client.cli_redeem(&body)` like any other operation — nothing about the auth flow is hand-rolled.
 
 ## Key conventions
 
@@ -218,7 +241,7 @@ Format references for the agent on-disk formats live at `docs/agents/formats/` �
 
 - Interactive pickers: `p import <provider>` auto-launches a fuzzy picker when TTY and no `--session`. Backend: external `fzf` if present, else the embedded skim picker (`embedded-picker` default feature, `crates/path-cli/src/skim_picker.rs`). Multi-select produces a `Graph`; single-select a `Path`. No usable backend falls back to most-recent (with `--project`) or prints the manual recipe. `p list <provider> --format tsv` is the machine-readable surface; the trailing column carries `first_user_message`.
 - `path share` is the one-shot `p import <harness> | p export pathbase`: probes installed harnesses, aggregates sessions into one picker ranking current-directory sessions first; `--harness`/`--session`/`--project` skip the picker; pathbase flags match `p export pathbase`. When the sync manifest shows the picked session unchanged (`sync::fresh_cache_id`), it uploads the cached doc instead of re-deriving. Uploads carry the same full derivation as local projection — no egress stripping.
-- Share also resolves a **configured share remote** from the session's own directory (the project for path-keyed harnesses, the recorded cwd otherwise — via the doc's `path.base` when no `--project` is in play): `crates/path-cli/src/share_config.rs` checks `~/.toolpath/config.toml` `[[project]]` rules (`dir` subtree match, `~/`-expandable, most specific wins; `remote` = bare `owner/name` or a canonical Pathbase repo web URL `https://<host>/u/<owner>/<name>`, which also carries the server — the URL scheme is the extension point for future backends, unknown schemes rejected). Precedence: `--repo` flag > config > `<you>/pathstash`; `--url` beats a URL remote's embedded server. A resolved remote prints `Sharing to <remote> (<origin>)`; hitting one while logged out errors with a `path auth login` hint (no silent anon fall-through), and explicit `--anon` opts out of the mapping. Both sides of the subtree match are prefix-canonicalized (longest existing ancestor resolved, tail re-appended) so macOS `/var`→`/private/var` and deleted checkouts still match. A repo-tracked `.toolpath.toml` is deliberately **not** consulted — a committed file redirecting other users' uploads needs a first-use consent flow (issue #179).
+- Share also resolves a **configured share remote** from the session's own directory (the project for path-keyed harnesses, the recorded cwd otherwise — via the doc's `path.base` when no `--project` is in play): `crates/path-cli/src/share_config.rs` checks `~/.toolpath/config.toml` `[[project]]` rules. A rule selects by `dir` (subtree match, `~/`-expandable, most specific wins), by `origin` (the `owner/name` of the enclosing repository's `origin` remote, case-insensitive, first match wins), or by both, which must both hold; a rule with neither selector is a config error. Any matching `origin` rule beats every `dir` rule — identity over location — and the repository is looked up at most once per resolve, only when some rule asks for it. `dir` is pure path logic and so still matches a deleted checkout; `origin` needs the checkout to exist and in exchange follows a repo that moved, was renamed, or is checked out elsewhere, and covers every worktree without naming one. `remote` = bare `owner/name` or a canonical Pathbase repo web URL `https://<host>/u/<owner>/<name>`, which also carries the server — the URL scheme is the extension point for future backends, unknown schemes rejected. Precedence: `--repo` flag > config > `<you>/pathstash`; `--url` beats a URL remote's embedded server. A resolved remote prints `Sharing to <remote> (<origin>)`; hitting one while logged out errors with a `path auth login` hint (no silent anon fall-through), and explicit `--anon` opts out of the mapping. Both sides of the subtree match are prefix-canonicalized (longest existing ancestor resolved, tail re-appended) so macOS `/var`→`/private/var` and deleted checkouts still match. A repo-tracked `.toolpath.toml` is deliberately **not** consulted — a committed file redirecting other users' uploads needs a first-use consent flow (issue #179).
 - `path resume <input>` is the inverse: accepts a Pathbase URL, `owner/repo/slug` shorthand, local file, or cache id; validates a single agent-bearing `Path`; opens a harness picker (pre-selecting `path.meta.source` when installed; `--harness` skips); projects the session into the harness's on-disk layout under `-C/--cwd` (default: shell cwd) and `execvp`'s the harness's resume command (spawn-and-wait on Windows).
 - `path query` plans before it scans: `crates/path-cli/src/query/plan.rs` classifies the jaq filter into `PerFileStream` (element-wise, print as you go), `Decompose` (algebraic aggregation with a derived combine), or `Slurp` (the always-correct whole-array fallback). Recognition is conservative so **the planner never changes an answer**; `query/filter.rs` tests assert streamed output equals slurp byte-for-byte. Execution is parallel (`mod.rs::execute_plan`/`for_each_file`): `PerFileStream`/`Decompose` run the whole per-file pipeline (parse → wrap → filter → render/pack) on rayon workers in chunks — partials cross threads as compact JSON bytes since jaq `Val`s are `Rc`-based — while `Slurp` parallelizes only parse/wrap; output stays byte-identical to a sequential scan (ordering, warnings, error precedence), and the emscripten build stays fully sequential. `TOOLPATH_QUERY_EXPLAIN=1` prints the chosen plan; there is no user-facing flag. Caveat: a streamed top-N matches slurp's ranking, but boundary ties may resolve to different rows.
 

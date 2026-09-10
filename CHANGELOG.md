@@ -2,9 +2,9 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## path-cli 0.19.0 — 2026-08-27
+## path-cli 0.20.0 — 2026-09-10
 
-- **`path-cli`** (0.19.0): new cargo feature `resume-remote`, off by
+- **`path-cli`** (0.20.0): new cargo feature `resume-remote`, off by
   default. It gates `p export claude --cwd <dir>`, which roots the
   session: the directory becomes the `cwd` of every line that carries
   one; it must be an absolute POSIX path in normalized form (no `.`,
@@ -12,14 +12,67 @@ All notable changes to the Toolpath workspace are documented here.
   to exist on this machine, and conflicts with `--project`. Message
   content and tool results are not touched. `scripts/resume-remote.sh`
   builds with the feature and passes the flag.
-- **`toolpath-cli`** (0.19.0): lockstep bump of the deprecated shim.
+- **`toolpath-cli`** (0.20.0): lockstep bump of the deprecated shim.
 
-## toolpath-claude 0.13.1 — 2026-08-27
+## toolpath-claude 0.13.2 — 2026-09-10
 
-- **`toolpath-claude`** (0.13.1): `Conversation::reroot(dir)` sets the
+- **`toolpath-claude`** (0.13.2): `Conversation::reroot(dir)` sets the
   directory everywhere the format carries it: `project_path`, every
   entry's `cwd` that is present, and a top-level `cwd` on a preamble
   line.
+
+## toolpath-cli 0.19.0 — 2026-09-05
+
+- Follow `path-cli` to 0.19.0. The shim's dependency was still pinned to
+  `version = "0.18.0"`, which for a `0.y.z` crate means `>=0.18.0, <0.19.0`
+  — unsatisfiable once `path-cli` reached 0.19.0, so the shim could not
+  resolve at all. Because `toolpath-cli` is excluded from the workspace
+  (it and `path-cli` both build a binary named `path`), neither
+  `cargo build --workspace` nor CI ever saw it, and the break would first
+  have surfaced in `scripts/release.sh` at the Tier 4 publish — after the
+  other crates had already gone to crates.io.
+
+## path-cli 0.19.0 — 2026-09-03
+
+- `[[project]]` rules in `~/.toolpath/config.toml` can select by
+  `origin` — the `owner/name` of the `origin` remote of the repository
+  enclosing the session's directory — instead of, or as well as, `dir`.
+  A rule that names the repository rather than a place it sits follows
+  the checkout when it moves or is renamed, covers every worktree
+  without naming one, and is the same on every machine, so a
+  version-controlled config need not carry a directory layout.
+  Matching is case-insensitive, and the URL forms git accepts
+  (`https://`, scp-style `git@host:owner/name`, `ssh://` with a port,
+  with or without `.git`) all resolve to the same pair.
+- Precedence: any matching `origin` rule beats every `dir` rule —
+  identity over location — and among `origin` rules the first in the
+  file wins, since they match exactly. `dir` ranking is unchanged. A
+  rule carrying both selectors must satisfy both. The repository is
+  looked up at most once per resolve and only when a rule asks for it,
+  so a config of pure `dir` rules touches no repository.
+- The two selectors differ in what they survive: `dir` is pure path
+  logic and still matches a checkout that has been deleted, while
+  `origin` needs the checkout to exist.
+- `path config edit` now rejects a `[[project]]` rule with neither
+  `dir` nor `origin`, and one whose `origin` is not a bare
+  `owner/name`. Previously a rule without `dir` failed to parse with a
+  serde message; the error now names the rule and what it is missing.
+
+## toolpath-claude 0.13.1 — 2026-08-25
+
+- **Fix:** `.orphaned-*` rotation artifacts are no longer classified as
+  chain successors. Their mangled stems made every entry read as a
+  bridge entry, silently dropping the whole segment's turns and token
+  usage from the merged conversation (#236). Dotted stems are now
+  classified standalone — and deliberately excluded from
+  `list_conversations`, because a derived document id truncates the stem
+  to 8 characters, which for an orphan equals its parent session's
+  prefix and would collide in the cache. Ingesting orphans arrives with
+  the full-stem id work. `read_segment` reads them directly today.
+- **Fix:** bridge-entry filtering in `read_conversation` now skips only
+  the *leading* bridge run of a successor segment — the copied
+  predecessor tail — instead of every entry with a foreign `sessionId`.
+  A foreign id deeper in a segment is data and is kept.
 
 ## toolpath-claude 0.13.0 — 2026-08-23
 
