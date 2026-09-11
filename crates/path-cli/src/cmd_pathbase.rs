@@ -68,6 +68,17 @@ pub(crate) fn resolve_url(cli_url: Option<String>) -> String {
     raw.trim_end_matches('/').to_string()
 }
 
+/// The server for a bare `owner/name` remote when nothing names one:
+/// `--url`, then `$PATHBASE_URL`, then the server the stored credentials
+/// were issued by, then the default. Sync has no anonymous mode, so the
+/// server you are logged in to is the only one it can mean.
+pub(crate) fn resolve_url_for(cli_url: Option<String>, credentials: &StoredSession) -> String {
+    let raw = cli_url
+        .or_else(|| std::env::var(PATHBASE_URL_ENV).ok())
+        .unwrap_or_else(|| credentials.url.clone());
+    raw.trim_end_matches('/').to_string()
+}
+
 /// Extract `scheme://host[:port]` from a URL, dropping any path/query.
 /// Returns the input unchanged if it doesn't look like a URL. Used to
 /// compare a stored session's host against the upload target so we can

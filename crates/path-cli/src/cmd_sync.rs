@@ -182,7 +182,7 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
     let Some(credentials) = credentials else {
         bail!("sync uploads require login; run `path auth login`");
     };
-    let default_url = crate::cmd_pathbase::resolve_url(args.url.clone());
+    let default_url = crate::cmd_pathbase::resolve_url_for(args.url.clone(), &credentials);
     let username = credentials.user.username.clone();
 
     let _lock = lock_uploads(&config_dir)?;
@@ -492,15 +492,18 @@ fn install(config: &Config, options: InstallOptions) -> Result<()> {
 }
 
 /// Every server and repo the configuration can route a session to.
-fn configured_destinations(user: &UserSyncConfig, username: &str) -> Result<Vec<Destination>> {
-    let default_url = crate::cmd_pathbase::resolve_url(None);
+fn configured_destinations(
+    user: &UserSyncConfig,
+    username: &str,
+    default_url: &str,
+) -> Result<Vec<Destination>> {
     let mut out: Vec<Destination> = Vec::new();
     let mut push = |value: &str, origin: &str| -> Result<()> {
         let (repo, base_url) = crate::remote::parse_remote(value, origin)?;
         let destination = Destination {
             repo: format!("{}/{}", repo.owner, repo.name),
             base_url: base_url
-                .unwrap_or_else(|| default_url.clone())
+                .unwrap_or_else(|| default_url.to_string())
                 .trim_end_matches('/')
                 .to_string(),
         };
@@ -530,7 +533,8 @@ fn configured_destinations(user: &UserSyncConfig, username: &str) -> Result<Vec<
 fn preflight(user: &UserSyncConfig) -> Result<()> {
     let credentials = crate::cmd_pathbase::load_session(&crate::cmd_pathbase::credentials_path()?)?
         .context("sync uploads require login; run `path auth login` first")?;
-    let destinations = configured_destinations(user, &credentials.user.username)?;
+    let default_url = crate::cmd_pathbase::resolve_url_for(None, &credentials);
+    let destinations = configured_destinations(user, &credentials.user.username, &default_url)?;
     let mut checked_servers: Vec<String> = Vec::new();
     for destination in &destinations {
         if !checked_servers.contains(&destination.base_url) {
@@ -734,7 +738,7 @@ mod tests {
             "c",
         )
         .unwrap();
-        let repos: Vec<String> = configured_destinations(&user, "me")
+        let repos: Vec<String> = configured_destinations(&user, "me", "https://d.test")
             .unwrap()
             .into_iter()
             .map(|d| d.repo_url())
@@ -743,7 +747,7 @@ mod tests {
         assert!(repos[0].ends_with("/u/me/main"));
         assert_eq!(repos[1], "https://h.test/u/o/r");
         let user = UserSyncConfig::parse("[sync]\nenabled=true", "c").unwrap();
-        let repos = configured_destinations(&user, "me").unwrap();
+        let repos = configured_destinations(&user, "me", "https://d.test").unwrap();
         assert_eq!(repos.len(), 1);
         assert!(repos[0].repo_url().ends_with("/u/me/pathstash"));
     }
