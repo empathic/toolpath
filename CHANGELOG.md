@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## path-cli 0.20.0 + toolpath-cli 0.20.0 — 2026-09-10
+## path-cli 0.20.0 + toolpath-cli 0.20.0 + pathbase-client 0.2.1 — 2026-09-10
 
 - `path sync`: automatic upload of the sessions in scope to Pathbase. One
   pass replays any staged operation, creates or updates each session's
@@ -22,6 +22,14 @@ All notable changes to the Toolpath workspace are documented here.
   `upload.lock`. The manifest record gains `activity`.
 - Requires a Pathbase with the sync API (graph state, `meta`, guarded `PUT`,
   `freeze`, `continuations`).
+- **`pathbase-client` 0.2.1.** Regenerated from a Pathbase with the sync
+  API: `get_graph_meta`, `replace_graph`, `freeze_graph`,
+  `create_continuation`, the `Idempotency-Key` header parameter on the
+  four mutations, `GraphMetaResponse`, `GraphState`, `freeze_after` on
+  `UploadGraphBody`, and the new `ApiErrorCode` values. `path sync`
+  sends every request through this client; staged operations are the
+  serialization of the generated body types, so a replay sends the same
+  bytes. Request bodies are not gzipped.
 
 ## toolpath-convo 0.11.2 — 2026-09-10
 

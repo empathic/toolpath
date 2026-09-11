@@ -55,7 +55,6 @@ toolpath-github = { workspace = true }
 pathbase-client = { workspace = true }
 git2 = { workspace = true }
 reqwest = { workspace = true }
-flate2 = "1"
 tokio = { workspace = true }
 rusqlite = { workspace = true }
 rayon = { workspace = true }

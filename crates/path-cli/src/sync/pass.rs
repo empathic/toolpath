@@ -6,7 +6,10 @@
 //! journal, and never records an upload it has not seen acknowledged.
 
 use super::activity::Activity;
-use super::api::{ApiFailure, Applied, GraphMeta, GraphState, SyncApi};
+use super::api::{
+    ApiFailure, Applied, ContinuationBody, FreezeGraphBody, GraphMetaResponse, GraphState,
+    ReplaceGraphBody, SyncApi, UploadGraphBody, to_document,
+};
 use super::journal::{self, OperationKind, PendingOperation};
 use super::segment::{SegmentKind, Segmentation, segment};
 use super::sources::Stamp;
@@ -273,7 +276,7 @@ pub(crate) fn sync_session(
         .as_ref()
         .and_then(|b| b.from.as_ref())
         .map(|r| r.to_string());
-    let document = serde_json::to_value(&doc)?;
+    let document = to_document(&doc)?;
     let freeze_after = idle && restat() == session.stamp;
     if idle && !freeze_after {
         activity.observe(ctx.now, restat());
@@ -287,10 +290,17 @@ pub(crate) fn sync_session(
             )?;
         }
     }
+    // Staged as the serialization of the generated body type, so the
+    // replay parses and re-serializes to the same bytes.
     let (kind, body) = match kind {
         SegmentKind::Independent => (
             OperationKind::Create,
-            serde_json::json!({ "document": document, "freeze_after": freeze_after }),
+            serde_json::to_vec(&UploadGraphBody {
+                document,
+                name: None,
+                visibility: None,
+                freeze_after: Some(freeze_after),
+            })?,
         ),
         SegmentKind::OwnedUpdate => {
             let current = state
@@ -301,11 +311,11 @@ pub(crate) fn sync_session(
                 OperationKind::Update {
                     graph_id: current.graph_id.clone(),
                 },
-                serde_json::json!({
-                    "document": document,
-                    "expected_generation": current.generation,
-                    "freeze_after": freeze_after,
-                }),
+                serde_json::to_vec(&ReplaceGraphBody {
+                    document,
+                    expected_generation: current.generation,
+                    freeze_after: Some(freeze_after),
+                })?,
             )
         }
         SegmentKind::Continuation => {
@@ -318,15 +328,15 @@ pub(crate) fn sync_session(
                     source_graph_id: frozen.graph_id.clone(),
                     source_path: frozen.path_id.clone(),
                 },
-                serde_json::json!({
-                    "document": document,
-                    "source_path": frozen.path_id,
-                    "freeze_after": freeze_after,
-                }),
+                serde_json::to_vec(&ContinuationBody {
+                    document,
+                    source_path: frozen.path_id.clone(),
+                    expected_generation: None,
+                    freeze_after: Some(freeze_after),
+                })?,
             )
         }
     };
-    let body = serde_json::to_vec(&body)?;
     let op = PendingOperation {
         key: uuid::Uuid::new_v4().to_string(),
         created_at: ctx.now,
@@ -407,8 +417,9 @@ fn freeze(
             current.graph_id
         )));
     }
-    let body =
-        serde_json::to_vec(&serde_json::json!({ "expected_generation": current.generation }))?;
+    let body = serde_json::to_vec(&FreezeGraphBody {
+        expected_generation: current.generation,
+    })?;
     let op = PendingOperation {
         key: uuid::Uuid::new_v4().to_string(),
         created_at: ctx.now,
@@ -483,7 +494,7 @@ fn acknowledge(
             // if what it owns is a prefix of what we were about to send.
             let stored = ctx
                 .api
-                .stored_document(&destination.repo, &meta.id)
+                .stored_document(&destination.repo, &meta.id.to_string())
                 .map_err(|e| anyhow::anyhow!("reading existing continuation {}: {e}", meta.url))?;
             let existing: Vec<String> = stored
                 .single_path()
@@ -511,7 +522,7 @@ fn acknowledge(
                 })
                 .unwrap_or_default();
             state.current = Some(CurrentGraph {
-                graph_id: meta.id.clone(),
+                graph_id: meta.id.to_string(),
                 url: meta.url.clone(),
                 repo_url: repo_url.clone(),
                 state: meta.state,
@@ -528,7 +539,7 @@ fn acknowledge(
         }
         _ => {
             state.current = Some(CurrentGraph {
-                graph_id: meta.id.clone(),
+                graph_id: meta.id.to_string(),
                 url: meta.url.clone(),
                 repo_url: repo_url.clone(),
                 state: meta.state,
@@ -556,7 +567,7 @@ fn acknowledge(
         session.project.as_deref(),
         &repo_url,
         super::UploadRecord {
-            graph_id: meta.id.clone(),
+            graph_id: meta.id.to_string(),
             url: meta.url.clone(),
             modified: op.modified,
             size: op.size,
@@ -618,7 +629,7 @@ fn adopt(
     };
     let ancestry = toolpath::v1::query::ancestors(&path.steps, &path.path.head);
     state.current = Some(CurrentGraph {
-        graph_id: meta.id.clone(),
+        graph_id: meta.id.to_string(),
         url: meta.url.clone(),
         repo_url: destination.repo_url(),
         state: meta.state,
@@ -650,13 +661,13 @@ fn owned_content_matches(
     api: &dyn SyncApi,
     destination: &Destination,
     current: &CurrentGraph,
-    meta: &GraphMeta,
+    meta: &GraphMetaResponse,
 ) -> Result<bool> {
     let Some(path) = meta.paths.first() else {
         return Ok(current.owned_ids.is_empty());
     };
     if path.head.as_deref() != Some(current.head.as_str())
-        || path.step_count != current.owned_ids.len() as u64
+        || path.step_count != current.owned_ids.len() as i64
     {
         return Ok(false);
     }
@@ -676,11 +687,12 @@ fn owned_content_matches(
 
 #[cfg(test)]
 mod tests {
-    use super::super::api::{Lineage, MetaBase, MetaPath};
     use super::*;
+    use pathbase_client::types::{GraphLineage, GraphPathMeta, PathBase};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use toolpath::v1::{Base, Path as TpPath, Step};
+    use uuid::Uuid;
 
     #[derive(Debug, Clone)]
     struct FakeGraph {
@@ -703,33 +715,43 @@ mod tests {
         calls: RefCell<Vec<String>>,
     }
 
+    /// Graph ids are UUIDs on the wire; tests name them `g1`, `gx`, ...
+    fn uid(name: &str) -> String {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        name.hash(&mut h);
+        Uuid::from_u64_pair(h.finish(), h.finish()).to_string()
+    }
+
     impl Fake {
-        fn meta_of(&self, id: &str, g: &FakeGraph) -> GraphMeta {
-            GraphMeta {
-                id: id.into(),
+        fn meta_of(&self, id: &str, g: &FakeGraph) -> GraphMetaResponse {
+            GraphMetaResponse {
+                id: id.parse().unwrap(),
                 url: format!("https://h/u/me/stash/graphs/{id}"),
                 state: g.state,
                 generation: g.generation,
-                base: g.base_from.as_ref().map(|from| MetaBase {
+                updated_at: t(0),
+                base: g.base_from.as_ref().map(|from| PathBase {
                     from: from.clone(),
-                    source_graph_id: String::new(),
+                    source_graph_id: Uuid::nil(),
                     source_path_id: g.path_id.clone(),
                     source_step_id: String::new(),
                 }),
-                lineage: Lineage {
-                    continuation_graph_id: g.continuation.clone(),
-                    ..Default::default()
+                lineage: GraphLineage {
+                    continuation_graph_id: g.continuation.as_deref().map(|c| c.parse().unwrap()),
+                    source_graph_id: None,
+                    source_path: None,
                 },
-                paths: vec![MetaPath {
+                paths: vec![GraphPathMeta {
                     id: g.path_id.clone(),
-                    server_id: "srv".into(),
+                    server_id: Uuid::nil(),
                     head: Some(g.head.clone()),
-                    step_count: g.owned_ids.len() as u64,
+                    step_count: g.owned_ids.len() as i64,
                 }],
             }
         }
-        fn graph(&self, id: &str) -> FakeGraph {
-            self.graphs.borrow()[id].clone()
+        fn graph(&self, name: &str) -> FakeGraph {
+            self.graphs.borrow()[&uid(name)].clone()
         }
     }
 
@@ -748,7 +770,7 @@ mod tests {
     }
 
     impl SyncApi for Fake {
-        fn meta(&self, _repo: &str, graph_id: &str) -> Result<GraphMeta, ApiFailure> {
+        fn meta(&self, _repo: &str, graph_id: &str) -> Result<GraphMetaResponse, ApiFailure> {
             self.calls.borrow_mut().push(format!("meta {graph_id}"));
             let graphs = self.graphs.borrow();
             graphs
@@ -774,7 +796,7 @@ mod tests {
                     let doc: Graph = serde_json::from_value(body["document"].clone()).unwrap();
                     let (path_id, owned_ids, head, base_from) = ids_of(&doc);
                     *self.next.borrow_mut() += 1;
-                    let id = format!("g{}", self.next.borrow());
+                    let id = uid(&format!("g{}", self.next.borrow()));
                     let g = FakeGraph {
                         state: if freeze_after {
                             GraphState::Frozen
@@ -877,7 +899,7 @@ mod tests {
                         });
                     }
                     *self.next.borrow_mut() += 1;
-                    let id = format!("g{}", self.next.borrow());
+                    let id = uid(&format!("g{}", self.next.borrow()));
                     let g = FakeGraph {
                         state: if freeze_after {
                             GraphState::Frozen
@@ -1089,7 +1111,7 @@ mod tests {
         assert_eq!(g2.owned_ids, ["c"]);
         assert_eq!(
             g2.base_from.as_deref(),
-            Some("https://h/u/me/stash/graphs/g1#p/b")
+            Some(format!("https://h/u/me/stash/graphs/{}#p/b", uid("g1")).as_str())
         );
         assert_eq!(g2.state, GraphState::Mutable);
         assert_eq!(h.state().current.unwrap().owned_ids, ["c"]);
@@ -1169,11 +1191,11 @@ mod tests {
         // Simulate the server having applied that PUT despite the lost response.
         {
             let mut graphs = h.api.graphs.borrow_mut();
-            let g = graphs.get_mut("g1").unwrap();
+            let g = graphs.get_mut(&uid("g1")).unwrap();
             g.owned_ids = vec!["a".into(), "b".into()];
             g.head = "b".into();
             g.generation = 1;
-            let meta = h.api.meta_of("g1", g);
+            let meta = h.api.meta_of(&uid("g1"), g);
             h.api.replies.borrow_mut().insert(
                 op_key,
                 (
@@ -1198,8 +1220,13 @@ mod tests {
         let h = Harness::new();
         h.run(t(0), 0, chain(&["a"]), false);
         // Another client froze it meanwhile.
-        h.api.graphs.borrow_mut().get_mut("g1").unwrap().state = GraphState::Frozen;
-        h.api.graphs.borrow_mut().get_mut("g1").unwrap().generation = 1;
+        h.api.graphs.borrow_mut().get_mut(&uid("g1")).unwrap().state = GraphState::Frozen;
+        h.api
+            .graphs
+            .borrow_mut()
+            .get_mut(&uid("g1"))
+            .unwrap()
+            .generation = 1;
         let out = h.run(t(60), 60, chain(&["a", "b"]), false);
         assert!(matches!(out, Outcome::Continued(_)), "{out:?}");
         assert_eq!(h.api.graph("g2").owned_ids, ["b"]);
@@ -1212,7 +1239,7 @@ mod tests {
         h.run(t(0), 0, chain(&["a"]), false);
         {
             let mut graphs = h.api.graphs.borrow_mut();
-            let g = graphs.get_mut("g1").unwrap();
+            let g = graphs.get_mut(&uid("g1")).unwrap();
             g.owned_ids = vec!["a".into(), "zzz".into()];
             g.head = "zzz".into();
             g.generation = 7;
@@ -1229,7 +1256,12 @@ mod tests {
     fn a_display_only_generation_bump_is_adopted() {
         let h = Harness::new();
         h.run(t(0), 0, chain(&["a"]), false);
-        h.api.graphs.borrow_mut().get_mut("g1").unwrap().generation = 3;
+        h.api
+            .graphs
+            .borrow_mut()
+            .get_mut(&uid("g1"))
+            .unwrap()
+            .generation = 3;
         assert!(matches!(
             h.run(t(60), 60, chain(&["a", "b"]), false),
             Outcome::Updated(_)
@@ -1263,12 +1295,12 @@ mod tests {
         assert_eq!(h.api.graph("g1").state, GraphState::Frozen);
         // Another client already continued with ["b"].
         {
-            let base = Some("https://h/u/me/stash/graphs/g1#p/a".to_string());
+            let base = Some(format!("https://h/u/me/stash/graphs/{}#p/a", uid("g1")));
             let mut doc = chain(&["b"]);
             doc.single_path_mut_steps()[0].step.parents.clear();
             let mut graphs = h.api.graphs.borrow_mut();
             graphs.insert(
-                "gx".into(),
+                uid("gx"),
                 FakeGraph {
                     state: GraphState::Mutable,
                     generation: 0,
@@ -1280,11 +1312,11 @@ mod tests {
                     doc,
                 },
             );
-            graphs.get_mut("g1").unwrap().continuation = Some("gx".into());
+            graphs.get_mut(&uid("g1")).unwrap().continuation = Some(uid("gx"));
         }
         let out = h.run(t(4 * H), 1, chain(&["a", "b", "c"]), false);
         assert!(matches!(out, Outcome::Continued(_)), "{out:?}");
-        assert_eq!(h.state().current.as_ref().unwrap().graph_id, "gx");
+        assert_eq!(h.state().current.as_ref().unwrap().graph_id, uid("gx"));
         assert_eq!(h.state().current.as_ref().unwrap().owned_ids, ["b"]);
         // The next pass brings it up to date.
         assert!(matches!(
@@ -1300,7 +1332,7 @@ mod tests {
         let doc = chain(&["a"]);
         let (path_id, owned_ids, head, base_from) = ids_of(&doc);
         h.api.graphs.borrow_mut().insert(
-            "shared".into(),
+            uid("shared"),
             FakeGraph {
                 state: GraphState::Mutable,
                 generation: 0,
@@ -1319,8 +1351,8 @@ mod tests {
             None,
             &h.dest.repo_url(),
             super::super::UploadRecord {
-                graph_id: "shared".into(),
-                url: "https://h/u/me/stash/graphs/shared".into(),
+                graph_id: uid("shared"),
+                url: format!("https://h/u/me/stash/graphs/{}", uid("shared")),
                 modified: Some(t(0)),
                 size: Some(0),
                 uploaded_at: t(0),
