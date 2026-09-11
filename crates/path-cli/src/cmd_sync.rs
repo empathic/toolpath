@@ -211,6 +211,7 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
 
     let manifest = crate::sync::load_manifest(&config_dir)?;
     let mut apis: HashMap<String, PathbaseSync> = HashMap::new();
+    let mut unsupported: HashMap<String, String> = HashMap::new();
     let mut counts = Counts::default();
     let mut errors = Vec::new();
     let mut destinations: BTreeMap<String, usize> = BTreeMap::new();
@@ -253,11 +254,24 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
             *destinations.entry(destination.repo_url()).or_default() += 1;
             let api = match apis.entry(destination.base_url.clone()) {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                std::collections::hash_map::Entry::Vacant(e) => e.insert(PathbaseSync::new(
-                    &destination.base_url,
-                    &credentials.token,
-                )?),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    let api = PathbaseSync::new(&destination.base_url, &credentials.token)?;
+                    if let Err(why) = supports_sync(&api, &destination.repo) {
+                        unsupported.insert(destination.base_url.clone(), why);
+                    }
+                    e.insert(api)
+                }
             };
+            if let Some(why) = unsupported.get(&destination.base_url) {
+                sessions += 1;
+                counts.tally(&Outcome::Failed(why.clone()));
+                let label = format!("{} {}", harness.name(), short_id(id));
+                eprintln!("{label}: {why}");
+                if errors.len() < MAX_STATUS_ERRORS {
+                    errors.push(format!("{label}: {why}"));
+                }
+                continue;
+            }
             let project = harness.path_keyed().then(|| rec.path.clone()).flatten();
             let session = Session {
                 harness,
@@ -337,6 +351,21 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// A server without the sync API still accepts `POST /graphs`, so a pass
+/// must never reach a create without knowing. The meta route for a graph
+/// that cannot exist answers `not_found` on a capable server and an
+/// untyped 404 on an old one.
+fn supports_sync(api: &dyn SyncApi, repo: &str) -> Result<(), String> {
+    match api.meta(repo, &uuid::Uuid::nil().to_string()) {
+        Ok(_) | Err(crate::sync::api::ApiFailure::NotFound) => Ok(()),
+        Err(crate::sync::api::ApiFailure::UpgradeRequired) => Err(format!(
+            "{} does not support sync; upgrade Pathbase before syncing to it",
+            repo
+        )),
+        Err(other) => Err(format!("cannot check {repo} for sync support: {other}")),
+    }
 }
 
 fn short_id(id: &str) -> &str {
