@@ -332,7 +332,7 @@ fn short_body(body: &str) -> String {
 // `cli_redeem` is in the spec, so `api_redeem` calls the generated
 // method like any other operation.
 
-fn block_on<F: std::future::Future>(f: F) -> F::Output {
+pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::sync::OnceLock;
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     let rt = RT.get_or_init(|| {
@@ -363,7 +363,10 @@ pub(crate) fn http_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
-fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_client::Client> {
+pub(crate) fn pathbase_client(
+    base_url: &str,
+    token: Option<&str>,
+) -> Result<pathbase_client::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
         .timeout(http_timeout());
@@ -410,6 +413,7 @@ pub(crate) fn anon_graphs_post(base_url: &str, document_json: &str) -> Result<An
         document: parse_document(document_json)?,
         name: None,
         visibility: None,
+        freeze_after: None,
     };
     let client = pathbase_client(base_url, None)?;
     match block_on(client.create_anon_graph(&body)) {
@@ -481,9 +485,10 @@ pub(crate) fn graphs_post(
         document: parse_document(document_json)?,
         name: name.map(|s| s.to_string()),
         visibility: Some(visibility_from_public_flag(public)),
+        freeze_after: None,
     };
     let client = pathbase_client(base_url, Some(token))?;
-    match block_on(client.create_graph(owner, repo, &body)) {
+    match block_on(client.create_graph(owner, repo, None, &body)) {
         Ok(resp) => {
             let inner = resp.into_inner();
             Ok(CreatedGraph {
@@ -935,6 +940,8 @@ pub(crate) mod tests {
                 "path_count": 0,
                 "url": "https://pathbase.dev/u/alex/repos/pathstash/graphs/{TEST_UUID}",
                 "visibility": "unlisted",
+                "state": "mutable",
+                "generation": 0,
                 "created_at": "2024-01-01T00:00:00Z",
                 "updated_at": "2024-01-01T00:00:00Z"
             }}"#

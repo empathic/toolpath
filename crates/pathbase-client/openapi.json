@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Pathbase API",
-    "description": "HTTP API for Pathbase — repositories, agent trace paths, computation graphs, and anonymous share links.\n\n**Stability.** v1 endpoints are stable in shape; additive changes (new fields, new endpoints, broader query params) ship without a version bump. Breaking changes get a new prefix (`/api/v2/...`) and a deprecation window.\n\n**Spec format.** OpenAPI 3.1, served live at `/api/v1/openapi.json`.\n\n**Versioning header.** Every response carries an `X-Pathbase-Version` header with the running build's identifier (`<semver>+<git-sha>`). The spec does not enumerate it per operation; consumers may read it from any response to pin or correlate.\n\n**Auth.** Most endpoints require a `pat_…` bearer token (see `bearerAuth`). Obtain one through the CLI grant flow (`POST /api/v1/auth/cli/request-grant` then `POST /api/v1/auth/cli/redeem`). Unauthenticated endpoints — the `Anon` namespace, public profile reads — are clearly tagged. Per-operation `security` annotations reflect the actual gate.",
+    "description": "HTTP API for Pathbase — repositories, paths (agent conversations), graphs (named, ordered collections of paths), and anonymous share links.\n\n**Stability.** v1 endpoints are stable in shape; additive changes (new fields, new endpoints, broader query params) ship without a version bump. Breaking changes get a new prefix (`/api/v2/...`) and a deprecation window.\n\n**Spec format.** OpenAPI 3.1, served live at `/api/v1/openapi.json`.\n\n**Versioning header.** Every response carries an `X-Pathbase-Version` header with the running build's identifier (`<semver>+<git-sha>`). The spec does not enumerate it per operation; consumers may read it from any response to pin or correlate.\n\n**Auth.** Most endpoints require a `pat_…` bearer token (see `bearerAuth`). Obtain one through the CLI grant flow (`POST /api/v1/auth/cli/request-grant` then `POST /api/v1/auth/cli/redeem`). Unauthenticated endpoints — the `Anon` namespace, public profile reads — are clearly tagged. Per-operation `security` annotations reflect the actual gate.",
     "license": {
       "name": ""
     },
@@ -205,10 +205,10 @@
         "tags": [
           "Anon"
         ],
-        "summary": "Upload a graph anonymously as the `anon` user. No authentication\nrequired; the resulting graph is always `Unlisted` and reachable\nonly via the returned share URL.",
+        "summary": "Upload a graph anonymously as the `anon` user. No authentication\nrequired; the resulting graph is always `Unlisted`, reachable only\nvia the returned share URL, and created `frozen` — nobody can\nauthenticate as its owner, so nothing could ever legitimately change it.",
         "operationId": "create_anon_graph",
         "requestBody": {
-          "description": "Toolpath Graph document. The body's `visibility` field is ignored; anon uploads are always `Unlisted`.",
+          "description": "Toolpath Graph document. The body's `visibility` and `freeze_after` fields are ignored; anon uploads are always `Unlisted` and frozen. The body may be sent with `Content-Encoding: gzip`; the route's body limit applies to the decompressed size (`413` when exceeded).",
           "content": {
             "application/json": {
               "schema": {
@@ -220,7 +220,7 @@
         },
         "responses": {
           "201": {
-            "description": "Graph stored; the `url` in the response is the share link.",
+            "description": "Graph stored; the `url` in the response is the share link. Anonymous graphs are created `frozen`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -240,7 +240,7 @@
             }
           },
           "413": {
-            "description": "Request body too large.",
+            "description": "Request body too large (after decompression).",
             "content": {
               "application/json": {
                 "schema": {
@@ -268,11 +268,11 @@
           "Users"
         ],
         "summary": "Return the authenticated user's full profile.",
-        "description": "Canonical \"who am I?\" endpoint. Returns the user matching the\ncaller's bearer token. The returned shape matches the public\n`GET /api/v1/u/{username}` response with one difference: `email`\nis included here because the caller is reading their own profile.",
+        "description": "Canonical \"who am I?\" endpoint. Returns the user matching the\ncaller's bearer token. The returned shape matches the public\n`GET /api/v1/u/{username}` response with two self-only differences:\n`email` and `auth_methods` are populated here because the caller is\nreading their own profile. Both are `null` on the public endpoint.",
         "operationId": "get_me",
         "responses": {
           "200": {
-            "description": "The authenticated user, including the private `email` field.",
+            "description": "The authenticated user, including the private `email` and `auth_methods` fields.",
             "content": {
               "application/json": {
                 "schema": {
@@ -756,7 +756,7 @@
           "Graphs"
         ],
         "summary": "Create a graph from a multi-path toolpath document.",
-        "description": "Inline path entries (full path objects) are admitted into the same\nworkspace as the graph (deduped by toolpath ID; an existing match\nis linked rather than re-created). Refs to existing paths\n(`{ \"$ref\": \"...\" }` entries) are kept as ID references and not\nre-stored.\n\nCaller must own `{owner}/{repo}`. The `document` field must parse\nas a toolpath v1 `Graph`.",
+        "description": "Inline path entries (full path objects) are admitted into the same\nworkspace as the graph; refs to existing paths (`{ \"$ref\": \"...\" }`\nentries) are kept as ID references and not re-stored. The graph, its\npaths, their steps and side rows commit in one transaction: a failure\nanywhere leaves nothing behind.\n\nCaller must hold write permission on `{owner}/{repo}`. The `document`\nfield must parse as a toolpath v1 `Graph`.",
         "operationId": "create_graph",
         "parameters": [
           {
@@ -776,10 +776,19 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Opaque key, at most 128 characters. A replay with the same key,\nmethod, target and body returns the original status and body; the\nsame key with a different request is `409 idempotency_conflict`; a\nreplay whose graph was deleted is `410 operation_target_deleted`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
-          "description": "Multi-path toolpath Graph document, optional display name, and visibility (`public`/`unlisted`/`private`, default `unlisted`). Inline paths are admitted into the workspace; refs are kept as ID references.",
+          "description": "Multi-path toolpath Graph document, optional display name, visibility (`public`/`unlisted`/`private`, default `unlisted`) and `freeze_after`. A path carrying `base.from` is rejected here; continuations go through `POST /graphs/{id}/continuations`. The body may be sent with `Content-Encoding: gzip`; the route's body limit applies to the decompressed size (`413` when exceeded).",
           "content": {
             "application/json": {
               "schema": {
@@ -791,7 +800,7 @@
         },
         "responses": {
           "201": {
-            "description": "The newly created graph with its server-assigned UUID, the reconstructed multi-path `document`, and the canonical `url`.",
+            "description": "The newly created graph with its server-assigned UUID, a headers-only `document` (graph + per-path headers, no steps — the uploader already has them), and the canonical `url`. Created `mutable` at generation 0, or `frozen` at generation 1 with `freeze_after`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -801,7 +810,7 @@
             }
           },
           "400": {
-            "description": "Document failed to parse as a toolpath Graph.",
+            "description": "Document failed to parse as a toolpath Graph, or `invalid_base`: a path carries `base.from`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -811,7 +820,37 @@
             }
           },
           "401": {
-            "description": "Missing/invalid bearer token, or the authenticated user does not own the target repository.",
+            "description": "Missing/invalid bearer token, or the authenticated user may not write to the target repository.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`idempotency_conflict`: the `Idempotency-Key` was already used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`operation_target_deleted`: replay of a create whose graph has since been deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body too large (after decompression).",
             "content": {
               "application/json": {
                 "schema": {
@@ -892,6 +931,147 @@
           }
         }
       },
+      "put": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Replace the document a mutable graph owns. The document must carry the\ngraph's paths (same Toolpath ids, inline) with their owned steps; steps\nare matched to stored rows by id, so server UUIDs survive, changed\npayloads are updated in place, new steps are inserted, absent ones\ndeleted, and stored order follows the document. History inherited\nthrough a path's `base.from` is not part of\nthe owned document: an owned step may not take an id stored anywhere\nalong that chain (dead ends included), and\nthe base itself cannot change. An identical document changes nothing\nand leaves `generation` where it was. Gates, validation, the writes\nand an optional freeze commit in one transaction. Requires write\npermission on the repo.",
+        "operationId": "replace_graph",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Opaque key, at most 128 characters. A replay with the same key,\nmethod, target and body returns the original status and body; the\nsame key with a different request is `409 idempotency_conflict`; a\nreplay whose graph was deleted is `410 operation_target_deleted`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The document the client now holds, the generation it last observed and, optionally, `freeze_after`. The body may be sent with `Content-Encoding: gzip`; the route's body limit applies to the decompressed size (`413` when exceeded).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceGraphBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The graph's meta after the update. `generation` advanced once when anything changed (and once more when `freeze_after` froze it); unchanged when the document was identical.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphMetaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_document`: the path set differs from the graph's, a path is a `$ref`, or a step id, head or parent fails validation. `base_retargeted`: a path's `base.from` differs from the stored one. `inherited_step_redefined`: a step id is stored somewhere along the path's base chain. `bad_request`: the body is not a toolpath Graph.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`base_unavailable`: a graph in a path's base chain is not readable by the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`frozen`: the graph is frozen. `generation_conflict`: `expected_generation` does not match. `conflict`: a path belongs to more than one graph. `idempotency_conflict`: the `Idempotency-Key` was already used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`operation_target_deleted`: replay of an update whose graph has since been deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body too large (after decompression).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
       "delete": {
         "tags": [
           "Graphs"
@@ -944,6 +1124,160 @@
           },
           "404": {
             "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`graph_has_dependents`: a continuation references this graph as its structural base, so its history cannot be deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/continuations": {
+      "post": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Create, or discover, the main-line continuation of a frozen path: a new\ngraph in the same repo, with the source's visibility, whose single path\nstarts from `source_path`'s head or an ancestor of it on the main line\n(never a frozen dead end). The document holds only the\nnew steps; the history it continues is reached through `base.from`,\nnever copied. Source lock, validation, creation, base and lineage all\ncommit in one transaction. Requires write permission on the repo.",
+        "operationId": "create_continuation",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The frozen source graph.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Opaque key, at most 128 characters. A replay with the same key,\nmethod, target and body returns the original status and body; the\nsame key with a different request is `409 idempotency_conflict`; a\nreplay whose graph was deleted is `410 operation_target_deleted`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The continuation document, the source path it continues and, optionally, the source generation observed and `freeze_after`. The body may be sent with `Content-Encoding: gzip`; the route's body limit applies to the decompressed size (`413` when exceeded).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContinuationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The source path already has its main-line continuation; this is that graph's meta, untouched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphMetaResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Continuation created: its meta, with `base` and `lineage` naming the source. `mutable` at generation 0, or `frozen` at 1 with `freeze_after`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphMetaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_base`: `base.from` is malformed, names another host, document, path or step, or names a step that is not the source path's head or an ancestor of it. `empty_continuation`: no owned steps. `invalid_document`: an owned step reuses an id stored in the source path or its base chain. `bad_request`: the document is not one inline path, or its ids, parents or head fail validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`source_not_frozen`: `{id}` is mutable. `generation_conflict`: `expected_generation` does not match. `idempotency_conflict`: the `Idempotency-Key` was already used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`operation_target_deleted`: replay of a create whose continuation has since been deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body too large (after decompression).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1031,12 +1365,189 @@
         }
       }
     },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/freeze": {
+      "post": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Permanently freeze a graph. One-way: nothing can make a frozen graph\nmutable again. Freezing a graph that is already frozen is an idempotent\nno-op that returns its current meta unchanged (its `expected_generation`\nis not checked). Requires write permission on the repo.",
+        "operationId": "freeze_graph",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Opaque key, at most 128 characters. A replay with the same key,\nmethod, target and body returns the original status and body; the\nsame key with a different request is `409 idempotency_conflict`; a\nreplay whose graph was deleted is `410 operation_target_deleted`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The generation the caller last observed. The body may be sent with `Content-Encoding: gzip`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FreezeGraphBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The graph's meta, now `frozen`. A graph that was mutable has its `generation` advanced by the freeze; an already-frozen graph is returned as is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphMetaResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`generation_conflict`: the graph's `generation` moved since the caller observed `expected_generation`. Re-read the graph and decide again. `idempotency_conflict`: the `Idempotency-Key` was already used for a different request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`operation_target_deleted`: replay of a freeze whose graph has since been deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/meta": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "The graph's lean state: `state`, `generation`, per-path heads and owned\nstep counts, structural base and continuation lineage. No step payloads\nand no transcript reconstruction. Same read rule as `GET /graphs/{id}`.",
+        "operationId": "get_graph_meta",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State, generation, paths (Toolpath id, server id, head, owned step count), `base` when the path continues a frozen one, and `lineage`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphMetaResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner, repository, or graph not found — or graph is `Private` and the caller cannot read it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ]
+      }
+    },
     "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/paths": {
       "get": {
         "tags": [
           "Graphs"
         ],
-        "summary": "List the paths that belong to a graph, in graph-defined order.\nIf the parent graph is readable to the caller (`Public`/`Unlisted`,\nor `Private` for the owner), all of its constituent paths are\nreturned; the parent's UUID is the share token. A `Private` graph\n404s for non-owners — same as the per-graph GET.",
+        "summary": "List the paths that belong to a graph, in graph-defined order.\nIf the parent graph is readable to the caller (`Public`/`Unlisted`,\nor `Private` for viewers who reach the repo through the access\nclosure), all of its constituent paths are returned; the parent's\nUUID is the share token. A `Private` graph 404s for everyone else —\nsame as the per-graph GET.",
         "operationId": "list_graph_paths",
         "parameters": [
           {
@@ -1175,7 +1686,7 @@
         "tags": [
           "Graphs"
         ],
-        "summary": "Delete a constituent path. Owner only. Cascades to its step rows\nAND removes the junction row from this graph.",
+        "summary": "Delete a constituent path. Owner only. Cascades to its step rows\nAND removes the junction row from this graph. Rejected with\n`409 frozen` once the graph is frozen; advances its `generation`.",
         "operationId": "delete_graph_path",
         "parameters": [
           {
@@ -1218,10 +1729,34 @@
             "description": ""
           },
           "401": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`frozen`: the graph is frozen; `graph_has_dependents`: a continuation references this path as its structural base.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1234,7 +1769,7 @@
         "tags": [
           "Graphs"
         ],
-        "summary": "Patch a constituent path's mutable fields — currently just\n`visibility`. Owner only.",
+        "summary": "Patch a constituent path's mutable fields — currently just\n`visibility`. Owner only. Rejected with `409 frozen` once the graph is\nfrozen. Visibility is a display field, not document content, so the\ngraph's `generation` does not move.",
         "operationId": "update_graph_path",
         "parameters": [
           {
@@ -1305,6 +1840,16 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`frozen`: the graph is frozen.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1390,12 +1935,186 @@
         }
       }
     },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/paths/{path_id}/composed": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "The path as a self-contained Toolpath `Path`: the history inherited\nthrough its structural base (the referenced step and its ancestors,\nrecursively, in transcript order), then its own steps, with explicit\nparent ids restored and `base.from` removed. A path without a base is\nreturned as stored. Every graph in the chain is checked for the caller\nat read time; a base the caller cannot read is `403 base_unavailable`\n— a partial transcript is never served as complete. Conditional via\n`If-None-Match`.",
+        "operationId": "get_graph_path_composed",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Toolpath `Path` JSON: `{path, meta?, steps}` with inherited history inlined.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong ETag for conditional GETs. Echo as `If-None-Match` on subsequent requests."
+              }
+            },
+            "content": {
+              "application/json": {}
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the current ETag."
+          },
+          "403": {
+            "description": "`base_unavailable`: a graph in the base chain is not readable by the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ]
+      }
+    },
+    "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/paths/{path_id}/stats": {
+      "get": {
+        "tags": [
+          "Graphs"
+        ],
+        "summary": "Token-spend projection over the path — measured totals plus the\nattribution walk's estimated breakdown (composition, per-tool /\nfile-type / command rollups, models, timeline).",
+        "description": "Server-side counterpart to the web client's `projectStats`. Both run\nthe same engine: this is the Rust port in `pathbase-stats`, held\nbyte-compatible with the TypeScript original by its parity suite. The\ndistinction the payload preserves is measured vs estimated —\n`totals` is the provider's own accounting, everything downstream of\nthe attribution walk is a character-share estimate.\n\nUnlike `/chat`, this reads EVERY step of the path, not the\nHEAD-ancestor chain: carrier turns and dead branches still cost\ntokens, and dropping them under-reports spend.",
+        "operationId": "get_graph_path_stats",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "path_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "drill",
+            "in": "query",
+            "description": "Include the per-call `items` drill-downs on every rollup row.\n\nOff by default, and the default is load-bearing: a drill item\ncarries the call's input and result previews, so on a real session\nthe rollups dwarf every other field — one 553 KB document projected\nto 19 MB, of which 18.6 MB was `commands` alone (665 rows). The\nheadline numbers a caller usually wants (`totals`, `composition`,\n`models`, `time`) are a few tens of KB. Ask for drill-downs when\nrendering an expandable table, not by default.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`StatsProjection` as JSON — measured `totals` plus the attribution walk's estimated rollups. Shape is defined by the `pathbase-stats` crate (and its TypeScript twin), which owns the contract; it is not mirrored into this spec as a schema. Send the returned `ETag` back as `If-None-Match` to receive 304 when unchanged.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong ETag for conditional GETs. Echo as `If-None-Match` on subsequent requests."
+              }
+            },
+            "content": {
+              "application/json": {}
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the current ETag."
+          },
+          "404": {
+            "description": "Owner, repository, graph, or path not found — or not readable by the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/u/{owner}/repos/{repo}/graphs/{id}/visibility": {
       "patch": {
         "tags": [
           "Graphs"
         ],
-        "summary": "Toggle a graph's public/secret visibility. Owner only.",
+        "summary": "Toggle a graph's public/secret visibility. Owner only. Visibility is a\nserver-owned display field, not document content: this works on\nfrozen graphs too and never moves `generation`.",
         "operationId": "update_graph_visibility",
         "parameters": [
           {
@@ -1579,7 +2298,7 @@
           "Users"
         ],
         "summary": "Look up a user's public profile by username.",
-        "description": "No authentication required. Returns the same `User` shape as\n`/u/me` with one guarantee: `email` is always `null` here — that\nfield is only ever populated for the caller's own profile via\n`GET /api/v1/u/me`.\n\n**Reserved namespaces.** The literal usernames `me` and `anon` are\nreserved and always return 404 from this endpoint. Use\n`GET /api/v1/u/me` for the calling user and `/api/v1/u/anon/...`\nfor anonymous content.",
+        "description": "No authentication required. Returns the same `User` shape as\n`/u/me` with one guarantee: the self-only fields `email` and\n`auth_methods` are always `null` here — they are only ever\npopulated for the caller's own profile via `GET /api/v1/u/me`.\n\n**Reserved namespaces.** The literal usernames `me` and `anon` are\nreserved and always return 404 from this endpoint. Use\n`GET /api/v1/u/me` for the calling user and `/api/v1/u/anon/...`\nfor anonymous content.",
         "operationId": "get_user",
         "parameters": [
           {
@@ -1619,6 +2338,14 @@
   },
   "components": {
     "schemas": {
+      "AccountKind": {
+        "type": "string",
+        "description": "Whether an account is a person or an organization. An `Individual` is a\nreal person who logs in; an `Org` is a loginless account that owns repos\nand a roster.",
+        "enum": [
+          "individual",
+          "org"
+        ]
+      },
       "ActorView": {
         "type": "object",
         "description": "Resolved actor identity for a turn. Lookup happens once on the\nserver against the document's `meta.actors` block; turns reference\nthe actor by `u32` index into the projection's `actors` array.",
@@ -1642,6 +2369,7 @@
           },
           "model": {
             "type": "string",
+            "description": "Model ID resolved against `meta.actors` if present, else an\n`agent:` actor ID's suffix.",
             "nullable": true
           }
         }
@@ -1654,7 +2382,20 @@
           "unauthorized",
           "bad_request",
           "conflict",
+          "frozen",
+          "generation_conflict",
+          "graph_has_dependents",
+          "source_not_frozen",
+          "invalid_base",
+          "base_unavailable",
+          "idempotency_conflict",
+          "empty_continuation",
+          "operation_target_deleted",
+          "invalid_document",
+          "base_retargeted",
+          "inherited_step_redefined",
           "visibility_locked",
+          "forbidden",
           "internal_error"
         ]
       },
@@ -1693,6 +2434,14 @@
             "description": "The path's full HATEOAS-decorated document after the append."
           }
         }
+      },
+      "AuthMethod": {
+        "type": "string",
+        "description": "How a user authenticates to Pathbase. A single account can carry\nmore than one method (e.g. an email/password account that later\nlinked GitHub), so it's modelled as a set rather than a single value.\n\nDerived server-side from the account's stored credentials:\n`Password` when `users.password_hash` is set, `Github` when an\n`auth_providers` row of kind `github` exists. Never carries the\nunderlying secret (hash / token) — only the *kind* of login.",
+        "enum": [
+          "github",
+          "password"
+        ]
       },
       "ChatCursor": {
         "type": "object",
@@ -1872,6 +2621,35 @@
           }
         }
       },
+      "ContinuationBody": {
+        "type": "object",
+        "description": "Body for `POST /api/v1/u/{owner}/repos/{repo}/graphs/{id}/continuations`.",
+        "required": [
+          "document",
+          "source_path"
+        ],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/ToolpathDocument",
+            "description": "A toolpath v1 Graph with exactly one inline path whose\n`path.base.from` is `<this graph's url>#<source_path>/<step>` — the\nsource path's head or an ancestor of it (a producer's head is often a\ntrailing sidecar step; the new turn continues the assistant turn\nbefore it) — and\nwhose steps are only the new, owned ones (root steps carry no\nparents; the frozen parent is implied by the base)."
+          },
+          "expected_generation": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When present, must equal the source graph's current `generation`.",
+            "nullable": true
+          },
+          "freeze_after": {
+            "type": "boolean",
+            "description": "Freeze the continuation in the same transaction that creates it."
+          },
+          "source_path": {
+            "type": "string",
+            "description": "Toolpath id of the frozen path in `{id}` being continued."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateRepoBody": {
         "type": "object",
         "description": "Request body for `POST /api/v1/u/{owner}/repos`.\n\nCreates a repository owned by the authenticated user. The (owner,\nname) pair must be unique; collisions return 409.",
@@ -1900,10 +2678,27 @@
         },
         "additionalProperties": false
       },
+      "FreezeGraphBody": {
+        "type": "object",
+        "description": "Body for `POST /api/v1/u/{owner}/repos/{repo}/graphs/{id}/freeze`.",
+        "required": [
+          "expected_generation"
+        ],
+        "properties": {
+          "expected_generation": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `generation` the caller last observed on the graph. The freeze\napplies only if the graph is still at that generation, so a content\nupdate that raced the decision to freeze is never silently included."
+          }
+        },
+        "additionalProperties": false
+      },
       "Graph": {
         "type": "object",
         "description": "A computation graph — a named ordered collection of paths within\na repo. Pure storage shape — the columns on `graphs`. Derived\nproperties (path count, reconstructed document) live on the response\nwrappers that need them (`GraphSummary`, `GraphDocument`).",
         "required": [
+          "state",
+          "generation",
           "id",
           "repo_id",
           "toolpath_id",
@@ -1915,6 +2710,11 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic concurrency token, not a historical revision."
           },
           "header": {
             "type": "object",
@@ -1934,12 +2734,16 @@
             "type": "string",
             "format": "uuid"
           },
+          "state": {
+            "$ref": "#/components/schemas/GraphState"
+          },
           "title": {
             "type": "string",
             "nullable": true
           },
           "toolpath_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Producer-chosen wire ID from the toolpath JSON (`graph.id`)."
           },
           "updated_at": {
             "type": "string",
@@ -1966,7 +2770,7 @@
             "properties": {
               "document": {
                 "type": "object",
-                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }`."
+                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }` on the GET\nendpoints. On the upload-create response it is headers-only (no `steps`)\n— see [`from_graph_headers`]."
               },
               "path_count": {
                 "type": "integer",
@@ -1979,6 +2783,107 @@
           }
         ],
         "description": "Wraps a `Graph` with its path count, reconstructed multi-path\ndocument, and the URL. Used by endpoints that promise the full\ndocument on the wire."
+      },
+      "GraphLineage": {
+        "type": "object",
+        "description": "Continuation lineage around one graph. `source_*` are set on a\ncontinuation (this graph continues that frozen path);\n`continuation_graph_id` is set on a frozen graph that already has its\nmain-line child. A graph with neither is independent.",
+        "properties": {
+          "continuation_graph_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "source_graph_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "source_path": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "GraphMetaResponse": {
+        "type": "object",
+        "description": "The lean state view of a graph: `GET …/graphs/{id}/meta` and the result\nof every sync mutation. Never carries step payloads.",
+        "required": [
+          "id",
+          "url",
+          "state",
+          "generation",
+          "updated_at",
+          "lineage",
+          "paths"
+        ],
+        "properties": {
+          "base": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathBase"
+              }
+            ],
+            "description": "Present when this graph's single path has a structural base."
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Compare-and-swap token for mutable operations; not a revision id."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lineage": {
+            "$ref": "#/components/schemas/GraphLineage"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphPathMeta"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/GraphState"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "url": {
+            "type": "string",
+            "description": "Canonical URL; also the document URI a continuation's `base.from`\nuses to name this graph."
+          }
+        }
+      },
+      "GraphPathMeta": {
+        "type": "object",
+        "description": "One constituent path in a graph's meta view. `step_count` counts owned\nrows only; inherited history is never counted.",
+        "required": [
+          "id",
+          "server_id",
+          "step_count"
+        ],
+        "properties": {
+          "head": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "string",
+            "description": "Toolpath path id."
+          },
+          "server_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Pathbase UUID."
+          },
+          "step_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "GraphResponse": {
         "allOf": [
@@ -1998,6 +2903,14 @@
           }
         ],
         "description": "`Graph` plus the absolute URL clients should link to."
+      },
+      "GraphState": {
+        "type": "string",
+        "description": "Mutable documents may change; freezing permanently fixes their content.",
+        "enum": [
+          "mutable",
+          "frozen"
+        ]
       },
       "GraphSummaryResponse": {
         "allOf": [
@@ -2023,6 +2936,31 @@
           }
         ],
         "description": "Wraps a `Graph` with its path count plus the URL. Used by listing\nendpoints."
+      },
+      "PathBase": {
+        "type": "object",
+        "description": "A path's structural base, resolved on this host: the `path.base.from`\nreference exactly as stored plus the graph, path and step it names.\n`source_path_id` / `source_step_id` are Toolpath ids, not server UUIDs.",
+        "required": [
+          "from",
+          "source_graph_id",
+          "source_path_id",
+          "source_step_id"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "source_graph_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_path_id": {
+            "type": "string"
+          },
+          "source_step_id": {
+            "type": "string"
+          }
+        }
       },
       "RedeemBody": {
         "type": "object",
@@ -2055,6 +2993,30 @@
             "description": "The user the CLI is now authenticated as."
           }
         }
+      },
+      "ReplaceGraphBody": {
+        "type": "object",
+        "description": "Body for `PUT /api/v1/u/{owner}/repos/{repo}/graphs/{id}`.",
+        "required": [
+          "document",
+          "expected_generation"
+        ],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/ToolpathDocument",
+            "description": "The toolpath v1 Graph document as the client now holds it: the same\ninline paths (by Toolpath id) as the stored graph, each carrying only\nits owned steps and, on a continuation, its stored `base.from`."
+          },
+          "expected_generation": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `generation` the caller last observed. The update applies only\nwhile the graph is still at that generation."
+          },
+          "freeze_after": {
+            "type": "boolean",
+            "description": "Freeze the graph in the same transaction, after the document is\napplied."
+          }
+        },
+        "additionalProperties": false
       },
       "Repo": {
         "type": "object",
@@ -2251,7 +3213,6 @@
           },
           "paths": {
             "type": "array",
-            "items": {},
             "description": "One or more entries — each is either a full inline path object\nor a `{ \"$ref\": \"...\" }` reference to an external path."
           }
         }
@@ -2295,7 +3256,8 @@
             "nullable": true
           },
           "toolpath_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Producer-chosen wire ID from the toolpath JSON (`path.id`)."
           },
           "updated_at": {
             "type": "string",
@@ -2452,7 +3414,7 @@
       },
       "UploadGraphBody": {
         "type": "object",
-        "description": "Request body for `POST /api/v1/u/{owner}/repos/{repo}/graphs`.\n\nThe `document` field carries a multi-path toolpath Graph; inline\npath entries are admitted into the workspace and deduped by their\ntoolpath ID, refs are kept as ID references.",
+        "description": "Request body for `POST /api/v1/u/{owner}/repos/{repo}/graphs`.\n\nThe `document` field carries a multi-path toolpath Graph. Each inline\npath entry mints its own server-UUID path record and ingests its steps;\nthe in-document toolpath path ID is a non-unique display/reference\nattribute, never a server key, so re-uploading the same document just\nyields independent paths.",
         "required": [
           "document"
         ],
@@ -2460,6 +3422,10 @@
           "document": {
             "$ref": "#/components/schemas/ToolpathDocument",
             "description": "The toolpath v1 Graph document with one or more `PathOrRef`\nentries. Inline paths are admitted into the same workspace as\nthe graph; refs are kept as ID references to existing paths."
+          },
+          "freeze_after": {
+            "type": "boolean",
+            "description": "Freeze the graph in the same transaction that creates it: it is\nreturned `frozen` at generation 1. Ignored on the anonymous route,\nwhose graphs are always frozen."
           },
           "name": {
             "type": "string",
@@ -2488,6 +3454,14 @@
           "updated_at"
         ],
         "properties": {
+          "auth_methods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthMethod"
+            },
+            "description": "The login method(s) this account can authenticate with. Like\n`email`, this is a self-only field: it is populated only on the\nauthenticated self-read (`GET /api/v1/u/me` and the internal\nsession bootstrap) and is `None` on the public profile endpoint\n`GET /api/v1/u/{username}` — another user's login method is not\ndisclosed. `None` therefore means \"not disclosed\", not \"no\nmethods\". Default-constructed `User`s (DB reads) start `None`;\nthe self-read handlers fill it in.",
+            "nullable": true
+          },
           "bio": {
             "type": "string",
             "nullable": true
@@ -2509,6 +3483,10 @@
             "type": "string",
             "format": "uuid"
           },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind",
+            "description": "Person (`individual`) or organization (`org`). Defaults to\n`individual` so existing deserializers (sessions, tests) are unaffected."
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
@@ -2520,7 +3498,7 @@
       },
       "Visibility": {
         "type": "string",
-        "description": "The visibility state of a `Repo`, `TracePath`, or `Graph`. Used uniformly\nacross the three entities at the storage and wire layers.\n\n- `Public`: appears in public and owner listings, readable by anyone.\n- `Unlisted`: hidden from default listings (even from the owner), but\n  readable by anyone in possession of the resource's URL/ID. The\n  resource ID is the access gate — for paths/graphs that's the UUID;\n  for repos it's a system-pinned state used by `pathstash` only.\n- `Private`: hidden from public listings, listed only to the owner,\n  readable only by the owner.",
+        "description": "The visibility state of a `Repo`, `TracePath`, or `Graph`. Used uniformly\nacross the three entities at the storage and wire layers.\n\n- `Public`: appears in public and owner listings, readable by anyone.\n- `Unlisted`: hidden from default listings (even from the owner), but\n  readable by anyone in possession of the resource's URL/ID. The\n  resource ID is the access gate — for paths/graphs that's the UUID;\n  for repos it's a system-pinned state used by `pathstash` only.\n- `Private`: hidden from public listings; listed and readable only by\n  viewers who reach the owning repo through the access closure — the\n  owner, an owning org's members, or grant holders.",
         "enum": [
           "public",
           "unlisted",
@@ -2555,7 +3533,7 @@
     },
     {
       "name": "Graphs",
-      "description": "Computation graphs and their constituent trace paths."
+      "description": "Graphs — named, ordered collections of paths — and their constituent paths. Each path is an agent conversation."
     },
     {
       "name": "Anon",
