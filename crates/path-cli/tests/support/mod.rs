@@ -6,6 +6,8 @@
 
 #![allow(dead_code)]
 
+pub mod pathbase;
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

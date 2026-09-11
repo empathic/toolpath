@@ -2,6 +2,9 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::path::PathBuf;
 
+mod support;
+use support::pathbase::MockPathbase;
+
 fn examples_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -1802,71 +1805,12 @@ fn share_anon_flag_ignores_configured_repo() {
     drop(temp);
 }
 
-/// Mock Pathbase for the authed configured-remote tests: serves
-/// `requests` sequential connections, answering `GET /api/v1/u/me`
-/// (credentials probe) or a graph POST by request line, and capturing
-/// each request's start line for assertions.
-fn authed_upload_server(requests: usize) -> (u16, std::thread::JoinHandle<Vec<String>>) {
-    use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let handle = std::thread::spawn(move || {
-        let mut starts = Vec::new();
-        for _ in 0..requests {
-            let (stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream);
-            let mut start = String::new();
-            reader.read_line(&mut start).unwrap();
-            let mut content_length = 0usize;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                    break;
-                }
-                if let Some((name, value)) = line.trim_end().split_once(':')
-                    && name.eq_ignore_ascii_case("content-length")
-                {
-                    content_length = value.trim().parse().unwrap_or(0);
-                }
-            }
-            if content_length > 0 {
-                let mut body = vec![0u8; content_length];
-                reader.read_exact(&mut body).ok();
-            }
-            // Progenitor strictly validates response shapes, so both
-            // bodies carry every required field.
-            let (status, body) = if start.starts_with("GET") {
-                (
-                    "200 OK",
-                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","username":"alex","email":null,"display_name":null,"bio":null,"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#,
-                )
-            } else {
-                (
-                    "201 Created",
-                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/u/team/repos/sessions/graphs/fe94b6f9","visibility":"unlisted","state":"mutable","generation":0,"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#,
-                )
-            };
-            let resp = format!(
-                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{body}",
-                body.len()
-            );
-            let mut stream = reader.into_inner();
-            let _ = stream.write_all(resp.as_bytes());
-            starts.push(start.trim_end().to_string());
-        }
-        starts
-    });
-    (port, handle)
-}
-
 /// Logged in with a `[[project]]` rule covering the session's project:
 /// the upload must go to the configured repo's graphs endpoint, with the
 /// provenance line on stderr and the share URL on stdout.
 #[test]
 fn share_configured_repo_uploads_when_authed() {
-    let (port, server) = authed_upload_server(2);
+    let server = MockPathbase::start();
     let (temp, project) = claude_session_fixture();
     let cfg = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -1877,13 +1821,7 @@ fn share_configured_repo_uploads_when_authed() {
         ),
     )
     .unwrap();
-    std::fs::write(
-        cfg.path().join("credentials.json"),
-        format!(
-            r#"{{"url":"http://127.0.0.1:{port}","token":"tok","user":{{"id":"u-1","username":"alex"}}}}"#
-        ),
-    )
-    .unwrap();
+    server.write_credentials(cfg.path());
 
     cmd()
         .env("HOME", temp.path())
@@ -1901,18 +1839,27 @@ fn share_configured_repo_uploads_when_authed() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Sharing to team/sessions"))
-        .stdout(predicate::str::contains(
-            "https://example.test/u/team/repos/sessions/graphs/fe94b6f9",
-        ));
+        .stdout(predicate::str::contains(format!(
+            "{}/u/team/sessions/graphs/",
+            server.base()
+        )));
 
-    let starts = server.join().unwrap();
+    let requests = server.requests();
+    assert_eq!(
+        requests[0], "GET /api/v1/u/me",
+        "first request should be the auth probe: {requests:?}"
+    );
+    // Uploads now go through the sync engine, which probes the server
+    // for the sync API before creating and reads the graph back after.
     assert!(
-        starts[0].starts_with("GET /api/v1/u/me"),
-        "first request should be the auth probe: {starts:?}"
+        requests
+            .iter()
+            .any(|r| r == "POST /api/v1/u/team/repos/sessions/graphs"),
+        "upload must target the configured repo: {requests:?}"
     );
     assert!(
-        starts[1].starts_with("POST /api/v1/u/team/repos/sessions/graphs"),
-        "upload must target the configured repo: {starts:?}"
+        !requests.iter().any(|r| r.contains("/repos/pathstash/")),
+        "a configured remote never touches pathstash: {requests:?}"
     );
 }
 
@@ -1921,25 +1868,20 @@ fn share_configured_repo_uploads_when_authed() {
 /// B — the upload POST must land on B, at the remote's repo.
 #[test]
 fn share_url_remote_targets_embedded_server() {
-    let (port_a, server_a) = authed_upload_server(1);
-    let (port_b, server_b) = authed_upload_server(1);
+    let server_a = MockPathbase::start();
+    let server_b = MockPathbase::start();
     let (temp, project) = claude_session_fixture();
     let cfg = tempfile::tempdir().unwrap();
     std::fs::write(
         cfg.path().join("config.toml"),
         format!(
-            "[[project]]\ndir = {:?}\nremote = \"http://127.0.0.1:{port_b}/u/team/proj\"\n",
-            project.display().to_string()
+            "[[project]]\ndir = {:?}\nremote = \"{}/u/team/proj\"\n",
+            project.display().to_string(),
+            server_b.base()
         ),
     )
     .unwrap();
-    std::fs::write(
-        cfg.path().join("credentials.json"),
-        format!(
-            r#"{{"url":"http://127.0.0.1:{port_a}","token":"tok","user":{{"id":"u-1","username":"alex"}}}}"#
-        ),
-    )
-    .unwrap();
+    server_a.write_credentials(cfg.path());
 
     cmd()
         .env("HOME", temp.path())
@@ -1957,17 +1899,26 @@ fn share_url_remote_targets_embedded_server() {
         .assert()
         .success()
         .stderr(predicate::str::contains(format!(
-            "Sharing to http://127.0.0.1:{port_b}/u/team/proj"
+            "Sharing to {}/u/team/proj",
+            server_b.base()
         )));
 
-    let starts_a = server_a.join().unwrap();
-    assert!(
-        starts_a[0].starts_with("GET /api/v1/u/me"),
-        "server A gets only the auth probe: {starts_a:?}"
+    let requests_a = server_a.requests();
+    assert_eq!(
+        requests_a,
+        ["GET /api/v1/u/me"],
+        "server A gets only the auth probe: {requests_a:?}"
     );
-    let starts_b = server_b.join().unwrap();
+    let requests_b = server_b.requests();
+    // Server B gets the engine's sync probe, then the create at the remote's repo.
     assert!(
-        starts_b[0].starts_with("POST /api/v1/u/team/repos/proj/graphs"),
-        "server B gets the upload at the remote's repo: {starts_b:?}"
+        requests_b
+            .iter()
+            .any(|r| r == "POST /api/v1/u/team/repos/proj/graphs"),
+        "server B gets the upload at the remote's repo: {requests_b:?}"
+    );
+    assert!(
+        !requests_b.iter().any(|r| r == "GET /api/v1/u/me"),
+        "{requests_b:?}"
     );
 }

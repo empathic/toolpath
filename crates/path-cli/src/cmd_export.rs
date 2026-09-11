@@ -162,7 +162,7 @@ pub enum ExportTarget {
         #[arg(short, long, conflicts_with = "project")]
         output: Option<PathBuf>,
     },
-    /// Upload a toolpath document to Pathbase.
+    /// Upload a toolpath document to Pathbase as a new graph.
     ///
     /// Default behavior depends on whether you're logged in:
     /// - Logged in (default): writes an unlisted graph under your
@@ -173,6 +173,12 @@ pub enum ExportTarget {
     /// Use `--repo`/`--name`/`--public` to override the pathstash default
     /// when authenticated. Use `--anon` to force the anonymous endpoint
     /// even when credentials are present.
+    ///
+    /// The document is uploaded as given: every run creates a graph
+    /// (mutable when authenticated), and nothing is recorded locally, so
+    /// a later `share` or `sync` of the same session does not know about
+    /// it. To upload a live agent session and keep its graph updated in
+    /// place, use `path share` or `path sync`.
     Pathbase {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
         #[arg(short, long)]
@@ -1911,7 +1917,7 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         let needs_auth = upload.repo.is_some() || upload.public || upload.name.is_some();
         let auth = preflight_auth(&base_url, upload.anon, needs_auth)?;
         let summary_source = file.display().to_string();
-        run_pathbase_inner(auth, base_url, upload, &body, &summary_source).map(|_| ())
+        run_pathbase_inner(auth, base_url, upload, &body, &summary_source)
     }
 }
 
@@ -1933,16 +1939,12 @@ pub(crate) fn resolve_upload_base_url(args: &PathbaseUploadArgs) -> String {
     resolve_url(None)
 }
 
-#[cfg(not(target_os = "emscripten"))]
-/// An authed upload's result: where it landed and what the server
-/// returned. `run_pathbase_inner` yields `None` for anonymous uploads.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) struct UploadedGraph {
-    pub(crate) owner: String,
-    pub(crate) repo: String,
-    pub(crate) created: crate::cmd_pathbase::CreatedGraph,
-}
-
+/// Upload `body` as a new graph. Anonymous uploads are frozen by the
+/// server; authenticated ones create a mutable graph that nothing
+/// tracks afterwards. Live sessions go through the sync engine
+/// (`cmd_share`) instead, so this is the only authed create outside it,
+/// and it refuses a server without the sync API for the same reason the
+/// engine does: an untracked create there is a duplicate waiting to happen.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn run_pathbase_inner(
     auth: crate::cmd_pathbase::AuthMode,
@@ -1950,7 +1952,7 @@ pub(crate) fn run_pathbase_inner(
     args: PathbaseUploadArgs,
     body: &str,
     summary_source: &str,
-) -> Result<Option<UploadedGraph>> {
+) -> Result<()> {
     use crate::cmd_pathbase::{AuthMode, anon_graphs_post, graphs_post, repos_post};
     use pathbase_client::types::Visibility;
 
@@ -1979,7 +1981,7 @@ pub(crate) fn run_pathbase_inner(
                 body.len()
             );
             println!("{printable}");
-            return Ok(None);
+            return Ok(());
         }
         AuthMode::Authed { token, username } => (token, username),
     };
@@ -1993,6 +1995,9 @@ pub(crate) fn run_pathbase_inner(
             (username, "pathstash".to_string())
         }
     };
+    let api = crate::sync::api::PathbaseSync::new(&base_url, &token)?;
+    crate::sync::lock::supports_sync(&api, &format!("{owner}/{repo}"))
+        .map_err(anyhow::Error::msg)?;
 
     let name = args.name.or_else(|| Some(derive_name(&doc)));
     let created = graphs_post(
@@ -2031,11 +2036,7 @@ pub(crate) fn run_pathbase_inner(
         body.len()
     );
     println!("{}", created.url);
-    Ok(Some(UploadedGraph {
-        owner,
-        repo,
-        created,
-    }))
+    Ok(())
 }
 
 /// Default display label for a graph uploaded via `export pathbase`.
