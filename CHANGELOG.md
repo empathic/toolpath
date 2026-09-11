@@ -12,6 +12,12 @@ All notable changes to the Toolpath workspace are documented here.
   export of it into the same project is refused instead of duplicated.
   `--cwd` does not change the ID. The `--output` message names the
   session ID.
+- **`path-cli`** (0.21.0): `p export claude` takes `--session-id <UUID>`,
+  without the feature. It renames the projected session the way
+  `--derive-session-id` does, to the ID the caller gives. The
+  document's own session is not touched, so one document exports as
+  several sessions. A value that is not a UUID is rejected at parse
+  time, and the flag excludes `--derive-session-id`.
 - **`toolpath-cli`** (0.21.0): lockstep bump of the deprecated shim.
 
 ## toolpath-claude 0.13.3 — 2026-09-10

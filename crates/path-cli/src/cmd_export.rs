@@ -29,6 +29,16 @@ use crate::remote::RepoSpec;
 #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
 mod remote_session;
 
+/// Claude Code names the session file `<id>.jsonl` and resumes it
+/// with `claude -r <id>`, and it accepts only a UUID there. The value
+/// is returned in the hyphenated lower-case form.
+#[cfg(not(target_os = "emscripten"))]
+fn parse_session_id_arg(raw: &str) -> Result<String> {
+    let id = uuid::Uuid::parse_str(raw)
+        .with_context(|| format!("the session ID must be a UUID (got {raw:?})"))?;
+    Ok(id.hyphenated().to_string())
+}
+
 /// Arguments of `p export claude`.
 #[derive(clap::Args, Debug, Default)]
 pub struct ClaudeExportArgs {
@@ -51,6 +61,13 @@ pub struct ClaudeExportArgs {
     /// clobbering local history.
     #[arg(long)]
     pub(crate) force: bool,
+
+    /// Rename the session to this ID (a UUID). The document's own
+    /// session is not touched, so one document can be exported as
+    /// several sessions.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long, value_name = "UUID", value_parser = parse_session_id_arg)]
+    pub(crate) session_id: Option<String>,
 
     #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
     #[command(flatten)]
@@ -638,6 +655,33 @@ pub(crate) fn project_pi(
     Ok(session.header.id)
 }
 
+/// The ID `--derive-session-id` computes from the document, or `None`
+/// when the flag is not set.
+#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+fn derived_session_id(args: &ClaudeExportArgs, document_json: &str) -> Result<Option<String>> {
+    if !args.remote.derive_session_id {
+        return Ok(None);
+    }
+    crate::claude_session::session_id_from_document_hash(document_json).map(Some)
+}
+
+/// Without the `resume-remote` feature there is no `--derive-session-id`.
+#[cfg(all(not(feature = "resume-remote"), not(target_os = "emscripten")))]
+fn derived_session_id(_args: &ClaudeExportArgs, _document_json: &str) -> Result<Option<String>> {
+    Ok(None)
+}
+
+/// The ID the exported session takes, or `None` to keep the ID the
+/// document carries. clap makes the naming flags mutually exclusive,
+/// so at most one arm answers.
+#[cfg(not(target_os = "emscripten"))]
+fn exported_session_id(args: &ClaudeExportArgs, document_json: &str) -> Result<Option<String>> {
+    if let Some(id) = &args.session_id {
+        return Ok(Some(id.clone()));
+    }
+    derived_session_id(args, document_json)
+}
+
 fn run_claude(args: ClaudeExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
@@ -649,19 +693,14 @@ fn run_claude(args: ClaudeExportArgs) -> Result<()> {
     {
         let document_json = read_doc_json(&args.input)?;
         let path = parse_path_doc(&document_json)?;
-        let conversation = build_claude_conversation(&path)?;
+        let mut conversation = build_claude_conversation(&path)?;
+        if let Some(id) = exported_session_id(&args, &document_json)? {
+            conversation.rename_session(&id);
+        }
         #[cfg(feature = "resume-remote")]
-        let conversation = {
-            let mut conversation = conversation;
-            if args.remote.derive_session_id {
-                let id = crate::claude_session::session_id_from_document_hash(&document_json)?;
-                conversation.rename_session(&id);
-            }
-            if let Some(dir) = &args.remote.cwd {
-                conversation.reroot(dir);
-            }
-            conversation
-        };
+        if let Some(dir) = &args.remote.cwd {
+            conversation.reroot(dir);
+        }
         let jsonl = serialize_jsonl(&conversation)?;
 
         match (args.project, args.output) {
@@ -2470,6 +2509,102 @@ mod tests {
         assert!(!out_path.parent().unwrap().join(session_uuid).exists());
     }
 
+    /// Runs `p export claude --output` with `args` on `doc` and parses
+    /// the lines.
+    fn export_claude_lines(
+        doc: &toolpath::v1::Graph,
+        args: ClaudeExportArgs,
+    ) -> Vec<serde_json::Value> {
+        let temp = tempfile::tempdir().unwrap();
+        let input_path = temp.path().join("input.json");
+        let output_path = temp.path().join("out.jsonl");
+        std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
+        run_claude(ClaudeExportArgs {
+            input: input_path.to_string_lossy().to_string(),
+            output: Some(output_path.clone()),
+            ..args
+        })
+        .unwrap();
+        std::fs::read_to_string(&output_path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn values_of<'a>(lines: &'a [serde_json::Value], key: &str) -> Vec<&'a str> {
+        lines.iter().filter_map(|v| v.get(key)?.as_str()).collect()
+    }
+
+    #[test]
+    fn parse_session_id_arg_normalizes_a_uuid_and_rejects_other_text() {
+        assert_eq!(
+            parse_session_id_arg("402A3CA5-2530-407E-9029-F96879A0B1C2").unwrap(),
+            "402a3ca5-2530-407e-9029-f96879a0b1c2"
+        );
+        assert_eq!(
+            parse_session_id_arg("402a3ca52530407e9029f96879a0b1c2").unwrap(),
+            "402a3ca5-2530-407e-9029-f96879a0b1c2"
+        );
+        for bad in ["", "my-template", "402a3ca5-2530-407e-9029"] {
+            let err = parse_session_id_arg(bad).unwrap_err().to_string();
+            assert!(err.contains("must be a UUID"), "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn session_id_flag_stamps_the_given_id() {
+        let doc = make_path_doc();
+        let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+        let source_ids = values_of(&plain, "sessionId");
+        assert_eq!(
+            source_ids.len(),
+            plain.len(),
+            "every line carries a sessionId"
+        );
+
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(!source_ids.contains(&given));
+        let renamed = export_claude_lines(
+            &doc,
+            ClaudeExportArgs {
+                session_id: Some(given.to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(renamed.len(), plain.len());
+        let ids = values_of(&renamed, "sessionId");
+        assert_eq!(ids.len(), source_ids.len());
+        assert!(ids.iter().all(|s| *s == given));
+    }
+
+    /// Parses `p export claude --input x <extra>` the way the binary
+    /// does, so the test sees clap's value parsers and conflicts.
+    fn parse_export_claude(extra: &[&str]) -> Result<(), clap::Error> {
+        use clap::Parser;
+        #[derive(Parser, Debug)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: ExportTarget,
+        }
+        Cli::try_parse_from(
+            ["test", "claude", "--input", "x"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+        .map(|_| ())
+    }
+
+    #[test]
+    fn session_id_flag_takes_only_a_uuid() {
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(parse_export_claude(&["--session-id", given]).is_ok());
+        assert!(
+            parse_export_claude(&["--session-id", "my-template"]).is_err(),
+            "clap must reject a session ID that is not a UUID"
+        );
+    }
+
     #[test]
     fn gemini_project_and_output_mutually_exclusive() {
         // clap's `conflicts_with` enforces this at parse time, but the
@@ -3567,33 +3702,6 @@ mod tests {
             toolpath::v1::Graph::from_path(path)
         }
 
-        /// Runs `p export claude --output` with `args` on `doc` and parses
-        /// the lines.
-        fn export_claude_lines(
-            doc: &toolpath::v1::Graph,
-            args: ClaudeExportArgs,
-        ) -> Vec<serde_json::Value> {
-            let temp = tempfile::tempdir().unwrap();
-            let input_path = temp.path().join("input.json");
-            let output_path = temp.path().join("out.jsonl");
-            std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
-            run_claude(ClaudeExportArgs {
-                input: input_path.to_string_lossy().to_string(),
-                output: Some(output_path.clone()),
-                ..args
-            })
-            .unwrap();
-            std::fs::read_to_string(&output_path)
-                .unwrap()
-                .lines()
-                .map(|l| serde_json::from_str(l).unwrap())
-                .collect()
-        }
-
-        fn values_of<'a>(lines: &'a [serde_json::Value], key: &str) -> Vec<&'a str> {
-            lines.iter().filter_map(|v| v.get(key)?.as_str()).collect()
-        }
-
         #[test]
         fn cwd_flag_rewrites_every_cwd() {
             let doc = make_path_doc_with_cwd("/old/project");
@@ -3640,6 +3748,16 @@ mod tests {
             assert_eq!(
                 values_of(&plain, "sessionId"),
                 values_of(&rooted, "sessionId")
+            );
+        }
+
+        #[test]
+        fn derive_session_id_excludes_the_other_naming_flags() {
+            let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+            assert!(parse_export_claude(&["--derive-session-id"]).is_ok());
+            assert!(
+                parse_export_claude(&["--derive-session-id", "--session-id", given]).is_err(),
+                "clap must reject simultaneous --derive-session-id and --session-id"
             );
         }
 

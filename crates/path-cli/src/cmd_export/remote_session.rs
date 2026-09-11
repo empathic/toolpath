@@ -13,8 +13,8 @@ pub struct RemoteSessionArgs {
     /// RFC 8785 (JCS) form. The same document yields the same ID
     /// on every run, so a second export of it into the same project
     /// is refused instead of duplicated. --cwd does not change the
-    /// ID.
-    #[arg(long)]
+    /// ID. Mutually exclusive with --session-id.
+    #[arg(long, conflicts_with = "session_id")]
     pub(super) derive_session_id: bool,
 
     /// Root the session at this directory: it becomes the `cwd` of
