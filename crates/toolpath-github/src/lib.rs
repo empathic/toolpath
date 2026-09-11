@@ -526,6 +526,7 @@ mod native {
             path: PathIdentity {
                 id: format!("pr-{}", pr_number),
                 base: Some(Base {
+                    from: None,
                     uri: format!("github:{}/{}", owner, repo),
                     ref_str: pr["base"]["sha"].as_str().map(|s| s.to_string()),
                     branch: pr["base"]["ref"].as_str().map(|s| s.to_string()),
