@@ -42,9 +42,8 @@ pub(crate) enum Segmentation {
         owned_ids: Vec<String>,
         /// Owned steps on the head's ancestry, in document order.
         main_line: Vec<String>,
-    },
-    /// Steps the current graph was acknowledged to own are gone from the source.
-    SourceRegression {
+        /// Steps the current graph was acknowledged to own that are gone
+        /// from the source, sorted. Sending this document would drop them.
         missing: Vec<String>,
     },
     Unsupported(String),
@@ -52,7 +51,8 @@ pub(crate) enum Segmentation {
 
 /// `owned_baseline` is the acknowledged owned step set of the current
 /// mutable graph, `None` when there is none. Inherited steps are never
-/// part of it, so their absence from a tail-only source is not a regression.
+/// part of it, so their absence from a tail-only source is not a
+/// regression; an owned step's absence is reported as `missing`.
 pub(crate) fn segment(
     live: &Graph,
     boundary: Option<&FrozenBoundary>,
@@ -66,9 +66,7 @@ pub(crate) fn segment(
     };
     let Some(boundary) = boundary else {
         let owned_ids: Vec<String> = path.steps.iter().map(|s| s.step.id.clone()).collect();
-        if let Some(missing) = regression(owned_baseline, &owned_ids) {
-            return Segmentation::SourceRegression { missing };
-        }
+        let missing = regression(owned_baseline, &owned_ids);
         let kind = if owned_baseline.is_some() {
             SegmentKind::OwnedUpdate
         } else {
@@ -80,6 +78,7 @@ pub(crate) fn segment(
             doc: Box::new(live.clone()),
             owned_ids,
             main_line,
+            missing,
         };
     };
     if boundary.path_id != path.path.id {
@@ -156,9 +155,7 @@ pub(crate) fn segment(
             .expect("owned is nonempty")
     };
     let owned_ids: Vec<String> = owned.iter().map(|s| s.step.id.clone()).collect();
-    if let Some(missing) = regression(owned_baseline, &owned_ids) {
-        return Segmentation::SourceRegression { missing };
-    }
+    let missing = regression(owned_baseline, &owned_ids);
     let reference = match BaseReference::new(&boundary.document_url, &boundary.path_id, base_step) {
         Ok(r) => r,
         Err(e) => return Segmentation::Unsupported(format!("frozen base is unusable: {e}")),
@@ -193,6 +190,7 @@ pub(crate) fn segment(
         doc: Box::new(doc),
         owned_ids,
         main_line,
+        missing,
     }
 }
 
@@ -206,19 +204,18 @@ fn main_line_of(steps: &[Step], head: &str) -> Vec<String> {
         .collect()
 }
 
-fn regression(baseline: Option<&HashSet<String>>, owned_ids: &[String]) -> Option<Vec<String>> {
-    let baseline = baseline?;
+fn regression(baseline: Option<&HashSet<String>>, owned_ids: &[String]) -> Vec<String> {
+    let Some(baseline) = baseline else {
+        return Vec::new();
+    };
     let present: HashSet<&str> = owned_ids.iter().map(String::as_str).collect();
     let mut missing: Vec<String> = baseline
         .iter()
         .filter(|id| !present.contains(id.as_str()))
         .cloned()
         .collect();
-    if missing.is_empty() {
-        return None;
-    }
     missing.sort();
-    Some(missing)
+    missing
 }
 
 #[cfg(test)]
@@ -261,8 +258,19 @@ mod tests {
                 kind,
                 doc,
                 owned_ids,
+                missing,
                 ..
-            } => (kind, *doc, owned_ids),
+            } => {
+                assert!(missing.is_empty(), "unexpected regression: {missing:?}");
+                (kind, *doc, owned_ids)
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+    }
+
+    fn missing_of(seg: Segmentation) -> Vec<String> {
+        match seg {
+            Segmentation::Document { missing, .. } => missing,
             other => panic!("expected a document, got {other:?}"),
         }
     }
@@ -290,10 +298,10 @@ mod tests {
     #[test]
     fn losing_an_acknowledged_owned_step_is_a_regression() {
         let live = graph(vec![step("a", &[]), step("b", &["a"])], "b");
-        match segment(&live, None, Some(&ids(&["a", "b", "c"]))) {
-            Segmentation::SourceRegression { missing } => assert_eq!(missing, ["c"]),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            missing_of(segment(&live, None, Some(&ids(&["a", "b", "c"])))),
+            ["c"]
+        );
     }
 
     #[test]
@@ -345,14 +353,14 @@ mod tests {
         ));
         assert_eq!(kind, SegmentKind::OwnedUpdate);
         assert_eq!(owned, ["c", "d"]);
-        match segment(
-            &live,
-            Some(&boundary("b", &["a", "b"])),
-            Some(&ids(&["c", "x"])),
-        ) {
-            Segmentation::SourceRegression { missing } => assert_eq!(missing, ["x"]),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            missing_of(segment(
+                &live,
+                Some(&boundary("b", &["a", "b"])),
+                Some(&ids(&["c", "x"])),
+            )),
+            ["x"]
+        );
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! `path sync`: one pass of automatic upload over the sessions in scope,
 //! plus `status`, `install`, and `uninstall`.
 
-use crate::config::{CONFIG_FILE_NAME, Config, SYNC_STATUS_FILE_NAME, UPLOAD_LOCK_FILE_NAME};
+use crate::config::{CONFIG_FILE_NAME, Config, SYNC_STATUS_FILE_NAME};
 use crate::sync::api::{PathbaseSync, SyncApi};
+use crate::sync::lock::{lock_uploads, supports_sync};
 use crate::sync::pass::{Destination, Outcome, PassContext, Session, sync_session};
 use crate::sync_config::{ScopeOverrides, UserSyncConfig};
 use crate::sync_service::{self, InstallOptions, LAUNCHD_LABEL, SERVICE_NAME};
@@ -153,24 +154,6 @@ fn load_user_config(config_dir: &Path) -> Result<(PathBuf, String, UserSyncConfi
     Ok((path, text, user))
 }
 
-/// The exclusive lock every uploader holds across decide, send, and
-/// record. Held for the whole pass; a concurrent `share` waits.
-fn lock_uploads(config_dir: &Path) -> Result<std::fs::File> {
-    std::fs::create_dir_all(config_dir)
-        .with_context(|| format!("create {}", config_dir.display()))?;
-    let path = config_dir.join(UPLOAD_LOCK_FILE_NAME);
-    let file =
-        std::fs::File::create(&path).with_context(|| format!("create {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-    file.lock()
-        .with_context(|| format!("lock {}", path.display()))?;
-    Ok(file)
-}
-
 fn pass(args: SyncArgs, config: &Config) -> Result<()> {
     let started_at = Utc::now();
     let config_dir = config.config_dir()?;
@@ -285,6 +268,10 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
                 api: api as &dyn SyncApi,
                 now: Utc::now(),
                 dry_run: args.dry_run,
+                force: false,
+                freeze: true,
+                name: None,
+                visibility: None,
             };
             let live = || -> Result<toolpath::v1::Graph> {
                 let path = crate::cache::cache_path(&cache_id)?;
@@ -351,21 +338,6 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
         );
     }
     Ok(())
-}
-
-/// A server without the sync API still accepts `POST /graphs`, so a pass
-/// must never reach a create without knowing. The meta route for a graph
-/// that cannot exist answers `not_found` on a capable server and an
-/// untyped 404 on an old one.
-fn supports_sync(api: &dyn SyncApi, repo: &str) -> Result<(), String> {
-    match api.meta(repo, &uuid::Uuid::nil().to_string()) {
-        Ok(_) | Err(crate::sync::api::ApiFailure::NotFound) => Ok(()),
-        Err(crate::sync::api::ApiFailure::UpgradeRequired) => Err(format!(
-            "{} does not support sync; upgrade Pathbase before syncing to it",
-            repo
-        )),
-        Err(other) => Err(format!("cannot check {repo} for sync support: {other}")),
-    }
 }
 
 fn short_id(id: &str) -> &str {

@@ -17,6 +17,7 @@ use super::state::{self, CurrentGraph, SessionState};
 use crate::artifact::ArtifactType;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use pathbase_client::types::Visibility;
 use std::collections::HashSet;
 use std::path::Path;
 use toolpath::v1::Graph;
@@ -71,6 +72,15 @@ pub(crate) struct PassContext<'a> {
     pub(crate) api: &'a dyn SyncApi,
     pub(crate) now: DateTime<Utc>,
     pub(crate) dry_run: bool,
+    /// Manual force: re-send an unchanged mutable graph, and replace
+    /// its owned content even when the source lost acknowledged steps.
+    /// Never touches inherited history and never bypasses a freeze.
+    pub(crate) force: bool,
+    /// Run the inactivity policy. `path sync` does; `share` does not.
+    pub(crate) freeze: bool,
+    /// Display label and visibility for a graph this pass creates.
+    pub(crate) name: Option<String>,
+    pub(crate) visibility: Option<Visibility>,
 }
 
 /// Run the pass for one session. `live` loads the derived document the
@@ -211,14 +221,21 @@ pub(crate) fn sync_session(
     }
 
     // 4. Decide.
-    let changed =
-        acknowledged != Some(session.stamp) || state.current.is_none() && state.frozen.is_none();
-    let idle = activity.idle_at(ctx.now);
+    // Only a real stamp can vouch for "unchanged": a source the
+    // provider cannot stat is re-sent, never assumed current.
+    let known = session.stamp.0.is_some() || session.stamp.1.is_some();
+    let changed = !known
+        || acknowledged != Some(session.stamp)
+        || state.current.is_none() && state.frozen.is_none();
+    let idle = ctx.freeze && activity.idle_at(ctx.now);
     let current_mutable = state
         .current
         .as_ref()
         .is_some_and(|c| c.state == GraphState::Mutable);
-    if !changed {
+    // A forced re-send only has a mutable graph to re-send to; a frozen
+    // graph with nothing new stays as it is.
+    let resend = ctx.force && current_mutable;
+    if !changed && !resend {
         if current_mutable && idle {
             return freeze(ctx, session, destination, &mut activity, &mut state, restat);
         }
@@ -246,9 +263,9 @@ pub(crate) fn sync_session(
             return Ok(Outcome::Unchanged);
         }
         Segmentation::Unsupported(m) => return Ok(Outcome::Failed(format!("unsupported: {m}"))),
-        Segmentation::SourceRegression { missing } => {
+        Segmentation::Document { missing, .. } if !missing.is_empty() && !ctx.force => {
             return Ok(Outcome::Failed(format!(
-                "source lost {} acknowledged step(s) ({}); sync will not overwrite the graph, share it again as a new one if the loss is intended",
+                "source lost {} acknowledged step(s) ({}); not overwriting the graph. `path share --force` replaces it if the loss is intended",
                 missing.len(),
                 missing
                     .iter()
@@ -263,6 +280,7 @@ pub(crate) fn sync_session(
             doc,
             owned_ids,
             main_line,
+            ..
         } => (kind, *doc, owned_ids, main_line),
     };
     let path = doc
@@ -297,8 +315,8 @@ pub(crate) fn sync_session(
             OperationKind::Create,
             serde_json::to_vec(&UploadGraphBody {
                 document,
-                name: None,
-                visibility: None,
+                name: ctx.name.clone(),
+                visibility: ctx.visibility,
                 freeze_after: Some(freeze_after),
             })?,
         ),
@@ -970,6 +988,8 @@ mod tests {
         dir: tempfile::TempDir,
         api: Fake,
         dest: Destination,
+        force: bool,
+        freeze: bool,
     }
 
     impl Harness {
@@ -981,6 +1001,8 @@ mod tests {
                     repo: "me/stash".into(),
                     base_url: "https://h".into(),
                 },
+                force: false,
+                freeze: true,
             }
         }
         fn run(&self, now: DateTime<Utc>, stamp_secs: i64, doc: Graph, dry_run: bool) -> Outcome {
@@ -999,6 +1021,10 @@ mod tests {
                 api: &self.api,
                 now,
                 dry_run,
+                force: self.force,
+                freeze: self.freeze,
+                name: None,
+                visibility: None,
             };
             let session = Session {
                 harness: ArtifactType::Codex,
@@ -1085,6 +1111,10 @@ mod tests {
             api: &h.api,
             now: t(3 * H + 2),
             dry_run: false,
+            force: false,
+            freeze: true,
+            name: None,
+            visibility: None,
         };
         let session = Session {
             harness: ArtifactType::Codex,
@@ -1364,6 +1394,115 @@ mod tests {
             Outcome::Updated(_)
         ));
         assert_eq!(h.api.graph("shared").owned_ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn an_unknown_stamp_never_reads_as_unchanged() {
+        let h = Harness::new();
+        let ctx = PassContext {
+            config_dir: h.dir.path(),
+            api: &h.api,
+            now: t(0),
+            dry_run: false,
+            force: false,
+            freeze: true,
+            name: None,
+            visibility: None,
+        };
+        let session = Session {
+            harness: ArtifactType::Codex,
+            id: "s1".into(),
+            project: None,
+            path: None,
+            stamp: (None, None),
+        };
+        let run = || {
+            sync_session(&ctx, &session, &h.dest, &|| Ok(chain(&["a"])), &|| {
+                (None, None)
+            })
+            .unwrap()
+        };
+        assert!(matches!(run(), Outcome::Created(_)));
+        assert!(matches!(run(), Outcome::Updated(_)));
+        assert_eq!(h.api.graphs.borrow().len(), 1);
+    }
+
+    #[test]
+    fn force_replaces_owned_content_after_a_source_regression() {
+        let mut h = Harness::new();
+        h.run(t(0), 0, chain(&["a", "b", "c"]), false);
+        let out = h.run(t(60), 60, chain(&["a", "b"]), false);
+        assert!(
+            matches!(out, Outcome::Failed(ref m) if m.contains("--force")),
+            "{out:?}"
+        );
+        assert_eq!(h.api.graph("g1").owned_ids, ["a", "b", "c"]);
+        h.force = true;
+        assert!(matches!(
+            h.run(t(120), 60, chain(&["a", "b"]), false),
+            Outcome::Updated(_)
+        ));
+        assert_eq!(h.api.graph("g1").owned_ids, ["a", "b"]);
+        assert_eq!(h.state().current.unwrap().owned_ids, ["a", "b"]);
+        assert_eq!(h.api.graphs.borrow().len(), 1);
+    }
+
+    #[test]
+    fn force_re_sends_an_unchanged_mutable_graph_as_a_no_op_put() {
+        let mut h = Harness::new();
+        h.run(t(0), 0, chain(&["a"]), false);
+        h.force = true;
+        assert!(matches!(
+            h.run(t(60), 0, chain(&["a"]), false),
+            Outcome::Updated(_)
+        ));
+        assert!(
+            h.api
+                .calls
+                .borrow()
+                .iter()
+                .any(|c| c.starts_with("execute update"))
+        );
+        assert_eq!(h.api.graph("g1").generation, 0);
+        assert_eq!(h.api.graphs.borrow().len(), 1);
+    }
+
+    #[test]
+    fn force_neither_reopens_a_frozen_graph_nor_skips_a_continuation() {
+        let mut h = Harness::new();
+        h.run(t(0), 0, chain(&["a"]), false);
+        h.run(t(3 * H), 0, chain(&["a"]), false);
+        assert_eq!(h.api.graph("g1").state, GraphState::Frozen);
+        h.force = true;
+        assert_eq!(
+            h.run(t(3 * H + 1), 0, chain(&["a"]), false),
+            Outcome::Unchanged
+        );
+        assert_eq!(h.api.graphs.borrow().len(), 1);
+        assert!(matches!(
+            h.run(t(3 * H + 2), 1, chain(&["a", "b"]), false),
+            Outcome::Continued(_)
+        ));
+        assert_eq!(h.api.graph("g2").owned_ids, ["b"]);
+        assert_eq!(h.api.graph("g1").owned_ids, ["a"]);
+    }
+
+    #[test]
+    fn without_the_inactivity_policy_an_idle_session_is_never_frozen() {
+        let mut h = Harness::new();
+        h.freeze = false;
+        assert!(matches!(
+            h.run(t(3 * H), 0, chain(&["a"]), false),
+            Outcome::Created(_)
+        ));
+        assert_eq!(h.api.graph("g1").state, GraphState::Mutable);
+        assert_eq!(h.run(t(6 * H), 0, chain(&["a"]), false), Outcome::Unchanged);
+        assert!(matches!(
+            h.run(t(9 * H), 1, chain(&["a", "b"]), false),
+            Outcome::Updated(_)
+        ));
+        assert_eq!(h.api.graph("g1").state, GraphState::Mutable);
+        assert!(!h.api.calls.borrow().iter().any(|c| c.contains("freeze")));
     }
 
     trait StepsMut {
