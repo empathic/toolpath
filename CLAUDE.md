@@ -71,6 +71,12 @@ cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
 
+Those three commands are the inner loop, not the gate. Before a branch is called ready for review, run the full gate set. It is the same script CI's `ci` job runs, so a subset of it proves nothing about CI:
+
+```bash
+scripts/quality_gates.sh          # or: just ci; --verbose streams each gate's output
+```
+
 Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
 
 If `cargo` is not on your PATH, `flake.nix` carries a devShell with everything the
