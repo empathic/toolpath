@@ -245,7 +245,7 @@ pub(crate) fn sync_session(
         Segmentation::Unsupported(m) => return Ok(Outcome::Failed(format!("unsupported: {m}"))),
         Segmentation::SourceRegression { missing } => {
             return Ok(Outcome::Failed(format!(
-                "source lost {} acknowledged step(s) ({}); run `path share --force` to replace the graph",
+                "source lost {} acknowledged step(s) ({}); sync will not overwrite the graph, share it again as a new one if the loss is intended",
                 missing.len(),
                 missing
                     .iter()
