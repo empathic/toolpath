@@ -142,10 +142,11 @@ impl SyncConfig {
         {
             bail!("cannot expand sync include directory without a home directory");
         }
-        let include = includes
-            .iter()
-            .map(|dir| canonicalize_prefix(&expand_tilde(dir, home)))
-            .collect();
+        // Kept as configured (tilde expanded): the provider-aware matcher
+        // compares both this form and its canonical form, so a Claude slug
+        // recorded under /tmp still matches an include that resolves to
+        // /private/tmp.
+        let include = includes.iter().map(|dir| expand_tilde(dir, home)).collect();
         let harnesses = if !overrides.harnesses.is_empty() {
             parse_harnesses(&overrides.harnesses)?
         } else if let Some(providers) = &self.harnesses {

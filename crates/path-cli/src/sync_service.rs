@@ -11,6 +11,7 @@ pub(crate) const LAUNCHD_LABEL: &str = "net.toolpath.sync";
 pub(crate) struct InstallOptions {
     pub(crate) all: bool,
     pub(crate) include: Vec<String>,
+    pub(crate) harnesses: Vec<String>,
     pub(crate) interval: Option<String>,
     pub(crate) remote: Option<String>,
 }
@@ -46,6 +47,19 @@ pub(crate) fn install_config(text: &str, options: &InstallOptions) -> Result<Str
                 .collect()
         };
         sync.insert("include".into(), toml::Value::Array(dirs));
+    }
+    if !options.harnesses.is_empty() {
+        sync.insert(
+            "harnesses".into(),
+            toml::Value::Array(
+                options
+                    .harnesses
+                    .iter()
+                    .cloned()
+                    .map(toml::Value::String)
+                    .collect(),
+            ),
+        );
     }
     if let Some(interval) = &options.interval {
         sync.insert("interval".into(), toml::Value::String(interval.clone()));
@@ -188,12 +202,14 @@ mod tests {
     fn supplied_install_settings_replace_only_their_fields() {
         let options = InstallOptions {
             include: vec!["/new".into()],
+            harnesses: vec!["claude".into()],
             interval: Some("2h".into()),
             remote: Some("me/new".into()),
             ..Default::default()
         };
         let result = install_config("[sync]\ninclude=['/old']\nremote='me/old'", &options).unwrap();
         let config = UserSyncConfig::parse(&result, "c").unwrap();
+        assert_eq!(config.sync.harnesses.as_deref().unwrap(), ["claude"]);
         assert_eq!(config.sync.interval_seconds().unwrap(), 7200);
         assert_eq!(config.sync.include.unwrap(), ["/new"]);
         assert_eq!(config.sync.remote.unwrap(), "me/new");

@@ -63,6 +63,10 @@ pub enum SyncOp {
         /// Sync every session on this machine
         #[arg(long)]
         all: bool,
+        /// Only these harnesses (repeatable); omitted keeps the configured
+        /// list, or all of them
+        #[arg(long, value_name = "NAME")]
+        harness: Vec<String>,
         /// Pass interval, e.g. 15m, 1h
         #[arg(long, value_name = "DURATION")]
         interval: Option<String>,
@@ -80,6 +84,7 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
         Some(SyncOp::Install {
             include,
             all,
+            harness,
             interval,
             remote,
         }) => install(
@@ -87,6 +92,7 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
             InstallOptions {
                 all,
                 include,
+                harnesses: harness,
                 interval,
                 remote,
             },
