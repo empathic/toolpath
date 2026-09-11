@@ -20,6 +20,28 @@ All notable changes to the Toolpath workspace are documented here.
 - State under the config dir: `pending/` (staged operations), `sync-state/`
   (per-session current graph and frozen boundary), `sync-status.json`,
   `upload.lock`. The manifest record gains `activity`.
+- `path share` and `path share --all` upload through the same engine as
+  `path sync`: a session already tracked by sync is updated in place
+  (`PUT`) instead of duplicated, a frozen graph is continued, an unchanged
+  session is skipped, and both commands write the same manifest and
+  `sync-state/` records under the shared upload lock. `--all` now uploads
+  changed sessions (previously skipped as "changed since upload") and its
+  summary shows `N to update` / `N to continue`; `--all --dry-run` plans
+  each session through the engine. Share never freezes a graph.
+- `path share --force` is the manual force: it re-sends an unchanged
+  session as a no-op `PUT` and replaces a graph's content when the session
+  lost steps the graph already holds (sync alone refuses that). It never
+  reopens a frozen graph.
+- `path share` builds its providers from the same configuration as every
+  other command, so `$CLAUDE_CONFIG_DIR` (and the other roots `Config`
+  reads) now apply to the picker, the cache-freshness check, and the
+  source stamp. Previously the picker and the "unchanged" check read
+  `$HOME/.claude` regardless.
+- Share of an authed destination on a Pathbase without the sync API is an
+  upgrade error; it no longer creates a graph there. `p export pathbase`
+  (a document, not a live session) still creates a graph directly and
+  records nothing, and refuses such a server the same way. Anonymous share
+  is unchanged.
 - Requires a Pathbase with the sync API (graph state, `meta`, guarded `PUT`,
   `freeze`, `continuations`).
 - **`pathbase-client` 0.2.1.** Regenerated from a Pathbase with the sync
