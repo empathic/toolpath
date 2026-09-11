@@ -41,7 +41,10 @@ pub struct SyncArgs {
     #[arg(long, value_name = "OWNER/NAME")]
     pub repo: Option<String>,
 
-    /// Pathbase server URL (default: $PATHBASE_URL or https://pathbase.dev)
+    /// Pathbase server for this run only (default: the server in a URL-form
+    /// remote, else $PATHBASE_URL, else https://pathbase.dev). To persist a
+    /// server, configure a remote that carries it:
+    /// `remote = "https://host/u/owner/name"`.
     #[arg(long)]
     pub url: Option<String>,
 }
@@ -256,9 +259,10 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
                     &credentials.token,
                 )?),
             };
-            // The user's pathstash is created on first use; configured
-            // remotes are expected to exist.
-            if remote.origin == "authenticated pathstash"
+            // The user's own pathstash is created on first use, whichever
+            // way it was named; other configured remotes must exist.
+            if remote.repo.owner == username
+                && remote.repo.name == "pathstash"
                 && !args.dry_run
                 && ensured_pathstash.insert(destination.base_url.clone())
             {
