@@ -570,8 +570,10 @@ fn uninstall(config: &Config) -> Result<()> {
         Ok::<_, anyhow::Error>((path, text, UserSyncConfig::default()))
     })?;
     write_config(&config_path, &sync_service::disable_config(&text)?)?;
-    ServiceFiles::remove(home.as_deref())?;
-    eprintln!("Sync disabled; upload records and staged operations were kept");
+    let removed = ServiceFiles::remove(home.as_deref())?;
+    eprintln!(
+        "Removed the {removed} service and set [sync].enabled = false; config, upload records, and staged operations were kept"
+    );
     Ok(())
 }
 
@@ -657,7 +659,7 @@ impl ServiceFiles {
         }
     }
 
-    fn remove(home: Option<&Path>) -> Result<()> {
+    fn remove(home: Option<&Path>) -> Result<&'static str> {
         let home = home.context("cannot remove a user service without a home directory")?;
         if cfg!(target_os = "macos") {
             let plist = home
@@ -667,7 +669,8 @@ impl ServiceFiles {
                 "launchctl",
                 &["bootout", &format!("{}/{LAUNCHD_LABEL}", launchd_domain())],
             );
-            remove_if_present(&plist)
+            remove_if_present(&plist)?;
+            Ok("launchd")
         } else if cfg!(target_os = "linux") {
             let _ = command(
                 "systemctl",
@@ -682,9 +685,9 @@ impl ServiceFiles {
             remove_if_present(&dir.join(format!("{SERVICE_NAME}.timer")))?;
             remove_if_present(&dir.join(format!("{SERVICE_NAME}.service")))?;
             let _ = command("systemctl", &["--user", "daemon-reload"]);
-            Ok(())
+            Ok("systemd")
         } else {
-            Ok(())
+            Ok("no")
         }
     }
 }
