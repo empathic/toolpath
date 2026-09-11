@@ -8,7 +8,7 @@
 # Usage:
 #   scripts/quality_gates.sh [--verbose] [[-]gate ...]
 #
-# Gates: format, shellcheck, clippy, test, doc, examples, plugin, site
+# Gates: format, shellcheck, clippy, test, wasm, doc, examples, plugin, site
 # No args runs all gates. Prefix with - to exclude a gate.
 #
 # Options:
@@ -43,7 +43,7 @@ trap 'rm -rf "${_tmpdir}"' EXIT
 # All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
 # run_gate; shellcheck can't see the call sites and flags them as unused.
 
-_all_gates=(format shellcheck clippy test doc examples plugin site)
+_all_gates=(format shellcheck clippy test wasm doc examples plugin site)
 
 # shellcheck disable=SC2329
 gate_format() {
@@ -76,6 +76,18 @@ gate_clippy() {
 # shellcheck disable=SC2329
 gate_test() {
     RUSTFLAGS="-D warnings" cargo test --workspace 2>&1
+}
+
+# The deploy workflow builds `path-cli` for wasm32-unknown-emscripten, and
+# that target has its own dependency set: a crate used outside the
+# `not(target_os = "emscripten")` gates compiles on every host target and
+# fails only there. The dev profile is the fast incremental build; `--if-changed`
+# makes the gate a no-op when no Rust source changed since the last build.
+# The script installs the rustup target and emsdk (into local/emsdk) when
+# they are missing.
+# shellcheck disable=SC2329
+gate_wasm() {
+    "${_root}/scripts/build-wasm.sh" --dev --if-changed 2>&1
 }
 
 # shellcheck disable=SC2329
