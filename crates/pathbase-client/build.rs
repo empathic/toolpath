@@ -32,7 +32,7 @@ fn main() {
 
     let spec_text = fs::read_to_string(&spec_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", spec_path.display()));
-    let mut spec: Value = serde_json::from_str(&spec_text).expect("parse pathbase-openapi.json");
+    let mut spec: Value = serde_json::from_str(&spec_text).expect("parse openapi.json");
 
     downgrade_to_oas_30(&mut spec);
 

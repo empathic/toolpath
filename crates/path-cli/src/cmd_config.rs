@@ -41,9 +41,10 @@ fn edit() -> Result<()> {
     let display = home_relative(&path, home_dir().as_deref());
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {display} back after editing"))?;
-    let rules = crate::share_config::validate_config_text(&text, &display).with_context(|| {
+    let config = crate::sync_config::UserSyncConfig::parse(&text, &display).with_context(|| {
         format!("{display} was saved but does not validate; run `path config edit` to fix it")
     })?;
+    let rules = config.project.len();
     let plural = if rules == 1 { "" } else { "s" };
     println!("{display}: {rules} project rule{plural}");
     Ok(())

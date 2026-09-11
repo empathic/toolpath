@@ -58,6 +58,12 @@ pub struct ShareArgs {
     #[arg(long)]
     pub no_cache: bool,
 
+    /// Seconds to allow each Pathbase request before giving up (default 300).
+    /// Sets `PATH_HTTP_TIMEOUT_SECS` for this invocation; export that
+    /// variable directly for commands without a flag of their own.
+    #[arg(long, value_name = "SECS")]
+    pub timeout: Option<u64>,
+
     /// Upload every session instead of picking one. Requires login.
     /// Every run uploads everything in scope — there is no record of
     /// what was shared before, so re-running creates duplicate graphs.
@@ -518,6 +524,11 @@ fn collect_cursor(
 }
 
 pub fn run(args: ShareArgs) -> Result<()> {
+    if let Some(secs) = args.timeout {
+        // SAFETY: single-threaded startup, before any client or task exists.
+        unsafe { std::env::set_var(crate::config::HTTP_TIMEOUT_ENV, secs.to_string()) };
+    }
+
     let harness = args.harness.map(|h| h.artifact_type());
 
     if args.session.is_some() && harness.is_none() {
@@ -623,6 +634,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
             None
         },
         no_cache: args.no_cache,
+        timeout: args.timeout,
         all: false,
         project_under: None,
         dry_run: false,
@@ -2134,6 +2146,7 @@ mod tests {
                 modified: None,
                 size: None,
                 synced_at: "2026-01-02T00:00:00Z".parse().unwrap(),
+                activity: None,
                 uploads: vec![upload.clone()],
             },
         );
@@ -2296,6 +2309,7 @@ mod tests {
             session: None,
             project: None,
             no_cache: false,
+            timeout: None,
             all: false,
             project_under: None,
             dry_run: false,

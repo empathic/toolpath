@@ -96,15 +96,20 @@ entry type are grouped under it.
 | Field                          | Defined in |
 |--------------------------------|------------|
 | `agentId`                      | [jsonl-envelope.md](jsonl-envelope.md), [entry-types.md §Sidechains](entry-types.md#sidechains) |
+| `agentName`                    | [entry-types.md](entry-types.md) |
+| `aiTitle`                      | [entry-types.md](entry-types.md) |
 | `attachment`                   | [jsonl-envelope.md](jsonl-envelope.md), [entry-types.md](entry-types.md) |
+| `atis`                         | [entry-types.md](entry-types.md) |
 | `cache_creation` / `cache_*_input_tokens` | [usage.md](usage.md) |
 | `caller` (on `tool_use`)       | [messages.md](messages.md) |
 | `compactMetadata`              | [entry-types.md](entry-types.md), [session-chains.md](session-chains.md) |
 | `content` (envelope, on `queue-operation`) | [entry-types.md](entry-types.md) |
 | `content` (inside `message` / `tool_result`) | [messages.md](messages.md) |
+| `customTitle`                  | [entry-types.md](entry-types.md) |
 | `cwd`                          | [jsonl-envelope.md](jsonl-envelope.md), [writing-compatible-jsonl.md](writing-compatible-jsonl.md) |
 | `durationMs`                   | [entry-types.md](entry-types.md) |
 | `entrypoint`                   | [jsonl-envelope.md](jsonl-envelope.md) |
+| `frameUrl` / `path` / `title` (on `frame-link`) | [entry-types.md](entry-types.md) |
 | `gitBranch`                    | [jsonl-envelope.md](jsonl-envelope.md) |
 | `hookCount` / `hookInfos` / `hookErrors` | [jsonl-envelope.md](jsonl-envelope.md) |
 | `id` (inside `message`)        | [messages.md](messages.md) |
@@ -124,11 +129,14 @@ entry type are grouped under it.
 | `message`                      | [messages.md](messages.md) |
 | `messageCount` (envelope)      | [entry-types.md](entry-types.md) |
 | `messageId`                    | [jsonl-envelope.md](jsonl-envelope.md), [entry-types.md](entry-types.md), [known-issues.md](known-issues.md) |
+| `mode`                         | [entry-types.md](entry-types.md) |
 | `model` (inside `message`)     | [messages.md](messages.md) |
 | `operation`                    | [entry-types.md](entry-types.md) |
 | `parentUuid`                   | [jsonl-envelope.md](jsonl-envelope.md), [known-issues.md](known-issues.md) |
 | `permissionMode`               | [entry-types.md](entry-types.md), [writing-compatible-jsonl.md](writing-compatible-jsonl.md) |
+| `prNumber` / `prUrl` / `prRepository` | [entry-types.md](entry-types.md) |
 | `preventedContinuation`        | [jsonl-envelope.md](jsonl-envelope.md) |
+| `relocatedCwd`                 | [entry-types.md](entry-types.md), [writing-compatible-jsonl.md](writing-compatible-jsonl.md) |
 | `requestId`                    | [jsonl-envelope.md](jsonl-envelope.md) |
 | `role`                         | [messages.md](messages.md) |
 | `server_tool_use`              | [usage.md](usage.md) |
@@ -156,6 +164,7 @@ entry type are grouped under it.
 | `userType`                     | [jsonl-envelope.md](jsonl-envelope.md) |
 | `uuid`                         | [jsonl-envelope.md](jsonl-envelope.md) |
 | `version`                      | [jsonl-envelope.md](jsonl-envelope.md) |
+| `worktreeSession`              | [entry-types.md](entry-types.md), [writing-compatible-jsonl.md](writing-compatible-jsonl.md) |
 
 For the mapping from these JSON keys to Rust fields in
 `ConversationEntry`, see the parser-surface table in

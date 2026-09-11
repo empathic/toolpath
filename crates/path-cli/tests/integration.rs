@@ -9,8 +9,21 @@ fn examples_dir() -> PathBuf {
         .join("examples")
 }
 
+/// The CLI under test, with the developer's Claude config root kept out of it.
+///
+/// Tests that need a sandbox set `HOME` on the command, which is enough for
+/// every reader that derives its paths from `$HOME`. The Claude reader does
+/// not: it prefers `$CLAUDE_CONFIG_DIR`, which the child inherits from the
+/// test process. On a machine that exports it — every Claude Code user, since
+/// that variable is how a custom config root gets selected at all — the CLI
+/// then walks straight out of the sandbox and reports the fixture session
+/// missing. Removing it here restores the `$HOME`-relative default, so the
+/// `HOME` the test sets is the one that counts. A test that wants the
+/// override should set it back on its own command.
 fn cmd() -> Command {
-    Command::cargo_bin("path").unwrap()
+    let mut c = Command::cargo_bin("path").unwrap();
+    c.env_remove("CLAUDE_CONFIG_DIR");
+    c
 }
 
 // ── Git fixture ──────────────────────────────────────────────────────

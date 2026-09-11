@@ -28,7 +28,7 @@ Every envelope field we have observed, in rough order of prominence:
 | Field          | Shape                      | Notes |
 |----------------|----------------------------|-------|
 | `type`         | string                     | Discriminant. Values in [entry-types.md](entry-types.md). Present on **every** line. |
-| `uuid`         | UUIDv4 string              | Per-entry ID. Empty string (`""`) or absent on some metadata entries (`permission-mode`, `queue-operation`, `last-prompt`, `file-history-snapshot`). |
+| `uuid`         | UUIDv4 string              | Per-entry ID. Empty string (`""`) or absent on some metadata entries (`permission-mode`, `queue-operation`, `last-prompt`, `file-history-snapshot`, and the session metadata lines in [entry-types.md](entry-types.md)). |
 | `timestamp`    | ISO-8601 string            | e.g. `"2026-04-02T13:59:26.313Z"`. Millisecond precision. Absent on pure-metadata entries. |
 | `sessionId`    | UUIDv4 string              | Usually equals the filename stem. On continuation files, the first real entry carries the **previous** session's ID — see [session-chains.md](session-chains.md). |
 | `parentUuid`   | UUIDv4 string \| `null`    | Prior entry in the conversation DAG. `null` for the first entry of a session and for `compact_boundary` entries (which use `logicalParentUuid` instead). |
@@ -77,6 +77,15 @@ Every envelope field we have observed, in rough order of prominence:
 | `operation`          | string  | `queue-operation` | `"enqueue"` / `"dequeue"`. |
 | `content`            | string  | `queue-operation` | Queued message text. **Conflicts in name with `message.content`** — distinguish by entry `type`. |
 | `lastPrompt`         | string  | `last-prompt` | Cached last user prompt. |
+| `aiTitle`            | string  | `ai-title` | Generated session title. |
+| `customTitle`        | string  | `custom-title` | Explicitly set session title. |
+| `agentName`          | string  | `agent-name` | Agent name for the session. |
+| `mode`               | string  | `mode` | Only `"normal"` observed. |
+| `atis`               | string  | `atis-latch` | Opaque. Empty, 16 hex characters, or ~190 characters. |
+| `prNumber` / `prUrl` / `prRepository` | number / URL / `owner/repo` | `pr-link` | Pull request linked to the session. |
+| `frameUrl` / `path` / `title` | URL / absolute path / string | `frame-link` | Frame URL linked to a local file. |
+| `relocatedCwd`       | absolute path | `relocated` | New working directory for the session. |
+| `worktreeSession`    | object \| `null` | `worktree-state` | `{originalCwd, preEnterOriginalCwd, worktreePath, worktreeName, worktreeBranch, sessionId, …}`. See [entry-types.md](entry-types.md). |
 | `subtype`            | string  | `system`, `compact_boundary` | Discriminant within metadata entries. See [entry-types.md](entry-types.md). |
 | `durationMs`         | number  | `system` (turn_duration) | Milliseconds the assistant turn took. |
 | `messageCount`       | number  | `system` (turn_duration) | Number of messages in the turn. |

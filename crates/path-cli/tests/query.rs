@@ -16,7 +16,13 @@ fn cmd() -> Command {
     static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     let home = HOME.get_or_init(|| tempfile::tempdir().unwrap());
     let mut c = Command::cargo_bin("path").unwrap();
-    c.env("HOME", home.path()).env_remove("XDG_DATA_HOME");
+    // $CLAUDE_CONFIG_DIR goes with $XDG_DATA_HOME: the Claude reader prefers
+    // it over $HOME/.claude, so leaving it inherited would send the auto-sync
+    // at the developer's real sessions — the exact thing the sandboxed $HOME
+    // above exists to prevent.
+    c.env("HOME", home.path())
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR");
     c
 }
 
@@ -549,6 +555,7 @@ fn fixture_query<'a>(
         .unwrap()
         .env("HOME", home.path())
         .env_remove("XDG_DATA_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env("TOOLPATH_CONFIG_DIR", cfg)
         .arg("query")
         .args(args)
@@ -593,6 +600,7 @@ fn input_only_query_never_touches_the_cache() {
         .unwrap()
         .env("HOME", home.path())
         .env_remove("XDG_DATA_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
         .args(["query", "--input"])
         .arg(&doc)

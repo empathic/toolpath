@@ -375,7 +375,7 @@ fn list_claude_sessions(
                         .last_activity
                         .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
                         .unwrap_or_else(|| "unknown".to_string());
-                    println!("  {} {:>4} msgs  {}", &m.session_id, m.message_count, date);
+                    println!("  {} {:>4} msgs  {}", m.session_id, m.message_count, date);
                 }
             }
         }
@@ -395,7 +395,7 @@ fn list_claude_sessions_all(manager: &toolpath_claude::ClaudeConvo, fmt: ListFor
             Err(_) => continue, // skip unreadable projects rather than aborting
         }
     }
-    all.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    all.sort_by_key(|s| std::cmp::Reverse(s.last_activity));
 
     match fmt {
         ListFormat::Json => {
@@ -547,7 +547,7 @@ fn list_gemini_sessions(
                     };
                     println!(
                         "  {} {:>4} msgs{}  {}",
-                        &m.session_uuid, m.message_count, sub, date
+                        m.session_uuid, m.message_count, sub, date
                     );
                 }
             }
@@ -568,7 +568,7 @@ fn list_gemini_sessions_all(manager: &toolpath_gemini::GeminiConvo, fmt: ListFor
             Err(_) => continue,
         }
     }
-    all.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    all.sort_by_key(|s| std::cmp::Reverse(s.last_activity));
 
     match fmt {
         ListFormat::Json => {

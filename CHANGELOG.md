@@ -2,6 +2,93 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.20.0 + toolpath-cli 0.20.0 — 2026-09-10
+
+- `path sync`: automatic upload of the sessions in scope to Pathbase. One
+  pass replays any staged operation, creates or updates each session's
+  mutable graph, freezes a graph after two hours of source inactivity, and
+  continues a frozen graph in a new one that references the frozen head
+  through `base.from`. `--dry-run` plans without writing. `path sync status`,
+  `install` (writes `[sync]` and a launchd agent or systemd user timer), and
+  `uninstall`.
+- `[sync]` section in `config.toml` (`enabled`, `include`, `harnesses`,
+  `remote`, `interval`); `[[project]]` rules gain `sync = false`, and their
+  `remote` and `sync` fields resolve independently. `config edit` validates
+  the section.
+- `path share --timeout <SECS>` and `PATH_HTTP_TIMEOUT_SECS`; the Pathbase
+  request timeout default is now 300s.
+- State under the config dir: `pending/` (staged operations), `sync-state/`
+  (per-session current graph and frozen boundary), `sync-status.json`,
+  `upload.lock`. The manifest record gains `activity`.
+- Requires a Pathbase with the sync API (graph state, `meta`, guarded `PUT`,
+  `freeze`, `continuations`).
+
+## toolpath-convo 0.11.2 — 2026-09-10
+
+- The derived path's `head` no longer lands on a conversation event that
+  leaves turns off its ancestry. Events (attachments, preamble lines,
+  file-history snapshots) are emitted after the turns; when they chain off
+  the newest turn the last of them stays the head, but when they hang off
+  older turns, as Claude's snapshots do, the newest turn is the head.
+  Previously every turn after the last snapshot rendered as a dead end in
+  `md`/`dot`, and sync could not tell a continuation from a fork.
+
+## toolpath 0.8.0 — 2026-09-10
+
+- Add validated portable `BaseReference` and `Base.from` structural ancestry. References preserve immutable document URIs and encode scoped IDs individually. `Base` struct literals must initialize the new optional field. Structural-only bases may omit VCS `uri`.
+
+## toolpath-cli 0.19.0 — 2026-09-05
+
+- Follow `path-cli` to 0.19.0. The shim's dependency was still pinned to
+  `version = "0.18.0"`, which for a `0.y.z` crate means `>=0.18.0, <0.19.0`
+  — unsatisfiable once `path-cli` reached 0.19.0, so the shim could not
+  resolve at all. Because `toolpath-cli` is excluded from the workspace
+  (it and `path-cli` both build a binary named `path`), neither
+  `cargo build --workspace` nor CI ever saw it, and the break would first
+  have surfaced in `scripts/release.sh` at the Tier 4 publish — after the
+  other crates had already gone to crates.io.
+
+## path-cli 0.19.0 — 2026-09-03
+
+- `[[project]]` rules in `~/.toolpath/config.toml` can select by
+  `origin` — the `owner/name` of the `origin` remote of the repository
+  enclosing the session's directory — instead of, or as well as, `dir`.
+  A rule that names the repository rather than a place it sits follows
+  the checkout when it moves or is renamed, covers every worktree
+  without naming one, and is the same on every machine, so a
+  version-controlled config need not carry a directory layout.
+  Matching is case-insensitive, and the URL forms git accepts
+  (`https://`, scp-style `git@host:owner/name`, `ssh://` with a port,
+  with or without `.git`) all resolve to the same pair.
+- Precedence: any matching `origin` rule beats every `dir` rule —
+  identity over location — and among `origin` rules the first in the
+  file wins, since they match exactly. `dir` ranking is unchanged. A
+  rule carrying both selectors must satisfy both. The repository is
+  looked up at most once per resolve and only when a rule asks for it,
+  so a config of pure `dir` rules touches no repository.
+- The two selectors differ in what they survive: `dir` is pure path
+  logic and still matches a checkout that has been deleted, while
+  `origin` needs the checkout to exist.
+- `path config edit` now rejects a `[[project]]` rule with neither
+  `dir` nor `origin`, and one whose `origin` is not a bare
+  `owner/name`. Previously a rule without `dir` failed to parse with a
+  serde message; the error now names the rule and what it is missing.
+
+## toolpath-claude 0.13.1 — 2026-08-25
+
+- **Fix:** `.orphaned-*` rotation artifacts are no longer classified as
+  chain successors. Their mangled stems made every entry read as a
+  bridge entry, silently dropping the whole segment's turns and token
+  usage from the merged conversation (#236). Dotted stems are now
+  classified standalone — and deliberately excluded from
+  `list_conversations`, because a derived document id truncates the stem
+  to 8 characters, which for an orphan equals its parent session's
+  prefix and would collide in the cache. Ingesting orphans arrives with
+  the full-stem id work. `read_segment` reads them directly today.
+- **Fix:** bridge-entry filtering in `read_conversation` now skips only
+  the *leading* bridge run of a successor segment — the copied
+  predecessor tail — instead of every entry with a foreign `sessionId`.
+  A foreign id deeper in a segment is data and is kept.
 ## Bulk share with `path share --all` — 2026-08-26
 
 - **`path-cli`** (0.19.0): `path share --all` uploads every session

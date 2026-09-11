@@ -328,9 +328,9 @@ fn short_body(body: &str) -> String {
 // The generated client is async; the rest of path-cli is sync, so we
 // tunnel through a `OnceLock`-cached current-thread tokio runtime via
 // [`block_on`]. The whole module — auth, paths, downloads, async upload
-// — runs on a single reqwest version (0.13). The auth flow stays
-// hand-rolled only because the redeem endpoint isn't in the OpenAPI
-// spec, not because of any HTTP-stack difference.
+// — runs on a single reqwest version (0.13), the auth flow included:
+// `cli_redeem` is in the spec, so `api_redeem` calls the generated
+// method like any other operation.
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::sync::OnceLock;
@@ -349,10 +349,24 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// supplied. Progenitor doesn't expose a bearer-token setter, so we
 /// pre-bake the header into the http client and hand it via
 /// `Client::new_with_client`.
+/// One ceiling covers every Pathbase request. Uploads are the reason it
+/// is generous: a long session derives to several MB and goes up in one
+/// request. `$PATH_HTTP_TIMEOUT_SECS` overrides it for every command;
+/// `share --timeout` sets that variable for its own invocation.
+pub(crate) fn http_timeout() -> std::time::Duration {
+    const DEFAULT_SECS: u64 = 300;
+    let secs = std::env::var(crate::config::HTTP_TIMEOUT_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(DEFAULT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
 fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_client::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(30));
+        .timeout(http_timeout());
     if let Some(t) = token {
         let mut headers = reqwest::header::HeaderMap::new();
         let mut auth = reqwest::header::HeaderValue::from_str(&format!("Bearer {t}"))
@@ -594,6 +608,30 @@ pub(crate) fn repos_post(base_url: &str, token: &str, owner: &str, name: &str) -
             bail!("creating repo {name} failed: {}", reqwest_hint(&e))
         }
         Err(e) => Err(anyhow!("creating repo {name} failed: {}", full_chain(&e))),
+    }
+}
+
+/// `GET /api/v1/u/{owner}/repos/{repo}` — confirm a repo exists and is
+/// visible to the caller. Write access is not part of the response; an
+/// owned repo is writable, anything else is settled by the first upload.
+pub(crate) fn repo_get(base_url: &str, token: &str, owner: &str, name: &str) -> Result<()> {
+    let client = pathbase_client(base_url, Some(token))?;
+    match block_on(client.get_repo(owner, name)) {
+        Ok(_) => Ok(()),
+        Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
+            404 => {
+                bail!("{owner}/{name} does not exist on {base_url} (or is private to someone else)")
+            }
+            401 => bail!("{base_url} rejected the stored credentials (HTTP 401)"),
+            code => bail!("{base_url} returned HTTP {code} for {owner}/{name}"),
+        },
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("connect to {base_url}: {}", reqwest_hint(&e))
+        }
+        Err(e) => Err(anyhow!(
+            "checking {owner}/{name} on {base_url}: {}",
+            full_chain(&e)
+        )),
     }
 }
 

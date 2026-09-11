@@ -239,6 +239,7 @@ mod native {
             path: PathIdentity {
                 id: format!("path-{}", spec.name.replace('/', "-")),
                 base: Some(Base {
+                    from: None,
                     uri: repo_uri,
                     ref_str: Some(base_commit.id().to_string()),
                     branch: Some(spec.name.clone()),
