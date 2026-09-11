@@ -70,9 +70,10 @@ pub enum SyncOp {
         /// Pass interval, e.g. 15m, 1h
         #[arg(long, value_name = "DURATION")]
         interval: Option<String>,
-        /// Default destination repo (`owner/name`)
-        #[arg(long, value_name = "OWNER/NAME")]
-        remote: Option<String>,
+        /// Default destination for sessions no [[project]] rule routes:
+        /// `owner/name`, or a repo URL that also names the server
+        #[arg(long, value_name = "OWNER/NAME|URL")]
+        default_remote: Option<String>,
     },
     /// Disable sync in config.toml and remove the scheduled service
     Uninstall,
@@ -86,7 +87,7 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
             all,
             harness,
             interval,
-            remote,
+            default_remote,
         }) => install(
             config,
             InstallOptions {
@@ -94,7 +95,7 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
                 include,
                 harnesses: harness,
                 interval,
-                remote,
+                default_remote,
             },
         ),
         Some(SyncOp::Uninstall) => uninstall(config),
@@ -435,7 +436,10 @@ fn status(config: &Config) -> Result<()> {
     println!("interval: {}s", user.sync.interval_seconds()?);
     println!(
         "default remote: {}",
-        user.sync.remote.as_deref().unwrap_or("<you>/pathstash")
+        user.sync
+            .default_remote
+            .as_deref()
+            .unwrap_or("<you>/pathstash")
     );
     let staged = crate::sync::journal::list(&config_dir)?;
     println!("staged operations: {}", staged.len());
@@ -512,8 +516,8 @@ fn configured_destinations(
         }
         Ok(())
     };
-    match user.sync.remote.as_deref() {
-        Some(remote) => push(remote, "[sync].remote")?,
+    match user.sync.default_remote.as_deref() {
+        Some(remote) => push(remote, "[sync].default_remote")?,
         None => push(&format!("{username}/pathstash"), "authenticated pathstash")?,
     }
     for rule in &user.project {
@@ -734,7 +738,7 @@ mod tests {
     #[test]
     fn configured_destinations_cover_the_default_and_every_project_remote_once() {
         let user = UserSyncConfig::parse(
-            "[sync]\nremote='me/main'\n[[project]]\ndir='/a'\nremote='https://h.test/u/o/r'\n[[project]]\ndir='/b'\nremote='me/main'\n[[project]]\ndir='/c'\nremote='me/skipped'\nsync=false",
+            "[sync]\ndefault_remote='me/main'\n[[project]]\ndir='/a'\nremote='https://h.test/u/o/r'\n[[project]]\ndir='/b'\nremote='me/main'\n[[project]]\ndir='/c'\nremote='me/skipped'\nsync=false",
             "c",
         )
         .unwrap();

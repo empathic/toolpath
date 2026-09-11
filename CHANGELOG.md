@@ -12,7 +12,7 @@ All notable changes to the Toolpath workspace are documented here.
   `install` (writes `[sync]` and a launchd agent or systemd user timer), and
   `uninstall`.
 - `[sync]` section in `config.toml` (`enabled`, `include`, `harnesses`,
-  `remote`, `interval`); `[[project]]` rules gain `sync = false`, and their
+  `default_remote`, `interval`); `[[project]]` rules gain `sync = false`, and their
   `remote` and `sync` fields resolve independently. `config edit` validates
   the section.
 - `path share --timeout <SECS>` and `PATH_HTTP_TIMEOUT_SECS`; the Pathbase

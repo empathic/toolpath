@@ -17,7 +17,7 @@ pub(crate) struct SyncConfig {
     /// None distinguishes an unconfigured scope from explicitly global [].
     pub(crate) include: Option<Vec<String>>,
     pub(crate) harnesses: Option<Vec<String>>,
-    pub(crate) remote: Option<String>,
+    pub(crate) default_remote: Option<String>,
     pub(crate) interval: Option<String>,
 }
 
@@ -81,8 +81,8 @@ impl UserSyncConfig {
             (value, "--repo")
         } else if let Some(value) = remote.and_then(|rule| rule.remote.as_deref()) {
             (value, "[[project]].remote")
-        } else if let Some(value) = self.sync.remote.as_deref() {
-            (value, "[sync].remote")
+        } else if let Some(value) = self.sync.default_remote.as_deref() {
+            (value, "[sync].default_remote")
         } else {
             let Some(user) = authenticated_user else {
                 bail!("automatic sync requires authentication; run `path auth login`")
@@ -103,8 +103,8 @@ impl UserSyncConfig {
 impl SyncConfig {
     pub(crate) fn validate(&self) -> Result<()> {
         self.interval_seconds()?;
-        if let Some(remote) = &self.remote {
-            parse_remote(remote, "[sync].remote")?;
+        if let Some(remote) = &self.default_remote {
+            parse_remote(remote, "[sync].default_remote")?;
         }
         if let Some(providers) = &self.harnesses {
             parse_harnesses(providers)?;
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn fields_resolve_independently_and_overrides_never_bypass_opt_out() {
         let c = config(
-            "[sync]\nenabled=true\nremote='me/default'\n[[project]]\ndir='/gone'\nsync=false\nremote='me/broad'\n[[project]]\ndir='/gone/child'\nremote='me/narrow'\n[[project]]\ndir='/gone/child/yes'\nsync=true",
+            "[sync]\nenabled=true\ndefault_remote='me/default'\n[[project]]\ndir='/gone'\nsync=false\nremote='me/broad'\n[[project]]\ndir='/gone/child'\nremote='me/narrow'\n[[project]]\ndir='/gone/child/yes'\nsync=true",
         );
         let s = scope(&c);
         assert!(
@@ -326,7 +326,7 @@ mod tests {
     }
     #[test]
     fn destination_precedence_and_authentication() {
-        let c = config("[sync]\nenabled=true\nremote='me/config'");
+        let c = config("[sync]\nenabled=true\ndefault_remote='me/config'");
         assert_eq!(
             c.destination(
                 &scope(&c),
@@ -376,7 +376,7 @@ mod tests {
             "[sync]\nharnesses=['git']",
             "[sync]\ninclude=['']",
             "[sync]\ninclude=['relative/dir']",
-            "[sync]\nremote='invalid'",
+            "[sync]\ndefault_remote='invalid'",
             "[[project]]\ndir='/work'\nsync='false'",
         ] {
             assert!(

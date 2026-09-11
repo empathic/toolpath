@@ -13,11 +13,13 @@ pub(crate) struct InstallOptions {
     pub(crate) include: Vec<String>,
     pub(crate) harnesses: Vec<String>,
     pub(crate) interval: Option<String>,
-    pub(crate) remote: Option<String>,
+    pub(crate) default_remote: Option<String>,
 }
 
-/// Merge only supplied values; a reinstall never widens an explicit scope.
-/// No file is changed until the complete result has been validated.
+/// Merge only supplied values into `[sync]`; a reinstall never widens an
+/// explicit scope. Every other byte of the file (other tables, comments,
+/// formatting) is left exactly as it was. No file is changed until the
+/// complete result has been validated.
 pub(crate) fn install_config(text: &str, options: &InstallOptions) -> Result<String> {
     if options.all && !options.include.is_empty() {
         bail!("--all and --include are mutually exclusive");
@@ -28,61 +30,71 @@ pub(crate) fn install_config(text: &str, options: &InstallOptions) -> Result<Str
             "first sync installation requires --include <dir> or --all unless [sync].include is already configured"
         );
     }
-    let mut value: toml::Table = toml::from_str(text).context("failed to parse config.toml")?;
-    let sync = value
-        .entry("sync")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-        .as_table_mut()
-        .context("[sync] must be a table")?;
-    sync.insert("enabled".into(), toml::Value::Boolean(true));
+    let mut doc = parse_document(text)?;
+    let sync = sync_table(&mut doc)?;
+    sync["enabled"] = toml_edit::value(true);
     if options.all || !options.include.is_empty() {
-        let dirs = if options.all {
-            Vec::new()
-        } else {
-            options
-                .include
-                .iter()
-                .cloned()
-                .map(toml::Value::String)
-                .collect()
-        };
-        sync.insert("include".into(), toml::Value::Array(dirs));
+        sync["include"] = string_array(if options.all { &[] } else { &options.include });
     }
     if !options.harnesses.is_empty() {
-        sync.insert(
-            "harnesses".into(),
-            toml::Value::Array(
-                options
-                    .harnesses
-                    .iter()
-                    .cloned()
-                    .map(toml::Value::String)
-                    .collect(),
-            ),
-        );
+        sync["harnesses"] = string_array(&options.harnesses);
     }
     if let Some(interval) = &options.interval {
-        sync.insert("interval".into(), toml::Value::String(interval.clone()));
+        sync["interval"] = toml_edit::value(interval.as_str());
     }
-    if let Some(remote) = &options.remote {
-        sync.insert("remote".into(), toml::Value::String(remote.clone()));
+    if let Some(remote) = &options.default_remote {
+        sync["default_remote"] = toml_edit::value(remote.as_str());
     }
-    let result = toml::to_string_pretty(&value)?;
+    let result = doc.to_string();
     UserSyncConfig::parse(&result, "config.toml")?;
+    check_only_sync_changed(text, &result)?;
     Ok(result)
 }
 
-/// Disable first, even when other sync settings no longer validate. Preserve
-/// project rules, unknown settings and operation records (which live elsewhere).
+/// Disable first, even when other sync settings no longer validate. Every
+/// other byte of the file is left as it was.
 pub(crate) fn disable_config(text: &str) -> Result<String> {
-    let mut value: toml::Table = toml::from_str(text).context("failed to parse config.toml")?;
-    let sync = value
-        .entry("sync")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+    let mut doc = parse_document(text)?;
+    let sync = sync_table(&mut doc)?;
+    sync["enabled"] = toml_edit::value(false);
+    let result = doc.to_string();
+    check_only_sync_changed(text, &result)?;
+    Ok(result)
+}
+
+fn parse_document(text: &str) -> Result<toml_edit::DocumentMut> {
+    text.parse::<toml_edit::DocumentMut>()
+        .context("failed to parse config.toml")
+}
+
+fn sync_table(doc: &mut toml_edit::DocumentMut) -> Result<&mut toml_edit::Table> {
+    let item = doc
         .as_table_mut()
-        .context("[sync] must be a table")?;
-    sync.insert("enabled".into(), toml::Value::Boolean(false));
-    Ok(toml::to_string_pretty(&value)?)
+        .entry("sync")
+        .or_insert_with(toml_edit::table);
+    item.as_table_mut().context("[sync] must be a table")
+}
+
+fn string_array(values: &[String]) -> toml_edit::Item {
+    let mut array = toml_edit::Array::new();
+    for v in values {
+        array.push(v.as_str());
+    }
+    toml_edit::value(array)
+}
+
+/// The one invariant a config writer must never break: nothing outside
+/// `[sync]` changes. Compared on parsed values, so formatting is free to
+/// stay as it was but no key, table, or rule may be lost or altered.
+fn check_only_sync_changed(before: &str, after: &str) -> Result<()> {
+    let mut before: toml::Table = toml::from_str(before).context("failed to parse config.toml")?;
+    let mut after: toml::Table = toml::from_str(after).context("failed to parse config.toml")?;
+    before.remove("sync");
+    after.remove("sync");
+    if before != after {
+        bail!("refusing to write config.toml: the edit would change something outside [sync]");
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -185,6 +197,41 @@ mod tests {
         assert_eq!(value["title"].as_str(), Some("keep"));
     }
     #[test]
+    fn everything_outside_sync_is_preserved_byte_for_byte() {
+        let text = "# my config\ntitle = \"keep me\"   # trailing\n\n[[project]]\ndir = \"~/work/a\"        # the main repo\nremote = \"https://pathbase.dev/u/o/r\"\n\n[[project]]\norigin = \"o/other\"\nremote = \"o/other\"\nsync = false\n\n[sync]\n# how often\ninterval = \"30m\"\ninclude = [\"~/work\"]\n";
+        let result = install_config(
+            text,
+            &InstallOptions {
+                default_remote: Some("me/stash".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let head = text.split("[sync]").next().unwrap();
+        assert!(result.starts_with(head), "{result}");
+        assert!(result.contains("# how often\n"));
+        assert!(result.contains("interval = \"30m\""));
+        assert!(result.contains("include = [\"~/work\"]"));
+        assert!(result.contains("enabled = true"));
+        assert!(result.contains("default_remote = \"me/stash\""));
+        let disabled = disable_config(&result).unwrap();
+        assert!(disabled.starts_with(head));
+        assert!(disabled.contains("enabled = false"));
+        assert!(!disabled.contains("enabled = true"));
+        // A config with no [sync] yet gains one at the end and loses nothing.
+        let fresh = install_config(
+            "title = 'x'\n[[project]]\ndir = '/a'\nremote = 'o/r'\n",
+            &InstallOptions {
+                all: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(fresh.starts_with("title = 'x'\n[[project]]\ndir = '/a'\nremote = 'o/r'\n"));
+        assert!(fresh.contains("[sync]\nenabled = true\ninclude = []\n"));
+    }
+
+    #[test]
     fn global_scope_is_explicit_and_repeatable() {
         let options = InstallOptions {
             all: true,
@@ -204,15 +251,19 @@ mod tests {
             include: vec!["/new".into()],
             harnesses: vec!["claude".into()],
             interval: Some("2h".into()),
-            remote: Some("me/new".into()),
+            default_remote: Some("me/new".into()),
             ..Default::default()
         };
-        let result = install_config("[sync]\ninclude=['/old']\nremote='me/old'", &options).unwrap();
+        let result = install_config(
+            "[sync]\ninclude=['/old']\ndefault_remote='me/old'",
+            &options,
+        )
+        .unwrap();
         let config = UserSyncConfig::parse(&result, "c").unwrap();
         assert_eq!(config.sync.harnesses.as_deref().unwrap(), ["claude"]);
         assert_eq!(config.sync.interval_seconds().unwrap(), 7200);
         assert_eq!(config.sync.include.unwrap(), ["/new"]);
-        assert_eq!(config.sync.remote.unwrap(), "me/new");
+        assert_eq!(config.sync.default_remote.unwrap(), "me/new");
     }
     #[test]
     fn disabling_retains_config_and_prevents_next_pass() {
@@ -240,11 +291,10 @@ mod tests {
         assert!(!scope.contains(crate::artifact::ArtifactType::Codex, None));
         assert_eq!(config.sync.include, Some(vec![]));
         // A broken interval must not prevent switching off an existing service.
-        assert!(
-            disable_config("[sync]\nenabled=true\ninterval='broken'")
-                .unwrap()
-                .contains("enabled = false")
-        );
+        let broken: toml::Table =
+            toml::from_str(&disable_config("[sync]\nenabled=true\ninterval='broken'").unwrap())
+                .unwrap();
+        assert_eq!(broken["sync"]["enabled"].as_bool(), Some(false));
     }
     #[test]
     fn systemd_quotes_paths_and_runs_plain_sync() {

@@ -475,7 +475,7 @@ routing or a second sync configuration store.
 enabled = true                    # absent/false means no automatic upload
 include = ["~/empathic", "~/oss"] # empty means all sessions
 harnesses = ["claude", "codex"]   # omitted means all supported agent providers
-remote = "ben/pathstash"
+default_remote = "ben/pathstash"
 interval = "15m"
 
 [[project]]
@@ -492,7 +492,7 @@ paths and the existing normalization for deleted checkout directories.
 Resolve `sync` and `remote` independently: the most specific matching rule
 that defines the field wins; equal specificity uses the first rule. Omitted
 `sync` inherits/defaults true. Destination precedence is `--repo`, project
-remote, `[sync].remote`, then authenticated `<you>/pathstash`. Destination
+remote, `[sync].default_remote`, then authenticated `<you>/pathstash`. Destination
 flags do not bypass a `sync = false` exclusion. Manual `share` is not disabled
 by automatic-sync opt-outs.
 
@@ -502,7 +502,7 @@ path sync --dry-run
 path sync --include <dir> [--include <dir> ...] [--harness <name>] [--repo o/n]
 path sync --all
 path sync status
-path sync install [--include <dir> ... | --all] [--interval 15m] [--remote o/n]
+path sync install [--include <dir> ... | --all] [--interval 15m] [--default-remote o/n]
 path sync uninstall
 ```
 
