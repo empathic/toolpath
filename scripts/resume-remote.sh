@@ -73,10 +73,10 @@
 #   3. Optional VM creation (--create).
 #   4. [shell] Call 1: remote home, claude path, tmux presence. Derive
 #      <remote-dir> from the remote home unless -C is given.
-#   5. `path p export claude --cwd <remote-dir> --derive-session-id`
+#   5. `path p export claude --cwd <remote-dir> --content-addressed-session-id`
 #      projects the document to JSONL rooted at the remote project
-#      directory under an ID derived from the document (the same
-#      document yields the same ID on every run). [shell] Check the
+#      directory under a content-addressed ID (the same document
+#      yields the same ID on every run). [shell] Check the
 #      JSONL carries the remote cwd and one session ID; that ID is the
 #      remote session ID.
 #      [shell] Compute the remote Claude project slug (/, _, and .
@@ -330,7 +330,7 @@ echo "remote project dir: $REMOTE_DIR"
 
 step "Project session $SESSION to JSONL"
 JSONL="$WORK_DIR/$SESSION.jsonl"
-run "$PATH_BIN" p export claude --input "$DOC" --cwd "$REMOTE_DIR" --derive-session-id >"$JSONL"
+run "$PATH_BIN" p export claude --input "$DOC" --cwd "$REMOTE_DIR" --content-addressed-session-id >"$JSONL"
 N_CWD="$(grep -cF "\"cwd\":\"$REMOTE_DIR\"" "$JSONL" || true)"
 [[ $N_CWD -gt 0 ]] || die "the projected JSONL carries no cwd key; the document records no cwd"
 # [shell] The remote session ID is the sessionId every line that

@@ -88,7 +88,7 @@ vendored-openssl = ["git2/vendored-openssl"]
 # (`--no-default-features`) for the minimal build.
 embedded-picker = ["dep:skim", "dep:regex"]
 # Remote resume (scripts/resume-remote.sh): experimental, off by
-# default. Gates `p export claude --derive-session-id` and `--cwd`.
+# default. Gates `p export claude --content-addressed-session-id` and `--cwd`.
 resume-remote = ["dep:serde_json_canonicalizer"]
 
 [dev-dependencies]

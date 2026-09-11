@@ -666,19 +666,25 @@ pub(crate) fn project_pi(
     Ok(session.header.id)
 }
 
-/// The ID `--derive-session-id` computes from the document, or `None`
-/// when the flag is not set.
+/// The content-addressed session ID when `--content-addressed-session-id`
+/// is set, else `None`.
 #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
-fn derived_session_id(args: &ClaudeExportArgs, document_json: &str) -> Result<Option<String>> {
-    if !args.remote.derive_session_id {
+fn content_addressed_session_id(
+    args: &ClaudeExportArgs,
+    document_json: &str,
+) -> Result<Option<String>> {
+    if !args.remote.content_addressed_session_id {
         return Ok(None);
     }
-    crate::claude_session::session_id_from_document_hash(document_json).map(Some)
+    crate::claude_session::content_addressed_id(document_json).map(Some)
 }
 
-/// Without the `resume-remote` feature there is no `--derive-session-id`.
+/// Without the `resume-remote` feature there is no `--content-addressed-session-id`.
 #[cfg(all(not(feature = "resume-remote"), not(target_os = "emscripten")))]
-fn derived_session_id(_args: &ClaudeExportArgs, _document_json: &str) -> Result<Option<String>> {
+fn content_addressed_session_id(
+    _args: &ClaudeExportArgs,
+    _document_json: &str,
+) -> Result<Option<String>> {
     Ok(None)
 }
 
@@ -693,7 +699,7 @@ fn exported_session_id(args: &ClaudeExportArgs, document_json: &str) -> Result<O
     if args.new_session_id {
         return Ok(Some(uuid::Uuid::new_v4().to_string()));
     }
-    derived_session_id(args, document_json)
+    content_addressed_session_id(args, document_json)
 }
 
 fn run_claude(args: ClaudeExportArgs) -> Result<()> {
@@ -3706,7 +3712,7 @@ mod tests {
     #[cfg(feature = "resume-remote")]
     mod resume_remote {
         use super::*;
-        use crate::claude_session::session_id_from_document_hash;
+        use crate::claude_session::content_addressed_id;
         use crate::cmd_export::remote_session::RemoteSessionArgs;
 
         /// `make_path_doc` with `cwd` recorded on every step, plus one
@@ -3802,22 +3808,22 @@ mod tests {
         }
 
         #[test]
-        fn derive_session_id_excludes_the_other_naming_flags() {
+        fn content_addressed_session_id_excludes_the_other_naming_flags() {
             let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
-            assert!(parse_export_claude(&["--derive-session-id"]).is_ok());
+            assert!(parse_export_claude(&["--content-addressed-session-id"]).is_ok());
             for extra in [
-                ["--derive-session-id", "--new-session-id"].as_slice(),
-                ["--derive-session-id", "--session-id", given].as_slice(),
+                ["--content-addressed-session-id", "--new-session-id"].as_slice(),
+                ["--content-addressed-session-id", "--session-id", given].as_slice(),
             ] {
                 assert!(
                     parse_export_claude(extra).is_err(),
-                    "clap must reject --derive-session-id with {extra:?}"
+                    "clap must reject --content-addressed-session-id with {extra:?}"
                 );
             }
         }
 
         #[test]
-        fn derive_session_id_flag_stamps_the_derived_id() {
+        fn content_addressed_session_id_flag_stamps_the_content_addressed_id() {
             let doc = make_path_doc();
             let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
             let source_ids = values_of(&plain, "sessionId");
@@ -3827,33 +3833,32 @@ mod tests {
                 "every line carries a sessionId"
             );
 
-            let expected =
-                session_id_from_document_hash(&serde_json::to_string(&doc).unwrap()).unwrap();
+            let expected = content_addressed_id(&serde_json::to_string(&doc).unwrap()).unwrap();
             assert!(!source_ids.contains(&expected.as_str()));
-            let derived = export_claude_lines(
+            let addressed = export_claude_lines(
                 &doc,
                 ClaudeExportArgs {
                     remote: RemoteSessionArgs {
-                        derive_session_id: true,
+                        content_addressed_session_id: true,
                         ..Default::default()
                     },
                     ..Default::default()
                 },
             );
-            assert_eq!(derived.len(), plain.len());
-            let ids = values_of(&derived, "sessionId");
+            assert_eq!(addressed.len(), plain.len());
+            let ids = values_of(&addressed, "sessionId");
             assert_eq!(ids.len(), source_ids.len());
             assert!(ids.iter().all(|s| *s == expected));
         }
 
         #[test]
-        fn cwd_flag_does_not_change_the_derived_id() {
+        fn cwd_flag_does_not_change_the_content_addressed_id() {
             let doc = make_path_doc_with_cwd("/old/project");
-            let derived = export_claude_lines(
+            let addressed = export_claude_lines(
                 &doc,
                 ClaudeExportArgs {
                     remote: RemoteSessionArgs {
-                        derive_session_id: true,
+                        content_addressed_session_id: true,
                         ..Default::default()
                     },
                     ..Default::default()
@@ -3863,27 +3868,27 @@ mod tests {
                 &doc,
                 ClaudeExportArgs {
                     remote: RemoteSessionArgs {
-                        derive_session_id: true,
+                        content_addressed_session_id: true,
                         cwd: Some("/new/dir".to_string()),
                     },
                     ..Default::default()
                 },
             );
             assert_eq!(
-                values_of(&derived, "sessionId"),
+                values_of(&addressed, "sessionId"),
                 values_of(&rerooted, "sessionId")
             );
         }
 
         #[test]
-        fn derived_export_names_the_project_file() {
+        fn content_addressed_export_names_the_project_file() {
             let temp = tempfile::tempdir().unwrap();
             let fake_home = temp.path().join("home");
             std::fs::create_dir_all(&fake_home).unwrap();
             let cwd = temp.path().join("proj");
             std::fs::create_dir_all(&cwd).unwrap();
 
-            let path = make_convo_path("claude-code://claude-derived-file-test-session");
+            let path = make_convo_path("claude-code://claude-addressed-file-test-session");
             let input_path = temp.path().join("input.json");
             let doc = toolpath::v1::Graph::from_path(path);
             std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
@@ -3891,7 +3896,7 @@ mod tests {
                 input: input_path.to_string_lossy().to_string(),
                 project: Some(cwd.clone()),
                 remote: RemoteSessionArgs {
-                    derive_session_id: true,
+                    content_addressed_session_id: true,
                     cwd: None,
                 },
                 ..Default::default()
@@ -3912,10 +3917,9 @@ mod tests {
                 }
             }
 
-            result.expect("derived export should succeed");
+            result.expect("content-addressed export should succeed");
             let expected =
-                session_id_from_document_hash(&std::fs::read_to_string(&input_path).unwrap())
-                    .unwrap();
+                content_addressed_id(&std::fs::read_to_string(&input_path).unwrap()).unwrap();
             let canon = std::fs::canonicalize(&cwd).unwrap();
             let file = toolpath_claude::PathResolver::new()
                 .with_home(&fake_home)

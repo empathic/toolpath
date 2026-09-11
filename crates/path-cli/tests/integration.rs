@@ -604,7 +604,7 @@ mod resume_remote {
             .assert()
             .success()
             .stdout(predicate::str::contains("Remote session:"))
-            .stdout(predicate::str::contains("--derive-session-id"))
+            .stdout(predicate::str::contains("--content-addressed-session-id"))
             .stdout(predicate::str::contains("--cwd <DIR>"));
     }
 
@@ -641,7 +641,7 @@ fn export_claude_help_omits_the_remote_session_flags() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Remote session").not())
-        .stdout(predicate::str::contains("--derive-session-id").not())
+        .stdout(predicate::str::contains("--content-addressed-session-id").not())
         .stdout(predicate::str::contains("--cwd").not());
 }
 

@@ -4,10 +4,10 @@ All notable changes to the Toolpath workspace are documented here.
 
 ## path-cli 0.21.0 — 2026-09-10
 
-- **`path-cli`** (0.21.0): `p export claude` takes `--derive-session-id`
+- **`path-cli`** (0.21.0): `p export claude` takes `--content-addressed-session-id`
   behind the `resume-remote` cargo feature. The flag renames the
-  session to an ID derived from the input document: a v4-shaped UUID
-  from the first 128 bits of the SHA-256 of its RFC 8785 (JCS) form.
+  session to a content-addressed ID: a v4-shaped UUID from the first
+  128 bits of the SHA-256 of the input document's RFC 8785 (JCS) form.
   The same document yields the same ID on every run, so a second
   export of it into the same project is refused instead of duplicated.
   `--cwd` does not change the ID. The `--output` message names the
@@ -15,10 +15,10 @@ All notable changes to the Toolpath workspace are documented here.
   reads the remote session ID back from the JSONL.
 - **`path-cli`** (0.21.0): `p export claude` takes `--session-id <UUID>`,
   without the feature. It renames the projected session the way
-  `--derive-session-id` does, to the ID the caller gives. The
+  `--content-addressed-session-id` does, to the ID the caller gives. The
   document's own session is not touched, so one document exports as
   several sessions. A value that is not a UUID is rejected at parse
-  time, and the flag excludes `--derive-session-id`.
+  time, and the flag excludes `--content-addressed-session-id`.
 - **`path-cli`** (0.21.0): `p export claude` takes `--new-session-id`,
   without the feature. It renames the projected session to a fresh
   random v4 UUID, so a second export of one document gets an address
