@@ -611,6 +611,30 @@ pub(crate) fn repos_post(base_url: &str, token: &str, owner: &str, name: &str) -
     }
 }
 
+/// `GET /api/v1/u/{owner}/repos/{repo}` — confirm a repo exists and is
+/// visible to the caller. Write access is not part of the response; an
+/// owned repo is writable, anything else is settled by the first upload.
+pub(crate) fn repo_get(base_url: &str, token: &str, owner: &str, name: &str) -> Result<()> {
+    let client = pathbase_client(base_url, Some(token))?;
+    match block_on(client.get_repo(owner, name)) {
+        Ok(_) => Ok(()),
+        Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
+            404 => {
+                bail!("{owner}/{name} does not exist on {base_url} (or is private to someone else)")
+            }
+            401 => bail!("{base_url} rejected the stored credentials (HTTP 401)"),
+            code => bail!("{base_url} returned HTTP {code} for {owner}/{name}"),
+        },
+        Err(pathbase_client::Error::CommunicationError(e)) => {
+            bail!("connect to {base_url}: {}", reqwest_hint(&e))
+        }
+        Err(e) => Err(anyhow!(
+            "checking {owner}/{name} on {base_url}: {}",
+            full_chain(&e)
+        )),
+    }
+}
+
 /// `GET /api/v1/u/{owner}/repos/{repo}/graphs/{id}/download` — fetch
 /// the reconstructed Graph document by UUID.
 ///

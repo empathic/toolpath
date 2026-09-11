@@ -211,7 +211,6 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
 
     let manifest = crate::sync::load_manifest(&config_dir)?;
     let mut apis: HashMap<String, PathbaseSync> = HashMap::new();
-    let mut ensured_pathstash: std::collections::HashSet<String> = Default::default();
     let mut counts = Counts::default();
     let mut errors = Vec::new();
     let mut destinations: BTreeMap<String, usize> = BTreeMap::new();
@@ -259,20 +258,6 @@ fn pass(args: SyncArgs, config: &Config) -> Result<()> {
                     &credentials.token,
                 )?),
             };
-            // The user's own pathstash is created on first use, whichever
-            // way it was named; other configured remotes must exist.
-            if remote.repo.owner == username
-                && remote.repo.name == "pathstash"
-                && !args.dry_run
-                && ensured_pathstash.insert(destination.base_url.clone())
-            {
-                crate::cmd_pathbase::repos_post(
-                    &destination.base_url,
-                    &credentials.token,
-                    &username,
-                    "pathstash",
-                )?;
-            }
             let project = harness.path_keyed().then(|| rec.path.clone()).flatten();
             let session = Session {
                 harness,
@@ -489,6 +474,7 @@ fn install(config: &Config, options: InstallOptions) -> Result<()> {
     let interval = user.sync.interval.clone().unwrap_or_else(|| "15m".into());
     let binary = std::env::current_exe().context("locate the path binary")?;
     let files = ServiceFiles::render(&binary, &config_dir, &interval, home.as_deref())?;
+    preflight(&user)?;
     write_config(&config_path, &updated)?;
     files.install()?;
     eprintln!(
@@ -496,6 +482,68 @@ fn install(config: &Config, options: InstallOptions) -> Result<()> {
         files.kind()
     );
     status(config)
+}
+
+/// Every server and repo the configuration can route a session to.
+fn configured_destinations(user: &UserSyncConfig, username: &str) -> Result<Vec<Destination>> {
+    let default_url = crate::cmd_pathbase::resolve_url(None);
+    let mut out: Vec<Destination> = Vec::new();
+    let mut push = |value: &str, origin: &str| -> Result<()> {
+        let (repo, base_url) = crate::remote::parse_remote(value, origin)?;
+        let destination = Destination {
+            repo: format!("{}/{}", repo.owner, repo.name),
+            base_url: base_url
+                .unwrap_or_else(|| default_url.clone())
+                .trim_end_matches('/')
+                .to_string(),
+        };
+        if !out.contains(&destination) {
+            out.push(destination);
+        }
+        Ok(())
+    };
+    match user.sync.remote.as_deref() {
+        Some(remote) => push(remote, "[sync].remote")?,
+        None => push(&format!("{username}/pathstash"), "authenticated pathstash")?,
+    }
+    for rule in &user.project {
+        if rule.sync == Some(false) {
+            continue;
+        }
+        if let Some(remote) = rule.remote.as_deref() {
+            push(remote, "[[project]].remote")?;
+        }
+    }
+    Ok(out)
+}
+
+/// Before anything is written: the credentials work against every
+/// configured server and every configured repo is there. A scheduled
+/// pass has nobody to tell when these fail.
+fn preflight(user: &UserSyncConfig) -> Result<()> {
+    let credentials = crate::cmd_pathbase::load_session(&crate::cmd_pathbase::credentials_path()?)?
+        .context("sync uploads require login; run `path auth login` first")?;
+    let destinations = configured_destinations(user, &credentials.user.username)?;
+    let mut checked_servers: Vec<String> = Vec::new();
+    for destination in &destinations {
+        if !checked_servers.contains(&destination.base_url) {
+            let me = crate::cmd_pathbase::api_me(&destination.base_url, &credentials.token)
+                .with_context(|| format!("sync cannot reach {}", destination.base_url))?;
+            eprintln!(
+                "{}: reachable, logged in as {}",
+                destination.base_url, me.username
+            );
+            checked_servers.push(destination.base_url.clone());
+        }
+        let (owner, name) = destination
+            .repo
+            .split_once('/')
+            .expect("parse_remote yields owner/name");
+        crate::cmd_pathbase::repo_get(&destination.base_url, &credentials.token, owner, name)
+            .with_context(|| format!("sync cannot upload to {}", destination.repo_url()))?;
+        eprintln!("{}: exists", destination.repo_url());
+    }
+    Ok(())
 }
 
 fn uninstall(config: &Config) -> Result<()> {
@@ -671,6 +719,27 @@ fn command(program: &str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_destinations_cover_the_default_and_every_project_remote_once() {
+        let user = UserSyncConfig::parse(
+            "[sync]\nremote='me/main'\n[[project]]\ndir='/a'\nremote='https://h.test/u/o/r'\n[[project]]\ndir='/b'\nremote='me/main'\n[[project]]\ndir='/c'\nremote='me/skipped'\nsync=false",
+            "c",
+        )
+        .unwrap();
+        let repos: Vec<String> = configured_destinations(&user, "me")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.repo_url())
+            .collect();
+        assert_eq!(repos.len(), 2);
+        assert!(repos[0].ends_with("/u/me/main"));
+        assert_eq!(repos[1], "https://h.test/u/o/r");
+        let user = UserSyncConfig::parse("[sync]\nenabled=true", "c").unwrap();
+        let repos = configured_destinations(&user, "me").unwrap();
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].repo_url().ends_with("/u/me/pathstash"));
+    }
 
     #[test]
     fn summary_line_names_only_nonzero_counts() {
