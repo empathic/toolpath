@@ -92,15 +92,21 @@ if [ ! -s "$CREDS" ]; then
   if [ "${DEMO_LOGIN:-}" = "browser" ]; then
     "$PATHBIN" auth login --url "$PATHBASE_URL"
   else
-    USER="demo$(date +%s)"
+    # The local dev login (available when GitHub OAuth is not configured)
+    # signs the browser in as `dev`; the CLI pairs with that same account.
     COOKIES="$DEMO_DIR/cookies"
-    curl -sS --fail-with-body -b "$COOKIES" -c "$COOKIES" -X POST "$PATHBASE_URL/api/v1/internal/auth/register" \
-      -H 'content-type: application/json' \
-      -d "{\"username\":\"$USER\",\"email\":\"$USER@example.com\",\"password\":\"correct-horse-battery-staple\"}" >/dev/null \
-      || fail "could not register $USER; is the server at $PATHBASE_URL a local Pathbase?"
+    if curl -sS -o /dev/null -b "$COOKIES" -c "$COOKIES" -w '%{http_code}' "$PATHBASE_URL/api/v1/internal/auth/dev" | grep -q '^30'; then
+      note "browser session: open $PATHBASE_URL/api/v1/internal/auth/dev (dev login, same user as the CLI)"
+    else
+      USER="demo$(date +%s)"
+      curl -sS --fail-with-body -b "$COOKIES" -c "$COOKIES" -X POST "$PATHBASE_URL/api/v1/internal/auth/register" \
+        -H 'content-type: application/json' \
+        -d "{\"username\":\"$USER\",\"email\":\"$USER@example.com\",\"password\":\"correct-horse-battery-staple\"}" >/dev/null \
+        || fail "could not log in at $PATHBASE_URL; is it a local Pathbase?"
+      note "browser session: open $PATHBASE_URL/login and sign in as $USER / correct-horse-battery-staple"
+    fi
     CODE=$(curl -sS --fail-with-body -b "$COOKIES" -c "$COOKIES" -X POST "$PATHBASE_URL/api/v1/auth/cli/request-grant" | jq -r .code)
     echo "$CODE" | "$PATHBIN" auth login --url "$PATHBASE_URL" | tail -1
-    note "browser session: open $PATHBASE_URL/login and sign in as $USER / correct-horse-battery-staple"
   fi
 fi
 TOKEN=$(jq -r .token "$CREDS")
