@@ -18,6 +18,12 @@ All notable changes to the Toolpath workspace are documented here.
   document's own session is not touched, so one document exports as
   several sessions. A value that is not a UUID is rejected at parse
   time, and the flag excludes `--derive-session-id`.
+- **`path-cli`** (0.21.0): `p export claude` takes `--new-session-id`,
+  without the feature. It renames the projected session to a fresh
+  random v4 UUID, so a second export of one document gets an address
+  of its own. The export names the session it wrote on stderr in
+  every output mode, stdout included, because a random ID is
+  otherwise only readable out of the JSONL.
 - **`toolpath-cli`** (0.21.0): lockstep bump of the deprecated shim.
 
 ## toolpath-claude 0.13.3 — 2026-09-10

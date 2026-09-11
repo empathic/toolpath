@@ -555,6 +555,33 @@ fn export_copilot_to_output_file() {
     assert!(jsonl.contains("hello copilot"), "user prompt round-trips");
 }
 
+/// The minted ID is random, so stdout alone does not tell the caller
+/// what it exported. The ID goes to stderr, which keeps the JSONL on
+/// stdout pipeable.
+#[test]
+fn export_claude_to_stdout_names_the_minted_session_on_stderr() {
+    let doc = examples_dir().join("path-02-local-session.path.json");
+    let out = cmd()
+        .args(["p", "export", "claude", "--new-session-id"])
+        .arg("--input")
+        .arg(&doc)
+        .assert()
+        .success();
+    let out = out.get_output();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let id = stderr
+        .trim()
+        .strip_prefix("Wrote session ")
+        .and_then(|rest| rest.strip_suffix(" to stdout"))
+        .unwrap_or_else(|| panic!("stderr does not name the session: {stderr:?}"))
+        .to_string();
+    assert!(uuid::Uuid::parse_str(&id).is_ok(), "{id:?} is not a UUID");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!("\"sessionId\":\"{id}\"")),
+        "the JSONL on stdout carries the ID stderr named"
+    );
+}
+
 #[test]
 fn export_help_lists_claude_and_pathbase() {
     cmd()

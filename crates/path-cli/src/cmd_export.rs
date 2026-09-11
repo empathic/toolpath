@@ -64,10 +64,21 @@ pub struct ClaudeExportArgs {
 
     /// Rename the session to this ID (a UUID). The document's own
     /// session is not touched, so one document can be exported as
-    /// several sessions.
+    /// several sessions. Mutually exclusive with --new-session-id.
     #[cfg(not(target_os = "emscripten"))]
-    #[arg(long, value_name = "UUID", value_parser = parse_session_id_arg)]
+    #[arg(
+        long,
+        value_name = "UUID",
+        conflicts_with = "new_session_id",
+        value_parser = parse_session_id_arg
+    )]
     pub(crate) session_id: Option<String>,
+
+    /// Rename the session to a fresh random UUID. Every export mints
+    /// a different ID; the export prints it. Mutually exclusive with
+    /// --session-id.
+    #[arg(long)]
+    pub(crate) new_session_id: bool,
 
     #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
     #[command(flatten)]
@@ -679,6 +690,9 @@ fn exported_session_id(args: &ClaudeExportArgs, document_json: &str) -> Result<O
     if let Some(id) = &args.session_id {
         return Ok(Some(id.clone()));
     }
+    if args.new_session_id {
+        return Ok(Some(uuid::Uuid::new_v4().to_string()));
+    }
     derived_session_id(args, document_json)
 }
 
@@ -730,6 +744,7 @@ fn run_claude(args: ClaudeExportArgs) -> Result<()> {
             }
             (None, None) => {
                 println!("{}", jsonl);
+                eprintln!("Wrote session {} to stdout", conversation.session_id);
             }
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
         }
@@ -2578,6 +2593,31 @@ mod tests {
         assert!(ids.iter().all(|s| *s == given));
     }
 
+    #[test]
+    fn new_session_id_flag_mints_a_distinct_id_per_export() {
+        let doc = make_path_doc();
+        let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+        let source_ids = values_of(&plain, "sessionId");
+        let args = || ClaudeExportArgs {
+            new_session_id: true,
+            ..Default::default()
+        };
+        let first = export_claude_lines(&doc, args());
+        let second = export_claude_lines(&doc, args());
+
+        let id_of = |lines: &[serde_json::Value]| {
+            let ids = values_of(lines, "sessionId");
+            assert_eq!(ids.len(), source_ids.len());
+            let id = ids[0].to_string();
+            assert!(ids.iter().all(|s| *s == id), "one ID on every line");
+            let parsed = uuid::Uuid::parse_str(&id).unwrap();
+            assert_eq!(parsed.get_version_num(), 4);
+            assert!(!source_ids.contains(&id.as_str()));
+            id
+        };
+        assert_ne!(id_of(&first), id_of(&second));
+    }
+
     /// Parses `p export claude --input x <extra>` the way the binary
     /// does, so the test sees clap's value parsers and conflicts.
     fn parse_export_claude(extra: &[&str]) -> Result<(), clap::Error> {
@@ -2602,6 +2642,16 @@ mod tests {
         assert!(
             parse_export_claude(&["--session-id", "my-template"]).is_err(),
             "clap must reject a session ID that is not a UUID"
+        );
+    }
+
+    #[test]
+    fn session_id_and_new_session_id_are_mutually_exclusive() {
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(parse_export_claude(&["--new-session-id"]).is_ok());
+        assert!(
+            parse_export_claude(&["--session-id", given, "--new-session-id"]).is_err(),
+            "clap must reject simultaneous --session-id and --new-session-id"
         );
     }
 
@@ -3755,10 +3805,15 @@ mod tests {
         fn derive_session_id_excludes_the_other_naming_flags() {
             let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
             assert!(parse_export_claude(&["--derive-session-id"]).is_ok());
-            assert!(
-                parse_export_claude(&["--derive-session-id", "--session-id", given]).is_err(),
-                "clap must reject simultaneous --derive-session-id and --session-id"
-            );
+            for extra in [
+                ["--derive-session-id", "--new-session-id"].as_slice(),
+                ["--derive-session-id", "--session-id", given].as_slice(),
+            ] {
+                assert!(
+                    parse_export_claude(extra).is_err(),
+                    "clap must reject --derive-session-id with {extra:?}"
+                );
+            }
         }
 
         #[test]
