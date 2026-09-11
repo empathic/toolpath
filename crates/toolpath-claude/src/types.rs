@@ -409,7 +409,7 @@ fn set_session_id_keys(value: &mut serde_json::Value, id: &str) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, child) in map.iter_mut() {
-                if key == "sessionId" && child.is_string() {
+                if key == crate::keys::SESSION_ID && child.is_string() {
                     *child = serde_json::Value::String(id.to_string());
                 } else {
                     set_session_id_keys(child, id);
@@ -486,7 +486,7 @@ impl Conversation {
             *slot = dir.to_string();
         }
         for raw in &mut self.preamble {
-            if let Some(slot) = raw.get_mut("cwd").filter(|v| v.is_string()) {
+            if let Some(slot) = raw.get_mut(crate::keys::CWD).filter(|v| v.is_string()) {
                 *slot = serde_json::Value::String(dir.to_string());
             }
         }

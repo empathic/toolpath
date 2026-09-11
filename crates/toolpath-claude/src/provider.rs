@@ -492,7 +492,10 @@ fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::Con
 fn entry_to_event(entry: &ConversationEntry) -> toolpath_convo::ConversationEvent {
     let mut data = HashMap::new();
     if let Some(v) = &entry.cwd {
-        data.insert("cwd".into(), serde_json::Value::String(v.clone()));
+        data.insert(
+            crate::keys::CWD.into(),
+            serde_json::Value::String(v.clone()),
+        );
     }
     if let Some(v) = &entry.git_branch {
         data.insert("git_branch".into(), serde_json::Value::String(v.clone()));

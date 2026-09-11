@@ -6,6 +6,7 @@ pub(crate) mod chain;
 pub mod derive;
 pub mod error;
 pub mod io;
+mod keys;
 pub mod paths;
 pub mod project;
 pub mod provider;

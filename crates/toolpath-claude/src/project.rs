@@ -271,7 +271,7 @@ fn tool_result_event_to_entry(
         session_id: Some(session_id.to_string()),
         cwd: event
             .data
-            .get("cwd")
+            .get(crate::keys::CWD)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         git_branch: event
@@ -979,7 +979,7 @@ fn project_event(event: &toolpath_convo::ConversationEvent, session_id: &str) ->
         message,
         cwd: event
             .data
-            .get("cwd")
+            .get(crate::keys::CWD)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         git_branch: event
