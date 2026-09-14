@@ -112,6 +112,7 @@ pub(crate) fn run_remote(
         home.join(crate::ssh::SSH_DIR_NAME),
     )?;
     remote::resume(
+        &resolved.json,
         &dest,
         args.cwd.as_deref(),
         args.remote.dry_run,
@@ -127,6 +128,7 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
     let ResolvedInput {
         graph,
         source_harness,
+        ..
     } = resolve_input(&args)?;
     let path = extract_the_only_path(&graph)?;
     require_an_agent_turn(path)?;
@@ -237,11 +239,16 @@ pub(crate) fn require_an_agent_turn(path: &TPath) -> Result<()> {
     Ok(())
 }
 
-/// A resolved input: the parsed document and its source harness.
+/// A resolved input: the parsed document, its source harness, and
+/// the JSON text it was parsed from. The text is kept because the
+/// remote session ID hashes the document text, not a type
+/// round-trip.
 #[derive(Debug)]
 pub(crate) struct ResolvedInput {
     pub(crate) graph: Graph,
     pub(crate) source_harness: Option<Harness>,
+    #[cfg(all(unix, feature = "resume-remote"))]
+    pub(crate) json: String,
 }
 
 /// Resolve the user-supplied `<input>` argument into a
@@ -328,6 +335,8 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
     Ok(ResolvedInput {
         graph,
         source_harness,
+        #[cfg(all(unix, feature = "resume-remote"))]
+        json,
     })
 }
 
@@ -811,6 +820,7 @@ mod tests {
         let ResolvedInput {
             graph: g,
             source_harness: harness,
+            ..
         } = resolve_input(&args).unwrap();
         require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Claude));
@@ -845,6 +855,7 @@ mod tests {
         let ResolvedInput {
             graph: g,
             source_harness: harness,
+            ..
         } = resolve_input(&args).unwrap();
         require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
@@ -915,6 +926,7 @@ mod tests {
         let ResolvedInput {
             graph: g,
             source_harness: harness,
+            ..
         } = result.expect("resolve_input should reuse cache without refetching");
         require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
