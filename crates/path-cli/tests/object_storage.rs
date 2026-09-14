@@ -100,8 +100,11 @@ fn export_then_import_round_trips_through_a_folder() {
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(ids.len(), 1, "expected one cached doc, got {ids:?}");
-    assert!(ids[0].starts_with("file-"), "unexpected cache id: {ids:?}");
+    assert_eq!(
+        ids,
+        vec!["object-g1.json".to_string()],
+        "unexpected cache id: {ids:?}"
+    );
 }
 
 #[test]

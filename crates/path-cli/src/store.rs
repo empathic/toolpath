@@ -269,21 +269,28 @@ impl ObjectUri {
         Ok(ObjectUri { url })
     }
 
-    /// The cache id a download of this object lands at, e.g.
-    /// `s3-my-bucket-traces_claude-abc`.
+    /// The cache ID a download of this object lands at: `object-<id>`,
+    /// where the ID is read from the object name (Task: `ObjectName::id_of`).
+    /// A function of the URI alone, so a cache hit costs no request; a
+    /// function of the *name* rather than the whole URI, so the same
+    /// document fetched from two prefixes is one cache entry and a
+    /// re-export of it names itself the same way.
     pub(crate) fn cache_id(&self) -> String {
-        let source = match self.url.scheme() {
-            "s3a" => "s3",
-            other => other,
-        };
-        let host = self.url.host_str().unwrap_or_default();
-        let key = self.url.path().trim_matches('/');
-        let inner = if host.is_empty() {
-            key.to_string()
+        let stem = self
+            .url
+            .path()
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(".json");
+        let id = slugify(ObjectName::id_of(stem));
+        let id = if id.len() > 100 {
+            truncate_slug(&id, 100)
         } else {
-            format!("{host}-{key}")
+            id
         };
-        crate::cache::make_id(source, &inner)
+        crate::cache::make_id("object", &id)
     }
 
     /// Download the object as UTF-8 text.
@@ -500,9 +507,6 @@ impl ObjectName {
     /// The ID half of a name stem: everything after the last `--`. A
     /// stem with no separator (a name from before the separator
     /// existed, or a bare ID) is taken whole.
-    // Not yet called outside tests; a listing-derived cache ID will
-    // read the ID back through this rather than the whole stem.
-    #[allow(dead_code)]
     pub(crate) fn id_of(stem: &str) -> &str {
         stem.rsplit_once(Self::ID_SEPARATOR)
             .map(|(_, id)| id)
@@ -913,13 +917,30 @@ mod tests {
     }
 
     #[test]
-    fn cache_id_flattens_the_key() {
-        let uri = ObjectUri::parse("s3://bkt/traces/claude-abc.json").unwrap();
-        assert_eq!(uri.cache_id(), "s3-bkt-traces_claude-abc");
+    fn cache_id_is_the_document_id_from_the_object_name() {
+        let uri = ObjectUri::parse("s3://bkt/traces/2026-01-01-hello--path-claude-code-abc.json")
+            .unwrap();
+        assert_eq!(uri.cache_id(), "object-path-claude-code-abc");
         // s3a is the same store under a different scheme spelling, so
-        // it must not fork the cache.
-        let alias = ObjectUri::parse("s3a://bkt/traces/claude-abc.json").unwrap();
+        // it must not fork the cache; neither must the container.
+        let alias =
+            ObjectUri::parse("s3a://other/prefix/2026-01-01-hello--path-claude-code-abc.json")
+                .unwrap();
         assert_eq!(alias.cache_id(), uri.cache_id());
+        let local =
+            ObjectUri::parse("file:///srv/traces/2026-01-01-hello--path-claude-code-abc.json")
+                .unwrap();
+        assert_eq!(local.cache_id(), uri.cache_id());
+    }
+
+    #[test]
+    fn cache_id_of_a_legacy_name_is_the_whole_stem_bounded() {
+        let uri = ObjectUri::parse("s3://bkt/traces/2026-01-01-hello-doc.json").unwrap();
+        assert_eq!(uri.cache_id(), "object-2026-01-01-hello-doc");
+
+        let long = format!("s3://bkt/{}.json", "k".repeat(300));
+        let id = ObjectUri::parse(&long).unwrap().cache_id();
+        assert!(id.len() <= "object-".len() + 100, "{}", id.len());
     }
 
     // ── S3 settings ──────────────────────────────────────────────────
