@@ -209,13 +209,15 @@ impl Transport for SshClient {
     }
 }
 
-/// Verifies the server's host key against `known_hosts`.
-struct HostKeyCheck {
+/// The russh client handler. The only callback it implements is
+/// `check_server_key`, which verifies the host key against
+/// `known_hosts`.
+struct KnownHostsHandler {
     host: String,
     known_hosts: PathBuf,
 }
 
-impl client::Handler for HostKeyCheck {
+impl client::Handler for KnownHostsHandler {
     type Error = anyhow::Error;
 
     async fn check_server_key(
@@ -269,7 +271,7 @@ fn create_ssh_dir(dir: &Path) -> std::io::Result<()> {
 }
 
 struct Session {
-    handle: client::Handle<HostKeyCheck>,
+    handle: client::Handle<KnownHostsHandler>,
 }
 
 impl Session {
@@ -302,7 +304,7 @@ async fn connect(
             keepalive_max: KEEPALIVE_MAX,
             ..Default::default()
         });
-        let handler = HostKeyCheck {
+        let handler = KnownHostsHandler {
             host: dest.host.clone(),
             known_hosts: ssh_dir.join(KNOWN_HOSTS_FILE),
         };
@@ -325,7 +327,7 @@ async fn connect(
 /// identity files in `ssh_dir`. A failure on one identity is recorded
 /// and the next one is tried. The error lists what was tried.
 async fn authenticate(
-    handle: &mut client::Handle<HostKeyCheck>,
+    handle: &mut client::Handle<KnownHostsHandler>,
     user: &str,
     host: &str,
     agent_socket: Option<&Path>,
