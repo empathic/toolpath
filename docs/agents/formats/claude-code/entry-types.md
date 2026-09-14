@@ -208,9 +208,19 @@ than reject.
 
 ## `attachment`
 
-Records a change in the available tool set mid-session. The primary
-case is `type: "deferred_tools_delta"`, emitted when a deferred tool
-is loaded into the active set.
+Context the harness injects between messages: a tool-set change, a hook
+result, a reminder to the model, the output style, the skill and agent
+listings, a queued user message. `attachment.type` names the kind;
+`total_tokens_reminder`, `batching_reminder_sent`,
+`bash_output_audience_note`, and `hook_success` are the most frequent.
+Attachments are on the `parentUuid` chain. The exception is a
+PreToolUse `hook_success` line, which hangs off the last line written
+when the hook ran and is left as a side leaf when the `tool_result`
+line hangs off the `tool_use` line instead. See "Write one chain" in
+[writing-compatible-jsonl.md](writing-compatible-jsonl.md) for the
+places where the harness forks its own chain. The example is
+`type: "deferred_tools_delta"`, emitted when a deferred tool is loaded
+into the active set.
 
 ```json
 {

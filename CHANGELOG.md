@@ -2,6 +2,25 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.4 — 2026-09-14
+
+- **Fix:** `ClaudeProjector` writes attachments and message-less `system`
+  lines into the `parentUuid` chain in source order: each run follows
+  the turn it hangs off, and the next turn hangs off the run's last
+  line. The projector appended these lines after the last turn with
+  their source parents, so each run was a side chain with a leaf of its
+  own, and `claude -r` on the file rendered the transcript up to the
+  last tool call and dropped the tool result and the reply after it. A
+  hook line the source wrote as a side leaf off its tool call is chained
+  after the tool result. A line whose parent names nothing in the view,
+  or that has no parent and comes from another harness, hangs off the
+  last turn at or before its timestamp.
+- `to_view` marks a line with no `parentUuid` in the event data
+  (`source_root`: `session` or `reset`). The projector opens the chain
+  with the session's first line and writes a compaction boundary in its
+  place with `parentUuid: null`, after the line its `logicalParentUuid`
+  names.
+
 ## path-cli 0.21.0 — 2026-09-10
 
 - **`path-cli`** (0.21.0): `p export claude` takes `--content-addressed-session-id`

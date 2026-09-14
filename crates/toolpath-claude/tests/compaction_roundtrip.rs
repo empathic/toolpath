@@ -55,6 +55,35 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
     extract_conversation(&path)
 }
 
+/// The boundary line has no `parentUuid` in the source and sits after
+/// the line its `logicalParentUuid` names. The projection writes it
+/// there, with no parent, and the summary hangs off it.
+#[test]
+fn boundary_is_written_in_place_with_no_parent_after_the_round_trip() {
+    let view = ir_roundtrip(&load_view());
+    let convo = ClaudeProjector.project(&view).expect("project");
+    let ids: Vec<&str> = convo.entries.iter().map(|e| e.uuid.as_str()).collect();
+    let at = ids
+        .iter()
+        .position(|id| *id == "uuid-boundary")
+        .expect("boundary projected");
+    assert_eq!(ids[at - 1], "uuid-pre-2-result-t-pre-1");
+    assert_eq!(ids[at + 1], "uuid-summary");
+    let entry = |id: &str| convo.entries.iter().find(|e| e.uuid == id).unwrap();
+    assert_eq!(entry("uuid-boundary").parent_uuid, None);
+    assert_eq!(
+        entry("uuid-boundary")
+            .extra
+            .get("logicalParentUuid")
+            .and_then(|v| v.as_str()),
+        Some("uuid-pre-3")
+    );
+    assert_eq!(
+        entry("uuid-summary").parent_uuid.as_deref(),
+        Some("uuid-boundary")
+    );
+}
+
 #[test]
 fn fixture_loads_without_panic() {
     let view = load_view();
