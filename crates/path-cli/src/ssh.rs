@@ -2,8 +2,9 @@
 //!
 //! The transport is an in-process SSH client (`russh`). No `ssh`
 //! binary is involved, and `~/.ssh/config` is not read: the
-//! destination is `user@host` on port 22, nothing else. The caller
-//! passes the agent socket and the ssh directory. The module reads no
+//! destination is `user@host` or `user@host:port`, and an alias is
+//! not resolved. The caller passes the agent socket and the ssh
+//! directory. The module reads no
 //! environment variable. The agent authenticates first, then the
 //! default identity files in the ssh directory. `known_hosts` in that
 //! directory verifies the host key: a changed key is an error, and an
@@ -49,8 +50,8 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const KEEPALIVE_MAX: usize = 3;
 
-/// The ssh port. A [`Destination`] carries none.
-const PORT: u16 = 22;
+/// The port of a [`Destination`] that names none.
+const DEFAULT_PORT: u16 = 22;
 
 /// The exit status reported when the remote gave none: a channel that
 /// closed without an exit-status message, or a command killed by a
@@ -67,42 +68,61 @@ const KNOWN_HOSTS_FILE: &str = "known_hosts";
 /// order they are tried.
 const IDENTITY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
 
-/// An ssh destination: `user@host` on port 22. `~/.ssh/config` is not
-/// read, so an alias, a port, or an IPv6 address is not accepted.
+/// An ssh destination: a user, a host, and a port. `~/.ssh/config` is
+/// not read, so an alias is not resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
     user: String,
-    host: String,
+    host: url::Host,
+    port: u16,
 }
 
 impl Destination {
-    /// `user@host`, both non-empty. Each side starts with an
-    /// alphanumeric character (so the value cannot be an option) and
-    /// continues with `[A-Za-z0-9._-]`. Also usable as a clap
+    /// The authority of the URL `ssh://<s>`: a non-empty user, a host
+    /// name or address (IPv6 in brackets), and an optional port. A
+    /// leading `ssh://` is accepted. Also usable as a clap
     /// `value_parser`, hence the `String` error type.
     pub fn parse(s: &str) -> std::result::Result<Self, String> {
-        let word = |part: &str| {
-            let mut chars = part.chars();
-            chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
-                && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        let error = || {
+            format!(
+                "expected an ssh destination of the form user@host or user@host:port, got {s:?}"
+            )
         };
-        match s.split_once('@') {
-            Some((user, host)) if word(user) && word(host) => Ok(Self {
-                user: user.to_string(),
-                host: host.to_string(),
-            }),
-            _ => Err(format!(
-                "expected an ssh destination of the form user@host (letters, \
-                 digits, and `._-` on each side, alphanumeric first); IPv6 \
-                 addresses and ports are not accepted, got {s:?}"
-            )),
+        let authority = s.strip_prefix("ssh://").unwrap_or(s);
+        let url = url::Url::parse(&format!("ssh://{authority}")).map_err(|_| error())?;
+        let host = url.host().ok_or_else(error)?;
+        let authority_only = url.password().is_none()
+            && url.path().is_empty()
+            && url.query().is_none()
+            && url.fragment().is_none();
+        if url.username().is_empty() || !authority_only {
+            return Err(error());
+        }
+        Ok(Self {
+            user: url.username().to_string(),
+            host: host.to_owned(),
+            port: url.port().unwrap_or(DEFAULT_PORT),
+        })
+    }
+
+    /// The host as a socket address takes it and as `known_hosts`
+    /// records it: an IPv6 address without brackets.
+    fn host_name(&self) -> String {
+        match &self.host {
+            url::Host::Domain(name) => name.clone(),
+            url::Host::Ipv4(addr) => addr.to_string(),
+            url::Host::Ipv6(addr) => addr.to_string(),
         }
     }
 }
 
 impl fmt::Display for Destination {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.user, self.host)
+        write!(f, "{}@{}", self.user, self.host)?;
+        if self.port != DEFAULT_PORT {
+            write!(f, ":{}", self.port)?;
+        }
+        Ok(())
     }
 }
 
@@ -215,6 +235,7 @@ impl Transport for SshClient {
 /// `known_hosts`.
 struct KnownHostsHandler {
     host: String,
+    port: u16,
     known_hosts: PathBuf,
 }
 
@@ -227,11 +248,12 @@ impl client::Handler for KnownHostsHandler {
     ) -> Result<bool, Self::Error> {
         let PublicKeyOrCertificate::PublicKey { key, .. } = server_key else {
             bail!(
-                "{}:{PORT} presented a host certificate; only plain host keys are accepted",
-                self.host
+                "{}:{} presented a host certificate; only plain host keys are accepted",
+                self.host,
+                self.port
             );
         };
-        match check_known_hosts_path(&self.host, PORT, key, &self.known_hosts) {
+        match check_known_hosts_path(&self.host, self.port, key, &self.known_hosts) {
             Ok(true) => Ok(true),
             Ok(false) => {
                 if let Some(dir) = self.known_hosts.parent()
@@ -239,21 +261,22 @@ impl client::Handler for KnownHostsHandler {
                 {
                     create_ssh_dir(dir).with_context(|| format!("create {}", dir.display()))?;
                 }
-                learn_known_hosts_path(&self.host, PORT, key, &self.known_hosts).with_context(
-                    || {
+                learn_known_hosts_path(&self.host, self.port, key, &self.known_hosts)
+                    .with_context(|| {
                         format!(
-                            "record the host key of {}:{PORT} in {}",
+                            "record the host key of {}:{} in {}",
                             self.host,
+                            self.port,
                             self.known_hosts.display()
                         )
-                    },
-                )?;
+                    })?;
                 Ok(true)
             }
             Err(russh::keys::Error::KeyChanged { line }) => bail!(
-                "the host key of {}:{PORT} does not match {} line {line}; \
+                "the host key of {}:{} does not match {} line {line}; \
                  refusing to connect",
                 self.host,
+                self.port,
                 self.known_hosts.display()
             ),
             Err(e) => Err(e).with_context(|| format!("read {}", self.known_hosts.display())),
@@ -305,14 +328,16 @@ async fn connect(
             keepalive_max: KEEPALIVE_MAX,
             ..Default::default()
         });
+        let host = dest.host_name();
         let handler = KnownHostsHandler {
-            host: dest.host.clone(),
+            host: host.clone(),
+            port: dest.port,
             known_hosts: ssh_dir.join(KNOWN_HOSTS_FILE),
         };
-        let mut handle = client::connect(client_config, (dest.host.as_str(), PORT), handler)
+        let mut handle = client::connect(client_config, (host.as_str(), dest.port), handler)
             .await
-            .with_context(|| format!("connect to {}:{PORT}", dest.host))?;
-        authenticate(&mut handle, &dest.user, &dest.host, agent_socket, ssh_dir).await?;
+            .with_context(|| format!("connect to {}:{}", host, dest.port))?;
+        authenticate(&mut handle, dest, agent_socket, ssh_dir).await?;
         Ok::<_, anyhow::Error>(Session { handle })
     };
     match tokio::time::timeout(CONNECT_TIMEOUT, connected).await {
@@ -329,11 +354,11 @@ async fn connect(
 /// and the next one is tried. The error lists what was tried.
 async fn authenticate(
     handle: &mut client::Handle<KnownHostsHandler>,
-    user: &str,
-    host: &str,
+    dest: &Destination,
     agent_socket: Option<&Path>,
     ssh_dir: &Path,
 ) -> Result<()> {
+    let user = dest.user.as_str();
     let rsa_hash = handle
         .best_supported_rsa_hash()
         .await
@@ -413,7 +438,7 @@ async fn authenticate(
     } else {
         tried.join(", ")
     };
-    bail!("authentication as {user}@{host} failed; tried {tried}")
+    bail!("authentication as {dest} failed; tried {tried}")
 }
 
 /// One exec channel: feed `input`, collect stdout and stderr, and take
@@ -674,44 +699,49 @@ mod tests {
     }
 
     #[test]
-    fn destination_accepts_user_at_host() {
+    fn destination_accepts_user_host_and_port_forms() {
         for s in [
             "user@host",
             "exedev@vm.exe.xyz",
             "a-b_c.d@e-f_g.h",
             "u1@10.0.0.1",
+            "u@host:2222",
+            "u@[::1]",
+            "u@[fe80::1]:2222",
         ] {
             assert_eq!(Destination::parse(s).unwrap().to_string(), s);
         }
+        assert_eq!(Destination::parse("ssh://u@h").unwrap().to_string(), "u@h");
+        assert_eq!(Destination::parse("u@h:22").unwrap().to_string(), "u@h");
     }
 
     #[test]
-    fn destination_rejects_missing_parts_option_shaped_and_shell_characters() {
+    fn destination_rejects_anything_but_user_host_and_port() {
         for s in [
             "",
             "host",
             "user@",
             "@host",
-            "-oProxyCommand=x",
-            "-",
-            "-u@host",
-            "user@-host",
-            "user@host;ls",
-            "a@b@c",
-            "a b",
-            "user@host$",
-            "u@[::1]",
-            "ssh://u@h",
+            "u:secret@host",
+            "u@host/dir",
+            "u@host?q",
+            "u@host#f",
+            "u@host:port",
+            "u@[::1",
         ] {
             assert!(Destination::parse(s).is_err(), "{s:?} must be rejected");
         }
     }
 
     #[test]
-    fn destination_splits_user_and_host() {
+    fn destination_splits_user_host_and_port() {
         let d = Destination::parse("exedev@vm.exe.xyz").unwrap();
         assert_eq!(d.user, "exedev");
-        assert_eq!(d.host, "vm.exe.xyz");
+        assert_eq!(d.host_name(), "vm.exe.xyz");
+        assert_eq!(d.port, 22);
+        let d = Destination::parse("u@[::1]:2222").unwrap();
+        assert_eq!(d.host_name(), "::1");
+        assert_eq!(d.port, 2222);
     }
 
     #[test]
