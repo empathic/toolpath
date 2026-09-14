@@ -2,6 +2,38 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.21.0 — 2026-09-10
+
+- **`path-cli`** (0.21.0): `p export claude` takes `--content-addressed-session-id`
+  behind the `resume-remote` cargo feature. The flag renames the
+  session to a content-addressed ID: a v4-shaped UUID from the first
+  128 bits of the SHA-256 of the input document's RFC 8785 (JCS) form.
+  The same document yields the same ID on every run, so a second
+  export of it into the same project is refused instead of duplicated.
+  `--cwd` does not change the ID. The `--output` message names the
+  session ID. `scripts/resume-remote.sh` exports with the flag and
+  reads the remote session ID back from the JSONL.
+- **`path-cli`** (0.21.0): `p export claude` takes `--session-id <UUID>`,
+  without the feature. It renames the projected session the way
+  `--content-addressed-session-id` does, to the ID the caller gives. The
+  document's own session is not touched, so one document exports as
+  several sessions. A value that is not a UUID is rejected at parse
+  time, and the flag excludes `--content-addressed-session-id`.
+- **`path-cli`** (0.21.0): `p export claude` takes `--new-session-id`,
+  without the feature. It renames the projected session to a fresh
+  random v4 UUID, so a second export of one document gets an address
+  of its own. The export names the session it wrote on stderr in
+  every output mode, stdout included, because a random ID is
+  otherwise only readable out of the JSONL.
+- **`toolpath-cli`** (0.21.0): lockstep bump of the deprecated shim.
+
+## toolpath-claude 0.13.3 — 2026-09-10
+
+- **`toolpath-claude`** (0.13.3): `Conversation::rename_session(id)` sets
+  the session ID everywhere the format carries it: `session_id`, every
+  entry's `sessionId` that is present, and every string-valued
+  `sessionId` key in preamble lines at any depth.
+
 ## path-cli 0.20.0 — 2026-09-10
 
 - **`path-cli`** (0.20.0): new cargo feature `resume-remote`, off by

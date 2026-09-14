@@ -29,6 +29,16 @@ use crate::remote::RepoSpec;
 #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
 mod remote_session;
 
+/// Claude Code names the session file `<id>.jsonl` and resumes it
+/// with `claude -r <id>`, and it accepts only a UUID there. The value
+/// is returned in the hyphenated lower-case form.
+#[cfg(not(target_os = "emscripten"))]
+fn parse_uuid_arg(raw: &str) -> Result<String> {
+    let id = uuid::Uuid::parse_str(raw)
+        .with_context(|| format!("the session ID must be a UUID (got {raw:?})"))?;
+    Ok(id.hyphenated().to_string())
+}
+
 /// Arguments of `p export claude`.
 #[derive(clap::Args, Debug, Default)]
 pub struct ClaudeExportArgs {
@@ -51,6 +61,24 @@ pub struct ClaudeExportArgs {
     /// clobbering local history.
     #[arg(long)]
     pub(crate) force: bool,
+
+    /// Rename the session to this ID (a UUID). The document's own
+    /// session is not touched, so one document can be exported as
+    /// several sessions. Mutually exclusive with --new-session-id.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(
+        long,
+        value_name = "UUID",
+        conflicts_with = "new_session_id",
+        value_parser = parse_uuid_arg
+    )]
+    pub(crate) session_id: Option<String>,
+
+    /// Rename the session to a fresh random UUID. Every export mints
+    /// a different ID; the export prints it. Mutually exclusive with
+    /// --session-id.
+    #[arg(long)]
+    pub(crate) new_session_id: bool,
 
     #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
     #[command(flatten)]
@@ -638,6 +666,42 @@ pub(crate) fn project_pi(
     Ok(session.header.id)
 }
 
+/// The content-addressed session ID when `--content-addressed-session-id`
+/// is set, else `None`.
+#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+fn resolve_content_addressed_session_id(
+    args: &ClaudeExportArgs,
+    document_json: &str,
+) -> Result<Option<String>> {
+    if !args.remote.content_addressed_session_id {
+        return Ok(None);
+    }
+    crate::claude_session::generate_content_addressed_session_id(document_json).map(Some)
+}
+
+/// Without the `resume-remote` feature there is no `--content-addressed-session-id`.
+#[cfg(all(not(feature = "resume-remote"), not(target_os = "emscripten")))]
+fn resolve_content_addressed_session_id(
+    _args: &ClaudeExportArgs,
+    _document_json: &str,
+) -> Result<Option<String>> {
+    Ok(None)
+}
+
+/// The ID the exported session takes, or `None` to keep the ID the
+/// document carries. clap makes the naming flags mutually exclusive,
+/// so at most one arm answers.
+#[cfg(not(target_os = "emscripten"))]
+fn exported_session_id(args: &ClaudeExportArgs, document_json: &str) -> Result<Option<String>> {
+    if let Some(id) = &args.session_id {
+        return Ok(Some(id.clone()));
+    }
+    if args.new_session_id {
+        return Ok(Some(uuid::Uuid::new_v4().to_string()));
+    }
+    resolve_content_addressed_session_id(args, document_json)
+}
+
 fn run_claude(args: ClaudeExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
@@ -647,16 +711,16 @@ fn run_claude(args: ClaudeExportArgs) -> Result<()> {
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&args.input)?;
-        let conversation = build_claude_conversation(&path)?;
+        let document_json = read_doc_json(&args.input)?;
+        let path = parse_path_doc(&document_json)?;
+        let mut conversation = build_claude_conversation(&path)?;
+        if let Some(id) = exported_session_id(&args, &document_json)? {
+            conversation.rename_session(&id);
+        }
         #[cfg(feature = "resume-remote")]
-        let conversation = {
-            let mut conversation = conversation;
-            if let Some(dir) = &args.remote.cwd {
-                conversation.reroot(dir);
-            }
-            conversation
-        };
+        if let Some(dir) = &args.remote.cwd {
+            conversation.reroot(dir);
+        }
         let jsonl = serialize_jsonl(&conversation)?;
 
         match (args.project, args.output) {
@@ -677,10 +741,16 @@ fn run_claude(args: ClaudeExportArgs) -> Result<()> {
             (None, Some(out_path)) => {
                 std::fs::write(&out_path, &jsonl)
                     .with_context(|| format!("write {}", out_path.display()))?;
-                eprintln!("Wrote {} bytes to {}", jsonl.len(), out_path.display());
+                eprintln!(
+                    "Wrote session {} ({} bytes) to {}",
+                    conversation.session_id,
+                    jsonl.len(),
+                    out_path.display()
+                );
             }
             (None, None) => {
                 println!("{}", jsonl);
+                eprintln!("Wrote session {} to stdout", conversation.session_id);
             }
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
         }
@@ -691,10 +761,18 @@ fn run_claude(args: ClaudeExportArgs) -> Result<()> {
 
 #[cfg(not(target_os = "emscripten"))]
 fn load_path_doc(input: &str) -> Result<toolpath::v1::Path> {
+    parse_path_doc(&read_doc_json(input)?)
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn read_doc_json(input: &str) -> Result<String> {
     let file = cache_ref(input)?;
-    let json = std::fs::read_to_string(&file)
-        .with_context(|| format!("Failed to read {}", file.display()))?;
-    let doc = toolpath::v1::Graph::from_json(&json)
+    std::fs::read_to_string(&file).with_context(|| format!("Failed to read {}", file.display()))
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn parse_path_doc(json: &str) -> Result<toolpath::v1::Path> {
+    let doc = toolpath::v1::Graph::from_json(json)
         .map_err(|e| anyhow::anyhow!("Failed to parse toolpath document: {}", e))?;
     doc.into_single_path().ok_or_else(|| {
         anyhow::anyhow!(
@@ -2452,6 +2530,137 @@ mod tests {
         assert!(!out_path.parent().unwrap().join(session_uuid).exists());
     }
 
+    /// Runs `p export claude --output` with `args` on `doc` and parses
+    /// the lines.
+    fn export_claude_lines(
+        doc: &toolpath::v1::Graph,
+        args: ClaudeExportArgs,
+    ) -> Vec<serde_json::Value> {
+        let temp = tempfile::tempdir().unwrap();
+        let input_path = temp.path().join("input.json");
+        let output_path = temp.path().join("out.jsonl");
+        std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
+        run_claude(ClaudeExportArgs {
+            input: input_path.to_string_lossy().to_string(),
+            output: Some(output_path.clone()),
+            ..args
+        })
+        .unwrap();
+        std::fs::read_to_string(&output_path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn values_of<'a>(lines: &'a [serde_json::Value], key: &str) -> Vec<&'a str> {
+        lines.iter().filter_map(|v| v.get(key)?.as_str()).collect()
+    }
+
+    #[test]
+    fn parse_uuid_arg_normalizes_a_uuid_and_rejects_other_text() {
+        assert_eq!(
+            parse_uuid_arg("402A3CA5-2530-407E-9029-F96879A0B1C2").unwrap(),
+            "402a3ca5-2530-407e-9029-f96879a0b1c2"
+        );
+        assert_eq!(
+            parse_uuid_arg("402a3ca52530407e9029f96879a0b1c2").unwrap(),
+            "402a3ca5-2530-407e-9029-f96879a0b1c2"
+        );
+        for bad in ["", "my-template", "402a3ca5-2530-407e-9029"] {
+            let err = parse_uuid_arg(bad).unwrap_err().to_string();
+            assert!(err.contains("must be a UUID"), "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn session_id_flag_stamps_the_given_id() {
+        let doc = make_path_doc();
+        let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+        let source_ids = values_of(&plain, "sessionId");
+        assert_eq!(
+            source_ids.len(),
+            plain.len(),
+            "every line carries a sessionId"
+        );
+
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(!source_ids.contains(&given));
+        let renamed = export_claude_lines(
+            &doc,
+            ClaudeExportArgs {
+                session_id: Some(given.to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(renamed.len(), plain.len());
+        let ids = values_of(&renamed, "sessionId");
+        assert_eq!(ids.len(), source_ids.len());
+        assert!(ids.iter().all(|s| *s == given));
+    }
+
+    #[test]
+    fn new_session_id_flag_mints_a_distinct_id_per_export() {
+        let doc = make_path_doc();
+        let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+        let source_ids = values_of(&plain, "sessionId");
+        let args = || ClaudeExportArgs {
+            new_session_id: true,
+            ..Default::default()
+        };
+        let first = export_claude_lines(&doc, args());
+        let second = export_claude_lines(&doc, args());
+
+        let id_of = |lines: &[serde_json::Value]| {
+            let ids = values_of(lines, "sessionId");
+            assert_eq!(ids.len(), source_ids.len());
+            let id = ids[0].to_string();
+            assert!(ids.iter().all(|s| *s == id), "one ID on every line");
+            let parsed = uuid::Uuid::parse_str(&id).unwrap();
+            assert_eq!(parsed.get_version_num(), 4);
+            assert!(!source_ids.contains(&id.as_str()));
+            id
+        };
+        assert_ne!(id_of(&first), id_of(&second));
+    }
+
+    /// Parses `p export claude --input x <extra>` the way the binary
+    /// does, so the test sees clap's value parsers and conflicts.
+    fn parse_export_claude(extra: &[&str]) -> Result<(), clap::Error> {
+        use clap::Parser;
+        #[derive(Parser, Debug)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: ExportTarget,
+        }
+        Cli::try_parse_from(
+            ["test", "claude", "--input", "x"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+        .map(|_| ())
+    }
+
+    #[test]
+    fn session_id_flag_takes_only_a_uuid() {
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(parse_export_claude(&["--session-id", given]).is_ok());
+        assert!(
+            parse_export_claude(&["--session-id", "my-template"]).is_err(),
+            "clap must reject a session ID that is not a UUID"
+        );
+    }
+
+    #[test]
+    fn session_id_and_new_session_id_are_mutually_exclusive() {
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(parse_export_claude(&["--new-session-id"]).is_ok());
+        assert!(
+            parse_export_claude(&["--session-id", given, "--new-session-id"]).is_err(),
+            "clap must reject simultaneous --session-id and --new-session-id"
+        );
+    }
+
     #[test]
     fn gemini_project_and_output_mutually_exclusive() {
         // clap's `conflicts_with` enforces this at parse time, but the
@@ -3503,6 +3712,7 @@ mod tests {
     #[cfg(feature = "resume-remote")]
     mod resume_remote {
         use super::*;
+        use crate::claude_session::generate_content_addressed_session_id;
         use crate::cmd_export::remote_session::RemoteSessionArgs;
 
         /// `make_path_doc` with `cwd` recorded on every step, plus one
@@ -3548,44 +3758,24 @@ mod tests {
             toolpath::v1::Graph::from_path(path)
         }
 
-        /// Runs `p export claude --output` on `doc` and parses the lines.
-        fn export_claude_lines(
-            doc: &toolpath::v1::Graph,
-            cwd: Option<&str>,
-        ) -> Vec<serde_json::Value> {
-            let temp = tempfile::tempdir().unwrap();
-            let input_path = temp.path().join("input.json");
-            let output_path = temp.path().join("out.jsonl");
-            std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
-            run_claude(ClaudeExportArgs {
-                input: input_path.to_string_lossy().to_string(),
-                output: Some(output_path.clone()),
-                remote: RemoteSessionArgs {
-                    cwd: cwd.map(str::to_string),
-                },
-                ..Default::default()
-            })
-            .unwrap();
-            std::fs::read_to_string(&output_path)
-                .unwrap()
-                .lines()
-                .map(|l| serde_json::from_str(l).unwrap())
-                .collect()
-        }
-
-        fn values_of<'a>(lines: &'a [serde_json::Value], key: &str) -> Vec<&'a str> {
-            lines.iter().filter_map(|v| v.get(key)?.as_str()).collect()
-        }
-
         #[test]
         fn cwd_flag_rewrites_every_cwd() {
             let doc = make_path_doc_with_cwd("/old/project");
-            let plain = export_claude_lines(&doc, None);
+            let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
             let old = values_of(&plain, "cwd");
             assert!(!old.is_empty());
             assert!(old.iter().all(|c| *c == "/old/project"));
 
-            let rooted = export_claude_lines(&doc, Some("/new/dir"));
+            let rooted = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        cwd: Some("/new/dir".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
             assert_eq!(rooted.len(), plain.len());
             let new = values_of(&rooted, "cwd");
             assert_eq!(new.len(), old.len());
@@ -3600,12 +3790,147 @@ mod tests {
         #[test]
         fn cwd_flag_leaves_session_ids_alone() {
             let doc = make_path_doc_with_cwd("/old/project");
-            let plain = export_claude_lines(&doc, None);
-            let rooted = export_claude_lines(&doc, Some("/new/dir"));
+            let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+            let rooted = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        cwd: Some("/new/dir".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
             assert_eq!(
                 values_of(&plain, "sessionId"),
                 values_of(&rooted, "sessionId")
             );
+        }
+
+        #[test]
+        fn content_addressed_session_id_excludes_the_other_naming_flags() {
+            let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+            assert!(parse_export_claude(&["--content-addressed-session-id"]).is_ok());
+            for extra in [
+                ["--content-addressed-session-id", "--new-session-id"].as_slice(),
+                ["--content-addressed-session-id", "--session-id", given].as_slice(),
+            ] {
+                assert!(
+                    parse_export_claude(extra).is_err(),
+                    "clap must reject --content-addressed-session-id with {extra:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn content_addressed_session_id_flag_stamps_the_content_addressed_id() {
+            let doc = make_path_doc();
+            let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+            let source_ids = values_of(&plain, "sessionId");
+            assert_eq!(
+                source_ids.len(),
+                plain.len(),
+                "every line carries a sessionId"
+            );
+
+            let expected =
+                generate_content_addressed_session_id(&serde_json::to_string(&doc).unwrap())
+                    .unwrap();
+            assert!(!source_ids.contains(&expected.as_str()));
+            let addressed = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        content_addressed_session_id: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert_eq!(addressed.len(), plain.len());
+            let ids = values_of(&addressed, "sessionId");
+            assert_eq!(ids.len(), source_ids.len());
+            assert!(ids.iter().all(|s| *s == expected));
+        }
+
+        #[test]
+        fn cwd_flag_does_not_change_the_content_addressed_id() {
+            let doc = make_path_doc_with_cwd("/old/project");
+            let addressed = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        content_addressed_session_id: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            let rerooted = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        content_addressed_session_id: true,
+                        cwd: Some("/new/dir".to_string()),
+                    },
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                values_of(&addressed, "sessionId"),
+                values_of(&rerooted, "sessionId")
+            );
+        }
+
+        #[test]
+        fn content_addressed_export_names_the_project_file() {
+            let temp = tempfile::tempdir().unwrap();
+            let fake_home = temp.path().join("home");
+            std::fs::create_dir_all(&fake_home).unwrap();
+            let cwd = temp.path().join("proj");
+            std::fs::create_dir_all(&cwd).unwrap();
+
+            let path = make_convo_path("claude-code://claude-addressed-file-test-session");
+            let input_path = temp.path().join("input.json");
+            let doc = toolpath::v1::Graph::from_path(path);
+            std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
+            let args = ClaudeExportArgs {
+                input: input_path.to_string_lossy().to_string(),
+                project: Some(cwd.clone()),
+                remote: RemoteSessionArgs {
+                    content_addressed_session_id: true,
+                    cwd: None,
+                },
+                ..Default::default()
+            };
+
+            let _g = crate::config::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let prior_home = std::env::var_os("HOME");
+            unsafe {
+                std::env::set_var("HOME", &fake_home);
+            }
+            let result = run_claude(args);
+            unsafe {
+                match prior_home {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+
+            result.expect("content-addressed export should succeed");
+            let expected = generate_content_addressed_session_id(
+                &std::fs::read_to_string(&input_path).unwrap(),
+            )
+            .unwrap();
+            let canon = std::fs::canonicalize(&cwd).unwrap();
+            let file = toolpath_claude::PathResolver::new()
+                .with_home(&fake_home)
+                .project_dir(canon.to_str().unwrap())
+                .unwrap()
+                .join(format!("{expected}.jsonl"));
+            assert!(file.is_file(), "{}", file.display());
         }
     }
 }
