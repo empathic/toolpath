@@ -270,7 +270,7 @@ impl ObjectUri {
     }
 
     /// The cache ID a download of this object lands at: `object-<id>`,
-    /// where the ID is read from the object name (Task: `ObjectName::id_of`).
+    /// where the ID is read from the object name (see [`ObjectName::id_of`]).
     /// A function of the URI alone, so a cache hit costs no request; a
     /// function of the *name* rather than the whole URI, so the same
     /// document fetched from two prefixes is one cache entry and a
