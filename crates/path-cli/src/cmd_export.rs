@@ -894,15 +894,9 @@ fn run_object(input: String, to: String) -> Result<()> {
         let dest = crate::store::Destination::parse(&to)?;
         let settings = crate::store::effective_settings()?;
 
-        // The object is named for the cache id, not the input string —
-        // `--input ./some/file.json` and `--input claude-abc` naming the
-        // same document should land on the same key.
-        let cache_id = file
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| input.clone());
-
-        let uri = dest.uri_for(&crate::store::name_for_body(&body, &cache_id));
+        let doc = toolpath::v1::Graph::from_json(&body)
+            .map_err(|e| anyhow::anyhow!("{} is not a toolpath document: {e}", file.display()))?;
+        let uri = dest.uri_for(&crate::store::name_for(&doc));
         uri.put(&settings, body.as_bytes())?;
         println!("{uri}");
         eprintln!("Uploaded {} bytes → {uri}", body.len());

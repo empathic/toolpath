@@ -86,10 +86,10 @@ fn export_then_import_round_trips_through_a_folder() {
     // Legible name: date and topic lead, cache id trails. The fixture
     // is a 2026-01-01 session whose first prompt is "hello".
     assert!(
-        uri.ends_with("/2026-01-01-hello-doc.json"),
+        uri.ends_with("/2026-01-01-hello--g1.json"),
         "unexpected location: {uri}"
     );
-    assert!(folder.path().join("2026-01-01-hello-doc.json").is_file());
+    assert!(folder.path().join("2026-01-01-hello--g1.json").is_file());
 
     cmd(config.path())
         .args(["p", "import", "object", &format!("file://{uri}")])
@@ -126,7 +126,7 @@ fn re_exporting_a_session_overwrites_its_own_object() {
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(objects, vec!["2026-01-01-hello-doc.json".to_string()]);
+    assert_eq!(objects, vec!["2026-01-01-hello--g1.json".to_string()]);
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn the_s3_subcommand_alias_still_works() {
         .args(["--to", &folder.path().to_string_lossy()])
         .assert()
         .success();
-    assert!(folder.path().join("2026-01-01-hello-doc.json").is_file());
+    assert!(folder.path().join("2026-01-01-hello--g1.json").is_file());
 }
 
 #[test]

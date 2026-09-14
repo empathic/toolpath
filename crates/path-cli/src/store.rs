@@ -423,18 +423,19 @@ impl Destination {
 
 /// What a shared document is called in the destination.
 ///
-/// `<date>-<slug>-<cache-id>`, e.g.
-/// `2026-08-07-add-s3-support-to-share-claude-6f2a1c9e`.
+/// `<date>-<topic>--<id>`, e.g.
+/// `2026-08-07-add-s3-support-to-share--path-claude-code-6f2a1c9e5b3d4a70`.
 ///
 /// Two requirements pull in opposite directions and both are load-bearing:
 ///
-/// - **Stable.** Every component is a pure function of the document, so
-///   re-sharing a session that has grown overwrites its own object
-///   instead of leaving a trail of near-duplicates.
+/// - **Stable.** Every component is a pure function of the document —
+///   the ID is `graph.id`, never the input filename — so re-sharing a
+///   session that has grown overwrites its own object instead of
+///   leaving a trail of near-duplicates.
 /// - **Legible.** A destination is a folder someone will open, or a
-///   bucket someone will page through. `claude-6f2a1c9e.json` tells
-///   them nothing; the date sorts chronologically under a plain
-///   lexicographic listing, and the slug says which session it is.
+///   bucket someone will page through. The bare ID tells them nothing;
+///   the date sorts chronologically under a plain lexicographic
+///   listing, and the topic says which session it is.
 ///
 /// Legibility also buys the picker: `path resume <destination>` builds
 /// its rows from names alone, so browsing a hundred shared sessions
@@ -448,30 +449,117 @@ impl std::fmt::Display for ObjectName {
     }
 }
 
+/// The three pieces of an object name, recovered from its stem.
+// Not yet read outside tests; a picker will render date/topic/ID as
+// separate columns once it exists.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NameParts {
+    pub date: Option<String>,
+    pub topic: Option<String>,
+    pub id: String,
+}
+
 impl ObjectName {
     /// Longest slug we'll put in a name. Long enough to recognize a
-    /// session, short enough that the cache id stays visible in a
+    /// session, short enough that the ID stays visible in a
     /// terminal-width listing.
     const SLUG_MAX: usize = 48;
+    /// Longest ID we'll put in a name verbatim. Derived IDs are ~40
+    /// chars; anything longer is a hand-written document, and a name
+    /// must stay under filesystem limits however long that ID is.
+    const ID_MAX: usize = 64;
+    /// Reserved: the slugger collapses dash runs, so neither the date
+    /// nor the topic can contain it, and automation splits on the last
+    /// occurrence to get the ID.
+    pub(crate) const ID_SEPARATOR: &'static str = "--";
 
-    pub(crate) fn new(cache_id: &str, date: Option<&str>, title: Option<&str>) -> Self {
-        let mut parts: Vec<String> = Vec::new();
+    pub(crate) fn new(id: &str, date: Option<&str>, title: Option<&str>) -> Self {
+        let mut prefix: Vec<String> = Vec::new();
         if let Some(d) = date.map(slugify).filter(|d| !d.is_empty()) {
-            parts.push(d);
+            prefix.push(d);
         }
         if let Some(t) = title.map(slugify).filter(|t| !t.is_empty()) {
-            parts.push(truncate_slug(&t, Self::SLUG_MAX));
+            prefix.push(truncate_slug(&t, Self::SLUG_MAX));
         }
-        parts.push(slugify(cache_id));
-        ObjectName(parts.join("-"))
+        let id = bounded_id(id);
+        if prefix.is_empty() {
+            ObjectName(id)
+        } else {
+            ObjectName(format!("{}{}{id}", prefix.join("-"), Self::ID_SEPARATOR))
+        }
     }
 
-    /// The name for a document with no usable metadata — the cache id
+    /// The name for a document with no usable metadata — the ID
     /// alone, which is what the whole scheme degrades to.
     #[cfg(test)]
-    pub(crate) fn bare(cache_id: &str) -> Self {
-        Self::new(cache_id, None, None)
+    pub(crate) fn bare(id: &str) -> Self {
+        Self::new(id, None, None)
     }
+
+    /// The ID half of a name stem: everything after the last `--`. A
+    /// stem with no separator (a name from before the separator
+    /// existed, or a bare ID) is taken whole.
+    // Not yet called outside tests; a listing-derived cache ID will
+    // read the ID back through this rather than the whole stem.
+    #[allow(dead_code)]
+    pub(crate) fn id_of(stem: &str) -> &str {
+        stem.rsplit_once(Self::ID_SEPARATOR)
+            .map(|(_, id)| id)
+            .unwrap_or(stem)
+    }
+
+    /// Split a stem into date, topic, and ID. The date is recognized
+    /// only as a leading `YYYY-MM-DD`; everything else before the
+    /// separator is the topic.
+    // Not yet called outside tests; see `NameParts`.
+    #[allow(dead_code)]
+    pub(crate) fn parse(stem: &str) -> NameParts {
+        let (prefix, id) = match stem.rsplit_once(Self::ID_SEPARATOR) {
+            Some((p, id)) => (Some(p), id),
+            None => (None, stem),
+        };
+        let mut date = None;
+        let mut topic = None;
+        if let Some(prefix) = prefix {
+            let looks_like_date = prefix.len() >= 10
+                && prefix.as_bytes()[..10].iter().enumerate().all(|(i, b)| {
+                    if i == 4 || i == 7 {
+                        *b == b'-'
+                    } else {
+                        b.is_ascii_digit()
+                    }
+                })
+                && (prefix.len() == 10 || prefix.as_bytes()[10] == b'-');
+            if looks_like_date {
+                date = Some(prefix[..10].to_string());
+                let rest = prefix[10..].trim_start_matches('-');
+                if !rest.is_empty() {
+                    topic = Some(rest.to_string());
+                }
+            } else if !prefix.is_empty() {
+                topic = Some(prefix.to_string());
+            }
+        }
+        NameParts {
+            date,
+            topic,
+            id: id.to_string(),
+        }
+    }
+}
+
+/// Slug of an ID, bounded: past `ID_MAX` the slug is cut on a dash
+/// boundary at 48 and suffixed with 8 hex characters of the raw ID's
+/// SHA-256, so two long IDs that share a prefix still get distinct names.
+fn bounded_id(raw: &str) -> String {
+    use sha2::Digest;
+    let slug = slugify(raw);
+    if slug.len() <= ObjectName::ID_MAX {
+        return slug;
+    }
+    let digest = hex::encode(sha2::Sha256::digest(raw.as_bytes()));
+    format!("{}-{}", truncate_slug(&slug, 48), &digest[..8])
 }
 
 /// Lowercase, ASCII-alphanumeric, single dashes, no leading/trailing
@@ -505,16 +593,17 @@ fn truncate_slug(slug: &str, max: usize) -> String {
     }
 }
 
-/// Name a document for a destination, reading the date and topic out of
-/// the document itself so `share` and `p export object` agree without
-/// either of them having to know where the document came from.
-pub(crate) fn name_for(doc: &toolpath::v1::Graph, cache_id: &str) -> ObjectName {
+/// Name a document for a destination: date and topic from the document
+/// itself, ID from `graph.id`. Nothing about the input path is
+/// consulted, so `share` and `p export object` agree, and two different
+/// documents that happen to share a filename land on two keys.
+pub(crate) fn name_for(doc: &toolpath::v1::Graph) -> ObjectName {
     let path = doc.paths.iter().find_map(|p| match p {
         toolpath::v1::PathOrRef::Path(p) => Some(p.as_ref()),
         toolpath::v1::PathOrRef::Ref(_) => None,
     });
     let Some(path) = path else {
-        return ObjectName::new(cache_id, None, None);
+        return ObjectName::new(&doc.graph.id, None, None);
     };
 
     // Earliest step wins: a session is dated when it started, so the
@@ -527,18 +616,7 @@ pub(crate) fn name_for(doc: &toolpath::v1::Graph, cache_id: &str) -> ObjectName 
         .and_then(|ts| ts.split('T').next())
         .map(str::to_string);
 
-    ObjectName::new(cache_id, date.as_deref(), topic_of(path).as_deref())
-}
-
-/// [`name_for`] against the serialized document — the exact bytes about
-/// to be uploaded, so the name always describes what actually lands.
-/// Degrades to the bare cache id if the body doesn't parse, because a
-/// worse name is better than a failed share.
-pub(crate) fn name_for_body(body: &str, cache_id: &str) -> ObjectName {
-    match toolpath::v1::Graph::from_json(body) {
-        Ok(doc) => name_for(&doc, cache_id),
-        Err(_) => ObjectName::new(cache_id, None, None),
-    }
+    ObjectName::new(&doc.graph.id, date.as_deref(), topic_of(path).as_deref())
 }
 
 /// The first user prompt, which is what a session is *about*.
@@ -1002,11 +1080,11 @@ mod tests {
     }
 
     #[test]
-    fn a_name_leads_with_the_date_and_topic() {
+    fn a_name_leads_with_the_date_and_topic_and_ends_with_the_document_id() {
         let doc = doc_with("Add S3 support to share", "2026-08-07T09:15:00Z");
         assert_eq!(
-            name_for(&doc, "claude-abc123").to_string(),
-            "2026-08-07-add-s3-support-to-share-claude-abc123"
+            name_for(&doc).to_string(),
+            "2026-08-07-add-s3-support-to-share--g1"
         );
     }
 
@@ -1015,7 +1093,7 @@ mod tests {
         // The date comes from the *earliest* step, so appending turns
         // can't move the object and leave a duplicate behind.
         let short = doc_with("Fix the parser", "2026-08-07T09:15:00Z");
-        let name = name_for(&short, "claude-abc");
+        let name = name_for(&short);
 
         let mut grown = short.clone();
         if let toolpath::v1::PathOrRef::Path(p) = &mut grown.paths[0] {
@@ -1024,7 +1102,7 @@ mod tests {
             later.step.timestamp = "2026-08-09T18:00:00Z".to_string();
             p.steps.push(later);
         }
-        assert_eq!(name_for(&grown, "claude-abc"), name);
+        assert_eq!(name_for(&grown), name);
     }
 
     #[test]
@@ -1033,28 +1111,26 @@ mod tests {
             "Add support to share and resume to and from S3 and a way to configure credentials",
             "2026-08-07T00:00:00Z",
         );
-        let name = name_for(&doc, "claude-abc").to_string();
+        let name = name_for(&doc).to_string();
         assert!(
             name.starts_with("2026-08-07-add-support-to-share"),
             "{name}"
         );
-        assert!(name.ends_with("-claude-abc"), "{name}");
-        assert!(!name.contains("--"), "no empty slug segments: {name}");
+        assert!(name.ends_with("--g1"), "{name}");
+        // The separator appears exactly once: the slugger collapses dash runs.
+        assert_eq!(name.matches("--").count(), 1, "{name}");
     }
 
     #[test]
     fn a_prompt_of_pure_punctuation_degrades_to_date_and_id() {
         let doc = doc_with("!!! ???", "2026-08-07T00:00:00Z");
-        assert_eq!(
-            name_for(&doc, "claude-abc").to_string(),
-            "2026-08-07-claude-abc"
-        );
+        assert_eq!(name_for(&doc).to_string(), "2026-08-07--g1");
     }
 
     #[test]
     fn a_synthesized_title_is_not_worth_slugging() {
         // `derive_path` writes "claude-code session: abc" when it has
-        // nothing better; repeating the id would waste the legible half
+        // nothing better; repeating the ID would waste the legible half
         // of the name.
         let body = serde_json::json!({
             "graph": { "id": "g1" },
@@ -1069,19 +1145,78 @@ mod tests {
             }]
         });
         let doc = toolpath::v1::Graph::from_json(&body.to_string()).unwrap();
+        assert_eq!(name_for(&doc).to_string(), "2026-08-07--g1");
+    }
+
+    #[test]
+    fn a_document_with_no_date_or_topic_is_named_by_its_id_alone() {
+        let doc =
+            toolpath::v1::Graph::from_json(r#"{"graph":{"id":"path-claude-code-abc"},"paths":[]}"#)
+                .unwrap();
+        assert_eq!(name_for(&doc).to_string(), "path-claude-code-abc");
+    }
+
+    #[test]
+    fn the_id_is_read_back_from_after_the_last_separator() {
         assert_eq!(
-            name_for(&doc, "claude-abc").to_string(),
-            "2026-08-07-claude-abc"
+            ObjectName::id_of("2026-08-07-fix-the-parser--path-claude-code-abc"),
+            "path-claude-code-abc"
+        );
+        // Legacy names without a separator: the whole stem is the ID.
+        assert_eq!(
+            ObjectName::id_of("2026-08-07-fix-the-parser-doc"),
+            "2026-08-07-fix-the-parser-doc"
+        );
+        assert_eq!(
+            ObjectName::id_of("path-claude-code-abc"),
+            "path-claude-code-abc"
         );
     }
 
     #[test]
-    fn an_unparseable_body_still_gets_a_name() {
-        // A worse name beats a failed share.
-        assert_eq!(
-            name_for_body("not json", "claude-abc").to_string(),
-            "claude-abc"
+    fn parse_splits_date_topic_and_id() {
+        let p = ObjectName::parse("2026-08-07-fix-the-parser--path-claude-code-abc");
+        assert_eq!(p.date.as_deref(), Some("2026-08-07"));
+        assert_eq!(p.topic.as_deref(), Some("fix-the-parser"));
+        assert_eq!(p.id, "path-claude-code-abc");
+
+        let p = ObjectName::parse("2026-08-07--g1");
+        assert_eq!(p.date.as_deref(), Some("2026-08-07"));
+        assert_eq!(p.topic, None);
+        assert_eq!(p.id, "g1");
+
+        let p = ObjectName::parse("g1");
+        assert_eq!((p.date, p.topic, p.id.as_str()), (None, None, "g1"));
+
+        // A topic that happens to start with digits is not a date.
+        let p = ObjectName::parse("2026-fixes--g1");
+        assert_eq!(p.date, None);
+        assert_eq!(p.topic.as_deref(), Some("2026-fixes"));
+    }
+
+    #[test]
+    fn an_overlong_id_is_bounded_with_a_hash_suffix() {
+        let long = "x".repeat(200);
+        let name = ObjectName::new(&long, None, None).to_string();
+        assert!(name.len() <= 64, "{}", name.len());
+        assert!(name.starts_with(&"x".repeat(48)), "{name}");
+        // 48 x's, a dash, 8 hex chars.
+        assert_eq!(name.len(), 48 + 1 + 8, "{name}");
+        // Two different overlong IDs get different names.
+        let other = format!("{}y", "x".repeat(199));
+        assert_ne!(
+            ObjectName::new(&other, None, None),
+            ObjectName::new(&long, None, None)
         );
+    }
+
+    #[test]
+    fn an_id_never_contains_the_separator() {
+        // slugify collapses dash runs, so `--` in a raw ID can't leak
+        // into the name and confuse `id_of`.
+        let name = ObjectName::new("weird--id", Some("2026-01-01"), Some("topic")).to_string();
+        assert_eq!(name, "2026-01-01-topic--weird-id");
+        assert_eq!(ObjectName::id_of(&name), "weird-id");
     }
 
     // ── Listing ──────────────────────────────────────────────────────
