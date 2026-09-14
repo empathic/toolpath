@@ -53,18 +53,36 @@ pub(crate) fn record(
         .parent()
         .ok_or_else(|| anyhow!("ledger path has no parent: {}", path.display()))?;
     std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+    }
     let tmp = parent.join(format!(
         ".{}.tmp-{}",
         crate::config::EXPORTS_FILE_NAME,
         std::process::id()
     ));
-    std::fs::write(&tmp, serde_json::to_string_pretty(&ledger)?)
-        .with_context(|| format!("write {}", tmp.display()))?;
+    let body = serde_json::to_string_pretty(&ledger)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("chmod 0600 {}", tmp.display()))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        // Create the temp file already restricted to 0600 — never a
+        // moment where it exists world/group-readable while it holds
+        // URIs and uploader names.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        f.write_all(body.as_bytes())
+            .with_context(|| format!("write {}", tmp.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&tmp, &body).with_context(|| format!("write {}", tmp.display()))?;
     }
     std::fs::rename(&tmp, path)
         .with_context(|| format!("rename {} → {}", tmp.display(), path.display()))?;
@@ -133,7 +151,10 @@ mod tests {
     #[test]
     fn records_accumulate_per_destination_and_cache_id() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("exports.json");
+        // Nested under a directory `record` must create itself, so the
+        // 0700 assertion below actually exercises `create_dir_all` +
+        // chmod rather than a tempdir's already-restrictive default.
+        let path = dir.path().join("cfg").join("exports.json");
         record(&path, "s3://b/traces", "claude-a", rec("aaa")).unwrap();
         record(&path, "s3://b/traces", "claude-b", rec("bbb")).unwrap();
         record(&path, "/srv/traces", "claude-a", rec("ccc")).unwrap();
@@ -155,6 +176,11 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
+            let dir_mode = std::fs::metadata(dir.path().join("cfg"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(dir_mode & 0o777, 0o700);
         }
     }
 
