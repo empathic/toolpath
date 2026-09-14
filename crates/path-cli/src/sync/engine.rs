@@ -265,6 +265,18 @@ fn sync_artifacts(
                 // prior manual `p import` of the same session must not
                 // error on the existing cache entry.
                 write_cached(&derived.cache_id, &derived.doc, true)?;
+                // A derive whose cache ID differs from the record's (the
+                // path-ID width changed, for instance) would otherwise
+                // leave the old document behind as an orphan that `path
+                // query` keeps seeing.
+                if let Some(old) = existing.and_then(|r| r.cache_id.as_deref())
+                    && old != derived.cache_id
+                    && let Ok(stale) = crate::cache::cache_path(old)
+                    && stale.exists()
+                {
+                    std::fs::remove_file(&stale)
+                        .with_context(|| format!("remove superseded {}", stale.display()))?;
+                }
                 stage(
                     &mut writes,
                     SyncRecord {
@@ -1051,6 +1063,47 @@ mod tests {
             assert!(
                 crate::cache::cache_path(&cache_id).unwrap().exists(),
                 "evicted artifact re-materializes"
+            );
+        });
+    }
+
+    #[test]
+    fn a_rederive_that_changes_the_cache_id_removes_the_superseded_doc() {
+        with_cfg(|home, config_dir| {
+            write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+            let bundle = claude_bundle(home);
+
+            // A record from an older CLI whose derive produced a different
+            // cache ID for the same session, with its document still on disk.
+            let stale_id = "claude-path-claude-code-stale";
+            let doc = toolpath::v1::Graph::from_json(r#"{"graph":{"id":"g"},"paths":[]}"#).unwrap();
+            crate::cache::write_cached(stale_id, &doc, true).unwrap();
+            let artifact = crate::artifact::ArtifactRef {
+                artifact_type: ArtifactType::Claude,
+                id: "sess-aaa".to_string(),
+                path: Some("-test-project".to_string()),
+                // No fingerprint: the next sync must treat the source as changed.
+                modified: None,
+                size: None,
+            };
+            let config = crate::config::Config {
+                toolpath_config_dir: Some(config_dir.to_path_buf()),
+                ..Default::default()
+            };
+            record_artifact(&config, &artifact, stale_id).unwrap();
+            assert!(crate::cache::cache_path(stale_id).unwrap().exists());
+
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+
+            let new_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
+                .cache_id
+                .clone()
+                .unwrap();
+            assert_ne!(new_id, stale_id);
+            assert!(crate::cache::cache_path(&new_id).unwrap().exists());
+            assert!(
+                !crate::cache::cache_path(stale_id).unwrap().exists(),
+                "the superseded document must be removed"
             );
         });
     }
