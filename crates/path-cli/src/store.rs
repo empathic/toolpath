@@ -329,7 +329,7 @@ impl ObjectUri {
             let result = opened.store.get(&opened.path).await?;
             result.bytes().await
         })
-        .map_err(|e| explain_location(e, "read", &self.to_string()))?;
+        .map_err(|e| explain_location(e, "read", &self.to_string(), opened.source.as_ref()))?;
         String::from_utf8(bytes.to_vec()).with_context(|| format!("{self} is not valid UTF-8"))
     }
 
@@ -343,7 +343,7 @@ impl ObjectUri {
         let payload = object_store::PutPayload::from(body.to_vec());
         block_on(opened.store.put(&opened.path, payload))
             .map(|_| ())
-            .map_err(|e| explain_location(e, "write", &self.to_string()))
+            .map_err(|e| explain_location(e, "write", &self.to_string(), opened.source.as_ref()))
     }
 }
 
@@ -352,7 +352,6 @@ impl ObjectUri {
 struct Opened {
     store: Box<dyn ObjectStore>,
     path: object_store::path::Path,
-    #[allow(dead_code)]
     source: Option<crate::aws_creds::Source>,
 }
 
@@ -367,18 +366,37 @@ fn open(url: &Url, cfg: &S3Settings) -> Result<Opened> {
     })
 }
 
-/// Strip `object_store`'s internals out of an error message.
+/// Strip `object_store`'s internals out of an error message and keep
+/// the cause.
 ///
 /// Its transport errors carry a retry epilogue — "after 10 retries,
 /// max_retries: 10, retry_timeout: 180s" — plus a `Generic S3 error:`
-/// prefix. Neither tells a user anything actionable, and both bury the
-/// part that does.
+/// or `Generic LocalFileSystem error:` prefix. Neither tells a user
+/// anything actionable. The *innermost* source ("connection refused",
+/// "File name too long") is the actionable part and lives at the
+/// bottom of the chain, so it is appended when the head doesn't
+/// already say it.
 fn terse(err: &object_store::Error) -> String {
-    let msg = err.to_string();
-    let msg = msg.split(", after ").next().unwrap_or(&msg);
-    msg.trim_start_matches("Generic S3 error: ")
+    let top = err.to_string();
+    let head = top
+        .split(", after ")
+        .next()
+        .unwrap_or(&top)
+        .trim_start_matches("Generic S3 error: ")
+        .trim_start_matches("Generic LocalFileSystem error: ")
         .trim_end_matches([' ', '-'])
-        .to_string()
+        .to_string();
+
+    let mut cause: Option<String> = None;
+    let mut cur: &dyn std::error::Error = err;
+    while let Some(next) = cur.source() {
+        cause = Some(next.to_string());
+        cur = next;
+    }
+    match cause {
+        Some(c) if !c.is_empty() && !head.contains(&c) => format!("{head}: {c}"),
+        _ => head,
+    }
 }
 
 /// Where `path share` writes when the target is object storage: a
@@ -423,8 +441,10 @@ impl Destination {
     /// picker row, which is exactly why they're worth the length.
     pub(crate) fn list(&self, cfg: &S3Settings) -> Result<Vec<ObjectEntry>> {
         let opened = open(&self.base, cfg)?;
-        let listed = block_on(opened.store.list_with_delimiter(Some(&opened.path)))
-            .map_err(|e| explain_location(e, "list", &friendly(&self.base)))?;
+        let listed =
+            block_on(opened.store.list_with_delimiter(Some(&opened.path))).map_err(|e| {
+                explain_location(e, "list", &friendly(&self.base), opened.source.as_ref())
+            })?;
 
         let mut out: Vec<ObjectEntry> = listed
             .objects
@@ -806,8 +826,15 @@ fn friendly(url: &Url) -> String {
 /// Turn an `object_store` error into something a user can act on. Its
 /// `NotFound` and `Unauthenticated` variants are the two that matter:
 /// the first usually means a typo'd key, the second an unconfigured or
-/// stale credential.
-fn explain_location(err: object_store::Error, verb: &str, location: &str) -> anyhow::Error {
+/// stale credential. A request that ended up at instance metadata
+/// because nothing local resolved gets the real explanation instead of
+/// a link-local IP.
+fn explain_location(
+    err: object_store::Error,
+    verb: &str,
+    location: &str,
+    source: Option<&crate::aws_creds::Source>,
+) -> anyhow::Error {
     match err {
         object_store::Error::NotFound { .. } => anyhow!("{location} not found"),
         object_store::Error::Unauthenticated { .. }
@@ -817,7 +844,20 @@ fn explain_location(err: object_store::Error, verb: &str, location: &str) -> any
                  credentials, or check the bucket policy for the ones you have."
             )
         }
-        e => anyhow!("failed to {verb} {location}: {}", terse(&e)),
+        e => {
+            let msg = terse(&e);
+            if matches!(source, Some(crate::aws_creds::Source::InstanceChain))
+                && msg.contains("169.254.169.254")
+            {
+                anyhow!(
+                    "failed to {verb} {location}: no credentials found (tried ~/.aws, the \
+                     environment, and the EC2/ECS/EKS chain). Run `path auth s3 login` or set \
+                     AWS_PROFILE."
+                )
+            } else {
+                anyhow!("failed to {verb} {location}: {msg}")
+            }
+        }
     }
 }
 
@@ -1381,5 +1421,51 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
         assert!(dest.list(&S3Settings::default()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn terse_keeps_the_innermost_cause() {
+        let inner =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
+        let err = object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(inner),
+        };
+        let msg = terse(&err);
+        assert!(msg.contains("connection refused"), "{msg}");
+        assert!(!msg.starts_with("Generic S3 error"), "{msg}");
+    }
+
+    #[test]
+    fn terse_strips_the_local_filesystem_prefix() {
+        let inner = std::io::Error::other("File name too long (os error 63)");
+        let err = object_store::Error::Generic {
+            store: "LocalFileSystem",
+            source: Box::new(inner),
+        };
+        let msg = terse(&err);
+        assert!(!msg.contains("Generic LocalFileSystem error"), "{msg}");
+        assert!(msg.contains("File name too long"), "{msg}");
+    }
+
+    #[test]
+    fn an_imds_failure_with_no_credentials_explains_where_it_looked() {
+        let inner = std::io::Error::other(
+            "Error performing PUT http://169.254.169.254/latest/api/token in 1.5s",
+        );
+        let err = object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(inner),
+        };
+        let msg = explain_location(
+            err,
+            "write",
+            "s3://b/k.json",
+            Some(&crate::aws_creds::Source::InstanceChain),
+        )
+        .to_string();
+        assert!(msg.contains("no credentials found"), "{msg}");
+        assert!(msg.contains("~/.aws"), "{msg}");
+        assert!(!msg.contains("169.254.169.254"), "{msg}");
     }
 }
