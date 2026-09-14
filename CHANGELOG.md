@@ -2,6 +2,16 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-convo 0.11.2 — 2026-09-14
+
+- **`toolpath-convo`** (0.11.2): `derive_path` now builds the default
+  path ID from the first 16 characters of the session ID instead of 8
+  (`path-claude-code-c0ee4a7d5a064f2d`). Object-storage keys and
+  cache IDs are derived from this ID, and 32 bits was thin for a bucket
+  shared by a team. Documents already in a cache keep their IDs; the
+  next re-derive of a changed session writes the new ID and the sync
+  engine removes the superseded document.
+
 ## path-cli 0.21.0 — 2026-09-10
 
 - **Fix:** `path auth login` creates `~/.toolpath/credentials.json` with

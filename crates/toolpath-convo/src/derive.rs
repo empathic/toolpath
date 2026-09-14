@@ -46,7 +46,10 @@ impl Default for DeriveConfig {
 /// Derive a [`Path`] from a [`ConversationView`].
 pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let provider = view.provider_id.as_deref().unwrap_or("unknown");
-    let id_prefix: String = view.id.chars().take(8).collect();
+    // 16 characters of the session ID: wide enough that a team bucket
+    // holding thousands of sessions never sees two collide, short enough
+    // to stay legible in a listing.
+    let id_prefix: String = view.id.chars().take(16).collect();
 
     let path_id = config
         .path_id
@@ -1475,7 +1478,7 @@ mod tests {
     fn test_path_id_default_format() {
         let view = view_with(vec![]);
         let path = derive_path(&view, &DeriveConfig::default());
-        assert_eq!(path.path.id, "path-pi-abcdef01");
+        assert_eq!(path.path.id, "path-pi-abcdef012345");
     }
 
     #[test]
@@ -1678,7 +1681,7 @@ mod tests {
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(
             path.meta.unwrap().title.as_deref(),
-            Some("pi session: abcdef01")
+            Some("pi session: abcdef012345")
         );
     }
 
