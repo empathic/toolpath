@@ -834,3 +834,34 @@ fn import_object_with_a_destination_skips_bad_objects_and_exits_nonzero() {
 
     assert_eq!(folder_names(&config.path().join("documents")).len(), 2);
 }
+
+// ── path resume with object storage ─────────────────────────────────
+
+#[test]
+fn resume_a_destination_without_a_terminal_points_at_the_lister() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    cmd(config.path())
+        .args([
+            "resume",
+            &folder.path().to_string_lossy(),
+            "--harness",
+            "claude",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path p list object"))
+        .stderr(predicate::str::contains("fzf").not());
+}
+
+#[test]
+fn resume_help_lists_object_storage_inputs() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["resume", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("s3://"))
+        .stdout(predicate::str::contains("folder"));
+}
