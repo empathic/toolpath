@@ -33,7 +33,7 @@ mod remote_session;
 /// with `claude -r <id>`, and it accepts only a UUID there. The value
 /// is returned in the hyphenated lower-case form.
 #[cfg(not(target_os = "emscripten"))]
-fn parse_session_id_arg(raw: &str) -> Result<String> {
+fn parse_uuid_arg(raw: &str) -> Result<String> {
     let id = uuid::Uuid::parse_str(raw)
         .with_context(|| format!("the session ID must be a UUID (got {raw:?})"))?;
     Ok(id.hyphenated().to_string())
@@ -70,7 +70,7 @@ pub struct ClaudeExportArgs {
         long,
         value_name = "UUID",
         conflicts_with = "new_session_id",
-        value_parser = parse_session_id_arg
+        value_parser = parse_uuid_arg
     )]
     pub(crate) session_id: Option<String>,
 
@@ -669,19 +669,19 @@ pub(crate) fn project_pi(
 /// The content-addressed session ID when `--content-addressed-session-id`
 /// is set, else `None`.
 #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
-fn content_addressed_session_id(
+fn resolve_content_addressed_session_id(
     args: &ClaudeExportArgs,
     document_json: &str,
 ) -> Result<Option<String>> {
     if !args.remote.content_addressed_session_id {
         return Ok(None);
     }
-    crate::claude_session::content_addressed_id(document_json).map(Some)
+    crate::claude_session::generate_content_addressed_session_id(document_json).map(Some)
 }
 
 /// Without the `resume-remote` feature there is no `--content-addressed-session-id`.
 #[cfg(all(not(feature = "resume-remote"), not(target_os = "emscripten")))]
-fn content_addressed_session_id(
+fn resolve_content_addressed_session_id(
     _args: &ClaudeExportArgs,
     _document_json: &str,
 ) -> Result<Option<String>> {
@@ -699,7 +699,7 @@ fn exported_session_id(args: &ClaudeExportArgs, document_json: &str) -> Result<O
     if args.new_session_id {
         return Ok(Some(uuid::Uuid::new_v4().to_string()));
     }
-    content_addressed_session_id(args, document_json)
+    resolve_content_addressed_session_id(args, document_json)
 }
 
 fn run_claude(args: ClaudeExportArgs) -> Result<()> {
@@ -2558,17 +2558,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_session_id_arg_normalizes_a_uuid_and_rejects_other_text() {
+    fn parse_uuid_arg_normalizes_a_uuid_and_rejects_other_text() {
         assert_eq!(
-            parse_session_id_arg("402A3CA5-2530-407E-9029-F96879A0B1C2").unwrap(),
+            parse_uuid_arg("402A3CA5-2530-407E-9029-F96879A0B1C2").unwrap(),
             "402a3ca5-2530-407e-9029-f96879a0b1c2"
         );
         assert_eq!(
-            parse_session_id_arg("402a3ca52530407e9029f96879a0b1c2").unwrap(),
+            parse_uuid_arg("402a3ca52530407e9029f96879a0b1c2").unwrap(),
             "402a3ca5-2530-407e-9029-f96879a0b1c2"
         );
         for bad in ["", "my-template", "402a3ca5-2530-407e-9029"] {
-            let err = parse_session_id_arg(bad).unwrap_err().to_string();
+            let err = parse_uuid_arg(bad).unwrap_err().to_string();
             assert!(err.contains("must be a UUID"), "{bad:?}: {err}");
         }
     }
@@ -3712,7 +3712,7 @@ mod tests {
     #[cfg(feature = "resume-remote")]
     mod resume_remote {
         use super::*;
-        use crate::claude_session::content_addressed_id;
+        use crate::claude_session::generate_content_addressed_session_id;
         use crate::cmd_export::remote_session::RemoteSessionArgs;
 
         /// `make_path_doc` with `cwd` recorded on every step, plus one
@@ -3833,7 +3833,9 @@ mod tests {
                 "every line carries a sessionId"
             );
 
-            let expected = content_addressed_id(&serde_json::to_string(&doc).unwrap()).unwrap();
+            let expected =
+                generate_content_addressed_session_id(&serde_json::to_string(&doc).unwrap())
+                    .unwrap();
             assert!(!source_ids.contains(&expected.as_str()));
             let addressed = export_claude_lines(
                 &doc,
@@ -3918,8 +3920,10 @@ mod tests {
             }
 
             result.expect("content-addressed export should succeed");
-            let expected =
-                content_addressed_id(&std::fs::read_to_string(&input_path).unwrap()).unwrap();
+            let expected = generate_content_addressed_session_id(
+                &std::fs::read_to_string(&input_path).unwrap(),
+            )
+            .unwrap();
             let canon = std::fs::canonicalize(&cwd).unwrap();
             let file = toolpath_claude::PathResolver::new()
                 .with_home(&fake_home)
