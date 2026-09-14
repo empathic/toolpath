@@ -675,7 +675,8 @@ fn write_line<W: Write>(w: &mut W, line: &JsonlLine) -> Result<(), JsonlError> {
 }
 
 fn step_meta_is_empty(m: &StepMeta) -> bool {
-    m.intent.is_none()
+    m.title.is_none()
+        && m.intent.is_none()
         && m.description.is_none()
         && m.source.is_none()
         && m.refs.is_empty()
@@ -1210,6 +1211,32 @@ mod tests {
         let jsonl = p.to_jsonl_string().unwrap();
         let back = Path::from_jsonl_str(&jsonl).unwrap();
         assert_eq!(canonical_json(&p), canonical_json(&back));
+    }
+
+    #[test]
+    fn roundtrip_step_title() {
+        let mut step = make_step("s1", None);
+        step.meta = Some(StepMeta {
+            title: Some("Rename config field".into()),
+            ..Default::default()
+        });
+        let p = Path {
+            path: PathIdentity {
+                id: "p".into(),
+                base: None,
+                head: "s1".into(),
+                graph_ref: None,
+            },
+            steps: vec![step],
+            meta: None,
+        };
+        let jsonl = p.to_jsonl_string().unwrap();
+        let back = Path::from_jsonl_str(&jsonl).unwrap();
+        assert_eq!(canonical_json(&p), canonical_json(&back));
+        // Typed field, not the extra catch-all.
+        let meta = back.steps[0].meta.as_ref().unwrap();
+        assert_eq!(meta.title.as_deref(), Some("Rename config field"));
+        assert!(meta.extra.is_empty());
     }
 
     #[test]

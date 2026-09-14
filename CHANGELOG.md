@@ -2,6 +2,22 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli Unreleased
+
+`path share` and `path p export pathbase` gain `--title` and
+`--description`, which stamp `meta.title` and `meta.description` onto
+the uploaded document's graph header (issue #182). Both travel inside
+the document, so they work on the anonymous endpoint too and need no
+Pathbase API change; without the flags, upload bodies remain
+byte-identical to before. `path p merge` gains `--description`
+alongside the existing `--title`.
+
+## toolpath 0.7.2 — 2026-08-21
+
+Adds an optional `title` field to `StepMeta`, completing the set:
+`GraphMeta` and `PathMeta` already had it. A short human-readable title
+for the step, first-class in the JSON Schema and typed structs; existing
+documents are unaffected.
 ## path-cli 0.21.0 — 2026-09-10
 
 - **`path-cli`** (0.21.0): `p export claude` takes `--content-addressed-session-id`
