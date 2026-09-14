@@ -46,7 +46,7 @@ use std::path::PathBuf;
 
 use crate::harness::Harness;
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct ResumeArgs {
     /// Toolpath document to resume from. Accepted shapes: a Pathbase
     /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
@@ -612,9 +612,7 @@ mod tests {
             input: doc_file.to_string_lossy().to_string(),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         };
 
         let recorder = RecordingExec::default();
@@ -746,11 +744,7 @@ mod tests {
 
         let args = ResumeArgs {
             input: p.to_string_lossy().to_string(),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
@@ -780,11 +774,8 @@ mod tests {
                 "{}/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
                 server.base()
             ),
-            cwd: None,
-            harness: None,
             no_cache: true, // skip cache write in tests
-            force: false,
-            url: None,
+            ..Default::default()
         };
         let (g, harness) = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
@@ -841,11 +832,7 @@ mod tests {
                 "{}/u/alex/repos/pathstash/graphs/{FIXTURE_UUID}",
                 server.base()
             ),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         };
         let result = resolve_input(&args);
 
@@ -869,11 +856,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let args = ResumeArgs {
             input: "definitely/not/a/real/cache/id".to_string(),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         };
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();
