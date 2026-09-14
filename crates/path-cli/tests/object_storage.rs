@@ -791,3 +791,46 @@ fn list_object_on_an_empty_destination_exits_zero() {
         .success()
         .stderr(predicate::str::contains("no documents in"));
 }
+
+// ── p import object <destination> ───────────────────────────────────
+
+#[test]
+fn import_object_with_a_destination_imports_every_document_under_it() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    cmd(config.path())
+        .args(["p", "import", "object", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Imported").count(2));
+
+    let mut ids = folder_names(&config.path().join("documents"));
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "object-path-claude-code-aaaa.json".to_string(),
+            "object-path-claude-code-bbbb.json".to_string()
+        ]
+    );
+}
+
+#[test]
+fn import_object_with_a_destination_skips_bad_objects_and_exits_nonzero() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+    std::fs::write(folder.path().join("garbage.json"), "not json").unwrap();
+
+    cmd(config.path())
+        .args(["p", "import", "object", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("skipping"))
+        .stderr(predicate::str::contains("garbage.json"))
+        .stderr(predicate::str::contains(
+            "1 object(s) could not be imported",
+        ));
+
+    assert_eq!(folder_names(&config.path().join("documents")).len(), 2);
+}
