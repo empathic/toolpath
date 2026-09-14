@@ -89,7 +89,10 @@ pub fn run(args: ResumeArgs) -> Result<()> {
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
-    let (graph, source_harness) = resolve_input(&args)?;
+    let ResolvedInput {
+        graph,
+        source_harness,
+    } = resolve_input(&args)?;
     let path = ensure_path_with_agent(&graph)?;
 
     let cwd = match args.cwd.as_ref() {
@@ -194,10 +197,20 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
     Ok(path)
 }
 
-/// Resolve the user-supplied `<input>` argument into a parsed `Graph`
-/// plus the source harness inferred from its single inline path (if
-/// any). See spec § "Input resolution" for the order.
-pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>)> {
+/// A resolved input: the parsed document and its source harness.
+#[derive(Debug)]
+pub(crate) struct ResolvedInput {
+    pub(crate) graph: Graph,
+    pub(crate) source_harness: Option<Harness>,
+}
+
+/// Resolve the user-supplied `<input>` argument into a
+/// [`ResolvedInput`]: the parsed `Graph` plus the source harness
+/// inferred from its single inline path (if any). See spec § "Input
+/// resolution" for the order. Every shape yields the document text,
+/// which one parse below turns into the `Graph`, so a parse error
+/// names the input it came from.
+pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
     let raw = args.input.as_str();
 
     enum Shape<'a> {
@@ -217,7 +230,7 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
         Shape::CacheId(raw)
     };
 
-    let graph: Graph = match shape {
+    let (json, source) = match shape {
         Shape::PathbaseUrl(u) | Shape::PathbaseShorthand(u) => {
             // Probe the local cache before going to the network. The cache
             // id is purely a function of the parsed (owner, repo, id), so
@@ -234,8 +247,7 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
                 let json = std::fs::read_to_string(&cache_path)
                     .with_context(|| format!("read {}", cache_path.display()))?;
                 eprintln!("Resolved {} → {} (cached)", raw, cache_id);
-                Graph::from_json(&json)
-                    .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e))?
+                (json, format!("cache entry {}", cache_path.display()))
             } else {
                 let derived = crate::derive::pathbase_fetch_to_doc(u, args.url.as_deref())?;
                 if !args.no_cache {
@@ -245,14 +257,17 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
                     crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
                     eprintln!("Resolved {} → {}", raw, derived.cache_id);
                 }
-                derived.doc
+                let json = derived
+                    .doc
+                    .to_json()
+                    .context("serialize the fetched document")?;
+                (json, "fetched from Pathbase".to_string())
             }
         }
-        Shape::FilePath(p) => {
-            let json = std::fs::read_to_string(p).with_context(|| format!("read {}", p))?;
-            Graph::from_json(&json)
-                .map_err(|e| anyhow::anyhow!("not a valid toolpath document: {}", e))?
-        }
+        Shape::FilePath(p) => (
+            std::fs::read_to_string(p).with_context(|| format!("read {}", p))?,
+            format!("file {p}"),
+        ),
         Shape::CacheId(id) => {
             let file = crate::cache::cache_ref(id).map_err(|e| {
                 anyhow::anyhow!(
@@ -263,13 +278,17 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
             })?;
             let json = std::fs::read_to_string(&file)
                 .with_context(|| format!("read {}", file.display()))?;
-            Graph::from_json(&json)
-                .map_err(|e| anyhow::anyhow!("not a valid toolpath document: {}", e))?
+            (json, format!("cache entry {}", file.display()))
         }
     };
 
-    let harness = graph.single_path().and_then(infer_source_harness);
-    Ok((graph, harness))
+    let graph = Graph::from_json(&json)
+        .map_err(|e| anyhow::anyhow!("not a valid toolpath document ({source}): {e}"))?;
+    let source_harness = graph.single_path().and_then(infer_source_harness);
+    Ok(ResolvedInput {
+        graph,
+        source_harness,
+    })
 }
 
 /// Probe `$PATH` (or `path_override`, for tests) for a given binary name.
@@ -747,7 +766,10 @@ mod tests {
             input: p.to_string_lossy().to_string(),
             ..Default::default()
         };
-        let (g, harness) = resolve_input(&args).unwrap();
+        let ResolvedInput {
+            graph: g,
+            source_harness: harness,
+        } = resolve_input(&args).unwrap();
         let _path = ensure_path_with_agent(&g).unwrap();
         assert_eq!(harness, Some(Harness::Claude));
     }
@@ -778,7 +800,10 @@ mod tests {
             no_cache: true, // skip cache write in tests
             ..Default::default()
         };
-        let (g, harness) = resolve_input(&args).unwrap();
+        let ResolvedInput {
+            graph: g,
+            source_harness: harness,
+        } = resolve_input(&args).unwrap();
         let _ = ensure_path_with_agent(&g).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
@@ -845,7 +870,10 @@ mod tests {
             }
         }
 
-        let (g, harness) = result.expect("resolve_input should reuse cache without refetching");
+        let ResolvedInput {
+            graph: g,
+            source_harness: harness,
+        } = result.expect("resolve_input should reuse cache without refetching");
         let _ = ensure_path_with_agent(&g).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
