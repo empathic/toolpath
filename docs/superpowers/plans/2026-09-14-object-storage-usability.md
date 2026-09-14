@@ -14,7 +14,7 @@
 
 - All commits must be signed. Signing goes through the 1Password SSH agent; if a commit fails with a 1Password error, stop and wait for the user rather than retrying or bypassing.
 - Commit messages describe the change, never the conversation or a quality rating.
-- In prose (help text, docs, comments) write "ID", never lowercase "ID", except for literal symbols like `graph.id` or `cache_id`.
+- In prose (help text, docs, comments) write "ID", never lowercase "id", except for literal symbols like `graph.id` or `cache_id`.
 - `path-cli` stays at 0.21.0 (unreleased on this branch). `toolpath-convo` bumps 0.11.1 → 0.11.2 and the bump must land in `crates/toolpath-convo/Cargo.toml`, the root `Cargo.toml` `[workspace.dependencies]`, `site/_data/crates.json`, and `CHANGELOG.md`.
 - Every `path` binary invocation in an integration test must go through the `cmd(config_dir)` helper in `crates/path-cli/tests/object_storage.rs` (it sandboxes `TOOLPATH_CONFIG_DIR`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`, and strips `AWS_*`), or the `cmd()` helper in `crates/path-cli/tests/integration.rs`. Never let a test read the developer's real `~/.aws` or `~/.toolpath`.
 - Object metadata attributes are attached only for `s3`/`s3a` URLs; the local backend rejects them.
@@ -160,11 +160,11 @@ Add to the `tests` module in `crates/path-cli/src/sync/engine.rs`, next to `evic
             // A record from an older CLI whose derive produced a different
             // cache ID for the same session, with its document still on disk.
             let stale_id = "claude-path-claude-code-stale";
-            let doc = toolpath::v1::Graph::from_json(r#"{"graph":{"ID":"g"},"paths":[]}"#).unwrap();
+            let doc = toolpath::v1::Graph::from_json(r#"{"graph":{"id":"g"},"paths":[]}"#).unwrap();
             crate::cache::write_cached(stale_id, &doc, true).unwrap();
             let artifact = crate::artifact::ArtifactRef {
                 artifact_type: ArtifactType::Claude,
-                ID: "sess-aaa".to_string(),
+                id: "sess-aaa".to_string(),
                 path: Some("-test-project".to_string()),
                 // No fingerprint: the next sync must treat the source as changed.
                 modified: None,
@@ -316,12 +316,12 @@ In the `tests` module of `crates/path-cli/src/store.rs`, replace the four tests 
         // nothing better; repeating the ID would waste the legible half
         // of the name.
         let body = serde_json::json!({
-            "graph": { "ID": "g1" },
+            "graph": { "id": "g1" },
             "paths": [{
-                "path": { "ID": "p1", "head": "s1" },
+                "path": { "id": "p1", "head": "s1" },
                 "meta": { "title": "claude-code session: abc123" },
                 "steps": [{
-                    "step": { "ID": "s1", "parents": [], "actor": "agent:claude-code",
+                    "step": { "id": "s1", "parents": [], "actor": "agent:claude-code",
                               "timestamp": "2026-08-07T00:00:00Z" },
                     "change": { "f": { "structural": { "type": "file.edit" } } }
                 }]
@@ -333,7 +333,7 @@ In the `tests` module of `crates/path-cli/src/store.rs`, replace the four tests 
 
     #[test]
     fn a_document_with_no_date_or_topic_is_named_by_its_id_alone() {
-        let doc = toolpath::v1::Graph::from_json(r#"{"graph":{"ID":"path-claude-code-abc"},"paths":[]}"#)
+        let doc = toolpath::v1::Graph::from_json(r#"{"graph":{"id":"path-claude-code-abc"},"paths":[]}"#)
             .unwrap();
         assert_eq!(name_for(&doc).to_string(), "path-claude-code-abc");
     }
@@ -410,7 +410,7 @@ Replace the `ObjectName` impl block, `name_for`, and `name_for_body` in `crates/
 pub(crate) struct NameParts {
     pub date: Option<String>,
     pub topic: Option<String>,
-    pub ID: String,
+    pub id: String,
 }
 
 impl ObjectName {
@@ -427,7 +427,7 @@ impl ObjectName {
     /// occurrence to get the ID.
     pub(crate) const ID_SEPARATOR: &'static str = "--";
 
-    pub(crate) fn new(ID: &str, date: Option<&str>, title: Option<&str>) -> Self {
+    pub(crate) fn new(id: &str, date: Option<&str>, title: Option<&str>) -> Self {
         let mut prefix: Vec<String> = Vec::new();
         if let Some(d) = date.map(slugify).filter(|d| !d.is_empty()) {
             prefix.push(d);
@@ -435,19 +435,19 @@ impl ObjectName {
         if let Some(t) = title.map(slugify).filter(|t| !t.is_empty()) {
             prefix.push(truncate_slug(&t, Self::SLUG_MAX));
         }
-        let ID = bounded_id(ID);
+        let id = bounded_id(id);
         if prefix.is_empty() {
-            ObjectName(ID)
+            ObjectName(id)
         } else {
-            ObjectName(format!("{}{}{ID}", prefix.join("-"), Self::ID_SEPARATOR))
+            ObjectName(format!("{}{}{id}", prefix.join("-"), Self::ID_SEPARATOR))
         }
     }
 
     /// The name for a document with no usable metadata — the ID
     /// alone, which is what the whole scheme degrades to.
     #[cfg(test)]
-    pub(crate) fn bare(ID: &str) -> Self {
-        Self::new(ID, None, None)
+    pub(crate) fn bare(id: &str) -> Self {
+        Self::new(id, None, None)
     }
 
     /// The ID half of a name stem: everything after the last `--`. A
@@ -455,7 +455,7 @@ impl ObjectName {
     /// existed, or a bare ID) is taken whole.
     pub(crate) fn id_of(stem: &str) -> &str {
         stem.rsplit_once(Self::ID_SEPARATOR)
-            .map(|(_, ID)| ID)
+            .map(|(_, id)| id)
             .unwrap_or(stem)
     }
 
@@ -463,8 +463,8 @@ impl ObjectName {
     /// only as a leading `YYYY-MM-DD`; everything else before the
     /// separator is the topic.
     pub(crate) fn parse(stem: &str) -> NameParts {
-        let (prefix, ID) = match stem.rsplit_once(Self::ID_SEPARATOR) {
-            Some((p, ID)) => (Some(p), ID),
+        let (prefix, id) = match stem.rsplit_once(Self::ID_SEPARATOR) {
+            Some((p, id)) => (Some(p), id),
             None => (None, stem),
         };
         let mut date = None;
@@ -489,7 +489,7 @@ impl ObjectName {
         NameParts {
             date,
             topic,
-            ID: id.to_string(),
+            id: id.to_string(),
         }
     }
 }
@@ -605,7 +605,7 @@ In `crates/path-cli/src/store.rs` tests, replace `cache_id_flattens_the_key` wit
         assert_eq!(uri.cache_id(), "object-2026-01-01-hello-doc");
 
         let long = format!("s3://bkt/{}.json", "k".repeat(300));
-        let ID = ObjectUri::parse(&long).unwrap().cache_id();
+        let id = ObjectUri::parse(&long).unwrap().cache_id();
         assert!(id.len() <= "object-".len() + 100, "{}", id.len());
     }
 ```
@@ -635,9 +635,9 @@ Replace `ObjectUri::cache_id`:
             .next()
             .unwrap_or_default()
             .trim_end_matches(".json");
-        let ID = slugify(ObjectName::id_of(stem));
-        let ID = if id.len() > 100 { truncate_slug(&ID, 100) } else { ID };
-        crate::cache::make_id("object", &ID)
+        let id = slugify(ObjectName::id_of(stem));
+        let id = if id.len() > 100 { truncate_slug(&id, 100) } else { id };
+        crate::cache::make_id("object", &id)
     }
 ```
 
@@ -646,7 +646,7 @@ Replace `ObjectUri::cache_id`:
 In `crates/path-cli/tests/object_storage.rs`, `export_then_import_round_trips_through_a_folder`, change the last assertion:
 
 ```rust
-    assert_eq!(IDs, vec!["object-g1.json".to_string()], "unexpected cache ID: {IDs:?}");
+    assert_eq!(ids, vec!["object-g1.json".to_string()], "unexpected cache id: {ids:?}");
 ```
 
 Run: `cargo test -p path-cli store::tests --test object_storage`
@@ -678,17 +678,17 @@ git commit -m "feat(store): cache imported objects under object-<document id>"
 In `crates/path-cli/tests/object_storage.rs`, replace `write_doc` with a two-function form:
 
 ```rust
-/// A minimal single-step agent document with graph ID `id`, written to
-/// `dir/doc.json`. Two documents with different IDs and the same
+/// A minimal single-step agent document with graph id `id`, written to
+/// `dir/doc.json`. Two documents with different ids and the same
 /// basename are how collision tests are built.
-fn write_doc_with_id(dir: &Path, ID: &str) -> std::path::PathBuf {
+fn write_doc_with_id(dir: &Path, id: &str) -> std::path::PathBuf {
     let body = serde_json::json!({
-        "graph": { "ID": ID },
+        "graph": { "id": id },
         "paths": [{
-            "path": { "ID": "p1", "head": "s1" },
+            "path": { "id": "p1", "head": "s1" },
             "steps": [{
                 "step": {
-                    "ID": "s1", "parents": [],
+                    "id": "s1", "parents": [],
                     "actor": "agent:claude-code",
                     "timestamp": "2026-01-01T00:00:00Z"
                 },
@@ -799,7 +799,7 @@ fn a_schema_invalid_document_is_refused_unless_forced() {
     let bad = work.path().join("bad.json");
     std::fs::write(
         &bad,
-        r#"{"graph":{"ID":"g-bad"},"paths":[{"path":{"ID":"p","head":"s"},"steps":[{"step":{"ID":"s","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#,
+        r#"{"graph":{"id":"g-bad"},"paths":[{"path":{"id":"p","head":"s"},"steps":[{"step":{"id":"s","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#,
     )
     .unwrap();
 
@@ -1379,7 +1379,7 @@ fn auth_s3_status_prints_the_key_id_for_a_profile_and_skips_the_login_advice() {
         .env("AWS_SHARED_CREDENTIALS_FILE", &creds)
         .assert()
         .success()
-        .stdout(predicate::str::contains("access key ID:     AKIAPROFILE"))
+        .stdout(predicate::str::contains("access key id:     AKIAPROFILE"))
         .stdout(predicate::str::contains("region:            us-east-1 (default)"))
         .stdout(predicate::str::contains("Run `path auth s3 login`").not());
 }
@@ -1513,7 +1513,7 @@ fn print_credential_source(effective: &S3Settings, resolved: &Result<crate::aws_
             if let Some(c) = &r.credentials
                 && effective.access_key_id.is_none()
             {
-                println!("  access key ID:     {}", c.access_key_id);
+                println!("  access key id:     {}", c.access_key_id);
             }
             if effective.region.is_none() {
                 match &r.region {
@@ -1577,7 +1577,7 @@ fn s3_whoami() -> Result<()> {
     let field = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("?").to_string();
     println!("arn:         {}", field("Arn"));
     println!("account:     {}", field("Account"));
-    println!("user ID:     {}", field("UserId"));
+    println!("user id:     {}", field("UserId"));
     println!("credentials: {}", resolved.source);
     Ok(())
 }
@@ -1787,9 +1787,9 @@ git commit -m "fix(store): keep the innermost cause in transport errors and expl
 
 fn folder_with_two_docs(config: &Path) -> tempfile::TempDir {
     let folder = tempfile::tempdir().unwrap();
-    for ID in ["path-claude-code-aaaa", "path-claude-code-bbbb"] {
+    for id in ["path-claude-code-aaaa", "path-claude-code-bbbb"] {
         let work = tempfile::tempdir().unwrap();
-        let doc = write_doc_with_id(work.path(), ID);
+        let doc = write_doc_with_id(work.path(), id);
         cmd(config)
             .args(["p", "export", "object"])
             .args(["--input", doc.to_str().unwrap()])
@@ -1832,8 +1832,8 @@ fn list_object_json_carries_the_parsed_name_parts() {
     assert_eq!(v["source"], "object");
     let objects = v["objects"].as_array().unwrap();
     assert_eq!(objects.len(), 2);
-    let IDs: Vec<&str> = objects.iter().map(|o| o["ID"].as_str().unwrap()).collect();
-    assert!(ids.contains(&"path-claude-code-aaaa"), "{IDs:?}");
+    let ids: Vec<&str> = objects.iter().map(|o| o["id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&"path-claude-code-aaaa"), "{ids:?}");
     assert_eq!(objects[0]["date"], "2026-01-01");
     assert_eq!(objects[0]["topic"], "hello");
     assert!(objects[0]["size"].as_u64().unwrap() > 0);
@@ -1912,7 +1912,7 @@ fn run_object(destination: String, fmt: ListFormat) -> Result<()> {
                     .map(|e| {
                         let parts = ObjectName::parse(&e.stem);
                         serde_json::json!({
-                            "ID": parts.id,
+                            "id": parts.id,
                             "date": parts.date,
                             "topic": parts.topic,
                             "name": e.stem,
@@ -2007,10 +2007,10 @@ fn import_object_with_a_destination_imports_every_document_under_it() {
         .success()
         .stderr(predicate::str::contains("Imported").count(2));
 
-    let mut IDs = folder_names(&config.path().join("documents"));
+    let mut ids = folder_names(&config.path().join("documents"));
     ids.sort();
     assert_eq!(
-        IDs,
+        ids,
         vec![
             "object-path-claude-code-aaaa.json".to_string(),
             "object-path-claude-code-bbbb.json".to_string()
@@ -2404,7 +2404,7 @@ pub(crate) fn record(
     let tmp = parent.join(format!(
         ".{}.tmp-{}",
         crate::config::EXPORTS_FILE_NAME,
-        std::process::ID()
+        std::process::id()
     ));
     std::fs::write(&tmp, serde_json::to_string_pretty(&ledger)?)
         .with_context(|| format!("write {}", tmp.display()))?;
@@ -2545,20 +2545,20 @@ git commit -m "feat(export): record every object upload in a local ledger"
 ```rust
 // ── --all and --dry-run ─────────────────────────────────────────────
 
-fn seed_cache(config: &Path, ID: &str) {
+fn seed_cache(config: &Path, id: &str) {
     let documents = config.join("documents");
     std::fs::create_dir_all(&documents).unwrap();
     let work = tempfile::tempdir().unwrap();
-    let doc = write_doc_with_id(work.path(), ID);
-    std::fs::copy(&doc, documents.join(format!("{ID}.json"))).unwrap();
+    let doc = write_doc_with_id(work.path(), id);
+    std::fs::copy(&doc, documents.join(format!("{id}.json"))).unwrap();
 }
 
 #[test]
 fn export_all_uploads_every_cached_document_except_imports_and_skips_unchanged_on_rerun() {
     let config = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();
-    // Cache IDs are `<source>-<graph id>`; the fixture's graph ID is the
-    // cache ID itself, which is what a real derive produces too.
+    // Cache IDs are `<source>-<graph id>`; the fixture's graph id is the
+    // cache id itself, which is what a real derive produces too.
     seed_cache(config.path(), "claude-path-claude-code-aaaa");
     seed_cache(config.path(), "codex-path-codex-bbbb");
     seed_cache(config.path(), "object-path-claude-code-cccc");
@@ -3117,7 +3117,7 @@ In `print_settings`, after the `virtual_hosted_style` line (or at the end of the
         stored.server_side_encryption.is_some(),
     );
     line(
-        "kms key ID",
+        "kms key id",
         effective.sse_kms_key_id.as_deref(),
         stored.sse_kms_key_id.is_some(),
     );
@@ -3837,7 +3837,7 @@ git commit -m "feat(share): --to <destination> and object-storage remotes in [[p
 #[test]
 fn an_unknown_source_warns_instead_of_silently_returning_nothing() {
     let cfg = tempfile::tempdir().unwrap();
-    seed(cfg.path(), "claude-abc", r#"{"graph":{"ID":"g"},"paths":[]}"#);
+    seed(cfg.path(), "claude-abc", r#"{"graph":{"id":"g"},"paths":[]}"#);
 
     cmd()
         .env("TOOLPATH_CONFIG_DIR", cfg.path())
@@ -4187,7 +4187,7 @@ fn live_s3_round_trip() {
     let config = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let doc = write_doc_with_id(work.path(), "path-live-test-0001");
-    let prefix = format!("s3://{bucket}/toolpath-live-{}", std::process::ID());
+    let prefix = format!("s3://{bucket}/toolpath-live-{}", std::process::id());
 
     let mut export = cmd(config.path());
     export
