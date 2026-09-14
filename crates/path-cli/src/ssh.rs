@@ -76,44 +76,36 @@ impl fmt::Display for Destination {
 /// A command for the remote login shell, with the bytes for its stdin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteCommand {
-    words: Vec<String>,
+    argv: Vec<String>,
     stdin: Option<Vec<u8>>,
 }
 
 impl RemoteCommand {
-    /// An argv: `program` followed by the values given to [`Self::arg`].
-    pub(crate) fn new(program: &str) -> Self {
+    /// An argv: the program and its arguments.
+    pub(crate) fn new(argv: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
-            words: vec![program.to_string()],
+            argv: argv.into_iter().map(Into::into).collect(),
             stdin: None,
         }
     }
 
-    /// A constant `sh` script. The values given to [`Self::arg`] reach
-    /// it as `$1`, `$2`, and so on. The text must not contain a single
-    /// quote, so shlex renders it as one word, single-quoted when it
-    /// needs quoting at all, which the login shell passes to `sh`
-    /// verbatim.
-    pub(crate) fn script(text: &'static str) -> Self {
+    /// A `sh` script with positional parameters: `args` reach `text` as
+    /// `$1`, `$2`, and so on. `text` is any POSIX `sh` program, on one
+    /// line or many, without a single quote. It is `'static` so that a
+    /// script is a source literal and never built from values. shlex
+    /// single-quotes it as one word, which the login shell passes to
+    /// `sh -c` verbatim.
+    pub(crate) fn from_script(
+        text: &'static str,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         assert!(
             !text.contains('\''),
             "a remote script must not contain a single quote"
         );
-        Self {
-            words: vec!["sh".into(), "-c".into(), text.into(), "sh".into()],
-            stdin: None,
-        }
-    }
-
-    pub(crate) fn arg(mut self, value: impl Into<String>) -> Self {
-        self.words.push(value.into());
-        self
-    }
-
-    pub(crate) fn args(self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        values
-            .into_iter()
-            .fold(self, |command, value| command.arg(value))
+        let mut argv: Vec<String> = vec!["sh".into(), "-c".into(), text.into(), "sh".into()];
+        argv.extend(args.into_iter().map(Into::into));
+        Self { argv, stdin: None }
     }
 
     /// The bytes fed to the command's stdin. Without them stdin is
@@ -126,7 +118,7 @@ impl RemoteCommand {
     /// The string the exec request carries: every word quoted for a
     /// POSIX shell.
     pub(crate) fn render(&self) -> Result<String> {
-        let words: Vec<String> = self.words.iter().map(|w| quote(w)).collect::<Result<_>>()?;
+        let words: Vec<String> = self.argv.iter().map(|w| quote(w)).collect::<Result<_>>()?;
         Ok(words.join(" "))
     }
 }
@@ -750,10 +742,7 @@ mod tests {
 
     #[test]
     fn remote_command_renders_program_then_quoted_args() {
-        let cmd = RemoteCommand::new("tmux")
-            .arg("new-session")
-            .args(["-c", "/it's here"])
-            .arg("");
+        let cmd = RemoteCommand::new(["tmux", "new-session", "-c", "/it's here", ""]);
         assert_eq!(
             cmd.render().unwrap(),
             "tmux new-session -c \"/it's here\" ''"
@@ -762,7 +751,7 @@ mod tests {
 
     #[test]
     fn script_renders_sh_dash_c_then_positional_args() {
-        let cmd = RemoteCommand::script("cd \"$1\" && pwd -P").arg("/a b");
+        let cmd = RemoteCommand::from_script("cd \"$1\" && pwd -P", ["/a b"]);
         assert_eq!(
             cmd.render().unwrap(),
             "sh -c 'cd \"$1\" && pwd -P' sh '/a b'"
@@ -772,28 +761,36 @@ mod tests {
     #[test]
     #[should_panic(expected = "single quote")]
     fn script_rejects_a_single_quote() {
-        RemoteCommand::script("printf '%s'");
+        RemoteCommand::from_script("printf '%s'", std::iter::empty::<&str>());
+    }
+
+    #[test]
+    fn from_script_accepts_a_multi_line_script() {
+        let cmd = RemoteCommand::from_script("a=$1\nprintf %s \"$a\"", ["x y"]);
+        assert_eq!(
+            cmd.render().unwrap(),
+            "sh -c 'a=$1\nprintf %s \"$a\"' sh 'x y'"
+        );
+        assert_eq!(sh(&cmd.render().unwrap()), "x y");
     }
 
     #[test]
     fn render_rejects_a_nul_byte() {
-        assert!(RemoteCommand::new("x").arg("a\0b").render().is_err());
+        assert!(RemoteCommand::new(["x", "a\0b"]).render().is_err());
     }
 
     #[test]
     fn remote_command_round_trips_hostile_args_through_sh() {
-        let argv = RemoteCommand::new("printf")
-            .arg("%s\\n")
-            .arg(SHELL_METACHARACTERS)
-            .arg("$HOME");
+        let argv = RemoteCommand::new(["printf", "%s\\n", SHELL_METACHARACTERS, "$HOME"]);
         assert_eq!(
             sh(&argv.render().unwrap()),
             format!("{SHELL_METACHARACTERS}\n$HOME\n")
         );
 
-        let script = RemoteCommand::script("printf \"%s\\n\" \"$1\" \"$2\"")
-            .arg(SHELL_METACHARACTERS)
-            .arg("$HOME");
+        let script = RemoteCommand::from_script(
+            "printf \"%s\\n\" \"$1\" \"$2\"",
+            [SHELL_METACHARACTERS, "$HOME"],
+        );
         assert_eq!(
             sh(&script.render().unwrap()),
             format!("{SHELL_METACHARACTERS}\n$HOME\n")
@@ -831,9 +828,11 @@ mod tests {
         )
         .unwrap();
 
-        let script = RemoteCommand::script("printf \"TP_A=%s\\n\" \"$1\"; printf err >&2; cat")
-            .arg("x y")
-            .stdin(b"fed".to_vec());
+        let script = RemoteCommand::from_script(
+            "printf \"TP_A=%s\\n\" \"$1\"; printf err >&2; cat",
+            ["x y"],
+        )
+        .stdin(b"fed".to_vec());
         let out = ssh.run(&dest, &script, Duration::from_secs(30)).unwrap();
         assert!(
             out.status.success(),
@@ -846,7 +845,7 @@ mod tests {
         let out = ssh
             .run(
                 &dest,
-                &RemoteCommand::new("sh").arg("-c").arg("exit 3"),
+                &RemoteCommand::new(["sh", "-c", "exit 3"]),
                 Duration::from_secs(30),
             )
             .unwrap();
@@ -858,7 +857,8 @@ mod tests {
         let out = ssh
             .run(
                 &dest,
-                &RemoteCommand::script("echo unread >&2; exit 4").stdin(unread),
+                &RemoteCommand::from_script("echo unread >&2; exit 4", std::iter::empty::<&str>())
+                    .stdin(unread),
                 Duration::from_secs(30),
             )
             .unwrap();
@@ -868,7 +868,10 @@ mod tests {
         let err = ssh
             .run(
                 &dest,
-                &RemoteCommand::script("echo hanging on a lock >&2; sleep 30"),
+                &RemoteCommand::from_script(
+                    "echo hanging on a lock >&2; sleep 30",
+                    std::iter::empty::<&str>(),
+                ),
                 Duration::from_millis(1500),
             )
             .unwrap_err();
@@ -927,9 +930,7 @@ mod tests {
         fn fake_records_rendered_commands_and_replays_replies() {
             let fake = FakeSsh::new();
             fake.reply(0, "A=1\n");
-            let cmd = RemoteCommand::script("printf A=1")
-                .arg("x y")
-                .stdin(b"body".to_vec());
+            let cmd = RemoteCommand::from_script("printf A=1", ["x y"]).stdin(b"body".to_vec());
             let out = fake.run(&dest(), &cmd, Duration::from_secs(1)).unwrap();
             assert_eq!(out.stdout, b"A=1\n");
             assert_eq!(
