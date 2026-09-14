@@ -906,6 +906,24 @@ fn run_object(args: ObjectExportArgs) -> Result<()> {
 
         let uri = dest.uri_for(&name);
         uri.put(&settings, body.as_bytes())?;
+
+        let ledger_key = file
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| args.input.clone());
+        crate::export_ledger::record(
+            &crate::export_ledger::ledger_path()?,
+            &dest.to_string(),
+            &ledger_key,
+            crate::export_ledger::ExportRecord {
+                uri: uri.to_string(),
+                sha256: crate::export_ledger::sha256_hex(body.as_bytes()),
+                bytes: body.len() as u64,
+                uploaded_at: chrono::Utc::now(),
+                uploader: crate::export_ledger::uploader(),
+            },
+        )?;
+
         println!("{uri}");
         eprintln!("Uploaded {} bytes → {uri}", body.len());
         eprintln!("Resume it with: path resume {uri}");

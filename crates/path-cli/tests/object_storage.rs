@@ -128,6 +128,36 @@ fn export_then_import_round_trips_through_a_folder() {
 }
 
 #[test]
+fn every_export_is_recorded_in_the_local_ledger() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+
+    let ledger: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config.path().join("exports.json")).unwrap())
+            .unwrap();
+    let dest = folder.path().to_string_lossy().to_string();
+    let entry = &ledger[&dest]["doc"];
+    assert!(
+        entry["uri"]
+            .as_str()
+            .unwrap()
+            .ends_with("2026-01-01-hello--g1.json"),
+        "{ledger}"
+    );
+    assert_eq!(entry["sha256"].as_str().unwrap().len(), 64);
+    assert!(entry["uploader"].as_str().unwrap().contains('@'));
+}
+
+#[test]
 fn re_exporting_a_session_overwrites_its_own_object() {
     // Every part of the name is a pure function of the document, so a
     // re-share must not leave a trail of near-duplicates.

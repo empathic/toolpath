@@ -35,6 +35,8 @@ mod cmd_validate;
 mod config;
 mod derive;
 #[cfg(not(target_os = "emscripten"))]
+mod export_ledger;
+#[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
 #[cfg(not(target_os = "emscripten"))]
 pub mod harness;
