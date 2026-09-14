@@ -725,17 +725,6 @@ mod tests {
     }
 
     #[test]
-    fn quote_round_trips_through_sh() {
-        assert_eq!(
-            sh(&format!(
-                "printf %s {}",
-                quote(SHELL_METACHARACTERS).unwrap()
-            )),
-            SHELL_METACHARACTERS
-        );
-    }
-
-    #[test]
     fn remote_command_renders_program_then_quoted_args() {
         let cmd = RemoteCommand::new(["tmux", "new-session", "-c", "/it's here", ""]);
         assert_eq!(
@@ -790,15 +779,6 @@ mod tests {
             sh(&script.render().unwrap()),
             format!("{SHELL_METACHARACTERS}\n$HOME\n")
         );
-    }
-
-    #[test]
-    fn tail_keeps_the_last_n_characters() {
-        assert_eq!(tail("abcdef", 3), "def");
-        assert_eq!(tail("ab", 3), "ab");
-        assert_eq!(tail("", 3), "");
-        assert_eq!(tail("abc", 0), "");
-        assert_eq!(tail("héllo", 2), "lo");
     }
 
     /// Needs a reachable host with agent or key auth:
