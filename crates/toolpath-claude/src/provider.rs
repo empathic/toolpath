@@ -493,7 +493,7 @@ fn entry_to_event(entry: &ConversationEntry) -> toolpath_convo::ConversationEven
     let mut data = HashMap::new();
     if let Some(v) = &entry.cwd {
         data.insert(
-            crate::keys::CWD.into(),
+            crate::constants::CWD.into(),
             serde_json::Value::String(v.clone()),
         );
     }
