@@ -85,6 +85,11 @@ pub(crate) struct S3Settings {
     /// costs nothing at rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Set by [`merge_env`] when the access key came from
+    /// `AWS_ACCESS_KEY_ID` rather than the stored file, so the resolver
+    /// can report the source honestly. Never persisted.
+    #[serde(skip)]
+    pub credentials_from_env: bool,
 }
 
 /// The credential resolution this settings blob implies.
@@ -122,7 +127,11 @@ impl S3Settings {
             }),
             _ => None,
         };
-        crate::aws_creds::resolve(stored, self.profile.as_deref(), env)
+        let mut resolved = crate::aws_creds::resolve(stored, self.profile.as_deref(), env)?;
+        if self.credentials_from_env && resolved.source == crate::aws_creds::Source::Stored {
+            resolved.source = crate::aws_creds::Source::Environment;
+        }
+        Ok(resolved)
     }
 }
 
@@ -169,10 +178,16 @@ pub(crate) fn merge_env<F: Fn(&str) -> Option<String>>(mut cfg: S3Settings, env:
         keys.iter()
             .find_map(|k| env(k).filter(|v| !v.trim().is_empty()))
     };
-    cfg.access_key_id = cfg.access_key_id.or_else(|| first(&["AWS_ACCESS_KEY_ID"]));
-    cfg.secret_access_key = cfg
-        .secret_access_key
-        .or_else(|| first(&["AWS_SECRET_ACCESS_KEY"]));
+    if cfg.access_key_id.is_none()
+        && let (Some(key), Some(secret)) = (
+            first(&["AWS_ACCESS_KEY_ID"]),
+            first(&["AWS_SECRET_ACCESS_KEY"]),
+        )
+    {
+        cfg.access_key_id = Some(key);
+        cfg.secret_access_key = Some(secret);
+        cfg.credentials_from_env = true;
+    }
     cfg.session_token = cfg.session_token.or_else(|| first(&["AWS_SESSION_TOKEN"]));
     cfg.region = cfg
         .region
@@ -989,6 +1004,35 @@ mod tests {
             _ => None,
         });
         assert!(merged.access_key_id.is_none());
+    }
+
+    #[test]
+    fn env_supplied_keys_resolve_as_the_environment_source() {
+        let merged = merge_env(S3Settings::default(), |k| match k {
+            "AWS_ACCESS_KEY_ID" => Some("AKIAENV".to_string()),
+            "AWS_SECRET_ACCESS_KEY" => Some("SK".to_string()),
+            _ => None,
+        });
+        assert!(merged.credentials_from_env);
+        let resolved = merged
+            .resolve_with(&crate::aws_creds::Env {
+                home: None,
+                var: &|_: &str| None,
+                aws_cli: &|_: &str| anyhow::bail!("unused"),
+                sso_login: &|_: &str| Ok(()),
+                confirm: &|_: &str| false,
+            })
+            .unwrap();
+        assert_eq!(resolved.source, crate::aws_creds::Source::Environment);
+        assert_eq!(resolved.credentials.unwrap().access_key_id, "AKIAENV");
+
+        // Stored keys stay "stored".
+        let stored = S3Settings {
+            access_key_id: Some("AKIASTORED".to_string()),
+            secret_access_key: Some("SK".to_string()),
+            ..Default::default()
+        };
+        assert!(!merge_env(stored.clone(), |_| None).credentials_from_env);
     }
 
     #[test]

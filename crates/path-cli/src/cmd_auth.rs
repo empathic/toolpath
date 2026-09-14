@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use std::io::IsTerminal;
 
@@ -47,8 +47,10 @@ pub enum S3Op {
     /// tweak. Run interactively with no flags and it prompts, without
     /// echoing the secret.
     ///
-    /// This does not set *where* shares go — that's `path target`
-    /// — so one stored credential serves any number of buckets.
+    /// This does not set *where* shares go — that's `--to` on
+    /// `p export object` and `share`, or a `[[project]]` remote in
+    /// `~/.toolpath/config.toml` — so one stored credential serves any
+    /// number of buckets.
     #[command(alias = "set")]
     Login {
         #[command(flatten)]
@@ -57,6 +59,11 @@ pub enum S3Op {
     /// Show the S3 settings in effect, with secrets redacted and
     /// environment-supplied values marked
     Status,
+    /// Ask STS who the resolved credentials belong to (account, ARN,
+    /// user ID). Runs `aws sts get-caller-identity` with the credentials
+    /// this CLI would use, so it works for stored keys, environment
+    /// keys, and any AWS profile alike.
+    Whoami,
     /// Forget the stored S3 settings
     #[command(alias = "clear")]
     Logout,
@@ -195,6 +202,7 @@ fn run_s3(op: S3Op) -> Result<()> {
     match op {
         S3Op::Login { args } => s3_login(&path, args),
         S3Op::Status => s3_status(&path),
+        S3Op::Whoami => s3_whoami(),
         S3Op::Logout => s3_logout(&path),
     }
 }
@@ -285,12 +293,16 @@ fn s3_status(path: &Path) -> Result<()> {
         Some(_) => println!("S3 settings in {}", path.display()),
         None => println!("No stored S3 settings ({} does not exist).", path.display()),
     }
-    if effective == S3Settings::default() {
-        println!("Run `path auth s3 login` to store some.");
-    } else {
+    if effective != S3Settings::default() {
         print_settings(&effective, &stored.unwrap_or_default());
     }
-    print_credential_source(&effective);
+    let resolved = effective.resolve_real();
+    print_credential_source(&effective, &resolved);
+    // Advice only when it would change anything: someone whose profile
+    // already resolves has nothing to store.
+    if matches!(&resolved, Ok(r) if r.source == crate::aws_creds::Source::InstanceChain) {
+        println!("Run `path auth s3 login` to store credentials, or configure an AWS profile.");
+    }
     Ok(())
 }
 
@@ -301,6 +313,60 @@ fn s3_logout(path: &Path) -> Result<()> {
     }
     store::clear(path)?;
     println!("S3 settings cleared.");
+    Ok(())
+}
+
+fn s3_whoami() -> Result<()> {
+    let effective = store::effective_settings()?;
+    let resolved = effective.resolve_real()?;
+    let Some(creds) = &resolved.credentials else {
+        anyhow::bail!(
+            "no local credentials to identify ({}); on a host with an instance role, run \
+             `aws sts get-caller-identity` directly",
+            resolved.source
+        );
+    };
+    let region = effective
+        .region
+        .clone()
+        .or_else(|| resolved.region.clone())
+        .unwrap_or_else(|| store::DEFAULT_REGION.to_string());
+
+    let mut command = std::process::Command::new("aws");
+    command
+        .args(["sts", "get-caller-identity", "--output", "json"])
+        .env("AWS_ACCESS_KEY_ID", &creds.access_key_id)
+        .env("AWS_SECRET_ACCESS_KEY", &creds.secret_access_key)
+        .env("AWS_REGION", &region)
+        .env_remove("AWS_PROFILE");
+    match &creds.session_token {
+        Some(t) => {
+            command.env("AWS_SESSION_TOKEN", t);
+        }
+        None => {
+            command.env_remove("AWS_SESSION_TOKEN");
+        }
+    }
+    let out = command.output().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => anyhow!(
+            "`aws` isn't on PATH; `path auth s3 whoami` asks STS through the AWS CLI. \
+             Install it, or run `aws sts get-caller-identity` wherever it is installed."
+        ),
+        _ => anyhow!("running `aws sts get-caller-identity`: {e}"),
+    })?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "`aws sts get-caller-identity` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .context("the AWS CLI returned output that isn't JSON")?;
+    let field = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("?").to_string();
+    println!("{:<13}{}", "arn:", field("Arn"));
+    println!("{:<13}{}", "account:", field("Account"));
+    println!("{:<13}{}", "user id:", field("UserId"));
+    println!("{:<13}{}", "credentials:", resolved.source);
     Ok(())
 }
 
@@ -350,24 +416,34 @@ fn print_settings(effective: &S3Settings, stored: &S3Settings) {
     );
 }
 
-/// Say which credentials a share would actually use.
+/// Say which credentials a share would actually use, and as which key.
 ///
 /// The first question when an upload fails is *which* credential was
 /// tried — a stored key, an AWS profile, or nothing at all are three
 /// completely different fixes, and only this line distinguishes them.
-fn print_credential_source(effective: &S3Settings) {
-    match effective.resolve_real() {
+/// The key ID is printed for every source (never the secret) so the
+/// answer can be matched against IAM.
+fn print_credential_source(effective: &S3Settings, resolved: &Result<crate::aws_creds::Resolved>) {
+    match resolved {
         Ok(r) => {
-            println!("  credentials: {}", r.source);
-            if let Some(region) = &r.region
-                && effective.region.is_none()
+            println!("  {:<19}{}", "credentials:", r.source);
+            if let Some(c) = &r.credentials
+                && effective.access_key_id.is_none()
             {
-                println!("  region:      {region} (from the profile)");
+                println!("  {:<19}{}", "access key id:", c.access_key_id);
+            }
+            if effective.region.is_none() {
+                match &r.region {
+                    Some(region) => println!("  {:<19}{region} (from the profile)", "region:"),
+                    None => {
+                        println!("  {:<19}{} (default)", "region:", store::DEFAULT_REGION)
+                    }
+                }
             }
         }
         // The reason *is* the answer here — "no such profile" tells the
         // user exactly what to fix.
-        Err(e) => println!("  credentials: unresolved — {e:#}"),
+        Err(e) => println!("  {:<19}unresolved — {e:#}", "credentials:"),
     }
 }
 

@@ -393,7 +393,7 @@ fn auth_s3_login_stores_status_shows_and_logout_clears() {
         .stdout(predicate::str::contains("supersecretvalue").not())
         .stdout(predicate::str::contains("****alue"))
         // And status says which source a share would actually use.
-        .stdout(predicate::str::contains("credentials: stored by"));
+        .stdout(predicate::str::contains("credentials:       stored by"));
 
     cmd(config.path())
         .args(["auth", "s3", "logout"])
@@ -419,6 +419,110 @@ fn auth_s3_login_merges_into_the_existing_settings() {
     let raw = std::fs::read_to_string(config.path().join("s3.json")).unwrap();
     assert!(raw.contains("AKIAEXAMPLE"), "{raw}");
     assert!(raw.contains("us-west-2"), "{raw}");
+}
+
+#[test]
+fn auth_s3_status_reports_env_keys_as_the_environment() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .env("AWS_ACCESS_KEY_ID", "AKIAENVENVENVENV1234")
+        .env("AWS_SECRET_ACCESS_KEY", "s3cret")
+        .env("AWS_REGION", "us-west-2")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("AWS_ACCESS_KEY_ID (environment)"))
+        .stdout(predicate::str::contains("stored by").not());
+}
+
+#[test]
+fn auth_s3_status_prints_the_key_id_for_a_profile_and_skips_the_login_advice() {
+    let config = tempfile::tempdir().unwrap();
+    let aws = tempfile::tempdir().unwrap();
+    let creds = aws.path().join("credentials");
+    std::fs::write(
+        &creds,
+        "[default]\naws_access_key_id = AKIAPROFILE\naws_secret_access_key = s3cret\n",
+    )
+    .unwrap();
+
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .env("AWS_SHARED_CREDENTIALS_FILE", &creds)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("access key id:     AKIAPROFILE"))
+        .stdout(predicate::str::contains(
+            "region:            us-east-1 (default)",
+        ))
+        .stdout(predicate::str::contains("Run `path auth s3 login`").not());
+}
+
+#[test]
+fn auth_s3_status_advises_login_only_when_nothing_resolves() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EC2/ECS/EKS credential chain"))
+        .stdout(predicate::str::contains("Run `path auth s3 login`"));
+}
+
+#[test]
+fn auth_s3_whoami_runs_sts_with_the_resolved_credentials() {
+    let config = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = dir.path().join("env.log");
+    let aws = bin.join("aws");
+    std::fs::write(
+        &aws,
+        format!(
+            "#!/bin/sh\necho \"$AWS_ACCESS_KEY_ID\" >> {}\nif [ \"$1\" = \"sts\" ]; then echo '{{\"Account\":\"123456789012\",\"Arn\":\"arn:aws:iam::123456789012:user/alex\",\"UserId\":\"AIDAEXAMPLE\"}}'; exit 0; fi\nexit 1\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    cmd(config.path())
+        .env("PATH", &bin)
+        .env("AWS_ACCESS_KEY_ID", "AKIAENVENVENVENV1234")
+        .env("AWS_SECRET_ACCESS_KEY", "s3cret")
+        .args(["auth", "s3", "whoami"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "arn:aws:iam::123456789012:user/alex",
+        ))
+        .stdout(predicate::str::contains("account:     123456789012"))
+        .stdout(predicate::str::contains(
+            "credentials: AWS_ACCESS_KEY_ID (environment)",
+        ));
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap().trim(),
+        "AKIAENVENVENVENV1234"
+    );
+}
+
+#[test]
+fn auth_s3_whoami_without_the_aws_cli_says_so() {
+    let config = tempfile::tempdir().unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .env("PATH", empty.path())
+        .env("AWS_ACCESS_KEY_ID", "AKIAENVENVENVENV1234")
+        .env("AWS_SECRET_ACCESS_KEY", "s3cret")
+        .args(["auth", "s3", "whoami"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`aws` isn't on PATH"));
 }
 
 #[test]
@@ -462,7 +566,9 @@ fn a_profile_is_picked_up_with_no_toolpath_configuration_at_all() {
         .env("AWS_SHARED_CREDENTIALS_FILE", &creds)
         .assert()
         .success()
-        .stdout(predicate::str::contains("credentials: profile `default`"));
+        .stdout(predicate::str::contains(
+            "credentials:       profile `default`",
+        ));
 }
 
 #[test]
