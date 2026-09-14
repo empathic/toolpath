@@ -70,7 +70,7 @@ pub struct ResumeArgs {
     /// Toolpath document to resume from. Accepted shapes: a Pathbase
     /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
     /// (`owner/repo/slug`), an object in storage (`s3://bucket/key.json`,
-    /// `file:///dir/key.json`), a destination to pick from
+    /// also `s3a://`, `file:///dir/key.json`), a destination to pick from
     /// (`s3://bucket/prefix`, a folder), a path to a local toolpath JSON
     /// file, or a cache ID (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
     #[cfg_attr(

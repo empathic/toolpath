@@ -863,5 +863,6 @@ fn resume_help_lists_object_storage_inputs() {
         .assert()
         .success()
         .stdout(predicate::str::contains("s3://"))
+        .stdout(predicate::str::contains("s3a://"))
         .stdout(predicate::str::contains("folder"));
 }
