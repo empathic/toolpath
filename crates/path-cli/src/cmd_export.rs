@@ -936,7 +936,8 @@ pub(crate) fn object_name_for(
     match checked {
         Ok(doc) => {
             let name = crate::store::name_for(&doc);
-            if name.to_string().is_empty() {
+            let stem = name.to_string();
+            if crate::store::ObjectName::id_of(&stem).is_empty() {
                 anyhow::bail!(
                     "{} has a graph id with no usable characters; cannot name the object",
                     source.display()

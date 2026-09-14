@@ -251,6 +251,23 @@ fn a_schema_invalid_document_is_refused_unless_forced() {
 }
 
 #[test]
+fn a_document_whose_graph_id_has_no_usable_characters_is_refused() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc_with_id(work.path(), "!!!");
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no usable characters"));
+    assert!(folder_names(folder.path()).is_empty());
+}
+
+#[test]
 fn the_s3_subcommand_alias_still_works() {
     let config = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
