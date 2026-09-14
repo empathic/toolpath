@@ -29,8 +29,9 @@ use russh::keys::known_hosts::{check_known_hosts_path, learn_known_hosts_path};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, Disconnect};
 use std::fmt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{ExitStatus, Output};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -488,13 +489,13 @@ async fn exec_captured(
             "remote command did not finish within {}s; \
              the connection may be fine while the command hangs{}",
             timeout.as_secs(),
-            stderr_note(&stderr)
+            format_stderr_tail(&stderr)
         ),
     };
     if status.is_none() && session.handle.is_closed() {
         bail!(
             "the connection closed before the remote reported an exit status{}",
-            stderr_note(&stderr)
+            format_stderr_tail(&stderr)
         );
     }
     if status.is_none()
@@ -502,16 +503,17 @@ async fn exec_captured(
     {
         return Err(e);
     }
+    let code = status.unwrap_or(NO_EXIT_STATUS);
     Ok(Output {
-        status: exit_status(status.unwrap_or(NO_EXIT_STATUS)),
+        status: ExitStatus::from_raw((code as i32 & 0xff) << 8),
         stdout,
         stderr,
     })
 }
 
-/// The tail of `stderr` behind a `(stderr)` marker, or nothing when it
-/// is empty.
-fn stderr_note(stderr: &[u8]) -> String {
+/// The last [`STDERR_TAIL_CHARS`] of `stderr` behind a `(stderr)`
+/// marker, for the end of an error message. Empty when `stderr` is.
+fn format_stderr_tail(stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr);
     let stderr = stderr.trim_end();
     if stderr.is_empty() {
@@ -519,11 +521,6 @@ fn stderr_note(stderr: &[u8]) -> String {
     } else {
         format!("\n(stderr) {}", tail(stderr, STDERR_TAIL_CHARS))
     }
-}
-
-fn exit_status(code: u32) -> std::process::ExitStatus {
-    use std::os::unix::process::ExitStatusExt;
-    std::process::ExitStatus::from_raw((code as i32 & 0xff) << 8)
 }
 
 /// The last `n` characters of `s`.
@@ -572,14 +569,10 @@ pub(crate) fn parse_facts<const N: usize>(output: &Output, tags: [&str; N]) -> R
         .filter_map(|(line, tag)| line.strip_prefix(tag)?.strip_prefix('='))
         .collect();
     if lines.len() != N || values.len() != N {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut shown = stdout.trim_end().to_string();
-        if !stderr.trim().is_empty() {
-            shown.push_str("\n(stderr) ");
-            shown.push_str(stderr.trim_end());
-        }
         bail!(
-            "unexpected output from the remote (a login banner or notice?); output was:\n{shown}"
+            "unexpected output from the remote (a login banner or notice?); output was:\n{}{}",
+            stdout.trim_end(),
+            format_stderr_tail(&output.stderr)
         );
     }
     Ok(std::array::from_fn(|i| values[i].to_string()))
@@ -608,7 +601,7 @@ pub(crate) mod fake {
 
     pub(crate) fn output(status: u32, stdout: &str, stderr: &str) -> Output {
         Output {
-            status: exit_status(status),
+            status: ExitStatus::from_raw((status as i32 & 0xff) << 8),
             stdout: stdout.as_bytes().to_vec(),
             stderr: stderr.as_bytes().to_vec(),
         }
@@ -797,13 +790,6 @@ mod tests {
             sh(&script.render().unwrap()),
             format!("{SHELL_METACHARACTERS}\n$HOME\n")
         );
-    }
-
-    #[test]
-    fn exit_status_maps_the_remote_code() {
-        assert!(exit_status(0).success());
-        assert_eq!(exit_status(3).code(), Some(3));
-        assert_eq!(exit_status(255).code(), Some(255));
     }
 
     #[test]
