@@ -38,10 +38,19 @@ If the current session id reads `unknown`, treat the newest row of the `sessions
 
 If the Auth context shows no valid login and the user did not pass `--anon`, stop and ask: upload anonymously (`--anon` — unlisted, addressable only by UUID), or log in first? Logging in means the user runs `path auth login` in their own terminal (it needs an interactive code paste — never run it yourself), then re-runs `/path:share`.
 
+### Compose a title and description
+
+Write both yourself before uploading — they become the shared page's header:
+
+- **Title**: very short, 2–4 words naming the work (e.g. "Rate limiter retry", "Login form fix"). Not a sentence, no trailing period.
+- **Description**: one or two sentences summarizing what the session did and how it turned out.
+
+For the current session, summarize the conversation you're in. For another session, base them on its first-user-message column from the listing (and, if that's too thin to summarize, `exec show <harness> --project <absolute cwd> --session <session-id>`). If the user supplied `--title` or `--description` in the arguments, theirs win — don't compose that field.
+
 ### Upload
 
 ```
-"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-path.sh" exec share --harness <harness> --session <session-id> [flags]
+"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-path.sh" exec share --harness <harness> --session <session-id> --title <title> --description <description> [flags]
 ```
 
 - Add `--project <absolute cwd>` for claude/gemini/pi session ids; omit it for codex/opencode/cursor/copilot.
