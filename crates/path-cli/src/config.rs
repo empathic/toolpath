@@ -56,6 +56,9 @@ pub(crate) struct Config {
     pub(crate) home: Option<PathBuf>,
     /// `$PATHBASE_URL`: Pathbase server override (see `cmd_pathbase`).
     pub(crate) pathbase_url: Option<String>,
+    /// `$SSH_AUTH_SOCK`: the ssh agent's socket (see `ssh`).
+    #[cfg(all(unix, feature = "resume-remote"))]
+    pub(crate) ssh_auth_sock: Option<PathBuf>,
     /// `$TOOLPATH_CONFIG_DIR`: overrides the `~/.toolpath` root.
     pub(crate) toolpath_config_dir: Option<PathBuf>,
     /// `$TOOLPATH_QUERY_EXPLAIN`: query-planner diagnostics on stderr.
@@ -101,6 +104,7 @@ impl Config {
         ("COPILOT_HOME", "copilot_home"),
         ("HOME", "home"),
         (PATHBASE_URL_ENV, "pathbase_url"),
+        ("SSH_AUTH_SOCK", "ssh_auth_sock"),
         (CONFIG_DIR_ENV, "toolpath_config_dir"),
         ("TOOLPATH_QUERY_EXPLAIN", "toolpath_query_explain"),
         ("USERPROFILE", "userprofile"),
@@ -213,6 +217,7 @@ mod tests {
             jail.set_env(PATHBASE_URL_ENV, "https://pathbase.test");
             jail.set_env("TOOLPATH_QUERY_EXPLAIN", "1");
             jail.set_env("USERPROFILE", "/home/jailed-profile");
+            jail.set_env("SSH_AUTH_SOCK", "/run/jailed/agent.sock");
             let config = Config::load().unwrap();
             assert_eq!(
                 config,
@@ -222,6 +227,8 @@ mod tests {
                     copilot_home: Some(PathBuf::from("/home/jailed/.copilot")),
                     home: Some(PathBuf::from("/home/jailed")),
                     pathbase_url: Some("https://pathbase.test".to_string()),
+                    #[cfg(all(unix, feature = "resume-remote"))]
+                    ssh_auth_sock: Some(PathBuf::from("/run/jailed/agent.sock")),
                     toolpath_config_dir: Some(PathBuf::from("/tmp/cfg-root")),
                     toolpath_query_explain: Some("1".to_string()),
                     userprofile: Some(PathBuf::from("/home/jailed-profile")),

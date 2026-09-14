@@ -2,6 +2,21 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.22.0 — 2026-09-14
+
+- **`path-cli`** (0.22.0): `path resume` takes `--remote <user@host>`
+  (Claude only) and `--dry-run` behind the `resume-remote` cargo
+  feature. The command plans a resume on an ssh host: one read-only
+  ssh call reports the remote home, the claude path, and tmux
+  presence, and the plan prints them with the remote project
+  directory. `-C` names that directory; the default is the local cwd
+  with the local home swapped for the remote home. `--dry-run` stops
+  after the plan; without it the command stops with an error, because
+  ship, launch, and attach are not implemented yet. The transport is
+  the internal ssh module, an in-process SSH client (`russh`) compiled
+  only with the feature; the probe has a 60s wall-clock timeout.
+- **`toolpath-cli`** (0.22.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.21.0 — 2026-09-10
 
 - **Fix:** `path auth login` creates `~/.toolpath/credentials.json` with
