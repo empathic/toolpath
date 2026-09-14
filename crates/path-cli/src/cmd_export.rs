@@ -244,19 +244,11 @@ pub enum ExportTarget {
     ///
     /// S3 credentials come from your `~/.aws` profiles, the AWS
     /// environment, or `path auth s3 login`; a folder needs none. The
-    /// object is named `<date>-<topic>-<cache-id>.json`, and the
-    /// printed location is what `path resume` takes.
+    /// object is named `<date>-<topic>--<graph id>.json`, and the
+    /// printed location is what `path resume` takes. The object is the
+    /// full document: every turn, verbatim diffs, and tool output.
     #[command(alias = "s3")]
-    Object {
-        /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
-        #[arg(short, long)]
-        input: String,
-
-        /// Destination: `s3://bucket/prefix`, or a folder (`~/traces`,
-        /// `file:///srv/traces`).
-        #[arg(long, value_name = "DESTINATION")]
-        to: String,
-    },
+    Object(ObjectExportArgs),
 }
 
 pub fn run(target: ExportTarget) -> Result<()> {
@@ -307,8 +299,25 @@ pub fn run(target: ExportTarget) -> Result<()> {
             name,
             public,
         }),
-        ExportTarget::Object { input, to } => run_object(input, to),
+        ExportTarget::Object(args) => run_object(args),
     }
+}
+
+/// Arguments of `p export object`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ObjectExportArgs {
+    /// Input: cache ID (e.g. `claude-abc`) or path to a toolpath JSON file
+    #[arg(short, long)]
+    pub input: String,
+
+    /// Destination: `s3://bucket/prefix`, or a folder (`~/traces`,
+    /// `file:///srv/traces`).
+    #[arg(long, value_name = "DESTINATION")]
+    pub to: String,
+
+    /// Upload even if the input does not validate as a toolpath document
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug)]
@@ -878,30 +887,72 @@ fn write_cursor_to_stdout(session: &toolpath_cursor::CursorSession) -> Result<()
 
 // ── Object storage ────────────────────────────────────────────────────
 
-fn run_object(input: String, to: String) -> Result<()> {
+fn run_object(args: ObjectExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, to);
+        let _ = args;
         anyhow::bail!("'path p export object' requires a native environment with network access");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let file = cache_ref(&input)?;
+        let file = cache_ref(&args.input)?;
         let body = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read {}", file.display()))?;
 
-        let dest = crate::store::Destination::parse(&to)?;
+        let dest = crate::store::Destination::parse(&args.to)?;
         let settings = crate::store::effective_settings()?;
+        let name = object_name_for(&body, &file, args.force)?;
 
-        let doc = toolpath::v1::Graph::from_json(&body)
-            .map_err(|e| anyhow::anyhow!("{} is not a toolpath document: {e}", file.display()))?;
-        let uri = dest.uri_for(&crate::store::name_for(&doc));
+        let uri = dest.uri_for(&name);
         uri.put(&settings, body.as_bytes())?;
         println!("{uri}");
         eprintln!("Uploaded {} bytes → {uri}", body.len());
         eprintln!("Resume it with: path resume {uri}");
         Ok(())
+    }
+}
+
+/// Parse and schema-check the bytes about to be uploaded, and name the
+/// object from the parsed document. A body that is not a valid toolpath
+/// document is an error — a bucket of "traces" must not quietly collect
+/// whatever file was passed — unless `force`, which warns and falls back
+/// to naming the object after the file.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn object_name_for(
+    body: &str,
+    source: &std::path::Path,
+    force: bool,
+) -> Result<crate::store::ObjectName> {
+    let checked = toolpath::v1::Graph::from_json(body)
+        .map_err(|e| anyhow::anyhow!("{} is not a toolpath document: {e}", source.display()))
+        .and_then(|doc| {
+            let value: serde_json::Value = serde_json::from_str(body)?;
+            crate::schema::validate(&value).map_err(|e| {
+                anyhow::anyhow!("{} is not a valid toolpath document: {e}", source.display())
+            })?;
+            Ok(doc)
+        });
+    match checked {
+        Ok(doc) => {
+            let name = crate::store::name_for(&doc);
+            if name.to_string().is_empty() {
+                anyhow::bail!(
+                    "{} has a graph id with no usable characters; cannot name the object",
+                    source.display()
+                );
+            }
+            Ok(name)
+        }
+        Err(e) if force => {
+            eprintln!("warning: {e:#}; uploading anyway (--force)");
+            let stem = source
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document".to_string());
+            Ok(crate::store::ObjectName::new(&stem, None, None))
+        }
+        Err(e) => Err(e),
     }
 }
 

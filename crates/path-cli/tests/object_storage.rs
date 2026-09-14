@@ -40,10 +40,12 @@ fn cmd(config_dir: &Path) -> Command {
     c
 }
 
-/// A minimal single-step agent document, written to `dir/doc.json`.
-fn write_doc(dir: &Path) -> std::path::PathBuf {
+/// A minimal single-step agent document with graph id `id`, written to
+/// `dir/doc.json`. Two documents with different ids and the same
+/// basename are how collision tests are built.
+fn write_doc_with_id(dir: &Path, id: &str) -> std::path::PathBuf {
     let body = serde_json::json!({
-        "graph": { "id": "g1" },
+        "graph": { "id": id },
         "paths": [{
             "path": { "id": "p1", "head": "s1" },
             "steps": [{
@@ -61,6 +63,19 @@ fn write_doc(dir: &Path) -> std::path::PathBuf {
     let p = dir.join("doc.json");
     std::fs::write(&p, serde_json::to_string(&body).unwrap()).unwrap();
     p
+}
+
+fn write_doc(dir: &Path) -> std::path::PathBuf {
+    write_doc_with_id(dir, "g1")
+}
+
+fn folder_names(folder: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 // ── p export object / p import object ───────────────────────────────
@@ -83,8 +98,8 @@ fn export_then_import_round_trips_through_a_folder() {
         .trim()
         .to_string();
 
-    // Legible name: date and topic lead, cache id trails. The fixture
-    // is a 2026-01-01 session whose first prompt is "hello".
+    // Legible name: date and topic lead, the document's graph ID trails.
+    // The fixture is a 2026-01-01 session whose first prompt is "hello".
     assert!(
         uri.ends_with("/2026-01-01-hello--g1.json"),
         "unexpected location: {uri}"
@@ -130,6 +145,109 @@ fn re_exporting_a_session_overwrites_its_own_object() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     assert_eq!(objects, vec!["2026-01-01-hello--g1.json".to_string()]);
+}
+
+#[test]
+fn two_documents_with_the_same_basename_land_on_two_keys() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let doc_a = write_doc_with_id(a.path(), "path-claude-code-aaaa");
+    let doc_b = write_doc_with_id(b.path(), "path-claude-code-bbbb");
+
+    for doc in [&doc_a, &doc_b] {
+        cmd(config.path())
+            .args(["p", "export", "object"])
+            .args(["--input", doc.to_str().unwrap()])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        folder_names(folder.path()),
+        vec![
+            "2026-01-01-hello--path-claude-code-aaaa.json".to_string(),
+            "2026-01-01-hello--path-claude-code-bbbb.json".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn the_same_document_from_a_cache_id_and_a_file_lands_on_one_key() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc_with_id(work.path(), "path-claude-code-aaaa");
+    // The same bytes under a cache ID that has nothing to do with the
+    // file's basename.
+    let documents = config.path().join("documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    std::fs::copy(&doc, documents.join("claude-path-claude-code-aaaa.json")).unwrap();
+
+    for input in [doc.to_str().unwrap(), "claude-path-claude-code-aaaa"] {
+        cmd(config.path())
+            .args(["p", "export", "object"])
+            .args(["--input", input])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        folder_names(folder.path()),
+        vec!["2026-01-01-hello--path-claude-code-aaaa.json".to_string()]
+    );
+}
+
+#[test]
+fn a_non_document_is_refused_before_anything_is_written() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let junk = work.path().join("id_rsa");
+    std::fs::write(&junk, "PRIVATE KEY MATERIAL\nnot json at all\n").unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", junk.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not a toolpath document"));
+    assert!(folder_names(folder.path()).is_empty());
+}
+
+#[test]
+fn a_schema_invalid_document_is_refused_unless_forced() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // Parses as a Graph (the Rust struct only requires `actor` to be a
+    // string), but the schema's actor pattern (`type:name`) rejects it.
+    let bad = work.path().join("bad.json");
+    std::fs::write(
+        &bad,
+        r#"{"graph":{"id":"g-bad"},"paths":[{"path":{"id":"p","head":"s"},"steps":[{"step":{"id":"s","actor":"not-a-valid-actor","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#,
+    )
+    .unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", bad.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a valid toolpath document"));
+    assert!(folder_names(folder.path()).is_empty());
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--force"])
+        .args(["--input", bad.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("uploading anyway"));
+    assert_eq!(folder_names(folder.path()).len(), 1);
 }
 
 #[test]
