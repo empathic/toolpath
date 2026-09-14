@@ -112,8 +112,10 @@ pub enum ContentPart {
     ToolResult {
         tool_use_id: String,
         content: ToolResultContent,
-        #[serde(default)]
-        is_error: bool,
+        /// Absent when the harness wrote no `is_error`, so a projected
+        /// line matches the source line. The API reads absent as false.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
     },
     /// Catch-all for unknown content types
     #[serde(other)]
@@ -127,10 +129,16 @@ pub enum ToolResultContent {
     Parts(Vec<ToolResultPart>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One part of an array-valued `tool_result.content`: a text part, an
+/// image part, or any other shape the API accepts. Every field is kept
+/// so a projected line replays through the API unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolResultPart {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 impl ToolResultContent {
@@ -159,7 +167,8 @@ pub struct ToolUseRef<'a> {
 pub struct ToolResultRef<'a> {
     pub tool_use_id: &'a str,
     pub content: &'a ToolResultContent,
-    pub is_error: bool,
+    /// `None` when the part carries no `is_error`.
+    pub is_error: Option<bool>,
 }
 
 impl Message {
@@ -312,7 +321,11 @@ impl ContentPart {
                 is_error, content, ..
             } => {
                 let text = content.text();
-                let prefix = if *is_error { "error" } else { "result" };
+                let prefix = if is_error.unwrap_or(false) {
+                    "error"
+                } else {
+                    "result"
+                };
                 if text.chars().count() > 80 {
                     let truncated: String = text.chars().take(77).collect();
                     format!("[{}: {}...]", prefix, truncated)
@@ -896,7 +909,7 @@ mod tests {
         let part = ContentPart::ToolResult {
             tool_use_id: "t1".to_string(),
             content: ToolResultContent::Text("OK".to_string()),
-            is_error: false,
+            is_error: Some(false),
         };
         assert_eq!(part.summary(), "[result: OK]");
     }
@@ -906,7 +919,7 @@ mod tests {
         let part = ContentPart::ToolResult {
             tool_use_id: "t1".to_string(),
             content: ToolResultContent::Text("fail".to_string()),
-            is_error: true,
+            is_error: Some(true),
         };
         assert_eq!(part.summary(), "[error: fail]");
     }
@@ -917,7 +930,7 @@ mod tests {
         let part = ContentPart::ToolResult {
             tool_use_id: "t1".to_string(),
             content: ToolResultContent::Text(long),
-            is_error: false,
+            is_error: Some(false),
         };
         let summary = part.summary();
         assert!(summary.starts_with("[result:"));
@@ -943,10 +956,15 @@ mod tests {
         let c = ToolResultContent::Parts(vec![
             ToolResultPart {
                 text: Some("line1".to_string()),
+                ..Default::default()
             },
-            ToolResultPart { text: None },
+            ToolResultPart {
+                text: None,
+                ..Default::default()
+            },
             ToolResultPart {
                 text: Some("line2".to_string()),
+                ..Default::default()
             },
         ]);
         assert_eq!(c.text(), "line1\nline2");
@@ -1122,12 +1140,12 @@ mod tests {
                 ContentPart::ToolResult {
                     tool_use_id: "t1".to_string(),
                     content: ToolResultContent::Text("file contents".to_string()),
-                    is_error: false,
+                    is_error: Some(false),
                 },
                 ContentPart::ToolResult {
                     tool_use_id: "t2".to_string(),
                     content: ToolResultContent::Text("error msg".to_string()),
-                    is_error: true,
+                    is_error: Some(true),
                 },
             ])),
             model: None,
@@ -1141,9 +1159,9 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].tool_use_id, "t1");
         assert_eq!(results[0].content.text(), "file contents");
-        assert!(!results[0].is_error);
+        assert_eq!(results[0].is_error, Some(false));
         assert_eq!(results[1].tool_use_id, "t2");
-        assert!(results[1].is_error);
+        assert_eq!(results[1].is_error, Some(true));
     }
 
     #[test]
