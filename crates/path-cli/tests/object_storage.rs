@@ -487,3 +487,84 @@ fn an_unknown_profile_says_which_profile_and_how_to_list_them() {
         .stdout(predicate::str::contains("no such profile"))
         .stdout(predicate::str::contains("aws configure list-profiles"));
 }
+
+/// A fake `aws` on PATH that logs every invocation to `log` and reports
+/// an expired SSO session, plus an `~/.aws/config` declaring an SSO
+/// profile so resolution has to go through the CLI.
+fn expired_sso_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = dir.path().join("aws-calls.log");
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" >> {}\necho 'Error loading SSO Token: Token for https://x.awsapps.com/start does not exist' >&2\nexit 255\n",
+        log.display()
+    );
+    let aws = bin.join("aws");
+    std::fs::write(&aws, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let config = dir.path().join("aws-config");
+    std::fs::write(
+        &config,
+        "[profile sso-team]\nsso_start_url = https://x.awsapps.com/start\nsso_region = us-east-1\nsso_account_id = 123456789012\nsso_role_name = Dev\nregion = us-east-1\n",
+    )
+    .unwrap();
+    (dir, bin, log)
+}
+
+#[test]
+fn a_folder_export_never_spawns_the_aws_cli() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let (fixture, bin, log) = expired_sso_fixture();
+
+    cmd(config.path())
+        .env("PATH", &bin)
+        .env("AWS_CONFIG_FILE", fixture.path().join("aws-config"))
+        .env("AWS_PROFILE", "sso-team")
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+
+    assert!(
+        !log.exists(),
+        "the AWS CLI was spawned for a folder export: {:?}",
+        std::fs::read_to_string(&log)
+    );
+    assert_eq!(folder_names(folder.path()).len(), 1);
+}
+
+#[test]
+fn an_expired_sso_session_on_s3_fails_with_the_login_command_not_imds() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let (fixture, bin, log) = expired_sso_fixture();
+
+    cmd(config.path())
+        .env("PATH", &bin)
+        .env("AWS_CONFIG_FILE", fixture.path().join("aws-config"))
+        .env("AWS_PROFILE", "sso-team")
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", "s3://audit-bucket/traces"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("aws sso login --profile sso-team"))
+        .stderr(predicate::str::contains("169.254.169.254").not());
+
+    let calls = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(calls.contains("configure export-credentials"), "{calls}");
+    assert!(
+        !calls.contains("sso login"),
+        "no terminal, so no login must be attempted: {calls}"
+    );
+}

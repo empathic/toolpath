@@ -92,14 +92,12 @@ pub(crate) struct S3Settings {
 /// `profile` is threaded through so `--profile` on a command reaches
 /// the resolver; everything else comes from the ambient AWS setup.
 impl S3Settings {
-    pub(crate) fn resolved_credentials(&self) -> Option<crate::aws_creds::Resolved> {
-        self.resolve_real().ok()
-    }
-
-    /// [`resolved_credentials`](Self::resolved_credentials), keeping the
-    /// error. Anything *reporting* on credentials wants the reason —
-    /// "no such profile" is the whole answer, and swallowing it leaves
-    /// the user with nothing to act on.
+    /// Resolve against the real environment, propagating the error. The
+    /// resolver already answers "nothing configured" with the instance
+    /// chain, so an error here is an explicit failure (a named profile
+    /// that doesn't exist, an expired SSO session with nobody to ask) —
+    /// callers that want to *report* a failure, rather than silently
+    /// fall through to the instance chain, need the reason.
     pub(crate) fn resolve_real(&self) -> Result<crate::aws_creds::Resolved> {
         self.resolve_with(&crate::aws_creds::Env {
             home: std::env::var_os("HOME").map(PathBuf::from),
@@ -110,10 +108,8 @@ impl S3Settings {
         })
     }
 
-    /// [`resolved_credentials`](Self::resolved_credentials) against an
-    /// injected environment, and propagating the error so callers that
-    /// want to *report* a failure (rather than fall through to the
-    /// instance chain) can.
+    /// [`resolve_real`](Self::resolve_real) against an injected
+    /// environment, so tests don't have to mutate process-global state.
     pub(crate) fn resolve_with(
         &self,
         env: &crate::aws_creds::Env<'_>,
@@ -187,23 +183,41 @@ pub(crate) fn merge_env<F: Fn(&str) -> Option<String>>(mut cfg: S3Settings, env:
     cfg
 }
 
-/// Settings as `object_store` key/value options. Unrecognized keys are
-/// ignored by `parse_url_opts`, so the same list is safe to pass for a
-/// `file://` URL as for `s3://`.
-fn store_options(cfg: &S3Settings) -> Vec<(&'static str, String)> {
+/// Settings as `object_store` key/value options, plus which credential
+/// source won.
+///
+/// Only an `s3`/`s3a` URL resolves credentials at all. A folder needs
+/// none, so for `file` this returns nothing and never touches `~/.aws`
+/// or spawns the AWS CLI — which also means a folder export can never
+/// trip an SSO login prompt.
+///
+/// A resolution *error* propagates. The resolver already answers
+/// "nothing configured" with the instance chain, so an error here is
+/// an explicit failure (a named profile that doesn't exist, an expired
+/// SSO session with nobody to ask), and silently falling through to
+/// instance metadata would write under whatever principal the machine
+/// happens to have.
+#[allow(clippy::type_complexity)]
+fn store_options(
+    cfg: &S3Settings,
+    scheme: &str,
+) -> Result<(
+    Vec<(&'static str, String)>,
+    Option<crate::aws_creds::Source>,
+)> {
     fn push(opts: &mut Vec<(&'static str, String)>, k: &'static str, v: &Option<String>) {
         if let Some(v) = v.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
             opts.push((k, v.to_string()));
         }
     }
 
-    let mut opts: Vec<(&'static str, String)> = Vec::new();
+    if !matches!(scheme, "s3" | "s3a") {
+        return Ok((Vec::new(), None));
+    }
 
-    // Credentials come from `resolve_credentials`, not straight off
-    // `cfg` — a stored key is only one of the places they can live, and
-    // the common laptop case is an AWS profile we had to go find.
-    let resolved = cfg.resolved_credentials();
-    if let Some(c) = resolved.as_ref().and_then(|r| r.credentials.as_ref()) {
+    let mut opts: Vec<(&'static str, String)> = Vec::new();
+    let resolved = cfg.resolve_real()?;
+    if let Some(c) = &resolved.credentials {
         opts.push(("aws_access_key_id", c.access_key_id.clone()));
         opts.push(("aws_secret_access_key", c.secret_access_key.clone()));
         if let Some(t) = &c.session_token {
@@ -215,7 +229,7 @@ fn store_options(cfg: &S3Settings) -> Vec<(&'static str, String)> {
     let region = cfg
         .region
         .clone()
-        .or_else(|| resolved.as_ref().and_then(|r| r.region.clone()))
+        .or_else(|| resolved.region.clone())
         .unwrap_or_else(|| DEFAULT_REGION.to_string());
     opts.push(("aws_region", region));
 
@@ -231,7 +245,7 @@ fn store_options(cfg: &S3Settings) -> Vec<(&'static str, String)> {
     {
         opts.push(("aws_allow_http", "true".to_string()));
     }
-    opts
+    Ok((opts, Some(resolved.source)))
 }
 
 // ── Locations ───────────────────────────────────────────────────────────
@@ -295,9 +309,9 @@ impl ObjectUri {
 
     /// Download the object as UTF-8 text.
     pub(crate) fn get(&self, cfg: &S3Settings) -> Result<String> {
-        let (store, path) = open(&self.url, cfg)?;
+        let opened = open(&self.url, cfg)?;
         let bytes = block_on(async {
-            let result = store.get(&path).await?;
+            let result = opened.store.get(&opened.path).await?;
             result.bytes().await
         })
         .map_err(|e| explain_location(e, "read", &self.to_string()))?;
@@ -310,26 +324,32 @@ impl ObjectUri {
     /// the document, so re-sharing a session that has grown replaces
     /// its own object rather than accumulating near-duplicates.
     pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8]) -> Result<()> {
-        let (store, path) = open(&self.url, cfg)?;
+        let opened = open(&self.url, cfg)?;
         let payload = object_store::PutPayload::from(body.to_vec());
-        block_on(store.put(&path, payload))
+        block_on(opened.store.put(&opened.path, payload))
             .map(|_| ())
             .map_err(|e| explain_location(e, "write", &self.to_string()))
     }
 }
 
-fn open(url: &Url, cfg: &S3Settings) -> Result<(Box<dyn ObjectStore>, object_store::path::Path)> {
-    open_with(url, cfg, Vec::new())
+/// An open store plus the path inside it, and which credential source
+/// was used (`None` for a folder).
+struct Opened {
+    store: Box<dyn ObjectStore>,
+    path: object_store::path::Path,
+    #[allow(dead_code)]
+    source: Option<crate::aws_creds::Source>,
 }
 
-fn open_with(
-    url: &Url,
-    cfg: &S3Settings,
-    extra: Vec<(&'static str, String)>,
-) -> Result<(Box<dyn ObjectStore>, object_store::path::Path)> {
-    let mut opts = store_options(cfg);
-    opts.extend(extra);
-    object_store::parse_url_opts(url, opts).with_context(|| format!("open {}", friendly(url)))
+fn open(url: &Url, cfg: &S3Settings) -> Result<Opened> {
+    let (opts, source) = store_options(cfg, url.scheme())?;
+    let (store, path) = object_store::parse_url_opts(url, opts)
+        .with_context(|| format!("open {}", friendly(url)))?;
+    Ok(Opened {
+        store,
+        path,
+        source,
+    })
 }
 
 /// Strip `object_store`'s internals out of an error message.
@@ -387,8 +407,8 @@ impl Destination {
     /// Nothing is downloaded — legible object names carry enough for a
     /// picker row, which is exactly why they're worth the length.
     pub(crate) fn list(&self, cfg: &S3Settings) -> Result<Vec<ObjectEntry>> {
-        let (store, prefix) = open(&self.base, cfg)?;
-        let listed = block_on(store.list_with_delimiter(Some(&prefix)))
+        let opened = open(&self.base, cfg)?;
+        let listed = block_on(opened.store.list_with_delimiter(Some(&opened.path)))
             .map_err(|e| explain_location(e, "list", &friendly(&self.base)))?;
 
         let mut out: Vec<ObjectEntry> = listed
@@ -973,12 +993,16 @@ mod tests {
 
     #[test]
     fn store_options_carry_credentials_and_endpoint() {
-        let opts = store_options(&S3Settings {
-            access_key_id: Some("AK".to_string()),
-            secret_access_key: Some("SK".to_string()),
-            endpoint: Some("http://127.0.0.1:9000".to_string()),
-            ..Default::default()
-        });
+        let (opts, source) = store_options(
+            &S3Settings {
+                access_key_id: Some("AK".to_string()),
+                secret_access_key: Some("SK".to_string()),
+                endpoint: Some("http://127.0.0.1:9000".to_string()),
+                ..Default::default()
+            },
+            "s3",
+        )
+        .unwrap();
         let get = |k: &str| {
             opts.iter()
                 .find(|(key, _)| *key == k)
@@ -990,15 +1014,35 @@ mod tests {
         // Plaintext endpoints have to be opted into explicitly.
         assert_eq!(get("aws_allow_http"), Some("true"));
         assert_eq!(get("aws_region"), Some(DEFAULT_REGION));
+        assert_eq!(source, Some(crate::aws_creds::Source::Stored));
     }
 
     #[test]
     fn https_endpoint_does_not_allow_http() {
-        let opts = store_options(&S3Settings {
-            endpoint: Some("https://minio.example".to_string()),
-            ..Default::default()
-        });
+        let (opts, _) = store_options(
+            &S3Settings {
+                endpoint: Some("https://minio.example".to_string()),
+                ..Default::default()
+            },
+            "s3",
+        )
+        .unwrap();
         assert!(!opts.iter().any(|(k, _)| *k == "aws_allow_http"));
+    }
+
+    #[test]
+    fn a_folder_never_resolves_credentials() {
+        // A stored profile that does not exist would make resolution
+        // fail — and must not even be attempted for a folder.
+        let cfg = S3Settings {
+            profile: Some("definitely-not-a-profile".to_string()),
+            ..Default::default()
+        };
+        let (opts, source) = store_options(&cfg, "file").unwrap();
+        assert!(opts.is_empty());
+        assert_eq!(source, None);
+        let err = store_options(&cfg, "s3").unwrap_err().to_string();
+        assert!(err.contains("definitely-not-a-profile"), "{err}");
     }
 
     #[test]
