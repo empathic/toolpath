@@ -35,6 +35,38 @@ use std::process::{ExitStatus, Output};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Bound on the TCP connect, the handshake, and authentication
+/// together. Separate from the caller's per-command timeout, which
+/// bounds the command alone.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound on the disconnect, so a stalled peer does not hold the caller
+/// after its command is done.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Keepalives on every session, so a peer that stops answering is
+/// noticed within a minute.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const KEEPALIVE_MAX: usize = 3;
+
+/// The ssh port. A [`Destination`] carries none.
+const PORT: u16 = 22;
+
+/// The exit status reported when the remote gave none: a channel that
+/// closed without an exit-status message, or a command killed by a
+/// signal. `ssh` itself reports 255 in that case.
+const NO_EXIT_STATUS: u32 = 255;
+
+/// How much of the remote stderr an error message carries.
+const STDERR_TAIL_CHARS: usize = 1000;
+
+/// The file in the ssh directory that verifies host keys.
+const KNOWN_HOSTS_FILE: &str = "known_hosts";
+
+/// The OpenSSH default identity files in the ssh directory, in the
+/// order they are tried.
+const IDENTITY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+
 /// An ssh destination: `user@host` on port 22. `~/.ssh/config` is not
 /// read, so an alias, a port, or an IPv6 address is not accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,38 +168,6 @@ pub(crate) trait Transport {
     fn run(&self, dest: &Destination, command: &RemoteCommand, timeout: Duration)
     -> Result<Output>;
 }
-
-/// Bound on the TCP connect, the handshake, and authentication
-/// together. Separate from the caller's per-command timeout, which
-/// bounds the command alone.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Bound on the disconnect, so a stalled peer does not hold the caller
-/// after its command is done.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Keepalives on every session, so a peer that stops answering is
-/// noticed within a minute.
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
-const KEEPALIVE_MAX: usize = 3;
-
-/// The ssh port. A [`Destination`] carries none.
-const PORT: u16 = 22;
-
-/// The exit status reported when the remote gave none: a channel that
-/// closed without an exit-status message, or a command killed by a
-/// signal. `ssh` itself reports 255 in that case.
-const NO_EXIT_STATUS: u32 = 255;
-
-/// How much of the remote stderr an error message carries.
-const STDERR_TAIL_CHARS: usize = 1000;
-
-/// The file in the ssh directory that verifies host keys.
-const KNOWN_HOSTS_FILE: &str = "known_hosts";
-
-/// The OpenSSH default identity files in the ssh directory, in the
-/// order they are tried.
-const IDENTITY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
 
 /// The in-process SSH client. Each call opens one connection.
 pub(crate) struct SshClient {
