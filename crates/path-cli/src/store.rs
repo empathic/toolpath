@@ -512,9 +512,6 @@ impl std::fmt::Display for ObjectName {
 }
 
 /// The three pieces of an object name, recovered from its stem.
-// Not yet read outside tests; a picker will render date/topic/ID as
-// separate columns once it exists.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NameParts {
     pub date: Option<String>,
@@ -571,8 +568,6 @@ impl ObjectName {
     /// Split a stem into date, topic, and ID. The date is recognized
     /// only as a leading `YYYY-MM-DD`; everything else before the
     /// separator is the topic.
-    // Not yet called outside tests; see `NameParts`.
-    #[allow(dead_code)]
     pub(crate) fn parse(stem: &str) -> NameParts {
         let (prefix, id) = match stem.rsplit_once(Self::ID_SEPARATOR) {
             Some((p, id)) => (Some(p), id),

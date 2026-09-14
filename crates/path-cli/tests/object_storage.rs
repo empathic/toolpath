@@ -674,3 +674,120 @@ fn an_expired_sso_session_on_s3_fails_with_the_login_command_not_imds() {
         "no terminal, so no login must be attempted: {calls}"
     );
 }
+
+// ── p list object ───────────────────────────────────────────────────
+
+fn folder_with_two_docs(config: &Path) -> tempfile::TempDir {
+    let folder = tempfile::tempdir().unwrap();
+    for id in ["path-claude-code-aaaa", "path-claude-code-bbbb"] {
+        let work = tempfile::tempdir().unwrap();
+        let doc = write_doc_with_id(work.path(), id);
+        cmd(config)
+            .args(["p", "export", "object"])
+            .args(["--input", doc.to_str().unwrap()])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert()
+            .success();
+    }
+    folder
+}
+
+#[test]
+fn list_object_tsv_is_one_line_per_document_with_the_id_first() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    let out = cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "tsv",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let mut rows: Vec<Vec<&str>> = stdout.lines().map(|l| l.split('\t').collect()).collect();
+    rows.sort();
+    assert_eq!(rows.len(), 2, "{stdout}");
+    assert_eq!(rows[0][0], "path-claude-code-aaaa");
+    assert_eq!(rows[0][1], "2026-01-01");
+    assert_eq!(rows[0][2], "hello");
+    assert!(
+        rows[0][5].ends_with("2026-01-01-hello--path-claude-code-aaaa.json"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn list_object_json_carries_the_parsed_name_parts() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    let out = cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["source"], "object");
+    let objects = v["objects"].as_array().unwrap();
+    assert_eq!(objects.len(), 2);
+    let ids: Vec<&str> = objects.iter().map(|o| o["id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&"path-claude-code-aaaa"), "{ids:?}");
+    assert_eq!(objects[0]["date"], "2026-01-01");
+    assert_eq!(objects[0]["topic"], "hello");
+    assert!(objects[0]["size"].as_u64().unwrap() > 0);
+    assert!(objects[0]["uri"].as_str().unwrap().ends_with(".json"));
+}
+
+#[test]
+fn list_object_on_an_empty_destination_exits_zero() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+
+    cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "tsv",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"objects\": []"));
+    cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "pretty",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no documents in"));
+}

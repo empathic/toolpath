@@ -70,6 +70,14 @@ pub enum ListSource {
         #[arg(long)]
         base: Option<PathBuf>,
     },
+    /// List the documents shared to an object-storage destination: an
+    /// `s3://bucket/prefix`, or a folder. Rows are built from object
+    /// names alone; nothing is downloaded.
+    Object {
+        /// Destination: `s3://bucket/prefix`, `~/traces`, `file:///srv/traces`
+        #[arg(value_name = "DESTINATION")]
+        destination: String,
+    },
 }
 
 /// Output format selector. When neither `--format` nor `--json` is set, the
@@ -118,6 +126,7 @@ pub fn run(
         ListSource::Opencode { project } => run_opencode(project, fmt, config),
         ListSource::Cursor { project } => run_cursor(project, fmt, config),
         ListSource::Pi { project, base } => run_pi(project, base, fmt, config),
+        ListSource::Object { destination } => run_object(destination, fmt),
     }
 }
 
@@ -1150,6 +1159,81 @@ fn emit_pi_tsv(project: &str, m: &toolpath_pi::SessionMeta) {
             .map(sanitize_tsv)
             .unwrap_or_default(),
     );
+}
+
+// ── Object storage ──────────────────────────────────────────────────────────
+
+fn run_object(destination: String, fmt: ListFormat) -> Result<()> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = (destination, fmt);
+        anyhow::bail!("'path p list object' requires a native environment with network access");
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        use crate::store::{Destination, ObjectName};
+
+        let dest = Destination::parse(&destination)?;
+        let settings = crate::store::effective_settings()?;
+        let entries = dest.list(&settings)?;
+
+        match fmt {
+            ListFormat::Json => {
+                let items: Vec<serde_json::Value> = entries
+                    .iter()
+                    .map(|e| {
+                        let parts = ObjectName::parse(&e.stem);
+                        serde_json::json!({
+                            "id": parts.id,
+                            "date": parts.date,
+                            "topic": parts.topic,
+                            "name": e.stem,
+                            "size": e.size,
+                            "modified": e.modified.map(|t| t.to_rfc3339()),
+                            "uri": e.uri.to_string(),
+                        })
+                    })
+                    .collect();
+                let output = serde_json::json!({
+                    "source": "object",
+                    "destination": dest.to_string(),
+                    "objects": items,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            }
+            ListFormat::Tsv => {
+                for e in &entries {
+                    let parts = ObjectName::parse(&e.stem);
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}\t{}",
+                        sanitize_tsv(&parts.id),
+                        sanitize_tsv(parts.date.as_deref().unwrap_or("")),
+                        sanitize_tsv(parts.topic.as_deref().unwrap_or("")),
+                        e.size,
+                        e.modified.map(|t| t.to_rfc3339()).unwrap_or_default(),
+                        sanitize_tsv(&e.uri.to_string()),
+                    );
+                }
+            }
+            ListFormat::Pretty => {
+                if entries.is_empty() {
+                    eprintln!("no documents in {dest}");
+                    return Ok(());
+                }
+                println!("Destination: {dest}");
+                println!();
+                for e in &entries {
+                    let when = e
+                        .modified
+                        .map(|t| t.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "          ".to_string());
+                    println!("  {when}  {:>8}  {}", e.size, e.stem);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
