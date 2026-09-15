@@ -27,9 +27,10 @@ command -v aws >/dev/null || { echo "aws CLI not on PATH (needed to create the b
 
 _container="toolpath-minio-$$"
 _port=9000
+# Docker Hub's minio/minio no longer allows anonymous pulls; quay.io/minio/minio does.
 docker run -d --rm --name "${_container}" -p "${_port}:9000" \
     -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-    minio/minio server /data >/dev/null
+    quay.io/minio/minio server /data >/dev/null
 trap 'docker stop "${_container}" >/dev/null 2>&1 || true' EXIT
 
 export AWS_ACCESS_KEY_ID=minioadmin
