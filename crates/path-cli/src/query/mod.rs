@@ -339,6 +339,19 @@ fn select_files(scope: &Scope) -> Result<Vec<DocSource>> {
                 );
             }
         }
+
+        // A `--source` that selects nothing is almost always a typo or a
+        // source that was never imported; say so rather than answering
+        // an empty question with an empty answer.
+        if let Some(name) = &scope.source
+            && scope.ids.is_empty()
+            && sources.is_empty()
+        {
+            eprintln!(
+                "warning: no cached documents with source `{name}`; run `path p cache ls` to see \
+                 what's cached"
+            );
+        }
     }
 
     for inp in &scope.inputs {

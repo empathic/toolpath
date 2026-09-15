@@ -59,7 +59,7 @@ pub fn run(op: CacheOp, config: &Config) -> Result<()> {
 fn run_ls() -> Result<()> {
     let entries = list_cached()?;
     if entries.is_empty() {
-        eprintln!("No cached documents. Run `path import <source>` to create one.");
+        eprintln!("No cached documents. Run `path p import <source>` to create one.");
         return Ok(());
     }
     for e in entries {

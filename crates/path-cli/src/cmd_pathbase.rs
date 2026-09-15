@@ -669,12 +669,27 @@ pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
     }
 
     let payload = serde_json::to_string_pretty(s)?;
-    std::fs::write(path, payload).with_context(|| format!("write {}", path.display()))?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("chmod 0600 {}", path.display()))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        // Open already restricted to 0600 so there is never a moment
+        // where the token exists world/group-readable under a permissive
+        // umask. `truncate` rather than `create_new`: the file is
+        // rewritten in place on every login.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("open {}", path.display()))?;
+        f.write_all(payload.as_bytes())
+            .with_context(|| format!("write {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, payload).with_context(|| format!("write {}", path.display()))?;
     }
     Ok(())
 }

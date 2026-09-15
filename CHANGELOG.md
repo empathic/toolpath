@@ -4,6 +4,18 @@ All notable changes to the Toolpath workspace are documented here.
 
 ## path-cli 0.21.0 — 2026-09-10
 
+- **Fix:** `path auth login` creates `~/.toolpath/credentials.json` with
+  mode 0600 from the first byte instead of writing it and restricting it
+  afterwards, so a permissive umask never leaves the token readable by
+  other users, even briefly.
+- **Fix:** error hints name commands that exist. "run `path cache ls`" and
+  "run `path import <source>`" (both removed without alias in 0.10.0)
+  now read `path p cache ls` and `path p import <source>`, and the
+  multi-path error from `path resume` no longer suggests a `split`
+  command that never existed.
+- **Fix:** `path query --source <name>` warns on stderr when no cached
+  document has that source prefix instead of silently answering the
+  empty question.
 - **`path-cli`** (0.21.0): `p export claude` takes `--content-addressed-session-id`
   behind the `resume-remote` cargo feature. The flag renames the
   session to a content-addressed ID: a v4-shaped UUID from the first

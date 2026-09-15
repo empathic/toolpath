@@ -170,8 +170,9 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
     }
     if g.paths.len() > 1 {
         anyhow::bail!(
-            "resume needs a single `Path`; input is a graph with {} paths. \
-             Pick one with `path query …` or split first.",
+            "resume needs a single `Path`; this document holds {} paths. Pass a \
+             single-path document, or export one path with `path p render md \
+             --input <file>` to inspect them.",
             g.paths.len()
         );
     }
