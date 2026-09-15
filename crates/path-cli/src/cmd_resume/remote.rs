@@ -1,16 +1,15 @@
 //! `path resume --remote`: resume a Claude session on a remote host
-//! under tmux. The command uploads and launches; it prints the ssh
-//! command that attaches.
+//! under tmux, with this terminal attached to it.
 //!
 //! The local host does all toolpath work: it projects the
 //! conversation in memory, renames it to the content-addressed
 //! session ID, roots it at the remote project directory, and uploads
 //! the JSONL over ssh stdin. The remote runs no `path`.
 //!
-//! The remote wins once it exists: a live tmux session is left as
-//! is, a present session file is launched as is, and only an absent
-//! file is uploaded. Two read-only probes decide which; the first
-//! remote write is the upload.
+//! The remote wins once it exists: a live tmux session is attached
+//! to as is, a present session file is launched as is, and only an
+//! absent file is shipped. Two read-only probes decide which; the
+//! first remote write is the ship.
 //!
 //! The remote runs constant `sh` scripts next to this module. The
 //! probes print `TP_<NAME>=<value>` fact lines; [`crate::ssh::parse_facts`]
@@ -63,10 +62,9 @@ pub struct RemoteArgs {
     /// (`user@host` or `user@host:port`; Claude only). With `--remote`,
     /// `-C` names the remote project directory; default: the local cwd
     /// with the local home swapped for the remote home. The session is
-    /// uploaded when the remote lacks it, and `claude -r` starts under
-    /// tmux; a live tmux session or a present session file on the
-    /// remote is used as is. The command prints the ssh command that
-    /// attaches.
+    /// shipped when the remote lacks it, `claude -r` starts under tmux,
+    /// and this terminal attaches; a live tmux session or a present
+    /// session file on the remote is used as is. Detach with ctrl-b d.
     #[arg(long = "remote", value_name = "DEST", value_parser = Destination::parse)]
     pub dest: Option<Destination>,
 
@@ -96,8 +94,28 @@ pub(super) fn require_harness_is_claude(
     }
 }
 
+/// Error unless stdin and stdout are terminals, which the attach
+/// needs; the caller says whether each is one.
+pub(super) fn require_a_terminal(stdin_is_tty: bool, stdout_is_tty: bool) -> Result<()> {
+    let not_a_tty = if !stdin_is_tty {
+        Some("stdin")
+    } else if !stdout_is_tty {
+        Some("stdout")
+    } else {
+        None
+    };
+    if let Some(stream) = not_a_tty {
+        bail!(
+            "`path resume --remote` needs an interactive terminal for the \
+             tmux attach: {stream} is not a TTY (pass --dry-run to stop at the plan)"
+        );
+    }
+    Ok(())
+}
+
 /// One remote resume: the document, where it goes, and the local
-/// context the default remote directory is derived from.
+/// context the default remote directory and the attach are derived
+/// from.
 pub(super) struct RemoteResume<'a> {
     pub(super) document: &'a toolpath::v1::Path,
     /// The text `document` was parsed from; the session ID hashes it.
@@ -108,6 +126,8 @@ pub(super) struct RemoteResume<'a> {
     pub(super) dry_run: bool,
     pub(super) local_home: &'a Path,
     pub(super) local_cwd: &'a Path,
+    /// This terminal's type, for the PTY the attach requests.
+    pub(super) term: Option<&'a str>,
 }
 
 /// The first step a run takes, decided by the project directory
@@ -149,9 +169,10 @@ struct RemotePlan {
     action: RunAction,
 }
 
-/// Entry point: probes, plan, then upload and launch as the remote
-/// state requires.
-pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Result<()> {
+/// Entry point: probes, plan, then ship, launch, and attach as the
+/// remote state requires. Returns the exit status of the attach, 0
+/// for a dry run.
+pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Result<u32> {
     let RemoteResume {
         document,
         document_json,
@@ -160,6 +181,7 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
         dry_run,
         local_home,
         local_cwd,
+        term,
     } = *request;
     let remote_dir = remote_dir
         .map(|p| p.to_str().context("-C must be valid UTF-8"))
@@ -222,7 +244,7 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
 
     if dry_run {
         eprintln!("Dry run: nothing was written or launched.");
-        return Ok(());
+        return Ok(0);
     }
 
     if plan.action == RunAction::UploadSession {
@@ -235,14 +257,21 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
         launch(&plan.target, dest, transport)?;
     }
 
-    // `ssh://` is the destination form OpenSSH takes with a port.
-    // `=` pins the exact session name; `-d` detaches a stale client.
-    eprintln!("Attach with (detach with ctrl-b d):");
     eprintln!(
-        "  ssh -t ssh://{dest} tmux attach-session -d -t ={}",
+        "Attaching to {} on {dest} (detach with ctrl-b d)",
         plan.target.tmux_name
     );
-    Ok(())
+    // `-u` forces UTF-8 output: the PTY channel carries no locale.
+    // `=` pins the exact session name; `-d` detaches a stale client.
+    let attach_command = RemoteCommand::new([
+        "tmux",
+        "-u",
+        "attach-session",
+        "-d",
+        "-t",
+        &format!("={}", plan.target.tmux_name),
+    ]);
+    transport.attach(dest, &attach_command, term)
 }
 
 /// Project the conversation under the plan's session ID and project
@@ -316,18 +345,17 @@ fn launch(target: &RemoteTarget, dest: &Destination, transport: &dyn Transport) 
 fn print_plan(plan: &RemotePlan, dest: &Destination) {
     let action = match (plan.action, plan.dead_session) {
         (RunAction::AttachTmux, _) => {
-            "nothing to upload or launch: the tmux session is live. \
-             The remote tree and turns are kept."
+            "attach to the live session. The remote tree and turns are kept."
         }
         (RunAction::LaunchClaude, false) => {
-            "launch claude on the remote session file. The remote tree and turns are kept."
+            "launch on the remote file, attach. The remote tree and turns are kept."
         }
         (RunAction::LaunchClaude, true) => {
-            "kill the dead tmux session, launch claude on the remote session file. \
+            "kill the dead tmux session, launch on the remote file, attach. \
              The remote tree and turns are kept."
         }
-        (RunAction::UploadSession, false) => "upload, launch claude.",
-        (RunAction::UploadSession, true) => "upload, kill the dead tmux session, launch claude.",
+        (RunAction::UploadSession, false) => "ship, launch, attach.",
+        (RunAction::UploadSession, true) => "ship, kill the dead tmux session, launch, attach.",
     };
     let target = &plan.target;
     eprintln!("Remote resume plan for {dest}:");
@@ -457,7 +485,32 @@ fn parse_flag(value: &str, what: &str, dest: &Destination) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ssh::fake::FakeSsh;
+    use crate::ssh::fake::{Call, FakeSsh};
+
+    /// The rendered command of a call, run or attach.
+    fn command_of(call: &Call) -> &str {
+        match call {
+            Call::Run { command, .. } | Call::Attach { command, .. } => command,
+        }
+    }
+
+    /// The stdin bytes of a run; `None` for an attach or a closed stdin.
+    fn input_of(call: &Call) -> Option<&[u8]> {
+        match call {
+            Call::Run { input, .. } => input.as_deref(),
+            Call::Attach { .. } => None,
+        }
+    }
+
+    /// The call attaches to the exact tmux session of [`doc_json`].
+    fn assert_attaches(call: &Call) {
+        assert!(matches!(call, Call::Attach { .. }), "{call:?}");
+        let command = command_of(call);
+        assert!(
+            command.contains(&format!("=path-{}", &session_id()[..8])),
+            "{command}"
+        );
+    }
 
     /// One valid single-path document with an agent actor, as text.
     fn doc_json() -> String {
@@ -491,11 +544,11 @@ mod tests {
     }
 
     /// Runs the resume for [`doc_json`] with `-C DIR`.
-    fn run(fake: &FakeSsh, dry_run: bool) -> Result<()> {
+    fn run(fake: &FakeSsh, dry_run: bool) -> Result<u32> {
         run_with_dir(fake, dry_run, Path::new(DIR))
     }
 
-    fn run_with_dir(fake: &FakeSsh, dry_run: bool, remote_dir: &Path) -> Result<()> {
+    fn run_with_dir(fake: &FakeSsh, dry_run: bool, remote_dir: &Path) -> Result<u32> {
         let json = doc_json();
         let graph = toolpath::v1::Graph::from_json(&json).unwrap();
         resume(
@@ -507,6 +560,7 @@ mod tests {
                 dry_run,
                 local_home: Path::new("/home/local"),
                 local_cwd: Path::new("/home/local/work"),
+                term: Some("xterm-test"),
             },
             fake,
         )
@@ -543,6 +597,24 @@ mod tests {
     }
 
     #[test]
+    fn require_a_terminal_names_the_stream_that_is_not_a_tty() {
+        assert!(require_a_terminal(true, true).is_ok());
+        let err = require_a_terminal(false, true).unwrap_err();
+        assert!(err.to_string().contains("stdin is not a TTY"), "{err:#}");
+        let err = require_a_terminal(true, false).unwrap_err();
+        assert!(err.to_string().contains("stdout is not a TTY"), "{err:#}");
+    }
+
+    #[test]
+    fn a_non_zero_attach_status_is_returned() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "yes", "no", "yes");
+        fake.reply(2, ""); // attach
+        assert_eq!(run(&fake, false).unwrap(), 2);
+    }
+
+    #[test]
     fn require_harness_is_claude_rejects_other_harnesses_and_names_the_fix() {
         assert!(require_harness_is_claude(None, Some(Harness::Claude)).is_ok());
         assert!(require_harness_is_claude(Some(Harness::Claude), Some(Harness::Codex)).is_ok());
@@ -554,22 +626,22 @@ mod tests {
     }
 
     #[test]
-    fn file_absent_uploads_and_launches() {
+    fn file_absent_ships_launches_and_attaches() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "no");
         fake.reply(0, ""); // upload
         fake.reply(0, ""); // launch
-        run(&fake, false).unwrap();
+        assert_eq!(run(&fake, false).unwrap(), 0);
 
         let calls = fake.calls();
-        assert_eq!(calls.len(), 4);
+        assert_eq!(calls.len(), 5);
         // Probes are read-only.
         for call in &calls[..2] {
-            assert!(call.input.is_none());
+            assert!(matches!(call, Call::Run { input: None, .. }), "{call:?}");
         }
         let id = session_id();
-        let command = &calls[2].command;
+        let command = command_of(&calls[2]);
         assert!(command.contains("umask 077"), "{command}");
         assert!(
             command.contains(&format!(
@@ -577,39 +649,44 @@ mod tests {
             )),
             "{command}"
         );
-        let jsonl = String::from_utf8(calls[2].input.clone().expect("upload feeds stdin")).unwrap();
+        let jsonl =
+            String::from_utf8(input_of(&calls[2]).expect("ship feeds stdin").to_vec()).unwrap();
         assert!(command.contains(&jsonl.len().to_string()), "{command}");
         let last = jsonl.lines().last().unwrap();
         let line: serde_json::Value = serde_json::from_str(last).unwrap();
         assert_eq!(line["sessionId"], id.as_str());
-        let command = &calls[3].command;
+        let command = command_of(&calls[3]);
         assert!(command.contains("tmux new-session"), "{command}");
         assert!(command.contains("remain-on-exit failed"), "{command}");
         assert!(command.contains(&id), "{command}");
         assert!(command.contains("/usr/local/bin/claude"), "{command}");
-        assert!(calls[3].input.is_none());
+        assert!(input_of(&calls[3]).is_none());
+        assert_attaches(&calls[4]);
     }
 
     #[test]
-    fn file_present_launches_without_uploading() {
+    fn file_present_launches_and_attaches_without_shipping() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "yes");
         fake.reply(0, ""); // launch
         run(&fake, false).unwrap();
         let calls = fake.calls();
-        assert_eq!(calls.len(), 3);
-        let command = &calls[2].command;
+        assert_eq!(calls.len(), 4);
+        let command = command_of(&calls[2]);
         assert!(command.contains("tmux new-session"), "{command}");
+        assert_attaches(&calls[3]);
     }
 
     #[test]
-    fn live_session_neither_uploads_nor_launches() {
+    fn live_session_attaches_without_shipping_or_launching() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "yes", "no", "yes");
         run(&fake, false).unwrap();
-        assert_eq!(fake.calls().len(), 2);
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 3);
+        assert_attaches(&calls[2]);
     }
 
     #[test]
@@ -621,20 +698,21 @@ mod tests {
         fake.reply(0, ""); // launch
         run(&fake, false).unwrap();
         let calls = fake.calls();
-        assert_eq!(calls.len(), 4);
+        assert_eq!(calls.len(), 5);
         let id = session_id();
-        let command = &calls[2].command;
+        let command = command_of(&calls[2]);
         assert!(command.contains("kill-session"), "{command}");
         assert!(
             command.contains(&format!("=path-{}", &id[..8])),
             "{command}"
         );
-        let command = &calls[3].command;
+        let command = command_of(&calls[3]);
         assert!(command.contains("tmux new-session"), "{command}");
+        assert_attaches(&calls[4]);
     }
 
     #[test]
-    fn a_failed_upload_stops_before_launch() {
+    fn a_failed_ship_stops_before_launch_and_attach() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "no");
@@ -667,7 +745,8 @@ mod tests {
         ])
         .unwrap();
         let outer = shlex::try_quote(&inner).unwrap();
-        let command = &fake.calls()[2].command;
+        let calls = fake.calls();
+        let command = command_of(&calls[2]);
         assert!(command.contains(outer.as_ref()), "{command}");
     }
 
@@ -694,7 +773,8 @@ mod tests {
         reply_dir(&fake, DIR, "no", "no", "no");
         run(&fake, true).unwrap();
         let session_id = session_id();
-        let command = &fake.calls()[1].command;
+        let calls = fake.calls();
+        let command = command_of(&calls[1]);
         assert!(command.contains(DIR), "{command}");
         assert!(
             command.contains(&format!("path-{}", &session_id[..8])),

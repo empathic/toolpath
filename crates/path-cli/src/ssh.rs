@@ -12,6 +12,7 @@
 //! `StrictHostKeyChecking=accept-new` does.
 //!
 //! [`Transport::run`] captures the output of an exec channel.
+//! [`Transport::attach`] bridges this terminal to a PTY channel.
 //!
 //! A remote command is one string by the protocol: the exec request
 //! carries it and the remote login shell parses it. [`RemoteCommand`]
@@ -30,11 +31,13 @@ use russh::keys::known_hosts::{check_known_hosts_path, learn_known_hosts_path};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, Disconnect};
 use std::fmt;
+use std::io::Read;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 
 /// Bound on the TCP connect, the handshake, and authentication
 /// together. Separate from the caller's per-command timeout, which
@@ -48,7 +51,7 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Keepalives on every session. A peer that stops answering is
 /// dropped after `KEEPALIVE_MAX` unanswered intervals; the drop lands
 /// up to one interval later depending on where in the cycle the peer
-/// died.
+/// died. During an attach no other bound applies.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const KEEPALIVE_MAX: usize = 3;
 
@@ -67,6 +70,14 @@ const NO_EXIT_STATUS: u32 = 255;
 
 /// How much of the remote stderr an error message carries.
 const STDERR_TAIL_CHARS: usize = 1000;
+
+/// The terminal type a PTY request names when the caller knows none.
+const DEFAULT_TERM: &str = "xterm";
+
+/// Bytes read from this terminal per keystroke batch during an attach,
+/// and how many batches queue before the reader waits on the channel.
+const KEYSTROKE_BUFFER: usize = 8192;
+const KEYSTROKE_QUEUE: usize = 16;
 
 /// The OpenSSH directory under the home directory.
 pub(crate) const SSH_DIR_NAME: &str = ".ssh";
@@ -197,6 +208,19 @@ pub(crate) trait Transport {
     /// detached remote process survives.
     fn run(&self, dest: &Destination, command: &RemoteCommand, timeout: Duration)
     -> Result<Output>;
+
+    /// Run `command` on `dest` in a PTY with this terminal attached to
+    /// it: raw mode, keystrokes and output forwarded, resizes passed
+    /// on. `term` is the terminal type the PTY request names. Returns
+    /// the command's exit status once it exits. Errors only when the
+    /// session cannot be set up or the remote refuses the pty or exec
+    /// request.
+    fn attach(
+        &self,
+        dest: &Destination,
+        command: &RemoteCommand,
+        term: Option<&str>,
+    ) -> Result<u32>;
 }
 
 /// The in-process SSH client. Each call opens one connection.
@@ -234,6 +258,21 @@ impl Transport for SshClient {
             let session = connect(dest, self.agent_socket.as_deref(), &self.ssh_dir).await?;
             let result =
                 exec_captured(&session, &rendered, command.stdin.as_deref(), timeout).await;
+            session.close().await;
+            result
+        })
+    }
+
+    fn attach(
+        &self,
+        dest: &Destination,
+        command: &RemoteCommand,
+        term: Option<&str>,
+    ) -> Result<u32> {
+        let rendered = command.render()?;
+        self.runtime.block_on(async {
+            let session = connect(dest, self.agent_socket.as_deref(), &self.ssh_dir).await?;
+            let result = attach_pty(&session, &rendered, term.unwrap_or(DEFAULT_TERM)).await;
             session.close().await;
             result
         })
@@ -546,6 +585,125 @@ async fn exec_captured(
     })
 }
 
+/// This terminal in raw mode until dropped.
+struct RawMode;
+
+impl RawMode {
+    fn enable() -> Result<Self> {
+        crossterm::terminal::enable_raw_mode().context("switch the terminal to raw mode")?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawMode {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+/// Keystrokes from this terminal, read on a dedicated thread as
+/// tokio's `stdin` docs recommend for interactive input: tokio's own
+/// handle reads on the blocking pool and cannot be cancelled, so a
+/// read waiting for the next keypress holds the runtime's shutdown.
+/// The thread ends when the receiver is dropped and the next read
+/// returns, or with the process.
+fn spawn_keystroke_reader() -> tokio::sync::mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = tokio::sync::mpsc::channel(KEYSTROKE_QUEUE);
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin().lock();
+        let mut buf = [0u8; KEYSTROKE_BUFFER];
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if sender.blocking_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    receiver
+}
+
+/// One PTY channel with this terminal in raw mode: keystrokes go to
+/// the channel, channel output goes to stdout, resizes are forwarded.
+/// The setup (channel open, pty request, exec request) is bounded by
+/// [`CONNECT_TIMEOUT`]; the attached run is bounded by the keepalive
+/// alone. A refused pty or exec request errors at once, because sshd
+/// keeps the channel open after a refusal.
+async fn attach_pty(session: &Session, command: &str, term: &str) -> Result<u32> {
+    let (cols, rows) = crossterm::terminal::size().context("read the terminal size")?;
+    let setup = async {
+        let channel = session
+            .handle
+            .channel_open_session()
+            .await
+            .context("open a session channel")?;
+        channel
+            .request_pty(true, term, u32::from(cols), u32::from(rows), 0, 0, &[])
+            .await
+            .context("request a pty")?;
+        channel
+            .exec(true, command)
+            .await
+            .context("send the exec request")?;
+        Ok::<_, anyhow::Error>(channel)
+    };
+    let channel = match tokio::time::timeout(CONNECT_TIMEOUT, setup).await {
+        Ok(channel) => channel?,
+        Err(_) => bail!(
+            "setting up the pty channel did not finish within {}s",
+            CONNECT_TIMEOUT.as_secs()
+        ),
+    };
+    let (mut reader, writer) = channel.split();
+
+    let _raw = RawMode::enable()?;
+    let mut keystrokes = spawn_keystroke_reader();
+    let mut keystrokes_open = true;
+    let mut stdout = tokio::io::stdout();
+    let mut resizes = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+        .context("watch for terminal resizes")?;
+    let mut status = None;
+    loop {
+        tokio::select! {
+            keys = keystrokes.recv(), if keystrokes_open => match keys {
+                Some(bytes) => writer.data(&bytes[..]).await.context("send keystrokes")?,
+                None => {
+                    keystrokes_open = false;
+                    writer.eof().await.context("close stdin")?;
+                }
+            },
+            msg = reader.wait() => match msg {
+                Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                    stdout.write_all(&data).await.context("write to the terminal")?;
+                    stdout.flush().await.context("write to the terminal")?;
+                }
+                Some(ChannelMsg::Failure) => {
+                    let _ = writer.close().await;
+                    bail!("the remote refused the pty or exec request");
+                }
+                Some(ChannelMsg::ExitStatus { exit_status }) => status = Some(exit_status),
+                Some(ChannelMsg::ExitSignal { signal_name, .. }) => {
+                    bail!("the attached command was terminated by signal {signal_name:?}")
+                }
+                Some(ChannelMsg::Close) | None => break,
+                Some(_) => {}
+            },
+            _ = resizes.recv() => {
+                if let Ok((cols, rows)) = crossterm::terminal::size() {
+                    let _ = writer.window_change(u32::from(cols), u32::from(rows), 0, 0).await;
+                }
+            }
+        }
+    }
+    if status.is_none() && session.handle.is_closed() {
+        bail!("the connection closed before the attached command exited");
+    }
+    Ok(status.unwrap_or(NO_EXIT_STATUS))
+}
+
 /// The last [`STDERR_TAIL_CHARS`] of `stderr` behind a `(stderr)`
 /// marker, for the end of an error message. Empty when `stderr` is.
 fn format_stderr_tail(stderr: &[u8]) -> String {
@@ -622,10 +780,16 @@ pub(crate) mod fake {
     use std::sync::Mutex;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct Call {
-        pub(crate) dest: String,
-        pub(crate) command: String,
-        pub(crate) input: Option<Vec<u8>>,
+    pub(crate) enum Call {
+        Run {
+            dest: String,
+            command: String,
+            input: Option<Vec<u8>>,
+        },
+        Attach {
+            dest: String,
+            command: String,
+        },
     }
 
     #[derive(Default)]
@@ -672,13 +836,29 @@ pub(crate) mod fake {
             _timeout: Duration,
         ) -> Result<Output> {
             let rendered = command.render()?;
-            self.calls.lock().unwrap().push(Call {
+            self.calls.lock().unwrap().push(Call::Run {
                 dest: dest.to_string(),
                 command: rendered.clone(),
                 input: command.stdin.clone(),
             });
             let reply = self.replies.lock().unwrap().pop_front();
             Ok(reply.unwrap_or_else(|| panic!("FakeSsh: no scripted reply for {rendered:?}")))
+        }
+
+        /// Records the attach and reports the next scripted reply's
+        /// status, or 0 when none is queued.
+        fn attach(
+            &self,
+            dest: &Destination,
+            command: &RemoteCommand,
+            _term: Option<&str>,
+        ) -> Result<u32> {
+            self.calls.lock().unwrap().push(Call::Attach {
+                dest: dest.to_string(),
+                command: command.render()?,
+            });
+            let reply = self.replies.lock().unwrap().pop_front();
+            Ok(reply.map_or(0, |output| output.status.code().unwrap_or(0) as u32))
         }
     }
 }
@@ -941,13 +1121,34 @@ mod tests {
             let cmd = RemoteCommand::from_script("printf A=1", ["x y"]).stdin(b"body".to_vec());
             let out = fake.run(&dest(), &cmd, Duration::from_secs(1)).unwrap();
             assert_eq!(out.stdout, b"A=1\n");
+            fake.reply(3, "");
+            assert_eq!(
+                fake.attach(&dest(), &RemoteCommand::new(["tmux"]), None)
+                    .unwrap(),
+                3
+            );
+            assert_eq!(
+                fake.attach(&dest(), &RemoteCommand::new(["tmux"]), None)
+                    .unwrap(),
+                0
+            );
             assert_eq!(
                 fake.calls(),
-                [Call {
-                    dest: "user@host".into(),
-                    command: "sh -c 'printf A=1' sh 'x y'".into(),
-                    input: Some(b"body".to_vec()),
-                }]
+                [
+                    Call::Run {
+                        dest: "user@host".into(),
+                        command: "sh -c 'printf A=1' sh 'x y'".into(),
+                        input: Some(b"body".to_vec()),
+                    },
+                    Call::Attach {
+                        dest: "user@host".into(),
+                        command: "tmux".into(),
+                    },
+                    Call::Attach {
+                        dest: "user@host".into(),
+                        command: "tmux".into(),
+                    },
+                ]
             );
         }
     }
