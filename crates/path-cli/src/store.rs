@@ -387,9 +387,9 @@ impl ObjectUri {
     /// near-duplicates. `spec.create_only` turns an existing object into
     /// an error instead, for destinations that are a record.
     pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8], spec: &PutSpec) -> Result<PutOutcome> {
-        // For a folder, count the directories that don't exist yet so the
-        // caller can say when this write created the destination.
-        let created_dirs = if self.url.scheme() == "file" {
+        // For a folder, remember which directories don't exist yet so
+        // only the ones this write creates get tightened.
+        let created_dirs: Vec<PathBuf> = if self.url.scheme() == "file" {
             self.url
                 .to_file_path()
                 .ok()
@@ -398,11 +398,12 @@ impl ObjectUri {
                         .ancestors()
                         .skip(1)
                         .take_while(|d| !d.exists())
-                        .count()
+                        .map(std::path::Path::to_path_buf)
+                        .collect()
                 })
-                .unwrap_or(0)
+                .unwrap_or_default()
         } else {
-            0
+            Vec::new()
         };
 
         let opened = open(&self.url, cfg)?;
@@ -437,10 +438,17 @@ impl ObjectUri {
         }
         let payload = object_store::PutPayload::from(body.to_vec());
         match block_on(opened.store.put_opts(&opened.path, payload, options)) {
-            Ok(_) => Ok(PutOutcome {
-                replaced,
-                created_dirs,
-            }),
+            Ok(_) => {
+                if self.url.scheme() == "file"
+                    && let Ok(target) = self.url.to_file_path()
+                {
+                    tighten_local_permissions(&target, &created_dirs);
+                }
+                Ok(PutOutcome {
+                    replaced,
+                    created_dirs: created_dirs.len(),
+                })
+            }
             Err(object_store::Error::AlreadyExists { .. }) => {
                 bail!("{self} already exists; drop --no-overwrite to replace it")
             }
@@ -984,6 +992,23 @@ fn expand_tilde(raw: &str) -> PathBuf {
         None => PathBuf::from(raw),
     }
 }
+
+/// A folder destination gets the same protection as the cache: the
+/// object 0600, and every directory this write created 0700. Directories
+/// that already existed (a Dropbox root, a shared mount) are left as the
+/// user had them. Best effort: a permission failure on a foreign
+/// filesystem must not turn a successful upload into an error.
+#[cfg(unix)]
+fn tighten_local_permissions(file: &std::path::Path, created_dirs: &[PathBuf]) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600));
+    for dir in created_dirs {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+#[cfg(not(unix))]
+fn tighten_local_permissions(_file: &std::path::Path, _created_dirs: &[PathBuf]) {}
 
 /// Render a location for humans: a `file://` URL shows as the plain
 /// path it names, which is both shorter and directly pasteable into

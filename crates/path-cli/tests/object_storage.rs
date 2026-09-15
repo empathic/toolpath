@@ -1289,3 +1289,38 @@ fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
         .stderr(predicate::str::contains("path p cache ls"))
         .stderr(predicate::str::contains("path cache ls").not());
 }
+
+#[cfg(unix)]
+#[test]
+fn folder_exports_are_private_and_created_directories_are_too() {
+    use std::os::unix::fs::PermissionsExt;
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let dest = root.path().join("new").join("deeper");
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &dest.to_string_lossy()])
+        .assert()
+        .success();
+
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode(&dest.join("2026-01-01-hello--claude-code-g1.json")),
+        0o600
+    );
+    assert_eq!(mode(&dest), 0o700);
+    assert_eq!(mode(&root.path().join("new")), 0o700);
+    // A directory that existed before the export is left alone.
+    let before = mode(root.path());
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &dest.to_string_lossy()])
+        .assert()
+        .success();
+    assert_eq!(mode(root.path()), before);
+}
