@@ -657,7 +657,12 @@ fn auth_s3_login_without_a_terminal_or_flags_is_an_error() {
         .args(["auth", "s3", "login"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Nothing to store"));
+        .stderr(predicate::str::contains("Nothing to store"))
+        // The suggestion is to get prompted, not to type the secret on
+        // the command line where it lands in shell history.
+        .stderr(predicate::str::contains("--access-key-id"))
+        .stderr(predicate::str::contains("be prompted"))
+        .stderr(predicate::str::contains("shell history"));
 }
 
 // ── credential resolution, end to end ───────────────────────────────

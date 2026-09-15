@@ -267,9 +267,10 @@ fn s3_login(path: &Path, args: S3LoginArgs) -> Result<()> {
 
     if cfg == S3Settings::default() {
         anyhow::bail!(
-            "Nothing to store. Pass at least one setting (e.g. \
-             `path auth s3 login --access-key-id AKIA… --secret-access-key …`), \
-             or run this from a terminal to be prompted."
+            "Nothing to store. Run `path auth s3 login` from a terminal to be \
+             prompted, or pass `--access-key-id AKIA…` and you'll be prompted \
+             for the secret. `--secret-access-key` on the command line exists \
+             for scripts, but it lands in shell history."
         );
     }
 

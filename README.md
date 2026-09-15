@@ -379,7 +379,10 @@ The picker leans on two machine-readable surfaces you can also use yourself:
   `<project>\t<session>\t<iso8601 last_activity>\t<count>\t<first_user_message>`.
   For single-keyed providers (codex, opencode):
   `<session>\t<iso8601 last_activity>\t<count>\t<cwd>\t<first_user_message>`.
-  `--format` defaults to `pretty` on a TTY and `tsv` when piped.
+  For `object` (an S3 bucket, S3-compatible endpoint, or folder):
+  `<id>\t<date>\t<topic>\t<size>\t<modified>\t<uri>` — `<topic>` is empty
+  for a topic-less document. `--format` defaults to `pretty` on a TTY
+  and `tsv` when piped.
 - `path show <provider> --…`: markdown summary for one session (the
   picker's `--preview` command).
 

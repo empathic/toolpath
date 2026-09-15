@@ -23,8 +23,11 @@ path resume s3://my-bucket/traces                            # pick from the buc
 The ID is the document's `graph.id`; the date is the session's first
 step; `--` is reserved, so automation takes everything after the last
 `--`. Every part is a function of the document, never of the input
-filename, so a re-export overwrites its own object and two different
-documents never collide. Imports land in the cache as `object-<id>`.
+filename, so a re-export overwrites its own object. Identity is
+`graph.id`: two documents with different `graph.id`s never share a
+key, and two that share one (git-derived documents from two repos on
+the same branch, for instance) replace each other unless
+`--no-overwrite` is set. Imports land in the cache as `object-<id>`.
 
 **Credentials come from wherever you already keep them.** `~/.aws`
 profiles, `AWS_PROFILE`, environment keys, and SSO / `role_arn` /
@@ -41,8 +44,14 @@ key; `path auth s3 whoami` asks STS.
 `no_overwrite`) makes puts create-only; `auth s3 login --sse aws:kms
 --kms-key-id …` sets server-side encryption; S3 objects carry
 `toolpath-*` metadata naming the graph ID, sha256, uploader, CLI
-version, and time; every upload is recorded locally in
-`~/.toolpath/exports.json`. Folder objects are 0600.
+version, and time — the uploader is `$USER@$HOSTNAME` as reported by
+the exporting process (attribution, not authentication; the bucket's
+CloudTrail data events or server access logs are the authoritative
+record of the principal behind each write); every upload is recorded
+locally in `~/.toolpath/exports.json`. Folder objects are 0600. No
+`path` command deletes an object — use bucket lifecycle rules or the
+AWS CLI for retention and erasure — and Object Lock makes erasure
+impossible by design, so choose its retention period accordingly.
 
 `p export object` validates the document before uploading (`--force`
 to skip). `--dry-run` prints the resolved location, endpoint, region,

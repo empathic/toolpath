@@ -124,6 +124,10 @@ Objects are named `<date>-<topic>--<id>.json`. The ID is the document's
 `graph.id`, and `--` is reserved: split on the last `--` to get it.
 Objects hold the full document — every turn, verbatim diffs, and tool
 output — so treat the bucket as you would the sessions themselves.
+Identity is `graph.id`: two documents with different `graph.id`s never
+share a key, and two that share one (git-derived documents from two
+repos on the same branch, for instance) replace each other unless
+`--no-overwrite` is set.
 
 Credentials: a folder needs none. For `s3://`, your `~/.aws` profiles
 (SSO included, via the AWS CLI), `AWS_PROFILE`, or environment keys are
@@ -141,13 +145,22 @@ that must be a record:
 - `path auth s3 login --sse aws:kms --kms-key-id <key>` sets server-side
   encryption; a bucket policy that denies unencrypted puts then works.
 - S3 objects carry `x-amz-meta-toolpath-graph-id`, `-sha256`,
-  `-uploader`, `-cli-version`, and `-uploaded-at`.
+  `-uploader`, `-cli-version`, and `-uploaded-at`. `-uploader` is
+  `$USER@$HOSTNAME` as reported by the exporting process — attribution,
+  not authentication.
 - `~/.toolpath/exports.json` records every upload from this machine.
 
 The bucket supplies the rest: Versioning and Object Lock for
 immutability, bucket-owner-enforced ownership, server access logging,
 and CloudTrail data events for the authoritative principal behind each
-write.
+write — the CloudTrail data events or server access logs, not the
+`-uploader` metadata above, are the authoritative record of who wrote
+an object.
+
+No `path` command removes an object. Use bucket lifecycle rules or the
+AWS CLI for retention and erasure. Object Lock, recommended above,
+makes erasure impossible by design for as long as its retention period
+runs, so choose that period deliberately.
 
 ### query
 
