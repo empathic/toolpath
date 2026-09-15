@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Resume a Claude Code session on a remote host. Builds `path`
-# from this checkout, seeds and syncs the host, hands off to
-# `path resume --remote`, which plans, uploads, and launches claude
-# under tmux, then attaches.
+# from this checkout, seeds and syncs the host, and hands off to
+# `path resume --remote`, which plans, ships, launches claude under
+# tmux, and attaches.
 #
 # `path` does the resume (`p import claude`, `resume --remote`). This
 # script does the host bootstrap in shell: VM creation, credential
@@ -89,13 +89,11 @@
 #      commands instead of running them.
 #   6. Hand off: `path resume <doc> --remote <dest> -C <remote-dir>`.
 #      It re-probes read-only, prints the plan, and does what the
-#      remote state asks: a live tmux session is left as is, a
+#      remote state asks: a live tmux session is attached to as is, a
 #      present session file is launched as is, an absent file is
-#      uploaded first. To reset a remote session, delete its file on
-#      the remote and re-run. --dry-run stops after its plan.
-#   7. [shell] Attach: `ssh -t <dest> tmux attach-session -d -t
-#      =path-<first 8 of the ID>`. Detach with ctrl-b d; re-run the
-#      script to reattach.
+#      shipped first. To reset a remote session, delete its file on
+#      the remote and re-run. --dry-run stops after its plan. Detach
+#      with ctrl-b d; re-run the script to reattach.
 
 set -euo pipefail
 
@@ -202,7 +200,7 @@ step "Preconditions"
 need cargo; need git; need ssh; need jq
 [[ $SYNC -eq 0 ]] || need rsync
 [[ $SETUP -eq 0 ]] || need scp
-[[ $DRY_RUN -eq 1 || -t 0 ]] || die "stdin is not a terminal; tmux attach needs one (pass --dry-run to stop before attach)"
+[[ $DRY_RUN -eq 1 || -t 0 ]] || die "stdin is not a terminal; path resume --remote attaches and needs one (pass --dry-run to stop at the plan)"
 [[ $REMOTE =~ $DEST_RE ]] || die "<user@host> must match $DEST_RE (got '$REMOTE')"
 # `path resume --remote` reads no ~/.ssh/config, so the destination must
 # mean the same thing to OpenSSH (which seeds and syncs) as to the
@@ -403,12 +401,4 @@ Tear down the VM when finished:
 EOF
 fi
 pause
-run "$PATH_BIN" "${RESUME_ARGS[@]}"
-[[ $DRY_RUN -eq 0 ]] || exit 0
-
-# ── 7. [shell] Attach ─────────────────────────────────────────────────────
-
-TMUX_NAME="path-${REMOTE_ID:0:8}"
-step "Attach to $TMUX_NAME (detach with ctrl-b d)"
-show "ssh -t $REMOTE tmux attach-session -d -t =$TMUX_NAME"
-exec ssh -t "$REMOTE" "tmux attach-session -d -t =$TMUX_NAME"
+exec "$PATH_BIN" "${RESUME_ARGS[@]}"
