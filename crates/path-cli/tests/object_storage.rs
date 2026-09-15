@@ -187,6 +187,60 @@ fn re_exporting_a_session_overwrites_its_own_object() {
 }
 
 #[test]
+fn re_exporting_prints_replaced_instead_of_uploaded() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Uploaded"))
+        .stderr(predicate::str::contains("Replaced").not());
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Replaced"))
+        .stderr(predicate::str::contains("Uploaded").not());
+}
+
+#[test]
+fn export_notes_when_it_creates_the_destination_directory() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let dest = root.path().join("new").join("deeper");
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &dest.to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(format!(
+            "note: created {}",
+            dest.to_string_lossy()
+        )));
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &dest.to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("note: created").not());
+}
+
+#[test]
 fn two_documents_with_the_same_basename_land_on_two_keys() {
     let config = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();
@@ -813,6 +867,26 @@ fn list_object_json_carries_the_parsed_name_parts() {
 }
 
 #[test]
+fn list_object_on_a_missing_local_directory_errors() {
+    let config = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let missing = root.path().join("nope");
+
+    cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &missing.to_string_lossy(),
+            "--format",
+            "tsv",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not exist"));
+}
+
+#[test]
 fn list_object_on_an_empty_destination_exits_zero() {
     let config = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();
@@ -982,6 +1056,57 @@ fn export_all_uploads_every_cached_document_except_imports_and_skips_unchanged_o
             "2 uploaded, 2 unchanged, 0 failed",
         ));
     assert_eq!(folder_names(folder.path()).len(), 4);
+}
+
+#[test]
+fn export_all_with_an_empty_cache_exits_zero() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "0 uploaded, 0 unchanged, 0 failed",
+        ));
+    assert!(folder_names(folder.path()).is_empty());
+}
+
+#[test]
+fn export_all_with_only_imported_documents_exits_zero_and_says_why() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    seed_cache(config.path(), "object-path-claude-code-cccc");
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "0 uploaded, 0 unchanged, 0 failed",
+        ))
+        .stderr(predicate::str::contains("1 skipped as imported"));
+    assert!(folder_names(folder.path()).is_empty());
+}
+
+#[test]
+fn dry_run_all_reports_a_would_upload_tally() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    seed_cache(config.path(), "claude-path-claude-code-aaaa");
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all", "--dry-run"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "1 would upload, 0 unchanged, 0 failed",
+        ));
+    assert!(folder_names(folder.path()).is_empty());
 }
 
 #[test]

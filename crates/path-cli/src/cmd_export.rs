@@ -951,15 +951,22 @@ fn run_object(args: ObjectExportArgs) -> Result<()> {
 
         // (ledger key, file) pairs. For a single export the key is the
         // cache ID or the file stem; for --all it is always the cache ID.
+        // `skipped_as_imported` counts cached documents excluded by the
+        // default `object-`/`pathbase-` filter, so an empty or all-excluded
+        // cache can say why rather than just "0 uploaded".
+        let mut skipped_as_imported = 0usize;
         let inputs: Vec<(String, std::path::PathBuf)> = if args.all {
-            crate::cache::list_cached()?
+            let all_cached = crate::cache::list_cached()?;
+            let total = all_cached.len();
+            let filtered: Vec<_> = all_cached
                 .into_iter()
                 .filter(|e| {
                     args.include_imported
                         || !(e.id.starts_with("object-") || e.id.starts_with("pathbase-"))
                 })
-                .map(|e| (e.id, e.path))
-                .collect()
+                .collect();
+            skipped_as_imported = total - filtered.len();
+            filtered.into_iter().map(|e| (e.id, e.path)).collect()
         } else {
             let input = args.input.as_deref().expect("clap: --input or --all");
             let file = cache_ref(input)?;
@@ -970,6 +977,17 @@ fn run_object(args: ObjectExportArgs) -> Result<()> {
             vec![(key, file)]
         };
         if inputs.is_empty() {
+            // Under `--all` an empty result is success, not an error: the
+            // nightly cron is `path p cache sync && path p export object
+            // --all --to "$DEST"` under `set -e`, and a fresh cache (or one
+            // holding only imported documents) must not fail it on day one.
+            if args.all {
+                eprintln!(
+                    "{}",
+                    tally_line(0, 0, 0, opts.dry_run, &dest, skipped_as_imported)
+                );
+                return Ok(());
+            }
             anyhow::bail!("no cached documents to export; run `path p cache sync` first");
         }
 
@@ -1003,7 +1021,7 @@ fn run_object(args: ObjectExportArgs) -> Result<()> {
                     uploaded += 1;
                 }
                 Ok(ObjectOutcome::Unchanged(_)) => unchanged += 1,
-                Ok(ObjectOutcome::DryRun(_)) => {}
+                Ok(ObjectOutcome::DryRun(_)) => uploaded += 1,
                 Err(e) if args.all => {
                     eprintln!("warning: {key}: {e:#}");
                     failed += 1;
@@ -1013,13 +1031,45 @@ fn run_object(args: ObjectExportArgs) -> Result<()> {
         }
 
         if args.all {
-            eprintln!("{uploaded} uploaded, {unchanged} unchanged, {failed} failed → {dest}");
+            eprintln!(
+                "{}",
+                tally_line(
+                    uploaded,
+                    unchanged,
+                    failed,
+                    opts.dry_run,
+                    &dest,
+                    skipped_as_imported
+                )
+            );
             if failed > 0 {
                 anyhow::bail!("{failed} document(s) failed to export");
             }
         }
         Ok(())
     }
+}
+
+/// The stderr summary line for `--all`: `would upload` under `--dry-run`,
+/// `uploaded` otherwise, plus a note when the default `object-`/`pathbase-`
+/// filter excluded documents (so "0 uploaded" can say why).
+#[cfg(not(target_os = "emscripten"))]
+fn tally_line(
+    uploaded: usize,
+    unchanged: usize,
+    failed: usize,
+    dry_run: bool,
+    dest: &crate::store::Destination,
+    skipped_as_imported: usize,
+) -> String {
+    let verb = if dry_run { "would upload" } else { "uploaded" };
+    let mut line = format!("{uploaded} {verb}, {unchanged} unchanged, {failed} failed → {dest}");
+    if skipped_as_imported > 0 {
+        line.push_str(&format!(
+            " ({skipped_as_imported} skipped as imported; --include-imported to include them)"
+        ));
+    }
+    line
 }
 
 /// Export one document body to `dest`: validate and name it, skip it if
@@ -1076,7 +1126,7 @@ pub(crate) fn export_body(
         return Ok(ObjectOutcome::DryRun(uri));
     }
 
-    uri.put(settings, body.as_bytes())?;
+    let outcome = uri.put(settings, body.as_bytes())?;
     crate::export_ledger::record(
         &crate::export_ledger::ledger_path()?,
         &dest.to_string(),
@@ -1089,7 +1139,14 @@ pub(crate) fn export_body(
             uploader: crate::export_ledger::uploader(),
         },
     )?;
-    eprintln!("Uploaded {} bytes → {uri}", body.len());
+    if outcome.replaced {
+        eprintln!("Replaced {} bytes → {uri}", body.len());
+    } else {
+        eprintln!("Uploaded {} bytes → {uri}", body.len());
+    }
+    if outcome.created_dirs > 0 {
+        eprintln!("note: created {dest}");
+    }
     Ok(ObjectOutcome::Uploaded(uri))
 }
 

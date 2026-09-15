@@ -271,6 +271,15 @@ pub(crate) struct ObjectUri {
     url: Url,
 }
 
+/// What [`ObjectUri::put`] actually did: whether the write replaced an
+/// object that was already there, and how many ancestor directories (for
+/// a folder destination) it had to create to get there.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct PutOutcome {
+    pub replaced: bool,
+    pub created_dirs: usize,
+}
+
 impl std::fmt::Display for ObjectUri {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&friendly(&self.url))
@@ -350,11 +359,41 @@ impl ObjectUri {
     /// Overwrite is intentional: the object name is a pure function of
     /// the document, so re-sharing a session that has grown replaces
     /// its own object rather than accumulating near-duplicates.
-    pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8]) -> Result<()> {
+    pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8]) -> Result<PutOutcome> {
+        // For a folder, count the directories that don't exist yet so the
+        // caller can say when this write created the destination.
+        let created_dirs = if self.url.scheme() == "file" {
+            self.url
+                .to_file_path()
+                .ok()
+                .map(|target| {
+                    target
+                        .ancestors()
+                        .skip(1)
+                        .take_while(|d| !d.exists())
+                        .count()
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
         let opened = open(&self.url, cfg)?;
+
+        // Whether this write replaces an existing object, decided before
+        // the put so the answer reflects the state the caller is about to
+        // change. Any head error other than `NotFound` (a transient read
+        // failure, a backend that doesn't support head) is treated as
+        // "new": it's informational only, and guessing wrong here must
+        // never block the upload itself.
+        let replaced = block_on(opened.store.head(&opened.path)).is_ok();
+
         let payload = object_store::PutPayload::from(body.to_vec());
         block_on(opened.store.put(&opened.path, payload))
-            .map(|_| ())
+            .map(|_| PutOutcome {
+                replaced,
+                created_dirs,
+            })
             .map_err(|e| explain_location(e, "write", &self.to_string(), opened.source.as_ref()))
     }
 }
@@ -442,6 +481,21 @@ impl Destination {
         Ok(Destination {
             base: parse_location(raw)?,
         })
+    }
+
+    /// Error clearly for a `file://` destination whose directory does not
+    /// exist, rather than silently listing nothing: the local backend
+    /// treats an absent directory the same as an empty one. A no-op for
+    /// `s3`/`s3a`, where "doesn't exist yet" and "empty" are genuinely
+    /// indistinguishable (and both fine).
+    pub(crate) fn ensure_local_dir_exists(&self) -> Result<()> {
+        if self.base.scheme() == "file"
+            && let Ok(path) = self.base.to_file_path()
+            && !path.exists()
+        {
+            bail!("{self} does not exist");
+        }
+        Ok(())
     }
 
     /// The `.json` objects sitting directly under this destination,
