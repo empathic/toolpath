@@ -898,9 +898,22 @@ fn is_ambiguously_relative(raw: &str) -> bool {
         || raw.starts_with("../")
         || raw == "."
         || raw == ".."
-        // Windows: `C:\…` and `\\server\share`.
-        || raw.starts_with('\\')
-        || raw.as_bytes().get(1) == Some(&b':'))
+        || windows_absolute(raw))
+}
+
+/// True for `C:traces`-style and `\\server\share`-style absolute
+/// spellings, which only mean something on Windows: on macOS/Linux
+/// `C:traces` is a bare relative path (the trap this function guards
+/// against), and treating it as absolute would silently write to
+/// `./C:traces`.
+#[cfg(windows)]
+fn windows_absolute(raw: &str) -> bool {
+    raw.starts_with('\\') || raw.as_bytes().get(1) == Some(&b':')
+}
+
+#[cfg(not(windows))]
+fn windows_absolute(_raw: &str) -> bool {
+    false
 }
 
 /// Expand a leading `~/`. Shells normally do this, but a quoted or
@@ -1059,6 +1072,16 @@ mod tests {
         // Saying "relative, I meant it" is accepted.
         assert!(Destination::parse("./my-bucket/traces").is_ok());
         assert!(Destination::parse("../sibling").is_ok());
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn a_windows_drive_path_is_rejected_as_ambiguous_off_windows() {
+        // `C:traces` only means something on Windows; on macOS/Linux it's
+        // a bare relative path, and treating it as absolute would create
+        // `./C:traces` while reporting success.
+        let err = Destination::parse("C:traces").unwrap_err().to_string();
+        assert!(err.contains("ambiguous"), "{err}");
     }
 
     #[test]
