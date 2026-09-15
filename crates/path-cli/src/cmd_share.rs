@@ -62,6 +62,11 @@ pub struct ShareArgs {
     /// or a folder (`~/traces`). Needs no Pathbase login.
     #[arg(long, value_name = "DESTINATION", conflicts_with_all = ["repo", "anon", "name", "public", "url"])]
     pub to: Option<String>,
+
+    /// With --to: refuse to replace an object that already exists at the
+    /// computed key.
+    #[arg(long, requires = "to")]
+    pub no_overwrite: bool,
 }
 
 /// One artifact surfaced by a provider — today always an agent session.
@@ -506,19 +511,19 @@ pub fn run(args: ShareArgs) -> Result<()> {
     let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
     let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some();
 
-    let preflight = |needs_auth: bool| -> Result<crate::cmd_pathbase::AuthMode> {
-        if args.to.is_some() {
-            // Object storage needs no Pathbase session at all.
-            return Ok(crate::cmd_pathbase::AuthMode::Anon);
+    // Lazy: `resolve_destination` calls this only once it has decided the
+    // destination actually is Pathbase, so a configured (or `--to`)
+    // object remote never touches the network or prints a Pathbase
+    // credentials notice.
+    let preflight = {
+        let base_url = base_url.clone();
+        move || -> Result<crate::cmd_pathbase::AuthMode> {
+            crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)
         }
-        crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)
     };
 
     if let (Some(h), Some(session)) = (harness, &args.session) {
-        // Explicit-args: validate creds before derive so a credential
-        // failure doesn't waste the derive/cache work.
-        let auth = preflight(needs_auth)?;
-        return share_explicit(h, session.as_str(), &args, auth, base_url);
+        return share_explicit(h, session.as_str(), &args, &preflight, base_url);
     }
 
     let cwd = std::env::current_dir()?;
@@ -544,10 +549,16 @@ pub fn run(args: ShareArgs) -> Result<()> {
     }
 
     // We have rows AND fzf available — now validate credentials before
-    // making the user pick a session. If preflight returns Anon (either
-    // explicit --anon, no creds + no auth flags, or auth probe failed
-    // and fell back), the picker still fires with that knowledge baked in.
-    let auth = preflight(needs_auth)?;
+    // making the user pick a session, unless this share is headed to
+    // object storage, which needs no Pathbase session at all. If
+    // preflight returns Anon (either explicit --anon, no creds + no
+    // auth flags, or auth probe failed and fell back), the picker still
+    // fires with that knowledge baked in.
+    let auth = if args.to.is_some() {
+        crate::cmd_pathbase::AuthMode::Anon
+    } else {
+        preflight()?
+    };
 
     let lines: Vec<String> = rows.iter().map(format_picker_row).collect();
     let header = match &args.to {
@@ -598,12 +609,16 @@ pub fn run(args: ShareArgs) -> Result<()> {
         },
         no_cache: args.no_cache,
         to: args.to.clone(),
+        no_overwrite: args.no_overwrite,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
     // thing. `{:?}` adds the surrounding quotes per the spec.
     eprintln!("Picked {} session {:?}", h.name(), title);
-    share_explicit(h, &session, &explicit, auth, base_url)
+    // `auth` is already resolved (or known irrelevant for `--to`) above;
+    // wrap it so `share_explicit` sees the same lazy-preflight interface
+    // as the explicit-args path without probing credentials twice.
+    share_explicit(h, &session, &explicit, &|| Ok(auth.clone()), base_url)
 }
 
 fn bail_no_sessions(
@@ -784,7 +799,7 @@ fn share_explicit(
     harness: ArtifactType,
     session: &str,
     args: &ShareArgs,
-    auth: crate::cmd_pathbase::AuthMode,
+    preflight: &dyn Fn() -> Result<crate::cmd_pathbase::AuthMode>,
     base_url: String,
 ) -> Result<()> {
     let project = match (harness.path_keyed(), args.project.as_ref()) {
@@ -819,9 +834,9 @@ fn share_explicit(
                 .ok()
                 .and_then(|doc| doc_session_dir(&doc))
         });
-        let dest = resolve_destination(args, &auth, base_url, session_dir)?;
+        let dest = resolve_destination(args, preflight, base_url, session_dir)?;
         let summary = format!("{} session {}", harness.name(), cache_id);
-        return deliver(dest, args, auth, &body, &cache_id, &summary);
+        return deliver(dest, args, &body, &cache_id, &summary);
     }
 
     let derived = derive_session(harness, project.as_deref(), session)?;
@@ -857,9 +872,9 @@ fn share_explicit(
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| doc_session_dir(&derived.doc));
-    let dest = resolve_destination(args, &auth, base_url, session_dir)?;
+    let dest = resolve_destination(args, preflight, base_url, session_dir)?;
     let body = derived.doc.to_json()?;
-    deliver(dest, args, auth, &body, &derived.cache_id, &summary)
+    deliver(dest, args, &body, &derived.cache_id, &summary)
 }
 
 /// The directory a derived session document belongs to: its single
@@ -879,12 +894,17 @@ fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
 /// Where an upload goes.
 #[derive(Debug)]
 enum ShareTarget {
-    /// A Pathbase repo (`None` = the pathstash default) on a server.
+    /// A Pathbase repo (`None` = the pathstash default) on a server,
+    /// with the auth mode already resolved (`resolve_destination` calls
+    /// `preflight` — which touches the network / prints Pathbase notices
+    /// — only once it lands on this variant).
     Pathbase {
         repo: Option<RepoSpec>,
         base_url: String,
+        auth: crate::cmd_pathbase::AuthMode,
     },
-    /// An object-storage destination.
+    /// An object-storage destination. Resolving one never calls
+    /// `preflight`: object storage needs no Pathbase session at all.
     Object(crate::store::Destination),
 }
 
@@ -903,9 +923,15 @@ struct ShareDestination {
 /// configured Pathbase remote needs an authed upload, so hitting one
 /// while unauthenticated is an error rather than a silent fall-through
 /// to the anonymous endpoint.
+///
+/// `preflight` resolves Pathbase credentials; it is called at most once,
+/// and only from a branch that has already decided the destination is
+/// Pathbase — an object destination (`--to`, or a configured object
+/// remote) never invokes it, so it never touches the network or prints
+/// a Pathbase auth notice for a share that never goes near Pathbase.
 fn resolve_destination(
     args: &ShareArgs,
-    auth: &crate::cmd_pathbase::AuthMode,
+    preflight: &dyn Fn() -> Result<crate::cmd_pathbase::AuthMode>,
     base_url: String,
     session_dir: Option<PathBuf>,
 ) -> Result<ShareDestination> {
@@ -914,17 +940,23 @@ fn resolve_destination(
             target: ShareTarget::Object(crate::store::Destination::parse(to)?),
         });
     }
-    let pathbase = |repo: Option<RepoSpec>, base_url: String| ShareDestination {
-        target: ShareTarget::Pathbase { repo, base_url },
+    let pathbase = |repo: Option<RepoSpec>, base_url: String| -> Result<ShareDestination> {
+        Ok(ShareDestination {
+            target: ShareTarget::Pathbase {
+                repo,
+                base_url,
+                auth: preflight()?,
+            },
+        })
     };
     if args.repo.is_some() || args.anon {
-        return Ok(pathbase(args.repo.clone(), base_url));
+        return pathbase(args.repo.clone(), base_url);
     }
     let Some(dir) = session_dir else {
-        return Ok(pathbase(None, base_url));
+        return pathbase(None, base_url);
     };
     let Some(found) = crate::share_config::resolve_remote(&dir)? else {
-        return Ok(pathbase(None, base_url));
+        return pathbase(None, base_url);
     };
     match found.remote {
         crate::remote::Remote::Object(destination) => {
@@ -937,6 +969,7 @@ fn resolve_destination(
             repo,
             base_url: remote_url,
         } => {
+            let auth = preflight()?;
             if matches!(auth, crate::cmd_pathbase::AuthMode::Anon) {
                 let login_url = remote_url
                     .as_ref()
@@ -955,7 +988,13 @@ fn resolve_destination(
                 _ => base_url,
             };
             eprintln!("Sharing to {} ({})", found.display, found.origin);
-            Ok(pathbase(Some(repo), base_url))
+            Ok(ShareDestination {
+                target: ShareTarget::Pathbase {
+                    repo: Some(repo),
+                    base_url,
+                    auth,
+                },
+            })
         }
     }
 }
@@ -965,13 +1004,16 @@ fn resolve_destination(
 fn deliver(
     dest: ShareDestination,
     args: &ShareArgs,
-    auth: crate::cmd_pathbase::AuthMode,
     body: &str,
     ledger_key: &str,
     summary: &str,
 ) -> Result<()> {
     match dest.target {
-        ShareTarget::Pathbase { repo, base_url } => {
+        ShareTarget::Pathbase {
+            repo,
+            base_url,
+            auth,
+        } => {
             let upload = crate::cmd_export::PathbaseUploadArgs {
                 url: args.url.clone(),
                 anon: args.anon,
@@ -990,7 +1032,10 @@ fn deliver(
                 &destination,
                 &settings,
                 &crate::export_ledger::Ledger::new(),
-                &crate::cmd_export::ExportOptions::default(),
+                &crate::cmd_export::ExportOptions {
+                    no_overwrite: args.no_overwrite,
+                    ..Default::default()
+                },
             )?;
             match outcome {
                 crate::cmd_export::ObjectOutcome::Uploaded(uri) => println!("{uri}"),
@@ -1476,6 +1521,7 @@ mod tests {
             project: None,
             no_cache: false,
             to: None,
+            no_overwrite: false,
         }
     }
 
@@ -1484,9 +1530,18 @@ mod tests {
     /// pass `--to`, so every result must be Pathbase.
     fn expect_pathbase(dest: ShareDestination) -> (Option<RepoSpec>, String) {
         match dest.target {
-            ShareTarget::Pathbase { repo, base_url } => (repo, base_url),
+            ShareTarget::Pathbase { repo, base_url, .. } => (repo, base_url),
             ShareTarget::Object(d) => panic!("expected a Pathbase target, got object {d:?}"),
         }
+    }
+
+    /// Wrap a fixed `AuthMode` as the zero-arg preflight closure
+    /// `resolve_destination` now takes, for tests that don't care about
+    /// lazy credential resolution.
+    fn fixed_preflight(
+        auth: crate::cmd_pathbase::AuthMode,
+    ) -> impl Fn() -> Result<crate::cmd_pathbase::AuthMode> {
+        move || Ok(auth.clone())
     }
 
     fn graph_with_base(uri: &str) -> toolpath::v1::Graph {
@@ -1532,7 +1587,7 @@ mod tests {
         args.repo = Some(crate::remote::parse_repo_spec("me/flag").unwrap());
         let dest = resolve_destination(
             &args,
-            &authed(),
+            &fixed_preflight(authed()),
             DEFAULT_BASE.to_string(),
             Some(PathBuf::from("/anywhere")),
         )
@@ -1549,7 +1604,7 @@ mod tests {
         args.anon = true;
         let dest = resolve_destination(
             &args,
-            &crate::cmd_pathbase::AuthMode::Anon,
+            &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
             DEFAULT_BASE.to_string(),
             Some(PathBuf::from("/anywhere")),
         )
@@ -1563,7 +1618,7 @@ mod tests {
     fn destination_default_without_session_dir() {
         let dest = resolve_destination(
             &share_args(),
-            &crate::cmd_pathbase::AuthMode::Anon,
+            &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
             DEFAULT_BASE.to_string(),
             None,
         )
@@ -1601,25 +1656,25 @@ mod tests {
         }
         let bare_unauthed = resolve_destination(
             &share_args(),
-            &crate::cmd_pathbase::AuthMode::Anon,
+            &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
             DEFAULT_BASE.to_string(),
             Some(bare.clone()),
         );
         let bare_authed = resolve_destination(
             &share_args(),
-            &authed(),
+            &fixed_preflight(authed()),
             DEFAULT_BASE.to_string(),
             Some(bare),
         );
         let url_unauthed = resolve_destination(
             &share_args(),
-            &crate::cmd_pathbase::AuthMode::Anon,
+            &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
             DEFAULT_BASE.to_string(),
             Some(url.clone()),
         );
         let url_authed = resolve_destination(
             &share_args(),
-            &authed(),
+            &fixed_preflight(authed()),
             DEFAULT_BASE.to_string(),
             Some(url.clone()),
         );
@@ -1627,7 +1682,7 @@ mod tests {
         flag_args.url = Some("https://flag.example".to_string());
         let url_flag_wins = resolve_destination(
             &flag_args,
-            &authed(),
+            &fixed_preflight(authed()),
             "https://flag.example".to_string(),
             Some(url),
         );

@@ -2056,7 +2056,12 @@ fn share_follows_a_configured_object_destination() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Sharing to"))
-        .stderr(predicate::str::contains("Uploaded"));
+        .stderr(predicate::str::contains("Uploaded"))
+        // A configured object remote must not touch Pathbase at all: no
+        // login hint, no "uploading anonymously" notice, no network call
+        // to the (unreachable) --url.
+        .stderr(predicate::str::contains("path auth login").not())
+        .stderr(predicate::str::contains("anonymously").not());
     assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 1);
 }
 
