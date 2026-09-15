@@ -17,6 +17,16 @@ use crate::remote::RepoSpec;
 
 #[derive(Args, Debug)]
 pub struct ShareArgs {
+    /// Share to object storage instead of Pathbase: `s3://bucket/prefix`,
+    /// or a folder (`~/traces`). Needs no Pathbase login.
+    #[arg(long, value_name = "DESTINATION", conflicts_with_all = ["repo", "anon", "name", "public", "url"])]
+    pub to: Option<String>,
+
+    /// With --to: refuse to replace an object that already exists at the
+    /// computed key.
+    #[arg(long, requires = "to")]
+    pub no_overwrite: bool,
+
     /// Pathbase server URL (defaults to the stored session's server)
     #[arg(long)]
     pub url: Option<String>,
@@ -57,16 +67,6 @@ pub struct ShareArgs {
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
-
-    /// Share to object storage instead of Pathbase: `s3://bucket/prefix`,
-    /// or a folder (`~/traces`). Needs no Pathbase login.
-    #[arg(long, value_name = "DESTINATION", conflicts_with_all = ["repo", "anon", "name", "public", "url"])]
-    pub to: Option<String>,
-
-    /// With --to: refuse to replace an object that already exists at the
-    /// computed key.
-    #[arg(long, requires = "to")]
-    pub no_overwrite: bool,
 }
 
 /// One artifact surfaced by a provider — today always an agent session.

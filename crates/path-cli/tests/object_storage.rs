@@ -1351,6 +1351,42 @@ fn help_text_describes_nothing_that_does_not_exist() {
         .stdout(predicate::str::contains("--<graph id>"));
 }
 
+#[test]
+fn top_level_help_summaries_mention_object_storage() {
+    let config = tempfile::tempdir().unwrap();
+    let out = cmd(config.path()).args(["--help"]).assert().success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let share_line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("share"))
+        .unwrap();
+    assert!(share_line.contains("object storage"), "{share_line}");
+    let auth_line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("auth"))
+        .unwrap();
+    assert!(
+        auth_line.contains('S') && auth_line.to_lowercase().contains("s3"),
+        "{auth_line}"
+    );
+}
+
+#[test]
+fn share_help_lists_to_near_the_top() {
+    let config = tempfile::tempdir().unwrap();
+    let out = cmd(config.path())
+        .args(["share", "--help"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let to_pos = text.find("--to <DESTINATION>").expect("--to flag in help");
+    let url_pos = text.find("--url <URL>").expect("--url flag in help");
+    assert!(
+        to_pos < url_pos,
+        "--to should be listed before --url:\n{text}"
+    );
+}
+
 // ── live S3 (opt in) ────────────────────────────────────────────────
 
 /// Round-trips one document through a real S3 endpoint. Ignored unless

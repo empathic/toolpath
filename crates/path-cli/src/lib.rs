@@ -97,7 +97,7 @@ enum Commands {
         #[arg(long)]
         ansi: bool,
     },
-    /// Share an agent session to Pathbase via an interactive picker
+    /// Share an agent session to Pathbase or object storage (--to)
     #[cfg(not(target_os = "emscripten"))]
     Share {
         #[command(flatten)]
@@ -122,7 +122,7 @@ enum Commands {
         #[command(flatten)]
         args: cmd_kind::KindArgs,
     },
-    /// Manage Pathbase credentials for trace uploads
+    /// Manage Pathbase and S3 credentials
     #[cfg(not(target_os = "emscripten"))]
     Auth {
         #[command(subcommand)]
