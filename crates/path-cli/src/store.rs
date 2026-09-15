@@ -534,7 +534,7 @@ impl std::fmt::Display for Destination {
 pub(crate) struct ObjectEntry {
     pub uri: ObjectUri,
     /// Filename without the `.json` extension — for legible names this
-    /// is `<date>-<slug>-<cache-id>`, which is the whole point.
+    /// is `<date>-<topic>--<graph id>`, which is the whole point.
     pub stem: String,
     pub size: u64,
     pub modified: Option<chrono::DateTime<chrono::Utc>>,

@@ -234,7 +234,7 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
 /// expensive work (session pickers, cache writes, derive passes) so that
 /// callers can fail fast or fall back to anonymous mode without making
 /// the user select a session and *then* discover the credentials are bad.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum AuthMode {
     /// Use the public anonymous endpoint. No credentials required;
     /// 5 MB cap and rate-limited.
@@ -661,40 +661,7 @@ pub(crate) fn credentials_path() -> Result<PathBuf> {
 }
 
 pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("credentials path has no parent: {}", path.display()))?;
-    std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-    }
-
-    let payload = serde_json::to_string_pretty(s)?;
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        // Open already restricted to 0600 so there is never a moment
-        // where the token exists world/group-readable under a permissive
-        // umask. `truncate` rather than `create_new`: the file is
-        // rewritten in place on every login.
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("open {}", path.display()))?;
-        f.write_all(payload.as_bytes())
-            .with_context(|| format!("write {}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, payload).with_context(|| format!("write {}", path.display()))?;
-    }
-    Ok(())
+    crate::config::write_private_json(path, s)
 }
 
 pub(crate) fn load_session(path: &Path) -> Result<Option<StoredSession>> {

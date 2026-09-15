@@ -216,12 +216,28 @@ pub(crate) fn write_private_json<T: serde::Serialize>(
     }
 
     let payload = serde_json::to_string_pretty(value)?;
-    std::fs::write(path, payload).map_err(|e| anyhow!("write {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| anyhow!("chmod 0600 {}: {e}", path.display()))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        // Open already restricted to 0600 so there is never a moment
+        // where the file exists world/group-readable under a permissive
+        // umask. `truncate` (not `create_new`) because this path is
+        // rewritten in place across calls (s3.json, credentials.json),
+        // unlike the export ledger's append-only records.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| anyhow!("open {}: {e}", path.display()))?;
+        f.write_all(payload.as_bytes())
+            .map_err(|e| anyhow!("write {}: {e}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, payload).map_err(|e| anyhow!("write {}: {e}", path.display()))?;
     }
     Ok(())
 }
