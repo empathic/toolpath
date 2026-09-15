@@ -924,11 +924,7 @@ pub(crate) struct ExportOptions {
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) enum ObjectOutcome {
     Uploaded(crate::store::ObjectUri),
-    // The URI isn't read back out by any caller in this task; `path
-    // share --to` (Task 16) is the consumer that will report it.
-    #[allow(dead_code)]
     Unchanged(crate::store::ObjectUri),
-    #[allow(dead_code)]
     DryRun(crate::store::ObjectUri),
 }
 

@@ -42,10 +42,7 @@ use crate::remote::{RepoSpec, parse_remote, parse_repo_spec};
 /// errors.
 #[derive(Debug)]
 pub(crate) struct ConfiguredRemote {
-    pub(crate) repo: RepoSpec,
-    /// Server base URL when the remote is a full Pathbase repo URL;
-    /// `None` for bare `owner/name` (credentialed/default server).
-    pub(crate) base_url: Option<String>,
+    pub(crate) remote: crate::remote::Remote,
     pub(crate) display: String,
     pub(crate) origin: String,
 }
@@ -224,10 +221,9 @@ fn global_rule(
         .remote
         .as_deref()
         .expect("remote-less rules were skipped");
-    let (repo, base_url) = parse_remote(value, &origin)?;
+    let remote = parse_remote(value, &origin)?;
     Ok(Some(ConfiguredRemote {
-        repo,
-        base_url,
+        remote,
         display: value.to_string(),
         origin,
     }))
@@ -296,7 +292,10 @@ mod tests {
     }
 
     fn repo_str(found: &ConfiguredRemote) -> String {
-        format!("{}/{}", found.repo.owner, found.repo.name)
+        match &found.remote {
+            crate::remote::Remote::Pathbase { repo, .. } => format!("{}/{}", repo.owner, repo.name),
+            other => panic!("expected a Pathbase remote, got {other:?}"),
+        }
     }
 
     #[test]
@@ -326,7 +325,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(repo_str(&found), "team/sessions");
-        assert_eq!(found.base_url, None);
+        assert!(matches!(
+            found.remote,
+            crate::remote::Remote::Pathbase { base_url: None, .. }
+        ));
         assert_eq!(found.display, "team/sessions");
         assert!(
             found.origin.contains("config.toml"),
@@ -498,8 +500,42 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(repo_str(&found), "team/sessions");
-        assert_eq!(found.base_url.as_deref(), Some("https://pathbase.dev"));
+        assert!(matches!(
+            found.remote,
+            crate::remote::Remote::Pathbase {
+                base_url: Some(ref u),
+                ..
+            } if u == "https://pathbase.dev"
+        ));
         assert_eq!(found.display, "https://pathbase.dev/u/team/sessions");
+    }
+
+    #[test]
+    fn an_object_destination_remote_resolves_to_an_object_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = temp.path().join("config.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[[project]]\ndir = {:?}\nremote = \"s3://team-bucket/traces\"\n",
+                project.display().to_string()
+            ),
+        )
+        .unwrap();
+        let found = resolve_remote_from(&config, None, &project)
+            .unwrap()
+            .expect("rule matches");
+        assert!(
+            matches!(found.remote, crate::remote::Remote::Object(ref d) if d == "s3://team-bucket/traces")
+        );
+        assert_eq!(found.display, "s3://team-bucket/traces");
+        assert_eq!(
+            validate_config_text(&std::fs::read_to_string(&config).unwrap(), "config.toml")
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

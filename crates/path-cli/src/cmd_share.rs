@@ -57,6 +57,11 @@ pub struct ShareArgs {
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Share to object storage instead of Pathbase: `s3://bucket/prefix`,
+    /// or a folder (`~/traces`). Needs no Pathbase login.
+    #[arg(long, value_name = "DESTINATION", conflicts_with_all = ["repo", "anon", "name", "public", "url"])]
+    pub to: Option<String>,
 }
 
 /// One artifact surfaced by a provider — today always an agent session.
@@ -501,10 +506,18 @@ pub fn run(args: ShareArgs) -> Result<()> {
     let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
     let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some();
 
+    let preflight = |needs_auth: bool| -> Result<crate::cmd_pathbase::AuthMode> {
+        if args.to.is_some() {
+            // Object storage needs no Pathbase session at all.
+            return Ok(crate::cmd_pathbase::AuthMode::Anon);
+        }
+        crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)
+    };
+
     if let (Some(h), Some(session)) = (harness, &args.session) {
         // Explicit-args: validate creds before derive so a credential
         // failure doesn't waste the derive/cache work.
-        let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
+        let auth = preflight(needs_auth)?;
         return share_explicit(h, session.as_str(), &args, auth, base_url);
     }
 
@@ -519,23 +532,28 @@ pub fn run(args: ShareArgs) -> Result<()> {
 
     if !crate::fuzzy::available() {
         eprintln!(
-            "Interactive `path share` needs `fzf` on PATH and a TTY.\n\
+            "Interactive `path share` needs an interactive terminal.\n\
              \n\
              Manual recipe:\n  \
-             path import <harness>      # writes a cache entry, prints its id\n  \
-             path export pathbase --input <id>"
+             path p import <harness>            # writes a cache entry, prints its ID\n  \
+             path p export pathbase --input <id> # or: path p export object --input <id> --to <destination>"
         );
-        anyhow::bail!("fzf unavailable; run `path import <harness>` then `path export pathbase`");
+        anyhow::bail!(
+            "no interactive terminal; run `path p import <harness>` then `path p export`"
+        );
     }
 
     // We have rows AND fzf available — now validate credentials before
     // making the user pick a session. If preflight returns Anon (either
     // explicit --anon, no creds + no auth flags, or auth probe failed
     // and fell back), the picker still fires with that knowledge baked in.
-    let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
+    let auth = preflight(needs_auth)?;
 
     let lines: Vec<String> = rows.iter().map(format_picker_row).collect();
-    let header = format!("share an agent session (Enter = upload to {base_url})");
+    let header = match &args.to {
+        Some(to) => format!("share an agent session (Enter = export to {to})"),
+        None => format!("share an agent session (Enter = upload to {base_url})"),
+    };
     let opts = crate::fuzzy::PickOptions {
         with_nth: "4",
         prompt: "share> ",
@@ -579,6 +597,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
             None
         },
         no_cache: args.no_cache,
+        to: args.to.clone(),
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
@@ -802,14 +821,7 @@ fn share_explicit(
         });
         let dest = resolve_destination(args, &auth, base_url, session_dir)?;
         let summary = format!("{} session {}", harness.name(), cache_id);
-        let upload = crate::cmd_export::PathbaseUploadArgs {
-            url: args.url.clone(),
-            anon: args.anon,
-            repo: dest.repo,
-            name: args.name.clone(),
-            public: args.public,
-        };
-        return crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary);
+        return deliver(dest, args, auth, &body, &cache_id, &summary);
     }
 
     let derived = derive_session(harness, project.as_deref(), session)?;
@@ -847,14 +859,7 @@ fn share_explicit(
         .or_else(|| doc_session_dir(&derived.doc));
     let dest = resolve_destination(args, &auth, base_url, session_dir)?;
     let body = derived.doc.to_json()?;
-    let upload = crate::cmd_export::PathbaseUploadArgs {
-        url: args.url.clone(),
-        anon: args.anon,
-        repo: dest.repo,
-        name: args.name.clone(),
-        public: args.public,
-    };
-    crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)
+    deliver(dest, args, auth, &body, &derived.cache_id, &summary)
 }
 
 /// The directory a derived session document belongs to: its single
@@ -871,70 +876,132 @@ fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
     Some(PathBuf::from(dir))
 }
 
-/// Where an upload goes: the repo (`None` = the pathstash default) and
-/// the server it lives on.
+/// Where an upload goes.
 #[derive(Debug)]
-struct ShareDestination {
-    repo: Option<RepoSpec>,
-    base_url: String,
+enum ShareTarget {
+    /// A Pathbase repo (`None` = the pathstash default) on a server.
+    Pathbase {
+        repo: Option<RepoSpec>,
+        base_url: String,
+    },
+    /// An object-storage destination.
+    Object(crate::store::Destination),
 }
 
-/// Apply the configured remote to the upload destination. `--repo` wins;
-/// explicit `--anon` skips config entirely (anonymous uploads have no
-/// repo); otherwise a remote configured for the session's directory
-/// applies (see `share_config`). A URL-form remote also carries the
-/// server, which replaces `base_url` unless `--url` was given — flags
-/// win. A configured remote needs an authed upload, so hitting one while
-/// unauthenticated is an error rather than a silent fall-through to the
-/// anonymous endpoint; a cross-server remote rides the stored token and
-/// lets the upload's own 401 handling surface a re-login hint.
+#[derive(Debug)]
+struct ShareDestination {
+    target: ShareTarget,
+}
+
+/// Apply flags and config to the upload destination. `--to` wins and
+/// names object storage; `--repo` wins for Pathbase; explicit `--anon`
+/// skips config entirely (anonymous uploads have no repo); otherwise a
+/// remote configured for the session's directory applies (see
+/// `share_config`), which may be a Pathbase repo or an object
+/// destination. A URL-form Pathbase remote also carries the server,
+/// which replaces `base_url` unless `--url` was given — flags win. A
+/// configured Pathbase remote needs an authed upload, so hitting one
+/// while unauthenticated is an error rather than a silent fall-through
+/// to the anonymous endpoint.
 fn resolve_destination(
     args: &ShareArgs,
     auth: &crate::cmd_pathbase::AuthMode,
     base_url: String,
     session_dir: Option<PathBuf>,
 ) -> Result<ShareDestination> {
-    if args.repo.is_some() || args.anon {
+    if let Some(to) = &args.to {
         return Ok(ShareDestination {
-            repo: args.repo.clone(),
-            base_url,
+            target: ShareTarget::Object(crate::store::Destination::parse(to)?),
         });
+    }
+    let pathbase = |repo: Option<RepoSpec>, base_url: String| ShareDestination {
+        target: ShareTarget::Pathbase { repo, base_url },
+    };
+    if args.repo.is_some() || args.anon {
+        return Ok(pathbase(args.repo.clone(), base_url));
     }
     let Some(dir) = session_dir else {
-        return Ok(ShareDestination {
-            repo: None,
-            base_url,
-        });
+        return Ok(pathbase(None, base_url));
     };
     let Some(found) = crate::share_config::resolve_remote(&dir)? else {
-        return Ok(ShareDestination {
-            repo: None,
-            base_url,
-        });
+        return Ok(pathbase(None, base_url));
     };
-    if matches!(auth, crate::cmd_pathbase::AuthMode::Anon) {
-        let login_url = found
-            .base_url
-            .as_ref()
-            .map(|u| format!(" --url {u}"))
-            .unwrap_or_default();
-        anyhow::bail!(
-            "sessions in {} are configured to upload to {} ({}), which requires login.\n\
-             Run `path auth login{login_url}`, or pass --anon to upload anonymously instead.",
-            dir.display(),
-            found.display,
-            found.origin,
-        );
+    match found.remote {
+        crate::remote::Remote::Object(destination) => {
+            eprintln!("Sharing to {} ({})", found.display, found.origin);
+            Ok(ShareDestination {
+                target: ShareTarget::Object(crate::store::Destination::parse(&destination)?),
+            })
+        }
+        crate::remote::Remote::Pathbase {
+            repo,
+            base_url: remote_url,
+        } => {
+            if matches!(auth, crate::cmd_pathbase::AuthMode::Anon) {
+                let login_url = remote_url
+                    .as_ref()
+                    .map(|u| format!(" --url {u}"))
+                    .unwrap_or_default();
+                anyhow::bail!(
+                    "sessions in {} are configured to upload to {} ({}), which requires login.\n\
+                     Run `path auth login{login_url}`, or pass --anon to upload anonymously instead.",
+                    dir.display(),
+                    found.display,
+                    found.origin,
+                );
+            }
+            let base_url = match (&args.url, remote_url) {
+                (None, Some(remote_url)) => remote_url,
+                _ => base_url,
+            };
+            eprintln!("Sharing to {} ({})", found.display, found.origin);
+            Ok(pathbase(Some(repo), base_url))
+        }
     }
-    let base_url = match (&args.url, found.base_url) {
-        (None, Some(remote_url)) => remote_url,
-        _ => base_url,
-    };
-    eprintln!("Sharing to {} ({})", found.display, found.origin);
-    Ok(ShareDestination {
-        repo: Some(found.repo),
-        base_url,
-    })
+}
+
+/// Send `body` where `dest` says. Pathbase uploads print their share
+/// URL; object uploads print the object location.
+fn deliver(
+    dest: ShareDestination,
+    args: &ShareArgs,
+    auth: crate::cmd_pathbase::AuthMode,
+    body: &str,
+    ledger_key: &str,
+    summary: &str,
+) -> Result<()> {
+    match dest.target {
+        ShareTarget::Pathbase { repo, base_url } => {
+            let upload = crate::cmd_export::PathbaseUploadArgs {
+                url: args.url.clone(),
+                anon: args.anon,
+                repo,
+                name: args.name.clone(),
+                public: args.public,
+            };
+            crate::cmd_export::run_pathbase_inner(auth, base_url, upload, body, summary)
+        }
+        ShareTarget::Object(destination) => {
+            let settings = crate::store::effective_settings()?;
+            let outcome = crate::cmd_export::export_body(
+                body,
+                ledger_key,
+                std::path::Path::new(summary),
+                &destination,
+                &settings,
+                &crate::export_ledger::Ledger::new(),
+                &crate::cmd_export::ExportOptions::default(),
+            )?;
+            match outcome {
+                crate::cmd_export::ObjectOutcome::Uploaded(uri) => println!("{uri}"),
+                crate::cmd_export::ObjectOutcome::Unchanged(uri) => {
+                    eprintln!("Unchanged: {uri}")
+                }
+                crate::cmd_export::ObjectOutcome::DryRun(_uri) => {}
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Build the TSV line fed to the picker. Three hidden parser-only
@@ -1408,6 +1475,17 @@ mod tests {
             session: None,
             project: None,
             no_cache: false,
+            to: None,
+        }
+    }
+
+    /// Unwrap a `ShareDestination` as a Pathbase target, panicking on an
+    /// object destination — the resolve_destination tests below never
+    /// pass `--to`, so every result must be Pathbase.
+    fn expect_pathbase(dest: ShareDestination) -> (Option<RepoSpec>, String) {
+        match dest.target {
+            ShareTarget::Pathbase { repo, base_url } => (repo, base_url),
+            ShareTarget::Object(d) => panic!("expected a Pathbase target, got object {d:?}"),
         }
     }
 
@@ -1459,9 +1537,10 @@ mod tests {
             Some(PathBuf::from("/anywhere")),
         )
         .unwrap();
-        let repo = dest.repo.unwrap();
+        let (repo, base_url) = expect_pathbase(dest);
+        let repo = repo.unwrap();
         assert_eq!((repo.owner.as_str(), repo.name.as_str()), ("me", "flag"));
-        assert_eq!(dest.base_url, DEFAULT_BASE);
+        assert_eq!(base_url, DEFAULT_BASE);
     }
 
     #[test]
@@ -1475,8 +1554,9 @@ mod tests {
             Some(PathBuf::from("/anywhere")),
         )
         .unwrap();
-        assert!(dest.repo.is_none());
-        assert_eq!(dest.base_url, DEFAULT_BASE);
+        let (repo, base_url) = expect_pathbase(dest);
+        assert!(repo.is_none());
+        assert_eq!(base_url, DEFAULT_BASE);
     }
 
     #[test]
@@ -1488,7 +1568,8 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(dest.repo.is_none());
+        let (repo, _) = expect_pathbase(dest);
+        assert!(repo.is_none());
     }
 
     /// One env-scoped run covering the remote forms: bare `owner/name`
@@ -1558,13 +1639,13 @@ mod tests {
         assert!(err.contains("team/sessions"), "got: {err}");
         assert!(err.contains("path auth login"), "got: {err}");
 
-        let dest = bare_authed.unwrap();
-        let repo = dest.repo.unwrap();
+        let (repo, base_url) = expect_pathbase(bare_authed.unwrap());
+        let repo = repo.unwrap();
         assert_eq!(
             (repo.owner.as_str(), repo.name.as_str()),
             ("team", "sessions")
         );
-        assert_eq!(dest.base_url, DEFAULT_BASE);
+        assert_eq!(base_url, DEFAULT_BASE);
 
         let err = url_unauthed.unwrap_err().to_string();
         assert!(
@@ -1572,13 +1653,13 @@ mod tests {
             "logged-out hint should name the remote's server: {err}"
         );
 
-        let dest = url_authed.unwrap();
-        assert_eq!(dest.base_url, "https://pathbase.internal");
-        assert_eq!(dest.repo.unwrap().name, "proj");
+        let (repo, base_url) = expect_pathbase(url_authed.unwrap());
+        assert_eq!(base_url, "https://pathbase.internal");
+        assert_eq!(repo.unwrap().name, "proj");
 
-        let dest = url_flag_wins.unwrap();
+        let (_, base_url) = expect_pathbase(url_flag_wins.unwrap());
         assert_eq!(
-            dest.base_url, "https://flag.example",
+            base_url, "https://flag.example",
             "--url must beat the remote's embedded server"
         );
     }
