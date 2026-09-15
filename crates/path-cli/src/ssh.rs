@@ -1,0 +1,944 @@
+//! ssh transport for commands that act on a remote host.
+//!
+//! The transport is an in-process SSH client (`russh`). No `ssh`
+//! binary is involved, and `~/.ssh/config` is not read: the
+//! destination is `user@host` or `user@host:port`, and an alias is
+//! not resolved. The caller passes the agent socket and the ssh
+//! directory. The module reads no
+//! environment variable. The agent authenticates first, then the
+//! default identity files in the ssh directory. `known_hosts` in that
+//! directory verifies the host key: a changed key is an error, and an
+//! unknown host is learned on first contact, as
+//! `StrictHostKeyChecking=accept-new` does.
+//!
+//! [`Transport::run`] captures the output of an exec channel.
+//!
+//! A remote command is one string by the protocol: the exec request
+//! carries it and the remote login shell parses it. [`RemoteCommand`]
+//! is the only way to build that string. Its two forms are an argv, and
+//! a constant `sh` script that reads its values as positional
+//! parameters. Every value passes through shell quoting. No caller
+//! interpolates into shell text.
+//!
+//! The remote login shell must be POSIX-compatible. A value that
+//! contains a single quote renders double-quoted with backslash
+//! escapes, which csh and fish parse differently.
+
+use anyhow::{Context, Result, anyhow, bail};
+use russh::client;
+use russh::keys::known_hosts::{check_known_hosts_path, learn_known_hosts_path};
+use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use russh::{ChannelMsg, Disconnect};
+use std::fmt;
+use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Output};
+use std::sync::Arc;
+use std::time::Duration;
+
+/// Bound on the TCP connect, the handshake, and authentication
+/// together. Separate from the caller's per-command timeout, which
+/// bounds the command alone.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound on the disconnect, so a stalled peer does not hold the caller
+/// after its command is done.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Keepalives on every session, so a peer that stops answering is
+/// noticed within a minute.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const KEEPALIVE_MAX: usize = 3;
+
+/// The port of a [`Destination`] that names none.
+const DEFAULT_PORT: u16 = 22;
+
+/// The exit status reported when the remote gave none: a channel that
+/// closed without an exit-status message, or a command killed by a
+/// signal. `ssh` itself reports 255 in that case.
+const NO_EXIT_STATUS: u32 = 255;
+
+/// How much of the remote stderr an error message carries.
+const STDERR_TAIL_CHARS: usize = 1000;
+
+/// The file in the ssh directory that verifies host keys.
+const KNOWN_HOSTS_FILE: &str = "known_hosts";
+
+/// The OpenSSH default identity files in the ssh directory, in the
+/// order they are tried.
+const IDENTITY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+
+/// An ssh destination: a user, a host, and a port. `~/.ssh/config` is
+/// not read, so an alias is not resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Destination {
+    user: String,
+    host: url::Host,
+    port: u16,
+}
+
+impl Destination {
+    /// The authority of the URL `ssh://<s>`: a non-empty user, a host
+    /// name or address (IPv6 in brackets), and an optional port. A
+    /// leading `ssh://` is accepted. Also usable as a clap
+    /// `value_parser`, hence the `String` error type.
+    pub fn parse(s: &str) -> std::result::Result<Self, String> {
+        let error = || {
+            format!(
+                "expected an ssh destination of the form user@host or user@host:port, got {s:?}"
+            )
+        };
+        let authority = s.strip_prefix("ssh://").unwrap_or(s);
+        let url = url::Url::parse(&format!("ssh://{authority}")).map_err(|_| error())?;
+        let host = url.host().ok_or_else(error)?;
+        let authority_only = url.password().is_none()
+            && url.path().is_empty()
+            && url.query().is_none()
+            && url.fragment().is_none();
+        if url.username().is_empty() || !authority_only {
+            return Err(error());
+        }
+        Ok(Self {
+            user: url.username().to_string(),
+            host: host.to_owned(),
+            port: url.port().unwrap_or(DEFAULT_PORT),
+        })
+    }
+
+    /// The host as a socket address takes it and as `known_hosts`
+    /// records it: an IPv6 address without brackets.
+    fn host_name(&self) -> String {
+        match &self.host {
+            url::Host::Domain(name) => name.clone(),
+            url::Host::Ipv4(addr) => addr.to_string(),
+            url::Host::Ipv6(addr) => addr.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for Destination {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.user, self.host)?;
+        if self.port != DEFAULT_PORT {
+            write!(f, ":{}", self.port)?;
+        }
+        Ok(())
+    }
+}
+
+/// A command for the remote login shell, with the bytes for its stdin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteCommand {
+    argv: Vec<String>,
+    stdin: Option<Vec<u8>>,
+}
+
+impl RemoteCommand {
+    /// An argv: the program and its arguments.
+    pub(crate) fn new(argv: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            argv: argv.into_iter().map(Into::into).collect(),
+            stdin: None,
+        }
+    }
+
+    /// A `sh` script with positional parameters: `args` reach `text` as
+    /// `$1`, `$2`, and so on. `text` is any POSIX `sh` program, on one
+    /// line or many, without a single quote. It is `'static` so that a
+    /// script is a source literal and never built from values. shlex
+    /// single-quotes it as one word, which the login shell passes to
+    /// `sh -c` verbatim.
+    pub(crate) fn from_script(
+        text: &'static str,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        assert!(
+            !text.contains('\''),
+            "a remote script must not contain a single quote"
+        );
+        let mut argv: Vec<String> = vec!["sh".into(), "-c".into(), text.into(), "sh".into()];
+        argv.extend(args.into_iter().map(Into::into));
+        Self { argv, stdin: None }
+    }
+
+    /// The bytes fed to the command's stdin. Without them stdin is
+    /// closed at once.
+    pub(crate) fn stdin(mut self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.stdin = Some(bytes.into());
+        self
+    }
+
+    /// The string the exec request carries: every word quoted for a
+    /// POSIX shell.
+    pub(crate) fn render(&self) -> Result<String> {
+        let words: Vec<String> = self.argv.iter().map(|w| quote(w)).collect::<Result<_>>()?;
+        Ok(words.join(" "))
+    }
+}
+
+pub(crate) trait Transport {
+    /// Run `command` on `dest` without a terminal. stdin is fed from
+    /// the command's stdin bytes or closed. stdout and stderr are
+    /// captured. The call returns when the remote command exits. A
+    /// command that exits before it reads all of its stdin yields its
+    /// status and stderr. When the command outlives `timeout`, the
+    /// connection is dropped and the call errors with the stderr
+    /// received so far. sshd hangs up the remote session, and a
+    /// detached remote process survives.
+    fn run(&self, dest: &Destination, command: &RemoteCommand, timeout: Duration)
+    -> Result<Output>;
+}
+
+/// The in-process SSH client. Each call opens one connection.
+pub(crate) struct SshClient {
+    runtime: tokio::runtime::Runtime,
+    agent_socket: Option<PathBuf>,
+    ssh_dir: PathBuf,
+}
+
+impl SshClient {
+    /// `agent_socket` is the ssh agent's socket, when there is one.
+    /// `ssh_dir` holds the identity files and `known_hosts`.
+    pub(crate) fn new(agent_socket: Option<PathBuf>, ssh_dir: PathBuf) -> Result<Self> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("start the async runtime")?;
+        Ok(Self {
+            runtime,
+            agent_socket,
+            ssh_dir,
+        })
+    }
+}
+
+impl Transport for SshClient {
+    fn run(
+        &self,
+        dest: &Destination,
+        command: &RemoteCommand,
+        timeout: Duration,
+    ) -> Result<Output> {
+        let rendered = command.render()?;
+        self.runtime.block_on(async {
+            let session = connect(dest, self.agent_socket.as_deref(), &self.ssh_dir).await?;
+            let result =
+                exec_captured(&session, &rendered, command.stdin.as_deref(), timeout).await;
+            session.close().await;
+            result
+        })
+    }
+}
+
+/// The russh client handler. The only callback it implements is
+/// `check_server_key`, which verifies the host key against
+/// `known_hosts`.
+struct KnownHostsHandler {
+    host: String,
+    port: u16,
+    known_hosts: PathBuf,
+}
+
+impl client::Handler for KnownHostsHandler {
+    type Error = anyhow::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        let PublicKeyOrCertificate::PublicKey { key, .. } = server_key else {
+            bail!(
+                "{}:{} presented a host certificate; only plain host keys are accepted",
+                self.host,
+                self.port
+            );
+        };
+        match check_known_hosts_path(&self.host, self.port, key, &self.known_hosts) {
+            Ok(true) => Ok(true),
+            Ok(false) => {
+                if let Some(dir) = self.known_hosts.parent()
+                    && !dir.exists()
+                {
+                    create_ssh_dir(dir).with_context(|| format!("create {}", dir.display()))?;
+                }
+                learn_known_hosts_path(&self.host, self.port, key, &self.known_hosts)
+                    .with_context(|| {
+                        format!(
+                            "record the host key of {}:{} in {}",
+                            self.host,
+                            self.port,
+                            self.known_hosts.display()
+                        )
+                    })?;
+                Ok(true)
+            }
+            Err(russh::keys::Error::KeyChanged { line }) => bail!(
+                "the host key of {}:{} does not match {} line {line}; \
+                 refusing to connect",
+                self.host,
+                self.port,
+                self.known_hosts.display()
+            ),
+            Err(e) => Err(e).with_context(|| format!("read {}", self.known_hosts.display())),
+        }
+    }
+}
+
+/// A missing ssh directory is created the way `ssh` creates it: mode
+/// 0700, not the umask default that `create_dir_all` would apply.
+fn create_ssh_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+}
+
+struct Session {
+    handle: client::Handle<KnownHostsHandler>,
+}
+
+impl Session {
+    /// Sends the DISCONNECT and waits for the session task to end,
+    /// within [`CLOSE_TIMEOUT`]. `disconnect` only queues the message;
+    /// the task writes it, and the runtime polls the task only while
+    /// this future runs.
+    async fn close(self) {
+        let handle = self.handle;
+        let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
+            let _ = handle
+                .disconnect(Disconnect::ByApplication, "", "English")
+                .await;
+            let _ = handle.await;
+        })
+        .await;
+    }
+}
+
+/// Connect, verify the host key, and authenticate, within
+/// [`CONNECT_TIMEOUT`].
+async fn connect(
+    dest: &Destination,
+    agent_socket: Option<&Path>,
+    ssh_dir: &Path,
+) -> Result<Session> {
+    let connected = async {
+        let client_config = Arc::new(client::Config {
+            keepalive_interval: Some(KEEPALIVE_INTERVAL),
+            keepalive_max: KEEPALIVE_MAX,
+            ..Default::default()
+        });
+        let host = dest.host_name();
+        let handler = KnownHostsHandler {
+            host: host.clone(),
+            port: dest.port,
+            known_hosts: ssh_dir.join(KNOWN_HOSTS_FILE),
+        };
+        let mut handle = client::connect(client_config, (host.as_str(), dest.port), handler)
+            .await
+            .with_context(|| format!("connect to {}:{}", host, dest.port))?;
+        authenticate(&mut handle, dest, agent_socket, ssh_dir).await?;
+        Ok::<_, anyhow::Error>(Session { handle })
+    };
+    match tokio::time::timeout(CONNECT_TIMEOUT, connected).await {
+        Ok(result) => result,
+        Err(_) => bail!(
+            "connecting to {dest} did not finish within {}s",
+            CONNECT_TIMEOUT.as_secs()
+        ),
+    }
+}
+
+/// The identities of the agent at `agent_socket` first, then the
+/// identity files in `ssh_dir`. A failure on one identity is recorded
+/// and the next one is tried. The error lists what was tried.
+async fn authenticate(
+    handle: &mut client::Handle<KnownHostsHandler>,
+    dest: &Destination,
+    agent_socket: Option<&Path>,
+    ssh_dir: &Path,
+) -> Result<()> {
+    let user = dest.user.as_str();
+    let rsa_hash = handle
+        .best_supported_rsa_hash()
+        .await
+        .context("negotiate signature algorithms")?
+        .flatten();
+    let mut tried: Vec<String> = Vec::new();
+
+    match agent_socket {
+        Some(socket) => match russh::keys::agent::client::AgentClient::connect_uds(socket).await {
+            Ok(mut agent) => match agent.request_identities().await {
+                Ok(identities) => {
+                    for identity in identities {
+                        let russh::keys::agent::AgentIdentity::PublicKey { key, comment } =
+                            identity
+                        else {
+                            continue;
+                        };
+                        let result = match handle
+                            .authenticate_publickey_with(user, key, rsa_hash, &mut agent)
+                            .await
+                        {
+                            Ok(result) => result,
+                            Err(e) => {
+                                tried.push(format!("agent key {comment:?} ({e})"));
+                                continue;
+                            }
+                        };
+                        if result.success() {
+                            return Ok(());
+                        }
+                        tried.push(format!("agent key {comment:?}"));
+                    }
+                }
+                Err(e) => tried.push(format!("agent identities ({e})")),
+            },
+            Err(e) => tried.push(format!("agent at {} ({e})", socket.display())),
+        },
+        None => tried.push("agent (no socket)".to_string()),
+    }
+
+    for path in IDENTITY_FILES.iter().map(|name| ssh_dir.join(name)) {
+        if !path.is_file() {
+            continue;
+        }
+        let key = match russh::keys::load_secret_key(&path, None) {
+            Ok(key) => key,
+            Err(russh::keys::Error::KeyIsEncrypted) => {
+                tried.push(format!(
+                    "{} (encrypted; add it to the agent)",
+                    path.display()
+                ));
+                continue;
+            }
+            Err(e) => {
+                tried.push(format!("{} ({e})", path.display()));
+                continue;
+            }
+        };
+        let result = match handle
+            .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), rsa_hash))
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                tried.push(format!("{} ({e})", path.display()));
+                continue;
+            }
+        };
+        if result.success() {
+            return Ok(());
+        }
+        tried.push(path.display().to_string());
+    }
+
+    let tried = if tried.is_empty() {
+        "nothing: no agent and no identity file".to_string()
+    } else {
+        tried.join(", ")
+    };
+    bail!("authentication as {dest} failed; tried {tried}")
+}
+
+/// One exec channel: feed `input`, collect stdout and stderr, and take
+/// the exit status. `timeout` bounds the whole call, from the channel
+/// open to the channel's close. The close ends the call, so a remote
+/// that exits without reading all of `input` does not leave the feed
+/// waiting on window space until `timeout`. A refused exec request
+/// errors at once, because sshd keeps the channel open after a refusal.
+async fn exec_captured(
+    session: &Session,
+    command: &str,
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Output> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut status = None;
+    let work = async {
+        let channel = session
+            .handle
+            .channel_open_session()
+            .await
+            .context("open a session channel")?;
+        channel
+            .exec(true, command)
+            .await
+            .context("send the exec request")?;
+        let (mut reader, writer) = channel.split();
+        let feed = async {
+            if let Some(bytes) = input {
+                writer.data(bytes).await.context("send stdin")?;
+            }
+            writer.eof().await.context("close stdin")
+        };
+        let collect = async {
+            while let Some(msg) = reader.wait().await {
+                match msg {
+                    ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+                    ChannelMsg::ExtendedData { data, ext: 1 } => stderr.extend_from_slice(&data),
+                    ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                    ChannelMsg::ExitSignal { signal_name, .. } => {
+                        status = Some(NO_EXIT_STATUS);
+                        stderr.extend_from_slice(
+                            format!("\nterminated by signal {signal_name:?}").as_bytes(),
+                        );
+                    }
+                    ChannelMsg::Failure => bail!("the remote refused the exec request"),
+                    ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        let (collected, fed) = {
+            tokio::pin!(feed);
+            tokio::pin!(collect);
+            let mut fed: Option<Result<()>> = None;
+            loop {
+                tokio::select! {
+                    result = &mut feed, if fed.is_none() => fed = Some(result),
+                    result = &mut collect => break (result, fed),
+                }
+            }
+        };
+        if collected.is_err() {
+            let _ = writer.close().await;
+        }
+        collected.map(|()| fed)
+    };
+    let fed = match tokio::time::timeout(timeout, work).await {
+        Ok(result) => result?,
+        Err(_) => bail!(
+            "remote command did not finish within {}s; \
+             the connection may be fine while the command hangs{}",
+            timeout.as_secs(),
+            format_stderr_tail(&stderr)
+        ),
+    };
+    if status.is_none() && session.handle.is_closed() {
+        bail!(
+            "the connection closed before the remote reported an exit status{}",
+            format_stderr_tail(&stderr)
+        );
+    }
+    if status.is_none()
+        && let Some(Err(e)) = fed
+    {
+        return Err(e);
+    }
+    let code = status.unwrap_or(NO_EXIT_STATUS);
+    Ok(Output {
+        status: ExitStatus::from_raw((code as i32 & 0xff) << 8),
+        stdout,
+        stderr,
+    })
+}
+
+/// The last [`STDERR_TAIL_CHARS`] of `stderr` behind a `(stderr)`
+/// marker, for the end of an error message. Empty when `stderr` is.
+fn format_stderr_tail(stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stderr = stderr.trim_end();
+    if stderr.is_empty() {
+        String::new()
+    } else {
+        format!("\n(stderr) {}", tail(stderr, STDERR_TAIL_CHARS))
+    }
+}
+
+/// The last `n` characters of `s`.
+fn tail(s: &str, n: usize) -> &str {
+    if n == 0 {
+        return "";
+    }
+    let start = s
+        .char_indices()
+        .rev()
+        .nth(n.saturating_sub(1))
+        .map_or(0, |(i, _)| i);
+    &s[start..]
+}
+
+/// POSIX shell quoting for one word of a remote command.
+fn quote(s: &str) -> Result<String> {
+    shlex::try_quote(s)
+        .map(|c| c.into_owned())
+        .map_err(|_| anyhow!("cannot quote a value that contains a NUL byte: {s:?}"))
+}
+
+/// Error unless `output` reports success. The message names `what`,
+/// the destination, the exit status, and the remote stderr.
+pub(crate) fn fail_unless_success(output: &Output, what: &str, dest: &Destination) -> Result<()> {
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim_end();
+    if stderr.is_empty() {
+        bail!("{what} on {dest} failed ({})", output.status);
+    }
+    bail!("{what} on {dest} failed ({}):\n{stderr}", output.status);
+}
+
+/// Parse `<tag>=<value>` lines from stdout: exactly one line per tag,
+/// in order. Any other shape (a login banner, a notice, a partial
+/// run) errors with stdout, then stderr behind a `(stderr)` marker.
+pub(crate) fn parse_facts<const N: usize>(output: &Output, tags: [&str; N]) -> Result<[String; N]> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let values: Vec<&str> = lines
+        .iter()
+        .zip(tags)
+        .filter_map(|(line, tag)| line.strip_prefix(tag)?.strip_prefix('='))
+        .collect();
+    if lines.len() != N || values.len() != N {
+        bail!(
+            "unexpected output from the remote (a login banner or notice?); output was:\n{}{}",
+            stdout.trim_end(),
+            format_stderr_tail(&output.stderr)
+        );
+    }
+    Ok(std::array::from_fn(|i| values[i].to_string()))
+}
+
+/// Scripted transport for tests: `reply` queues one `run` result;
+/// every call is recorded with its rendered command.
+#[cfg(test)]
+pub(crate) mod fake {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct Call {
+        pub(crate) dest: String,
+        pub(crate) command: String,
+        pub(crate) input: Option<Vec<u8>>,
+    }
+
+    #[derive(Default)]
+    pub(crate) struct FakeSsh {
+        replies: Mutex<VecDeque<Output>>,
+        calls: Mutex<Vec<Call>>,
+    }
+
+    pub(crate) fn output(status: u32, stdout: &str, stderr: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw((status as i32 & 0xff) << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    impl FakeSsh {
+        pub(crate) fn new() -> Self {
+            Self::default()
+        }
+
+        pub(crate) fn reply(&self, status: u32, stdout: &str) -> &Self {
+            self.reply_with_stderr(status, stdout, "")
+        }
+
+        pub(crate) fn reply_with_stderr(&self, status: u32, stdout: &str, stderr: &str) -> &Self {
+            self.replies
+                .lock()
+                .unwrap()
+                .push_back(output(status, stdout, stderr));
+            self
+        }
+
+        pub(crate) fn calls(&self) -> Vec<Call> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl Transport for FakeSsh {
+        fn run(
+            &self,
+            dest: &Destination,
+            command: &RemoteCommand,
+            _timeout: Duration,
+        ) -> Result<Output> {
+            let rendered = command.render()?;
+            self.calls.lock().unwrap().push(Call {
+                dest: dest.to_string(),
+                command: rendered.clone(),
+                input: command.stdin.clone(),
+            });
+            let reply = self.replies.lock().unwrap().pop_front();
+            Ok(reply.unwrap_or_else(|| panic!("FakeSsh: no scripted reply for {rendered:?}")))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SHELL_METACHARACTERS: &str =
+        "$(rm -rf ~); `x`; $HOME 'quoted' \"double\" \\ * ? ; & | > <";
+
+    fn dest() -> Destination {
+        Destination::parse("user@host").unwrap()
+    }
+
+    fn sh(command: &str) -> String {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    #[test]
+    fn destination_accepts_user_host_and_port_forms() {
+        for s in [
+            "user@host",
+            "exedev@vm.exe.xyz",
+            "a-b_c.d@e-f_g.h",
+            "u1@10.0.0.1",
+            "u@host:2222",
+            "u@[::1]",
+            "u@[fe80::1]:2222",
+        ] {
+            assert_eq!(Destination::parse(s).unwrap().to_string(), s);
+        }
+        assert_eq!(Destination::parse("ssh://u@h").unwrap().to_string(), "u@h");
+        assert_eq!(Destination::parse("u@h:22").unwrap().to_string(), "u@h");
+    }
+
+    #[test]
+    fn destination_rejects_anything_but_user_host_and_port() {
+        for s in [
+            "",
+            "host",
+            "user@",
+            "@host",
+            "u:secret@host",
+            "u@host/dir",
+            "u@host?q",
+            "u@host#f",
+            "u@host:port",
+            "u@[::1",
+        ] {
+            assert!(Destination::parse(s).is_err(), "{s:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn destination_splits_user_host_and_port() {
+        let d = Destination::parse("exedev@vm.exe.xyz").unwrap();
+        assert_eq!(d.user, "exedev");
+        assert_eq!(d.host_name(), "vm.exe.xyz");
+        assert_eq!(d.port, 22);
+        let d = Destination::parse("u@[::1]:2222").unwrap();
+        assert_eq!(d.host_name(), "::1");
+        assert_eq!(d.port, 2222);
+    }
+
+    #[test]
+    fn quote_leaves_plain_words_and_quotes_the_rest() {
+        assert_eq!(quote("/a/b").unwrap(), "/a/b");
+        assert_eq!(quote("=path-abc").unwrap(), "'=path-abc'");
+        assert_eq!(quote("").unwrap(), "''");
+        assert_eq!(quote("a b").unwrap(), "'a b'");
+        assert_eq!(quote("a'b").unwrap(), "\"a'b\"");
+        assert!(quote("a\0b").is_err());
+    }
+
+    #[test]
+    fn remote_command_renders_program_then_quoted_args() {
+        let cmd = RemoteCommand::new(["tmux", "new-session", "-c", "/it's here", ""]);
+        assert_eq!(
+            cmd.render().unwrap(),
+            "tmux new-session -c \"/it's here\" ''"
+        );
+    }
+
+    #[test]
+    fn script_renders_sh_dash_c_then_positional_args() {
+        let cmd = RemoteCommand::from_script("cd \"$1\" && pwd -P", ["/a b"]);
+        assert_eq!(
+            cmd.render().unwrap(),
+            "sh -c 'cd \"$1\" && pwd -P' sh '/a b'"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "single quote")]
+    fn script_rejects_a_single_quote() {
+        RemoteCommand::from_script("printf '%s'", std::iter::empty::<&str>());
+    }
+
+    #[test]
+    fn from_script_accepts_a_multi_line_script() {
+        let cmd = RemoteCommand::from_script("a=$1\nprintf %s \"$a\"", ["x y"]);
+        assert_eq!(
+            cmd.render().unwrap(),
+            "sh -c 'a=$1\nprintf %s \"$a\"' sh 'x y'"
+        );
+        assert_eq!(sh(&cmd.render().unwrap()), "x y");
+    }
+
+    #[test]
+    fn render_rejects_a_nul_byte() {
+        assert!(RemoteCommand::new(["x", "a\0b"]).render().is_err());
+    }
+
+    #[test]
+    fn remote_command_round_trips_hostile_args_through_sh() {
+        let argv = RemoteCommand::new(["printf", "%s\\n", SHELL_METACHARACTERS, "$HOME"]);
+        assert_eq!(
+            sh(&argv.render().unwrap()),
+            format!("{SHELL_METACHARACTERS}\n$HOME\n")
+        );
+
+        let script = RemoteCommand::from_script(
+            "printf \"%s\\n\" \"$1\" \"$2\"",
+            [SHELL_METACHARACTERS, "$HOME"],
+        );
+        assert_eq!(
+            sh(&script.render().unwrap()),
+            format!("{SHELL_METACHARACTERS}\n$HOME\n")
+        );
+    }
+
+    /// Needs a reachable host with agent or key auth:
+    /// `PATH_TEST_SSH_DEST=user@host cargo test -p path-cli -- --ignored live_`.
+    #[test]
+    #[ignore = "connects to $PATH_TEST_SSH_DEST"]
+    fn live_run_captures_feeds_stdin_times_out_and_maps_the_status() {
+        let Ok(dest) = std::env::var("PATH_TEST_SSH_DEST") else {
+            return;
+        };
+        let dest = Destination::parse(&dest).unwrap();
+        let ssh = SshClient::new(
+            std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from),
+            crate::config::home_dir().unwrap().join(".ssh"),
+        )
+        .unwrap();
+
+        let script = RemoteCommand::from_script(
+            "printf \"TP_A=%s\\n\" \"$1\"; printf err >&2; cat",
+            ["x y"],
+        )
+        .stdin(b"fed".to_vec());
+        let out = ssh.run(&dest, &script, Duration::from_secs(30)).unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "TP_A=x y\nfed");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), "err");
+
+        let out = ssh
+            .run(
+                &dest,
+                &RemoteCommand::new(["sh", "-c", "exit 3"]),
+                Duration::from_secs(30),
+            )
+            .unwrap();
+        assert_eq!(out.status.code(), Some(3));
+
+        // stdin larger than the initial channel window (2 MiB on
+        // OpenSSH) and a remote that exits without reading it.
+        let unread = vec![b'x'; 4 << 20];
+        let out = ssh
+            .run(
+                &dest,
+                &RemoteCommand::from_script("echo unread >&2; exit 4", std::iter::empty::<&str>())
+                    .stdin(unread),
+                Duration::from_secs(30),
+            )
+            .unwrap();
+        assert_eq!(out.status.code(), Some(4));
+        assert_eq!(String::from_utf8_lossy(&out.stderr), "unread\n");
+
+        let err = ssh
+            .run(
+                &dest,
+                &RemoteCommand::from_script(
+                    "echo hanging on a lock >&2; sleep 30",
+                    std::iter::empty::<&str>(),
+                ),
+                Duration::from_millis(1500),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("did not finish within"), "{err:#}");
+        assert!(
+            err.to_string().ends_with("(stderr) hanging on a lock"),
+            "{err:#}"
+        );
+    }
+
+    mod with_fake_output {
+        use super::super::fake::{Call, FakeSsh, output};
+        use super::*;
+
+        #[test]
+        fn parse_facts_reads_values_in_order() {
+            let out = output(0, "A=1\nB=\nC=/x y\n", "");
+            assert_eq!(
+                parse_facts(&out, ["A", "B", "C"]).unwrap(),
+                ["1", "", "/x y"]
+            );
+        }
+
+        #[test]
+        fn parse_facts_rejects_banner_missing_and_extra_lines() {
+            let banner = output(0, "Welcome!\nA=1\n", "");
+            let err = parse_facts(&banner, ["A"]).unwrap_err().to_string();
+            assert!(err.contains("login banner"), "{err}");
+            assert!(err.contains("Welcome!"), "{err}");
+            assert!(parse_facts(&output(0, "A=1\n", ""), ["A", "B"]).is_err());
+            assert!(parse_facts(&output(0, "A=1\nB=2\n", ""), ["A"]).is_err());
+            assert!(parse_facts(&output(0, "B=2\nA=1\n", ""), ["A", "B"]).is_err());
+            assert!(parse_facts(&output(0, "", ""), ["A"]).is_err());
+            let noisy = output(0, "Welcome!\n", "warning: x\n");
+            let err = parse_facts(&noisy, ["A"]).unwrap_err().to_string();
+            assert!(err.ends_with("Welcome!\n(stderr) warning: x"), "{err}");
+        }
+
+        #[test]
+        fn fail_unless_success_names_what_destination_status_and_stderr() {
+            let dest = Destination::parse("u@h").unwrap();
+            assert!(fail_unless_success(&output(0, "", ""), "x", &dest).is_ok());
+            let err =
+                fail_unless_success(&output(255, "", "Connection refused\n"), "preflight", &dest)
+                    .unwrap_err()
+                    .to_string();
+            assert!(err.starts_with("preflight on u@h failed ("), "{err}");
+            assert!(err.ends_with("Connection refused"), "{err}");
+            let quiet = fail_unless_success(&output(1, "", ""), "launch", &dest)
+                .unwrap_err()
+                .to_string();
+            assert!(quiet.ends_with(')'), "no trailing colon: {quiet}");
+        }
+
+        #[test]
+        fn fake_records_rendered_commands_and_replays_replies() {
+            let fake = FakeSsh::new();
+            fake.reply(0, "A=1\n");
+            let cmd = RemoteCommand::from_script("printf A=1", ["x y"]).stdin(b"body".to_vec());
+            let out = fake.run(&dest(), &cmd, Duration::from_secs(1)).unwrap();
+            assert_eq!(out.stdout, b"A=1\n");
+            assert_eq!(
+                fake.calls(),
+                [Call {
+                    dest: "user@host".into(),
+                    command: "sh -c 'printf A=1' sh 'x y'".into(),
+                    input: Some(b"body".to_vec()),
+                }]
+            );
+        }
+    }
+}
