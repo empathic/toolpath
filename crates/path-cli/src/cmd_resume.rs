@@ -35,6 +35,17 @@
 //! integration tests use [`RecordingExec`] to capture
 //! `(binary, args, cwd)` without launching anything.
 //!
+//! ## Remote
+//!
+//! `--remote <user@host>` (Claude only) resumes the session on an ssh
+//! host under tmux instead of this machine. The flow lives in
+//! the `remote` module: two read-only probes, the printed plan (`--dry-run`
+//! stops there), then ship and launch as the remote state requires;
+//! the command prints the ssh command that attaches. With `--remote`,
+//! `-C` names the remote project directory; the default is the local
+//! cwd with the local home swapped for the remote home. All of it
+//! compiles only with the `resume-remote` cargo feature on unix.
+//!
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
 //! for the full design.
 
@@ -101,8 +112,8 @@ pub(crate) fn run_remote(
     config: &crate::config::Config,
 ) -> Result<()> {
     let resolved = resolve_input(&args)?;
-    let path = extract_the_only_path(&resolved.graph)?;
-    require_an_agent_turn(path)?;
+    let document = extract_the_only_path(&resolved.graph)?;
+    require_an_agent_turn(document)?;
     remote::require_harness_is_claude(args.harness, resolved.source_harness)?;
     let home = config
         .home_dir()
@@ -112,13 +123,16 @@ pub(crate) fn run_remote(
         home.join(crate::ssh::SSH_DIR_NAME),
     )?;
     remote::resume(
-        &resolved.json,
-        &dest,
-        args.cwd.as_deref(),
-        args.remote.dry_run,
+        &remote::RemoteResume {
+            document,
+            document_json: &resolved.json,
+            dest: &dest,
+            remote_dir: args.cwd.as_deref(),
+            dry_run: args.remote.dry_run,
+            local_home: home,
+            local_cwd: &std::env::current_dir()?,
+        },
         &transport,
-        home,
-        &std::env::current_dir()?,
     )
 }
 
