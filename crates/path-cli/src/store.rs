@@ -479,6 +479,10 @@ impl Destination {
         url.set_path(&format!("{base_path}/{}.json", name.0));
         ObjectUri { url }
     }
+
+    pub(crate) fn scheme(&self) -> &str {
+        self.base.scheme()
+    }
 }
 
 // ── Naming ──────────────────────────────────────────────────────────────

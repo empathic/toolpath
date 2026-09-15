@@ -89,9 +89,6 @@ pub(crate) fn record(
     Ok(())
 }
 
-/// Not yet called from `cmd_export`: skip-on-unchanged wiring lands
-/// with the shared `export_body` path.
-#[allow(dead_code)]
 pub(crate) fn unchanged(ledger: &Ledger, destination: &str, cache_id: &str, sha256: &str) -> bool {
     ledger
         .get(destination)

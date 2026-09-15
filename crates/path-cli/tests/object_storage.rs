@@ -897,6 +897,107 @@ fn import_object_with_a_destination_skips_bad_objects_and_exits_nonzero() {
     assert_eq!(folder_names(&config.path().join("documents")).len(), 2);
 }
 
+// ── --all and --dry-run ─────────────────────────────────────────────
+
+fn seed_cache(config: &Path, id: &str) {
+    let documents = config.join("documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc_with_id(work.path(), id);
+    std::fs::copy(&doc, documents.join(format!("{id}.json"))).unwrap();
+}
+
+#[test]
+fn export_all_uploads_every_cached_document_except_imports_and_skips_unchanged_on_rerun() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    // Cache IDs are `<source>-<graph id>`; the fixture's graph id is the
+    // cache id itself, which is what a real derive produces too.
+    seed_cache(config.path(), "claude-path-claude-code-aaaa");
+    seed_cache(config.path(), "codex-path-codex-bbbb");
+    seed_cache(config.path(), "object-path-claude-code-cccc");
+    seed_cache(config.path(), "pathbase-alex-pathstash-dddd");
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "2 uploaded, 0 unchanged, 0 failed",
+        ));
+    assert_eq!(
+        folder_names(folder.path()),
+        vec![
+            "2026-01-01-hello--claude-path-claude-code-aaaa.json".to_string(),
+            "2026-01-01-hello--codex-path-codex-bbbb.json".to_string(),
+        ]
+    );
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "0 uploaded, 2 unchanged, 0 failed",
+        ));
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all", "--include-imported"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "2 uploaded, 2 unchanged, 0 failed",
+        ));
+    assert_eq!(folder_names(folder.path()).len(), 4);
+}
+
+#[test]
+fn export_all_reports_a_bad_document_and_keeps_going() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    seed_cache(config.path(), "claude-path-claude-code-aaaa");
+    let documents = config.path().join("documents");
+    std::fs::write(documents.join("claude-broken.json"), "not json").unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("warning: claude-broken"))
+        .stderr(predicate::str::contains(
+            "1 uploaded, 0 unchanged, 1 failed",
+        ));
+    assert_eq!(folder_names(folder.path()).len(), 1);
+}
+
+#[test]
+fn dry_run_prints_the_plan_and_writes_nothing() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--dry-run"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("would write"))
+        .stderr(predicate::str::contains("2026-01-01-hello--g1.json"))
+        .stderr(predicate::str::contains(
+            "credentials: none needed (folder)",
+        ))
+        .stderr(predicate::str::contains("mode:        overwrite"));
+    assert!(folder_names(folder.path()).is_empty());
+    assert!(!config.path().join("exports.json").exists());
+}
+
 // ── path resume with object storage ─────────────────────────────────
 
 #[test]

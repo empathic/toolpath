@@ -307,8 +307,20 @@ pub fn run(target: ExportTarget) -> Result<()> {
 #[derive(clap::Args, Debug)]
 pub(crate) struct ObjectExportArgs {
     /// Input: cache ID (e.g. `claude-abc`) or path to a toolpath JSON file
-    #[arg(short, long)]
-    pub input: String,
+    #[arg(short, long, required_unless_present = "all", conflicts_with = "all")]
+    pub input: Option<String>,
+
+    /// Export every cached document instead of one. Documents that were
+    /// themselves imported from object storage or Pathbase are skipped
+    /// (see --include-imported), and documents already uploaded to this
+    /// destination with the same bytes are skipped using the export
+    /// ledger. Failures are reported and tallied, not fatal.
+    #[arg(long)]
+    pub all: bool,
+
+    /// With --all: also export `object-` and `pathbase-` cache entries
+    #[arg(long, requires = "all")]
+    pub include_imported: bool,
 
     /// Destination: `s3://bucket/prefix`, or a folder (`~/traces`,
     /// `file:///srv/traces`).
@@ -318,6 +330,18 @@ pub(crate) struct ObjectExportArgs {
     /// Upload even if the input does not validate as a toolpath document
     #[arg(long)]
     pub force: bool,
+
+    /// Resolve everything and print what would be written, without
+    /// writing: the object location, endpoint, region, credential
+    /// source, and put mode.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Refuse to replace an object that already exists at the computed
+    /// key (a create-only put). Default is to overwrite, because a
+    /// re-export of a session that grew should replace its own object.
+    #[arg(long)]
+    pub no_overwrite: bool,
 }
 
 #[derive(Debug)]
@@ -887,6 +911,27 @@ fn write_cursor_to_stdout(session: &toolpath_cursor::CursorSession) -> Result<()
 
 // ── Object storage ────────────────────────────────────────────────────
 
+/// Per-call knobs for an object export, shared by `p export object` and
+/// `path share --to`.
+#[cfg(not(target_os = "emscripten"))]
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ExportOptions {
+    pub force: bool,
+    pub dry_run: bool,
+    pub no_overwrite: bool,
+}
+
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) enum ObjectOutcome {
+    Uploaded(crate::store::ObjectUri),
+    // The URI isn't read back out by any caller in this task; `path
+    // share --to` (Task 16) is the consumer that will report it.
+    #[allow(dead_code)]
+    Unchanged(crate::store::ObjectUri),
+    #[allow(dead_code)]
+    DryRun(crate::store::ObjectUri),
+}
+
 fn run_object(args: ObjectExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
@@ -896,39 +941,154 @@ fn run_object(args: ObjectExportArgs) -> Result<()> {
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let file = cache_ref(&args.input)?;
-        let body = std::fs::read_to_string(&file)
-            .with_context(|| format!("Failed to read {}", file.display()))?;
-
         let dest = crate::store::Destination::parse(&args.to)?;
         let settings = crate::store::effective_settings()?;
-        let name = object_name_for(&body, &file, args.force)?;
+        let opts = ExportOptions {
+            force: args.force,
+            dry_run: args.dry_run,
+            no_overwrite: args.no_overwrite,
+        };
 
-        let uri = dest.uri_for(&name);
-        uri.put(&settings, body.as_bytes())?;
+        // (ledger key, file) pairs. For a single export the key is the
+        // cache ID or the file stem; for --all it is always the cache ID.
+        let inputs: Vec<(String, std::path::PathBuf)> = if args.all {
+            crate::cache::list_cached()?
+                .into_iter()
+                .filter(|e| {
+                    args.include_imported
+                        || !(e.id.starts_with("object-") || e.id.starts_with("pathbase-"))
+                })
+                .map(|e| (e.id, e.path))
+                .collect()
+        } else {
+            let input = args.input.as_deref().expect("clap: --input or --all");
+            let file = cache_ref(input)?;
+            let key = file
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| input.to_string());
+            vec![(key, file)]
+        };
+        if inputs.is_empty() {
+            anyhow::bail!("no cached documents to export; run `path p cache sync` first");
+        }
 
-        let ledger_key = file
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| args.input.clone());
-        crate::export_ledger::record(
-            &crate::export_ledger::ledger_path()?,
-            &dest.to_string(),
-            &ledger_key,
-            crate::export_ledger::ExportRecord {
-                uri: uri.to_string(),
-                sha256: crate::export_ledger::sha256_hex(body.as_bytes()),
-                bytes: body.len() as u64,
-                uploaded_at: chrono::Utc::now(),
-                uploader: crate::export_ledger::uploader(),
-            },
-        )?;
+        // Only --all consults the ledger to skip: a single explicit
+        // export means "ship it", even if the bytes are unchanged.
+        let ledger = if args.all {
+            crate::export_ledger::load(&crate::export_ledger::ledger_path()?)?
+        } else {
+            crate::export_ledger::Ledger::new()
+        };
 
-        println!("{uri}");
-        eprintln!("Uploaded {} bytes → {uri}", body.len());
-        eprintln!("Resume it with: path resume {uri}");
+        let (mut uploaded, mut unchanged, mut failed) = (0usize, 0usize, 0usize);
+        for (key, file) in inputs {
+            let body = match std::fs::read_to_string(&file)
+                .with_context(|| format!("Failed to read {}", file.display()))
+            {
+                Ok(b) => b,
+                Err(e) if args.all => {
+                    eprintln!("warning: {key}: {e:#}");
+                    failed += 1;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            match export_body(&body, &key, &file, &dest, &settings, &ledger, &opts) {
+                Ok(ObjectOutcome::Uploaded(uri)) => {
+                    println!("{uri}");
+                    uploaded += 1;
+                }
+                Ok(ObjectOutcome::Unchanged(_)) => unchanged += 1,
+                Ok(ObjectOutcome::DryRun(_)) => {}
+                Err(e) if args.all => {
+                    eprintln!("warning: {key}: {e:#}");
+                    failed += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        if args.all {
+            eprintln!("{uploaded} uploaded, {unchanged} unchanged, {failed} failed → {dest}");
+            if failed > 0 {
+                anyhow::bail!("{failed} document(s) failed to export");
+            }
+        }
         Ok(())
     }
+}
+
+/// Export one document body to `dest`: validate and name it, skip it if
+/// the ledger says these bytes already landed there, honor --dry-run,
+/// put, and record the upload. `ledger_key` is how the upload is
+/// remembered (the cache ID, or the file stem for a loose file);
+/// `source_label` names the input in errors.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn export_body(
+    body: &str,
+    ledger_key: &str,
+    source_label: &std::path::Path,
+    dest: &crate::store::Destination,
+    settings: &crate::store::S3Settings,
+    ledger: &crate::export_ledger::Ledger,
+    opts: &ExportOptions,
+) -> Result<ObjectOutcome> {
+    let name = object_name_for(body, source_label, opts.force)?;
+    let uri = dest.uri_for(&name);
+    let sha256 = crate::export_ledger::sha256_hex(body.as_bytes());
+
+    if crate::export_ledger::unchanged(ledger, &dest.to_string(), ledger_key, &sha256) {
+        eprintln!("Unchanged: {uri}");
+        return Ok(ObjectOutcome::Unchanged(uri));
+    }
+
+    if opts.dry_run {
+        eprintln!("would write {} bytes → {uri}", body.len());
+        match dest.scheme() {
+            "s3" | "s3a" => {
+                let resolved = settings.resolve_real()?;
+                eprintln!(
+                    "  endpoint:    {}",
+                    settings.endpoint.as_deref().unwrap_or("AWS S3")
+                );
+                let region = settings
+                    .region
+                    .clone()
+                    .or_else(|| resolved.region.clone())
+                    .unwrap_or_else(|| crate::store::DEFAULT_REGION.to_string());
+                eprintln!("  region:      {region}");
+                eprintln!("  credentials: {}", resolved.source);
+            }
+            _ => eprintln!("  credentials: none needed (folder)"),
+        }
+        eprintln!(
+            "  mode:        {}",
+            if opts.no_overwrite {
+                "create-only"
+            } else {
+                "overwrite"
+            }
+        );
+        return Ok(ObjectOutcome::DryRun(uri));
+    }
+
+    uri.put(settings, body.as_bytes())?;
+    crate::export_ledger::record(
+        &crate::export_ledger::ledger_path()?,
+        &dest.to_string(),
+        ledger_key,
+        crate::export_ledger::ExportRecord {
+            uri: uri.to_string(),
+            sha256,
+            bytes: body.len() as u64,
+            uploaded_at: chrono::Utc::now(),
+            uploader: crate::export_ledger::uploader(),
+        },
+    )?;
+    eprintln!("Uploaded {} bytes → {uri}", body.len());
+    eprintln!("Resume it with: path resume {uri}");
+    Ok(ObjectOutcome::Uploaded(uri))
 }
 
 /// Parse and schema-check the bytes about to be uploaded, and name the
