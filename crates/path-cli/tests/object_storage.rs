@@ -1186,3 +1186,17 @@ fn resume_help_lists_object_storage_inputs() {
         .stdout(predicate::str::contains("s3a://"))
         .stdout(predicate::str::contains("folder"));
 }
+
+#[test]
+fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", "claude-does-not-exist"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path p cache ls"))
+        .stderr(predicate::str::contains("path cache ls").not());
+}
