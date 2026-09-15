@@ -880,6 +880,33 @@ fn import_object_with_a_destination_imports_every_document_under_it() {
 }
 
 #[test]
+fn import_object_with_a_destination_is_idempotent() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    cmd(config.path())
+        .args(["p", "import", "object", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+
+    cmd(config.path())
+        .args(["p", "import", "object", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("2 unchanged"));
+
+    let mut ids = folder_names(&config.path().join("documents"));
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "object-path-claude-code-aaaa.json".to_string(),
+            "object-path-claude-code-bbbb.json".to_string()
+        ]
+    );
+}
+
+#[test]
 fn import_object_with_a_destination_skips_bad_objects_and_exits_nonzero() {
     let config = tempfile::tempdir().unwrap();
     let folder = folder_with_two_docs(config.path());

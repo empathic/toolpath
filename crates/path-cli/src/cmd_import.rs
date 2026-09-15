@@ -225,17 +225,34 @@ pub struct ImportArgs {
 }
 
 pub fn run(args: ImportArgs, pretty: bool, config: &Config) -> Result<()> {
-    let (docs, skipped) = match args.source {
+    let (docs, fetch_skipped, destination_mode) = match args.source {
         ImportSource::Object { target } => derive_object(target)?,
-        other => (derive(other, config)?, 0),
+        other => (derive(other, config)?, 0, false),
     };
-    emit(&docs, args.force, args.no_cache, pretty, config)?;
+    let write_skipped = emit(
+        &docs,
+        args.force,
+        args.no_cache,
+        pretty,
+        config,
+        destination_mode,
+    )?;
+    let skipped = fetch_skipped + write_skipped;
     if skipped > 0 {
         anyhow::bail!("{skipped} object(s) could not be imported (see warnings above)");
     }
     Ok(())
 }
 
+/// Writes each derived document to the cache and prints its path.
+///
+/// `destination_mode` (set only for a multi-document `p import object
+/// <destination>`) switches from the default "error unless --force" cache
+/// write to an idempotent one: an existing entry with identical bytes is
+/// counted `unchanged` and left alone; one that differs is skipped with a
+/// warning (unless `--force`); a re-run of a mirror import is then a
+/// no-op. Returns the number of objects skipped for this reason (0 in the
+/// default mode), which the caller folds into its exit-1 decision.
 #[cfg_attr(target_os = "emscripten", expect(unused_variables))]
 fn emit(
     docs: &[DerivedDoc],
@@ -243,10 +260,14 @@ fn emit(
     no_cache: bool,
     pretty: bool,
     config: &Config,
-) -> Result<()> {
+    destination_mode: bool,
+) -> Result<usize> {
     if docs.is_empty() {
         anyhow::bail!("no documents produced");
     }
+    let mut imported = 0usize;
+    let mut unchanged = 0usize;
+    let mut skipped = 0usize;
     for d in docs {
         if no_cache {
             let json = if pretty {
@@ -255,35 +276,70 @@ fn emit(
                 d.doc.to_json()?
             };
             println!("{}", json);
-        } else {
-            // The implicit sync in `path query` fills the cache under
-            // these same IDs; re-importing an artifact whose record is
-            // still fresh is a no-op, not an exists-error.
-            #[cfg(not(target_os = "emscripten"))]
-            if !force
-                && let Some(stub) = &d.provenance
-                && crate::sync::record_is_current(config, stub, &d.cache_id)
-            {
-                println!("{}", crate::cache::cache_path(&d.cache_id)?.display());
+            continue;
+        }
+
+        if destination_mode {
+            let path = crate::cache::cache_path(&d.cache_id)?;
+            if path.exists() && !force {
+                // Compare parsed values, not raw bytes: `StructuralChange`
+                // and the meta types carry a `HashMap` `extra` map, whose
+                // key order is randomized per process, so two semantically
+                // identical documents can legitimately serialize with
+                // their fields in a different order.
+                let existing: Option<serde_json::Value> = std::fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+                let new_value = serde_json::to_value(&d.doc)?;
+                if existing.as_ref() == Some(&new_value) {
+                    println!("{}", path.display());
+                    unchanged += 1;
+                    continue;
+                }
                 eprintln!(
-                    "{} is already up to date (pass --force to re-derive)",
+                    "warning: {} differs from the cached copy; pass --force to overwrite",
                     d.cache_id
                 );
+                skipped += 1;
                 continue;
             }
-            let path = write_cached(&d.cache_id, &d.doc, force)?;
-            println!("{}", path.display());
-            #[cfg(not(target_os = "emscripten"))]
-            if let Some(stub) = &d.provenance
-                && let Err(e) = crate::sync::record_artifact(config, stub, &d.cache_id)
-            {
-                eprintln!("warning: sync manifest not updated: {e}");
-            }
-            let summary = doc_summary(&d.doc);
-            eprintln!("Imported {} → {}", summary, d.cache_id);
+            let written = write_cached(&d.cache_id, &d.doc, true)?;
+            println!("{}", written.display());
+            eprintln!("Imported {} → {}", doc_summary(&d.doc), d.cache_id);
+            imported += 1;
+            continue;
         }
+
+        // The implicit sync in `path query` fills the cache under
+        // these same IDs; re-importing an artifact whose record is
+        // still fresh is a no-op, not an exists-error.
+        #[cfg(not(target_os = "emscripten"))]
+        if !force
+            && let Some(stub) = &d.provenance
+            && crate::sync::record_is_current(config, stub, &d.cache_id)
+        {
+            println!("{}", crate::cache::cache_path(&d.cache_id)?.display());
+            eprintln!(
+                "{} is already up to date (pass --force to re-derive)",
+                d.cache_id
+            );
+            continue;
+        }
+        let path = write_cached(&d.cache_id, &d.doc, force)?;
+        println!("{}", path.display());
+        #[cfg(not(target_os = "emscripten"))]
+        if let Some(stub) = &d.provenance
+            && let Err(e) = crate::sync::record_artifact(config, stub, &d.cache_id)
+        {
+            eprintln!("warning: sync manifest not updated: {e}");
+        }
+        let summary = doc_summary(&d.doc);
+        eprintln!("Imported {} → {}", summary, d.cache_id);
     }
-    Ok(())
+    if destination_mode {
+        eprintln!("{imported} imported, {unchanged} unchanged, {skipped} skipped");
+    }
+    Ok(skipped)
 }
 
 fn doc_summary(doc: &Graph) -> String {
@@ -1589,7 +1645,11 @@ fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<Deriv
     }
 }
 
-fn derive_object(target: String) -> Result<(Vec<DerivedDoc>, usize)> {
+/// Returns `(documents, fetch failures, destination_mode)`. `destination_mode`
+/// is true only for the multi-document form (a bucket prefix or folder),
+/// which `run` routes through `emit`'s idempotent write path; a single
+/// `<name>.json` object keeps the plain single-document import behavior.
+fn derive_object(target: String) -> Result<(Vec<DerivedDoc>, usize, bool)> {
     #[cfg(target_os = "emscripten")]
     {
         let _ = target;
@@ -1600,7 +1660,7 @@ fn derive_object(target: String) -> Result<(Vec<DerivedDoc>, usize)> {
         // A shared document is always `<name>.json`; anything else names
         // a place to import everything from.
         if target.trim_end_matches('/').ends_with(".json") {
-            return Ok((vec![crate::derive::object_fetch_to_doc(&target)?], 0));
+            return Ok((vec![crate::derive::object_fetch_to_doc(&target)?], 0, false));
         }
         let dest = crate::store::Destination::parse(&target)?;
         let settings = crate::store::effective_settings()?;
@@ -1623,7 +1683,7 @@ fn derive_object(target: String) -> Result<(Vec<DerivedDoc>, usize)> {
         if docs.is_empty() {
             anyhow::bail!("{skipped} object(s) failed; nothing imported");
         }
-        Ok((docs, skipped))
+        Ok((docs, skipped, true))
     }
 }
 
