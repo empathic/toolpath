@@ -1,5 +1,7 @@
-//! The identity of a Claude Code session file that `p export claude`
-//! writes: the content-addressed session ID.
+//! The identity of a Claude Code session file that `path` writes for
+//! another host: the content-addressed session ID, and the rules for
+//! the `cwd` the session is keyed on. `p export claude` and
+//! `path resume --remote` share them.
 
 use anyhow::{Context, Result};
 
@@ -20,9 +22,53 @@ pub(crate) fn generate_content_addressed_session_id(json: &str) -> Result<String
         .to_string())
 }
 
+/// Claude Code keys a session on its canonical `cwd` string: an
+/// absolute Unix path on one line with no `.`, `..`, or empty
+/// component. One trailing `/` is dropped. Unix rules apply whatever
+/// the local host is, and the directory is not required to exist
+/// here, since it may be on another machine.
+pub(crate) fn parse_posix_dir(raw: &str) -> Result<String> {
+    use typed_path::{Utf8Component, Utf8UnixComponent, Utf8UnixPath, Utf8UnixPathBuf};
+
+    if raw.contains('\n') {
+        anyhow::bail!("the directory must be a single line (got {raw:?})");
+    }
+    let path = Utf8UnixPath::new(raw);
+    if !path.is_absolute() {
+        anyhow::bail!("the directory must be an absolute POSIX path (got {raw:?})");
+    }
+    let mut normalized = Utf8UnixPathBuf::new();
+    for component in path.components() {
+        match component {
+            Utf8UnixComponent::CurDir | Utf8UnixComponent::ParentDir => {
+                anyhow::bail!("the directory must not contain `.` or `..` (got {raw:?})")
+            }
+            component => normalized.push(component.as_str()),
+        }
+    }
+    let trimmed = raw
+        .strip_suffix('/')
+        .filter(|t| !t.is_empty())
+        .unwrap_or(raw);
+    if normalized.as_str() != trimmed {
+        anyhow::bail!("the directory must be in normalized form, {normalized} (got {raw:?})");
+    }
+    Ok(normalized.into_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_posix_dir_rejects_unnormalized_paths() {
+        for bad in ["relative/dir", "/a/../b", "/a/./b", "/a//b", "", "/a\nb"] {
+            assert!(parse_posix_dir(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(parse_posix_dir("/a/b/").unwrap(), "/a/b");
+        assert_eq!(parse_posix_dir("/").unwrap(), "/");
+        assert_eq!(parse_posix_dir("//").unwrap(), "/");
+    }
 
     /// A fixed document and the ID `generate_content_addressed_session_id`
     /// returns for it. `DOC_REORDERED` is the same document with other

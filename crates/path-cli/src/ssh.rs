@@ -61,6 +61,9 @@ const NO_EXIT_STATUS: u32 = 255;
 /// How much of the remote stderr an error message carries.
 const STDERR_TAIL_CHARS: usize = 1000;
 
+/// The OpenSSH directory under the home directory.
+pub(crate) const SSH_DIR_NAME: &str = ".ssh";
+
 /// The file in the ssh directory that verifies host keys.
 const KNOWN_HOSTS_FILE: &str = "known_hosts";
 

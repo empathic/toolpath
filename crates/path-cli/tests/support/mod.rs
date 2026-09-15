@@ -163,7 +163,7 @@ impl Drop for ScopedPath {
 /// Build a minimal `Path` whose single step has the given `actor`
 /// and a `conversation.append` artifact keyed `<artifact_prefix>://<session>`.
 /// The artifact key drives the harness projector's session-id extraction;
-/// the actor satisfies `ensure_path_with_agent`.
+/// the actor satisfies `require_an_agent_turn`.
 pub fn make_convo_path(actor: &str, artifact_key: &str) -> toolpath::v1::Path {
     let mut extra = HashMap::new();
     extra.insert("role".to_string(), serde_json::json!("user"));

@@ -1,6 +1,6 @@
 [package]
 name = "path-cli"
-version = "0.21.0"
+version = "0.22.0"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -42,6 +42,7 @@ jaq-core = "3.1.0"
 jaq-std = "3.0.1"
 jaq-json = "2.0.1"
 figment = { version = "0.10", features = ["env"] }
+typed-path = { version = "0.12", optional = true }
 
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
 toolpath-claude = { workspace = true, features = ["watcher"] }
@@ -92,9 +93,9 @@ vendored-openssl = ["git2/vendored-openssl"]
 embedded-picker = ["dep:skim", "dep:regex"]
 # Remote resume (scripts/resume-remote.sh): experimental, off by
 # default. Gates `p export claude --content-addressed-session-id`,
-# `--cwd`, and the ssh transport module. Pulls in the in-process SSH
-# client.
-resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url"]
+# `--cwd`, `path resume --remote`, `--dry-run`, and the ssh transport
+# module. Pulls in the in-process SSH client.
+resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url", "dep:typed-path"]
 
 [dev-dependencies]
 assert_cmd = "2"
