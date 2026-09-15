@@ -322,6 +322,18 @@ impl ObjectUri {
         crate::cache::make_id("object", &id)
     }
 
+    /// The URI's exact wire form, always carrying an explicit scheme.
+    /// Unlike the friendly `Display` form (a bare path for `file://`),
+    /// this round-trips through [`ObjectUri::parse`] without falling
+    /// into its scheme-less/directory branch, which unconditionally
+    /// appends a trailing slash (`Url::from_directory_path`) — the
+    /// right behavior for a destination, but wrong for a single
+    /// object. Use this, not `to_string()`, whenever a URI needs to be
+    /// handed to something that re-parses it.
+    pub(crate) fn as_str(&self) -> &str {
+        self.url.as_str()
+    }
+
     /// Download the object as UTF-8 text.
     pub(crate) fn get(&self, cfg: &S3Settings) -> Result<String> {
         let opened = open(&self.url, cfg)?;

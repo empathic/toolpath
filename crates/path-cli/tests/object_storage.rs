@@ -918,6 +918,7 @@ fn import_object_with_a_destination_skips_bad_objects_and_exits_nonzero() {
         .failure()
         .stderr(predicate::str::contains("skipping"))
         .stderr(predicate::str::contains("garbage.json"))
+        .stderr(predicate::str::contains("garbage.json/").not())
         .stderr(predicate::str::contains(
             "1 object(s) could not be imported",
         ));

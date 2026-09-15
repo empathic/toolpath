@@ -1671,8 +1671,12 @@ fn derive_object(target: String) -> Result<(Vec<DerivedDoc>, usize, bool)> {
         let mut docs = Vec::with_capacity(entries.len());
         let mut skipped = 0;
         for entry in entries {
+            // Display uses the friendly form (a bare path for `file://`)
+            // but re-fetching goes through the exact wire form, so a
+            // scheme-less round-trip doesn't pick up a spurious trailing
+            // slash (see `ObjectUri::as_str`).
             let uri = entry.uri.to_string();
-            match crate::derive::object_fetch_to_doc(&uri) {
+            match crate::derive::object_fetch_to_doc(entry.uri.as_str()) {
                 Ok(doc) => docs.push(doc),
                 Err(e) => {
                     eprintln!("warning: skipping {uri}: {e:#}");
