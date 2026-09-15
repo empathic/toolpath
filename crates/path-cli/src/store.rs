@@ -3,10 +3,11 @@
 //! Transport is [`object_store`], so one code path covers real AWS S3,
 //! any S3-compatible endpoint (Cloudflare R2, MinIO, Ceph, Backblaze
 //! B2), and a plain local directory via `file://`. A folder is a
-//! first-class destination, not a testing affordance: `path target
-//! ~/Dropbox/traces` is a complete setup, needing no credentials at
-//! all. It is also what the tests round-trip against, so share and
-//! resume are exercised end-to-end without a network.
+//! first-class destination, not a testing affordance: `--to ~/Dropbox/traces`
+//! is a complete setup, needing no credentials at all — credentials are
+//! resolved only for `s3://`. It is also what the tests round-trip
+//! against, so share and resume are exercised end-to-end without a
+//! network.
 //!
 //! The module owns two separable things:
 //!
@@ -104,8 +105,9 @@ pub(crate) struct S3Settings {
 
 /// The credential resolution this settings blob implies.
 ///
-/// `profile` is threaded through so `--profile` on a command reaches
-/// the resolver; everything else comes from the ambient AWS setup.
+/// `profile` names an AWS profile stored by `path auth s3 login
+/// --profile`; `AWS_PROFILE` is the per-invocation override, as with
+/// every other AWS tool.
 impl S3Settings {
     /// Resolve against the real environment, propagating the error. The
     /// resolver already answers "nothing configured" with the instance

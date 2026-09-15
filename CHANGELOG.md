@@ -2,6 +2,55 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.29.0 — 2026-09-25
+
+**Share and resume over object storage.** `path-cli` (0.29.0) can write
+toolpath documents to an S3 bucket, any S3-compatible endpoint (R2,
+MinIO, Ceph, B2), or a plain folder — and read them back.
+
+```bash
+path p export object --input claude-abc --to s3://my-bucket/traces
+path p export object --all --to ~/Dropbox/toolpath-traces   # every cached session; unchanged ones skipped
+path p list object s3://my-bucket/traces --format tsv
+path p import object s3://my-bucket/traces                  # every document under the prefix
+path share --to s3://my-bucket/traces
+path resume s3://my-bucket/traces                            # pick from the bucket
+```
+
+**Objects are named to be read and to be parsed.** A document lands at
+`<date>-<topic>--<id>.json`, e.g.
+`2026-08-07-add-s3-support--path-claude-code-6f2a1c9e5b3d4a70.json`.
+The ID is the document's `graph.id`; the date is the session's first
+step; `--` is reserved, so automation takes everything after the last
+`--`. Every part is a function of the document, never of the input
+filename, so a re-export overwrites its own object and two different
+documents never collide. Imports land in the cache as `object-<id>`.
+
+**Credentials come from wherever you already keep them.** `~/.aws`
+profiles, `AWS_PROFILE`, environment keys, and SSO / `role_arn` /
+`credential_process` profiles via `aws configure export-credentials`.
+A folder needs none and never consults them. An expired SSO session is
+offered `aws sso login` on a terminal and fails with that command
+otherwise; a resolution failure on `s3://` is an error, never a silent
+fall-through to instance metadata. `path auth s3 login` stores
+connection settings for endpoints the AWS tooling doesn't know;
+`path auth s3 status` says which credential source won and as which
+key; `path auth s3 whoami` asks STS.
+
+**A record store when you want one.** `--no-overwrite` (or a stored
+`no_overwrite`) makes puts create-only; `auth s3 login --sse aws:kms
+--kms-key-id …` sets server-side encryption; S3 objects carry
+`toolpath-*` metadata naming the graph ID, sha256, uploader, CLI
+version, and time; every upload is recorded locally in
+`~/.toolpath/exports.json`. Folder objects are 0600.
+
+`p export object` validates the document before uploading (`--force`
+to skip). `--dry-run` prints the resolved location, endpoint, region,
+credential source, and put mode. `[[project]] remote` in
+`~/.toolpath/config.toml` accepts an object destination. `path query
+--source` warns when it matches nothing.
+
+**`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>

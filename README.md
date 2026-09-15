@@ -124,6 +124,18 @@ path p validate --input examples/step-01-minimal.json
 path p query ancestors --input doc.json --step-id step-003
 ```
 
+## Back up sessions to a bucket or a folder
+
+```bash
+path p export object --all --to ~/Dropbox/toolpath-traces      # a folder needs no credentials
+path p export object --all --to s3://my-bucket/traces           # uses your ~/.aws profile
+path resume s3://my-bucket/traces                                # pick a session on another machine
+```
+
+Objects are named `<date>-<topic>--<id>.json`; re-running overwrites a
+session's own object and skips unchanged ones. Objects hold the full
+document: every turn, verbatim diffs, and tool output.
+
 ## The format
 
 Three objects, from a single change up to a release:
@@ -265,7 +277,7 @@ path
     opencode  --session ID
     cursor    --session UUID
     pi        --project PATH --session ID [--base DIR]
-  share       # one-shot interactive picker + Pathbase upload
+  share       # one-shot interactive picker + Pathbase upload, or --to DESTINATION for object storage
   resume      # project a doc into a coding agent and exec --resume
   query       # jaq (jq) filter over cached steps
               FILTER [--source NAME] [--id CACHE-ID] [--input FILE]
@@ -273,6 +285,7 @@ path
   kind        # list bundled kinds, or print a kind's schema
               [KIND[/VERSION]]
   auth        login | status | whoami | logout [--url URL]
+              s3 login | status | whoami | logout
   config      edit    # open ~/.toolpath/config.toml in $VISUAL/$EDITOR, validate on exit
   p           # plumbing: lower-level building blocks
     query
@@ -287,6 +300,7 @@ path
       opencode  [--project ID] [--format ...]
       cursor    [--project PATH] [--format ...]
       pi        [--project PATH] [--base DIR] [--format ...]
+      object    DESTINATION [--format ...]
     import                                            # writes to ~/.toolpath/documents/ by default
       git       --repo PATH --branch NAME[:START] [--base COMMIT] [--remote NAME] [--title TEXT]
       github    --repo OWNER/REPO --pr NUMBER [--no-ci] [--no-comments]
@@ -298,6 +312,7 @@ path
       cursor    [--session UUID] [--all] [--project PATH]
       pi        [--project PATH] [--session ID] [--all] [--base DIR]
       pathbase  TRACE-ID-OR-URL [--url URL]
+      object    OBJECT-URL-OR-DESTINATION
                                                       # global: [--force] [--no-cache]
     export
       claude    --input REF [--project DIR | --output FILE]
@@ -308,6 +323,7 @@ path
       cursor    --input REF [--project DIR | --output FILE]
       pi        --input REF [--project DIR | --output FILE]
       pathbase  --input REF [--url URL]
+      object    (--input REF | --all [--include-imported]) --to DESTINATION [--force] [--dry-run] [--no-overwrite]
     cache
       ls | rm CACHE-ID | sync [TYPE...]
     render

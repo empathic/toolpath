@@ -24,7 +24,7 @@ plumbing (`path p …`, the building blocks porcelain composes from).
 path
   haiku
   show        # markdown summary for one session (used by fzf preview)
-  share       # one-shot interactive picker + Pathbase upload
+  share       # picker + Pathbase upload, or --to DESTINATION for object storage
   resume      # project a doc into a coding agent and exec --resume
   query       # jaq (jq) filter over cached steps
               FILTER [--source NAME] [--id CACHE-ID] [--input FILE]
@@ -32,19 +32,23 @@ path
   kind        # list bundled kinds, or print a kind's schema
               [KIND[/VERSION]]
   auth        login | status | whoami | logout [--url URL]
+              s3 login | status | whoami | logout
   p           # plumbing
     query
       ancestors --input FILE --step-id ID
     list
       git       [--repo PATH] [--remote NAME] [--json]
       claude    [--project PATH] [--json]
+      object    DESTINATION [--format ...]
     import
       git       --repo PATH --branch NAME[:START] [--base COMMIT] [--remote NAME] [--title TEXT]
       claude    --project PATH [--session ID] [--all]
+      object    OBJECT-URL-OR-DESTINATION
                                                     # global: [--force] [--no-cache]
     export
       claude    --input REF [--project DIR | --output FILE]
       pathbase  --input REF [--url URL]
+      object    (--input REF | --all) --to DESTINATION [--force] [--dry-run] [--no-overwrite]
     cache       ls | rm CACHE-ID
     render
       dot       [--input FILE] [--output FILE] [--show-files] [--show-timestamps]

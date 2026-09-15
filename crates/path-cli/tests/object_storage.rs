@@ -1324,3 +1324,24 @@ fn folder_exports_are_private_and_created_directories_are_too() {
         .success();
     assert_eq!(mode(root.path()), before);
 }
+
+#[test]
+fn help_text_describes_nothing_that_does_not_exist() {
+    let config = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["auth", "s3", "login", "--help"],
+        vec!["auth", "s3", "--help"],
+        vec!["p", "export", "object", "--help"],
+        vec!["p", "import", "object", "--help"],
+        vec!["resume", "--help"],
+    ] {
+        let out = cmd(config.path()).args(&args).assert().success();
+        let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+        assert!(!text.contains("path target"), "{args:?}: {text}");
+    }
+    cmd(config.path())
+        .args(["p", "export", "object", "--help"])
+        .assert()
+        .stdout(predicate::str::contains("full document"))
+        .stdout(predicate::str::contains("--<graph id>"));
+}

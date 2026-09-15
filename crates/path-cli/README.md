@@ -99,6 +99,56 @@ path p import claude --project /path/to/project --session abc123
 path p import claude --project /path/to/project --all
 ```
 
+### p export object / p import object / p list object
+
+Object storage — an S3 bucket, an S3-compatible endpoint, or a folder —
+as a backup, a hand-off between machines, or a team's shared record.
+
+```bash
+# One session, or every cached session (unchanged ones are skipped)
+path p export object --input claude-abc --to s3://my-bucket/traces
+path p export object --all --to ~/Dropbox/toolpath-traces
+
+# See what is there without downloading anything
+path p list object s3://my-bucket/traces --format tsv
+
+# Bring one back, or everything under a prefix
+path p import object s3://my-bucket/traces/2026-03-04-fix-the-parser--path-claude-code-abc.json
+path p import object s3://my-bucket/traces
+
+# Nightly, from cron: sync the cache, push what changed
+path p cache sync && path p export object --all --to s3://team-bucket/traces
+```
+
+Objects are named `<date>-<topic>--<id>.json`. The ID is the document's
+`graph.id`, and `--` is reserved: split on the last `--` to get it.
+Objects hold the full document — every turn, verbatim diffs, and tool
+output — so treat the bucket as you would the sessions themselves.
+
+Credentials: a folder needs none. For `s3://`, your `~/.aws` profiles
+(SSO included, via the AWS CLI), `AWS_PROFILE`, or environment keys are
+used automatically; `path auth s3 login` stores settings for endpoints
+the AWS tooling doesn't know (MinIO, R2). `path auth s3 status` shows
+which credential source is in effect; `path auth s3 whoami` asks STS.
+
+#### Object storage as a record store
+
+By default a re-export replaces a session's own object. For a bucket
+that must be a record:
+
+- `path auth s3 login --no-overwrite` makes every put create-only
+  (`--no-overwrite` on a single export does the same once).
+- `path auth s3 login --sse aws:kms --kms-key-id <key>` sets server-side
+  encryption; a bucket policy that denies unencrypted puts then works.
+- S3 objects carry `x-amz-meta-toolpath-graph-id`, `-sha256`,
+  `-uploader`, `-cli-version`, and `-uploaded-at`.
+- `~/.toolpath/exports.json` records every upload from this machine.
+
+The bucket supplies the rest: Versioning and Object Lock for
+immutability, bucket-owner-enforced ownership, server access logging,
+and CloudTrail data events for the authoritative principal behind each
+write.
+
 ### query
 
 Load every step in the local cache into one JSON array and transform it with
