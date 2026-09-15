@@ -997,6 +997,9 @@ fn run_object(args: ObjectExportArgs) -> Result<()> {
             match export_body(&body, &key, &file, &dest, &settings, &ledger, &opts) {
                 Ok(ObjectOutcome::Uploaded(uri)) => {
                     println!("{uri}");
+                    if !args.all {
+                        eprintln!("Resume it with: path resume {uri}");
+                    }
                     uploaded += 1;
                 }
                 Ok(ObjectOutcome::Unchanged(_)) => unchanged += 1,
@@ -1087,7 +1090,6 @@ pub(crate) fn export_body(
         },
     )?;
     eprintln!("Uploaded {} bytes → {uri}", body.len());
-    eprintln!("Resume it with: path resume {uri}");
     Ok(ObjectOutcome::Uploaded(uri))
 }
 

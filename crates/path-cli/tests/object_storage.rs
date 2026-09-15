@@ -93,7 +93,8 @@ fn export_then_import_round_trips_through_a_folder() {
         .args(["--input", doc.to_str().unwrap()])
         .args(["--to", &folder.path().to_string_lossy()])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains("Resume it with"));
     let uri = String::from_utf8(out.get_output().stdout.clone())
         .unwrap()
         .trim()
@@ -925,7 +926,8 @@ fn export_all_uploads_every_cached_document_except_imports_and_skips_unchanged_o
         .success()
         .stderr(predicate::str::contains(
             "2 uploaded, 0 unchanged, 0 failed",
-        ));
+        ))
+        .stderr(predicate::str::contains("Resume it with").not());
     assert_eq!(
         folder_names(folder.path()),
         vec![
