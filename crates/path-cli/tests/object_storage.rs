@@ -1345,3 +1345,73 @@ fn help_text_describes_nothing_that_does_not_exist() {
         .stdout(predicate::str::contains("full document"))
         .stdout(predicate::str::contains("--<graph id>"));
 }
+
+// ── live S3 (opt in) ────────────────────────────────────────────────
+
+/// Round-trips one document through a real S3 endpoint. Ignored unless
+/// run explicitly with the environment below; `scripts/test-object-storage-live.sh`
+/// wires it to a MinIO container.
+#[test]
+#[ignore = "needs TOOLPATH_S3_TEST_BUCKET and credentials; run via scripts/test-object-storage-live.sh"]
+fn live_s3_round_trip() {
+    let bucket = std::env::var("TOOLPATH_S3_TEST_BUCKET").expect("TOOLPATH_S3_TEST_BUCKET");
+    let endpoint = std::env::var("TOOLPATH_S3_TEST_ENDPOINT").ok();
+    let key = std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID");
+    let secret = std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY");
+    let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc_with_id(work.path(), "path-live-test-0001");
+    let prefix = format!("s3://{bucket}/toolpath-live-{}", std::process::id());
+
+    let mut export = cmd(config.path());
+    export
+        .env("AWS_ACCESS_KEY_ID", &key)
+        .env("AWS_SECRET_ACCESS_KEY", &secret)
+        .env("AWS_REGION", &region)
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &prefix]);
+    if let Some(e) = &endpoint {
+        export.env("AWS_ENDPOINT_URL_S3", e);
+    }
+    let out = export.assert().success();
+    let uri = String::from_utf8(out.get_output().stdout.clone())
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(
+        uri.ends_with("2026-01-01-hello--path-live-test-0001.json"),
+        "{uri}"
+    );
+
+    let mut list = cmd(config.path());
+    list.env("AWS_ACCESS_KEY_ID", &key)
+        .env("AWS_SECRET_ACCESS_KEY", &secret)
+        .env("AWS_REGION", &region)
+        .args(["p", "list", "object", &prefix, "--format", "tsv"]);
+    if let Some(e) = &endpoint {
+        list.env("AWS_ENDPOINT_URL_S3", e);
+    }
+    list.assert()
+        .success()
+        .stdout(predicate::str::starts_with("path-live-test-0001\t"));
+
+    let mut import = cmd(config.path());
+    import
+        .env("AWS_ACCESS_KEY_ID", &key)
+        .env("AWS_SECRET_ACCESS_KEY", &secret)
+        .env("AWS_REGION", &region)
+        .args(["p", "import", "object", &uri]);
+    if let Some(e) = &endpoint {
+        import.env("AWS_ENDPOINT_URL_S3", e);
+    }
+    import.assert().success();
+    assert!(
+        config
+            .path()
+            .join("documents/object-path-live-test-0001.json")
+            .is_file()
+    );
+}
