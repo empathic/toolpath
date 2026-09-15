@@ -1,10 +1,11 @@
 //! `path resume --remote`: plan a Claude session resume on a remote
 //! host. Read-only: the command stops after the plan.
 //!
-//! The local host does all toolpath work. The remote runs a constant
-//! `sh` script (`probe_host.sh`, next to this module) that prints
-//! `TP_<NAME>=<value>` fact lines; [`crate::ssh::parse_facts`] rejects
-//! any other output, so a login banner cannot become a path component.
+//! The local host does all toolpath work. The remote runs two
+//! constant `sh` scripts (`probe_host.sh` and `probe_project_dir.sh`,
+//! next to this module) that print `TP_<NAME>=<value>` fact lines;
+//! [`crate::ssh::parse_facts`] rejects any other output, so a login
+//! banner cannot become a path component.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
@@ -31,6 +32,9 @@ const HOST_FACT_TAGS: [&str; 3] = ["TP_HOME", "TP_CLAUDE", "TP_TMUX"];
 /// The two values a probe script prints for a yes-or-no fact.
 const FLAG_YES: &str = "yes";
 const FLAG_NO: &str = "no";
+
+/// The facts `probe_project_dir.sh` prints, in order.
+const DIR_FACT_TAGS: [&str; 3] = ["TP_PWD", "TP_SESSION", "TP_TARGET"];
 
 /// The `path resume` flags for a remote resume.
 #[derive(clap::Args, Debug, Default)]
@@ -70,8 +74,34 @@ pub(super) fn require_harness_is_claude(
     }
 }
 
+/// What a run would do, decided by the project directory facts. The
+/// remote wins once it exists: nothing overwrites a remote session
+/// file, and a live session is attached to as is.
+#[derive(Debug, Clone, Copy)]
+enum RunAction {
+    /// tmux session live: attach.
+    Attach,
+    /// Session file present, no live session: launch, attach.
+    Launch,
+    /// Session file absent: ship, launch, attach.
+    Ship,
+}
+
+/// The plan for one remote resume, assembled from the document and
+/// the two probes.
+struct RemotePlan {
+    remote_home: String,
+    claude_path: String,
+    project_dir: String,
+    session_id: String,
+    session_file: String,
+    tmux_name: String,
+    action: RunAction,
+}
+
 /// Entry point. `remote_dir` is the `-C` value.
 pub(super) fn resume(
+    document_json: &str,
     dest: &Destination,
     remote_dir: Option<&Path>,
     dry_run: bool,
@@ -84,13 +114,53 @@ pub(super) fn resume(
         .transpose()?
         .map(crate::claude_session::parse_posix_dir)
         .transpose()?;
+    let session_id = crate::claude_session::generate_content_addressed_session_id(document_json)?;
+    let tmux_name = format_tmux_session_name(&session_id);
 
     let facts = probe_host(transport, dest)?;
     let project_dir = match remote_dir {
         Some(dir) => dir,
         None => swap_home(local_cwd, local_home, &facts.home)?,
     };
-    print_plan(&facts, &project_dir, dest);
+    let session_file = toolpath_claude::PathResolver::new()
+        .with_home(&facts.home)
+        .conversation_file(&project_dir, &session_id)
+        .context("build the remote session file path")?;
+    let session_file = session_file
+        .to_str()
+        .context("the remote session file path is not valid UTF-8")?
+        .to_string();
+
+    let dir_facts = probe_project_dir(transport, dest, &project_dir, &tmux_name, &session_file)?;
+    match dir_facts.physical_dir.as_deref() {
+        None => {
+            bail!("project directory {project_dir} does not exist on {dest}; create it or pass -C")
+        }
+        Some(physical) if physical != project_dir => bail!(
+            "project directory {project_dir} is not physical on {dest} \
+             (it resolves to {physical}); pass the physical path: -C {physical}"
+        ),
+        Some(_) => {}
+    }
+
+    let action = if dir_facts.tmux_session_live {
+        RunAction::Attach
+    } else if dir_facts.session_file_exists {
+        RunAction::Launch
+    } else {
+        RunAction::Ship
+    };
+
+    let plan = RemotePlan {
+        remote_home: facts.home,
+        claude_path: facts.claude,
+        project_dir,
+        session_id,
+        session_file,
+        tmux_name,
+        action,
+    };
+    print_plan(&plan, dest);
 
     if dry_run {
         eprintln!("Dry run: nothing was written or launched.");
@@ -103,11 +173,22 @@ pub(super) fn resume(
     );
 }
 
-fn print_plan(facts: &HostFacts, project_dir: &str, dest: &Destination) {
+fn print_plan(plan: &RemotePlan, dest: &Destination) {
+    let action = match plan.action {
+        RunAction::Attach => "attach to the live session. The remote tree and turns are kept.",
+        RunAction::Launch => {
+            "launch on the remote file, attach. The remote tree and turns are kept."
+        }
+        RunAction::Ship => "ship, launch, attach.",
+    };
     eprintln!("Remote resume plan for {dest}:");
-    eprintln!("  remote home:   {}", facts.home);
-    eprintln!("  claude:        {}", facts.claude);
-    eprintln!("  project dir:   {project_dir}");
+    eprintln!("  remote home:   {}", plan.remote_home);
+    eprintln!("  claude:        {}", plan.claude_path);
+    eprintln!("  project dir:   {}", plan.project_dir);
+    eprintln!("  session ID:    {}", plan.session_id);
+    eprintln!("  session file:  {}", plan.session_file);
+    eprintln!("  tmux session:  {}", plan.tmux_name);
+    eprintln!("  run:           {action}");
 }
 
 struct HostFacts {
@@ -140,6 +221,36 @@ fn probe_host(transport: &dyn Transport, dest: &Destination) -> Result<HostFacts
     Ok(HostFacts { home, claude })
 }
 
+struct ProjectDirFacts {
+    /// `pwd -P` inside the directory, `None` when it is missing.
+    physical_dir: Option<String>,
+    tmux_session_live: bool,
+    session_file_exists: bool,
+}
+
+/// The directory's physical path, the tmux session state, and the
+/// session file's existence, in one read-only call.
+fn probe_project_dir(
+    transport: &dyn Transport,
+    dest: &Destination,
+    project_dir: &str,
+    tmux_name: &str,
+    session_file: &str,
+) -> Result<ProjectDirFacts> {
+    let command = RemoteCommand::from_script(
+        include_str!("probe_project_dir.sh"),
+        [project_dir, tmux_name, session_file],
+    );
+    let output = transport.run(dest, &command, PROBE_TIMEOUT)?;
+    fail_unless_success(&output, "project directory probe", dest)?;
+    let [pwd, session, target] = parse_facts(&output, DIR_FACT_TAGS)?;
+    Ok(ProjectDirFacts {
+        physical_dir: if pwd.is_empty() { None } else { Some(pwd) },
+        tmux_session_live: parse_flag(&session, "tmux session live", dest)?,
+        session_file_exists: parse_flag(&target, "session file present", dest)?,
+    })
+}
+
 /// The local cwd with the local home swapped for the remote home,
 /// checked by [`crate::claude_session::parse_posix_dir`].
 fn swap_home(local_cwd: &Path, local_home: &Path, remote_home: &str) -> Result<String> {
@@ -160,6 +271,12 @@ fn swap_home(local_cwd: &Path, local_home: &Path, remote_home: &str) -> Result<S
         format!("{}/{}", remote_home.trim_end_matches('/'), suffix)
     };
     crate::claude_session::parse_posix_dir(&dir)
+}
+
+/// `path-<first 8 characters of the session ID>`. The ID is a
+/// hyphenated UUID, so the name is always a valid tmux session name.
+fn format_tmux_session_name(session_id: &str) -> String {
+    format!("path-{}", &session_id[..8])
 }
 
 /// A value captured from the remote may only become a path component
@@ -186,6 +303,12 @@ mod tests {
     use super::*;
     use crate::ssh::fake::FakeSsh;
 
+    /// One valid single-path document with an agent actor, as text.
+    fn doc_json() -> String {
+        r#"{"graph":{"id":"g1"},"paths":[{"path":{"id":"p1","head":"s1"},"steps":[{"step":{"id":"s1","actor":"agent:claude-code","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#
+            .to_string()
+    }
+
     fn dest() -> Destination {
         Destination::parse("user@host").unwrap()
     }
@@ -201,8 +324,17 @@ mod tests {
         );
     }
 
+    /// Queues the project directory probe reply from the three facts.
+    fn reply_dir(fake: &FakeSsh, physical: &str, session: &str, target: &str) {
+        fake.reply(
+            0,
+            &format!("TP_PWD={physical}\nTP_SESSION={session}\nTP_TARGET={target}\n"),
+        );
+    }
+
     fn run(fake: &FakeSsh, dry_run: bool) -> Result<()> {
         resume(
+            &doc_json(),
             &dest(),
             Some(Path::new(DIR)),
             dry_run,
@@ -212,14 +344,19 @@ mod tests {
         )
     }
 
+    /// The tags and the marker values the Rust side reads are the
+    /// ones the scripts print.
     #[test]
-    fn the_probe_script_prints_every_fact_tag_and_both_flag_values() {
-        let script = include_str!("probe_host.sh");
-        for tag in HOST_FACT_TAGS {
-            assert!(script.contains(&format!("{tag}=")), "{tag}");
-        }
-        for flag in [FLAG_YES, FLAG_NO] {
-            assert!(script.contains(&format!("={flag}")), "{flag}");
+    fn the_probe_scripts_print_every_fact_tag_and_marker() {
+        let host = include_str!("probe_host.sh");
+        let dir = include_str!("probe_project_dir.sh");
+        for (script, tags) in [(host, HOST_FACT_TAGS), (dir, DIR_FACT_TAGS)] {
+            for tag in tags {
+                assert!(script.contains(&format!("{tag}=")), "{tag}");
+            }
+            for flag in [FLAG_YES, FLAG_NO] {
+                assert!(script.contains(&format!("={flag}")), "{flag}");
+            }
         }
     }
 
@@ -244,29 +381,58 @@ mod tests {
     }
 
     #[test]
-    fn the_plan_stops_without_dry_run() {
+    fn file_absent_plans_a_ship_and_stops_without_dry_run() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "no", "no");
         let err = run(&fake, false).unwrap_err();
         assert!(err.to_string().contains("not implemented yet"), "{err:#}");
-        // Read-only: one call ran, and it fed no stdin.
+        // Read-only: both calls ran, neither fed stdin.
         let calls = fake.calls();
-        assert_eq!(calls.len(), 1);
-        assert!(calls[0].input.is_none());
+        assert_eq!(calls.len(), 2);
+        for call in &calls {
+            assert!(call.input.is_none());
+        }
     }
 
     #[test]
-    fn dry_run_stops_cleanly() {
+    fn dry_run_stops_cleanly_for_each_action() {
+        for (session, target) in [("no", "no"), ("no", "yes"), ("yes", "yes")] {
+            let fake = FakeSsh::new();
+            reply_host_ok(&fake);
+            reply_dir(&fake, DIR, session, target);
+            run(&fake, true).unwrap();
+            assert_eq!(fake.calls().len(), 2);
+        }
+    }
+
+    #[test]
+    fn the_dir_probe_carries_the_dir_the_exact_tmux_name_and_the_session_file() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "no", "no");
         run(&fake, true).unwrap();
-        assert_eq!(fake.calls().len(), 1);
+        let session_id =
+            crate::claude_session::generate_content_addressed_session_id(&doc_json()).unwrap();
+        let command = &fake.calls()[1].command;
+        assert!(command.contains(DIR), "{command}");
+        assert!(
+            command.contains(&format!("path-{}", &session_id[..8])),
+            "{command}"
+        );
+        assert!(
+            command.contains(&format!(
+                "{HOME}/.claude/projects/-home-remote-work/{session_id}.jsonl"
+            )),
+            "{command}"
+        );
     }
 
     #[test]
     fn an_invalid_c_flag_errors_before_any_remote_call() {
         let fake = FakeSsh::new();
         let err = resume(
+            &doc_json(),
             &dest(),
             Some(Path::new("relative/dir")),
             true,
@@ -280,6 +446,27 @@ mod tests {
             fake.calls().is_empty(),
             "no remote call before the -C check"
         );
+    }
+
+    #[test]
+    fn missing_dir_errors_and_names_it() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, "", "no", "no");
+        let err = run(&fake, true).unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err:#}");
+        assert!(err.to_string().contains(DIR), "{err:#}");
+    }
+
+    #[test]
+    fn non_physical_dir_errors_with_the_c_hint() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, "/private/home/remote/work", "no", "no");
+        let err = run(&fake, true).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("not physical"), "{err:#}");
+        assert!(text.contains("-C /private/home/remote/work"), "{err:#}");
     }
 
     #[test]
@@ -312,5 +499,13 @@ mod tests {
         );
         let err = swap_home(Path::new("/elsewhere"), local_home, HOME).unwrap_err();
         assert!(err.to_string().contains("pass -C"), "{err:#}");
+    }
+
+    #[test]
+    fn tmux_name_is_path_plus_the_first_8_of_the_id() {
+        assert_eq!(
+            format_tmux_session_name("b7e1c0de-0000-4000-8000-000000000001"),
+            "path-b7e1c0de"
+        );
     }
 }
