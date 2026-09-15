@@ -1188,6 +1188,17 @@ fn resume_help_lists_object_storage_inputs() {
 }
 
 #[test]
+fn query_source_help_lists_object_and_pathbase() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["query", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("object"))
+        .stdout(predicate::str::contains("pathbase"));
+}
+
+#[test]
 fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
     let config = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();

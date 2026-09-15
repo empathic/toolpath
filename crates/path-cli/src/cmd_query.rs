@@ -27,7 +27,7 @@ pub struct QueryArgs {
     filter: String,
 
     /// Select cached files by source prefix
-    /// (claude/gemini/codex/opencode/cursor/pi/git/github).
+    /// (claude/gemini/codex/opencode/cursor/pi/git/github/object/pathbase).
     #[arg(long)]
     source: Option<String>,
 
