@@ -92,7 +92,7 @@ pub(crate) fn cache_ref(s: &str) -> Result<PathBuf> {
         let p = PathBuf::from(s);
         if !p.exists() {
             bail!(
-                "file not found: {}; if you meant a cache id, drop the path/extension and run `path cache ls`",
+                "file not found: {}; if you meant a cache id, drop the path/extension and run `path p cache ls`",
                 p.display()
             );
         }
@@ -101,7 +101,7 @@ pub(crate) fn cache_ref(s: &str) -> Result<PathBuf> {
     let p = cache_path(s)?;
     if !p.exists() {
         bail!(
-            "cache entry {s} not found at {}; run `path cache ls` to see what's cached",
+            "cache entry {s} not found at {}; run `path p cache ls` to see what's cached",
             p.display()
         );
     }

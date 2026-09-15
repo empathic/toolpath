@@ -2050,3 +2050,23 @@ fn share_url_remote_targets_embedded_server() {
         "server B gets the upload at the remote's repo: {starts_b:?}"
     );
 }
+
+/// The plumbing spellings replaced the top-level ones in 0.10.0; hints in
+/// errors must point at the commands that exist.
+#[test]
+fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "export", "pathbase"])
+        .args([
+            "--input",
+            "claude-does-not-exist",
+            "--url",
+            "http://127.0.0.1:1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path p cache ls"))
+        .stderr(predicate::str::contains("path cache ls").not());
+}
