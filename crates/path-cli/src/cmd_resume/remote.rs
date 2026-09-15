@@ -1,11 +1,21 @@
-//! `path resume --remote`: plan a Claude session resume on a remote
-//! host. Read-only: the command stops after the plan.
+//! `path resume --remote`: resume a Claude session on a remote host
+//! under tmux. The command ships and launches; it prints the ssh
+//! command that attaches.
 //!
-//! The local host does all toolpath work. The remote runs two
-//! constant `sh` scripts (`probe_host.sh` and `probe_project_dir.sh`,
-//! next to this module) that print `TP_<NAME>=<value>` fact lines;
-//! [`crate::ssh::parse_facts`] rejects any other output, so a login
-//! banner cannot become a path component.
+//! The local host does all toolpath work: it projects the
+//! conversation in memory, renames it to the content-addressed
+//! session ID, roots it at the remote project directory, and ships
+//! the JSONL over ssh stdin. The remote runs no `path`.
+//!
+//! The remote wins once it exists: a live tmux session is left as
+//! is, a present session file is launched as is, and only an absent
+//! file is shipped. Two read-only probes decide which; the first
+//! remote write is the ship.
+//!
+//! The remote runs constant `sh` scripts next to this module. The
+//! probes print `TP_<NAME>=<value>` fact lines; [`crate::ssh::parse_facts`]
+//! rejects any other output, so a login banner cannot become a path
+//! component.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
@@ -14,8 +24,15 @@ use std::time::Duration;
 use crate::harness::Harness;
 use crate::ssh::{Destination, RemoteCommand, Transport, fail_unless_success, parse_facts};
 
-/// Wall-clock bound on one probe.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Wall-clock bound on a probe, a kill, or the launch. Each runs a
+/// few shell builtins; the launch returns as soon as tmux has forked.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Wall-clock bound on the ship: 60s plus one second per 64 KiB, the
+/// time a 512 kbit/s uplink needs.
+fn ship_timeout(bytes: usize) -> Duration {
+    Duration::from_secs(60 + (bytes / (64 * 1024)) as u64)
+}
 
 /// Locations probed for `claude` when `command -v` finds nothing,
 /// relative to the remote home. An ssh exec channel runs a non-login
@@ -34,17 +51,20 @@ const FLAG_YES: &str = "yes";
 const FLAG_NO: &str = "no";
 
 /// The facts `probe_project_dir.sh` prints, in order.
-const DIR_FACT_TAGS: [&str; 3] = ["TP_PWD", "TP_SESSION", "TP_TARGET"];
+const DIR_FACT_TAGS: [&str; 4] = ["TP_PWD", "TP_SESSION", "TP_PANE_DEAD", "TP_TARGET"];
 
 /// The `path resume` flags for a remote resume.
 #[derive(clap::Args, Debug, Default)]
 #[command(next_help_heading = "Remote resume")]
 pub struct RemoteArgs {
-    /// Plan the resume on this ssh destination instead of this
-    /// machine (`user@host` or `user@host:port`; Claude only). With
-    /// `--remote`, `-C` names the remote project directory; default:
-    /// the local cwd with the local home swapped for the remote home.
-    /// Read-only: the command stops after the plan.
+    /// Resume on this ssh destination instead of this machine
+    /// (`user@host` or `user@host:port`; Claude only). With `--remote`,
+    /// `-C` names the remote project directory; default: the local cwd
+    /// with the local home swapped for the remote home. The session is
+    /// shipped when the remote lacks it, and `claude -r` starts under
+    /// tmux; a live tmux session or a present session file on the
+    /// remote is used as is. The command prints the ssh command that
+    /// attaches.
     #[arg(long = "remote", value_name = "DEST", value_parser = Destination::parse)]
     pub dest: Option<Destination>,
 
@@ -74,10 +94,24 @@ pub(super) fn require_harness_is_claude(
     }
 }
 
+/// One remote resume: the document, where it goes, and the local
+/// context the default remote directory is derived from.
+pub(super) struct RemoteResume<'a> {
+    pub(super) document: &'a toolpath::v1::Path,
+    /// The text `document` was parsed from; the session ID hashes it.
+    pub(super) document_json: &'a str,
+    pub(super) dest: &'a Destination,
+    /// The `-C` value.
+    pub(super) remote_dir: Option<&'a Path>,
+    pub(super) dry_run: bool,
+    pub(super) local_home: &'a Path,
+    pub(super) local_cwd: &'a Path,
+}
+
 /// What a run would do, decided by the project directory facts. The
 /// remote wins once it exists: nothing overwrites a remote session
 /// file, and a live session is attached to as is.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RunAction {
     /// tmux session live: attach.
     Attach,
@@ -96,19 +130,24 @@ struct RemotePlan {
     session_id: String,
     session_file: String,
     tmux_name: String,
+    /// The tmux session exists with a dead pane (a previous launch
+    /// exited non-zero); it is killed before the launch.
+    dead_session: bool,
     action: RunAction,
 }
 
-/// Entry point. `remote_dir` is the `-C` value.
-pub(super) fn resume(
-    document_json: &str,
-    dest: &Destination,
-    remote_dir: Option<&Path>,
-    dry_run: bool,
-    transport: &dyn Transport,
-    local_home: &Path,
-    local_cwd: &Path,
-) -> Result<()> {
+/// Entry point: probes, plan, then ship and launch as the remote
+/// state requires.
+pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Result<()> {
+    let RemoteResume {
+        document,
+        document_json,
+        dest,
+        remote_dir,
+        dry_run,
+        local_home,
+        local_cwd,
+    } = *request;
     let remote_dir = remote_dir
         .map(|p| p.to_str().context("-C must be valid UTF-8"))
         .transpose()?
@@ -143,7 +182,8 @@ pub(super) fn resume(
         Some(_) => {}
     }
 
-    let action = if dir_facts.tmux_session_live {
+    let dead_session = dir_facts.tmux_session && dir_facts.pane_dead;
+    let action = if dir_facts.tmux_session && !dir_facts.pane_dead {
         RunAction::Attach
     } else if dir_facts.session_file_exists {
         RunAction::Launch
@@ -158,6 +198,7 @@ pub(super) fn resume(
         session_id,
         session_file,
         tmux_name,
+        dead_session,
         action,
     };
     print_plan(&plan, dest);
@@ -166,20 +207,110 @@ pub(super) fn resume(
         eprintln!("Dry run: nothing was written or launched.");
         return Ok(());
     }
-    bail!(
-        "`path resume --remote` stops after the plan; \
-         ship, launch, and attach are not implemented yet. \
-         Use scripts/resume-remote.sh to run the plan."
+
+    if plan.action == RunAction::Ship {
+        ship(document, &plan, dest, transport)?;
+    }
+    if plan.action != RunAction::Attach {
+        if plan.dead_session {
+            kill_dead_session(&plan, dest, transport)?;
+        }
+        launch(&plan, dest, transport)?;
+    }
+
+    // `ssh://` is the destination form OpenSSH takes with a port.
+    // `=` pins the exact session name; `-d` detaches a stale client.
+    eprintln!("Attach with (detach with ctrl-b d):");
+    eprintln!(
+        "  ssh -t ssh://{dest} tmux attach-session -d -t ={}",
+        plan.tmux_name
     );
+    Ok(())
+}
+
+/// Project the conversation under the plan's session ID and project
+/// directory, and write it to the remote session file over stdin.
+fn ship(
+    document: &toolpath::v1::Path,
+    plan: &RemotePlan,
+    dest: &Destination,
+    transport: &dyn Transport,
+) -> Result<()> {
+    let mut conversation = crate::cmd_export::build_claude_conversation(document)?;
+    conversation.rename_session(&plan.session_id);
+    conversation.reroot(&plan.project_dir);
+    let jsonl = crate::cmd_export::serialize_jsonl(&conversation)?.into_bytes();
+
+    eprintln!(
+        "Shipping session {} to {dest}:{}",
+        plan.session_id, plan.session_file
+    );
+    let bytes = jsonl.len();
+    let command = RemoteCommand::from_script(
+        include_str!("ship_session.sh"),
+        [plan.session_file.as_str(), &bytes.to_string()],
+    )
+    .stdin(jsonl);
+    let output = transport.run(dest, &command, ship_timeout(bytes))?;
+    fail_unless_success(&output, "shipping the session", dest)
+}
+
+fn kill_dead_session(
+    plan: &RemotePlan,
+    dest: &Destination,
+    transport: &dyn Transport,
+) -> Result<()> {
+    eprintln!("Killing the dead tmux session {}", plan.tmux_name);
+    let command = RemoteCommand::new([
+        "tmux",
+        "kill-session",
+        "-t",
+        &format!("={}", plan.tmux_name),
+    ]);
+    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    fail_unless_success(&output, "killing the dead tmux session", dest)
+}
+
+/// Start `claude -r <id>` in a detached tmux session.
+fn launch(plan: &RemotePlan, dest: &Destination, transport: &dyn Transport) -> Result<()> {
+    eprintln!("Launching {} in {}", plan.tmux_name, plan.project_dir);
+    // tmux hands the command to `sh -c`, so it is quoted for that
+    // shell here, not in the script.
+    let claude_command = shlex::try_join([
+        "env",
+        "LANG=C.UTF-8",
+        &plan.claude_path,
+        "-r",
+        &plan.session_id,
+    ])
+    .context("quote the claude command for the remote shell")?;
+    let command = RemoteCommand::from_script(
+        include_str!("launch_session.sh"),
+        [
+            plan.tmux_name.as_str(),
+            plan.project_dir.as_str(),
+            claude_command.as_str(),
+        ],
+    );
+    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    fail_unless_success(&output, "launching the tmux session", dest)
 }
 
 fn print_plan(plan: &RemotePlan, dest: &Destination) {
-    let action = match plan.action {
-        RunAction::Attach => "attach to the live session. The remote tree and turns are kept.",
-        RunAction::Launch => {
-            "launch on the remote file, attach. The remote tree and turns are kept."
+    let action = match (plan.action, plan.dead_session) {
+        (RunAction::Attach, _) => {
+            "nothing to ship or launch: the tmux session is live. \
+             The remote tree and turns are kept."
         }
-        RunAction::Ship => "ship, launch, attach.",
+        (RunAction::Launch, false) => {
+            "launch on the remote file. The remote tree and turns are kept."
+        }
+        (RunAction::Launch, true) => {
+            "kill the dead tmux session, launch on the remote file. \
+             The remote tree and turns are kept."
+        }
+        (RunAction::Ship, false) => "ship, launch.",
+        (RunAction::Ship, true) => "ship, kill the dead tmux session, launch.",
     };
     eprintln!("Remote resume plan for {dest}:");
     eprintln!("  remote home:   {}", plan.remote_home);
@@ -199,7 +330,7 @@ struct HostFacts {
 /// Remote home, claude path, and tmux presence, in one read-only call.
 fn probe_host(transport: &dyn Transport, dest: &Destination) -> Result<HostFacts> {
     let command = RemoteCommand::from_script(include_str!("probe_host.sh"), CLAUDE_PROBE_LOCATIONS);
-    let output = transport.run(dest, &command, PROBE_TIMEOUT)?;
+    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
     fail_unless_success(&output, "host probe", dest)?;
     let [home, claude, tmux] = parse_facts(&output, HOST_FACT_TAGS)?;
 
@@ -224,7 +355,11 @@ fn probe_host(transport: &dyn Transport, dest: &Destination) -> Result<HostFacts
 struct ProjectDirFacts {
     /// `pwd -P` inside the directory, `None` when it is missing.
     physical_dir: Option<String>,
-    tmux_session_live: bool,
+    /// A tmux session with the derived name exists.
+    tmux_session: bool,
+    /// That session's pane is dead: kept by `remain-on-exit` after a
+    /// non-zero exit.
+    pane_dead: bool,
     session_file_exists: bool,
 }
 
@@ -241,12 +376,13 @@ fn probe_project_dir(
         include_str!("probe_project_dir.sh"),
         [project_dir, tmux_name, session_file],
     );
-    let output = transport.run(dest, &command, PROBE_TIMEOUT)?;
+    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
     fail_unless_success(&output, "project directory probe", dest)?;
-    let [pwd, session, target] = parse_facts(&output, DIR_FACT_TAGS)?;
+    let [pwd, session, pane_dead, target] = parse_facts(&output, DIR_FACT_TAGS)?;
     Ok(ProjectDirFacts {
         physical_dir: if pwd.is_empty() { None } else { Some(pwd) },
-        tmux_session_live: parse_flag(&session, "tmux session live", dest)?,
+        tmux_session: parse_flag(&session, "tmux session exists", dest)?,
+        pane_dead: parse_flag(&pane_dead, "tmux pane dead", dest)?,
         session_file_exists: parse_flag(&target, "session file present", dest)?,
     })
 }
@@ -324,24 +460,41 @@ mod tests {
         );
     }
 
-    /// Queues the project directory probe reply from the three facts.
-    fn reply_dir(fake: &FakeSsh, physical: &str, session: &str, target: &str) {
+    /// Queues the project directory probe reply from the four facts.
+    fn reply_dir(fake: &FakeSsh, physical: &str, session: &str, dead: &str, target: &str) {
         fake.reply(
             0,
-            &format!("TP_PWD={physical}\nTP_SESSION={session}\nTP_TARGET={target}\n"),
+            &format!(
+                "TP_PWD={physical}\nTP_SESSION={session}\nTP_PANE_DEAD={dead}\nTP_TARGET={target}\n"
+            ),
         );
     }
 
+    /// Runs the resume for [`doc_json`] with `-C DIR`.
     fn run(fake: &FakeSsh, dry_run: bool) -> Result<()> {
+        run_with_dir(fake, dry_run, Path::new(DIR))
+    }
+
+    fn run_with_dir(fake: &FakeSsh, dry_run: bool, remote_dir: &Path) -> Result<()> {
+        let json = doc_json();
+        let graph = toolpath::v1::Graph::from_json(&json).unwrap();
         resume(
-            &doc_json(),
-            &dest(),
-            Some(Path::new(DIR)),
-            dry_run,
+            &RemoteResume {
+                document: graph.single_path().unwrap(),
+                document_json: &json,
+                dest: &dest(),
+                remote_dir: Some(remote_dir),
+                dry_run,
+                local_home: Path::new("/home/local"),
+                local_cwd: Path::new("/home/local/work"),
+            },
             fake,
-            Path::new("/home/local"),
-            Path::new("/home/local/work"),
         )
+    }
+
+    /// The content-addressed session ID of [`doc_json`].
+    fn session_id() -> String {
+        crate::claude_session::generate_content_addressed_session_id(&doc_json()).unwrap()
     }
 
     /// The tags and the marker values the Rust side reads are the
@@ -350,7 +503,7 @@ mod tests {
     fn the_probe_scripts_print_every_fact_tag_and_marker() {
         let host = include_str!("probe_host.sh");
         let dir = include_str!("probe_project_dir.sh");
-        for (script, tags) in [(host, HOST_FACT_TAGS), (dir, DIR_FACT_TAGS)] {
+        for (script, tags) in [(host, &HOST_FACT_TAGS[..]), (dir, &DIR_FACT_TAGS[..])] {
             for tag in tags {
                 assert!(script.contains(&format!("{tag}=")), "{tag}");
             }
@@ -381,26 +534,134 @@ mod tests {
     }
 
     #[test]
-    fn file_absent_plans_a_ship_and_stops_without_dry_run() {
+    fn file_absent_ships_and_launches() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
-        reply_dir(&fake, DIR, "no", "no");
-        let err = run(&fake, false).unwrap_err();
-        assert!(err.to_string().contains("not implemented yet"), "{err:#}");
-        // Read-only: both calls ran, neither fed stdin.
+        reply_dir(&fake, DIR, "no", "no", "no");
+        fake.reply(0, ""); // ship
+        fake.reply(0, ""); // launch
+        run(&fake, false).unwrap();
+
         let calls = fake.calls();
-        assert_eq!(calls.len(), 2);
-        for call in &calls {
+        assert_eq!(calls.len(), 4);
+        // Probes are read-only.
+        for call in &calls[..2] {
             assert!(call.input.is_none());
         }
+        let id = session_id();
+        let command = &calls[2].command;
+        assert!(command.contains("umask 077"), "{command}");
+        assert!(
+            command.contains(&format!(
+                "{HOME}/.claude/projects/-home-remote-work/{id}.jsonl"
+            )),
+            "{command}"
+        );
+        let jsonl = String::from_utf8(calls[2].input.clone().expect("ship feeds stdin")).unwrap();
+        assert!(command.contains(&jsonl.len().to_string()), "{command}");
+        let last = jsonl.lines().last().unwrap();
+        let line: serde_json::Value = serde_json::from_str(last).unwrap();
+        assert_eq!(line["sessionId"], id.as_str());
+        let command = &calls[3].command;
+        assert!(command.contains("tmux new-session"), "{command}");
+        assert!(command.contains("remain-on-exit failed"), "{command}");
+        assert!(command.contains(&id), "{command}");
+        assert!(command.contains("/usr/local/bin/claude"), "{command}");
+        assert!(calls[3].input.is_none());
+    }
+
+    #[test]
+    fn file_present_launches_without_shipping() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "no", "no", "yes");
+        fake.reply(0, ""); // launch
+        run(&fake, false).unwrap();
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 3);
+        let command = &calls[2].command;
+        assert!(command.contains("tmux new-session"), "{command}");
+    }
+
+    #[test]
+    fn live_session_neither_ships_nor_launches() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "yes", "no", "yes");
+        run(&fake, false).unwrap();
+        assert_eq!(fake.calls().len(), 2);
+    }
+
+    #[test]
+    fn dead_session_is_killed_before_the_launch() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "yes", "yes", "yes");
+        fake.reply(0, ""); // kill
+        fake.reply(0, ""); // launch
+        run(&fake, false).unwrap();
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 4);
+        let id = session_id();
+        let command = &calls[2].command;
+        assert!(command.contains("kill-session"), "{command}");
+        assert!(
+            command.contains(&format!("=path-{}", &id[..8])),
+            "{command}"
+        );
+        let command = &calls[3].command;
+        assert!(command.contains("tmux new-session"), "{command}");
+    }
+
+    #[test]
+    fn a_failed_ship_stops_before_launch() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "no", "no", "no");
+        fake.reply_with_stderr(1, "", "disk full");
+        let err = run(&fake, false).unwrap_err();
+        assert!(err.to_string().contains("shipping the session"), "{err:#}");
+        assert!(err.to_string().contains("disk full"), "{err:#}");
+        assert_eq!(fake.calls().len(), 3);
+    }
+
+    #[test]
+    fn the_claude_path_is_quoted_for_the_shell_tmux_starts() {
+        let fake = FakeSsh::new();
+        fake.reply(
+            0,
+            &format!("TP_HOME={HOME}\nTP_CLAUDE=/opt/twi'lek/claude\nTP_TMUX=yes\n"),
+        );
+        reply_dir(&fake, DIR, "no", "no", "yes");
+        fake.reply(0, ""); // launch
+        run(&fake, false).unwrap();
+        // The claude command is one positional parameter of the launch
+        // script, so it appears quoted once for the inner shell and
+        // once more for the outer.
+        let inner = shlex::try_join([
+            "env",
+            "LANG=C.UTF-8",
+            "/opt/twi'lek/claude",
+            "-r",
+            &session_id(),
+        ])
+        .unwrap();
+        let outer = shlex::try_quote(&inner).unwrap();
+        let command = &fake.calls()[2].command;
+        assert!(command.contains(outer.as_ref()), "{command}");
     }
 
     #[test]
     fn dry_run_stops_cleanly_for_each_action() {
-        for (session, target) in [("no", "no"), ("no", "yes"), ("yes", "yes")] {
+        for (session, dead, target) in [
+            ("no", "no", "no"),
+            ("no", "no", "yes"),
+            ("yes", "no", "yes"),
+            ("yes", "yes", "yes"),
+        ] {
             let fake = FakeSsh::new();
             reply_host_ok(&fake);
-            reply_dir(&fake, DIR, session, target);
+            reply_dir(&fake, DIR, session, dead, target);
             run(&fake, true).unwrap();
             assert_eq!(fake.calls().len(), 2);
         }
@@ -410,10 +671,9 @@ mod tests {
     fn the_dir_probe_carries_the_dir_the_exact_tmux_name_and_the_session_file() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
-        reply_dir(&fake, DIR, "no", "no");
+        reply_dir(&fake, DIR, "no", "no", "no");
         run(&fake, true).unwrap();
-        let session_id =
-            crate::claude_session::generate_content_addressed_session_id(&doc_json()).unwrap();
+        let session_id = session_id();
         let command = &fake.calls()[1].command;
         assert!(command.contains(DIR), "{command}");
         assert!(
@@ -431,16 +691,7 @@ mod tests {
     #[test]
     fn an_invalid_c_flag_errors_before_any_remote_call() {
         let fake = FakeSsh::new();
-        let err = resume(
-            &doc_json(),
-            &dest(),
-            Some(Path::new("relative/dir")),
-            true,
-            &fake,
-            Path::new("/"),
-            Path::new("/"),
-        )
-        .unwrap_err();
+        let err = run_with_dir(&fake, true, Path::new("relative/dir")).unwrap_err();
         assert!(err.to_string().contains("absolute POSIX path"), "{err:#}");
         assert!(
             fake.calls().is_empty(),
@@ -452,7 +703,7 @@ mod tests {
     fn missing_dir_errors_and_names_it() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
-        reply_dir(&fake, "", "no", "no");
+        reply_dir(&fake, "", "no", "no", "no");
         let err = run(&fake, true).unwrap_err();
         assert!(err.to_string().contains("does not exist"), "{err:#}");
         assert!(err.to_string().contains(DIR), "{err:#}");
@@ -462,7 +713,7 @@ mod tests {
     fn non_physical_dir_errors_with_the_c_hint() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
-        reply_dir(&fake, "/private/home/remote/work", "no", "no");
+        reply_dir(&fake, "/private/home/remote/work", "no", "no", "no");
         let err = run(&fake, true).unwrap_err();
         let text = err.to_string();
         assert!(text.contains("not physical"), "{err:#}");

@@ -2,6 +2,27 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.23.0 — 2026-09-15
+
+- **`path-cli`** (0.23.0): `path resume --remote` runs the resume it
+  plans (behind the `resume-remote` cargo feature). An absent session
+  file is shipped over ssh stdin: the local host projects the
+  conversation in memory under the content-addressed ID and the remote
+  project directory, and the remote writes a temporary name (0600),
+  checks the byte count, and links it into place, so a file that
+  appears between the probe and the ship is kept and the ship errors.
+  A present file is launched as is: `claude -r <id>` in a detached
+  tmux session named `path-<first 8 of the ID>`, with `remain-on-exit
+  failed` so a claude that exits non-zero leaves a dead pane whose
+  error the attach shows; the probe reports the session and whether
+  its pane is dead, and a dead session is killed before the launch. A
+  live session is left as is. The command prints the `ssh -t <dest>
+  tmux attach-session` command; the attach is the caller's.
+  `scripts/resume-remote.sh` hands off to the command after its
+  bootstrap steps (VM creation, `--setup` seeding, working-tree sync)
+  and attaches when it returns.
+- **`toolpath-cli`** (0.23.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.22.0 — 2026-09-14
 
 - **`path-cli`** (0.22.0): `path resume` takes `--remote <user@host>`

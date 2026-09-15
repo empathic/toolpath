@@ -781,8 +781,12 @@ fn parse_path_doc(json: &str) -> Result<toolpath::v1::Path> {
     })
 }
 
+/// The Claude projection of a path, the one `p export claude` and
+/// `path resume --remote` both write.
 #[cfg(not(target_os = "emscripten"))]
-fn build_claude_conversation(path: &toolpath::v1::Path) -> Result<toolpath_claude::Conversation> {
+pub(crate) fn build_claude_conversation(
+    path: &toolpath::v1::Path,
+) -> Result<toolpath_claude::Conversation> {
     use toolpath_convo::ConversationProjector;
     let view = toolpath_convo::extract_conversation(path);
     let projector = toolpath_claude::ClaudeProjector;
@@ -791,8 +795,9 @@ fn build_claude_conversation(path: &toolpath::v1::Path) -> Result<toolpath_claud
         .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))
 }
 
+/// The session-file JSONL of a projected conversation.
 #[cfg(not(target_os = "emscripten"))]
-fn serialize_jsonl(conv: &toolpath_claude::Conversation) -> Result<String> {
+pub(crate) fn serialize_jsonl(conv: &toolpath_claude::Conversation) -> Result<String> {
     let mut buf = Vec::new();
     toolpath_claude::ConversationWriter::write_conversation(conv, &mut buf)?;
     Ok(String::from_utf8(buf).expect("serde_json emits UTF-8"))
