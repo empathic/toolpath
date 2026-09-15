@@ -265,18 +265,10 @@ fn sync_artifacts(
                 // prior manual `p import` of the same session must not
                 // error on the existing cache entry.
                 write_cached(&derived.cache_id, &derived.doc, true)?;
-                // A derive whose cache ID differs from the record's (the
-                // path-ID width changed, for instance) would otherwise
-                // leave the old document behind as an orphan that `path
-                // query` keeps seeing.
-                if let Some(old) = existing.and_then(|r| r.cache_id.as_deref())
-                    && old != derived.cache_id
-                    && let Ok(stale) = crate::cache::cache_path(old)
-                    && stale.exists()
-                {
-                    std::fs::remove_file(&stale)
-                        .with_context(|| format!("remove superseded {}", stale.display()))?;
-                }
+                remove_superseded_doc(
+                    existing.and_then(|r| r.cache_id.as_deref()),
+                    &derived.cache_id,
+                )?;
                 stage(
                     &mut writes,
                     SyncRecord {
@@ -313,6 +305,28 @@ fn sync_artifacts(
     Ok(outcome)
 }
 
+/// Remove the document a superseded cache ID points at, if any — the
+/// counterpart to writing a new cache ID for the same artifact. Shared
+/// by [`sync_artifacts`] and [`record_artifact`] so a path-ID-width
+/// migration (or any other cache-ID scheme change) can't leave the old
+/// document behind as an orphan `path query` keeps seeing, regardless
+/// of which of the two ever re-derives it first.
+fn remove_superseded_doc(old_cache_id: Option<&str>, new_cache_id: &str) -> Result<()> {
+    let Some(old) = old_cache_id else {
+        return Ok(());
+    };
+    if old == new_cache_id {
+        return Ok(());
+    }
+    if let Ok(stale) = crate::cache::cache_path(old)
+        && stale.exists()
+    {
+        std::fs::remove_file(&stale)
+            .with_context(|| format!("remove superseded {}", stale.display()))?;
+    }
+    Ok(())
+}
+
 /// Record an externally-derived cache write (`p import`, `share`) in
 /// the manifest, so sync doesn't re-derive what was just written.
 pub(crate) fn record_artifact(
@@ -321,21 +335,24 @@ pub(crate) fn record_artifact(
     cache_id: &str,
 ) -> Result<()> {
     let config_dir = config.config_dir()?;
+    let mut previous_cache_id: Option<String> = None;
     update_manifest(&config_dir, |manifest| {
-        manifest
+        let records = manifest
             .entry(artifact.artifact_type.name().to_string())
-            .or_default()
-            .insert(
-                artifact.id.clone(),
-                SyncRecord {
-                    path: artifact.path.clone(),
-                    cache_id: Some(cache_id.to_string()),
-                    modified: artifact.modified,
-                    size: artifact.size,
-                    synced_at: Utc::now(),
-                },
-            );
-    })
+            .or_default();
+        previous_cache_id = records.get(&artifact.id).and_then(|r| r.cache_id.clone());
+        records.insert(
+            artifact.id.clone(),
+            SyncRecord {
+                path: artifact.path.clone(),
+                cache_id: Some(cache_id.to_string()),
+                modified: artifact.modified,
+                size: artifact.size,
+                synced_at: Utc::now(),
+            },
+        );
+    })?;
+    remove_superseded_doc(previous_cache_id.as_deref(), cache_id)
 }
 
 /// Whether the manifest already records exactly this artifact state
@@ -1101,6 +1118,49 @@ mod tests {
                 .unwrap();
             assert_ne!(new_id, stale_id);
             assert!(crate::cache::cache_path(&new_id).unwrap().exists());
+            assert!(
+                !crate::cache::cache_path(stale_id).unwrap().exists(),
+                "the superseded document must be removed"
+            );
+        });
+    }
+
+    #[test]
+    fn record_artifact_with_a_new_cache_id_removes_the_superseded_doc() {
+        with_cfg(|_, config_dir| {
+            let stale_id = "claude-path-claude-code-stale";
+            let doc = toolpath::v1::Graph::from_json(r#"{"graph":{"id":"g"},"paths":[]}"#).unwrap();
+            crate::cache::write_cached(stale_id, &doc, true).unwrap();
+            let new_id = "claude-path-claude-code-fresh0000";
+            crate::cache::write_cached(new_id, &doc, true).unwrap();
+
+            let artifact = crate::artifact::ArtifactRef {
+                artifact_type: ArtifactType::Claude,
+                id: "sess-aaa".to_string(),
+                path: Some("-test-project".to_string()),
+                modified: None,
+                size: None,
+            };
+            let config = crate::config::Config {
+                toolpath_config_dir: Some(config_dir.to_path_buf()),
+                ..Default::default()
+            };
+            record_artifact(&config, &artifact, stale_id).unwrap();
+            assert!(crate::cache::cache_path(stale_id).unwrap().exists());
+
+            // `p import` / `share` re-deriving under a new cache ID (the
+            // path-ID-width migration, for instance) must remove the
+            // document the manifest previously pointed at for this
+            // artifact.
+            record_artifact(&config, &artifact, new_id).unwrap();
+
+            assert_eq!(
+                load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
+                    .cache_id
+                    .as_deref(),
+                Some(new_id)
+            );
+            assert!(crate::cache::cache_path(new_id).unwrap().exists());
             assert!(
                 !crate::cache::cache_path(stale_id).unwrap().exists(),
                 "the superseded document must be removed"
