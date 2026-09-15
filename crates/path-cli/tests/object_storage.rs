@@ -1155,6 +1155,84 @@ fn dry_run_prints_the_plan_and_writes_nothing() {
     assert!(!config.path().join("exports.json").exists());
 }
 
+// ── --no-overwrite and record-store settings ────────────────────────
+
+#[test]
+fn no_overwrite_refuses_the_second_export_of_the_same_document() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--no-overwrite"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+    cmd(config.path())
+        .args(["p", "export", "object", "--no-overwrite"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"))
+        .stderr(predicate::str::contains("--no-overwrite"));
+    // Without the flag the default overwrite still applies.
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+}
+
+#[test]
+fn a_stored_no_overwrite_applies_to_every_export() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args([
+            "auth",
+            "s3",
+            "login",
+            "--no-overwrite",
+            "--sse",
+            "aws:kms",
+            "--kms-key-id",
+            "alias/traces",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("create-only"))
+        .stdout(predicate::str::contains("aws:kms"))
+        .stdout(predicate::str::contains("alias/traces"));
+
+    for expect_ok in [true, false] {
+        let assert = cmd(config.path())
+            .args(["p", "export", "object"])
+            .args(["--input", doc.to_str().unwrap()])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert();
+        if expect_ok {
+            assert.success();
+        } else {
+            assert
+                .failure()
+                .stderr(predicate::str::contains("already exists"));
+        }
+    }
+
+    cmd(config.path())
+        .args(["auth", "s3", "login", "--overwrite"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("create-only").not());
+}
+
 // ── path resume with object storage ─────────────────────────────────
 
 #[test]

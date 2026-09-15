@@ -85,6 +85,16 @@ pub(crate) struct S3Settings {
     /// costs nothing at rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Refuse to replace an existing object by default (a create-only
+    /// put). `--no-overwrite` on a command does the same per call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_overwrite: Option<bool>,
+    /// `AES256` or `aws:kms`; passed through as `x-amz-server-side-encryption`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_side_encryption: Option<String>,
+    /// KMS key for `aws:kms` encryption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sse_kms_key_id: Option<String>,
     /// Set by [`merge_env`] when the access key came from
     /// `AWS_ACCESS_KEY_ID` rather than the stored file, so the resolver
     /// can report the source honestly. Never persisted.
@@ -248,6 +258,13 @@ fn store_options(
         .unwrap_or_else(|| DEFAULT_REGION.to_string());
     opts.push(("aws_region", region));
 
+    push(
+        &mut opts,
+        "aws_server_side_encryption",
+        &cfg.server_side_encryption,
+    );
+    push(&mut opts, "aws_sse_kms_key_id", &cfg.sse_kms_key_id);
+
     if let Some(v) = cfg.virtual_hosted_style {
         opts.push(("aws_virtual_hosted_style_request", v.to_string()));
     }
@@ -269,6 +286,16 @@ fn store_options(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObjectUri {
     url: Url,
+}
+
+/// How an object is written: overwrite (default) or create-only, and
+/// what metadata to attach. Metadata reaches S3 as `x-amz-meta-*`
+/// headers; the local backend rejects attributes, so it is dropped for
+/// folders rather than failing the write.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PutSpec {
+    pub create_only: bool,
+    pub metadata: Vec<(&'static str, String)>,
 }
 
 /// What [`ObjectUri::put`] actually did: whether the write replaced an
@@ -354,12 +381,12 @@ impl ObjectUri {
         String::from_utf8(bytes.to_vec()).with_context(|| format!("{self} is not valid UTF-8"))
     }
 
-    /// Upload `body` to the object, overwriting any existing one.
-    ///
-    /// Overwrite is intentional: the object name is a pure function of
-    /// the document, so re-sharing a session that has grown replaces
-    /// its own object rather than accumulating near-duplicates.
-    pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8]) -> Result<PutOutcome> {
+    /// Upload `body` to the object. Overwrite by default: the object name
+    /// is a pure function of the document, so re-sharing a session that
+    /// has grown replaces its own object rather than accumulating
+    /// near-duplicates. `spec.create_only` turns an existing object into
+    /// an error instead, for destinations that are a record.
+    pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8], spec: &PutSpec) -> Result<PutOutcome> {
         // For a folder, count the directories that don't exist yet so the
         // caller can say when this write created the destination.
         let created_dirs = if self.url.scheme() == "file" {
@@ -382,19 +409,48 @@ impl ObjectUri {
 
         // Whether this write replaces an existing object, decided before
         // the put so the answer reflects the state the caller is about to
-        // change. Any head error other than `NotFound` (a transient read
-        // failure, a backend that doesn't support head) is treated as
-        // "new": it's informational only, and guessing wrong here must
-        // never block the upload itself.
-        let replaced = block_on(opened.store.head(&opened.path)).is_ok();
+        // change. A create-only put can never replace anything -- it fails
+        // instead -- so skip the extra request in that case. Any head
+        // error other than `NotFound` (a transient read failure, a
+        // backend that doesn't support head) is treated as "new": it's
+        // informational only, and guessing wrong here must never block
+        // the upload itself.
+        let replaced = if spec.create_only {
+            false
+        } else {
+            block_on(opened.store.head(&opened.path)).is_ok()
+        };
 
+        let mut options = object_store::PutOptions::default();
+        if spec.create_only {
+            options.mode = object_store::PutMode::Create;
+        }
+        if matches!(self.url.scheme(), "s3" | "s3a") {
+            let mut attributes = object_store::Attributes::new();
+            for (key, value) in &spec.metadata {
+                attributes.insert(
+                    object_store::Attribute::Metadata((*key).into()),
+                    value.clone().into(),
+                );
+            }
+            options.attributes = attributes;
+        }
         let payload = object_store::PutPayload::from(body.to_vec());
-        block_on(opened.store.put(&opened.path, payload))
-            .map(|_| PutOutcome {
+        match block_on(opened.store.put_opts(&opened.path, payload, options)) {
+            Ok(_) => Ok(PutOutcome {
                 replaced,
                 created_dirs,
-            })
-            .map_err(|e| explain_location(e, "write", &self.to_string(), opened.source.as_ref()))
+            }),
+            Err(object_store::Error::AlreadyExists { .. }) => {
+                bail!("{self} already exists; drop --no-overwrite to replace it")
+            }
+            Err(e) => Err(explain_location(
+                e,
+                "write",
+                &self.to_string(),
+                opened.source.as_ref(),
+            )),
+        }
     }
 }
 
@@ -1293,7 +1349,7 @@ mod tests {
         let uri = dest.uri_for(&ObjectName::bare("claude-abc"));
         let body = br#"{"graph":{"id":"g"},"paths":[]}"#;
 
-        uri.put(&cfg, body).unwrap();
+        uri.put(&cfg, body, &PutSpec::default()).unwrap();
         assert_eq!(uri.get(&cfg).unwrap(), String::from_utf8_lossy(body));
         assert!(dir.path().join("claude-abc.json").is_file());
     }
@@ -1305,9 +1361,73 @@ mod tests {
         let cfg = S3Settings::default();
         let uri = dest.uri_for(&ObjectName::bare("claude-abc"));
 
-        uri.put(&cfg, b"{\"v\":1}").unwrap();
-        uri.put(&cfg, b"{\"v\":2}").unwrap();
+        uri.put(&cfg, b"{\"v\":1}", &PutSpec::default()).unwrap();
+        uri.put(&cfg, b"{\"v\":2}", &PutSpec::default()).unwrap();
         assert_eq!(uri.get(&cfg).unwrap(), "{\"v\":2}");
+    }
+
+    #[test]
+    fn a_create_only_put_refuses_to_replace_an_existing_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
+        let cfg = S3Settings::default();
+        let uri = dest.uri_for(&ObjectName::bare("claude-abc"));
+        let create_only = PutSpec {
+            create_only: true,
+            ..Default::default()
+        };
+
+        uri.put(&cfg, b"{\"v\":1}", &create_only).unwrap();
+        let err = uri
+            .put(&cfg, b"{\"v\":2}", &create_only)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(err.contains("--no-overwrite"), "{err}");
+        assert_eq!(uri.get(&cfg).unwrap(), "{\"v\":1}");
+
+        // The default still overwrites.
+        uri.put(&cfg, b"{\"v\":3}", &PutSpec::default()).unwrap();
+        assert_eq!(uri.get(&cfg).unwrap(), "{\"v\":3}");
+    }
+
+    #[test]
+    fn metadata_is_not_sent_to_a_folder() {
+        // The local backend rejects attributes outright; a folder export
+        // carrying uploader metadata must still succeed.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
+        let uri = dest.uri_for(&ObjectName::bare("claude-abc"));
+        let spec = PutSpec {
+            create_only: false,
+            metadata: vec![("toolpath-graph-id", "g1".to_string())],
+        };
+        uri.put(&S3Settings::default(), b"{}", &spec).unwrap();
+    }
+
+    #[test]
+    fn store_options_carry_server_side_encryption() {
+        let (opts, _) = store_options(
+            &S3Settings {
+                access_key_id: Some("AK".to_string()),
+                secret_access_key: Some("SK".to_string()),
+                server_side_encryption: Some("aws:kms".to_string()),
+                sse_kms_key_id: Some("arn:aws:kms:us-east-1:1:key/k".to_string()),
+                ..Default::default()
+            },
+            "s3",
+        )
+        .unwrap();
+        let get = |k: &str| {
+            opts.iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("aws_server_side_encryption"), Some("aws:kms"));
+        assert_eq!(
+            get("aws_sse_kms_key_id"),
+            Some("arn:aws:kms:us-east-1:1:key/k")
+        );
     }
 
     #[test]
@@ -1315,7 +1435,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = Destination::parse(&format!("{}/a/b/c", dir.path().display())).unwrap();
         dest.uri_for(&ObjectName::bare("claude-abc"))
-            .put(&S3Settings::default(), b"{}")
+            .put(&S3Settings::default(), b"{}", &PutSpec::default())
             .unwrap();
         assert!(dir.path().join("a/b/c/claude-abc.json").is_file());
     }
@@ -1555,7 +1675,7 @@ mod tests {
 
         for name in ["2026-08-01-older-claude-a", "2026-08-09-newer-claude-b"] {
             dest.uri_for(&ObjectName::bare(name))
-                .put(&cfg, b"{}")
+                .put(&cfg, b"{}", &PutSpec::default())
                 .unwrap();
             // Distinct mtimes; the local backend stamps on write.
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1579,13 +1699,13 @@ mod tests {
         let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
         let cfg = S3Settings::default();
         dest.uri_for(&ObjectName::bare("here"))
-            .put(&cfg, b"{}")
+            .put(&cfg, b"{}", &PutSpec::default())
             .unwrap();
 
         let nested = Destination::parse(&format!("{}/deeper", dir.path().display())).unwrap();
         nested
             .uri_for(&ObjectName::bare("there"))
-            .put(&cfg, b"{}")
+            .put(&cfg, b"{}", &PutSpec::default())
             .unwrap();
 
         let entries = dest.list(&cfg).unwrap();

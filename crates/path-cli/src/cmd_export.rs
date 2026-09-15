@@ -1117,7 +1117,7 @@ pub(crate) fn export_body(
         }
         eprintln!(
             "  mode:        {}",
-            if opts.no_overwrite {
+            if opts.no_overwrite || settings.no_overwrite.unwrap_or(false) {
                 "create-only"
             } else {
                 "overwrite"
@@ -1126,7 +1126,21 @@ pub(crate) fn export_body(
         return Ok(ObjectOutcome::DryRun(uri));
     }
 
-    let outcome = uri.put(settings, body.as_bytes())?;
+    let graph_id = crate::store::ObjectName::id_of(&name.to_string()).to_string();
+    let spec = crate::store::PutSpec {
+        create_only: opts.no_overwrite || settings.no_overwrite.unwrap_or(false),
+        metadata: vec![
+            ("toolpath-graph-id", graph_id),
+            ("toolpath-sha256", sha256.clone()),
+            ("toolpath-uploader", crate::export_ledger::uploader()),
+            (
+                "toolpath-cli-version",
+                env!("CARGO_PKG_VERSION").to_string(),
+            ),
+            ("toolpath-uploaded-at", chrono::Utc::now().to_rfc3339()),
+        ],
+    };
+    let outcome = uri.put(settings, body.as_bytes(), &spec)?;
     crate::export_ledger::record(
         &crate::export_ledger::ledger_path()?,
         &dest.to_string(),

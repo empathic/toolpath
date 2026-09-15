@@ -80,6 +80,7 @@ pub struct S3LoginArgs {
     #[arg(long)]
     pub endpoint: Option<String>,
 
+    /// Access key ID (stored in ~/.toolpath/s3.json, 0600)
     #[arg(long)]
     pub access_key_id: Option<String>,
 
@@ -101,6 +102,23 @@ pub struct S3LoginArgs {
     /// Address the bucket as `bucket.host/key` instead of `host/bucket/key`
     #[arg(long)]
     pub virtual_hosted_style: bool,
+
+    /// Refuse to replace existing objects on every export (create-only
+    /// puts). Pass --no-overwrite on a single export for a one-off.
+    #[arg(long, conflicts_with = "overwrite")]
+    pub no_overwrite: bool,
+
+    /// Clear a stored --no-overwrite
+    #[arg(long)]
+    pub overwrite: bool,
+
+    /// Server-side encryption for uploads: `AES256` or `aws:kms`
+    #[arg(long, value_name = "ALGORITHM")]
+    pub sse: Option<String>,
+
+    /// KMS key ID or ARN for `--sse aws:kms`
+    #[arg(long, value_name = "KEY", requires = "sse")]
+    pub kms_key_id: Option<String>,
 }
 
 pub fn run(op: AuthOp) -> Result<()> {
@@ -234,6 +252,14 @@ fn s3_login(path: &Path, args: S3LoginArgs) -> Result<()> {
     if args.virtual_hosted_style {
         cfg.virtual_hosted_style = Some(true);
     }
+    if args.no_overwrite {
+        cfg.no_overwrite = Some(true);
+    }
+    if args.overwrite {
+        cfg.no_overwrite = None;
+    }
+    set(&mut cfg.server_side_encryption, args.sse);
+    set(&mut cfg.sse_kms_key_id, args.kms_key_id);
 
     if std::io::stdin().is_terminal() && !had_settings {
         prompt_missing(&mut cfg)?;
@@ -414,6 +440,22 @@ fn print_settings(effective: &S3Settings, stored: &S3Settings) {
         effective.profile.as_deref(),
         stored.profile.is_some(),
     );
+    line(
+        "encryption",
+        effective.server_side_encryption.as_deref(),
+        stored.server_side_encryption.is_some(),
+    );
+    line(
+        "kms key id",
+        effective.sse_kms_key_id.as_deref(),
+        stored.sse_kms_key_id.is_some(),
+    );
+    if effective.no_overwrite == Some(true) {
+        println!(
+            "  {:<19}create-only (existing objects are never replaced)",
+            "put mode:"
+        );
+    }
 }
 
 /// Say which credentials a share would actually use, and as which key.
