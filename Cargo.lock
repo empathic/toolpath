@@ -3124,6 +3124,7 @@ dependencies = [
  "assert_cmd",
  "chrono",
  "clap",
+ "crossterm",
  "figment",
  "git2",
  "hex",

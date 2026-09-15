@@ -61,6 +61,7 @@ tokio = { workspace = true }
 shlex = { workspace = true, optional = true }
 russh = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }
 rusqlite = { workspace = true }
 rayon = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
@@ -95,7 +96,7 @@ embedded-picker = ["dep:skim", "dep:regex"]
 # default. Gates `p export claude --content-addressed-session-id`,
 # `--cwd`, `path resume --remote`, `--dry-run`, and the ssh transport
 # module. Pulls in the in-process SSH client.
-resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url", "dep:typed-path"]
+resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url", "dep:typed-path", "dep:crossterm"]
 
 [dev-dependencies]
 assert_cmd = "2"
