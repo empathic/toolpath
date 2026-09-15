@@ -483,7 +483,7 @@ fn import_copilot_writes_cache() {
     // And the cache file actually landed.
     assert!(
         cfg.path()
-            .join("documents/copilot-path-copilot-demo-ses.json")
+            .join("documents/copilot-path-copilot-demo-sess-01.json")
             .exists()
     );
 }
