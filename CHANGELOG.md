@@ -2,6 +2,15 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.26.0 — 2026-09-16
+
+- **`path-cli`** (0.26.0): `path resume --remote` takes launch
+  arguments after `--`, appended to the remote `claude -r <id>` (for
+  example `-- --permission-mode acceptEdits`). The plan prints them.
+  The Claude Code plugin's `/path:resume --remote` passes through
+  anything after `--`.
+- **`toolpath-cli`** (0.26.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.25.0 — 2026-09-16
 
 - **`path-cli`** (0.25.0): `path resume --remote` takes `--no-attach`:
