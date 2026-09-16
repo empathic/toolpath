@@ -5,7 +5,7 @@ All notable changes to the Toolpath workspace are documented here.
 ## path-cli 0.25.0 — 2026-09-16
 
 - **`path-cli`** (0.25.0): `path resume --remote` takes `--no-attach`:
-  ship and launch as the remote state requires, then print the `ssh -t`
+  upload and launch as the remote state requires, then print the `ssh -t`
   command that attaches a terminal to the tmux session on stdout and
   exit 0 instead of attaching. Needs no TTY, so an agent tool call can
   run it. Requires `--remote`, conflicts with `--dry-run`. The Claude

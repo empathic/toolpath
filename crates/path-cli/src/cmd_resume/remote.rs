@@ -8,8 +8,8 @@
 //!
 //! The remote wins once it exists: a live tmux session is attached
 //! to as is, a present session file is launched as is, and only an
-//! absent file is shipped. Two read-only probes decide which; the
-//! first remote write is the ship. With `--no-attach` the run ends
+//! absent file is uploaded. Two read-only probes decide which; the
+//! first remote write is the upload. With `--no-attach` the run ends
 //! after the launch and prints the attach command on stdout.
 //!
 //! The remote runs constant `sh` scripts next to this module. The
@@ -73,7 +73,7 @@ pub struct RemoteArgs {
     #[arg(long, requires = "dest")]
     pub dry_run: bool,
 
-    /// Ship and launch as the remote state requires, then print the
+    /// Upload and launch as the remote state requires, then print the
     /// `ssh -t` command that attaches a terminal to the tmux session
     /// instead of attaching. Needs no TTY. Only with --remote, not
     /// with --dry-run.
@@ -354,8 +354,8 @@ fn print_plan(plan: &RemotePlan, dest: &Destination, no_attach: bool) {
         (RunAction::LaunchClaude, true) => {
             "kill the dead tmux session, launch on the remote file, "
         }
-        (RunAction::UploadSession, false) => "ship, launch, ",
-        (RunAction::UploadSession, true) => "ship, kill the dead tmux session, launch, ",
+        (RunAction::UploadSession, false) => "upload, launch, ",
+        (RunAction::UploadSession, true) => "upload, kill the dead tmux session, launch, ",
     };
     let last = match (no_attach, plan.action) {
         (true, RunAction::AttachTmux) => "print the attach command for the live session",
@@ -720,7 +720,7 @@ mod tests {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "no");
-        fake.reply(0, ""); // ship
+        fake.reply(0, ""); // upload
         fake.reply(0, ""); // launch
         assert_eq!(
             run_with(
