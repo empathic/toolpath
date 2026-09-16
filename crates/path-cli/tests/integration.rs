@@ -609,6 +609,47 @@ mod resume_remote {
     }
 
     #[test]
+    fn resume_no_attach_conflicts_with_dry_run() {
+        cmd()
+            .args([
+                "resume",
+                "doc.json",
+                "--remote",
+                "u@h",
+                "--no-attach",
+                "--dry-run",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+
+    #[test]
+    fn resume_no_attach_requires_remote() {
+        cmd()
+            .args(["resume", "doc.json", "--no-attach"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>"));
+    }
+
+    /// The test harness pipes stdin and stdout, so without the flag the
+    /// TTY check is the first error.
+    #[test]
+    fn resume_no_attach_skips_the_terminal_check() {
+        cmd()
+            .args(["resume", "missing.json", "--remote", "u@h"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("needs an interactive terminal"));
+        cmd()
+            .args(["resume", "missing.json", "--remote", "u@h", "--no-attach"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("needs an interactive terminal").not());
+    }
+
+    #[test]
     fn export_claude_cwd_conflicts_with_project() {
         cmd()
             .args(["p", "export", "claude", "--input", "doc.json"])

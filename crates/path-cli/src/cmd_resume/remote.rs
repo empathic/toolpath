@@ -8,8 +8,9 @@
 //!
 //! The remote wins once it exists: a live tmux session is attached
 //! to as is, a present session file is launched as is, and only an
-//! absent file is uploaded. Two read-only probes decide which; the
-//! first remote write is the upload.
+//! absent file is shipped. Two read-only probes decide which; the
+//! first remote write is the ship. With `--no-attach` the run ends
+//! after the launch and prints the attach command on stdout.
 //!
 //! The remote runs constant `sh` scripts next to this module. The
 //! probes print `TP_<NAME>=<value>` fact lines; [`crate::ssh::parse_facts`]
@@ -71,6 +72,13 @@ pub struct RemoteArgs {
     /// Stop after printing the plan. Only with --remote.
     #[arg(long, requires = "dest")]
     pub dry_run: bool,
+
+    /// Ship and launch as the remote state requires, then print the
+    /// `ssh -t` command that attaches a terminal to the tmux session
+    /// instead of attaching. Needs no TTY. Only with --remote, not
+    /// with --dry-run.
+    #[arg(long, requires = "dest", conflicts_with = "dry_run")]
+    pub no_attach: bool,
 }
 
 /// Error unless the harness being resumed into is Claude, the one the
@@ -105,6 +113,7 @@ pub(super) struct RemoteResume<'a> {
     /// The `-C` value.
     pub(super) remote_dir: Option<&'a Path>,
     pub(super) dry_run: bool,
+    pub(super) no_attach: bool,
     pub(super) local_home: &'a Path,
     pub(super) local_cwd: &'a Path,
     /// This terminal's type, for the PTY the attach requests.
@@ -152,7 +161,7 @@ struct RemotePlan {
 
 /// Entry point: probes, plan, then upload, launch, and attach as the
 /// remote state requires. Returns the exit status of the attach, 0
-/// for a dry run.
+/// for a dry run or a run that prints the attach command.
 pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Result<u32> {
     let RemoteResume {
         document,
@@ -160,6 +169,7 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
         dest,
         remote_dir,
         dry_run,
+        no_attach,
         local_home,
         local_cwd,
         term,
@@ -221,7 +231,7 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
         dead_session,
         action,
     };
-    print_plan(&plan, dest);
+    print_plan(&plan, dest, no_attach);
 
     if dry_run {
         eprintln!("Dry run: nothing was written or launched.");
@@ -238,10 +248,20 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
         launch(&plan.target, dest, transport)?;
     }
 
-    eprintln!(
-        "Attaching to {} on {dest} (detach with ctrl-b d)",
-        plan.target.tmux_name
-    );
+    if no_attach {
+        eprintln!("Attach with:");
+        // The line passes through the user's shell and the remote
+        // shell unquoted, so every word must be plain in any shell:
+        // the `=` pin is zsh's command-path expansion, and the name
+        // (`path-` plus 8 hex digits) is fixed-length, so tmux's
+        // prefix match is exact without it. `ssh://` carries a
+        // non-default port.
+        println!(
+            "ssh -t ssh://{dest} tmux -u attach-session -d -t {}",
+            plan.target.tmux_name
+        );
+        return Ok(0);
+    }
     // `-u` forces UTF-8 output: the PTY channel carries no locale.
     // `=` pins the exact session name; `-d` detaches a stale client.
     let attach_command = RemoteCommand::new([
@@ -252,6 +272,10 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
         "-t",
         &format!("={}", plan.target.tmux_name),
     ]);
+    eprintln!(
+        "Attaching to {} on {dest} (detach with ctrl-b d)",
+        plan.target.tmux_name
+    );
     transport.attach(dest, &attach_command, term)
 }
 
@@ -323,21 +347,27 @@ fn launch(target: &RemoteTarget, dest: &Destination, transport: &dyn Transport) 
     fail_unless_success(&output, "launching the tmux session", dest)
 }
 
-fn print_plan(plan: &RemotePlan, dest: &Destination) {
-    let action = match (plan.action, plan.dead_session) {
-        (RunAction::AttachTmux, _) => {
-            "attach to the live session. The remote tree and turns are kept."
-        }
-        (RunAction::LaunchClaude, false) => {
-            "launch on the remote file, attach. The remote tree and turns are kept."
-        }
+fn print_plan(plan: &RemotePlan, dest: &Destination, no_attach: bool) {
+    let steps = match (plan.action, plan.dead_session) {
+        (RunAction::AttachTmux, _) => "",
+        (RunAction::LaunchClaude, false) => "launch on the remote file, ",
         (RunAction::LaunchClaude, true) => {
-            "kill the dead tmux session, launch on the remote file, attach. \
-             The remote tree and turns are kept."
+            "kill the dead tmux session, launch on the remote file, "
         }
-        (RunAction::UploadSession, false) => "upload, launch, attach.",
-        (RunAction::UploadSession, true) => "upload, kill the dead tmux session, launch, attach.",
+        (RunAction::UploadSession, false) => "ship, launch, ",
+        (RunAction::UploadSession, true) => "ship, kill the dead tmux session, launch, ",
     };
+    let last = match (no_attach, plan.action) {
+        (true, RunAction::AttachTmux) => "print the attach command for the live session",
+        (true, _) => "print the attach command",
+        (false, RunAction::AttachTmux) => "attach to the live session",
+        (false, _) => "attach",
+    };
+    let kept = match plan.action {
+        RunAction::UploadSession => "",
+        _ => " The remote tree and turns are kept.",
+    };
+    let action = format!("{steps}{last}.{kept}");
     let target = &plan.target;
     eprintln!("Remote resume plan for {dest}:");
     eprintln!("  remote home:   {}", target.remote_home);
@@ -524,12 +554,35 @@ mod tests {
         );
     }
 
-    /// Runs the resume for [`doc_json`] with `-C DIR`.
-    fn run(fake: &FakeSsh, dry_run: bool) -> Result<u32> {
-        run_with_dir(fake, dry_run, Path::new(DIR))
+    /// The flags of one test run; the default is `-C DIR` and nothing else.
+    struct RunOpts<'a> {
+        dry_run: bool,
+        no_attach: bool,
+        remote_dir: &'a Path,
     }
 
-    fn run_with_dir(fake: &FakeSsh, dry_run: bool, remote_dir: &Path) -> Result<u32> {
+    impl Default for RunOpts<'_> {
+        fn default() -> Self {
+            Self {
+                dry_run: false,
+                no_attach: false,
+                remote_dir: Path::new(DIR),
+            }
+        }
+    }
+
+    /// Runs the resume for [`doc_json`] with `-C DIR`.
+    fn run(fake: &FakeSsh, dry_run: bool) -> Result<u32> {
+        run_with(
+            fake,
+            RunOpts {
+                dry_run,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn run_with(fake: &FakeSsh, opts: RunOpts) -> Result<u32> {
         let json = doc_json();
         let graph = toolpath::v1::Graph::from_json(&json).unwrap();
         resume(
@@ -537,8 +590,9 @@ mod tests {
                 document: graph.single_path().unwrap(),
                 document_json: &json,
                 dest: &dest(),
-                remote_dir: Some(remote_dir),
-                dry_run,
+                remote_dir: Some(opts.remote_dir),
+                dry_run: opts.dry_run,
+                no_attach: opts.no_attach,
                 local_home: Path::new("/home/local"),
                 local_cwd: Path::new("/home/local/work"),
                 term: Some("xterm-test"),
@@ -662,6 +716,50 @@ mod tests {
     }
 
     #[test]
+    fn no_attach_ships_and_launches_without_an_attach_call() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "no", "no", "no");
+        fake.reply(0, ""); // ship
+        fake.reply(0, ""); // launch
+        assert_eq!(
+            run_with(
+                &fake,
+                RunOpts {
+                    no_attach: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            0
+        );
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 4);
+        let command = command_of(&calls[3]);
+        assert!(command.contains("tmux new-session"), "{command}");
+        assert!(matches!(&calls[3], Call::Run { .. }), "{:?}", calls[3]);
+    }
+
+    #[test]
+    fn no_attach_on_a_live_session_stops_after_the_probes() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "yes", "no", "yes");
+        assert_eq!(
+            run_with(
+                &fake,
+                RunOpts {
+                    no_attach: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(fake.calls().len(), 2);
+    }
+
+    #[test]
     fn dead_session_is_killed_before_the_launch() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
@@ -763,7 +861,15 @@ mod tests {
     #[test]
     fn an_invalid_c_flag_errors_before_any_remote_call() {
         let fake = FakeSsh::new();
-        let err = run_with_dir(&fake, true, Path::new("relative/dir")).unwrap_err();
+        let err = run_with(
+            &fake,
+            RunOpts {
+                dry_run: true,
+                remote_dir: Path::new("relative/dir"),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("absolute POSIX path"), "{err:#}");
         assert!(
             fake.calls().is_empty(),
