@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Resume a Claude Code session on a remote host. Builds `path`
 # from this checkout, seeds and syncs the host, hands off to
-# `path resume --remote`, which plans, ships, and launches claude
+# `path resume --remote`, which plans, uploads, and launches claude
 # under tmux, then attaches.
 #
 # `path` does the resume (`p import claude`, `resume --remote`). This
@@ -67,7 +67,7 @@
 #   - The reply is exactly the TP_* lines the probe prints. A login
 #     banner or a registration notice fails the run verbatim.
 #   - The probe reports $HOME and whether the target session file
-#     exists. The file's absence means the run ships, which gates the
+#     exists. The file's absence means the run uploads, which gates the
 #     sync.
 #
 # Steps (always in this order):
@@ -80,8 +80,8 @@
 #   3. Optional VM creation (--create).
 #   4. [shell] The probe: remote home and whether the target session
 #      file exists. Derive <remote-dir> from the remote home unless
-#      -C is given. An absent file means the run ships.
-#   5. Optional remote seeding (--setup). When the run ships, rsync
+#      -C is given. An absent file means the run uploads.
+#   5. Optional remote seeding (--setup). When the run uploads, rsync
 #      the working tree (tracked, untracked, and uncommitted files,
 #      plus .git; minus target/ and anything .gitignore lists) into the
 #      remote project dir. --delete makes the remote mirror the local
@@ -91,7 +91,7 @@
 #      It re-probes read-only, prints the plan, and does what the
 #      remote state asks: a live tmux session is left as is, a
 #      present session file is launched as is, an absent file is
-#      shipped first. To reset a remote session, delete its file on
+#      uploaded first. To reset a remote session, delete its file on
 #      the remote and re-run. --dry-run stops after its plan.
 #   7. [shell] Attach: `ssh -t <dest> tmux attach-session -d -t
 #      =path-<first 8 of the ID>`. Detach with ctrl-b d; re-run the
@@ -311,7 +311,7 @@ echo "remote session id: $REMOTE_ID"
 # probe_script: read-only. `path resume --remote` re-checks everything
 # it plans on; this probe only feeds the pre-steps: the remote home
 # (for -C derivation and the --setup trust entry) and whether the
-# target session file exists (an absent file means the run ships,
+# target session file exists (an absent file means the run uploads,
 # which gates the sync). __SUFFIX__ is the project path relative to
 # the local home ('.' for the home itself); __DIR__ is the -C value or
 # empty. Both match $PLAIN_PATH_RE or are empty, so plain substitution
@@ -349,8 +349,8 @@ if [[ -z $REMOTE_DIR ]]; then
 fi
 TARGET_EXISTS="${PF_VALS[1]}"
 [[ $TARGET_EXISTS == yes || $TARGET_EXISTS == no ]] || die "bad target state '$TARGET_EXISTS'"
-SHIP=1
-[[ $TARGET_EXISTS == no ]] || SHIP=0
+UPLOAD=1
+[[ $TARGET_EXISTS == no ]] || UPLOAD=0
 echo "ok: home=$REMOTE_HOME dir=$REMOTE_DIR target=$TARGET_EXISTS"
 
 # ── 5. Seed (optional) and sync ───────────────────────────────────────────
@@ -375,7 +375,7 @@ if [[ $SETUP -eq 1 ]]; then
     fi
 fi
 
-if [[ $SYNC -eq 1 && $SHIP -eq 1 ]]; then
+if [[ $SYNC -eq 1 && $UPLOAD -eq 1 ]]; then
     step "Sync $PROJECT to $REMOTE:$REMOTE_DIR"
     if [[ $DRY_RUN -eq 1 ]]; then
         skip "ssh -n $REMOTE mkdir -p $REMOTE_DIR"
@@ -387,7 +387,7 @@ if [[ $SYNC -eq 1 && $SHIP -eq 1 ]]; then
             "$PROJECT/" "$REMOTE:$REMOTE_DIR/" | grep -E '^(Number of (regular )?files|Total transferred)'
     fi
 elif [[ $SYNC -eq 1 ]]; then
-    echo "sync skipped: the remote session file exists, so the run does not ship"
+    echo "sync skipped: the remote session file exists, so the run does not upload"
 fi
 
 # ── 6. Hand off to path resume ────────────────────────────────────────────
@@ -395,7 +395,7 @@ fi
 RESUME_ARGS=(resume "$DOC" --remote "$REMOTE" -C "$REMOTE_DIR")
 [[ $DRY_RUN -eq 0 ]] || RESUME_ARGS+=(--dry-run)
 step "path ${RESUME_ARGS[*]}"
-echo "After a detach (ctrl-b d), re-run this script to reattach; the live tmux session is reused and nothing is re-shipped."
+echo "After a detach (ctrl-b d), re-run this script to reattach; the live tmux session is reused and nothing is re-uploaded."
 if [[ -n "$VM_NAME" ]]; then
     cat <<EOF
 Tear down the VM when finished:
