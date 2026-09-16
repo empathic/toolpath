@@ -74,11 +74,11 @@ The destination must mean the same host, port, and user to `ssh` as to `path`: t
    ... exec resume claude-<session id> --remote <user@host> --no-attach
    ```
 
-   The remote project directory defaults to this cwd with the local home swapped for the remote home; pass through `-C <remote-dir>` from the user's arguments to override it. For a document whose source is not Claude Code, add `--harness claude`. The command prints its plan on stderr, ships the session when the remote lacks it, launches `claude -r` in a detached tmux session, and prints the attach command. A session that already exists on the remote is launched as is; a live tmux session is left running, and the plan says so.
+   The remote project directory defaults to this cwd with the local home swapped for the remote home; pass through `-C <remote-dir>` from the user's arguments to override it. For a document whose source is not Claude Code, add `--harness claude`. The command prints its plan on stderr, uploads the session when the remote lacks it, launches `claude -r` in a detached tmux session, and prints the attach command. A session that already exists on the remote is launched as is; a live tmux session is left running, and the plan says so.
 
 3. **Hand off.** The last stdout line is `ssh -t ssh://<user@host> tmux ...`. Give the user that line, in a code block, as the command to run in a terminal. You cannot attach from here. Tell the user that the remote conversation ends with this `/path:resume` prompt, so the remote Claude needs its next instruction stated explicitly.
 
-The shipped session ends with this `/path:resume` prompt; nothing after the import is shipped.
+The uploaded session ends with this `/path:resume` prompt; nothing after the import is uploaded.
 
 ### Notes
 
