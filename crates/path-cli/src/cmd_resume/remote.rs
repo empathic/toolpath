@@ -8,8 +8,8 @@
 //!
 //! The remote wins once it exists: a live tmux session is attached
 //! to as is, a present session file is launched as is, and only an
-//! absent file is shipped. Two read-only probes decide which; the
-//! first remote write is the ship.
+//! absent file is uploaded. Two read-only probes decide which; the
+//! first remote write is the upload.
 //!
 //! The remote runs constant `sh` scripts next to this module. The
 //! probes print `TP_<NAME>=<value>` fact lines; [`crate::ssh::parse_facts`]
@@ -62,7 +62,7 @@ pub struct RemoteArgs {
     /// (`user@host` or `user@host:port`; Claude only). With `--remote`,
     /// `-C` names the remote project directory; default: the local cwd
     /// with the local home swapped for the remote home. The session is
-    /// shipped when the remote lacks it, `claude -r` starts under tmux,
+    /// uploaded when the remote lacks it, `claude -r` starts under tmux,
     /// and this terminal attaches; a live tmux session or a present
     /// session file on the remote is used as is. Detach with ctrl-b d.
     #[arg(long = "remote", value_name = "DEST", value_parser = Destination::parse)]
@@ -150,7 +150,7 @@ struct RemotePlan {
     action: RunAction,
 }
 
-/// Entry point: probes, plan, then ship, launch, and attach as the
+/// Entry point: probes, plan, then upload, launch, and attach as the
 /// remote state requires. Returns the exit status of the attach, 0
 /// for a dry run.
 pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Result<u32> {
@@ -335,8 +335,8 @@ fn print_plan(plan: &RemotePlan, dest: &Destination) {
             "kill the dead tmux session, launch on the remote file, attach. \
              The remote tree and turns are kept."
         }
-        (RunAction::UploadSession, false) => "ship, launch, attach.",
-        (RunAction::UploadSession, true) => "ship, kill the dead tmux session, launch, attach.",
+        (RunAction::UploadSession, false) => "upload, launch, attach.",
+        (RunAction::UploadSession, true) => "upload, kill the dead tmux session, launch, attach.",
     };
     let target = &plan.target;
     eprintln!("Remote resume plan for {dest}:");
@@ -598,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn file_absent_ships_launches_and_attaches() {
+    fn file_absent_uploads_launches_and_attaches() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "no");
@@ -622,7 +622,7 @@ mod tests {
             "{command}"
         );
         let jsonl =
-            String::from_utf8(input_of(&calls[2]).expect("ship feeds stdin").to_vec()).unwrap();
+            String::from_utf8(input_of(&calls[2]).expect("upload feeds stdin").to_vec()).unwrap();
         assert!(command.contains(&jsonl.len().to_string()), "{command}");
         let last = jsonl.lines().last().unwrap();
         let line: serde_json::Value = serde_json::from_str(last).unwrap();
@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn file_present_launches_and_attaches_without_shipping() {
+    fn file_present_launches_and_attaches_without_uploading() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "yes");
@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn live_session_attaches_without_shipping_or_launching() {
+    fn live_session_attaches_without_uploading_or_launching() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "yes", "no", "yes");
@@ -684,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_ship_stops_before_launch_and_attach() {
+    fn a_failed_upload_stops_before_launch_and_attach() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "no");

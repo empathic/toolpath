@@ -40,7 +40,7 @@
 //! `--remote <user@host>` (Claude only) resumes the session on an ssh
 //! host under tmux instead of this machine. The flow lives in
 //! the `remote` module: two read-only probes, the printed plan
-//! (`--dry-run` stops there), then ship, launch, and attach as the
+//! (`--dry-run` stops there), then upload, launch, and attach as the
 //! remote state requires. With `--remote`,
 //! `-C` names the remote project directory; the default is the local
 //! cwd with the local home swapped for the remote home. All of it

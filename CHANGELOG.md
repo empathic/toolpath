@@ -5,7 +5,7 @@ All notable changes to the Toolpath workspace are documented here.
 ## path-cli 0.24.0 — 2026-09-15
 
 - **`path-cli`** (0.24.0): `path resume --remote` attaches this terminal
-  to the tmux session after the ship and the launch, over a PTY
+  to the tmux session after the upload and the launch, over a PTY
   channel: raw mode, keystrokes, output, and resizes forwarded, tmux's
   exit status passed through. Without `--dry-run` the command needs a
   TTY on stdin and stdout. `crossterm` is a new optional dependency of
