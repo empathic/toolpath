@@ -1,6 +1,6 @@
 ---
 description: Resume a shared agent session in Claude Code, or send this session to an ssh host
-argument-hint: "pathbase-url | --remote <user@host> [-C <remote-dir>]"
+argument-hint: "pathbase-url | --remote <user@host> [-C <remote-dir>] [-- <claude args>]"
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-path.sh:*)
 ---
 
@@ -74,7 +74,7 @@ The destination must mean the same host, port, and user to `ssh` as to `path`: t
    ... exec resume claude-<session id> --remote <user@host> --no-attach
    ```
 
-   The remote project directory defaults to this cwd with the local home swapped for the remote home; pass through `-C <remote-dir>` from the user's arguments to override it. For a document whose source is not Claude Code, add `--harness claude`. The command prints its plan on stderr, uploads the session when the remote lacks it, launches `claude -r` in a detached tmux session, and prints the attach command. A session that already exists on the remote is launched as is; a live tmux session is left running, and the plan says so.
+   The remote project directory defaults to this cwd with the local home swapped for the remote home; pass through `-C <remote-dir>` from the user's arguments to override it. Anything after `--` in the user's arguments goes after `--` on this command and reaches the remote `claude` (for example `-- --permission-mode acceptEdits`, which lets the remote session work without a person answering its permission prompts). For a document whose source is not Claude Code, add `--harness claude`. The command prints its plan on stderr, ships the session when the remote lacks it, launches `claude -r` in a detached tmux session, and prints the attach command. A session that already exists on the remote is launched as is; a live tmux session is left running, and the plan says so.
 
 3. **Hand off.** The last stdout line is `ssh -t ssh://<user@host> tmux ...`. Give the user that line, in a code block, as the command to run in a terminal. You cannot attach from here. Tell the user that the remote conversation ends with this `/path:resume` prompt, so the remote Claude needs its next instruction stated explicitly.
 

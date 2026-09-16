@@ -79,6 +79,12 @@ pub struct RemoteArgs {
     /// with --dry-run.
     #[arg(long, requires = "dest", conflicts_with = "dry_run")]
     pub no_attach: bool,
+
+    /// Arguments appended to the remote `claude -r <id>`, after `--`
+    /// (for example `-- --permission-mode acceptEdits`). Only with
+    /// --remote.
+    #[arg(last = true, requires = "dest", value_name = "ARGS")]
+    pub launch_args: Vec<String>,
 }
 
 /// Error unless the harness being resumed into is Claude, the one the
@@ -114,6 +120,8 @@ pub(super) struct RemoteResume<'a> {
     pub(super) remote_dir: Option<&'a Path>,
     pub(super) dry_run: bool,
     pub(super) no_attach: bool,
+    /// Appended to the remote `claude -r <id>`.
+    pub(super) launch_args: &'a [String],
     pub(super) local_home: &'a Path,
     pub(super) local_cwd: &'a Path,
     /// This terminal's type, for the PTY the attach requests.
@@ -147,6 +155,7 @@ struct RemoteTarget {
     session_id: String,
     session_file: String,
     tmux_name: String,
+    launch_args: Vec<String>,
 }
 
 /// The plan for one remote resume: the target and what the project
@@ -170,6 +179,7 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
         remote_dir,
         dry_run,
         no_attach,
+        launch_args,
         local_home,
         local_cwd,
         term,
@@ -202,6 +212,7 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
         session_id,
         session_file,
         tmux_name,
+        launch_args: launch_args.to_vec(),
     };
 
     let dir_facts = probe_project_dir(transport, dest, &target)?;
@@ -327,13 +338,17 @@ fn launch(target: &RemoteTarget, dest: &Destination, transport: &dyn Transport) 
     eprintln!("Launching {} in {}", target.tmux_name, target.project_dir);
     // tmux hands the command to `sh -c`, so it is quoted for that
     // shell here, not in the script.
-    let claude_command = shlex::try_join([
-        "env",
-        "LANG=C.UTF-8",
-        &target.claude_path,
-        "-r",
-        &target.session_id,
-    ])
+    let claude_command = shlex::try_join(
+        [
+            "env",
+            "LANG=C.UTF-8",
+            &target.claude_path,
+            "-r",
+            &target.session_id,
+        ]
+        .into_iter()
+        .chain(target.launch_args.iter().map(String::as_str)),
+    )
     .context("quote the claude command for the remote shell")?;
     let command = RemoteCommand::from_script(
         include_str!("launch_session.sh"),
@@ -376,6 +391,9 @@ fn print_plan(plan: &RemotePlan, dest: &Destination, no_attach: bool) {
     eprintln!("  session ID:    {}", target.session_id);
     eprintln!("  session file:  {}", target.session_file);
     eprintln!("  tmux session:  {}", target.tmux_name);
+    if !target.launch_args.is_empty() {
+        eprintln!("  launch args:   {}", target.launch_args.join(" "));
+    }
     eprintln!("  run:           {action}");
 }
 
@@ -558,6 +576,7 @@ mod tests {
     struct RunOpts<'a> {
         dry_run: bool,
         no_attach: bool,
+        launch_args: &'a [String],
         remote_dir: &'a Path,
     }
 
@@ -566,6 +585,7 @@ mod tests {
             Self {
                 dry_run: false,
                 no_attach: false,
+                launch_args: &[],
                 remote_dir: Path::new(DIR),
             }
         }
@@ -593,6 +613,7 @@ mod tests {
                 remote_dir: Some(opts.remote_dir),
                 dry_run: opts.dry_run,
                 no_attach: opts.no_attach,
+                launch_args: opts.launch_args,
                 local_home: Path::new("/home/local"),
                 local_cwd: Path::new("/home/local/work"),
                 term: Some("xterm-test"),
@@ -791,6 +812,37 @@ mod tests {
         assert!(err.to_string().contains("uploading the session"), "{err:#}");
         assert!(err.to_string().contains("disk full"), "{err:#}");
         assert_eq!(fake.calls().len(), 3);
+    }
+
+    #[test]
+    fn launch_args_follow_the_session_id_quoted_for_the_shell_tmux_starts() {
+        let fake = FakeSsh::new();
+        reply_host_ok(&fake);
+        reply_dir(&fake, DIR, "no", "no", "yes");
+        fake.reply(0, ""); // launch
+        let launch_args = ["--permission-mode".to_string(), "accept edits".to_string()];
+        run_with(
+            &fake,
+            RunOpts {
+                launch_args: &launch_args,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let inner = shlex::try_join([
+            "env",
+            "LANG=C.UTF-8",
+            "/usr/local/bin/claude",
+            "-r",
+            &session_id(),
+            "--permission-mode",
+            "accept edits",
+        ])
+        .unwrap();
+        let outer = shlex::try_quote(&inner).unwrap();
+        let calls = fake.calls();
+        let command = command_of(&calls[2]);
+        assert!(command.contains(&*outer), "{command}");
     }
 
     #[test]

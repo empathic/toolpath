@@ -42,7 +42,8 @@
 //! the `remote` module: two read-only probes, the printed plan
 //! (`--dry-run` stops there), then upload, launch, and attach as the
 //! remote state requires; `--no-attach` prints the attach command
-//! after the launch instead of attaching. With `--remote`,
+//! after the launch instead of attaching; arguments after `--`
+//! reach the remote `claude`. With `--remote`,
 //! `-C` names the remote project directory; the default is the local
 //! cwd with the local home swapped for the remote home. All of it
 //! compiles only with the `resume-remote` cargo feature on unix.
@@ -146,6 +147,7 @@ pub(crate) fn run_remote(
             remote_dir: args.cwd.as_deref(),
             dry_run: args.remote.dry_run,
             no_attach: args.remote.no_attach,
+            launch_args: &args.remote.launch_args,
             local_home: home,
             local_cwd: &std::env::current_dir()?,
             term: config.term.as_deref(),
