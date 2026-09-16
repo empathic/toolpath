@@ -46,6 +46,9 @@ use std::path::PathBuf;
 
 use crate::harness::Harness;
 
+#[cfg(all(unix, feature = "resume-remote"))]
+mod remote;
+
 #[derive(Args, Debug, Default)]
 pub struct ResumeArgs {
     /// Toolpath document to resume from. Accepted shapes: a Pathbase
@@ -80,10 +83,42 @@ pub struct ResumeArgs {
     /// then `$PATHBASE_URL`, then `https://pathbase.dev`.
     #[arg(long)]
     pub url: Option<String>,
+
+    #[cfg(all(unix, feature = "resume-remote"))]
+    #[command(flatten)]
+    pub remote: remote::RemoteArgs,
 }
 
 pub fn run(args: ResumeArgs) -> Result<()> {
     run_with_strategy(args, &RealExec)
+}
+
+/// `path resume --remote <dest>`: the resume on an ssh host.
+#[cfg(all(unix, feature = "resume-remote"))]
+pub(crate) fn run_remote(
+    dest: crate::ssh::Destination,
+    args: ResumeArgs,
+    config: &crate::config::Config,
+) -> Result<()> {
+    let resolved = resolve_input(&args)?;
+    let path = extract_the_only_path(&resolved.graph)?;
+    require_an_agent_turn(path)?;
+    remote::require_harness_is_claude(args.harness, resolved.source_harness)?;
+    let home = config
+        .home_dir()
+        .context("cannot determine the home directory")?;
+    let transport = crate::ssh::SshClient::new(
+        config.ssh_auth_sock.clone(),
+        home.join(crate::ssh::SSH_DIR_NAME),
+    )?;
+    remote::resume(
+        &dest,
+        args.cwd.as_deref(),
+        args.remote.dry_run,
+        &transport,
+        home,
+        &std::env::current_dir()?,
+    )
 }
 
 /// Internal entry point that the integration tests call with a
@@ -93,7 +128,8 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
         graph,
         source_harness,
     } = resolve_input(&args)?;
-    let path = ensure_path_with_agent(&graph)?;
+    let path = extract_the_only_path(&graph)?;
+    require_an_agent_turn(path)?;
 
     let cwd = match args.cwd.as_ref() {
         Some(p) => {
@@ -164,10 +200,9 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
     None
 }
 
-/// Validate that a parsed Toolpath document is a single inline Path
-/// carrying at least one `agent:*` actor. Returns the inner Path borrow
-/// on success.
-pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
+/// The one `Path` of a document. An empty graph, more than one path,
+/// or a `$ref` in place of the path errors.
+pub(crate) fn extract_the_only_path(g: &Graph) -> Result<&TPath> {
     if g.paths.is_empty() {
         anyhow::bail!("resume needs a `Path`; expected one path, got an empty graph");
     }
@@ -179,12 +214,17 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
             g.paths.len()
         );
     }
-    let path = match &g.paths[0] {
-        PathOrRef::Path(p) => p.as_ref(),
+    match &g.paths[0] {
+        PathOrRef::Path(p) => Ok(p.as_ref()),
         PathOrRef::Ref(_) => anyhow::bail!(
             "resume needs an inline `Path`; got a $ref. Resolve it first with `path import` or fetch the document."
         ),
-    };
+    }
+}
+
+/// Error unless some step of `path` has an `agent:` actor. A path
+/// with none has no agent session to resume.
+pub(crate) fn require_an_agent_turn(path: &TPath) -> Result<()> {
     let has_agent = path
         .steps
         .iter()
@@ -194,7 +234,7 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
             "no agent session in input — `path resume` only works on harness-derived paths"
         );
     }
-    Ok(path)
+    Ok(())
 }
 
 /// A resolved input: the parsed document and its source harness.
@@ -622,7 +662,7 @@ mod tests {
         // project_claude can consume, reusing the existing helper.
         let mut path = make_convo_path_for_resume("claude-code://resume-test-session");
         // Overwrite the actor to agent:claude-code so run_with_strategy can
-        // pass the ensure_path_with_agent check.
+        // pass the require_an_agent_turn check.
         path.steps[0].step.actor = "agent:claude-code".to_string();
 
         let graph = toolpath::v1::Graph::from_path(path);
@@ -711,47 +751,49 @@ mod tests {
     }
 
     #[test]
-    fn ensure_path_with_agent_accepts_single_path_with_agent_actor() {
+    fn extract_the_only_path_accepts_a_single_path() {
         let g = Graph::from_path(make_path_with_actor("agent:claude-code"));
-        assert!(ensure_path_with_agent(&g).is_ok());
+        let path = extract_the_only_path(&g).unwrap();
+        assert!(require_an_agent_turn(path).is_ok());
     }
 
     #[test]
-    fn ensure_path_with_agent_rejects_empty_graph() {
+    fn extract_the_only_path_rejects_empty_graph() {
         let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
         g.paths.clear();
-        let err = ensure_path_with_agent(&g).unwrap_err();
+        let err = extract_the_only_path(&g).unwrap_err();
         assert!(err.to_string().contains("expected"));
         assert!(err.to_string().contains("empty"));
     }
 
     #[test]
-    fn ensure_path_with_agent_rejects_multi_path_graph() {
+    fn extract_the_only_path_rejects_multi_path_graph() {
         let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
         g.paths.push(PathOrRef::Path(Box::new(make_path_with_actor(
             "agent:claude-code",
         ))));
-        let err = ensure_path_with_agent(&g).unwrap_err();
+        let err = extract_the_only_path(&g).unwrap_err();
         let s = err.to_string();
         assert!(s.contains("single `Path`"), "actual: {s}");
         assert!(s.contains("2 paths"), "actual: {s}");
     }
 
     #[test]
-    fn ensure_path_with_agent_rejects_agentless_path() {
+    fn require_an_agent_turn_rejects_a_path_without_one() {
         let g = Graph::from_path(make_path_with_actor("human:alex"));
-        let err = ensure_path_with_agent(&g).unwrap_err();
+        let path = extract_the_only_path(&g).unwrap();
+        let err = require_an_agent_turn(path).unwrap_err();
         assert!(err.to_string().contains("no agent session"));
     }
 
     #[test]
-    fn ensure_path_with_agent_rejects_path_ref_only_graph() {
+    fn extract_the_only_path_rejects_path_ref_only_graph() {
         use toolpath::v1::PathRef;
         let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
         g.paths = vec![PathOrRef::Ref(PathRef {
             ref_url: "$ref://something".into(),
         })];
-        let err = ensure_path_with_agent(&g).unwrap_err();
+        let err = extract_the_only_path(&g).unwrap_err();
         assert!(err.to_string().contains("inline `Path`"), "actual: {}", err);
     }
 
@@ -770,7 +812,7 @@ mod tests {
             graph: g,
             source_harness: harness,
         } = resolve_input(&args).unwrap();
-        let _path = ensure_path_with_agent(&g).unwrap();
+        require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Claude));
     }
 
@@ -804,7 +846,7 @@ mod tests {
             graph: g,
             source_harness: harness,
         } = resolve_input(&args).unwrap();
-        let _ = ensure_path_with_agent(&g).unwrap();
+        require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
 
@@ -874,7 +916,7 @@ mod tests {
             graph: g,
             source_harness: harness,
         } = result.expect("resolve_input should reuse cache without refetching");
-        let _ = ensure_path_with_agent(&g).unwrap();
+        require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
 

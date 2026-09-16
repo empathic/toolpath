@@ -156,7 +156,13 @@ pub fn run() -> Result<()> {
         #[cfg(not(target_os = "emscripten"))]
         Commands::Share { args } => cmd_share::run(args),
         #[cfg(not(target_os = "emscripten"))]
-        Commands::Resume { args } => cmd_resume::run(args),
+        Commands::Resume { args } => {
+            #[cfg(all(unix, feature = "resume-remote"))]
+            if let Some(dest) = args.remote.dest.clone() {
+                return cmd_resume::run_remote(dest, args, &config);
+            }
+            cmd_resume::run(args)
+        }
         Commands::Query { args } => cmd_query::run(args, cli.pretty, &config),
         Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]
