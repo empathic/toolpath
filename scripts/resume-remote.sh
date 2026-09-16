@@ -72,7 +72,8 @@
 #
 # Steps (always in this order):
 #   1. cargo build -p path-cli --features resume-remote; the script runs
-#      target/debug/path and does not touch any installed `path`.
+#      the binary cargo reports building and does not touch any
+#      installed `path`.
 #   2. Resolve the session. `path p import claude --no-cache` writes
 #      the document to $TMPDIR/path-resume-remote/. The remote session
 #      ID comes from `p export claude --content-addressed-session-id`:
@@ -235,8 +236,10 @@ echo "ok: local tools, $REMOTE, $PROJECT"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 step "Build path from $(git -C "$ROOT" rev-parse --short HEAD) ($(git -C "$ROOT" branch --show-current))"
-run cargo build -q -p path-cli --features resume-remote --manifest-path "$ROOT/Cargo.toml"
-PATH_BIN="$ROOT/target/debug/path"
+show cargo build -q -p path-cli --features resume-remote --manifest-path "$ROOT/Cargo.toml"
+PATH_BIN="$(cargo build -q -p path-cli --features resume-remote --manifest-path "$ROOT/Cargo.toml" --message-format=json-render-diagnostics \
+    | jq -r 'select(.reason == "compiler-artifact" and .target.name == "path" and (.target.kind | index("bin"))) | .executable')"
+[[ -x $PATH_BIN ]] || die "cargo build did not report the path binary (got '$PATH_BIN')"
 "$PATH_BIN" --version
 
 # ── 2. Resolve the session ────────────────────────────────────────────────
