@@ -74,17 +74,21 @@ pub(super) fn require_harness_is_claude(
     }
 }
 
-/// What a run would do, decided by the project directory facts. The
-/// remote wins once it exists: nothing overwrites a remote session
-/// file, and a live session is attached to as is.
+/// The first step a run takes, decided by the project directory
+/// facts. Each variant implies the steps after it: a launch ends in
+/// an attach, an upload ends in a launch and an attach. The remote
+/// wins once it exists: nothing overwrites a remote session file, and
+/// a live session is attached to as is.
 #[derive(Debug, Clone, Copy)]
 enum RunAction {
-    /// tmux session live: attach.
-    Attach,
-    /// Session file present, no live session: launch, attach.
-    Launch,
-    /// Session file absent: ship, launch, attach.
-    Ship,
+    /// The tmux session is live: attach to it.
+    AttachTmux,
+    /// The session file is present and no tmux session is live: start
+    /// claude on that file in a new tmux session, then attach.
+    LaunchClaude,
+    /// The session file is absent: upload the local projection to the
+    /// session file over ssh, then launch claude, then attach.
+    UploadSession,
 }
 
 /// The plan for one remote resume, assembled from the document and
@@ -144,11 +148,11 @@ pub(super) fn resume(
     }
 
     let action = if dir_facts.tmux_session_live {
-        RunAction::Attach
+        RunAction::AttachTmux
     } else if dir_facts.session_file_exists {
-        RunAction::Launch
+        RunAction::LaunchClaude
     } else {
-        RunAction::Ship
+        RunAction::UploadSession
     };
 
     let plan = RemotePlan {
@@ -168,18 +172,20 @@ pub(super) fn resume(
     }
     bail!(
         "`path resume --remote` stops after the plan; \
-         ship, launch, and attach are not implemented yet. \
+         upload, launch, and attach are not implemented yet. \
          Use scripts/resume-remote.sh to run the plan."
     );
 }
 
 fn print_plan(plan: &RemotePlan, dest: &Destination) {
     let action = match plan.action {
-        RunAction::Attach => "attach to the live session. The remote tree and turns are kept.",
-        RunAction::Launch => {
-            "launch on the remote file, attach. The remote tree and turns are kept."
+        RunAction::AttachTmux => {
+            "attach to the live tmux session. The remote tree and turns are kept."
         }
-        RunAction::Ship => "ship, launch, attach.",
+        RunAction::LaunchClaude => {
+            "launch claude on the remote session file, attach. The remote tree and turns are kept."
+        }
+        RunAction::UploadSession => "upload the session file, launch claude, attach.",
     };
     eprintln!("Remote resume plan for {dest}:");
     eprintln!("  remote home:   {}", plan.remote_home);

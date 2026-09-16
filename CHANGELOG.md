@@ -12,9 +12,9 @@ All notable changes to the Toolpath workspace are documented here.
   existence. `-C` names the remote project directory; the default is
   the local cwd with the local home swapped for the remote home. The
   session ID is the one `p export claude --content-addressed-session-id` gives.
-  The plan prints what a run does (attach, launch, or ship).
+  The plan prints what a run does (attach, launch, or upload).
   `--dry-run` stops after the plan; without it the command stops with
-  an error, because ship, launch, and attach are not implemented yet.
+  an error, because upload, launch, and attach are not implemented yet.
   The transport is the internal ssh module, an in-process SSH client
   (`russh`) compiled only with the feature; each probe has a 60s
   wall-clock timeout.
