@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Resume a Claude Code session on a remote host. Builds `path`
 # from this checkout, seeds and syncs the host, and hands off to
-# `path resume --remote`, which plans, ships, launches claude under
+# `path resume --remote`, which plans, uploads, launches claude under
 # tmux, and attaches.
 #
 # `path` does the resume (`p import claude`, `resume --remote`). This
@@ -91,7 +91,7 @@
 #      It re-probes read-only, prints the plan, and does what the
 #      remote state asks: a live tmux session is attached to as is, a
 #      present session file is launched as is, an absent file is
-#      shipped first. To reset a remote session, delete its file on
+#      uploaded first. To reset a remote session, delete its file on
 #      the remote and re-run. --dry-run stops after its plan. Detach
 #      with ctrl-b d; re-run the script to reattach.
 
