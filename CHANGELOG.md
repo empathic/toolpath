@@ -2,6 +2,22 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-convo 0.11.2 — 2026-09-16
+
+- **`toolpath-convo`** (0.11.2): `derive_path` records the harness's
+  whole session ID under `path.meta.extra.session_id`, next to the
+  provider already in `path.meta.source`. `path.id` keeps its
+  `path-<provider>-<8 chars>` shape, which is unique within a document
+  but only 32 bits wide; anything that needs a key unique across a
+  store shared by many machines (an object-storage export, a team
+  index) pairs `meta.source` with `meta.extra.session_id` and inherits
+  the harness's own uniqueness guarantee instead of truncating. For
+  example a Claude Code session `de09d54b-b91f-4be7-a757-3ff3d004fb35`
+  keeps `path.id = path-claude-code-de09d54b` and gains
+  `meta.source = claude-code`, `meta.extra.session_id =
+  de09d54b-b91f-4be7-a757-3ff3d004fb35`; a Codex session
+  `01a0a6fb-57ca-7030-b43d-5b4d577ac6c9` keeps `path-codex-01a0a6fb`
+  and records the full ID the same way.
 ## path-cli 0.23.0 — 2026-09-15
 
 - **`path-cli`** (0.23.0): `path resume --remote` runs the resume it

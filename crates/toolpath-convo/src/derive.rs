@@ -463,6 +463,19 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         meta.extra.insert("producer".to_string(), v);
     }
 
+    // The harness's own session ID, whole. `path.id` carries only a prefix
+    // of it, which is enough to be unique within one document's scope but
+    // not across a store shared by many machines; anything that needs a
+    // globally unique key for the session (an object-storage export, a
+    // team index) pairs `meta.source` with this field instead of
+    // truncating anything.
+    if !view.id.is_empty() {
+        meta.extra.insert(
+            "session_id".to_string(),
+            serde_json::Value::String(view.id.clone()),
+        );
+    }
+
     Path {
         path: PathIdentity {
             id: path_id,
@@ -1476,6 +1489,18 @@ mod tests {
         let view = view_with(vec![]);
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.path.id, "path-pi-abcdef01");
+    }
+
+    #[test]
+    fn test_source_and_full_session_id_in_meta() {
+        let view = view_with(vec![]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        // The local ID stays a prefix; the whole session ID and the
+        // provider are recorded so a global key can be built from them.
+        assert_eq!(path.path.id, "path-pi-abcdef01");
+        let meta = path.meta.unwrap();
+        assert_eq!(meta.source.as_deref(), Some("pi"));
+        assert_eq!(meta.extra["session_id"], "abcdef012345");
     }
 
     #[test]

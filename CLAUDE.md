@@ -219,6 +219,7 @@ Format references for the agent on-disk formats live at `docs/agents/formats/` �
 
 - `PathOrRef::Path` is `Box<Path>` to avoid a large enum variant size difference.
 - Shared derivation: `toolpath-convo` provides the provider-agnostic `ConversationView → Path` mapping (`toolpath_convo::derive_path`). New conversation providers build on it rather than re-implementing the mapping.
+- Session identity: `derive_path` sets `path.id` to `path-<provider>-<first 8 chars of the session ID>` (unique within the document, 32 bits wide) and records the whole session ID under `path.meta.extra.session_id` with the provider in `path.meta.source`. Anything that needs a key unique across machines (object-storage exports, team indexes) keys on `meta.source` + `meta.extra.session_id`, never on a truncated `path.id`.
 - Provider extras: `Turn.extra` and `WatcherEvent::Progress.data` use provider-namespaced keys (e.g. `extra["claude"]`, `extra["gemini"]`) so trait-only consumers can reach provider metadata without importing provider types.
 - Path kinds: `PathMeta.kind` is an optional URI naming a hosted kind spec; URIs are immutable and semver-versioned. The only one defined is `https://toolpath.net/kinds/agent-coding-session/v1.1.0` (`toolpath::v1::PATH_KIND_AGENT_CODING_SESSION`); every conversation → `Path` derivation sets it. Spec sources: `site/kinds/<name>/<version>/{index.md,schema.json}` (schema.json symlinks into `crates/path-cli/kinds/`, which `p validate` bundles). RFC section: "Document Kind".
 
