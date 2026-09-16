@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn file_absent_plans_a_ship_and_stops_without_dry_run() {
+    fn file_absent_plans_an_upload_and_stops_without_dry_run() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no");
