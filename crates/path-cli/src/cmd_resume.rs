@@ -113,10 +113,17 @@ pub(crate) fn run_remote(
 ) -> Result<()> {
     if !args.remote.dry_run {
         use std::io::IsTerminal;
-        remote::require_a_terminal(
-            std::io::stdin().is_terminal(),
-            std::io::stdout().is_terminal(),
-        )?;
+        for (stream, is_tty) in [
+            ("stdin", std::io::stdin().is_terminal()),
+            ("stdout", std::io::stdout().is_terminal()),
+        ] {
+            if !is_tty {
+                anyhow::bail!(
+                    "`path resume --remote` needs an interactive terminal for the \
+                     tmux attach: {stream} is not a TTY (pass --dry-run to stop at the plan)"
+                );
+            }
+        }
     }
     let resolved = resolve_input(&args)?;
     let document = extract_the_only_path(&resolved.graph)?;

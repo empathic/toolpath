@@ -94,25 +94,6 @@ pub(super) fn require_harness_is_claude(
     }
 }
 
-/// Error unless stdin and stdout are terminals, which the attach
-/// needs; the caller says whether each is one.
-pub(super) fn require_a_terminal(stdin_is_tty: bool, stdout_is_tty: bool) -> Result<()> {
-    let not_a_tty = if !stdin_is_tty {
-        Some("stdin")
-    } else if !stdout_is_tty {
-        Some("stdout")
-    } else {
-        None
-    };
-    if let Some(stream) = not_a_tty {
-        bail!(
-            "`path resume --remote` needs an interactive terminal for the \
-             tmux attach: {stream} is not a TTY (pass --dry-run to stop at the plan)"
-        );
-    }
-    Ok(())
-}
-
 /// One remote resume: the document, where it goes, and the local
 /// context the default remote directory and the attach are derived
 /// from.
@@ -594,15 +575,6 @@ mod tests {
         let err = parse_flag("ok", "tmux on PATH", &dest()).unwrap_err();
         assert!(err.to_string().contains("tmux on PATH"), "{err:#}");
         assert!(err.to_string().contains("\"ok\""), "{err:#}");
-    }
-
-    #[test]
-    fn require_a_terminal_names_the_stream_that_is_not_a_tty() {
-        assert!(require_a_terminal(true, true).is_ok());
-        let err = require_a_terminal(false, true).unwrap_err();
-        assert!(err.to_string().contains("stdin is not a TTY"), "{err:#}");
-        let err = require_a_terminal(true, false).unwrap_err();
-        assert!(err.to_string().contains("stdout is not a TTY"), "{err:#}");
     }
 
     #[test]
