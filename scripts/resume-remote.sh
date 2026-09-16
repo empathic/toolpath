@@ -34,7 +34,6 @@
 #                      ~/.claude.json that skips onboarding and trusts the
 #                      project directory. Idempotent.
 #   --no-sync          Do not push the working tree to the remote.
-#   --no-pause         Do not wait for Enter between steps.
 #   --dry-run          Print the setup and sync commands instead of
 #                      running them, and stop after the `path resume`
 #                      plan. Every remote call is read-only. With
@@ -123,7 +122,6 @@ PROJECT="$PWD"
 REMOTE_DIR=""
 SETUP=0
 SYNC=1
-PAUSE=1
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -134,7 +132,6 @@ while [[ $# -gt 0 ]]; do
         -C) REMOTE_DIR="$2"; shift 2 ;;
         --setup) SETUP=1; shift ;;
         --no-sync) SYNC=0; shift ;;
-        --no-pause) PAUSE=0; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage 0 ;;
         *) echo "unknown option: $1" >&2; usage ;;
@@ -153,11 +150,6 @@ run()  { show "$@"; "$@"; }
 skip() { printf '\033[2m$ %s\033[0m  (skipped: dry run)\n' "$*" >&2; }
 die()  { echo "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 is required on PATH"; }
-pause() {
-    [[ $PAUSE -eq 1 ]] || return 0
-    printf '\n[Enter to continue] '
-    read -r _ </dev/tty
-}
 
 PLAIN_PATH_RE='^/[A-Za-z0-9/._-]*$'
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -414,5 +406,4 @@ Tear down the VM when finished:
   ssh exe.dev rm $VM_NAME
 EOF
 fi
-pause
 exec "$PATH_BIN" "${RESUME_ARGS[@]}"
