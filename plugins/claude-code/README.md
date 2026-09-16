@@ -20,7 +20,7 @@ Inside Claude Code:
 |---------|-------------|
 | `/path:share` | Share an agent session to Pathbase and get a link. With no arguments it shares the current conversation; pass a hint to pick another session, `--harness <name>` for another harness, and `--anon` / `--public` / `--repo` / `--name` / `--url` to control the upload. |
 | `/path:query` | Ask questions about your local agent-session history. Takes plain English (translated to a jaq filter) or a jaq filter verbatim, plus `--source` / `--project` scoping. |
-| `/path:resume` | Bring a shared session (Pathbase URL, `owner/repo/slug`, file, or cache id) into this project and get the exact resume step — `/resume <id>` here, or `claude -r <id>` from a terminal. |
+| `/path:resume` | Bring a shared session (Pathbase URL, `owner/repo/slug`, file, or cache id) into this project and get the exact resume step — `/resume <id>` here, or `claude -r <id>` from a terminal. With `--remote <user@host>` (needs a `path` built with the `resume-remote` feature), send the current session to an ssh host under tmux and get the attach command. |
 | `/path:link-pr` | Share the current conversation and append the Pathbase link to a PR description — the PR you name, or the current branch's. |
 
 ## How the binary is bundled
