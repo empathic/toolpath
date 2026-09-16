@@ -45,10 +45,17 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// after its command is done.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Keepalives on every session, so a peer that stops answering is
-/// noticed within a minute.
+/// Keepalives on every session. A peer that stops answering is
+/// dropped after `KEEPALIVE_MAX` unanswered intervals; the drop lands
+/// up to one interval later depending on where in the cycle the peer
+/// died.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const KEEPALIVE_MAX: usize = 3;
+
+/// Latest point at which a dead peer has been dropped. A per-command
+/// timeout at or above this means a live remote that is stuck.
+pub(crate) const DEAD_PEER_TIMEOUT: Duration =
+    KEEPALIVE_INTERVAL.saturating_mul(KEEPALIVE_MAX as u32 + 1);
 
 /// The port of a [`Destination`] that names none.
 const DEFAULT_PORT: u16 = 22;
