@@ -665,6 +665,62 @@ mod resume_remote {
             .stderr(predicate::str::contains("--session"));
     }
 
+    const SESSION: &str = "b7e1c0de-0000-4000-8000-000000000001";
+
+    #[test]
+    fn resume_session_requires_remote() {
+        cmd()
+            .args(["resume", "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("--session <ID>"))
+            .stdout(predicate::str::contains("--project <DIR>"));
+        cmd()
+            .args(["resume", "--session", SESSION])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>"));
+        cmd()
+            .args([
+                "resume",
+                "--session",
+                SESSION,
+                "--project",
+                ".",
+                "--remote",
+                "u@h",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>").not());
+    }
+
+    #[test]
+    fn resume_takes_a_document_or_a_session_not_both() {
+        cmd()
+            .args(["resume", "--remote", "u@h"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("required"));
+        cmd()
+            .args([
+                "resume",
+                "doc.json",
+                "--session",
+                SESSION,
+                "--remote",
+                "u@h",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+        cmd()
+            .args(["resume", "--session", "not-a-uuid", "--remote", "u@h"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("must be a UUID"));
+    }
+
     #[test]
     fn resume_launch_args_require_remote() {
         cmd()
@@ -739,6 +795,17 @@ fn import_claude_help_omits_the_remote_host_flags() {
         .success()
         .stdout(predicate::str::contains("Remote host").not())
         .stdout(predicate::str::contains("--remote").not());
+}
+
+#[cfg(not(feature = "resume-remote"))]
+#[test]
+fn resume_help_omits_session() {
+    cmd()
+        .args(["resume", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--session").not())
+        .stdout(predicate::str::contains("--project").not());
 }
 
 #[cfg(not(feature = "resume-remote"))]
