@@ -22,16 +22,18 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::harness::Harness;
-use crate::ssh::{Destination, RemoteCommand, Transport, fail_unless_success, parse_facts};
+use crate::ssh::{
+    DEAD_PEER_TIMEOUT, Destination, RemoteCommand, Transport, fail_unless_success, parse_facts,
+};
 
-/// Wall-clock bound on a probe, a kill, or the launch. Each runs a
-/// few shell builtins; the launch returns as soon as tmux has forked.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+/// Wall-clock bound on a probe, a kill, or the launch, so a timeout
+/// means a live remote that is stuck.
+const COMMAND_TIMEOUT: Duration = DEAD_PEER_TIMEOUT;
 
-/// Wall-clock bound on the ship: 60s plus one second per 64 KiB, the
-/// time a 512 kbit/s uplink needs.
+/// Wall-clock bound on the ship: `COMMAND_TIMEOUT` plus one second per
+/// 64 KiB, the time a 512 kbit/s uplink needs.
 fn ship_timeout(bytes: usize) -> Duration {
-    Duration::from_secs(60 + (bytes / (64 * 1024)) as u64)
+    COMMAND_TIMEOUT + Duration::from_secs((bytes / (64 * 1024)) as u64)
 }
 
 /// Locations probed for `claude` when `command -v` finds nothing,
