@@ -6,11 +6,11 @@ All notable changes to the Toolpath workspace are documented here.
 
 - **`path-cli`** (0.23.0): `path resume --remote` runs the resume it
   plans (behind the `resume-remote` cargo feature). An absent session
-  file is shipped over ssh stdin: the local host projects the
+  file is uploaded over ssh stdin: the local host projects the
   conversation in memory under the content-addressed ID and the remote
   project directory, and the remote writes a temporary name (0600),
   checks the byte count, and links it into place, so a file that
-  appears between the probe and the ship is kept and the ship errors.
+  appears between the probe and the upload is kept and the upload errors.
   A present file is launched as is: `claude -r <id>` in a detached
   tmux session named `path-<first 8 of the ID>`, with `remain-on-exit
   failed` so a claude that exits non-zero leaves a dead pane whose

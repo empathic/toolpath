@@ -1,16 +1,16 @@
 //! `path resume --remote`: resume a Claude session on a remote host
-//! under tmux. The command ships and launches; it prints the ssh
+//! under tmux. The command uploads and launches; it prints the ssh
 //! command that attaches.
 //!
 //! The local host does all toolpath work: it projects the
 //! conversation in memory, renames it to the content-addressed
-//! session ID, roots it at the remote project directory, and ships
+//! session ID, roots it at the remote project directory, and uploads
 //! the JSONL over ssh stdin. The remote runs no `path`.
 //!
 //! The remote wins once it exists: a live tmux session is left as
 //! is, a present session file is launched as is, and only an absent
-//! file is shipped. Two read-only probes decide which; the first
-//! remote write is the ship.
+//! file is uploaded. Two read-only probes decide which; the first
+//! remote write is the upload.
 //!
 //! The remote runs constant `sh` scripts next to this module. The
 //! probes print `TP_<NAME>=<value>` fact lines; [`crate::ssh::parse_facts`]
@@ -30,9 +30,9 @@ use crate::ssh::{
 /// means a live remote that is stuck.
 const COMMAND_TIMEOUT: Duration = DEAD_PEER_TIMEOUT;
 
-/// Wall-clock bound on the ship: `COMMAND_TIMEOUT` plus one second per
+/// Wall-clock bound on the upload: `COMMAND_TIMEOUT` plus one second per
 /// 64 KiB, the time a 512 kbit/s uplink needs.
-fn ship_timeout(bytes: usize) -> Duration {
+fn upload_timeout(bytes: usize) -> Duration {
     COMMAND_TIMEOUT + Duration::from_secs((bytes / (64 * 1024)) as u64)
 }
 
@@ -63,7 +63,7 @@ pub struct RemoteArgs {
     /// (`user@host` or `user@host:port`; Claude only). With `--remote`,
     /// `-C` names the remote project directory; default: the local cwd
     /// with the local home swapped for the remote home. The session is
-    /// shipped when the remote lacks it, and `claude -r` starts under
+    /// uploaded when the remote lacks it, and `claude -r` starts under
     /// tmux; a live tmux session or a present session file on the
     /// remote is used as is. The command prints the ssh command that
     /// attaches.
@@ -149,7 +149,7 @@ struct RemotePlan {
     action: RunAction,
 }
 
-/// Entry point: probes, plan, then ship and launch as the remote
+/// Entry point: probes, plan, then upload and launch as the remote
 /// state requires.
 pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Result<()> {
     let RemoteResume {
@@ -226,7 +226,7 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
     }
 
     if plan.action == RunAction::UploadSession {
-        ship(document, &plan.target, dest, transport)?;
+        upload(document, &plan.target, dest, transport)?;
     }
     if plan.action != RunAction::AttachTmux {
         if plan.dead_session {
@@ -247,7 +247,7 @@ pub(super) fn resume(request: &RemoteResume, transport: &dyn Transport) -> Resul
 
 /// Project the conversation under the plan's session ID and project
 /// directory, and write it to the remote session file over stdin.
-fn ship(
+fn upload(
     document: &toolpath::v1::Path,
     target: &RemoteTarget,
     dest: &Destination,
@@ -259,17 +259,17 @@ fn ship(
     let jsonl = crate::cmd_export::serialize_jsonl(&conversation)?.into_bytes();
 
     eprintln!(
-        "Shipping session {} to {dest}:{}",
+        "Uploading session {} to {dest}:{}",
         target.session_id, target.session_file
     );
     let bytes = jsonl.len();
     let command = RemoteCommand::from_script(
-        include_str!("ship_session.sh"),
+        include_str!("upload_session.sh"),
         [target.session_file.as_str(), &bytes.to_string()],
     )
     .stdin(jsonl);
-    let output = transport.run(dest, &command, ship_timeout(bytes))?;
-    fail_unless_success(&output, "shipping the session", dest)
+    let output = transport.run(dest, &command, upload_timeout(bytes))?;
+    fail_unless_success(&output, "uploading the session", dest)
 }
 
 fn kill_dead_session(
@@ -316,7 +316,7 @@ fn launch(target: &RemoteTarget, dest: &Destination, transport: &dyn Transport) 
 fn print_plan(plan: &RemotePlan, dest: &Destination) {
     let action = match (plan.action, plan.dead_session) {
         (RunAction::AttachTmux, _) => {
-            "nothing to ship or launch: the tmux session is live. \
+            "nothing to upload or launch: the tmux session is live. \
              The remote tree and turns are kept."
         }
         (RunAction::LaunchClaude, false) => {
@@ -326,8 +326,8 @@ fn print_plan(plan: &RemotePlan, dest: &Destination) {
             "kill the dead tmux session, launch claude on the remote session file. \
              The remote tree and turns are kept."
         }
-        (RunAction::UploadSession, false) => "ship, launch claude.",
-        (RunAction::UploadSession, true) => "ship, kill the dead tmux session, launch claude.",
+        (RunAction::UploadSession, false) => "upload, launch claude.",
+        (RunAction::UploadSession, true) => "upload, kill the dead tmux session, launch claude.",
     };
     let target = &plan.target;
     eprintln!("Remote resume plan for {dest}:");
@@ -554,11 +554,11 @@ mod tests {
     }
 
     #[test]
-    fn file_absent_ships_and_launches() {
+    fn file_absent_uploads_and_launches() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "no");
-        fake.reply(0, ""); // ship
+        fake.reply(0, ""); // upload
         fake.reply(0, ""); // launch
         run(&fake, false).unwrap();
 
@@ -577,7 +577,7 @@ mod tests {
             )),
             "{command}"
         );
-        let jsonl = String::from_utf8(calls[2].input.clone().expect("ship feeds stdin")).unwrap();
+        let jsonl = String::from_utf8(calls[2].input.clone().expect("upload feeds stdin")).unwrap();
         assert!(command.contains(&jsonl.len().to_string()), "{command}");
         let last = jsonl.lines().last().unwrap();
         let line: serde_json::Value = serde_json::from_str(last).unwrap();
@@ -591,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn file_present_launches_without_shipping() {
+    fn file_present_launches_without_uploading() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "yes");
@@ -604,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn live_session_neither_ships_nor_launches() {
+    fn live_session_neither_uploads_nor_launches() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "yes", "no", "yes");
@@ -634,13 +634,13 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_ship_stops_before_launch() {
+    fn a_failed_upload_stops_before_launch() {
         let fake = FakeSsh::new();
         reply_host_ok(&fake);
         reply_dir(&fake, DIR, "no", "no", "no");
         fake.reply_with_stderr(1, "", "disk full");
         let err = run(&fake, false).unwrap_err();
-        assert!(err.to_string().contains("shipping the session"), "{err:#}");
+        assert!(err.to_string().contains("uploading the session"), "{err:#}");
         assert!(err.to_string().contains("disk full"), "{err:#}");
         assert_eq!(fake.calls().len(), 3);
     }
