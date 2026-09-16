@@ -91,15 +91,22 @@ enum RunAction {
     UploadSession,
 }
 
-/// The plan for one remote resume, assembled from the document and
-/// the two probes.
-struct RemotePlan {
+/// Where a remote resume lands, resolved from the document and the
+/// host probe. Every value is fixed before the project directory is
+/// probed.
+struct RemoteTarget {
     remote_home: String,
     claude_path: String,
     project_dir: String,
     session_id: String,
     session_file: String,
     tmux_name: String,
+}
+
+/// The plan for one remote resume: the target and the action the
+/// project directory probe decided.
+struct RemotePlan {
+    target: RemoteTarget,
     action: RunAction,
 }
 
@@ -134,8 +141,17 @@ pub(super) fn resume(
         .to_str()
         .context("the remote session file path is not valid UTF-8")?
         .to_string();
+    let target = RemoteTarget {
+        remote_home: facts.home,
+        claude_path: facts.claude,
+        project_dir,
+        session_id,
+        session_file,
+        tmux_name,
+    };
 
-    let dir_facts = probe_project_dir(transport, dest, &project_dir, &tmux_name, &session_file)?;
+    let dir_facts = probe_project_dir(transport, dest, &target)?;
+    let project_dir = &target.project_dir;
     match dir_facts.physical_dir.as_deref() {
         None => {
             bail!("project directory {project_dir} does not exist on {dest}; create it or pass -C")
@@ -155,15 +171,7 @@ pub(super) fn resume(
         RunAction::UploadSession
     };
 
-    let plan = RemotePlan {
-        remote_home: facts.home,
-        claude_path: facts.claude,
-        project_dir,
-        session_id,
-        session_file,
-        tmux_name,
-        action,
-    };
+    let plan = RemotePlan { target, action };
     print_plan(&plan, dest);
 
     if dry_run {
@@ -187,13 +195,14 @@ fn print_plan(plan: &RemotePlan, dest: &Destination) {
         }
         RunAction::UploadSession => "upload the session file, launch claude, attach.",
     };
+    let target = &plan.target;
     eprintln!("Remote resume plan for {dest}:");
-    eprintln!("  remote home:   {}", plan.remote_home);
-    eprintln!("  claude:        {}", plan.claude_path);
-    eprintln!("  project dir:   {}", plan.project_dir);
-    eprintln!("  session ID:    {}", plan.session_id);
-    eprintln!("  session file:  {}", plan.session_file);
-    eprintln!("  tmux session:  {}", plan.tmux_name);
+    eprintln!("  remote home:   {}", target.remote_home);
+    eprintln!("  claude:        {}", target.claude_path);
+    eprintln!("  project dir:   {}", target.project_dir);
+    eprintln!("  session ID:    {}", target.session_id);
+    eprintln!("  session file:  {}", target.session_file);
+    eprintln!("  tmux session:  {}", target.tmux_name);
     eprintln!("  run:           {action}");
 }
 
@@ -239,13 +248,15 @@ struct ProjectDirFacts {
 fn probe_project_dir(
     transport: &dyn Transport,
     dest: &Destination,
-    project_dir: &str,
-    tmux_name: &str,
-    session_file: &str,
+    target: &RemoteTarget,
 ) -> Result<ProjectDirFacts> {
     let command = RemoteCommand::from_script(
         include_str!("probe_project_dir.sh"),
-        [project_dir, tmux_name, session_file],
+        [
+            target.project_dir.as_str(),
+            target.tmux_name.as_str(),
+            target.session_file.as_str(),
+        ],
     );
     let output = transport.run(dest, &command, PROBE_TIMEOUT)?;
     fail_unless_success(&output, "project directory probe", dest)?;
