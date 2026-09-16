@@ -223,9 +223,19 @@ if [[ -n $REMOTE_DIR ]]; then
     check_plain_path "$REMOTE_DIR" "-C"
 fi
 if [[ $SETUP -eq 1 ]]; then
-    CREDS="$HOME/.claude/.credentials.json"
+    # The local Claude Code config dir: CLAUDE_CONFIG_DIR when set, else
+    # ~/.claude. path reads sessions from it, and the seed copies its
+    # login. .claude.json sits inside the dir when CLAUDE_CONFIG_DIR is
+    # set, else in the home.
+    CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    CREDS="$CONFIG_DIR/.credentials.json"
+    if [[ -n ${CLAUDE_CONFIG_DIR:-} ]]; then
+        CLAUDE_JSON="$CLAUDE_CONFIG_DIR/.claude.json"
+    else
+        CLAUDE_JSON="$HOME/.claude.json"
+    fi
     [[ -f "$CREDS" ]] || die "missing $CREDS; log into claude locally first"
-    [[ -f "$HOME/.claude.json" ]] || die "missing ~/.claude.json"
+    [[ -f "$CLAUDE_JSON" ]] || die "missing $CLAUDE_JSON"
 fi
 echo "ok: local tools, $PROJECT"
 
@@ -364,17 +374,17 @@ if [[ $SETUP -eq 1 ]]; then
     if [[ $DRY_RUN -eq 1 ]]; then
         skip "ssh -n $REMOTE mkdir -p ~/.claude $REMOTE_DIR"
         skip "scp -pq $CREDS $REMOTE:.claude/"
-        skip "jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
+        skip "jq '...' $CLAUDE_JSON | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
     else
         run ssh -n "$REMOTE" "mkdir -p ~/.claude $REMOTE_DIR"
         run scp -pq "$CREDS" "$REMOTE:.claude/"
-        show "jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
+        show "jq '...' $CLAUDE_JSON | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
         jq --arg dir "$REMOTE_DIR" '{
             hasCompletedOnboarding: true,
             theme: (.theme // "dark"),
             oauthAccount,
             projects: { ($dir): { hasTrustDialogAccepted: true } }
-        }' "$HOME/.claude.json" | ssh "$REMOTE" 'umask 077; cat > ~/.claude.json'
+        }' "$CLAUDE_JSON" | ssh "$REMOTE" 'umask 077; cat > ~/.claude.json'
         echo "seeded ~/.claude/.credentials.json and ~/.claude.json"
     fi
 fi
