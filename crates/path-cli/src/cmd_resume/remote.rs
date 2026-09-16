@@ -18,7 +18,7 @@
 //! component.
 
 use anyhow::{Context, Result, bail};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::claude_session::swap_home;
 use crate::harness::Harness;
@@ -53,7 +53,8 @@ pub struct RemoteArgs {
     /// Resume on this ssh destination instead of this machine
     /// (`user@host` or `user@host:port`; Claude only). With `--remote`,
     /// `-C` names the remote project directory; default: the local cwd
-    /// with the local home swapped for the remote home. The session is
+    /// (--project when given) with the local home swapped for the
+    /// remote home. The session is
     /// uploaded when the remote lacks it, `claude -r` starts under tmux,
     /// and this terminal attaches; a live tmux session or a present
     /// session file on the remote is used as is. Detach with ctrl-b d.
@@ -76,6 +77,47 @@ pub struct RemoteArgs {
     /// --remote.
     #[arg(last = true, requires = "dest", value_name = "ARGS")]
     pub launch_args: Vec<String>,
+
+    /// Send this Claude session, named by its ID as `p list claude`
+    /// prints it, in place of `<input>`: the document is derived from
+    /// the session on disk. Only with --remote.
+    #[arg(
+        long,
+        requires = "dest",
+        value_name = "ID",
+        value_parser = crate::claude_session::parse_uuid_arg,
+        conflicts_with_all = ["force", "no_cache", "url"]
+    )]
+    pub session: Option<String>,
+
+    /// The local project directory --session is in. Default: the
+    /// current directory. Its home swap is the default remote project
+    /// directory. Only with --session.
+    #[arg(long, requires = "session", value_name = "DIR")]
+    pub project: Option<PathBuf>,
+}
+
+/// Derive the document of the Claude session `session` of `project`,
+/// a canonical path. `json` is the text the remote session ID hashes.
+pub(super) fn resolve_session(
+    session: &str,
+    project: &Path,
+    config: &crate::config::Config,
+) -> Result<super::ResolvedInput> {
+    let project = project.to_str().context("--project must be valid UTF-8")?;
+    let manager = crate::providers::claude_convo(config);
+    let derived = crate::derive::derive_claude_session_with(&manager, project, session)?;
+    let json = derived
+        .doc
+        .to_json()
+        .context("serialize the derived document")?;
+    let graph = derived.doc;
+    let source_harness = graph.single_path().and_then(super::infer_source_harness);
+    Ok(super::ResolvedInput {
+        graph,
+        source_harness,
+        json,
+    })
 }
 
 /// Error unless the harness being resumed into is Claude, the one the
@@ -509,6 +551,46 @@ mod tests {
 
     fn dest() -> Destination {
         Destination::parse("user@host").unwrap()
+    }
+
+    /// A one-turn session file under `<claude dir>/projects/<slug>`,
+    /// recorded against `cwd`, derives from disk.
+    #[test]
+    fn a_session_id_with_project_derives_the_session_on_disk() {
+        let claude_dir = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let project = std::fs::canonicalize(project.path()).unwrap();
+        let cwd = project.to_str().unwrap();
+        let slug = toolpath_claude::PathResolver::new()
+            .with_claude_dir(claude_dir.path())
+            .project_dir(cwd)
+            .unwrap();
+        std::fs::create_dir_all(&slug).unwrap();
+        let session = "b7e1c0de-0000-4000-8000-000000000001";
+        std::fs::write(
+            slug.join(format!("{session}.jsonl")),
+            format!(
+                "{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{session}\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"{cwd}\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n\
+                 {{\"type\":\"assistant\",\"uuid\":\"a1\",\"parentUuid\":\"u1\",\"sessionId\":\"{session}\",\"timestamp\":\"2026-01-01T00:00:01Z\",\"cwd\":\"{cwd}\",\"message\":{{\"role\":\"assistant\",\"content\":\"hello\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        let config = crate::config::Config {
+            claude_config_dir: Some(claude_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let resolved = resolve_session(session, &project, &config).unwrap();
+        assert_eq!(resolved.source_harness, Some(Harness::Claude));
+        let path = resolved.graph.single_path().unwrap();
+        assert_eq!(path.steps.len(), 2);
+        assert!(
+            path.steps[0]
+                .change
+                .contains_key(&format!("claude-code://{session}")),
+            "{:?}",
+            path.steps[0].change.keys().collect::<Vec<_>>()
+        );
+        assert!(resolved.json.contains(session));
     }
 
     const HOME: &str = "/home/remote";
