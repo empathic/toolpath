@@ -135,10 +135,7 @@ pub(crate) fn run_remote(
     let home = config
         .home_dir()
         .context("cannot determine the home directory")?;
-    let transport = crate::ssh::SshClient::new(
-        config.ssh_auth_sock.clone(),
-        home.join(crate::ssh::SSH_DIR_NAME),
-    )?;
+    let transport = crate::providers::ssh_client(config)?;
     let status = remote::resume(
         &remote::RemoteResume {
             document,
