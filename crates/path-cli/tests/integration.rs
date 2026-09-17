@@ -625,6 +625,21 @@ mod resume_remote {
     }
 
     #[test]
+    fn resume_launch_args_require_remote() {
+        cmd()
+            .args([
+                "resume",
+                "doc.json",
+                "--",
+                "--permission-mode",
+                "acceptEdits",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>"));
+    }
+
+    #[test]
     fn resume_no_attach_requires_remote() {
         cmd()
             .args(["resume", "doc.json", "--no-attach"])
