@@ -2,6 +2,14 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.7.2 — 2026-09-17
+
+Step tags: label a message during a session and find it again later.
+
+- **`toolpath`** (0.7.2): adds an optional `tags` list to `StepMeta` —
+  opaque strings, unique within a step, order preserved. First-class in
+  the JSON Schema and typed structs; existing documents are unaffected.
+
 ## path-cli 0.23.0 — 2026-09-15
 
 - **`path-cli`** (0.23.0): `path resume --remote` runs the resume it
