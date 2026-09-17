@@ -103,6 +103,9 @@ All notable changes to the Toolpath workspace are documented here.
   directory everywhere the format carries it: `project_path`, every
   entry's `cwd` that is present, and a top-level `cwd` on a preamble
   line.
+## toolpath 0.8.0 — 2026-09-10
+
+- Add validated portable `BaseReference` and `Base.from` structural ancestry. References preserve immutable document URIs and encode scoped IDs individually. `Base` struct literals must initialize the new optional field. Structural-only bases may omit VCS `uri`.
 
 ## toolpath-cli 0.19.0 — 2026-09-05
 
