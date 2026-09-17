@@ -54,7 +54,8 @@ fn write_doc_with_id(dir: &Path, id: &str) -> std::path::PathBuf {
                     "actor": "agent:claude-code",
                     "timestamp": "2026-01-01T00:00:00Z"
                 },
-                "change": { "claude-code://object-int": { "structural": {
+                // Object names use the conversation artifact key, not `graph.id`.
+                "change": { format!("claude-code://{id}"): { "structural": {
                     "type": "conversation.append", "role": "user", "text": "hello"
                 }}}
             }]
@@ -98,13 +99,17 @@ fn export_then_import_round_trips_through_a_folder() {
         .trim()
         .to_string();
 
-    // Legible name: date and topic lead, the document's graph ID trails.
-    // The fixture is a 2026-01-01 session whose first prompt is "hello".
+    // Legible name: date and topic lead, the session identity trails.
     assert!(
-        uri.ends_with("/2026-01-01-hello--g1.json"),
+        uri.ends_with("/2026-01-01-hello--claude-code-g1.json"),
         "unexpected location: {uri}"
     );
-    assert!(folder.path().join("2026-01-01-hello--g1.json").is_file());
+    assert!(
+        folder
+            .path()
+            .join("2026-01-01-hello--claude-code-g1.json")
+            .is_file()
+    );
 
     cmd(config.path())
         .args(["p", "import", "object", &format!("file://{uri}")])
@@ -117,7 +122,7 @@ fn export_then_import_round_trips_through_a_folder() {
         .collect();
     assert_eq!(
         ids,
-        vec!["object-g1.json".to_string()],
+        vec!["object-claude-code-g1.json".to_string()],
         "unexpected cache id: {ids:?}"
     );
 }
@@ -144,7 +149,10 @@ fn re_exporting_a_session_overwrites_its_own_object() {
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(objects, vec!["2026-01-01-hello--g1.json".to_string()]);
+    assert_eq!(
+        objects,
+        vec!["2026-01-01-hello--claude-code-g1.json".to_string()]
+    );
 }
 
 #[test]
@@ -167,8 +175,8 @@ fn two_documents_with_the_same_basename_land_on_two_keys() {
     assert_eq!(
         folder_names(folder.path()),
         vec![
-            "2026-01-01-hello--path-claude-code-aaaa.json".to_string(),
-            "2026-01-01-hello--path-claude-code-bbbb.json".to_string(),
+            "2026-01-01-hello--claude-code-path-claude-code-aaaa.json".to_string(),
+            "2026-01-01-hello--claude-code-path-claude-code-bbbb.json".to_string(),
         ]
     );
 }
@@ -195,7 +203,7 @@ fn the_same_document_from_a_cache_id_and_a_file_lands_on_one_key() {
     }
     assert_eq!(
         folder_names(folder.path()),
-        vec!["2026-01-01-hello--path-claude-code-aaaa.json".to_string()]
+        vec!["2026-01-01-hello--claude-code-path-claude-code-aaaa.json".to_string()]
     );
 }
 
@@ -255,7 +263,23 @@ fn a_document_whose_graph_id_has_no_usable_characters_is_refused() {
     let config = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let doc = write_doc_with_id(work.path(), "!!!");
+    // No conversation artifact: this exercises the `graph.id` fallback.
+    let body = serde_json::json!({
+        "graph": { "id": "!!!" },
+        "paths": [{
+            "path": { "id": "p1", "head": "s1" },
+            "steps": [{
+                "step": {
+                    "id": "s1", "parents": [],
+                    "actor": "human:alex",
+                    "timestamp": "2026-01-01T00:00:00Z"
+                },
+                "change": { "src/main.rs": { "raw": "@@ -1 +1 @@\n-a\n+b" } }
+            }]
+        }]
+    });
+    let doc = work.path().join("doc.json");
+    std::fs::write(&doc, serde_json::to_string(&body).unwrap()).unwrap();
 
     cmd(config.path())
         .args(["p", "export", "object"])
@@ -280,7 +304,12 @@ fn the_s3_subcommand_alias_still_works() {
         .args(["--to", &folder.path().to_string_lossy()])
         .assert()
         .success();
-    assert!(folder.path().join("2026-01-01-hello--g1.json").is_file());
+    assert!(
+        folder
+            .path()
+            .join("2026-01-01-hello--claude-code-g1.json")
+            .is_file()
+    );
 }
 
 #[test]
@@ -712,11 +741,11 @@ fn list_object_tsv_is_one_line_per_document_with_the_id_first() {
     let mut rows: Vec<Vec<&str>> = stdout.lines().map(|l| l.split('\t').collect()).collect();
     rows.sort();
     assert_eq!(rows.len(), 2, "{stdout}");
-    assert_eq!(rows[0][0], "path-claude-code-aaaa");
+    assert_eq!(rows[0][0], "claude-code-path-claude-code-aaaa");
     assert_eq!(rows[0][1], "2026-01-01");
     assert_eq!(rows[0][2], "hello");
     assert!(
-        rows[0][5].ends_with("2026-01-01-hello--path-claude-code-aaaa.json"),
+        rows[0][5].ends_with("2026-01-01-hello--claude-code-path-claude-code-aaaa.json"),
         "{stdout}"
     );
 }
@@ -742,7 +771,10 @@ fn list_object_json_carries_the_parsed_name_parts() {
     let objects = v["objects"].as_array().unwrap();
     assert_eq!(objects.len(), 2);
     let ids: Vec<&str> = objects.iter().map(|o| o["id"].as_str().unwrap()).collect();
-    assert!(ids.contains(&"path-claude-code-aaaa"), "{ids:?}");
+    assert!(
+        ids.contains(&"claude-code-path-claude-code-aaaa"),
+        "{ids:?}"
+    );
     assert_eq!(objects[0]["date"], "2026-01-01");
     assert_eq!(objects[0]["topic"], "hello");
     assert!(objects[0]["size"].as_u64().unwrap() > 0);
@@ -810,8 +842,8 @@ fn import_object_with_a_destination_imports_every_document_under_it() {
     assert_eq!(
         ids,
         vec![
-            "object-path-claude-code-aaaa.json".to_string(),
-            "object-path-claude-code-bbbb.json".to_string()
+            "object-claude-code-path-claude-code-aaaa.json".to_string(),
+            "object-claude-code-path-claude-code-bbbb.json".to_string()
         ]
     );
 }

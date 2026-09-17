@@ -486,14 +486,20 @@ impl Destination {
 /// What a shared document is called in the destination.
 ///
 /// `<date>-<topic>--<id>`, e.g.
-/// `2026-08-07-add-s3-support-to-share--path-claude-code-6f2a1c9e5b3d4a70`.
+/// `2026-08-07-add-s3-support-to-share--claude-code-de09d54b-b91f-4be7-a757-3ff3d004fb35`.
 ///
 /// Two requirements pull in opposite directions and both are load-bearing:
 ///
-/// - **Stable.** Every component is a pure function of the document —
-///   the ID is `graph.id`, never the input filename — so re-sharing a
-///   session that has grown overwrites its own object instead of
-///   leaving a trail of near-duplicates.
+/// - **Stable and unique.** Every component is a pure function of the
+///   document, never of the input filename, so re-sharing a session that
+///   has grown overwrites its own object instead of leaving a trail of
+///   near-duplicates. The ID half is the session's own conversation
+///   artifact key (see [`session_key`]), so two sessions collide only if
+///   the harness issued one identifier twice. A document with no
+///   conversation artifact falls back to `graph.id`, which is unique
+///   within a document but says nothing across a shared store: two git
+///   documents from different repositories on the same branch do collide,
+///   and `--no-overwrite` is the guard for that case.
 /// - **Legible.** A destination is a folder someone will open, or a
 ///   bucket someone will page through. The bare ID tells them nothing;
 ///   the date sorts chronologically under a plain lexicographic
@@ -648,9 +654,11 @@ fn truncate_slug(slug: &str, max: usize) -> String {
 }
 
 /// Name a document for a destination: date and topic from the document
-/// itself, ID from `graph.id`. Nothing about the input path is
-/// consulted, so `share` and `p export object` agree, and two different
-/// documents that happen to share a filename land on two keys.
+/// itself, identity from its conversation artifact key (see
+/// [`session_key`]) or, for a document that has none, from `graph.id`.
+/// Nothing about the input path is consulted, so `share` and
+/// `p export object` agree, and two different documents that happen to
+/// share a filename land on two keys.
 pub(crate) fn name_for(doc: &toolpath::v1::Graph) -> ObjectName {
     let path = doc.paths.iter().find_map(|p| match p {
         toolpath::v1::PathOrRef::Path(p) => Some(p.as_ref()),
@@ -670,7 +678,39 @@ pub(crate) fn name_for(doc: &toolpath::v1::Graph) -> ObjectName {
         .and_then(|ts| ts.split('T').next())
         .map(str::to_string);
 
-    ObjectName::new(&doc.graph.id, date.as_deref(), topic_of(path).as_deref())
+    let id = session_key(path).unwrap_or(doc.graph.id.as_str());
+    ObjectName::new(id, date.as_deref(), topic_of(path).as_deref())
+}
+
+/// The session a path describes, as its conversation artifact key.
+///
+/// The agent-coding-session kind specifies that key as
+/// `<source>://<conversation-id>` on the `conversation.append` entry, so
+/// it already carries the provider and the harness's own session ID.
+/// That pair is the identity a store shared between machines needs, and
+/// it is unique because the harness that issued it says so — not because
+/// we truncated an ID and hoped. Documents with no conversation artifact
+/// (git-derived, hand-written) have no session identity, so callers fall
+/// back to `graph.id`.
+///
+/// Keys are visited in sorted order so a path whose steps carry several
+/// conversation artifacts still names the same one every run.
+fn session_key(path: &toolpath::v1::Path) -> Option<&str> {
+    for step in &path.steps {
+        let mut keys: Vec<&String> = step.change.keys().collect();
+        keys.sort();
+        for key in keys {
+            let is_conversation = step
+                .change
+                .get(key)
+                .and_then(|c| c.structural.as_ref())
+                .is_some_and(|s| s.change_type == "conversation.append");
+            if is_conversation && key.contains("://") {
+                return Some(key.as_str());
+            }
+        }
+    }
+    None
 }
 
 /// The first user prompt, which is what a session is *about*.
@@ -1228,7 +1268,7 @@ mod tests {
         let doc = doc_with("Add S3 support to share", "2026-08-07T09:15:00Z");
         assert_eq!(
             name_for(&doc).to_string(),
-            "2026-08-07-add-s3-support-to-share--g1"
+            "2026-08-07-add-s3-support-to-share--claude-code-s"
         );
     }
 
@@ -1260,15 +1300,64 @@ mod tests {
             name.starts_with("2026-08-07-add-support-to-share"),
             "{name}"
         );
-        assert!(name.ends_with("--g1"), "{name}");
+        assert!(name.ends_with("--claude-code-s"), "{name}");
         // The separator appears exactly once: the slugger collapses dash runs.
         assert_eq!(name.matches("--").count(), 1, "{name}");
     }
 
     #[test]
+    fn the_id_half_is_the_session_not_the_document_id() {
+        // Two documents from the same session but with different
+        // `graph.id`s (a re-derive that renamed the graph, say) are the
+        // same session and must land on the same key.
+        let a = doc_with("Fix the parser", "2026-08-07T09:15:00Z");
+        let mut b = toolpath::v1::Graph::from_json(&a.to_json().unwrap()).unwrap();
+        b.graph.id = "some-other-graph-id".to_string();
+        assert_eq!(name_for(&a), name_for(&b));
+        assert!(
+            name_for(&a).to_string().ends_with("--claude-code-s"),
+            "{}",
+            name_for(&a)
+        );
+    }
+
+    #[test]
+    fn two_sessions_take_two_keys_even_with_the_same_graph_id() {
+        // The inverse: one `graph.id`, two harness sessions. Keying on
+        // the session is what keeps the second from replacing the first.
+        let a = doc_with("Fix the parser", "2026-08-07T09:15:00Z");
+        let raw = a
+            .to_json()
+            .unwrap()
+            .replace("claude-code://s", "claude-code://other");
+        let b = toolpath::v1::Graph::from_json(&raw).unwrap();
+        assert_eq!(b.graph.id, a.graph.id);
+        assert_ne!(name_for(&a), name_for(&b));
+        assert!(name_for(&b).to_string().ends_with("--claude-code-other"));
+    }
+
+    #[test]
+    fn a_document_with_no_conversation_artifact_falls_back_to_the_graph_id() {
+        // Git-derived and hand-written documents have no session identity.
+        let body = serde_json::json!({
+            "graph": { "id": "path-main" },
+            "paths": [{
+                "path": { "id": "p1", "head": "s1" },
+                "steps": [{
+                    "step": { "id": "s1", "parents": [], "actor": "human:alex",
+                              "timestamp": "2026-08-07T00:00:00Z" },
+                    "change": { "src/main.rs": { "raw": "@@ -1 +1 @@\n-a\n+b" } }
+                }]
+            }]
+        });
+        let doc = toolpath::v1::Graph::from_json(&body.to_string()).unwrap();
+        assert_eq!(name_for(&doc).to_string(), "2026-08-07--path-main");
+    }
+
+    #[test]
     fn a_prompt_of_pure_punctuation_degrades_to_date_and_id() {
         let doc = doc_with("!!! ???", "2026-08-07T00:00:00Z");
-        assert_eq!(name_for(&doc).to_string(), "2026-08-07--g1");
+        assert_eq!(name_for(&doc).to_string(), "2026-08-07--claude-code-s");
     }
 
     #[test]
