@@ -16,3 +16,10 @@ site/wasm/
 
 # nix build output symlink
 result
+
+# terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
