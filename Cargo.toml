@@ -37,7 +37,7 @@ toolpath-github = { version = "0.6.0", path = "crates/toolpath-github" }
 toolpath-dot = { version = "0.5.0", path = "crates/toolpath-dot" }
 toolpath-md = { version = "0.7.0", path = "crates/toolpath-md" }
 toolpath-pi = { version = "0.6.1", path = "crates/toolpath-pi" }
-path-cli = { version = "0.23.0", path = "crates/path-cli" }
+path-cli = { version = "0.24.0", path = "crates/path-cli" }
 pathbase-client = { version = "0.2.0", path = "crates/pathbase-client" }
 
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
@@ -60,6 +60,7 @@ toml = "1"
 russh = "0.63"
 shlex = "1.3"
 url = "2.5"
+crossterm = "0.29"
 
 [profile.wasm]
 inherits = "release"

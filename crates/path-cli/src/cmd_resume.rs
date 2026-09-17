@@ -39,9 +39,9 @@
 //!
 //! `--remote <user@host>` (Claude only) resumes the session on an ssh
 //! host under tmux instead of this machine. The flow lives in
-//! the `remote` module: two read-only probes, the printed plan (`--dry-run`
-//! stops there), then upload and launch as the remote state requires;
-//! the command prints the ssh command that attaches. With `--remote`,
+//! the `remote` module: two read-only probes, the printed plan
+//! (`--dry-run` stops there), then upload, launch, and attach as the
+//! remote state requires. With `--remote`,
 //! `-C` names the remote project directory; the default is the local
 //! cwd with the local home swapped for the remote home. All of it
 //! compiles only with the `resume-remote` cargo feature on unix.
@@ -111,6 +111,20 @@ pub(crate) fn run_remote(
     args: ResumeArgs,
     config: &crate::config::Config,
 ) -> Result<()> {
+    if !args.remote.dry_run {
+        use std::io::IsTerminal;
+        for (stream, is_tty) in [
+            ("stdin", std::io::stdin().is_terminal()),
+            ("stdout", std::io::stdout().is_terminal()),
+        ] {
+            if !is_tty {
+                anyhow::bail!(
+                    "`path resume --remote` needs an interactive terminal for the \
+                     tmux attach: {stream} is not a TTY (pass --dry-run to stop at the plan)"
+                );
+            }
+        }
+    }
     let resolved = resolve_input(&args)?;
     let document = extract_the_only_path(&resolved.graph)?;
     require_an_agent_turn(document)?;
@@ -122,7 +136,7 @@ pub(crate) fn run_remote(
         config.ssh_auth_sock.clone(),
         home.join(crate::ssh::SSH_DIR_NAME),
     )?;
-    remote::resume(
+    let status = remote::resume(
         &remote::RemoteResume {
             document,
             document_json: &resolved.json,
@@ -131,9 +145,14 @@ pub(crate) fn run_remote(
             dry_run: args.remote.dry_run,
             local_home: home,
             local_cwd: &std::env::current_dir()?,
+            term: config.term.as_deref(),
         },
         &transport,
-    )
+    )?;
+    if status != 0 {
+        std::process::exit(status as i32);
+    }
+    Ok(())
 }
 
 /// Internal entry point that the integration tests call with a
