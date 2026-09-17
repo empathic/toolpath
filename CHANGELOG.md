@@ -12,7 +12,10 @@ All notable changes to the Toolpath workspace are documented here.
   to the same remote session ID. `--project` defaults to the current
   directory. The Claude Code plugin (0.4.0) `/path:resume --remote`
   sends the current session that way, with no import into the cache
-  first; `scripts/resume-remote.sh` hands off the same way.
+  first. `scripts/resume-remote.sh` hands off the same way, and its
+  sync is explicit: `--sync` (implied by `--create`) pushes the
+  working tree one way with no delete, in place of a probe that
+  guessed from the remote session file.
 - **`toolpath-cli`** (0.28.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.27.0 — 2026-09-16
