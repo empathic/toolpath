@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## toolpath 0.7.2, toolpath-convo 0.11.2 — 2026-09-17
+## toolpath 0.7.2, toolpath-convo 0.11.2, toolpath-md 0.7.1 — 2026-09-17
 
 Step tags: label a message during a session and find it again later.
 
@@ -18,6 +18,9 @@ Step tags: label a message during a session and find it again later.
   a `conversation.event`'s `text`/`content`, which is how a hook-blocked
   Claude Code prompt lands. New `tags` module: `parse_tag_line`,
   `apply_tags`, `TAG_PREFIX`.
+- **`toolpath-md`** (0.7.1): tagged steps render a `**Tags:**` line in
+  step bodies and a `*tags: …*` line under the speaker line in session
+  transcripts (compact and full).
 
 ## path-cli 0.23.0 — 2026-09-15
 

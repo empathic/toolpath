@@ -97,7 +97,7 @@
   },
   {
     "name": "toolpath-md",
-    "version": "0.7.0",
+    "version": "0.7.1",
     "description": "Markdown rendering for LLM consumption",
     "docs": "https://docs.rs/toolpath-md",
     "crate": "https://crates.io/crates/toolpath-md",

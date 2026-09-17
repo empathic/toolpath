@@ -286,6 +286,30 @@ pub fn render_graph(graph: &Graph, options: &RenderOptions) -> String {
 // Internal rendering helpers
 // ============================================================================
 
+/// `**Tags:** \`a\`, \`b\`` when the step carries any; nothing otherwise.
+fn write_step_tags(out: &mut String, step: &Step) {
+    if let Some(meta) = &step.meta
+        && !meta.tags.is_empty()
+    {
+        let tags: Vec<String> = meta.tags.iter().map(|t| format!("`{t}`")).collect();
+        writeln!(out, "**Tags:** {}", tags.join(", ")).unwrap();
+    }
+}
+
+/// The step's `meta.tags`, or nothing.
+fn step_tags(step: &Step) -> &[String] {
+    step.meta.as_ref().map(|m| m.tags.as_slice()).unwrap_or(&[])
+}
+
+/// Transcript form of a step's tags: `*tags: a, b*` plus a blank line, or
+/// nothing when the step has none.
+fn write_transcript_tags(out: &mut String, tags: &[String]) {
+    if !tags.is_empty() {
+        writeln!(out, "*tags: {}*", tags.join(", ")).unwrap();
+        writeln!(out).unwrap();
+    }
+}
+
 fn write_step_body(out: &mut String, step: &Step, options: &RenderOptions, compact: bool) {
     let heading = if compact { "###" } else { "##" };
 
@@ -298,6 +322,8 @@ fn write_step_body(out: &mut String, step: &Step, options: &RenderOptions, compa
         let parents: Vec<String> = step.step.parents.iter().map(|p| format!("`{p}`")).collect();
         writeln!(out, "**Parents:** {}", parents.join(", ")).unwrap();
     }
+
+    write_step_tags(out, step);
 
     writeln!(out).unwrap();
 
@@ -581,7 +607,7 @@ fn write_conversation_transcript_body(out: &mut String, path: &Path, options: &R
                 })
                 .collect();
             files.sort_by(|a, b| a.0.cmp(b.0));
-            write_transcript_turn(out, append, &files, options);
+            write_transcript_turn(out, append, &files, step_tags(step), options);
         }
     }
 
@@ -620,9 +646,15 @@ fn write_compact_transcript(out: &mut String, turns: &[&Step]) {
             .unwrap_or("")
             .trim();
         let tools = extra.get("tool_uses").and_then(|v| v.as_array());
+        let tags = step_tags(step);
 
         if text.is_empty() {
             accumulate_tools(&mut pending, tools);
+            // A tagged tool-only turn still gets its tags line, in place.
+            if !tags.is_empty() {
+                flush_tool_breakdown(out, &mut pending);
+                write_transcript_tags(out, tags);
+            }
             continue;
         }
 
@@ -636,6 +668,7 @@ fn write_compact_transcript(out: &mut String, turns: &[&Step]) {
         };
         writeln!(out, "**{}:** {display}", speaker_label(role)).unwrap();
         writeln!(out).unwrap();
+        write_transcript_tags(out, tags);
 
         accumulate_tools(&mut pending, tools);
     }
@@ -672,6 +705,7 @@ fn write_transcript_turn(
     out: &mut String,
     append: &ArtifactChange,
     files: &[(&String, &ArtifactChange)],
+    tags: &[String],
     options: &RenderOptions,
 ) {
     let Some(s) = append.structural.as_ref() else {
@@ -696,6 +730,7 @@ fn write_transcript_turn(
         && tool_uses.is_none()
         && delegations.is_none()
         && files.is_empty()
+        && tags.is_empty()
     {
         return;
     }
@@ -707,6 +742,7 @@ fn write_transcript_turn(
         writeln!(out, "**{speaker}:** {text}").unwrap();
     }
     writeln!(out).unwrap();
+    write_transcript_tags(out, tags);
 
     if !thinking.is_empty() {
         writeln!(out, "**Reasoning:**").unwrap();
@@ -926,6 +962,8 @@ fn write_path_step(
         let parents: Vec<String> = step.step.parents.iter().map(|p| format!("`{p}`")).collect();
         writeln!(out, "**Parents:** {}", parents.join(", ")).unwrap();
     }
+
+    write_step_tags(out, step);
 
     writeln!(out).unwrap();
 
@@ -1604,6 +1642,20 @@ mod tests {
         assert!(md.starts_with("# s1"));
         assert!(md.contains("human:alex"));
         assert!(md.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_render_step_with_tags() {
+        let mut step = make_step("s1", "agent:claude", &["s0"]);
+        step.meta = Some(toolpath::v1::StepMeta {
+            tags: vec!["decision".into(), "bug:auth".into()],
+            ..Default::default()
+        });
+        let md = render_step(&step, &RenderOptions::default());
+        assert!(md.contains("**Tags:** `decision`, `bug:auth`"), "{md}");
+
+        let untagged = make_step("s2", "agent:claude", &[]);
+        assert!(!render_step(&untagged, &RenderOptions::default()).contains("**Tags:**"));
     }
 
     #[test]
@@ -2625,6 +2677,39 @@ mod tests {
                 extra,
             }),
         }
+    }
+
+    #[test]
+    fn test_transcript_shows_step_tags_in_both_details() {
+        let mut path = agent_coding_session_path();
+        let asst = path
+            .steps
+            .iter_mut()
+            .find(|s| s.step.id == "a1")
+            .expect("assistant step");
+        asst.meta = Some(toolpath::v1::StepMeta {
+            tags: vec!["decision".into(), "auth".into()],
+            ..Default::default()
+        });
+
+        let compact = render_path(&path, &RenderOptions::default());
+        assert!(
+            compact.contains("**Assistant:** done\n\n*tags: decision, auth*"),
+            "{compact}"
+        );
+
+        let full = render_path(
+            &path,
+            &RenderOptions {
+                detail: Detail::Full,
+                ..Default::default()
+            },
+        );
+        assert!(
+            full.contains("**Assistant:** done\n\n*tags: decision, auth*"),
+            "{full}"
+        );
+        assert_eq!(full.matches("*tags:").count(), 1);
     }
 
     fn agent_coding_session_path() -> Path {
