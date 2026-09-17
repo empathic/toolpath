@@ -595,12 +595,12 @@ pub(crate) fn project_into_harness(
                 Ok(session_id)
             }
         },
-        Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
-        Harness::Codex => crate::cmd_export::project_codex(path, cwd),
-        Harness::Copilot => crate::cmd_export::project_copilot(path, cwd),
-        Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
-        Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
-        Harness::Pi => crate::cmd_export::project_pi(path, cwd),
+        Harness::Gemini => crate::projection::gemini::project_gemini(path, cwd),
+        Harness::Codex => crate::projection::codex::project_codex(path, cwd),
+        Harness::Copilot => crate::projection::copilot::project_copilot(path, cwd),
+        Harness::Opencode => crate::projection::opencode::project_opencode(path, cwd),
+        Harness::Cursor => crate::projection::cursor::project_cursor(path, cwd),
+        Harness::Pi => crate::projection::pi::project_pi(path, cwd),
     }
 }
 
