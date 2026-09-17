@@ -468,25 +468,17 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
         })
 }
 
-/// The cache entry for an artifact, when the manifest says it is
-/// materialized and a fresh stat shows its source unchanged since —
-/// i.e. re-deriving would reproduce the cached doc byte-for-byte.
-/// Used by `share` to upload straight from the cache. The stat
-/// targets one artifact directly — no enumeration of its siblings.
-///
-/// Transitional: loads a [`Config`] per call. New code takes the
-/// config directory as a parameter.
-pub(crate) fn fresh_cache_id(
-    bundle: &HarnessBundle,
+/// [`fresh_cache_id`] against a manifest and stamp the caller already
+/// holds — for callers that process many artifacts and must not reload
+/// the manifest or re-stat the source per artifact.
+pub(crate) fn fresh_cache_id_in(
+    manifest: &Manifest,
     artifact_type: ArtifactType,
-    project: Option<&str>,
     id: &str,
+    (modified, size): sources::Stamp,
 ) -> Option<String> {
-    let config_dir = Config::load().ok()?.config_dir().ok()?;
-    let manifest = load_manifest(&config_dir).ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
     let cache_id = rec.cache_id.clone()?;
-    let (modified, size) = sources::source_for(bundle, artifact_type)?.stamp(project, id)?;
     // None stamps mean freshness is unknowable; only a real,
     // matching stamp can vouch for the cache entry.
     ((rec.modified.is_some() || rec.size.is_some())
@@ -592,6 +584,26 @@ mod tests {
     use super::*;
     use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
     use std::path::Path;
+
+    /// The cache entry for an artifact, when the manifest says it is
+    /// materialized and a fresh stat shows its source unchanged since —
+    /// i.e. re-deriving would reproduce the cached doc byte-for-byte.
+    /// Used by `share` to upload straight from the cache. The stat
+    /// targets one artifact directly — no enumeration of its siblings.
+    ///
+    /// Transitional: loads a [`Config`] per call. New code takes the
+    /// config directory as a parameter.
+    fn fresh_cache_id(
+        bundle: &HarnessBundle,
+        artifact_type: ArtifactType,
+        project: Option<&str>,
+        id: &str,
+    ) -> Option<String> {
+        let config_dir = Config::load().ok()?.config_dir().ok()?;
+        let manifest = load_manifest(&config_dir).ok()?;
+        let stamp = sources::source_for(bundle, artifact_type)?.stamp(project, id)?;
+        fresh_cache_id_in(&manifest, artifact_type, id, stamp)
+    }
 
     /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
     /// `f` receives the tempdir root for building provider fixtures and

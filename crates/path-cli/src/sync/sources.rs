@@ -90,9 +90,6 @@ fn canonicalize_or_self(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// Subtree check for a real filesystem path. Canonicalizes both
-/// sides, but also accepts the raw parent so a not-yet-resolvable
-/// constraint (or an unresolvable dir) still matches literally.
 /// Whether `dir` (a project directory or recorded cwd as the provider
 /// reports it) lies under `project_under`, using the same per-provider
 /// comparison sync uses — slug space for claude and pi, whose on-disk
@@ -105,6 +102,9 @@ pub(crate) fn project_in_scope(t: ArtifactType, dir: &str, project_under: &Path)
     }
 }
 
+/// Subtree check for a real filesystem path. Canonicalizes both
+/// sides, but also accepts the raw parent so a not-yet-resolvable
+/// constraint (or an unresolvable dir) still matches literally.
 fn dir_in_scope(dir: &str, project_under: &Path) -> bool {
     let d = canonicalize_or_self(Path::new(dir));
     d.starts_with(canonicalize_or_self(project_under)) || d.starts_with(project_under)
