@@ -586,21 +586,21 @@ pub(crate) fn project_into_harness(
     cwd: &std::path::Path,
 ) -> Result<String> {
     match harness {
-        Harness::Claude => match crate::cmd_export::project_claude(path, cwd)? {
-            crate::cmd_export::ClaudeProjection::Written { session_id } => Ok(session_id),
-            crate::cmd_export::ClaudeProjection::AlreadyLocal { session_id } => {
+        Harness::Claude => match crate::projection::claude::project_claude(path, cwd)? {
+            crate::projection::claude::ClaudeProjection::Written { session_id } => Ok(session_id),
+            crate::projection::claude::ClaudeProjection::AlreadyLocal { session_id } => {
                 eprintln!(
                     "Session {session_id} already exists in this project; resuming the local copy."
                 );
                 Ok(session_id)
             }
         },
-        Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
-        Harness::Codex => crate::cmd_export::project_codex(path, cwd),
-        Harness::Copilot => crate::cmd_export::project_copilot(path, cwd),
-        Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
-        Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
-        Harness::Pi => crate::cmd_export::project_pi(path, cwd),
+        Harness::Gemini => crate::projection::gemini::project_gemini(path, cwd),
+        Harness::Codex => crate::projection::codex::project_codex(path, cwd),
+        Harness::Copilot => crate::projection::copilot::project_copilot(path, cwd),
+        Harness::Opencode => crate::projection::opencode::project_opencode(path, cwd),
+        Harness::Cursor => crate::projection::cursor::project_cursor(path, cwd),
+        Harness::Pi => crate::projection::pi::project_pi(path, cwd),
     }
 }
 
