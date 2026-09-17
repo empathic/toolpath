@@ -21,6 +21,15 @@ Step tags: label a message during a session and find it again later.
 - **`toolpath-md`** (0.7.1): tagged steps render a `**Tags:**` line in
   step bodies and a `*tags: …*` line under the speaker line in session
   transcripts (compact and full).
+- **Claude Code plugin** (0.3.0): a `UserPromptSubmit` hook
+  (`hooks/hooks.json`, `scripts/tag-hook.sh`) blocks a `ptag: …` prompt,
+  or its `/path:tag …` alias, before the model sees it, with the canonical
+  `ptag:` line as the reason, so a tag costs no tokens and adds nothing to
+  the context. The alias needs no command file: hooks see the raw prompt
+  before any slash-command lookup. Dependency-free; never
+  resolves the binary. `scripts/test-plugin.sh` covers it.
+- **docs**: `entry-types.md` documents the `system`/`informational` entry a
+  blocked prompt leaves.
 
 ## path-cli 0.23.0 — 2026-09-15
 
