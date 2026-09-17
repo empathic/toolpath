@@ -50,35 +50,33 @@ Always invoke the CLI through the wrapper, and write paths as literal absolute s
 
 Send a session to an ssh host and run it there under tmux. The remote needs `claude` and `tmux` on it, and the project directory. The deliverable is the attach command.
 
-This mode needs a `path` built with the `resume-remote` cargo feature, version 0.25.0 or later. Check first:
+This mode needs a `path` built with the `resume-remote` cargo feature, version 0.28.0 or later. Check first:
 
 ```
 ... exec resume --help
 ```
 
-If the output does not list `--no-attach`, stop and tell the user: the installed `path` lacks `--no-attach` (path-cli 0.25.0 or later, built with the `resume-remote` feature); build one with `cargo install path-cli --features resume-remote` or point `TOOLPATH_BIN` at a build that has it.
+If the output does not list `--session`, stop and tell the user: the installed `path` lacks `resume --session` (path-cli 0.28.0 or later, built with the `resume-remote` feature); build one with `cargo install path-cli --features resume-remote` or point `TOOLPATH_BIN` at a build that has it.
 
 The destination must mean the same host, port, and user to `ssh` as to `path`: the command connects with its own ssh client and reads no `~/.ssh/config`, while the attach line it prints goes through `ssh`. An alias, a `ProxyJump`, or a `User` or `Port` override in `~/.ssh/config` for that host launches the session in one place and attaches somewhere else.
 
-1. **Import** the session to send. With no other input, that is the current conversation — the "Current session id" from the context above. If it reads `unknown`, take the newest row of `"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-path.sh" sessions` (TSV, newest first: project, session id, timestamp, step count, first user message) as the current conversation.
+1. **Send** the session, without attaching. With no other input, that is the current conversation — the "Current session id" from the context above. If it reads `unknown`, take the newest row of `"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-path.sh" sessions` (TSV, newest first: project, session id, timestamp, step count, first user message) as the current conversation.
 
    ```
-   ... exec p import claude --project <absolute cwd> --session <session id> --force
+   ... exec resume --remote <user@host> --no-attach --session <session id> --project <absolute cwd>
    ```
 
-   The cache id is `claude-<session id>`. If the user gave a Pathbase URL, file, or cache id, skip this step and use that input in step 2 instead.
-
-2. **Resume remotely**, without attaching:
+   If the user gave a Pathbase URL, file, or cache id, send that document instead:
 
    ```
-   ... exec resume claude-<session id> --remote <user@host> --no-attach
+   ... exec resume <input> --remote <user@host> --no-attach
    ```
 
    The remote project directory defaults to this cwd with the local home swapped for the remote home; pass through `-C <remote-dir>` from the user's arguments to override it. Anything after `--` in the user's arguments goes after `--` on this command and reaches the remote `claude` (for example `-- --permission-mode acceptEdits`, which lets the remote session work without a person answering its permission prompts). For a document whose source is not Claude Code, add `--harness claude`. The command prints its plan on stderr, uploads the session when the remote lacks it, launches `claude -r` in a detached tmux session, and prints the attach command. A session that already exists on the remote is launched as is; a live tmux session is left running, and the plan says so.
 
-3. **Hand off.** The last stdout line is `ssh -t ssh://<user@host> tmux ...`. Give the user that line, in a code block, as the command to run in a terminal. You cannot attach from here. Tell the user that the remote conversation ends with this `/path:resume` prompt, so the remote Claude needs its next instruction stated explicitly.
+2. **Hand off.** The last stdout line is `ssh -t ssh://<user@host> tmux ...`. Give the user that line, in a code block, as the command to run in a terminal. You cannot attach from here. Tell the user that the remote conversation ends with this `/path:resume` prompt, so the remote Claude needs its next instruction stated explicitly.
 
-The uploaded session ends with this `/path:resume` prompt; nothing after the import is uploaded.
+The uploaded session ends with this `/path:resume` prompt; nothing after it is uploaded.
 
 ### Notes
 
