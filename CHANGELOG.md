@@ -2,6 +2,17 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.28.0 — 2026-09-16
+
+- **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>
+  [--project <dir>]` sends a Claude session named by its ID, the way
+  `share` and `p import claude` name one, in place of a document. The
+  document is derived in memory from the session on disk, so a session
+  goes to a host without an import first, and the derived text hashes
+  to the same remote session ID. `--project` defaults to the current
+  directory.
+- **`toolpath-cli`** (0.28.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.27.0 — 2026-09-16
 
 - **`path-cli`** (0.27.0): `p import claude --remote <user@host>

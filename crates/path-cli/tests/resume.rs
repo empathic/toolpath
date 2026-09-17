@@ -259,7 +259,7 @@ fn cache_id_input_loads_and_projects() {
     .unwrap();
 
     let resume_args = ResumeArgs {
-        input: cache_id.to_string(),
+        input: Some(cache_id.to_string()),
         cwd: Some(cwd.path().to_path_buf()),
         harness: Some(Harness::Claude),
         ..Default::default()
