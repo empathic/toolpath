@@ -679,6 +679,7 @@ fn step_meta_is_empty(m: &StepMeta) -> bool {
         && m.description.is_none()
         && m.source.is_none()
         && m.refs.is_empty()
+        && m.tags.is_empty()
         && m.actors.as_ref().is_none_or(|a| a.is_empty())
         && m.signatures.is_empty()
         && m.extra.is_empty()
@@ -1210,6 +1211,35 @@ mod tests {
         let jsonl = p.to_jsonl_string().unwrap();
         let back = Path::from_jsonl_str(&jsonl).unwrap();
         assert_eq!(canonical_json(&p), canonical_json(&back));
+    }
+
+    #[test]
+    fn roundtrip_step_tags() {
+        let mut step = make_step("s1", None);
+        step.meta = Some(StepMeta {
+            tags: vec!["decision".into(), "bug:auth".into()],
+            ..Default::default()
+        });
+        let p = Path {
+            path: PathIdentity {
+                id: "p".into(),
+                base: None,
+                head: "s1".into(),
+                graph_ref: None,
+            },
+            steps: vec![step],
+            meta: None,
+        };
+        let jsonl = p.to_jsonl_string().unwrap();
+        let back = Path::from_jsonl_str(&jsonl).unwrap();
+        assert_eq!(canonical_json(&p), canonical_json(&back));
+        // Typed field, not the extra catch-all.
+        let meta = back.steps[0].meta.as_ref().unwrap();
+        assert_eq!(
+            meta.tags,
+            vec!["decision".to_string(), "bug:auth".to_string()]
+        );
+        assert!(meta.extra.is_empty());
     }
 
     #[test]
