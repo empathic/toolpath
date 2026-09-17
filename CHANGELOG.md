@@ -2,13 +2,22 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## toolpath 0.7.2 — 2026-09-17
+## toolpath 0.7.2, toolpath-convo 0.11.2 — 2026-09-17
 
 Step tags: label a message during a session and find it again later.
 
 - **`toolpath`** (0.7.2): adds an optional `tags` list to `StepMeta` —
   opaque strings, unique within a step, order preserved. First-class in
   the JSON Schema and typed structs; existing documents are unaffected.
+- **`toolpath-convo`** (0.11.2): `derive_path` recognises a *tag line*, a
+  user message whose whole text is `ptag: <tag> [<tag>…]` (whitespace or
+  comma separated), and attaches its tags to the nearest preceding
+  `conversation.append` step on the tag step's ancestry — the final step
+  of the message the person had just read. The tag step records
+  `meta.extra["tag"] = {tags, target}`. The same line is recognised inside
+  a `conversation.event`'s `text`/`content`, which is how a hook-blocked
+  Claude Code prompt lands. New `tags` module: `parse_tag_line`,
+  `apply_tags`, `TAG_PREFIX`.
 
 ## path-cli 0.23.0 — 2026-09-15
 
