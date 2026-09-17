@@ -11,7 +11,7 @@ A spike, expected to be reworked.
   opaque strings, unique within a step, order preserved. First-class in
   the JSON Schema and typed structs; existing documents are unaffected.
 - **`toolpath-convo`** (0.11.2): `derive_path` recognises a *tag line*, a
-  user message whose whole text is `tag: <tag> [<tag>…]` (whitespace or
+  user message whose whole text is `ptag: <tag> [<tag>…]` (whitespace or
   comma separated), and attaches its tags to the nearest preceding
   `conversation.append` step on the tag step's ancestry — the final step
   of the message the person had just read. The tag step records
@@ -23,9 +23,11 @@ A spike, expected to be reworked.
   step bodies and a `*tags: …*` line under the speaker line in session
   transcripts (compact and full).
 - **Claude Code plugin** (0.3.0): a `UserPromptSubmit` hook
-  (`hooks/hooks.json`, `scripts/tag-hook.sh`) blocks a `tag: …` prompt
-  before the model sees it, with the line as the reason, so a tag costs
-  no tokens and adds nothing to the context. Dependency-free; never
+  (`hooks/hooks.json`, `scripts/tag-hook.sh`) blocks a `ptag: …` prompt,
+  or its `/path:tag …` alias, before the model sees it, with the canonical
+  `ptag:` line as the reason, so a tag costs no tokens and adds nothing to
+  the context. The alias needs no command file: hooks see the raw prompt
+  before any slash-command lookup. Dependency-free; never
   resolves the binary. `scripts/test-plugin.sh` covers it.
 - **docs**: `entry-types.md` documents the `system`/`informational` entry a
   blocked prompt leaves.

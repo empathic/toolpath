@@ -3,7 +3,7 @@
 //! A user turn whose whole text is one line of the form
 //!
 //! ```text
-//! tag: <tag> [<tag>…]
+//! ptag: <tag> [<tag>…]
 //! ```
 //!
 //! is a *tag step*. Its tags are attached to the nearest preceding
@@ -32,12 +32,12 @@ use std::collections::HashMap;
 use toolpath::v1::Step;
 
 /// The prefix that makes a line a tag line.
-pub const TAG_PREFIX: &str = "tag:";
+pub const TAG_PREFIX: &str = "ptag:";
 
 /// Parse `text` as a tag line. `Some(tags)` when the trimmed text is a single
 /// line starting with [`TAG_PREFIX`] and naming at least one tag; the tags
 /// come back in order, deduplicated. `None` for anything else, including a
-/// multi-line message that happens to start with `tag:` — a tag line is the
+/// multi-line message that happens to start with `ptag:` — a tag line is the
 /// whole message, never its first line.
 pub fn parse_tag_line(text: &str) -> Option<Vec<String>> {
     let line = text.trim();
@@ -179,11 +179,11 @@ mod tests {
     #[test]
     fn parses_space_and_comma_separated_tags() {
         assert_eq!(
-            parse_tag_line("tag: decision auth"),
+            parse_tag_line("ptag: decision auth"),
             Some(vec!["decision".to_string(), "auth".to_string()])
         );
         assert_eq!(
-            parse_tag_line("tag:decision,auth, later"),
+            parse_tag_line("ptag:decision,auth, later"),
             Some(vec![
                 "decision".to_string(),
                 "auth".to_string(),
@@ -191,7 +191,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            parse_tag_line("  tag: bug:auth \n"),
+            parse_tag_line("  ptag: bug:auth \n"),
             Some(vec!["bug:auth".to_string()])
         );
     }
@@ -199,19 +199,19 @@ mod tests {
     #[test]
     fn dedupes_within_a_line() {
         assert_eq!(
-            parse_tag_line("tag: a b a"),
+            parse_tag_line("ptag: a b a"),
             Some(vec!["a".to_string(), "b".to_string()])
         );
     }
 
     #[test]
     fn rejects_non_tag_lines() {
-        assert_eq!(parse_tag_line("tag:"), None);
-        assert_eq!(parse_tag_line("tag: , ,"), None);
-        assert_eq!(parse_tag_line("tags: a"), None);
-        assert_eq!(parse_tag_line("Tag: a"), None);
-        assert_eq!(parse_tag_line("please tag: a"), None);
-        assert_eq!(parse_tag_line("tag: a\nand some prose"), None);
+        assert_eq!(parse_tag_line("ptag:"), None);
+        assert_eq!(parse_tag_line("ptag: , ,"), None);
+        assert_eq!(parse_tag_line("tag: a"), None);
+        assert_eq!(parse_tag_line("Ptag: a"), None);
+        assert_eq!(parse_tag_line("please ptag: a"), None);
+        assert_eq!(parse_tag_line("ptag: a\nand some prose"), None);
         assert_eq!(parse_tag_line(""), None);
     }
 }

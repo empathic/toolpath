@@ -298,7 +298,7 @@ can be found again. The format assigns no meaning to the characters inside a
 tag: `bug:auth` and `bug/auth` are two different tags, and any hierarchy is a
 convention of whoever queries them. Entries are unique within a step and keep
 the order they were attached in. How a tag gets onto a step is up to the
-producer; the agent-coding-session derivation, for example, reads a `tag:`
+producer; the agent-coding-session derivation, for example, reads a `ptag:`
 line typed into the conversation and attaches its tags to the message before it.
 
 #### Document Kind

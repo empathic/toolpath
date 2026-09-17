@@ -73,19 +73,25 @@ hook_json() {
     printf '{"session_id":"s","transcript_path":"/t/s.jsonl","cwd":"/w","hook_event_name":"UserPromptSubmit","prompt":"%s"}' "$1"
 }
 
-out="$(tag_hook "$(hook_json 'tag: decision auth')")"
-[ "$out" = '{"decision":"block","reason":"tag: decision auth"}' ] || fail "tag line not blocked: $out"
-out="$(tag_hook "$(hook_json 'tag:decision,auth ')")"
-[ "$out" = '{"decision":"block","reason":"tag:decision,auth"}' ] || fail "compact tag line not blocked: $out"
-ok "a tag line is blocked with the line as the reason"
+out="$(tag_hook "$(hook_json 'ptag: decision auth')")"
+[ "$out" = '{"decision":"block","reason":"ptag: decision auth"}' ] || fail "tag line not blocked: $out"
+out="$(tag_hook "$(hook_json 'ptag:decision,auth ')")"
+[ "$out" = '{"decision":"block","reason":"ptag: decision,auth"}' ] || fail "compact tag line not blocked: $out"
+ok "a ptag: line is blocked with the canonical line as the reason"
 
-for p in 'what does tag: mean?' 'tag:' 'tag: , ,' 'tag: a\\nmore prose' 'tag: say \\"hi\\"' 'Tag: a' ''; do
+out="$(tag_hook "$(hook_json '/path:tag decision auth')")"
+[ "$out" = '{"decision":"block","reason":"ptag: decision auth"}' ] || fail "/path:tag alias not blocked: $out"
+out="$(tag_hook "$(hook_json '  /path:tag  bug:auth ')")"
+[ "$out" = '{"decision":"block","reason":"ptag: bug:auth"}' ] || fail "/path:tag alias not normalised: $out"
+ok "the /path:tag alias is rewritten to the canonical ptag: line"
+
+for p in 'what does ptag: mean?' 'tag: decision' 'ptag:' 'ptag: , ,' '/path:tag' '/path:tag  ' '/path:tagged x' '/path:share' 'ptag: a\\nmore prose' 'ptag: say \\"hi\\"' 'Ptag: a' ''; do
     out="$(tag_hook "$(hook_json "$p")")"
     [ -z "$out" ] || fail "non-tag prompt '$p' produced: $out"
 done
 out="$(printf '{"session_id":"s"}' | "$TAG_HOOK")"
 [ -z "$out" ] || fail "missing prompt produced: $out"
-ok "prose, empty, multi-line, quoted and capitalised prompts pass through"
+ok "prose, plain tag:, empty, other commands, multi-line, quoted and capitalised prompts pass through"
 
 # --- ensure-path.sh behavior ----------------------------------------------
 

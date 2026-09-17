@@ -198,7 +198,7 @@ also carries the raw prompt in `content`.
 {
   "type": "system",
   "subtype": "informational",
-  "content": "UserPromptSubmit operation blocked by hook:\ntag: decision auth\n\nOriginal prompt: tag: decision auth",
+  "content": "UserPromptSubmit operation blocked by hook:\nptag: decision auth\n\nOriginal prompt: ptag: decision auth",
   "level": "warning",
   "preventContinuation": true,
   "isMeta": false,
@@ -209,7 +209,7 @@ also carries the raw prompt in `content`.
 ```
 
 Toolpath's tag derivation reads this entry: the `path` plugin's tag hook
-blocks a `tag: …` prompt with the line itself as the reason, and
+blocks a `ptag: …` prompt (or its `/path:tag …` alias) with the canonical `ptag:` line as the reason, and
 `toolpath-convo` scans the entry's content for a tag line and attaches the
 tags to the parent step.
 

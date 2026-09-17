@@ -28,13 +28,14 @@ Inside Claude Code:
 Type a line of the form
 
 ```
-tag: decision auth
+ptag: decision auth
 ```
 
-on its own to label the message you just read. Tags are separated by spaces
-or commas and are otherwise opaque (`bug:auth` is one tag). The plugin's
-`UserPromptSubmit` hook (`hooks/hooks.json`, `scripts/tag-hook.sh`) blocks
-the line before it reaches the model, so it costs no tokens and adds nothing
+or, equivalently, `/path:tag decision auth`, on its own to label the message
+you just read. Tags are separated by spaces or commas and are otherwise
+opaque (`bug:auth` is one tag). The plugin's `UserPromptSubmit` hook
+(`hooks/hooks.json`, `scripts/tag-hook.sh`) blocks either spelling before it
+reaches the model, so it costs no tokens and adds nothing
 to the context; Claude Code records the block in the session log, and `path`
 derives the tags onto the previous message's step (`meta.tags`) when the
 session is imported, shared, or queried:
@@ -43,7 +44,7 @@ session is imported, shared, or queried:
 path query 'map(select(.meta.tags // [] | index("decision")))'
 ```
 
-The same line typed into any other harness `path` reads (codex, gemini, pi,
+The same `ptag:` line typed into any other harness `path` reads (codex, gemini, pi,
 …) is recognised too; there it reaches the model as an ordinary message.
 
 ## How the binary is bundled
