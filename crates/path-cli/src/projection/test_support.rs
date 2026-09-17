@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-/// A one-step conversation path whose step touches `artifact_key`.
+/// A `toolpath::v1::Path` with a single `conversation.append` step on
+/// `artifact_key` (for example `claude-code://my-session`). The
+/// projectors read `view.id` from the first `<provider>://<id>` artifact
+/// key they see, so this gives them a non-empty session id.
 pub(crate) fn make_convo_path(artifact_key: &str) -> toolpath::v1::Path {
     let mut extra = HashMap::new();
     extra.insert("role".to_string(), serde_json::json!("user"));

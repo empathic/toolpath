@@ -106,10 +106,6 @@ mod tests {
     use super::*;
     use crate::projection::test_support::make_convo_path;
 
-    /// Build a minimal `toolpath::v1::Path` with a single `conversation.append`
-    /// step using the given `artifact_key` (e.g. `"claude-code://my-session"`).
-    /// The projectors read `view.id` from the first `<provider>://<id>` artifact
-    /// key they see, so this gives them a non-empty session id to work with.
     #[test]
     fn project_claude_returns_session_id_and_writes_jsonl() {
         let temp = tempfile::tempdir().unwrap();
