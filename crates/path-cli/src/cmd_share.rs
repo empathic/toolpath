@@ -57,6 +57,12 @@ pub struct ShareArgs {
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Seconds to allow each Pathbase request before giving up (default 300).
+    /// Sets `PATH_HTTP_TIMEOUT_SECS` for this invocation; export that
+    /// variable directly for commands without a flag of their own.
+    #[arg(long, value_name = "SECS")]
+    pub timeout: Option<u64>,
 }
 
 /// One artifact surfaced by a provider — today always an agent session.
@@ -482,6 +488,11 @@ fn collect_cursor(
 }
 
 pub fn run(args: ShareArgs) -> Result<()> {
+    if let Some(secs) = args.timeout {
+        // SAFETY: single-threaded startup, before any client or task exists.
+        unsafe { std::env::set_var(crate::config::HTTP_TIMEOUT_ENV, secs.to_string()) };
+    }
+
     let harness = args.harness.map(|h| h.artifact_type());
 
     if args.session.is_some() && harness.is_none() {
@@ -579,6 +590,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
             None
         },
         no_cache: args.no_cache,
+        timeout: args.timeout,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
@@ -1408,6 +1420,7 @@ mod tests {
             session: None,
             project: None,
             no_cache: false,
+            timeout: None,
         }
     }
 
