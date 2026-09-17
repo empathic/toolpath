@@ -4,7 +4,9 @@
 //! providers. Takes a [`ConversationView`] and emits a [`Path`] document with
 //! one step per turn and a `conversation.append` structural change carrying
 //! the turn's text, thinking, tool uses, and token usage. The emitted path is
-//! tagged with `meta.kind = PATH_KIND_AGENT_CODING_SESSION`.
+//! tagged with `meta.kind = PATH_KIND_AGENT_CODING_SESSION`. Tag lines in the
+//! conversation (`tag: …`) become `meta.tags` on the step they follow; see
+//! [`crate::tags`].
 
 use std::collections::HashMap;
 
@@ -420,6 +422,9 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         );
         last_step_id = Some(push_step_and_dedup(&mut steps, &mut by_id, step));
     }
+
+    // Tag lines (`tag: …`) label the message before them; see `crate::tags`.
+    crate::tags::apply_tags(&mut steps);
 
     let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
 
@@ -1710,5 +1715,151 @@ mod tests {
         assert_eq!(back.steps.len(), 2);
         assert_eq!(back.steps[1].step.parents, vec!["t1".to_string()]);
         assert!(back.steps[1].change.contains_key("x.rs"));
+    }
+
+    // ── Tag lines ────────────────────────────────────────────────────────
+
+    fn tag_view(turns: Vec<Turn>, events: Vec<crate::ConversationEvent>) -> ConversationView {
+        let mut v = view_with(turns);
+        v.events = events;
+        v
+    }
+
+    fn step_by_id<'a>(path: &'a Path, id: &str) -> &'a Step {
+        path.steps
+            .iter()
+            .find(|s| s.step.id == id)
+            .expect("step present")
+    }
+
+    fn tags_of<'a>(path: &'a Path, id: &str) -> &'a [String] {
+        step_by_id(path, id)
+            .meta
+            .as_ref()
+            .map(|m| m.tags.as_slice())
+            .unwrap_or(&[])
+    }
+
+    #[test]
+    fn test_tag_line_tags_the_previous_message() {
+        let mut a1 = base_turn("a1", Role::Assistant);
+        a1.text = "Use JWTs for the session cookie.".into();
+        let mut u2 = base_turn("u2", Role::User);
+        u2.parent_id = Some("a1".into());
+        u2.text = "tag: decision auth".into();
+        let path = derive_path(&tag_view(vec![a1, u2], vec![]), &DeriveConfig::default());
+
+        assert_eq!(tags_of(&path, "a1"), ["decision", "auth"]);
+        assert!(
+            tags_of(&path, "u2").is_empty(),
+            "the tag step is not itself tagged"
+        );
+        let marker = &step_by_id(&path, "u2").meta.as_ref().unwrap().extra["tag"];
+        assert_eq!(marker["target"], "a1");
+        assert_eq!(marker["tags"], serde_json::json!(["decision", "auth"]));
+    }
+
+    #[test]
+    fn test_tag_line_lands_on_the_final_step_of_a_message_group() {
+        let mut a1 = base_turn("a1", Role::Assistant);
+        a1.group_id = Some("m1".into());
+        let mut a2 = base_turn("a2", Role::Assistant);
+        a2.group_id = Some("m1".into());
+        a2.parent_id = Some("a1".into());
+        let mut u3 = base_turn("u3", Role::User);
+        u3.parent_id = Some("a2".into());
+        u3.text = "tag: reviewed".into();
+        let path = derive_path(
+            &tag_view(vec![a1, a2, u3], vec![]),
+            &DeriveConfig::default(),
+        );
+
+        assert!(tags_of(&path, "a1").is_empty());
+        assert_eq!(tags_of(&path, "a2"), ["reviewed"]);
+    }
+
+    #[test]
+    fn test_consecutive_tag_lines_accumulate_on_one_target() {
+        let a1 = base_turn("a1", Role::Assistant);
+        let mut u2 = base_turn("u2", Role::User);
+        u2.parent_id = Some("a1".into());
+        u2.text = "tag: decision".into();
+        let mut u3 = base_turn("u3", Role::User);
+        u3.parent_id = Some("u2".into());
+        u3.text = "tag: auth decision".into();
+        let path = derive_path(
+            &tag_view(vec![a1, u2, u3], vec![]),
+            &DeriveConfig::default(),
+        );
+
+        assert_eq!(tags_of(&path, "a1"), ["decision", "auth"]);
+        assert_eq!(
+            step_by_id(&path, "u3").meta.as_ref().unwrap().extra["tag"]["target"],
+            "a1"
+        );
+    }
+
+    #[test]
+    fn test_hook_blocked_prompt_event_tags_its_parent() {
+        // Claude Code's UserPromptSubmit hook leaves a `system` entry whose
+        // content carries the hook's reason and the original prompt, parented
+        // to the message the person had just read.
+        let u1 = base_turn("u1", Role::User);
+        let mut a1 = base_turn("a1", Role::Assistant);
+        a1.parent_id = Some("u1".into());
+        let mut data = std::collections::HashMap::new();
+        data.insert(
+            "entry_extra".to_string(),
+            serde_json::json!({
+                "content": "UserPromptSubmit operation blocked by hook:\ntag: decision auth\n\nOriginal prompt: tag: decision auth",
+                "subtype": "informational"
+            }),
+        );
+        let ev = crate::ConversationEvent {
+            id: "e1".into(),
+            timestamp: "2026-01-01T00:00:01Z".into(),
+            parent_id: Some("a1".into()),
+            event_type: "system".into(),
+            data,
+        };
+        let path = derive_path(&tag_view(vec![u1, a1], vec![ev]), &DeriveConfig::default());
+
+        assert_eq!(tags_of(&path, "a1"), ["decision", "auth"]);
+        assert!(tags_of(&path, "u1").is_empty());
+        let marker = &step_by_id(&path, "e1").meta.as_ref().unwrap().extra["tag"];
+        assert_eq!(marker["target"], "a1");
+    }
+
+    #[test]
+    fn test_tag_line_with_nothing_before_it_records_no_target() {
+        let mut u1 = base_turn("u1", Role::User);
+        u1.text = "tag: orphan".into();
+        let path = derive_path(&tag_view(vec![u1], vec![]), &DeriveConfig::default());
+
+        let marker = &step_by_id(&path, "u1").meta.as_ref().unwrap().extra["tag"];
+        assert_eq!(marker["tags"], serde_json::json!(["orphan"]));
+        assert!(marker.get("target").is_none());
+        assert!(
+            path.steps
+                .iter()
+                .all(|s| s.meta.as_ref().is_none_or(|m| m.tags.is_empty()))
+        );
+    }
+
+    #[test]
+    fn test_prose_starting_with_tag_is_not_a_tag_line() {
+        let a1 = base_turn("a1", Role::Assistant);
+        let mut u2 = base_turn("u2", Role::User);
+        u2.parent_id = Some("a1".into());
+        u2.text = "tag: decision\nActually, let me explain why.".into();
+        let mut a3 = base_turn("a3", Role::Assistant);
+        a3.parent_id = Some("u2".into());
+        a3.text = "tag: not-from-the-user".into();
+        let path = derive_path(
+            &tag_view(vec![a1, u2, a3], vec![]),
+            &DeriveConfig::default(),
+        );
+
+        assert!(path.steps.iter().all(|s| s.meta.is_none()));
     }
 }
