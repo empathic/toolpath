@@ -49,6 +49,44 @@ for cmd in share query resume link-pr; do
 done
 ok "scripts parse; all four commands exist and use the wrapper"
 
+# --- tag hook --------------------------------------------------------------
+
+TAG_HOOK="$PWD/$PLUGIN/scripts/tag-hook.sh"
+bash -n "$TAG_HOOK" || fail "tag-hook.sh does not parse"
+python3 - "$PLUGIN" <<'PYCHK' || fail "hooks.json checks"
+import json, sys
+
+hooks = json.load(open(f"{sys.argv[1]}/hooks/hooks.json"))["hooks"]
+entries = hooks.get("UserPromptSubmit") or []
+cmds = [h["command"] for e in entries for h in e.get("hooks", []) if h.get("type") == "command"]
+assert any("scripts/tag-hook.sh" in c for c in cmds), f"UserPromptSubmit must run scripts/tag-hook.sh, got {cmds}"
+assert all("${CLAUDE_PLUGIN_ROOT}" in c for c in cmds), "hook commands must resolve through ${CLAUDE_PLUGIN_ROOT}"
+PYCHK
+ok "hooks.json registers tag-hook.sh on UserPromptSubmit"
+
+tag_hook() {
+    # $1: the hook's JSON on stdin; prints the hook's stdout.
+    printf '%s' "$1" | "$TAG_HOOK"
+}
+hook_json() {
+    # $1: the prompt, already JSON-escaped.
+    printf '{"session_id":"s","transcript_path":"/t/s.jsonl","cwd":"/w","hook_event_name":"UserPromptSubmit","prompt":"%s"}' "$1"
+}
+
+out="$(tag_hook "$(hook_json 'tag: decision auth')")"
+[ "$out" = '{"decision":"block","reason":"tag: decision auth"}' ] || fail "tag line not blocked: $out"
+out="$(tag_hook "$(hook_json 'tag:decision,auth ')")"
+[ "$out" = '{"decision":"block","reason":"tag:decision,auth"}' ] || fail "compact tag line not blocked: $out"
+ok "a tag line is blocked with the line as the reason"
+
+for p in 'what does tag: mean?' 'tag:' 'tag: , ,' 'tag: a\\nmore prose' 'tag: say \\"hi\\"' 'Tag: a' ''; do
+    out="$(tag_hook "$(hook_json "$p")")"
+    [ -z "$out" ] || fail "non-tag prompt '$p' produced: $out"
+done
+out="$(printf '{"session_id":"s"}' | "$TAG_HOOK")"
+[ -z "$out" ] || fail "missing prompt produced: $out"
+ok "prose, empty, multi-line, quoted and capitalised prompts pass through"
+
 # --- ensure-path.sh behavior ----------------------------------------------
 
 SANDBOX="$(mktemp -d)"

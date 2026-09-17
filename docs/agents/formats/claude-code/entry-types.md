@@ -181,6 +181,38 @@ Emitted after an assistant turn completes. Carries `durationMs` and
 }
 ```
 
+### `subtype: "informational"`
+
+A notice the harness shows the person instead of running a turn. The one
+shape observed (2.1.274): a `UserPromptSubmit` hook returned
+`{"decision": "block", "reason": …}`, so the prompt never reached the
+model. No `user` entry is written for it; this entry is the only record,
+and its `content` carries the hook's reason followed by the original
+prompt. `parentUuid` is the previous entry on the main chain (the
+assistant message the person had just read, or `null` in an empty
+session), `level` is `"warning"`, `preventContinuation` is `true`, and
+`isMeta` is `false`. A `queue-operation` `enqueue` line just before it
+also carries the raw prompt in `content`.
+
+```json
+{
+  "type": "system",
+  "subtype": "informational",
+  "content": "UserPromptSubmit operation blocked by hook:\ntag: decision auth\n\nOriginal prompt: tag: decision auth",
+  "level": "warning",
+  "preventContinuation": true,
+  "isMeta": false,
+  "parentUuid": "ebcc218f-…",
+  "uuid": "9bed81b9-…",
+  ...
+}
+```
+
+Toolpath's tag derivation reads this entry: the `path` plugin's tag hook
+blocks a `tag: …` prompt with the line itself as the reason, and
+`toolpath-convo` scans the entry's content for a tag line and attaches the
+tags to the parent step.
+
 ### `subtype: "compact_boundary"`
 
 Marks an autocompaction. Carries `compactMetadata` (`trigger`, `preTokens`)

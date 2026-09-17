@@ -1,0 +1,15 @@
+{
+  "description": "A prompt that is a single `tag: …` line labels the message before it. The hook blocks it before the model sees it; Claude Code records the block in the session log, and `path` derives the tags from there.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/tag-hook.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
