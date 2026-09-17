@@ -3,8 +3,10 @@
 pub mod derive;
 pub mod extract;
 pub mod project;
+pub mod tags;
 
 pub use derive::{DeriveConfig, derive_path, file_write_diff, unified_diff};
+pub use tags::{TAG_PREFIX, apply_tags, parse_tag_line};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

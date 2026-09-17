@@ -23,10 +23,34 @@ Inside Claude Code:
 | `/path:resume` | Bring a shared session (Pathbase URL, `owner/repo/slug`, file, or cache id) into this project and get the exact resume step — `/resume <id>` here, or `claude -r <id>` from a terminal. |
 | `/path:link-pr` | Share the current conversation and append the Pathbase link to a PR description — the PR you name, or the current branch's. |
 
+## Tags
+
+Type a line of the form
+
+```
+ptag: decision auth
+```
+
+or, equivalently, `/path:tag decision auth`, on its own to label the message
+you just read. Tags are separated by spaces or commas and are otherwise
+opaque (`bug:auth` is one tag). The plugin's `UserPromptSubmit` hook
+(`hooks/hooks.json`, `scripts/tag-hook.sh`) blocks either spelling before it
+reaches the model, so it costs no tokens and adds nothing
+to the context; Claude Code records the block in the session log, and `path`
+derives the tags onto the previous message's step (`meta.tags`) when the
+session is imported, shared, or queried:
+
+```
+path query 'map(select(.meta.tags // [] | index("decision")))'
+```
+
+The same `ptag:` line typed into any other harness `path` reads (codex, gemini, pi,
+…) is recognised too; there it reaches the model as an ordinary message.
+
 ## How the binary is bundled
 
-Both commands run the CLI through `scripts/ensure-path.sh`, which resolves in
-order:
+The commands run the CLI through `scripts/ensure-path.sh`, which resolves in
+order (the tag hook never resolves a binary):
 
 1. `$TOOLPATH_BIN`, when set — an explicit override that wins over
    everything else. Point it at a working tree's `target/release/path` to

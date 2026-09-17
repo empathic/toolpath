@@ -285,12 +285,21 @@ paths.
 | `intent`      | The initial goal of the work                       |
 | `description` | Human-readable summary of the object itself        |
 | `refs`        | Links to issues, docs, reasoning                   |
+| `tags`        | Free-form labels for finding the object again (steps only) |
 | `actors`      | Actor definitions with identities and keys         |
 | `signatures`  | Cryptographic signatures for verification          |
 
 `intent` and `description` differ in what they describe: `intent` records
 what the work set out to do, fixed at the outset; `description` summarizes
 the object as it stands, and may be written or revised after the fact.
+
+`tags` is a list of opaque strings a person or tool attaches to a step so it
+can be found again. The format assigns no meaning to the characters inside a
+tag: `bug:auth` and `bug/auth` are two different tags, and any hierarchy is a
+convention of whoever queries them. Entries are unique within a step and keep
+the order they were attached in. How a tag gets onto a step is up to the
+producer; the agent-coding-session derivation, for example, reads a `ptag:`
+line typed into the conversation and attaches its tags to the message before it.
 
 #### Document Kind
 

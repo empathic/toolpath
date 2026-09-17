@@ -49,6 +49,50 @@ for cmd in share query resume link-pr; do
 done
 ok "scripts parse; all four commands exist and use the wrapper"
 
+# --- tag hook --------------------------------------------------------------
+
+TAG_HOOK="$PWD/$PLUGIN/scripts/tag-hook.sh"
+bash -n "$TAG_HOOK" || fail "tag-hook.sh does not parse"
+python3 - "$PLUGIN" <<'PYCHK' || fail "hooks.json checks"
+import json, sys
+
+hooks = json.load(open(f"{sys.argv[1]}/hooks/hooks.json"))["hooks"]
+entries = hooks.get("UserPromptSubmit") or []
+cmds = [h["command"] for e in entries for h in e.get("hooks", []) if h.get("type") == "command"]
+assert any("scripts/tag-hook.sh" in c for c in cmds), f"UserPromptSubmit must run scripts/tag-hook.sh, got {cmds}"
+assert all("${CLAUDE_PLUGIN_ROOT}" in c for c in cmds), "hook commands must resolve through ${CLAUDE_PLUGIN_ROOT}"
+PYCHK
+ok "hooks.json registers tag-hook.sh on UserPromptSubmit"
+
+tag_hook() {
+    # $1: the hook's JSON on stdin; prints the hook's stdout.
+    printf '%s' "$1" | "$TAG_HOOK"
+}
+hook_json() {
+    # $1: the prompt, already JSON-escaped.
+    printf '{"session_id":"s","transcript_path":"/t/s.jsonl","cwd":"/w","hook_event_name":"UserPromptSubmit","prompt":"%s"}' "$1"
+}
+
+out="$(tag_hook "$(hook_json 'ptag: decision auth')")"
+[ "$out" = '{"decision":"block","reason":"ptag: decision auth"}' ] || fail "tag line not blocked: $out"
+out="$(tag_hook "$(hook_json 'ptag:decision,auth ')")"
+[ "$out" = '{"decision":"block","reason":"ptag: decision,auth"}' ] || fail "compact tag line not blocked: $out"
+ok "a ptag: line is blocked with the canonical line as the reason"
+
+out="$(tag_hook "$(hook_json '/path:tag decision auth')")"
+[ "$out" = '{"decision":"block","reason":"ptag: decision auth"}' ] || fail "/path:tag alias not blocked: $out"
+out="$(tag_hook "$(hook_json '  /path:tag  bug:auth ')")"
+[ "$out" = '{"decision":"block","reason":"ptag: bug:auth"}' ] || fail "/path:tag alias not normalised: $out"
+ok "the /path:tag alias is rewritten to the canonical ptag: line"
+
+for p in 'what does ptag: mean?' 'tag: decision' 'ptag:' 'ptag: , ,' '/path:tag' '/path:tag  ' '/path:tagged x' '/path:share' 'ptag: a\\nmore prose' 'ptag: say \\"hi\\"' 'Ptag: a' ''; do
+    out="$(tag_hook "$(hook_json "$p")")"
+    [ -z "$out" ] || fail "non-tag prompt '$p' produced: $out"
+done
+out="$(printf '{"session_id":"s"}' | "$TAG_HOOK")"
+[ -z "$out" ] || fail "missing prompt produced: $out"
+ok "prose, plain tag:, empty, other commands, multi-line, quoted and capitalised prompts pass through"
+
 # --- ensure-path.sh behavior ----------------------------------------------
 
 SANDBOX="$(mktemp -d)"

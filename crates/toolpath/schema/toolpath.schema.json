@@ -222,6 +222,12 @@
           "items": { "$ref": "#/$defs/ref" },
           "description": "Links to issues, docs, reasoning"
         },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Free-form labels for finding this step again; opaque strings"
+        },
         "actors": {
           "$ref": "#/$defs/actors",
           "description": "Actor definitions (for standalone steps)"

@@ -288,6 +288,12 @@ pub struct StepMeta {
     pub source: Option<VcsSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<Ref>,
+    /// Free-form labels attached to this step so it can be found again
+    /// (`decision`, `bug:auth`, …). Opaque strings: the format assigns no
+    /// meaning to separators inside a tag. Order is preserved, entries
+    /// are unique within a step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actors: Option<HashMap<String, ActorDefinition>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

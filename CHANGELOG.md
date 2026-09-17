@@ -2,6 +2,35 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.7.2, toolpath-convo 0.11.2, toolpath-md 0.7.1 — 2026-09-17
+
+Step tags: label a message during a session and find it again later.
+
+- **`toolpath`** (0.7.2): adds an optional `tags` list to `StepMeta` —
+  opaque strings, unique within a step, order preserved. First-class in
+  the JSON Schema and typed structs; existing documents are unaffected.
+- **`toolpath-convo`** (0.11.2): `derive_path` recognises a *tag line*, a
+  user message whose whole text is `ptag: <tag> [<tag>…]` (whitespace or
+  comma separated), and attaches its tags to the nearest preceding
+  `conversation.append` step on the tag step's ancestry — the final step
+  of the message the person had just read. The tag step records
+  `meta.extra["tag"] = {tags, target}`. The same line is recognised inside
+  a `conversation.event`'s `text`/`content`, which is how a hook-blocked
+  Claude Code prompt lands. New `tags` module: `parse_tag_line`,
+  `apply_tags`, `TAG_PREFIX`.
+- **`toolpath-md`** (0.7.1): tagged steps render a `**Tags:**` line in
+  step bodies and a `*tags: …*` line under the speaker line in session
+  transcripts (compact and full).
+- **Claude Code plugin** (0.3.0): a `UserPromptSubmit` hook
+  (`hooks/hooks.json`, `scripts/tag-hook.sh`) blocks a `ptag: …` prompt,
+  or its `/path:tag …` alias, before the model sees it, with the canonical
+  `ptag:` line as the reason, so a tag costs no tokens and adds nothing to
+  the context. The alias needs no command file: hooks see the raw prompt
+  before any slash-command lookup. Dependency-free; never
+  resolves the binary. `scripts/test-plugin.sh` covers it.
+- **docs**: `entry-types.md` documents the `system`/`informational` entry a
+  blocked prompt leaves.
+
 ## path-cli 0.23.0 — 2026-09-15
 
 - **`path-cli`** (0.23.0): `path resume --remote` runs the resume it
