@@ -49,6 +49,22 @@ for cmd in share query resume link-pr; do
 done
 ok "scripts parse; all four commands exist and use the wrapper"
 
+# --- send hook -------------------------------------------------------------
+
+SEND_HOOK="$PWD/$PLUGIN/scripts/resume-remote-hook.sh"
+bash -n "$SEND_HOOK" || fail "resume-remote-hook.sh does not parse"
+python3 - "$PLUGIN" <<'PYCHK' || fail "hooks.json checks"
+import json, sys
+hooks = json.load(open(f"{sys.argv[1]}/hooks/hooks.json"))["hooks"]
+entries = hooks.get("UserPromptExpansion") or []
+send = [e for e in entries if any("scripts/resume-remote-hook.sh" in h.get("command", "") for h in e.get("hooks", []))]
+assert send, f"UserPromptExpansion must run scripts/resume-remote-hook.sh, got {entries}"
+assert all(e.get("matcher") == "path:resume" for e in send), f"the send hook must match path:resume, got {send}"
+cmds = [h["command"] for e in entries for h in e.get("hooks", []) if h.get("type") == "command"]
+assert all("${CLAUDE_PLUGIN_ROOT}" in c for c in cmds), "hook commands must resolve through ${CLAUDE_PLUGIN_ROOT}"
+PYCHK
+ok "hooks.json registers resume-remote-hook.sh on UserPromptExpansion for path:resume"
+
 # --- ensure-path.sh behavior ----------------------------------------------
 
 SANDBOX="$(mktemp -d)"
@@ -124,6 +140,102 @@ out="$(PATH="/usr/bin:/bin" CLAUDE_CODE_SESSION_ID="sess-123" "$ENSURE" current-
 out="$(env -u CLAUDE_CODE_SESSION_ID PATH="/usr/bin:/bin" "$ENSURE" current-session)"
 [ "$out" = "unknown" ] || fail "current-session without env: expected unknown, got $out"
 ok "current-session reports the env var without resolving a binary"
+
+# 4b. The send hook. A stub `path` answers `resume --help` with the
+#     `--session` flag and `resume ... --remote <dest>` with a plan on
+#     stderr and the attach command on stdout, recording its arguments.
+#     A missing destination gets a clap-shaped error.
+STUB_SEND="$SANDBOX/stub-send"
+mkdir -p "$STUB_SEND"
+cat >"$STUB_SEND/path" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+    --help) echo "Derive, query, and visualize Toolpath provenance documents"; exit 0 ;;
+    --version) echo "path 9.9.9"; exit 0 ;;
+    resume) ;;
+    *) echo "fake-path ran: \$*"; exit 0 ;;
+esac
+printf '%s\n' "\$*" >"$STUB_SEND/argv"
+dest=""; dry=no
+shift
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+        --help) echo "  --session <ID>  Send this Claude session"; exit 0 ;;
+        --remote) shift; dest="\${1:-}" ;;
+        --remote=*) dest="\${1#--remote=}" ;;
+        --dry-run) dry=yes ;;
+        --) break ;;
+    esac
+    [ \$# -eq 0 ] || shift
+done
+[ -n "\$dest" ] || { echo "error: a value is required for '--remote <DEST>' but none was supplied" >&2; exit 2; }
+[ -z "\${SEND_STUB_FAIL:-}" ] || { echo "\${SEND_STUB_TEXT:-remote said no}" >&2; exit 3; }
+echo "Remote resume plan for \$dest:" >&2
+[ "\$dry" = no ] || exit 0
+echo "Attach with:" >&2
+echo "ssh -t ssh://\$dest tmux -u attach-session -d -t path-12345678"
+EOF
+chmod +x "$STUB_SEND/path"
+send_hook() {
+    # $1: the arguments after `/path:resume`; prints the hook's stdout.
+    printf '{"session_id":"sess-1","cwd":"/proj","hook_event_name":"UserPromptExpansion","command_name":"path:resume","command_args":"%s","prompt":"/path:resume %s"}' "$1" "$1" \
+        | CLAUDE_PLUGIN_ROOT="$PWD/$PLUGIN" TOOLPATH_BIN="$STUB_SEND/path" PATH="/usr/bin:/bin" "$SEND_HOOK"
+}
+out="$(send_hook "")"
+[ -z "$out" ] || fail "send hook must let a bare /path:resume expand, got: $out"
+out="$(send_hook "https://pathbase.dev/u/a/b/c")"
+[ -z "$out" ] || fail "send hook must pass a document resume through, got: $out"
+out="$(send_hook "claude-abc --remote u@h")"
+[ -z "$out" ] || fail "send hook must pass a document sent remotely through, got: $out"
+out="$(send_hook "--remote u@h -C /r -- --permission-mode acceptEdits")"
+case "$out" in
+    '{"decision":"block","reason":"Remote resume plan for u@h:\nAttach with:\n  ssh -t ssh://u@h tmux -u attach-session -d -t path-12345678\n'*'"hookSpecificOutput":{"hookEventName":"UserPromptExpansion","suppressOriginalPrompt":true}}') ;;
+    *) fail "send hook must block with the attach command, got: $out" ;;
+esac
+# The user's words reach the CLI verbatim, after the session and the cwd.
+argv="$(cat "$STUB_SEND/argv")"
+[ "$argv" = "resume --session sess-1 --project /proj --no-attach --remote u@h -C /r -- --permission-mode acceptEdits" ] \
+    || fail "send hook ran the wrong command: $argv"
+# `--remote=<dest>` and a value-taking option before `--remote` classify as a send.
+out="$(send_hook "--harness claude --remote=u@h")"
+case "$out" in
+    '{"decision":"block","reason":"Remote resume plan for u@h:'*) ;;
+    *) fail "send hook must classify --remote=<dest> as a send, got: $out" ;;
+esac
+# `--dry-run` drops `--no-attach` and blocks with the plan alone.
+out="$(send_hook "--remote u@h --dry-run")"
+[ "$out" = '{"decision":"block","reason":"Remote resume plan for u@h:","hookSpecificOutput":{"hookEventName":"UserPromptExpansion","suppressOriginalPrompt":true}}' ] \
+    || fail "send hook must block a dry run with the plan, got: $out"
+argv="$(cat "$STUB_SEND/argv")"
+[ "$argv" = "resume --session sess-1 --project /proj --remote u@h --dry-run" ] \
+    || fail "send hook must not add --no-attach to a dry run: $argv"
+# The CLI's own parse error is the block reason.
+out="$(send_hook "--remote")"
+case "$out" in
+    '{"decision":"block","reason":"/path:resume --remote failed: path resume --remote exited 2.'*'a value is required'*) ;;
+    *) fail "send hook must block with the CLI error for a missing destination, got: $out" ;;
+esac
+out="$(SEND_STUB_FAIL=1 send_hook "--remote u@h")"
+case "$out" in
+    '{"decision":"block","reason":"/path:resume --remote failed: path resume --remote exited 3.'*'remote said no'*) ;;
+    *) fail "send hook must report a failed send, got: $out" ;;
+esac
+# The reason is a JSON string whatever the CLI printed.
+out="$(SEND_STUB_FAIL=1 SEND_STUB_TEXT='a "quoted" \\ backslash' send_hook "--remote u@h")"
+reason="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])')" \
+    || fail "send hook must emit valid JSON, got: $out"
+case "$reason" in
+    *'a "quoted" \\ backslash'*) ;;
+    *) fail "send hook must carry the CLI text through, got: $reason" ;;
+esac
+# A quoted argument is the command's to handle.
+out="$(send_hook "--remote u@h -- --append-system-prompt \\\"be brief\\\"")"
+[ -z "$out" ] || fail "send hook must pass a quoted argument through, got: $out"
+# A `path` without `resume --session` lets the prompt through to resume.md.
+out="$(printf '{"session_id":"sess-1","cwd":"/proj","command_name":"path:resume","command_args":"--remote u@h","prompt":"/path:resume --remote u@h"}' \
+    | CLAUDE_PLUGIN_ROOT="$PWD/$PLUGIN" TOOLPATH_BIN="$STUB1/path" PATH="/usr/bin:/bin" "$SEND_HOOK")"
+[ -z "$out" ] || fail "send hook must pass through when path lacks --session, got: $out"
+ok "send hook sends the current session and blocks with the attach command"
 
 # 5. A binary older than MIN_VERSION warns on stderr but still resolves.
 STUB_OLD="$SANDBOX/stub-old"
