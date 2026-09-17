@@ -19,6 +19,7 @@ pub mod writer;
 
 #[cfg(feature = "watcher")]
 pub use async_watcher::{AsyncConversationWatcher, WatcherConfig, WatcherHandle};
+pub use chain::{build_succession_map, resolve_chain_with_map};
 pub use error::{ConvoError, Result};
 pub use io::ConvoIO;
 pub use paths::PathResolver;
