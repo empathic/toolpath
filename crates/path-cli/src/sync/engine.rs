@@ -44,20 +44,40 @@ pub(crate) struct SyncRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) size: Option<u64>,
     pub(crate) synced_at: DateTime<Utc>,
-    /// Pathbase uploads of this artifact, one per server+repo. Only
-    /// authed uploads are recorded — anonymous ones have no repo to
-    /// key on and cannot be listed later.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) uploads: Vec<UploadRecord>,
+    /// Where this artifact has been uploaded, keyed by remote (see
+    /// [`remote_key`]). Only authed uploads are recorded — anonymous
+    /// ones have no repo to key on and cannot be listed later.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) remotes: BTreeMap<String, RemoteState>,
 }
 
-/// One upload of an artifact to a Pathbase repo, with the source
-/// fingerprint at upload time so a later run can tell "unchanged
-/// since" from "changed since". The destination is not stored
-/// separately: the graph URL the server returned is
-/// `<server>/u/<owner>/<name>/graphs/<id>`, so it names the repo.
+/// The key an upload destination is recorded under:
+/// `<server>/u/<owner>/<name>`, built from the destination the client
+/// resolved — never from a URL the server echoed, which may spell the
+/// host differently. Scheme and host are lower-cased and a trailing
+/// slash on the server is dropped, so the same destination always
+/// yields the same key.
+pub(crate) fn remote_key(base_url: &str, owner: &str, name: &str) -> String {
+    let server = base_url.trim_end_matches('/');
+    let host_end = server
+        .find("://")
+        .map(|i| {
+            server[i + 3..]
+                .find('/')
+                .map_or(server.len(), |j| i + 3 + j)
+        })
+        .unwrap_or(server.len());
+    let (authority, path) = server.split_at(host_end);
+    format!("{}{path}/u/{owner}/{name}", authority.to_ascii_lowercase())
+}
+
+/// This artifact's state on one remote: the graph currently receiving
+/// its steps and the source fingerprint the server last acknowledged,
+/// so a later run can tell "unchanged since" from "changed since".
+/// Today every upload creates a new immutable graph, so the current
+/// graph is simply the newest one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct UploadRecord {
+pub(crate) struct RemoteState {
     pub(crate) graph_id: String,
     pub(crate) url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,46 +87,33 @@ pub(crate) struct UploadRecord {
     pub(crate) uploaded_at: DateTime<Utc>,
 }
 
-impl UploadRecord {
-    /// Whether this upload landed in the repo at `repo_url`
-    /// (`<server>/u/<owner>/<name>`, built from the base URL and the
-    /// repo the upload targets): the graph URL must be
-    /// `<repo_url>/graphs/…`. A plain string match — a base URL that
-    /// differs from what the server echoes (scheme, host case) just
-    /// means one extra upload.
-    fn in_repo(&self, repo_url: &str) -> bool {
-        self.url
-            .starts_with(&format!("{}/graphs/", repo_url.trim_end_matches('/')))
-    }
-}
-
-/// What the manifest knows about an artifact relative to one upload
-/// destination.
+/// What the manifest knows about an artifact relative to one remote.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum UploadState<'a> {
-    /// No upload recorded for this destination.
+    /// No upload recorded for this remote.
     New,
     /// Uploaded, and the source fingerprint still matches.
-    Uploaded(&'a UploadRecord),
+    Uploaded(&'a RemoteState),
     /// Uploaded, but the source has changed since (or freshness is
     /// unknowable — no stamp on either side).
-    Changed(&'a UploadRecord),
+    Changed(&'a RemoteState),
 }
 
-/// The artifact's upload state for the repo at `repo_url`
-/// (`<server>/u/<owner>/<name>`), judged against the current source stamp. Only a real, matching stamp can vouch for
-/// "unchanged"; a `None` stamp on either side reads as changed.
+/// The artifact's upload state on `remote` (a [`remote_key`]), judged
+/// against the current source stamp. Only a real, matching stamp can
+/// vouch for "unchanged"; a `None` stamp on either side reads as
+/// changed.
 pub(crate) fn upload_state<'a>(
     manifest: &'a Manifest,
     artifact_type: ArtifactType,
     id: &str,
-    repo_url: &str,
+    remote: &str,
     current: sources::Stamp,
 ) -> UploadState<'a> {
     let Some(rec) = manifest
         .get(artifact_type.name())
         .and_then(|records| records.get(id))
-        .and_then(|rec| rec.uploads.iter().find(|u| u.in_repo(repo_url)))
+        .and_then(|rec| rec.remotes.get(remote))
     else {
         return UploadState::New;
     };
@@ -121,16 +128,16 @@ pub(crate) fn upload_state<'a>(
     }
 }
 
-/// Record a successful upload to the repo at `repo_url`. Replaces any
-/// prior record in that repo. Creates a known-but-uncached record when the artifact
-/// has none yet (e.g. a `--no-cache` share).
+/// Record a successful upload to `remote` (a [`remote_key`]),
+/// replacing any prior state there. Creates a known-but-uncached
+/// record when the artifact has none yet (e.g. a `--no-cache` share).
 pub(crate) fn record_upload(
     config_dir: &Path,
     artifact_type: ArtifactType,
     id: &str,
     path: Option<&str>,
-    repo_url: &str,
-    upload: UploadRecord,
+    remote: &str,
+    state: RemoteState,
 ) -> Result<()> {
     update_manifest(config_dir, |manifest| {
         let rec = manifest
@@ -143,10 +150,9 @@ pub(crate) fn record_upload(
                 modified: None,
                 size: None,
                 synced_at: Utc::now(),
-                uploads: Vec::new(),
+                remotes: BTreeMap::new(),
             });
-        rec.uploads.retain(|u| !u.in_repo(repo_url));
-        rec.uploads.push(upload);
+        rec.remotes.insert(remote.to_string(), state);
     })
 }
 
@@ -257,13 +263,13 @@ fn newest_first(artifacts: &[ArtifactRef]) -> Vec<&ArtifactRef> {
     order
 }
 
-/// Replace `id`'s record, carrying over its upload history — sync and
+/// Replace `id`'s record, carrying over its remotes — sync and
 /// import rewrite the source fingerprint, never what was uploaded.
 fn put_record(records: &mut BTreeMap<String, SyncRecord>, id: String, mut rec: SyncRecord) {
-    if rec.uploads.is_empty()
+    if rec.remotes.is_empty()
         && let Some(prev) = records.get_mut(&id)
     {
-        rec.uploads = std::mem::take(&mut prev.uploads);
+        rec.remotes = std::mem::take(&mut prev.remotes);
     }
     records.insert(id, rec);
 }
@@ -356,7 +362,7 @@ fn sync_artifacts(
                             modified: artifact.modified,
                             size: artifact.size,
                             synced_at: Utc::now(),
-                            uploads: Vec::new(),
+                            remotes: BTreeMap::new(),
                         },
                     );
                     unflushed += 1;
@@ -392,7 +398,7 @@ fn sync_artifacts(
                         modified: artifact.modified,
                         size: artifact.size,
                         synced_at: Utc::now(),
-                        uploads: Vec::new(),
+                        remotes: BTreeMap::new(),
                     },
                 );
                 unflushed += 1;
@@ -438,7 +444,7 @@ pub(crate) fn record_artifact(
                 modified: artifact.modified,
                 size: artifact.size,
                 synced_at: Utc::now(),
-                uploads: Vec::new(),
+                remotes: BTreeMap::new(),
             },
         );
     })
@@ -627,10 +633,10 @@ mod tests {
         result
     }
 
-    fn upload(server: &str, repo: &str, graph_id: &str) -> UploadRecord {
-        UploadRecord {
+    fn remote_state(graph_id: &str) -> RemoteState {
+        RemoteState {
             graph_id: graph_id.to_string(),
-            url: format!("{server}/u/{repo}/graphs/{graph_id}"),
+            url: format!("https://a/u/me/x/graphs/{graph_id}"),
             modified: Some("2026-01-01T00:00:00Z".parse().unwrap()),
             size: Some(10),
             uploaded_at: "2026-01-02T00:00:00Z".parse().unwrap(),
@@ -638,25 +644,43 @@ mod tests {
     }
 
     #[test]
-    fn record_upload_creates_and_replaces_per_destination() {
+    fn remote_key_normalizes_server_and_keeps_repo_case() {
+        let want = "https://pb.example:8443/u/Me/Repo";
+        assert_eq!(remote_key("https://pb.example:8443", "Me", "Repo"), want);
+        assert_eq!(remote_key("https://pb.example:8443/", "Me", "Repo"), want);
+        assert_eq!(remote_key("HTTPS://PB.Example:8443", "Me", "Repo"), want);
+        assert_eq!(
+            remote_key("https://host/prefix/", "o", "r"),
+            "https://host/prefix/u/o/r"
+        );
+        assert_eq!(
+            remote_key("localhost:3000", "o", "r"),
+            "localhost:3000/u/o/r"
+        );
+    }
+
+    #[test]
+    fn record_upload_creates_and_replaces_per_remote() {
         with_cfg(|_, cfg| {
-            let put = |path: Option<&str>, repo_url: &str, u: UploadRecord| {
-                record_upload(cfg, ArtifactType::Claude, "s1", path, repo_url, u).unwrap()
+            let put = |path: Option<&str>, remote: &str, st: RemoteState| {
+                record_upload(cfg, ArtifactType::Claude, "s1", path, remote, st).unwrap()
             };
-            put(
-                Some("/p"),
-                "https://a/u/me/x",
-                upload("https://a", "me/x", "g1"),
-            );
-            put(None, "https://a/u/me/y", upload("https://a", "me/y", "g2"));
-            // Trailing slash on the repo URL: still replaces the me/x record.
-            put(None, "https://a/u/me/x/", upload("https://a", "me/x", "g3"));
+            put(Some("/p"), "https://a/u/me/x", remote_state("g1"));
+            put(None, "https://a/u/me/y", remote_state("g2"));
+            put(None, "https://a/u/me/x", remote_state("g3"));
             let m = load_manifest(cfg).unwrap();
             let rec = &m["claude"]["s1"];
             assert_eq!(rec.path.as_deref(), Some("/p"));
             assert_eq!(rec.cache_id, None, "known but not materialized");
-            let ids: Vec<&str> = rec.uploads.iter().map(|u| u.graph_id.as_str()).collect();
-            assert_eq!(ids, ["g2", "g3"]);
+            let got: Vec<(&str, &str)> = rec
+                .remotes
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.graph_id.as_str()))
+                .collect();
+            assert_eq!(
+                got,
+                [("https://a/u/me/x", "g3"), ("https://a/u/me/y", "g2")]
+            );
         });
     }
 
@@ -669,7 +693,7 @@ mod tests {
                 "s1",
                 None,
                 "https://a/u/me/x",
-                upload("https://a", "me/x", "g1"),
+                remote_state("g1"),
             )
             .unwrap();
             let artifact = ArtifactRef {
@@ -686,9 +710,9 @@ mod tests {
             assert_eq!(rec.cache_id.as_deref(), Some("claude-s1"));
             assert_eq!(rec.size, Some(99));
             assert_eq!(
-                rec.uploads.len(),
+                rec.remotes.len(),
                 1,
-                "record_artifact must not drop uploads"
+                "record_artifact must not drop remotes"
             );
 
             let mut pending = BTreeMap::new();
@@ -703,19 +727,19 @@ mod tests {
                         modified: None,
                         size: Some(100),
                         synced_at: Utc::now(),
-                        uploads: Vec::new(),
+                        remotes: BTreeMap::new(),
                     },
                 );
             flush_writes(cfg, &mut pending).unwrap();
             let m = load_manifest(cfg).unwrap();
             let rec = &m["claude"]["s1"];
             assert_eq!(rec.size, Some(100));
-            assert_eq!(rec.uploads.len(), 1, "flush_writes must not drop uploads");
+            assert_eq!(rec.remotes.len(), 1, "flush_writes must not drop remotes");
         });
     }
 
     #[test]
-    fn upload_state_judges_by_stamp_and_destination() {
+    fn upload_state_judges_by_stamp_and_remote() {
         let mut m = Manifest::default();
         m.entry("claude".into()).or_default().insert(
             "s1".into(),
@@ -725,12 +749,12 @@ mod tests {
                 modified: None,
                 size: None,
                 synced_at: Utc::now(),
-                uploads: vec![upload("https://a", "me/x", "g1")],
+                remotes: BTreeMap::from([("https://a/u/me/x".to_string(), remote_state("g1"))]),
             },
         );
         let same = (Some("2026-01-01T00:00:00Z".parse().unwrap()), Some(10));
-        let st = |id: &str, repo_url: &str, stamp| {
-            upload_state(&m, ArtifactType::Claude, id, repo_url, stamp)
+        let st = |id: &str, remote: &str, stamp| {
+            upload_state(&m, ArtifactType::Claude, id, remote, stamp)
         };
         assert!(matches!(
             st("s1", "https://a/u/me/x", same),
@@ -745,8 +769,7 @@ mod tests {
             UploadState::Changed(_)
         ));
         assert_eq!(st("s1", "https://b/u/me/x", same), UploadState::New);
-        assert_eq!(st("s1", "https://a/u/me/xy", same), UploadState::New);
-        assert_eq!(st("s1", "https://a/u/me", same), UploadState::New);
+        assert_eq!(st("s1", "https://a/u/me/y", same), UploadState::New);
         assert_eq!(st("s2", "https://a/u/me/x", same), UploadState::New);
     }
 
@@ -805,7 +828,7 @@ mod tests {
                     modified: Some("2024-01-02T00:00:01.123456789Z".parse().unwrap()),
                     size: Some(4096),
                     synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
-                    uploads: Vec::new(),
+                    remotes: BTreeMap::new(),
                 },
             );
             save_manifest(config_dir, &manifest).unwrap();

@@ -18,12 +18,12 @@ All notable changes to the Toolpath workspace are documented here.
   are sequential, failures warn and continue, and the run exits
   non-zero if any failed.
 - **`path-cli`**: authed uploads from `share` are recorded in the sync
-  manifest (`uploads` on the artifact's record: graph id, URL — which
-  names the server and repo — and the source fingerprint at upload
-  time). `share --all` skips
-  sessions already uploaded to their destination and, since there is no
-  graph update endpoint, also skips ones that changed since — the
-  summary heading reports both counts. Single-session `share` on an
+  manifest (`remotes` on the artifact's record, keyed by the normalized
+  destination `<server>/u/<owner>/<name>`; each value holds the current
+  graph id, its URL, and the source fingerprint at upload time).
+  `share --all` skips sessions already uploaded to their destination
+  and, since there is no graph update endpoint, also skips ones that
+  changed since — the summary heading reports both counts. Single-session `share` on an
   unchanged session prints the existing URL instead of uploading a
   duplicate. `--force` uploads regardless. Sync and import rewrite the
   fingerprint but keep the upload history; anonymous uploads are not

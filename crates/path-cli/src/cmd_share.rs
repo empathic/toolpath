@@ -884,13 +884,13 @@ fn share_explicit(
     let dest = resolve_destination(args, &auth, base_url, session_dir)?;
 
     if let crate::cmd_pathbase::AuthMode::Authed { username, .. } = &auth {
-        let repo = dest
-            .repo
-            .as_ref()
-            .map(|r| format!("{}/{}", r.owner, r.name))
-            .unwrap_or_else(|| format!("{username}/pathstash"));
-        let repo_url = repo_url(&dest.base_url, &repo);
-        match crate::sync::upload_state(&manifest, harness, session, &repo_url, stamp) {
+        let (owner, name) = match &dest.repo {
+            Some(r) => (r.owner.as_str(), r.name.as_str()),
+            None => (username.as_str(), "pathstash"),
+        };
+        let repo = format!("{owner}/{name}");
+        let remote = crate::sync::remote_key(&dest.base_url, owner, name);
+        match crate::sync::upload_state(&manifest, harness, session, &remote, stamp) {
             UploadState::Uploaded(u) if !args.force => {
                 eprintln!(
                     "Already uploaded to {repo}, unchanged since; pass --force to upload again"
@@ -926,7 +926,7 @@ fn share_explicit(
             harness,
             session,
             project.as_deref(),
-            &repo_url(&base_url, &format!("{}/{}", done.owner, done.repo)),
+            &crate::sync::remote_key(&base_url, &done.owner, &done.repo),
             &done.created,
             stamp,
         );
@@ -942,11 +942,6 @@ fn row_project(row: &ArtifactRow) -> Option<&str> {
     } else {
         None
     }
-}
-
-/// `<server>/u/<owner>/<name>` — the key upload records match on.
-fn repo_url(base_url: &str, repo: &str) -> String {
-    format!("{}/u/{repo}", base_url.trim_end_matches('/'))
 }
 
 /// The sync manifest, or an empty one when it can't be read — a
@@ -1021,20 +1016,20 @@ fn record_upload(
     harness: ArtifactType,
     session: &str,
     project: Option<&str>,
-    repo_url: &str,
+    remote: &str,
     created: &crate::cmd_pathbase::CreatedGraph,
     stamp: Stamp,
 ) {
-    let record = crate::sync::UploadRecord {
+    let state = crate::sync::RemoteState {
         graph_id: created.id.clone(),
         url: created.url.clone(),
         modified: stamp.0,
         size: stamp.1,
         uploaded_at: Utc::now(),
     };
-    if let Err(e) = crate::config::config_dir().and_then(|dir| {
-        crate::sync::record_upload(&dir, harness, session, project, repo_url, record)
-    }) {
+    if let Err(e) = crate::config::config_dir()
+        .and_then(|dir| crate::sync::record_upload(&dir, harness, session, project, remote, state))
+    {
         eprintln!("warning: upload not recorded in sync manifest: {e}");
     }
 }
@@ -1136,8 +1131,9 @@ impl BulkTarget {
         format!("{}/{}", self.owner, self.repo)
     }
 
-    fn url(&self) -> String {
-        format!("{}/u/{}/{}", self.base_url, self.owner, self.repo)
+    /// The manifest key for this destination; also its web URL.
+    fn remote(&self) -> String {
+        crate::sync::remote_key(&self.base_url, &self.owner, &self.repo)
     }
 }
 
@@ -1391,7 +1387,7 @@ fn share_all(
                 &manifest,
                 row.artifact_type,
                 &row.session_id,
-                &target.url(),
+                &target.remote(),
                 row_stamp(&stamps, bundle, row),
             )
         },
@@ -1486,7 +1482,7 @@ fn share_all(
                         row.artifact_type,
                         &row.session_id,
                         project,
-                        &target.url(),
+                        &target.remote(),
                         &created,
                         stamp,
                     );
@@ -1515,7 +1511,7 @@ fn share_all(
         println!(
             "  {:<width$}  {count:>4}   {}",
             target.display(),
-            target.url()
+            target.remote()
         );
     }
     if failed > 0 {
@@ -2119,7 +2115,7 @@ mod tests {
             bulk_row(ArtifactType::Claude, Some("/p"), "d"),
             bulk_row(ArtifactType::Claude, Some("/q"), "e"),
         ];
-        let rec = upload_record("https://pb.test/u/me/foo/graphs/g1");
+        let rec = remote_state("https://pb.test/u/me/foo/graphs/g1");
         let groups = plan_bulk(
             &rows,
             &target("me", "pathstash"),
@@ -2143,8 +2139,8 @@ mod tests {
         );
     }
 
-    fn upload_record(url: &str) -> crate::sync::UploadRecord {
-        crate::sync::UploadRecord {
+    fn remote_state(url: &str) -> crate::sync::RemoteState {
+        crate::sync::RemoteState {
             graph_id: "g1".into(),
             url: url.into(),
             modified: Some("2026-01-01T00:00:00Z".parse().unwrap()),
@@ -2154,10 +2150,12 @@ mod tests {
     }
 
     #[test]
-    fn repo_url_keys_manifest_uploads() {
-        use crate::sync::{Manifest, SyncRecord, upload_state};
-        let upload = upload_record("https://pb.test/u/me/foo/graphs/g1");
-        let stamp = (upload.modified, upload.size);
+    fn bulk_target_remote_matches_manifest_key() {
+        use crate::sync::{Manifest, SyncRecord, remote_key, upload_state};
+        let foo = target("me", "foo");
+        assert_eq!(foo.remote(), "https://pb.test/u/me/foo");
+        let state = remote_state("https://pb.test/u/me/foo/graphs/g1");
+        let stamp = (state.modified, state.size);
         let mut manifest = Manifest::default();
         manifest.entry("claude".into()).or_default().insert(
             "s1".into(),
@@ -2167,16 +2165,19 @@ mod tests {
                 modified: None,
                 size: None,
                 synced_at: "2026-01-02T00:00:00Z".parse().unwrap(),
-                uploads: vec![upload.clone()],
+                remotes: std::collections::BTreeMap::from([(
+                    remote_key("https://pb.test/", "me", "foo"),
+                    state.clone(),
+                )]),
             },
         );
-        let st =
-            |repo_url: &str, st| upload_state(&manifest, ArtifactType::Claude, "s1", repo_url, st);
-        let foo = repo_url("https://pb.test/", "me/foo");
-        assert_eq!(foo, "https://pb.test/u/me/foo");
-        assert_eq!(st(&foo, stamp), UploadState::Uploaded(&upload));
-        assert_eq!(st(&foo, (stamp.0, Some(11))), UploadState::Changed(&upload));
-        assert_eq!(st("https://pb.test/u/me/bar", stamp), UploadState::New);
+        let st = |remote: &str, st| upload_state(&manifest, ArtifactType::Claude, "s1", remote, st);
+        assert_eq!(st(&foo.remote(), stamp), UploadState::Uploaded(&state));
+        assert_eq!(
+            st(&foo.remote(), (stamp.0, Some(11))),
+            UploadState::Changed(&state)
+        );
+        assert_eq!(st(&target("me", "bar").remote(), stamp), UploadState::New);
     }
 
     #[test]
