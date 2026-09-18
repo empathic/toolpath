@@ -10,12 +10,20 @@ All notable changes to the Toolpath workspace are documented here.
   document is derived in memory from the session on disk, so a session
   goes to a host without an import first, and the derived text hashes
   to the same remote session ID. `--project` defaults to the current
-  directory. The Claude Code plugin (0.4.0) `/path:resume --remote`
-  sends the current session that way, with no import into the cache
-  first. `scripts/resume-remote.sh` hands off the same way, and its
-  sync is explicit: `--sync` (implied by `--create`) pushes the
-  working tree one way with no delete, in place of a probe that
-  guessed from the remote session file.
+  directory. The Claude Code plugin `/path:resume --remote` sends the
+  current session that way, with no import into the cache first.
+  `scripts/resume-remote.sh` hands off the same way, and its sync is
+  explicit: `--sync` (implied by `--create`) pushes the working tree
+  one way with no delete, in place of a probe that guessed from the
+  remote session file. The plugin (0.5.0) handles `/path:resume
+  --remote <user@host>` in a `UserPromptExpansion` hook that runs only
+  when `/path:resume` expands: the hook forwards the arguments to
+  `resume --session <id> --project <cwd> --no-attach` and blocks the
+  expansion with the attach command, or the CLI's error, as the
+  reason, so the send costs no model turn. The command reaches the
+  model only when the arguments name a document to send or carry a
+  quote, or the machine lacks `jq` or a `path` with `resume
+  --session`.
 - **`toolpath-cli`** (0.28.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.27.0 — 2026-09-16
