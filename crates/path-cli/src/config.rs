@@ -1,6 +1,7 @@
-//! Environment-derived configuration. [`Config`] holds every value the
-//! CLI reads from the process environment. The module also resolves
-//! the config directory and the home directory.
+//! Configuration. [`Config`] holds every value the CLI reads from the
+//! process environment and from the user's `config.toml`, layered by
+//! figment: defaults, then the file, then the environment. The module
+//! also resolves the config directory and the home directory.
 //!
 //! Kept in its own module so it can be used by `cmd_cache` (needed on every
 //! target, including wasm/emscripten) and `cmd_pathbase` (native-only).
@@ -9,7 +10,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use figment::Figment;
-use figment::providers::{Env, Serialized};
+use figment::providers::{Env, Format, Serialized, Toml};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -45,9 +46,24 @@ pub(crate) const S3_SETTINGS_FILE_NAME: &str = "s3.json";
 /// Local record of every object-storage upload (see `export_ledger`).
 pub(crate) const EXPORTS_FILE_NAME: &str = "exports.json";
 
-/// Environment-derived configuration. [`Config::load`] reads the
-/// environment once, at the composition root. Code below the root
-/// receives values as parameters and does not read the environment.
+/// The `[share]` table of `config.toml`: settings for `path share` and
+/// the commands that read back what it wrote.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ShareConfig {
+    /// The default share remote, consulted when no `--to`, no Pathbase
+    /// flag, and no `[[project]]` rule applies: an object destination
+    /// (`s3://bucket/prefix`, a folder) or a Pathbase repo. Grammar in
+    /// `remote::parse_remote`; `share_config::default_remote` parses it.
+    /// `path resume` with no input and `p list object` / `p export
+    /// object` with no destination browse and write here when it is an
+    /// object destination.
+    pub(crate) remote: Option<String>,
+}
+
+/// Configuration. [`Config::load`] reads the environment and the user's
+/// `config.toml` once, at the composition root. Code below the root
+/// receives values as parameters and does not read the environment or
+/// the file.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Config {
     /// `$APPDATA`: Windows harness data root.
@@ -61,6 +77,9 @@ pub(crate) struct Config {
     pub(crate) home: Option<PathBuf>,
     /// `$PATHBASE_URL`: Pathbase server override (see `cmd_pathbase`).
     pub(crate) pathbase_url: Option<String>,
+    /// `config.toml` `[share]`: the default share remote.
+    #[serde(default)]
+    pub(crate) share: ShareConfig,
     /// `$SSH_AUTH_SOCK`: the ssh agent's socket (see `ssh`).
     #[cfg(all(unix, feature = "resume-remote"))]
     pub(crate) ssh_auth_sock: Option<PathBuf>,
@@ -125,20 +144,55 @@ impl Config {
         Self::ENV_MAP.iter().map(|(var, _)| *var)
     }
 
-    /// Read the process environment and extract an immutable `Config`.
-    pub(crate) fn load() -> Result<Self> {
+    /// The environment layer: the mapped variables, renamed to their
+    /// fields, values verbatim.
+    fn env_layer() -> VerbatimEnv {
         let vars: Vec<&str> = Self::env_var_names().collect();
-        let env = Env::raw().only(&vars).map(|key| {
+        VerbatimEnv(Env::raw().only(&vars).map(|key| {
             Self::ENV_MAP
                 .iter()
                 .find(|(var, _)| key.as_str().eq_ignore_ascii_case(var))
                 .map(|(_, field)| (*field).into())
                 .expect("only() admits exactly the mapped variables")
-        });
+        }))
+    }
+
+    /// Read the process environment alone and extract a `Config`: the
+    /// file layer is absent, so `share` stays at its default. This is
+    /// what locates `config.toml` in the first place, and what
+    /// `path config edit` runs on so a file that fails to parse can
+    /// still be opened and fixed.
+    pub(crate) fn load_env() -> Result<Self> {
         Figment::from(Serialized::defaults(Config::default()))
-            .merge(VerbatimEnv(env))
+            .merge(Self::env_layer())
             .extract()
             .context("failed to load configuration from the environment")
+    }
+
+    /// Read the process environment and the user's `config.toml` and
+    /// extract an immutable `Config`. Layers, lowest first: defaults,
+    /// the file, the environment. A missing file contributes nothing;
+    /// a file that does not parse is an error naming `path config
+    /// edit`, because every command would otherwise act on settings
+    /// the user believes are in force.
+    pub(crate) fn load() -> Result<Self> {
+        let bootstrap = Self::load_env()?;
+        // No config dir (no `$HOME`, no override) means no file to
+        // read; the commands that need the dir report that themselves.
+        let Ok(dir) = bootstrap.config_dir() else {
+            return Ok(bootstrap);
+        };
+        let file = dir.join(CONFIG_FILE_NAME);
+        Figment::from(Serialized::defaults(Config::default()))
+            .merge(Toml::file(&file))
+            .merge(Self::env_layer())
+            .extract()
+            .with_context(|| {
+                format!(
+                    "failed to load {}; fix it with `path config edit`",
+                    home_relative(&file, bootstrap.home_dir().map(PathBuf::as_path))
+                )
+            })
     }
 
     /// The configured toolpath config directory (default `~/.toolpath`,
@@ -166,9 +220,11 @@ impl Config {
 /// overridable via `$TOOLPATH_CONFIG_DIR`).
 ///
 /// Transitional: loads a [`Config`] per call. New code takes `&Config`
-/// as a parameter and calls [`Config::config_dir`].
+/// as a parameter and calls [`Config::config_dir`]. Reads the
+/// environment only: the directory is what locates the file, so the
+/// file cannot be an input to it.
 pub(crate) fn config_dir() -> Result<PathBuf> {
-    Config::load()?.config_dir()
+    Config::load_env()?.config_dir()
 }
 
 /// Cross-platform `$HOME` lookup matching the providers' internal helpers.
@@ -299,6 +355,7 @@ mod tests {
                     copilot_home: Some(PathBuf::from("/home/jailed/.copilot")),
                     home: Some(PathBuf::from("/home/jailed")),
                     pathbase_url: Some("https://pathbase.test".to_string()),
+                    share: ShareConfig::default(),
                     #[cfg(all(unix, feature = "resume-remote"))]
                     ssh_auth_sock: Some(PathBuf::from("/run/jailed/agent.sock")),
                     #[cfg(all(unix, feature = "resume-remote"))]
@@ -357,6 +414,63 @@ mod tests {
             jail.set_env("TOOLPATH_QUERY_EXPLAIN", "01");
             let config = Config::load().unwrap();
             assert_eq!(config.toolpath_query_explain, Some("01".to_string()));
+            Ok(())
+        });
+    }
+
+    /// `config.toml` under the config dir is a layer below the
+    /// environment: its `[share]` table fills `Config::share`, and its
+    /// other tables (`[[project]]` rules, read by `share_config`) are
+    /// ignored here rather than rejected.
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_reads_share_remote_from_config_toml() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        figment::Jail::expect_with(|jail| {
+            let dir = jail.directory().display().to_string();
+            jail.set_env(CONFIG_DIR_ENV, dir);
+            jail.create_file(
+                CONFIG_FILE_NAME,
+                "[[project]]\ndir = \"/work\"\nremote = \"team/sessions\"\n\n\
+                 [share]\nremote = \"s3://team-bucket/traces\"\n",
+            )?;
+            let config = Config::load().unwrap();
+            assert_eq!(
+                config.share.remote.as_deref(),
+                Some("s3://team-bucket/traces")
+            );
+            // The environment-only load never sees the file.
+            assert_eq!(Config::load_env().unwrap().share.remote, None);
+            Ok(())
+        });
+    }
+
+    /// A missing file is the empty layer, not an error.
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_without_config_toml_leaves_share_default() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        figment::Jail::expect_with(|jail| {
+            let dir = jail.directory().display().to_string();
+            jail.set_env(CONFIG_DIR_ENV, dir);
+            let config = Config::load().unwrap();
+            assert_eq!(config.share, ShareConfig::default());
+            Ok(())
+        });
+    }
+
+    /// A file that does not parse fails the load and names the fix.
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_reports_a_malformed_config_toml() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        figment::Jail::expect_with(|jail| {
+            let dir = jail.directory().display().to_string();
+            jail.set_env(CONFIG_DIR_ENV, dir);
+            jail.create_file(CONFIG_FILE_NAME, "[share\nremote = broken\n")?;
+            let err = Config::load().unwrap_err().to_string();
+            assert!(err.contains("path config edit"), "got: {err}");
+            assert!(Config::load_env().is_ok());
             Ok(())
         });
     }
