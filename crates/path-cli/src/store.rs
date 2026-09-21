@@ -78,6 +78,54 @@ pub(crate) struct S3Settings {
     /// path style, which every S3-compatible endpoint accepts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_hosted_style: Option<bool>,
+    /// AWS profile to resolve credentials from, when you don't want the
+    /// `AWS_PROFILE` / `[default]` answer. Storing a profile name is
+    /// very different from storing a key: it's a pointer to credentials
+    /// the AWS tooling already manages, so it can't go stale and it
+    /// costs nothing at rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+/// The credential resolution this settings blob implies.
+///
+/// `profile` is threaded through so `--profile` on a command reaches
+/// the resolver; everything else comes from the ambient AWS setup.
+impl S3Settings {
+    pub(crate) fn resolved_credentials(&self) -> Option<crate::aws_creds::Resolved> {
+        self.resolve_real().ok()
+    }
+
+    /// [`resolved_credentials`](Self::resolved_credentials), keeping the
+    /// error. Anything *reporting* on credentials wants the reason —
+    /// "no such profile" is the whole answer, and swallowing it leaves
+    /// the user with nothing to act on.
+    pub(crate) fn resolve_real(&self) -> Result<crate::aws_creds::Resolved> {
+        self.resolve_with(&crate::aws_creds::Env {
+            home: std::env::var_os("HOME").map(PathBuf::from),
+            var: &|k| std::env::var(k).ok(),
+            aws_cli: &crate::aws_creds::run_aws_cli,
+        })
+    }
+
+    /// [`resolved_credentials`](Self::resolved_credentials) against an
+    /// injected environment, and propagating the error so callers that
+    /// want to *report* a failure (rather than fall through to the
+    /// instance chain) can.
+    pub(crate) fn resolve_with(
+        &self,
+        env: &crate::aws_creds::Env<'_>,
+    ) -> Result<crate::aws_creds::Resolved> {
+        let stored = match (&self.access_key_id, &self.secret_access_key) {
+            (Some(k), Some(s)) => Some(crate::aws_creds::Credentials {
+                access_key_id: k.clone(),
+                secret_access_key: s.clone(),
+                session_token: self.session_token.clone(),
+            }),
+            _ => None,
+        };
+        crate::aws_creds::resolve(stored, self.profile.as_deref(), env)
+    }
 }
 
 pub(crate) fn config_path() -> Result<PathBuf> {
@@ -149,13 +197,23 @@ fn store_options(cfg: &S3Settings) -> Vec<(&'static str, String)> {
 
     let mut opts: Vec<(&'static str, String)> = Vec::new();
 
-    push(&mut opts, "aws_access_key_id", &cfg.access_key_id);
-    push(&mut opts, "aws_secret_access_key", &cfg.secret_access_key);
-    push(&mut opts, "aws_session_token", &cfg.session_token);
+    // Credentials come from `resolve_credentials`, not straight off
+    // `cfg` — a stored key is only one of the places they can live, and
+    // the common laptop case is an AWS profile we had to go find.
+    let resolved = cfg.resolved_credentials();
+    if let Some(c) = resolved.as_ref().and_then(|r| r.credentials.as_ref()) {
+        opts.push(("aws_access_key_id", c.access_key_id.clone()));
+        opts.push(("aws_secret_access_key", c.secret_access_key.clone()));
+        if let Some(t) = &c.session_token {
+            opts.push(("aws_session_token", t.clone()));
+        }
+    }
+
     push(&mut opts, "aws_endpoint", &cfg.endpoint);
     let region = cfg
         .region
         .clone()
+        .or_else(|| resolved.as_ref().and_then(|r| r.region.clone()))
         .unwrap_or_else(|| DEFAULT_REGION.to_string());
     opts.push(("aws_region", region));
 
