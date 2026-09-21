@@ -120,14 +120,24 @@ path p import object s3://my-bucket/traces
 path p cache sync && path p export object --all --to s3://team-bucket/traces
 ```
 
-Objects are named `<date>-<topic>--<id>.json`. The ID is the document's
-`graph.id`, and `--` is reserved: split on the last `--` to get it.
-Objects hold the full document — every turn, verbatim diffs, and tool
-output — so treat the bucket as you would the sessions themselves.
-Identity is `graph.id`: two documents with different `graph.id`s never
-share a key, and two that share one (git-derived documents from two
-repos on the same branch, for instance) replace each other unless
-`--no-overwrite` is set.
+Objects are named `<date>-<topic>--<id>.json`, and `--` is reserved:
+split on the last `--` to get the ID. Objects hold the full document —
+every turn, verbatim diffs, and tool output — so treat the bucket as you
+would the sessions themselves.
+
+For an agent session the ID is the session itself: the conversation
+artifact key the document already carries, `<source>://<session-id>`,
+slugified. A Claude Code session lands at
+`2026-03-04-fix-the-parser--claude-code-de09d54b-b91f-4be7-a757-3ff3d004fb35.json`.
+Two sessions therefore share a key only if a harness issued the same
+session ID twice; nothing is truncated or hashed to make the name fit.
+
+A document with no conversation artifact — git-derived, or hand-written
+— has no session identity, so its ID falls back to `graph.id`. That is
+unique within a document but says nothing across a shared bucket: two
+git documents from different repositories on the same branch both derive
+`path-main` and will replace each other. Use `--no-overwrite` on a
+bucket where that matters.
 
 Credentials: a folder needs none. For `s3://`, your `~/.aws` profiles
 (SSO included, via the AWS CLI), `AWS_PROFILE`, or environment keys are

@@ -19,15 +19,23 @@ path resume s3://my-bucket/traces                            # pick from the buc
 
 **Objects are named to be read and to be parsed.** A document lands at
 `<date>-<topic>--<id>.json`, e.g.
-`2026-08-07-add-s3-support--path-claude-code-6f2a1c9e5b3d4a70.json`.
-The ID is the document's `graph.id`; the date is the session's first
-step; `--` is reserved, so automation takes everything after the last
-`--`. Every part is a function of the document, never of the input
-filename, so a re-export overwrites its own object. Identity is
-`graph.id`: two documents with different `graph.id`s never share a
-key, and two that share one (git-derived documents from two repos on
-the same branch, for instance) replace each other unless
-`--no-overwrite` is set. Imports land in the cache as `object-<id>`.
+`2026-08-07-add-s3-support--claude-code-de09d54b-b91f-4be7-a757-3ff3d004fb35.json`.
+The date is the session's first step; `--` is reserved, so automation
+takes everything after the last `--`. Every part is a function of the
+document, never of the input filename, so a re-export overwrites its
+own object. Imports land in the cache as `object-<id>`.
+
+**The ID is the session itself.** For an agent session it is the
+conversation artifact key the document already carries — the
+`<source>://<session-id>` key that the agent-coding-session kind
+specifies on the `conversation.append` entry — slugified. So two
+sessions share a key only if a harness issued one session ID twice;
+nothing is truncated or hashed to make a name fit. A document with no
+conversation artifact (git-derived, hand-written) falls back to
+`graph.id`, which is unique within a document but not across a bucket:
+two git documents from different repositories on the same branch both
+derive `path-main` and replace each other unless `--no-overwrite` is
+set.
 
 **Credentials come from wherever you already keep them.** `~/.aws`
 profiles, `AWS_PROFILE`, environment keys, and SSO / `role_arn` /
