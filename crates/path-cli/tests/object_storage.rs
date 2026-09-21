@@ -151,7 +151,7 @@ fn every_export_is_recorded_in_the_local_ledger() {
         entry["uri"]
             .as_str()
             .unwrap()
-            .ends_with("2026-01-01-hello--g1.json"),
+            .ends_with("2026-01-01-hello--claude-code-g1.json"),
         "{ledger}"
     );
     assert_eq!(entry["sha256"].as_str().unwrap().len(), 64);
@@ -974,8 +974,8 @@ fn import_object_with_a_destination_is_idempotent() {
     assert_eq!(
         ids,
         vec![
-            "object-path-claude-code-aaaa.json".to_string(),
-            "object-path-claude-code-bbbb.json".to_string()
+            "object-claude-code-path-claude-code-aaaa.json".to_string(),
+            "object-claude-code-path-claude-code-bbbb.json".to_string()
         ]
     );
 }
@@ -1033,8 +1033,8 @@ fn export_all_uploads_every_cached_document_except_imports_and_skips_unchanged_o
     assert_eq!(
         folder_names(folder.path()),
         vec![
-            "2026-01-01-hello--claude-path-claude-code-aaaa.json".to_string(),
-            "2026-01-01-hello--codex-path-codex-bbbb.json".to_string(),
+            "2026-01-01-hello--claude-code-claude-path-claude-code-aaaa.json".to_string(),
+            "2026-01-01-hello--claude-code-codex-path-codex-bbbb.json".to_string(),
         ]
     );
 
@@ -1144,7 +1144,9 @@ fn dry_run_prints_the_plan_and_writes_nothing() {
         .success()
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("would write"))
-        .stderr(predicate::str::contains("2026-01-01-hello--g1.json"))
+        .stderr(predicate::str::contains(
+            "2026-01-01-hello--claude-code-g1.json",
+        ))
         .stderr(predicate::str::contains(
             "credentials: none needed (folder)",
         ))
