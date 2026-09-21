@@ -277,7 +277,7 @@ path
     opencode  --session ID
     cursor    --session UUID
     pi        --project PATH --session ID [--base DIR]
-  share       # one-shot interactive picker + Pathbase upload, or --to DESTINATION for object storage
+  share       # one-shot interactive picker + Pathbase upload, or --to DESTINATION / a [share] remote default for object storage
   resume      # project a doc into a coding agent and exec --resume
   query       # jaq (jq) filter over cached steps
               FILTER [--source NAME] [--id CACHE-ID] [--input FILE]
@@ -323,7 +323,7 @@ path
       cursor    --input REF [--project DIR | --output FILE]
       pi        --input REF [--project DIR | --output FILE]
       pathbase  --input REF [--url URL]
-      object    (--input REF | --all [--include-imported]) --to DESTINATION [--force] [--dry-run] [--no-overwrite]
+      object    (--input REF | --all [--include-imported]) [--to DESTINATION] [--force] [--dry-run] [--no-overwrite]
     cache
       ls | rm CACHE-ID | sync [TYPE...]
     render

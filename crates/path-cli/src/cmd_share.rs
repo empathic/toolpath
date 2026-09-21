@@ -491,7 +491,7 @@ fn collect_cursor(
     }
 }
 
-pub fn run(args: ShareArgs) -> Result<()> {
+pub fn run(args: ShareArgs, config: &crate::config::Config) -> Result<()> {
     let harness = args.harness.map(|h| h.artifact_type());
 
     if args.session.is_some() && harness.is_none() {
@@ -523,7 +523,7 @@ pub fn run(args: ShareArgs) -> Result<()> {
     };
 
     if let (Some(h), Some(session)) = (harness, &args.session) {
-        return share_explicit(h, session.as_str(), &args, &preflight, base_url);
+        return share_explicit(h, session.as_str(), &args, &preflight, base_url, config);
     }
 
     let cwd = std::env::current_dir()?;
@@ -550,20 +550,32 @@ pub fn run(args: ShareArgs) -> Result<()> {
 
     // We have rows AND fzf available — now validate credentials before
     // making the user pick a session, unless this share is headed to
-    // object storage, which needs no Pathbase session at all. If
-    // preflight returns Anon (either explicit --anon, no creds + no
+    // object storage, which needs no Pathbase session at all: `--to`,
+    // or a default object remote with no Pathbase flag overriding it.
+    // If preflight returns Anon (either explicit --anon, no creds + no
     // auth flags, or auth probe failed and fell back), the picker still
-    // fires with that knowledge baked in.
-    let auth = if args.to.is_some() {
-        crate::cmd_pathbase::AuthMode::Anon
+    // fires with that knowledge baked in. With a default object remote
+    // the probe stays lazy: only a `[[project]]` rule that redirects the
+    // picked session to Pathbase will ever run it.
+    let default_object = if args.to.is_none() && !args.anon && args.repo.is_none() {
+        crate::share_config::default_object_destination(config)?
     } else {
-        preflight()?
+        None
+    };
+    let auth = if args.to.is_some() || default_object.is_some() {
+        None
+    } else {
+        Some(preflight()?)
     };
 
     let lines: Vec<String> = rows.iter().map(format_picker_row).collect();
-    let header = match &args.to {
-        Some(to) => format!("share an agent session (Enter = export to {to})"),
-        None => format!("share an agent session (Enter = upload to {base_url})"),
+    let header = match (&args.to, &default_object) {
+        (Some(to), _) => format!("share an agent session (Enter = export to {to})"),
+        (None, Some(found)) => format!(
+            "share an agent session (Enter = export to {})",
+            found.display
+        ),
+        (None, None) => format!("share an agent session (Enter = upload to {base_url})"),
     };
     let opts = crate::fuzzy::PickOptions {
         with_nth: "4",
@@ -615,10 +627,14 @@ pub fn run(args: ShareArgs) -> Result<()> {
     // is opaque and doesn't help the user verify they picked the right
     // thing. `{:?}` adds the surrounding quotes per the spec.
     eprintln!("Picked {} session {:?}", h.name(), title);
-    // `auth` is already resolved (or known irrelevant for `--to`) above;
-    // wrap it so `share_explicit` sees the same lazy-preflight interface
-    // as the explicit-args path without probing credentials twice.
-    share_explicit(h, &session, &explicit, &|| Ok(auth.clone()), base_url)
+    // `auth` is already resolved above (or left lazy for an object
+    // default); wrap it so `share_explicit` sees the same lazy-preflight
+    // interface as the explicit-args path without probing twice.
+    let preflight_once = || match &auth {
+        Some(auth) => Ok(auth.clone()),
+        None => preflight(),
+    };
+    share_explicit(h, &session, &explicit, &preflight_once, base_url, config)
 }
 
 fn bail_no_sessions(
@@ -801,6 +817,7 @@ fn share_explicit(
     args: &ShareArgs,
     preflight: &dyn Fn() -> Result<crate::cmd_pathbase::AuthMode>,
     base_url: String,
+    config: &crate::config::Config,
 ) -> Result<()> {
     let project = match (harness.path_keyed(), args.project.as_ref()) {
         (true, Some(p)) => Some(p.to_string_lossy().into_owned()),
@@ -834,7 +851,7 @@ fn share_explicit(
                 .ok()
                 .and_then(|doc| doc_session_dir(&doc))
         });
-        let dest = resolve_destination(args, preflight, base_url, session_dir)?;
+        let dest = resolve_destination(args, preflight, base_url, session_dir, config)?;
         let summary = format!("{} session {}", harness.name(), cache_id);
         return deliver(dest, args, &body, &cache_id, &summary);
     }
@@ -872,7 +889,7 @@ fn share_explicit(
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| doc_session_dir(&derived.doc));
-    let dest = resolve_destination(args, preflight, base_url, session_dir)?;
+    let dest = resolve_destination(args, preflight, base_url, session_dir, config)?;
     let body = derived.doc.to_json()?;
     deliver(dest, args, &body, &derived.cache_id, &summary)
 }
@@ -934,6 +951,7 @@ fn resolve_destination(
     preflight: &dyn Fn() -> Result<crate::cmd_pathbase::AuthMode>,
     base_url: String,
     session_dir: Option<PathBuf>,
+    config: &crate::config::Config,
 ) -> Result<ShareDestination> {
     if let Some(to) = &args.to {
         return Ok(ShareDestination {
@@ -952,10 +970,24 @@ fn resolve_destination(
     if args.repo.is_some() || args.anon {
         return pathbase(args.repo.clone(), base_url);
     }
-    let Some(dir) = session_dir else {
-        return pathbase(None, base_url);
+    // A `[[project]]` rule for the session's own directory, then the
+    // `[share] remote` default, then the built-in Pathbase default.
+    // `subject` names what routed the share, for the logged-out error.
+    let rule = match &session_dir {
+        Some(dir) => crate::share_config::resolve_remote(dir)?.map(|found| {
+            (
+                found,
+                format!("sessions in {} are configured to upload to", dir.display()),
+            )
+        }),
+        None => None,
     };
-    let Some(found) = crate::share_config::resolve_remote(&dir)? else {
+    let routed = match rule {
+        Some(routed) => Some(routed),
+        None => crate::share_config::default_remote(config)?
+            .map(|found| (found, "shares default to".to_string())),
+    };
+    let Some((found, subject)) = routed else {
         return pathbase(None, base_url);
     };
     match found.remote {
@@ -976,9 +1008,8 @@ fn resolve_destination(
                     .map(|u| format!(" --url {u}"))
                     .unwrap_or_default();
                 anyhow::bail!(
-                    "sessions in {} are configured to upload to {} ({}), which requires login.\n\
+                    "{subject} {} ({}), which requires login.\n\
                      Run `path auth login{login_url}`, or pass --anon to upload anonymously instead.",
-                    dir.display(),
                     found.display,
                     found.origin,
                 );
@@ -1038,7 +1069,10 @@ fn deliver(
                 },
             )?;
             match outcome {
-                crate::cmd_export::ObjectOutcome::Uploaded(uri) => println!("{uri}"),
+                crate::cmd_export::ObjectOutcome::Uploaded(uri) => {
+                    println!("{uri}");
+                    eprintln!("Resume it with: path resume {uri}");
+                }
                 crate::cmd_export::ObjectOutcome::Unchanged(uri) => {
                     eprintln!("Unchanged: {uri}")
                 }
@@ -1574,6 +1608,172 @@ mod tests {
 
     const DEFAULT_BASE: &str = "https://pathbase.dev";
 
+    /// A `Config` whose `config.toml` (written under `dir`) sets
+    /// `[share] remote`, plus any extra text (a `[[project]]` rule).
+    fn config_with_default(dir: &Path, remote: &str, extra: &str) -> crate::config::Config {
+        std::fs::write(
+            dir.join("config.toml"),
+            format!("{extra}[share]\nremote = {remote:?}\n"),
+        )
+        .unwrap();
+        crate::config::Config {
+            toolpath_config_dir: Some(dir.to_path_buf()),
+            share: crate::config::ShareConfig {
+                remote: Some(remote.to_string()),
+            },
+            ..Default::default()
+        }
+    }
+
+    fn expect_object(dest: ShareDestination) -> String {
+        match dest.target {
+            ShareTarget::Object(d) => d.to_string(),
+            ShareTarget::Pathbase { repo, .. } => panic!("expected an object target, got {repo:?}"),
+        }
+    }
+
+    /// With no flag and no rule, `[share] remote` routes the share —
+    /// with or without a session directory — and never touches
+    /// Pathbase credentials.
+    #[test]
+    fn destination_falls_back_to_the_default_object_remote() {
+        let cfg = TempDir::new().unwrap();
+        let bucket = cfg.path().join("bucket");
+        let config = config_with_default(cfg.path(), &bucket.display().to_string(), "");
+        let never = || -> Result<crate::cmd_pathbase::AuthMode> { panic!("preflight ran") };
+        for session_dir in [None, Some(PathBuf::from("/anywhere"))] {
+            let dest = resolve_destination(
+                &share_args(),
+                &never,
+                DEFAULT_BASE.to_string(),
+                session_dir,
+                &config,
+            )
+            .unwrap();
+            assert_eq!(expect_object(dest), bucket.display().to_string());
+        }
+    }
+
+    /// Explicit Pathbase flags beat the stored default.
+    #[test]
+    fn destination_pathbase_flags_beat_the_default_remote() {
+        let cfg = TempDir::new().unwrap();
+        let config = config_with_default(cfg.path(), "s3://team-bucket/traces", "");
+        let mut repo_args = share_args();
+        repo_args.repo = Some(crate::remote::parse_repo_spec("me/flag").unwrap());
+        let (repo, _) = expect_pathbase(
+            resolve_destination(
+                &repo_args,
+                &fixed_preflight(authed()),
+                DEFAULT_BASE.to_string(),
+                None,
+                &config,
+            )
+            .unwrap(),
+        );
+        assert_eq!(repo.unwrap().name, "flag");
+        let mut anon_args = share_args();
+        anon_args.anon = true;
+        let (repo, _) = expect_pathbase(
+            resolve_destination(
+                &anon_args,
+                &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
+                DEFAULT_BASE.to_string(),
+                None,
+                &config,
+            )
+            .unwrap(),
+        );
+        assert!(repo.is_none());
+    }
+
+    /// A matching `[[project]]` rule beats the default; a session
+    /// outside every rule gets the default.
+    #[test]
+    fn destination_project_rule_beats_the_default_remote() {
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let cfg = TempDir::new().unwrap();
+        let ruled = cfg.path().join("ruled-proj");
+        let rule_bucket = cfg.path().join("rule-bucket");
+        let default_bucket = cfg.path().join("default-bucket");
+        std::fs::create_dir_all(&ruled).unwrap();
+        let config = config_with_default(
+            cfg.path(),
+            &default_bucket.display().to_string(),
+            &format!(
+                "[[project]]\ndir = {:?}\nremote = {:?}\n\n",
+                ruled.display().to_string(),
+                rule_bucket.display().to_string()
+            ),
+        );
+        unsafe {
+            std::env::set_var(crate::config::CONFIG_DIR_ENV, cfg.path());
+        }
+        let never = || -> Result<crate::cmd_pathbase::AuthMode> { panic!("preflight ran") };
+        let in_rule = resolve_destination(
+            &share_args(),
+            &never,
+            DEFAULT_BASE.to_string(),
+            Some(ruled),
+            &config,
+        );
+        let outside = resolve_destination(
+            &share_args(),
+            &never,
+            DEFAULT_BASE.to_string(),
+            Some(cfg.path().join("elsewhere")),
+            &config,
+        );
+        unsafe {
+            std::env::remove_var(crate::config::CONFIG_DIR_ENV);
+        }
+        assert_eq!(
+            expect_object(in_rule.unwrap()),
+            rule_bucket.display().to_string()
+        );
+        assert_eq!(
+            expect_object(outside.unwrap()),
+            default_bucket.display().to_string()
+        );
+    }
+
+    /// A Pathbase default behaves like a Pathbase rule: login required,
+    /// and the error names the default rather than a directory.
+    #[test]
+    fn destination_default_pathbase_remote_needs_login() {
+        let cfg = TempDir::new().unwrap();
+        let config = config_with_default(cfg.path(), "team/sessions", "");
+        let err = resolve_destination(
+            &share_args(),
+            &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
+            DEFAULT_BASE.to_string(),
+            None,
+            &config,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("shares default to team/sessions"),
+            "got: {err}"
+        );
+        assert!(err.contains("[share] remote"), "got: {err}");
+        assert!(err.contains("path auth login"), "got: {err}");
+        let (repo, base_url) = expect_pathbase(
+            resolve_destination(
+                &share_args(),
+                &fixed_preflight(authed()),
+                DEFAULT_BASE.to_string(),
+                None,
+                &config,
+            )
+            .unwrap(),
+        );
+        assert_eq!(repo.unwrap().name, "sessions");
+        assert_eq!(base_url, DEFAULT_BASE);
+    }
+
     fn authed() -> crate::cmd_pathbase::AuthMode {
         crate::cmd_pathbase::AuthMode::Authed {
             token: "tok".into(),
@@ -1590,6 +1790,7 @@ mod tests {
             &fixed_preflight(authed()),
             DEFAULT_BASE.to_string(),
             Some(PathBuf::from("/anywhere")),
+            &crate::config::Config::default(),
         )
         .unwrap();
         let (repo, base_url) = expect_pathbase(dest);
@@ -1607,6 +1808,7 @@ mod tests {
             &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
             DEFAULT_BASE.to_string(),
             Some(PathBuf::from("/anywhere")),
+            &crate::config::Config::default(),
         )
         .unwrap();
         let (repo, base_url) = expect_pathbase(dest);
@@ -1621,6 +1823,7 @@ mod tests {
             &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
             DEFAULT_BASE.to_string(),
             None,
+            &crate::config::Config::default(),
         )
         .unwrap();
         let (repo, _) = expect_pathbase(dest);
@@ -1659,24 +1862,28 @@ mod tests {
             &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
             DEFAULT_BASE.to_string(),
             Some(bare.clone()),
+            &crate::config::Config::default(),
         );
         let bare_authed = resolve_destination(
             &share_args(),
             &fixed_preflight(authed()),
             DEFAULT_BASE.to_string(),
             Some(bare),
+            &crate::config::Config::default(),
         );
         let url_unauthed = resolve_destination(
             &share_args(),
             &fixed_preflight(crate::cmd_pathbase::AuthMode::Anon),
             DEFAULT_BASE.to_string(),
             Some(url.clone()),
+            &crate::config::Config::default(),
         );
         let url_authed = resolve_destination(
             &share_args(),
             &fixed_preflight(authed()),
             DEFAULT_BASE.to_string(),
             Some(url.clone()),
+            &crate::config::Config::default(),
         );
         let mut flag_args = share_args();
         flag_args.url = Some("https://flag.example".to_string());
@@ -1685,6 +1892,7 @@ mod tests {
             &fixed_preflight(authed()),
             "https://flag.example".to_string(),
             Some(url),
+            &crate::config::Config::default(),
         );
         unsafe {
             std::env::remove_var(crate::config::CONFIG_DIR_ENV);

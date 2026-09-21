@@ -517,6 +517,69 @@ fn auth_s3_login_stores_status_shows_and_logout_clears() {
     assert!(!stored.exists());
 }
 
+/// `auth s3 login --to` is the one-time step after which the plumbing
+/// needs no destination: it lands in `config.toml`, status reports it,
+/// and export and list use it.
+#[test]
+fn auth_s3_login_to_sets_the_default_the_plumbing_then_uses() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let dest = folder.path().display().to_string();
+
+    // Nothing stored, nothing given: the error says how to set one.
+    cmd(config.path())
+        .args(["p", "export", "object", "--input", doc.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path auth s3 login --to"));
+
+    // `--to` alone stores no connection settings and asks for none.
+    cmd(config.path())
+        .args(["auth", "s3", "login", "--to", &dest])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Default destination set to"))
+        .stdout(predicate::str::contains("S3 settings saved").not());
+    assert!(!config.path().join("s3.json").exists());
+    let toml = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+    assert!(
+        toml.contains(&format!("[share]\nremote = {dest:?}\n")),
+        "{toml}"
+    );
+
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("destination:"))
+        .stdout(predicate::str::contains(&dest));
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--input", doc.to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Uploaded"));
+    let names = folder_names(folder.path());
+    assert_eq!(names.len(), 1, "{names:?}");
+
+    cmd(config.path())
+        .args(["p", "list", "object", "--format", "tsv"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&names[0]));
+
+    // A bad destination is refused and the stored one stays.
+    cmd(config.path())
+        .args(["auth", "s3", "login", "--to", "ftp://nope"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("[share] remote"));
+    let toml = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+    assert!(toml.contains(&dest), "{toml}");
+}
+
 #[test]
 fn auth_s3_login_merges_into_the_existing_settings() {
     let config = tempfile::tempdir().unwrap();

@@ -61,6 +61,20 @@ locally in `~/.toolpath/exports.json`. Folder objects are 0600. No
 AWS CLI for retention and erasure — and Object Lock makes erasure
 impossible by design, so choose its retention period accordingly.
 
+**One login, no addresses after it.** `path auth s3 login --to
+s3://bucket/prefix` (or a folder) writes `[share] remote` in
+`~/.toolpath/config.toml`, the default for every session no
+`[[project]]` rule claims. After it, `path share` exports there and
+prints the resume line, `path resume` with no input browses it and
+opens the picker, and `p list object` / `p export object` need no
+destination. `--to`, `--repo`, and `--anon` on a single command still
+win, a `[[project]]` rule still wins for its sessions, and a Pathbase
+repo works as the default too (`path config edit`). `path auth s3
+status` reports the default. `Config::load` now layers `config.toml`
+under the environment, so every command sees the file through one
+figment root; a file that does not parse fails with a `path config
+edit` hint.
+
 `p export object` validates the document before uploading (`--force`
 to skip). `--dry-run` prints the resolved location, endpoint, region,
 credential source, and put mode. `[[project]] remote` in

@@ -4,7 +4,7 @@ use std::io::IsTerminal;
 
 use crate::store::{self, S3Settings};
 use clap::Subcommand;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cmd_pathbase::{
     StoredSession, api_logout, api_me, api_redeem, clear_session, credentials_path, load_session,
@@ -47,14 +47,16 @@ pub enum S3Op {
     /// tweak. Run interactively with no flags and it prompts, without
     /// echoing the secret.
     ///
-    /// This does not set *where* shares go — that's `--to` on
-    /// `p export object` and `share`, or a `[[project]]` remote in
-    /// `~/.toolpath/config.toml` — so one stored credential serves any
-    /// number of buckets.
+    /// `--to <destination>` sets where shares go by default: it writes
+    /// `[share] remote` in `~/.toolpath/config.toml`, after which
+    /// `path share`, `path resume`, `p list object`, and `p export
+    /// object` need no destination. The connection settings stay
+    /// separate from it, so one stored credential serves any number of
+    /// buckets (`--to` on a single command, or a `[[project]]` remote).
     #[command(alias = "set")]
     Login {
         #[command(flatten)]
-        args: S3LoginArgs,
+        args: Box<S3LoginArgs>,
     },
     /// Show the S3 settings in effect, with secrets redacted and
     /// environment-supplied values marked
@@ -119,11 +121,19 @@ pub struct S3LoginArgs {
     /// KMS key ID or ARN for `--sse aws:kms`
     #[arg(long, value_name = "KEY", requires = "sse")]
     pub kms_key_id: Option<String>,
+
+    /// Default destination for `share`, `resume`, `p list object`, and
+    /// `p export object`: `s3://bucket/prefix`, or a folder. Written to
+    /// `[share] remote` in `~/.toolpath/config.toml`; a `[[project]]`
+    /// rule or a per-command `--to` still overrides it. May be given on
+    /// its own, with nothing else to store.
+    #[arg(long, value_name = "DESTINATION")]
+    pub to: Option<String>,
 }
 
-pub fn run(op: AuthOp) -> Result<()> {
+pub fn run(op: AuthOp, config: &crate::config::Config) -> Result<()> {
     match op {
-        AuthOp::S3 { op } => run_s3(op),
+        AuthOp::S3 { op } => run_s3(op, config),
         other => {
             let path = credentials_path()?;
             match other {
@@ -215,11 +225,11 @@ fn status(path: &Path) -> Result<()> {
 
 // ── S3 ──────────────────────────────────────────────────────────────────
 
-fn run_s3(op: S3Op) -> Result<()> {
+fn run_s3(op: S3Op, config: &crate::config::Config) -> Result<()> {
     let path = store::config_path()?;
     match op {
-        S3Op::Login { args } => s3_login(&path, args),
-        S3Op::Status => s3_status(&path),
+        S3Op::Login { args } => s3_login(&path, *args, config),
+        S3Op::Status => s3_status(&path, config),
         S3Op::Whoami => s3_whoami(),
         S3Op::Logout => s3_logout(&path),
     }
@@ -231,9 +241,11 @@ fn run_s3(op: S3Op) -> Result<()> {
 /// Merge rather than replace: partial updates are the common case
 /// (rotating a key, switching endpoint), and a replace would silently
 /// drop the fields the user didn't repeat.
-fn s3_login(path: &Path, args: S3LoginArgs) -> Result<()> {
+fn s3_login(path: &Path, mut args: S3LoginArgs, config: &crate::config::Config) -> Result<()> {
+    let default_to = args.to.take();
     let mut cfg = store::load_stored(path)?.unwrap_or_default();
     let had_settings = cfg != S3Settings::default();
+    let before = cfg.clone();
 
     let set = |slot: &mut Option<String>, value: Option<String>| {
         if let Some(v) = value
@@ -261,6 +273,16 @@ fn s3_login(path: &Path, args: S3LoginArgs) -> Result<()> {
     set(&mut cfg.server_side_encryption, args.sse);
     set(&mut cfg.sse_kms_key_id, args.kms_key_id);
 
+    // `--to` on its own changes nothing in the connection settings, so
+    // it neither prompts for credentials nor complains that there is
+    // nothing to store: for anyone whose `~/.aws` profile already
+    // works, it is the whole login.
+    if let Some(to) = &default_to
+        && cfg == before
+    {
+        return set_default_destination(to, config);
+    }
+
     if std::io::stdin().is_terminal() && !had_settings {
         prompt_missing(&mut cfg)?;
     }
@@ -278,6 +300,26 @@ fn s3_login(path: &Path, args: S3LoginArgs) -> Result<()> {
     println!("S3 settings saved to {}", path.display());
     // Everything printed here was just written, so nothing is `(env)`.
     print_settings(&cfg, &cfg);
+    if let Some(to) = &default_to {
+        set_default_destination(to, config)?;
+    }
+    Ok(())
+}
+
+/// Write `to` as `[share] remote` in the config file and say what it
+/// now means.
+fn set_default_destination(to: &str, config: &crate::config::Config) -> Result<()> {
+    let file = config.config_dir()?.join(crate::config::CONFIG_FILE_NAME);
+    let home = config.home_dir().map(PathBuf::as_path);
+    crate::share_config::write_default_remote(&file, home, to)?;
+    println!(
+        "Default destination set to {to} in {}",
+        crate::config::home_relative(&file, home)
+    );
+    println!(
+        "  `path share` exports there, `path resume` browses it, and \
+         `p list object` / `p export object` need no destination."
+    );
     Ok(())
 }
 
@@ -312,7 +354,7 @@ fn prompt_missing(cfg: &mut S3Settings) -> Result<()> {
     Ok(())
 }
 
-fn s3_status(path: &Path) -> Result<()> {
+fn s3_status(path: &Path, config: &crate::config::Config) -> Result<()> {
     let stored = store::load_stored(path)?;
     let effective = store::effective_settings()?;
 
@@ -322,6 +364,18 @@ fn s3_status(path: &Path) -> Result<()> {
     }
     if effective != S3Settings::default() {
         print_settings(&effective, &stored.unwrap_or_default());
+    }
+    // The default destination for share, resume, list, and export;
+    // same column as the settings above.
+    match crate::share_config::default_object_destination(config)? {
+        Some(found) => println!(
+            "  {:<19}{} ({})",
+            "destination:", found.display, found.origin
+        ),
+        None => println!(
+            "  {:<19}none (`path auth s3 login --to s3://bucket/prefix` sets one)",
+            "destination:"
+        ),
     }
     let resolved = effective.resolve_real();
     print_credential_source(&effective, &resolved);

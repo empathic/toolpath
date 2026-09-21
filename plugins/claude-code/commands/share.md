@@ -1,6 +1,6 @@
 ---
 description: Share an agent session to Pathbase and get a link
-argument-hint: "[session hint] [--anon] [--public] [--harness <name>]"
+argument-hint: "[session hint] [--anon] [--public] [--to <destination>] [--harness <name>]"
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-path.sh:*)
 ---
 
@@ -45,9 +45,9 @@ If the Auth context shows no valid login and the user did not pass `--anon`, sto
 ```
 
 - Add `--project <absolute cwd>` for claude/gemini/pi session ids; omit it for codex/opencode/cursor/copilot.
-- Pass through any of `--anon`, `--public`, `--repo <owner/name>`, `--name <label>`, `--url <server>` from the user's arguments.
+- Pass through any of `--anon`, `--public`, `--repo <owner/name>`, `--name <label>`, `--url <server>`, `--to <destination>`, `--no-overwrite` from the user's arguments.
 - Never run `share` without `--session` — the interactive picker cannot run here.
 
 ### Report
 
-Give the user the Pathbase URL from the output. On failure show the error and the likely fix: log in or use `--anon` for auth errors, or upgrade the CLI (`curl --proto '=https' --tlsv1.2 -fsS https://toolpath.net/install.sh | bash`) if the installed version predates `share`.
+Give the user the Pathbase URL from the output — or, when the CLI printed `Sharing to` an object destination (`--to`, a `[[project]]` rule, or the `[share] remote` default), the object location it printed on stdout together with the `Resume it with: path resume …` line. On failure show the error and the likely fix: log in or use `--anon` for auth errors, or upgrade the CLI (`curl --proto '=https' --tlsv1.2 -fsS https://toolpath.net/install.sh | bash`) if the installed version predates `share`.

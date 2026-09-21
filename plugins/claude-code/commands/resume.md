@@ -1,6 +1,6 @@
 ---
 description: Resume a shared agent session in Claude Code, or send this session to an ssh host
-argument-hint: "pathbase-url | --remote <user@host> [-C <remote-dir>] [-- <claude args>]"
+argument-hint: "pathbase-url | s3-object-url | --remote <user@host> [-C <remote-dir>] [-- <claude args>]"
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-path.sh:*)
 ---
 
@@ -15,7 +15,7 @@ Bring a shared agent session into this project so the user can resume it in Clau
 
 User arguments: $ARGUMENTS
 
-The input is a Pathbase URL (`https://host/owner/repo/slug`), an `owner/repo/slug` shorthand, a local toolpath JSON file, or a cache id. If no input was given and `--remote` is absent, ask for one.
+The input is a Pathbase URL (`https://host/owner/repo/slug`), an `owner/repo/slug` shorthand, an object in storage (`s3://bucket/prefix/name.json`, `file:///dir/name.json`), a local toolpath JSON file, or a cache id. If no input was given and `--remote` is absent, ask for one — the interactive picker that bare `path resume` opens over the default destination cannot run here; the user can list it with `exec p list object --format tsv` and pick a row.
 
 Always invoke the CLI through the wrapper, and write paths as literal absolute strings — never `$PWD` or other variables (they fail the permission check):
 
@@ -25,13 +25,14 @@ Always invoke the CLI through the wrapper, and write paths as literal absolute s
 
 ### Steps
 
-1. **Fetch** (Pathbase URL or shorthand only — skip for a cache id or local file):
+1. **Fetch** (Pathbase URL or shorthand, or an object URL — skip for a cache id or local file):
 
    ```
    ... exec p import pathbase <input> --force
+   ... exec p import object <object-url> --force
    ```
 
-   Note the cache id from the output.
+   Note the cache id (Pathbase) or the printed cache file path (object) from the output; either works as step 2's `--input`.
 
 2. **Project** the document into this project:
 

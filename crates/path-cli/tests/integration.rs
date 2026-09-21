@@ -2012,7 +2012,7 @@ fn share_to_a_folder_writes_one_object_and_needs_no_pathbase() {
         .unwrap()
         .trim()
         .to_string();
-    assert!(uri.contains("--path-claude-code-"), "{uri}");
+    assert!(uri.contains("--claude-code-"), "{uri}");
     let names: Vec<String> = std::fs::read_dir(folder.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -2062,6 +2062,56 @@ fn share_follows_a_configured_object_destination() {
         // to the (unreachable) --url.
         .stderr(predicate::str::contains("path auth login").not())
         .stderr(predicate::str::contains("anonymously").not());
+    assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 1);
+}
+
+/// `[share] remote` in the personal config is the default for every
+/// session no rule claims: bare `share` exports there, says so, and
+/// prints the resume line — without touching Pathbase.
+#[test]
+fn share_uses_the_default_object_remote_without_flags() {
+    let (temp, project) = claude_session_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg.path().join("config.toml"),
+        format!(
+            "[share]\nremote = {:?}\n",
+            folder.path().display().to_string()
+        ),
+    )
+    .unwrap();
+
+    let out = cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent/credentials")
+        .env("AWS_CONFIG_FILE", "/nonexistent/config")
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache", "--url", "http://127.0.0.1:1"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Sharing to"))
+        .stderr(predicate::str::contains("[share] remote"))
+        .stderr(predicate::str::contains("Resume it with: path resume "))
+        .stderr(predicate::str::contains("path auth login").not())
+        .stderr(predicate::str::contains("anonymously").not());
+    let uri = String::from_utf8(out.get_output().stdout.clone())
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(
+        uri.starts_with(&folder.path().display().to_string()),
+        "{uri}"
+    );
     assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 1);
 }
 

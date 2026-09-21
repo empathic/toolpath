@@ -120,6 +120,22 @@ path p import object s3://my-bucket/traces
 path p cache sync && path p export object --all --to s3://team-bucket/traces
 ```
 
+Make a destination the default once and drop the addresses:
+
+```bash
+path auth s3 login --to s3://team-bucket/traces   # writes [share] remote in ~/.toolpath/config.toml
+
+path share                     # picker; exports there and prints the resume line
+path resume                    # browses the bucket, opens the picker
+path p list object             # what is there
+path p export object --all     # push what changed
+```
+
+The default is `[share] remote` in `~/.toolpath/config.toml` and may
+also be a Pathbase repo (`path config edit`). A `--to` on the command
+or a `[[project]]` rule for the session's directory still wins, and
+`--repo` / `--anon` still send a single share to Pathbase.
+
 Objects are named `<date>-<topic>--<id>.json`, and `--` is reserved:
 split on the last `--` to get the ID. Objects hold the full document —
 every turn, verbatim diffs, and tool output — so treat the bucket as you

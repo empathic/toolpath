@@ -29,7 +29,15 @@ pub fn run(op: ConfigOp) -> Result<()> {
 
 /// Written on first `path config edit`. Comments only — a fresh file
 /// behaves exactly like no file.
-const TEMPLATE: &str = "# Toolpath user configuration.\n# https://toolpath.net/cli/\n";
+const TEMPLATE: &str = "# Toolpath user configuration.\n\
+# https://toolpath.net/cli/\n\
+#\n\
+# [share]\n\
+# remote = \"s3://bucket/prefix\"   # default for share, resume, p list/export object\n\
+#\n\
+# [[project]]\n\
+# dir = \"~/work/proj\"             # or: origin = \"owner/name\"\n\
+# remote = \"owner/name\"           # a Pathbase repo, or an object destination\n";
 
 fn edit() -> Result<()> {
     let path = config_dir()?.join(CONFIG_FILE_NAME);
@@ -51,7 +59,7 @@ fn edit() -> Result<()> {
 
 /// Create the file at `path` from the template if it doesn't exist yet. Uses
 /// `create_new` so a concurrently created file is never clobbered.
-fn ensure_config_file(path: &Path) -> Result<()> {
+pub(crate) fn ensure_config_file(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         #[cfg(unix)]

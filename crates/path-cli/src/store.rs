@@ -317,6 +317,33 @@ impl std::fmt::Display for ObjectUri {
 
 /// True for anything `path resume` / `p import` should route to object
 /// storage rather than to Pathbase or the local cache.
+/// The destination a command was given, or the `[share] remote`
+/// default when it names an object destination. The error for neither
+/// says how to set one, since that is the one-time step that makes
+/// every later invocation flag-free.
+pub(crate) fn destination_or_default(
+    given: Option<&str>,
+    config: &crate::config::Config,
+) -> Result<Destination> {
+    if let Some(raw) = given {
+        return Destination::parse(raw);
+    }
+    match crate::share_config::default_object_destination(config)? {
+        Some(found) => {
+            let crate::remote::Remote::Object(raw) = &found.remote else {
+                unreachable!("default_object_destination filters to Object")
+            };
+            Destination::parse(raw)
+                .with_context(|| format!("default destination from {}", found.origin))
+        }
+        None => bail!(
+            "no destination given and no default set. Pass one (`s3://bucket/prefix`, \
+             a folder), or set the default once with \
+             `path auth s3 login --to s3://bucket/prefix`."
+        ),
+    }
+}
+
 pub(crate) fn looks_like_object_uri(s: &str) -> bool {
     SCHEMES.iter().any(|p| s.starts_with(&format!("{p}://")))
 }

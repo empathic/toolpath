@@ -161,19 +161,19 @@ pub fn run() -> Result<()> {
         #[cfg(not(target_os = "emscripten"))]
         Commands::Show { source, ansi } => cmd_show::run(source, ansi, &config),
         #[cfg(not(target_os = "emscripten"))]
-        Commands::Share { args } => cmd_share::run(args),
+        Commands::Share { args } => cmd_share::run(args, &config),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Resume { args } => {
             #[cfg(all(unix, feature = "resume-remote"))]
             if let Some(dest) = args.remote.dest.clone() {
                 return cmd_resume::run_remote(dest, args, &config);
             }
-            cmd_resume::run(args)
+            cmd_resume::run(args, &config)
         }
         Commands::Query { args } => cmd_query::run(args, cli.pretty, &config),
         Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]
-        Commands::Auth { op } => cmd_auth::run(op),
+        Commands::Auth { op } => cmd_auth::run(op, &config),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Config { op } => cmd_config::run(op),
         Commands::P { command } => cmd_p::run(command, cli.pretty, &config),

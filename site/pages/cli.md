@@ -24,7 +24,7 @@ plumbing (`path p …`, the building blocks porcelain composes from).
 path
   haiku
   show        # markdown summary for one session (used by fzf preview)
-  share       # picker + Pathbase upload, or --to DESTINATION for object storage
+  share       # picker + Pathbase upload, or --to DESTINATION / a [share] remote default for object storage
   resume      # project a doc into a coding agent and exec --resume
   query       # jaq (jq) filter over cached steps
               FILTER [--source NAME] [--id CACHE-ID] [--input FILE]
@@ -39,7 +39,7 @@ path
     list
       git       [--repo PATH] [--remote NAME] [--json]
       claude    [--project PATH] [--json]
-      object    DESTINATION [--format ...]
+      object    [DESTINATION] [--format ...]
     import
       git       --repo PATH --branch NAME[:START] [--base COMMIT] [--remote NAME] [--title TEXT]
       claude    --project PATH [--session ID] [--all]
@@ -48,7 +48,7 @@ path
     export
       claude    --input REF [--project DIR | --output FILE]
       pathbase  --input REF [--url URL]
-      object    (--input REF | --all) --to DESTINATION [--force] [--dry-run] [--no-overwrite]
+      object    (--input REF | --all) [--to DESTINATION] [--force] [--dry-run] [--no-overwrite]
     cache       ls | rm CACHE-ID
     render
       dot       [--input FILE] [--output FILE] [--show-files] [--show-timestamps]
