@@ -332,7 +332,10 @@ fn short_body(body: &str) -> String {
 // `cli_redeem` is in the spec, so `api_redeem` calls the generated
 // method like any other operation.
 
-fn block_on<F: std::future::Future>(f: F) -> F::Output {
+/// Shared with the `store` module, which drives the equally-async
+/// `object_store` client: one runtime for every async client the CLI
+/// tunnels into.
+pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
     use std::sync::OnceLock;
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     let rt = RT.get_or_init(|| {

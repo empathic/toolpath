@@ -50,6 +50,8 @@ mod share_config;
 mod skim_picker;
 #[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
 mod ssh;
+#[cfg(not(target_os = "emscripten"))]
+mod store;
 mod sync;
 mod term;
 

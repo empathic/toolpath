@@ -45,6 +45,10 @@ figment = { version = "0.10", features = ["env"] }
 typed-path = { version = "0.12", optional = true }
 
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
+# Share/resume over object storage. `aws` covers every S3-compatible
+# endpoint; the default `fs` feature gives `file://` for local
+# destinations and for the round-trip tests.
+object_store = { version = "0.14.1", features = ["aws"] }
 toolpath-claude = { workspace = true, features = ["watcher"] }
 toolpath-gemini = { workspace = true, features = ["watcher"] }
 toolpath-codex = { workspace = true }
@@ -60,7 +64,7 @@ reqwest = { workspace = true }
 tokio = { workspace = true }
 shlex = { workspace = true, optional = true }
 russh = { workspace = true, optional = true }
-url = { workspace = true, optional = true }
+url = { workspace = true }
 crossterm = { workspace = true, optional = true }
 rusqlite = { workspace = true }
 rayon = { workspace = true }
@@ -96,7 +100,7 @@ embedded-picker = ["dep:skim", "dep:regex"]
 # default. Gates `p export claude --content-addressed-session-id`,
 # `--cwd`, `path resume --remote`, `--dry-run`, and the ssh transport
 # module. Pulls in the in-process SSH client.
-resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url", "dep:typed-path", "dep:crossterm"]
+resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:typed-path", "dep:crossterm"]
 
 [dev-dependencies]
 assert_cmd = "2"
