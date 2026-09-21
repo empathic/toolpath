@@ -49,6 +49,8 @@ typed-path = { version = "0.12", optional = true }
 # endpoint; the default `fs` feature gives `file://` for local
 # destinations and for the round-trip tests.
 object_store = { version = "0.14.1", features = ["aws"] }
+# No-echo prompt for the S3 secret access key in `path auth s3 login`.
+rpassword = "7"
 toolpath-claude = { workspace = true, features = ["watcher"] }
 toolpath-gemini = { workspace = true, features = ["watcher"] }
 toolpath-codex = { workspace = true }

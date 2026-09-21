@@ -215,3 +215,89 @@ fn import_object_rejects_a_non_toolpath_object() {
         .failure()
         .stderr(predicate::str::contains("not a toolpath document"));
 }
+
+// ── path auth s3 ────────────────────────────────────────────────────
+
+#[test]
+fn auth_s3_login_stores_status_shows_and_logout_clears() {
+    let config = tempfile::tempdir().unwrap();
+
+    cmd(config.path())
+        .args(["auth", "s3", "login"])
+        .args(["--region", "eu-west-1"])
+        .args(["--access-key-id", "AKIAEXAMPLE"])
+        .args(["--secret-access-key", "supersecretvalue"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("S3 settings saved"));
+
+    let stored = config.path().join("s3.json");
+    assert!(stored.is_file(), "s3.json not written");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&stored).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "credentials must not be world-readable"
+        );
+    }
+
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("eu-west-1"))
+        .stdout(predicate::str::contains("AKIAEXAMPLE"))
+        // The secret is stored but never printed back in full.
+        .stdout(predicate::str::contains("supersecretvalue").not())
+        .stdout(predicate::str::contains("****alue"));
+
+    cmd(config.path())
+        .args(["auth", "s3", "logout"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cleared"));
+    assert!(!stored.exists());
+}
+
+#[test]
+fn auth_s3_login_merges_into_the_existing_settings() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "login", "--access-key-id", "AKIAEXAMPLE"])
+        .assert()
+        .success();
+    // A later, narrower call must not wipe the key.
+    cmd(config.path())
+        .args(["auth", "s3", "login", "--region", "us-west-2"])
+        .assert()
+        .success();
+
+    let raw = std::fs::read_to_string(config.path().join("s3.json")).unwrap();
+    assert!(raw.contains("AKIAEXAMPLE"), "{raw}");
+    assert!(raw.contains("us-west-2"), "{raw}");
+}
+
+#[test]
+fn auth_s3_status_marks_env_supplied_values() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .env("AWS_REGION", "ap-south-1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ap-south-1 (env)"));
+}
+
+#[test]
+fn auth_s3_login_without_a_terminal_or_flags_is_an_error() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "login"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Nothing to store"));
+}
