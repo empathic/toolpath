@@ -4,8 +4,9 @@
 //! `crates/pathbase-client/openapi.json` — refresh via
 //! `scripts/refresh-pathbase-openapi.sh`) plus session-storage logic
 //! used by `cmd_auth`, `cmd_import`, `cmd_export`, and `cmd_share`.
-//! Every Pathbase HTTP call now goes through the typed client; no
-//! hand-rolled reqwest left in this module. Config-dir resolution lives
+//! Every Pathbase HTTP call goes through the typed client except the
+//! streamed-upload batch routes (`graphs_post_streamed`), which are not
+//! in the spec yet and use reqwest directly. Config-dir resolution lives
 //! in the sibling `config` module so `cmd_cache` (which doesn't depend
 //! on reqwest and must build on emscripten) can reuse it.
 
@@ -344,12 +345,19 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
     rt.block_on(f)
 }
 
-/// Build a `pathbase_client::Client` whose underlying reqwest client
-/// carries a default `Authorization: Bearer <token>` header when one is
-/// supplied. Progenitor doesn't expose a bearer-token setter, so we
-/// pre-bake the header into the http client and hand it via
-/// `Client::new_with_client`.
+/// Build a `pathbase_client::Client` over [`http_client`]. Progenitor
+/// doesn't expose a bearer-token setter, so the header is pre-baked into
+/// the http client and handed over via `Client::new_with_client`.
 fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_client::Client> {
+    Ok(pathbase_client::Client::new_with_client(
+        base_url,
+        http_client(token)?,
+    ))
+}
+
+/// A reqwest client with a 30 s per-request timeout and, when a token is
+/// supplied, a default `Authorization: Bearer <token>` header.
+fn http_client(token: Option<&str>) -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(30));
@@ -361,8 +369,7 @@ fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_clien
         headers.insert(reqwest::header::AUTHORIZATION, auth);
         builder = builder.default_headers(headers);
     }
-    let client = builder.build().context("build pathbase http client")?;
-    Ok(pathbase_client::Client::new_with_client(base_url, client))
+    builder.build().context("build pathbase http client")
 }
 
 /// Decode a toolpath JSON string into the typed `ToolpathDocument` the
@@ -481,11 +488,7 @@ pub(crate) fn graphs_post(
         Err(pathbase_client::Error::ErrorResponse(resp)) => {
             let code = resp.status().as_u16();
             if code == 401 {
-                bail!(
-                    "{base_url} rejected your stored credentials (HTTP 401). \
-                     Run `path auth login --url {base_url}` to authenticate against this server, \
-                     or pass `--anon` to upload anonymously."
-                )
+                bail!(relogin_message(base_url))
             }
             // Declared error responses (e.g. the 400 from duplicate step IDs)
             // carry an `ApiErrorResponse { code, error }` body — surface the
@@ -515,6 +518,348 @@ pub(crate) fn graphs_post(
             full_chain(&e)
         )),
     }
+}
+
+fn relogin_message(base_url: &str) -> String {
+    format!(
+        "{base_url} rejected your stored credentials (HTTP 401). \
+         Run `path auth login --url {base_url}` to authenticate against this server, \
+         or pass `--anon` to upload anonymously."
+    )
+}
+
+// ── Streamed upload ─────────────────────────────────────────────────────
+
+/// Largest request body the streamed upload sends, and the document size
+/// above which an authed upload is streamed at all.
+pub(crate) const BATCH_BUDGET: usize = 4 * 1024 * 1024;
+
+const BATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const BATCH_RETRIES: u32 = 3;
+#[cfg(not(test))]
+const RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
+#[cfg(test)]
+const RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// One request body of a streamed path upload.
+#[derive(Debug, Default, PartialEq)]
+struct Batch {
+    body: String,
+    /// Id and line size of the largest `Step` line, for the 413 message.
+    largest_step: Option<(String, usize)>,
+}
+
+fn head_line(step_id: &str) -> String {
+    let line = toolpath::v1::jsonl::JsonlLine::Head(toolpath::v1::jsonl::HeadBody {
+        step_id: step_id.to_string(),
+    });
+    let mut s = serde_json::to_string(&line).expect("serialize Head line");
+    s.push('\n');
+    s
+}
+
+/// Split the output of `Path::to_jsonl_writer` into request bodies of at
+/// most `budget` bytes, cut at line boundaries. `step_ids` are the ids of
+/// the `Step` lines in order.
+///
+/// A step and its `Signature` lines are never separated. Every non-final
+/// batch ends with an added `Head` line naming its last step, so the server
+/// holds a valid path after each request. A batch is only closed once it
+/// contains a step, which keeps `PathOpen` and the `ActorDef` lines with
+/// the first step. A step larger than the budget is sent in a batch of its
+/// own, over budget.
+fn pack_batches(jsonl: &str, step_ids: &[&str], budget: usize) -> Vec<Batch> {
+    const STEP: &str = r#"{"Step":"#;
+    const STEP_SIGNATURE: &str = r#"{"Signature":{"target":"step:"#;
+    let line_end = |s: &str, from: usize| s[from..].find('\n').map_or(s.len(), |i| from + i + 1);
+
+    let mut batches = Vec::new();
+    let mut cur = Batch::default();
+    let mut last_step: Option<&str> = None;
+    let mut ids = step_ids.iter().copied();
+    let mut rest = jsonl;
+    while !rest.is_empty() {
+        let mut end = line_end(rest, 0);
+        let step = if rest.starts_with(STEP) {
+            ids.next().map(|id| (id, end))
+        } else {
+            None
+        };
+        if step.is_some() {
+            while rest[end..].starts_with(STEP_SIGNATURE) {
+                end = line_end(rest, end);
+            }
+        }
+        let (unit, tail) = rest.split_at(end);
+        rest = tail;
+
+        if let Some(last) = last_step {
+            let head = head_line(step.map_or(last, |(id, _)| id));
+            if cur.body.len() + unit.len() + head.len() > budget {
+                cur.body.push_str(&head_line(last));
+                batches.push(std::mem::take(&mut cur));
+                last_step = None;
+            }
+        }
+        cur.body.push_str(unit);
+        if let Some((id, len)) = step {
+            last_step = Some(id);
+            if cur.largest_step.as_ref().is_none_or(|(_, l)| len > *l) {
+                cur.largest_step = Some((id.to_string(), len));
+            }
+        }
+    }
+    if !cur.body.is_empty() {
+        batches.push(cur);
+    }
+    batches
+}
+
+/// Step indices in a stable parents-first order, or `None` when the steps
+/// already are. Parents outside the path are ignored.
+fn parents_first_order(steps: &[toolpath::v1::Step]) -> Option<Vec<usize>> {
+    use std::collections::{HashMap, HashSet};
+    let index: HashMap<&str, usize> = steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.step.id.as_str(), i))
+        .collect();
+    let mut seen: HashSet<&str> = HashSet::new();
+    let ordered = steps.iter().all(|s| {
+        let ok = s
+            .step
+            .parents
+            .iter()
+            .all(|p| !index.contains_key(p.as_str()) || seen.contains(p.as_str()));
+        seen.insert(s.step.id.as_str());
+        ok
+    });
+    if ordered {
+        return None;
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        New,
+        Open,
+        Done,
+    }
+    let mut state = vec![State::New; steps.len()];
+    let mut order = Vec::with_capacity(steps.len());
+    for root in 0..steps.len() {
+        let mut stack = vec![root];
+        while let Some(&i) = stack.last() {
+            if state[i] == State::Done {
+                stack.pop();
+                continue;
+            }
+            state[i] = State::Open;
+            let pending = steps[i]
+                .step
+                .parents
+                .iter()
+                .filter_map(|p| index.get(p.as_str()).copied())
+                .find(|&p| state[p] == State::New);
+            match pending {
+                Some(p) => stack.push(p),
+                None => {
+                    state[i] = State::Done;
+                    order.push(i);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    Some(order)
+}
+
+enum BatchFailure {
+    Transport(reqwest::Error),
+    Status(u16, String),
+}
+
+impl BatchFailure {
+    fn retryable(&self) -> bool {
+        match self {
+            BatchFailure::Transport(_) => true,
+            BatchFailure::Status(code, _) => *code >= 500,
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            BatchFailure::Transport(e) if e.is_timeout() => {
+                format!("request timed out after {}s", BATCH_TIMEOUT.as_secs())
+            }
+            BatchFailure::Transport(e) => reqwest_hint(e),
+            BatchFailure::Status(code, msg) if msg.is_empty() => format!("HTTP {code}"),
+            BatchFailure::Status(code, msg) => format!("HTTP {code}: {msg}"),
+        }
+    }
+}
+
+fn post_batch_once(
+    http: &reqwest::Client,
+    url: &str,
+    body: &str,
+) -> std::result::Result<serde_json::Value, BatchFailure> {
+    block_on(async {
+        let resp = http
+            .post(url)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+            .timeout(BATCH_TIMEOUT)
+            .body(body.to_owned())
+            .send()
+            .await
+            .map_err(BatchFailure::Transport)?;
+        let status = resp.status();
+        let text = resp.text().await.map_err(BatchFailure::Transport)?;
+        if status.is_success() {
+            Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
+        } else {
+            let msg = error_message(&text).unwrap_or_else(|| short_body(&text));
+            Err(BatchFailure::Status(status.as_u16(), msg))
+        }
+    })
+}
+
+/// POST one batch, retrying transport errors and 5xx responses. Both batch
+/// routes are idempotent for a replayed body, so a retry after a lost
+/// response is safe.
+fn post_batch(
+    http: &reqwest::Client,
+    url: &str,
+    body: &str,
+) -> std::result::Result<serde_json::Value, BatchFailure> {
+    let mut retries = 0;
+    loop {
+        match post_batch_once(http, url, body) {
+            Err(f) if f.retryable() && retries < BATCH_RETRIES => {
+                retries += 1;
+                eprintln!(
+                    "  batch failed ({}); retry {retries}/{BATCH_RETRIES}",
+                    f.describe()
+                );
+                std::thread::sleep(RETRY_BACKOFF * 2u32.pow(retries - 1));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Upload a graph too large for one request: create it with `paths: []`,
+/// then send each inline path as batches of RFC-jsonl lines of at most
+/// `budget` bytes. The first batch of a path opens it
+/// (`POST …/graphs/{id}/paths`); the rest append to it
+/// (`POST …/graphs/{id}/paths/{path_id}/steps`).
+///
+/// If any batch fails, the partly uploaded graph is deleted (best effort)
+/// before the error is returned. `$ref` path entries are skipped; callers
+/// route documents containing them to [`graphs_post`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn graphs_post_streamed(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    name: Option<&str>,
+    doc: &toolpath::v1::Graph,
+    public: bool,
+    budget: usize,
+) -> Result<CreatedGraph> {
+    let shell = toolpath::v1::Graph {
+        graph: doc.graph.clone(),
+        paths: Vec::new(),
+        meta: doc.meta.clone(),
+    };
+    let shell_json = serde_json::to_string(&shell).context("serialize graph")?;
+    let created = graphs_post(base_url, token, owner, repo, name, &shell_json, public)?;
+
+    let http = http_client(Some(token))?;
+    let graph_url = format!(
+        "{base_url}/api/v1/u/{owner}/repos/{repo}/graphs/{}",
+        created.id
+    );
+    match stream_paths(&http, &graph_url, doc, budget) {
+        Ok(()) => Ok(created),
+        Err((failure, largest_step)) => {
+            let _ = block_on(async { http.delete(&graph_url).send().await });
+            match (&failure, largest_step) {
+                (BatchFailure::Status(401, _), _) => bail!(relogin_message(base_url)),
+                (BatchFailure::Status(413, _), Some((id, len))) => bail!(
+                    "upload to {owner}/{repo} failed (HTTP 413): step {id} is {len} bytes, \
+                     larger than the server accepts in one request"
+                ),
+                _ => bail!("upload to {owner}/{repo} failed: {}", failure.describe()),
+            }
+        }
+    }
+}
+
+/// On failure, returns the failure and the failing batch's largest step.
+fn stream_paths(
+    http: &reqwest::Client,
+    graph_url: &str,
+    doc: &toolpath::v1::Graph,
+    budget: usize,
+) -> std::result::Result<(), (BatchFailure, Option<(String, usize)>)> {
+    use toolpath::v1::PathOrRef;
+
+    let paths: Vec<&toolpath::v1::Path> = doc
+        .paths
+        .iter()
+        .filter_map(|p| match p {
+            PathOrRef::Path(p) => Some(p.as_ref()),
+            PathOrRef::Ref(_) => None,
+        })
+        .collect();
+    for (pi, path) in paths.iter().enumerate() {
+        let reordered;
+        let path = match parents_first_order(&path.steps) {
+            Some(order) => {
+                reordered = toolpath::v1::Path {
+                    path: path.path.clone(),
+                    steps: order.iter().map(|&i| path.steps[i].clone()).collect(),
+                    meta: path.meta.clone(),
+                };
+                &reordered
+            }
+            None => *path,
+        };
+        let jsonl = path.to_jsonl_string().expect("write jsonl to memory");
+        let step_ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        let batches = pack_batches(&jsonl, &step_ids, budget);
+
+        let mut steps_url = String::new();
+        for (bi, batch) in batches.iter().enumerate() {
+            eprintln!(
+                "Uploading path {}/{}, batch {}/{} ({} bytes)",
+                pi + 1,
+                paths.len(),
+                bi + 1,
+                batches.len(),
+                batch.body.len()
+            );
+            let url = if bi == 0 {
+                format!("{graph_url}/paths")
+            } else {
+                steps_url.clone()
+            };
+            let resp =
+                post_batch(http, &url, &batch.body).map_err(|f| (f, batch.largest_step.clone()))?;
+            if bi == 0 {
+                let Some(path_id) = resp.get("path_id").and_then(|v| v.as_str()) else {
+                    let f = BatchFailure::Status(
+                        200,
+                        "server response to the first batch has no path_id".to_string(),
+                    );
+                    return Err((f, None));
+                };
+                steps_url = format!("{graph_url}/paths/{path_id}/steps");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn error_message(body: &str) -> Option<String> {
@@ -578,11 +923,7 @@ pub(crate) fn repos_post(base_url: &str, token: &str, owner: &str, name: &str) -
     match block_on(client.create_repo(owner, &body)) {
         Ok(_) => Ok(()),
         Err(pathbase_client::Error::ErrorResponse(resp)) => match resp.status().as_u16() {
-            401 => bail!(
-                "{base_url} rejected your stored credentials (HTTP 401). \
-                 Run `path auth login --url {base_url}` to authenticate against this server, \
-                 or pass `--anon` to upload anonymously."
-            ),
+            401 => bail!(relogin_message(base_url)),
             409 => Ok(()),
             code => bail!("creating repo {name} failed (HTTP {code})"),
         },
@@ -824,60 +1165,34 @@ pub(crate) mod tests {
 
     // ── Mock HTTP server ─────────────────────────────────────────────
 
-    /// A one-shot HTTP/1.1 responder. Binds to 127.0.0.1 on a free port,
-    /// reads one request (headers + body), writes a canned response, closes.
+    /// A canned HTTP/1.1 responder. Binds to 127.0.0.1 on a free port and
+    /// serves one connection per scripted response: reads one request
+    /// (headers + body), writes the response, closes.
     pub(crate) struct MockServer {
         port: u16,
-        thread: Option<std::thread::JoinHandle<Vec<u8>>>,
+        thread: Option<std::thread::JoinHandle<Vec<Vec<u8>>>>,
     }
 
     impl MockServer {
         pub(crate) fn start(status_line: &'static str, body: &'static str) -> Self {
-            use std::io::{BufRead, BufReader, Write};
+            Self::start_sequence(vec![(status_line, body.to_string())])
+        }
+
+        /// Serve `responses` in order, one connection each. An empty status
+        /// line closes that connection without responding.
+        pub(crate) fn start_sequence(responses: Vec<(&'static str, String)>) -> Self {
             use std::net::TcpListener;
 
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
             let thread = std::thread::spawn(move || {
-                let (mut stream, _addr) = listener.accept().unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut req = Vec::new();
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap() == 0 {
-                        break;
-                    }
-                    req.extend_from_slice(line.as_bytes());
-                    if line == "\r\n" {
-                        break;
-                    }
-                }
-                let content_length = req
-                    .split(|b| *b == b'\n')
-                    .find_map(|line| {
-                        let line = std::str::from_utf8(line).ok()?;
-                        let (name, value) = line.trim_end_matches('\r').split_once(':')?;
-                        if name.eq_ignore_ascii_case("content-length") {
-                            value.trim().parse::<usize>().ok()
-                        } else {
-                            None
-                        }
+                responses
+                    .into_iter()
+                    .map(|(status_line, body)| {
+                        let (stream, _addr) = listener.accept().unwrap();
+                        Self::serve(stream, status_line, &body)
                     })
-                    .unwrap_or(0);
-                if content_length > 0 {
-                    use std::io::Read;
-                    let mut body_buf = vec![0u8; content_length];
-                    reader.read_exact(&mut body_buf).ok();
-                    req.extend_from_slice(&body_buf);
-                }
-
-                let response = format!(
-                    "{status_line}\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.flush();
-                req
+                    .collect()
             });
             MockServer {
                 port,
@@ -885,11 +1200,59 @@ pub(crate) mod tests {
             }
         }
 
+        fn serve(mut stream: std::net::TcpStream, status_line: &str, body: &str) -> Vec<u8> {
+            use std::io::{BufRead, BufReader, Write};
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut req = Vec::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 {
+                    break;
+                }
+                req.extend_from_slice(line.as_bytes());
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let content_length = req
+                .split(|b| *b == b'\n')
+                .find_map(|line| {
+                    let line = std::str::from_utf8(line).ok()?;
+                    let (name, value) = line.trim_end_matches('\r').split_once(':')?;
+                    if name.eq_ignore_ascii_case("content-length") {
+                        value.trim().parse::<usize>().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            if content_length > 0 {
+                use std::io::Read;
+                let mut body_buf = vec![0u8; content_length];
+                reader.read_exact(&mut body_buf).ok();
+                req.extend_from_slice(&body_buf);
+            }
+
+            if !status_line.is_empty() {
+                let response = format!(
+                    "{status_line}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+            req
+        }
+
         pub(crate) fn base(&self) -> String {
             format!("http://127.0.0.1:{}", self.port)
         }
 
-        fn request(mut self) -> Vec<u8> {
+        pub(crate) fn request(self) -> Vec<u8> {
+            self.requests().remove(0)
+        }
+
+        pub(crate) fn requests(mut self) -> Vec<Vec<u8>> {
             self.thread.take().unwrap().join().unwrap()
         }
     }
@@ -902,7 +1265,7 @@ pub(crate) mod tests {
     /// mock has to return every required field even though the CLI only reads
     /// a few. A bare-minimum toolpath document parses cleanly as
     /// `ToolpathDocument` (`{graph, paths}`).
-    fn graph_document_json() -> String {
+    pub(crate) fn graph_document_json() -> String {
         format!(
             r#"{{
                 "id": "{TEST_UUID}",
@@ -1246,5 +1609,391 @@ pub(crate) mod tests {
                 }
             }
         }
+    }
+    // ── Streamed upload ──────────────────────────────────────────────
+
+    fn signature(sig: &str) -> toolpath::v1::Signature {
+        toolpath::v1::Signature {
+            signer: "human:alex".to_string(),
+            key: "key-1".to_string(),
+            scope: "author".to_string(),
+            sig: sig.to_string(),
+            timestamp: None,
+        }
+    }
+
+    /// A linear path `s0 → s1 → …` whose step lines are roughly
+    /// `step_bytes` long. `s1` carries two signatures and the path one.
+    fn stream_path(steps: usize, step_bytes: usize) -> toolpath::v1::Path {
+        use toolpath::v1::{Path, PathIdentity, PathMeta, Step, StepMeta};
+        let steps: Vec<Step> = (0..steps)
+            .map(|i| {
+                let mut step = Step::new(format!("s{i}"), "human:alex", "2024-01-01T00:00:00Z")
+                    .with_raw_change("src/main.rs", "x".repeat(step_bytes));
+                if i > 0 {
+                    step = step.with_parent(format!("s{}", i - 1));
+                }
+                if i == 1 {
+                    step.meta = Some(StepMeta {
+                        signatures: vec![signature("step-a"), signature("step-b")],
+                        ..Default::default()
+                    });
+                }
+                step
+            })
+            .collect();
+        Path {
+            path: PathIdentity {
+                id: "p".to_string(),
+                base: None,
+                head: steps.last().unwrap().step.id.clone(),
+                graph_ref: None,
+            },
+            steps,
+            meta: Some(PathMeta {
+                title: Some("streamed".to_string()),
+                signatures: vec![signature("path-a")],
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn pack(path: &toolpath::v1::Path, budget: usize) -> Vec<Batch> {
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        pack_batches(&path.to_jsonl_string().unwrap(), &ids, budget)
+    }
+
+    fn step_lines(batch: &Batch) -> usize {
+        batch
+            .body
+            .lines()
+            .filter(|l| l.starts_with(r#"{"Step":"#))
+            .count()
+    }
+
+    #[test]
+    fn pack_batches_concatenation_reads_back_to_the_path() {
+        let path = stream_path(12, 200);
+        let batches = pack(&path, 1000);
+        assert!(batches.len() > 3, "got {} batches", batches.len());
+        for b in &batches {
+            assert!(b.body.len() <= 1000, "batch is {} bytes", b.body.len());
+        }
+
+        let all: String = batches.iter().map(|b| b.body.as_str()).collect();
+        let read = toolpath::v1::Path::from_jsonl_str(&all).unwrap();
+        assert_eq!(
+            serde_json::to_value(&read).unwrap(),
+            serde_json::to_value(&path).unwrap()
+        );
+    }
+
+    #[test]
+    fn pack_batches_every_prefix_has_a_stored_head() {
+        let path = stream_path(12, 200);
+        let batches = pack(&path, 1000);
+        let mut prefix = String::new();
+        for b in &batches {
+            prefix.push_str(&b.body);
+            let read = toolpath::v1::Path::from_jsonl_str(&prefix).unwrap();
+            assert_eq!(
+                read.path.head,
+                read.steps.last().unwrap().step.id,
+                "head should name the last step sent so far"
+            );
+        }
+    }
+
+    #[test]
+    fn pack_batches_sends_an_oversized_step_alone() {
+        let mut path = stream_path(6, 200);
+        path.steps[3] = toolpath::v1::Step::new("s3", "human:alex", "2024-01-01T00:00:00Z")
+            .with_parent("s2")
+            .with_raw_change("src/main.rs", "y".repeat(5000));
+        let batches = pack(&path, 1000);
+
+        let big = batches
+            .iter()
+            .find(|b| b.body.contains(r#""id":"s3""#))
+            .unwrap();
+        assert_eq!(step_lines(big), 1);
+        assert!(big.body.len() > 1000);
+        let (id, len) = big.largest_step.clone().unwrap();
+        assert_eq!(id, "s3");
+        assert_eq!(len, big.body.lines().next().unwrap().len() + 1);
+        assert!(big.body.ends_with(&head_line("s3")));
+
+        let all: String = batches.iter().map(|b| b.body.as_str()).collect();
+        let read = toolpath::v1::Path::from_jsonl_str(&all).unwrap();
+        assert_eq!(read.steps.len(), 6);
+    }
+
+    #[test]
+    fn pack_batches_keeps_signatures_with_their_step() {
+        let path = stream_path(4, 200);
+        let line_len = |needle: &str| {
+            let jsonl = path.to_jsonl_string().unwrap();
+            jsonl.lines().find(|l| l.contains(needle)).unwrap().len() + 1
+        };
+        // Room for s1's step line and one signature, but not both signatures.
+        let budget = line_len(r#""id":"s1""#) + line_len("step-a") + head_line("s1").len() + 10;
+        let batches = pack(&path, budget);
+
+        let with_s1 = batches
+            .iter()
+            .find(|b| b.body.contains(r#""id":"s1""#))
+            .unwrap();
+        assert!(with_s1.body.contains("step-a"));
+        assert!(with_s1.body.contains("step-b"));
+        assert_eq!(step_lines(with_s1), 1);
+    }
+
+    #[test]
+    fn pack_batches_keeps_path_open_with_the_first_step() {
+        let path = stream_path(3, 200);
+        let batches = pack(&path, 50);
+        assert!(batches[0].body.starts_with(r#"{"PathOpen":"#));
+        assert_eq!(step_lines(&batches[0]), 1);
+    }
+
+    #[test]
+    fn parents_first_order_leaves_ordered_steps_alone() {
+        let path = stream_path(5, 10);
+        assert!(parents_first_order(&path.steps).is_none());
+
+        let external = vec![
+            toolpath::v1::Step::new("a", "human:alex", "2024-01-01T00:00:00Z")
+                .with_parent("not-in-this-path"),
+        ];
+        assert!(parents_first_order(&external).is_none());
+    }
+
+    #[test]
+    fn parents_first_order_moves_only_what_it_must() {
+        let step = |id: &str, parent: Option<&str>| {
+            let s = toolpath::v1::Step::new(id, "human:alex", "2024-01-01T00:00:00Z");
+            match parent {
+                Some(p) => s.with_parent(p),
+                None => s,
+            }
+        };
+        let steps = vec![
+            step("a", None),
+            step("c", Some("b")),
+            step("b", Some("a")),
+            step("d", Some("a")),
+        ];
+        let order = parents_first_order(&steps).unwrap();
+        let ids: Vec<&str> = order.iter().map(|&i| steps[i].step.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c", "d"]);
+    }
+
+    fn request_line(req: &[u8]) -> String {
+        let text = String::from_utf8_lossy(req);
+        text.lines().next().unwrap_or_default().to_string()
+    }
+
+    fn request_body(req: &[u8]) -> String {
+        let text = String::from_utf8_lossy(req);
+        text.split_once("\r\n\r\n").unwrap().1.to_string()
+    }
+
+    const PATH_OPENED: &str = r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":1,"head":"s0","generation":1}"#;
+    const STEPS_APPENDED: &str = r#"{"inserted":1,"head":"s1","generation":2}"#;
+    const GRAPH_ROUTE: &str =
+        "/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
+
+    fn post_streamed(
+        server: &MockServer,
+        path: &toolpath::v1::Path,
+        budget: usize,
+    ) -> Result<CreatedGraph> {
+        let doc = toolpath::v1::Graph::from_path(path.clone());
+        graphs_post_streamed(
+            &server.base(),
+            "tok",
+            "alex",
+            "pathstash",
+            Some("big"),
+            &doc,
+            false,
+            budget,
+        )
+    }
+
+    #[test]
+    fn graphs_post_streamed_sends_graph_then_batches() {
+        let path = stream_path(8, 200);
+        let batches = pack(&path, 1000);
+        assert!(batches.len() >= 3);
+
+        let mut responses = vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+        ];
+        responses.extend((2..=batches.len()).map(|_| ("HTTP/1.1 200 OK", STEPS_APPENDED.into())));
+        let server = MockServer::start_sequence(responses);
+
+        let created = post_streamed(&server, &path, 1000).unwrap();
+        assert_eq!(created.id, TEST_UUID);
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), batches.len() + 1);
+
+        assert_eq!(
+            request_line(&reqs[0]),
+            "POST /api/v1/u/alex/repos/pathstash/graphs HTTP/1.1"
+        );
+        let create: serde_json::Value = serde_json::from_str(&request_body(&reqs[0])).unwrap();
+        assert_eq!(create["name"], "big");
+        assert_eq!(create["visibility"], "unlisted");
+        assert_eq!(create["document"]["paths"], serde_json::json!([]));
+        assert_eq!(create["document"]["graph"]["id"], "p");
+
+        assert_eq!(
+            request_line(&reqs[1]),
+            format!("POST {GRAPH_ROUTE}/paths HTTP/1.1")
+        );
+        for (req, batch) in reqs[1..].iter().zip(&batches) {
+            let head = String::from_utf8_lossy(req).to_lowercase();
+            assert!(
+                head.contains("content-type: application/x-ndjson"),
+                "{head}"
+            );
+            assert!(head.contains("authorization: bearer tok"), "{head}");
+            assert_eq!(request_body(req), batch.body);
+        }
+        for req in &reqs[2..] {
+            assert_eq!(
+                request_line(req),
+                format!(
+                    "POST {GRAPH_ROUTE}/paths/11111111-1111-1111-1111-111111111111/steps HTTP/1.1"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn graphs_post_streamed_reorders_children_sent_before_parents() {
+        let mut path = stream_path(3, 50);
+        path.steps.swap(1, 2);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+        ]);
+        post_streamed(&server, &path, BATCH_BUDGET).unwrap();
+
+        let body = request_body(&server.requests()[1]);
+        let s1 = body.find(r#""id":"s1""#).unwrap();
+        let s2 = body.find(r#""id":"s2""#).unwrap();
+        assert!(s1 < s2, "{body}");
+    }
+
+    #[test]
+    fn graphs_post_streamed_retries_dropped_response_and_5xx() {
+        let path = stream_path(2, 50);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("", String::new()),
+            (
+                "HTTP/1.1 503 Service Unavailable",
+                r#"{"error":"busy"}"#.into(),
+            ),
+            ("HTTP/1.1 200 OK", PATH_OPENED.to_string()),
+        ]);
+        post_streamed(&server, &path, BATCH_BUDGET).unwrap();
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 4);
+        for req in &reqs[1..] {
+            assert_eq!(
+                request_line(req),
+                format!("POST {GRAPH_ROUTE}/paths HTTP/1.1")
+            );
+            assert_eq!(request_body(req), request_body(&reqs[1]));
+        }
+    }
+
+    #[test]
+    fn graphs_post_streamed_gives_up_after_three_retries_and_deletes() {
+        let path = stream_path(2, 50);
+        let busy = || {
+            (
+                "HTTP/1.1 503 Service Unavailable",
+                r#"{"error":"busy"}"#.to_string(),
+            )
+        };
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            busy(),
+            busy(),
+            busy(),
+            busy(),
+            ("HTTP/1.1 204 No Content", String::new()),
+        ]);
+        let err = post_streamed(&server, &path, BATCH_BUDGET).unwrap_err();
+        assert!(err.to_string().contains("HTTP 503: busy"), "{err}");
+
+        let reqs = server.requests();
+        assert_eq!(
+            request_line(&reqs[5]),
+            format!("DELETE {GRAPH_ROUTE} HTTP/1.1")
+        );
+    }
+
+    #[test]
+    fn graphs_post_streamed_deletes_graph_after_a_400() {
+        let path = stream_path(8, 200);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            (
+                "HTTP/1.1 400 Bad Request",
+                r#"{"code":"bad_request","error":"line 2: malformed Step"}"#.into(),
+            ),
+            ("HTTP/1.1 204 No Content", String::new()),
+        ]);
+        let err = post_streamed(&server, &path, 1000).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("alex/pathstash"), "{msg}");
+        assert!(msg.contains("HTTP 400: line 2: malformed Step"), "{msg}");
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 4);
+        assert_eq!(
+            request_line(&reqs[3]),
+            format!("DELETE {GRAPH_ROUTE} HTTP/1.1")
+        );
+        assert!(
+            String::from_utf8_lossy(&reqs[3])
+                .to_lowercase()
+                .contains("authorization: bearer tok")
+        );
+    }
+
+    #[test]
+    fn graphs_post_streamed_413_names_the_step_and_its_size() {
+        let mut path = stream_path(3, 50);
+        path.steps[2] = toolpath::v1::Step::new("s2", "human:alex", "2024-01-01T00:00:00Z")
+            .with_parent("s1")
+            .with_raw_change("src/main.rs", "y".repeat(5000));
+        let size = path
+            .to_jsonl_string()
+            .unwrap()
+            .lines()
+            .find(|l| l.contains(r#""id":"s2""#))
+            .unwrap()
+            .len()
+            + 1;
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 413 Payload Too Large", String::new()),
+            ("HTTP/1.1 204 No Content", String::new()),
+        ]);
+        let err = post_streamed(&server, &path, BATCH_BUDGET).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("HTTP 413"), "{msg}");
+        assert!(msg.contains(&format!("step s2 is {size} bytes")), "{msg}");
+        assert_eq!(server.requests().len(), 3);
     }
 }
