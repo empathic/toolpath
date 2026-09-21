@@ -754,7 +754,9 @@ fn post_batch(
 /// (`POST …/graphs/{id}/paths/{path_id}/steps`).
 ///
 /// If any batch fails, the partly uploaded graph is deleted (best effort)
-/// before the error is returned. `$ref` path entries are skipped; callers
+/// before the error is returned. A `404` or `405` on a path's first batch
+/// means the server lacks the batch routes; the whole document is then
+/// sent with [`graphs_post`] instead. `$ref` path entries are skipped; callers
 /// route documents containing them to [`graphs_post`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn graphs_post_streamed(
@@ -776,33 +778,60 @@ pub(crate) fn graphs_post_streamed(
     let created = graphs_post(base_url, token, owner, repo, name, &shell_json, public)?;
 
     let http = http_client(Some(token))?;
-    let graph_url = format!(
-        "{base_url}/api/v1/u/{owner}/repos/{repo}/graphs/{}",
-        created.id
-    );
-    match stream_paths(&http, &graph_url, doc, budget) {
+    let mut graph_url = reqwest::Url::parse(base_url).context("parse pathbase url")?;
+    graph_url
+        .path_segments_mut()
+        .map_err(|_| anyhow!("pathbase url cannot be a base: {base_url}"))?
+        .pop_if_empty()
+        .extend([
+            "api",
+            "v1",
+            "u",
+            owner,
+            "repos",
+            repo,
+            "graphs",
+            &created.id,
+        ]);
+    let graph_url = graph_url.as_str();
+    match stream_paths(&http, graph_url, doc, budget) {
         Ok(()) => Ok(created),
-        Err((failure, largest_step)) => {
-            let _ = block_on(async { http.delete(&graph_url).send().await });
-            match (&failure, largest_step) {
+        Err(e) => {
+            let _ = block_on(async { http.delete(graph_url).send().await });
+            match (&e.failure, e.largest_step) {
+                (BatchFailure::Status(404 | 405, _), _) if e.opening_path => {
+                    eprintln!(
+                        "note: {base_url} does not support streamed upload; \
+                         sending the document in one request"
+                    );
+                    let json = serde_json::to_string(doc).context("serialize graph")?;
+                    graphs_post(base_url, token, owner, repo, name, &json, public)
+                }
                 (BatchFailure::Status(401, _), _) => bail!(relogin_message(base_url)),
                 (BatchFailure::Status(413, _), Some((id, len))) => bail!(
                     "upload to {owner}/{repo} failed (HTTP 413): step {id} is {len} bytes, \
                      larger than the server accepts in one request"
                 ),
-                _ => bail!("upload to {owner}/{repo} failed: {}", failure.describe()),
+                _ => bail!("upload to {owner}/{repo} failed: {}", e.failure.describe()),
             }
         }
     }
 }
 
-/// On failure, returns the failure and the failing batch's largest step.
+struct StreamError {
+    failure: BatchFailure,
+    /// Largest step of the failing batch.
+    largest_step: Option<(String, usize)>,
+    /// The failing request was a path's first batch (`POST …/paths`).
+    opening_path: bool,
+}
+
 fn stream_paths(
     http: &reqwest::Client,
     graph_url: &str,
     doc: &toolpath::v1::Graph,
     budget: usize,
-) -> std::result::Result<(), (BatchFailure, Option<(String, usize)>)> {
+) -> std::result::Result<(), StreamError> {
     use toolpath::v1::PathOrRef;
 
     let paths: Vec<&toolpath::v1::Path> = doc
@@ -845,15 +874,21 @@ fn stream_paths(
             } else {
                 steps_url.clone()
             };
-            let resp =
-                post_batch(http, &url, &batch.body).map_err(|f| (f, batch.largest_step.clone()))?;
+            let resp = post_batch(http, &url, &batch.body).map_err(|failure| StreamError {
+                failure,
+                largest_step: batch.largest_step.clone(),
+                opening_path: bi == 0,
+            })?;
             if bi == 0 {
                 let Some(path_id) = resp.get("path_id").and_then(|v| v.as_str()) else {
-                    let f = BatchFailure::Status(
-                        200,
-                        "server response to the first batch has no path_id".to_string(),
-                    );
-                    return Err((f, None));
+                    return Err(StreamError {
+                        failure: BatchFailure::Status(
+                            200,
+                            "server response to the first batch has no path_id".to_string(),
+                        ),
+                        largest_step: None,
+                        opening_path: false,
+                    });
                 };
                 steps_url = format!("{graph_url}/paths/{path_id}/steps");
             }
@@ -1995,5 +2030,95 @@ pub(crate) mod tests {
         assert!(msg.contains("HTTP 413"), "{msg}");
         assert!(msg.contains(&format!("step s2 is {size} bytes")), "{msg}");
         assert_eq!(server.requests().len(), 3);
+    }
+    #[test]
+    fn graphs_post_streamed_falls_back_when_the_open_route_is_missing() {
+        let path = stream_path(8, 200);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 405 Method Not Allowed", String::new()),
+            ("HTTP/1.1 204 No Content", String::new()),
+            ("HTTP/1.1 201 Created", graph_document_json()),
+        ]);
+        let created = post_streamed(&server, &path, 1000).unwrap();
+        assert_eq!(created.id, TEST_UUID);
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 4);
+        assert_eq!(
+            request_line(&reqs[2]),
+            format!("DELETE {GRAPH_ROUTE} HTTP/1.1")
+        );
+        assert_eq!(
+            request_line(&reqs[3]),
+            "POST /api/v1/u/alex/repos/pathstash/graphs HTTP/1.1"
+        );
+        let full: serde_json::Value = serde_json::from_str(&request_body(&reqs[3])).unwrap();
+        assert_eq!(full["name"], "big");
+        assert_eq!(
+            full["document"],
+            serde_json::to_value(toolpath::v1::Graph::from_path(path)).unwrap()
+        );
+    }
+
+    #[test]
+    fn graphs_post_streamed_does_not_fall_back_on_a_400_from_open() {
+        let path = stream_path(8, 200);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            (
+                "HTTP/1.1 400 Bad Request",
+                r#"{"code":"bad_request","error":"line 1: not a PathOpen"}"#.into(),
+            ),
+            ("HTTP/1.1 204 No Content", String::new()),
+        ]);
+        let err = post_streamed(&server, &path, 1000).unwrap_err();
+        assert!(err.to_string().contains("line 1: not a PathOpen"), "{err}");
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 3);
+        assert_eq!(
+            request_line(&reqs[2]),
+            format!("DELETE {GRAPH_ROUTE} HTTP/1.1")
+        );
+    }
+
+    #[test]
+    fn graphs_post_streamed_does_not_fall_back_on_a_404_from_a_later_batch() {
+        let path = stream_path(8, 200);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            ("HTTP/1.1 404 Not Found", String::new()),
+            ("HTTP/1.1 204 No Content", String::new()),
+        ]);
+        let err = post_streamed(&server, &path, 1000).unwrap_err();
+        assert!(err.to_string().contains("HTTP 404"), "{err}");
+        assert_eq!(server.requests().len(), 4);
+    }
+
+    #[test]
+    fn graphs_post_streamed_percent_encodes_owner_and_repo() {
+        let path = stream_path(2, 50);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+        ]);
+        let doc = toolpath::v1::Graph::from_path(path);
+        graphs_post_streamed(
+            &server.base(),
+            "tok",
+            "al ex",
+            "path/stash",
+            None,
+            &doc,
+            false,
+            BATCH_BUDGET,
+        )
+        .unwrap();
+        assert_eq!(
+            request_line(&server.requests()[1]),
+            format!("POST /api/v1/u/al%20ex/repos/path%2Fstash/graphs/{TEST_UUID}/paths HTTP/1.1")
+        );
     }
 }

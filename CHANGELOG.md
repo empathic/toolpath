@@ -17,8 +17,10 @@ All notable changes to the Toolpath workspace are documented here.
   on any other failure the partly uploaded graph is deleted and the
   error is reported (a 413 names the step and its size). Documents at or
   under 4 MiB, documents containing a `$ref` path entry or a path with
-  no steps, and anonymous uploads still use the single request. Streamed
-  uploads need a Pathbase server that implements the batch routes.
+  no steps, and anonymous uploads still use the single request. When
+  the server answers `404` or `405` to a path's first batch it does not
+  implement the batch routes: the CLI deletes the empty graph, prints a
+  note, and sends the whole document in one request as before.
 - **`toolpath-cli`** (0.27.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.26.0 — 2026-09-16
