@@ -2,6 +2,25 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.27.0 — 2026-09-21
+
+- **`path-cli`** (0.27.0): authenticated uploads (`path share`,
+  `p export pathbase`) of a document larger than 4 MiB are sent as
+  several requests instead of one. The CLI creates the graph with
+  `paths: []`, then sends each path as batches of RFC-jsonl lines of at
+  most 4 MiB: the first batch to `POST …/graphs/{id}/paths`, the rest to
+  `POST …/graphs/{id}/paths/{path_id}/steps`. Every batch but the last
+  ends with an added `Head` line, so the stored path is valid after each
+  request. A step's signatures travel with the step, a step larger than
+  the budget is sent alone, and steps are sent parents-first. A batch
+  that fails with a transport error or a 5xx is retried up to 3 times;
+  on any other failure the partly uploaded graph is deleted and the
+  error is reported (a 413 names the step and its size). Documents at or
+  under 4 MiB, documents containing a `$ref` path entry or a path with
+  no steps, and anonymous uploads still use the single request. Streamed
+  uploads need a Pathbase server that implements the batch routes.
+- **`toolpath-cli`** (0.27.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.26.0 — 2026-09-16
 
 - **`path-cli`** (0.26.0): `path resume --remote` takes launch
