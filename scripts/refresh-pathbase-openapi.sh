@@ -60,14 +60,33 @@ jq '
       | (if $ref_obj.description then .description = $ref_obj.description else . end)
     else . end;
 
-  # Progenitor 0.14 only handles JSON request/response bodies. Drop
-  # operations that use non-JSON content types (e.g. application/x-ndjson
-  # for streaming endpoints) so the build doesnt panic on
-  # `UnexpectedFormat("unexpected content type: ...")`. The CLI doesnt
-  # use these surfaces; if it ever needs them, add a hand-rolled reqwest
-  # call in cmd_pathbase.rs alongside the generated client.
+  # Progenitor 0.14 accepts request bodies of application/json,
+  # application/x-www-form-urlencoded, application/octet-stream,
+  # text/plain and text/x-markdown, and JSON responses only. The
+  # streamed-upload routes take application/x-ndjson with schema
+  # {type: string}; rewrite that key to text/plain so progenitor
+  # generates a `body: String` parameter. The generated client then
+  # sends `Content-Type: text/plain`, which the server accepts: those
+  # handlers read the raw body and do not check the header. Operations
+  # still using an unsupported content type after the rewrite are
+  # dropped so the build does not panic on
+  # `UnexpectedFormat("unexpected content type: ...")`.
+  def rewrite_ndjson_request_body:
+    if type == "object"
+       and has("requestBody")
+       and ((.requestBody.content // {}) | has("application/x-ndjson"))
+    then
+      .requestBody.content |= with_entries(
+        if .key == "application/x-ndjson" then .key = "text/plain" else . end
+      )
+    else . end;
+
+  def supported_request_body(key):
+    key | IN("application/json", "application/x-www-form-urlencoded",
+             "application/octet-stream", "text/plain", "text/x-markdown");
+
   def has_unsupported_content(op):
-    ((op.requestBody.content // {}) | keys | any(. != "application/json"))
+    ((op.requestBody.content // {}) | keys | any(supported_request_body(.) | not))
     or ((op.responses // {}) | to_entries | any(
       ((.value.content // {}) | keys | any(. != "application/json"))
     ));
@@ -82,6 +101,7 @@ jq '
       )
     ) | .paths |= with_entries(select((.value | length) > 0));
 
-  walk(downconvert_type_array | downconvert_nullable_ref) | strip_unsupported_operations
+  walk(downconvert_type_array | downconvert_nullable_ref | rewrite_ndjson_request_body)
+  | strip_unsupported_operations
 ' "${_tmp}" > "${_dest}"
 echo "refresh: wrote ${_dest} ($(wc -l < "${_dest}") lines, OpenAPI 3.0 form)"

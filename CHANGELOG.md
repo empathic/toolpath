@@ -21,6 +21,20 @@ All notable changes to the Toolpath workspace are documented here.
   the server answers `404` or `405` to a path's first batch it does not
   implement the batch routes: the CLI deletes the empty graph, prints a
   note, and sends the whole document in one request as before.
+- **`pathbase-client`** (0.2.1): regenerate from the Pathbase branch
+  that adds streamed upload. New operations `open_graph_path`
+  (`POST …/graphs/{id}/paths`) and `append_graph_path_steps`
+  (`POST …/graphs/{id}/paths/{path_id}/steps`, replacing the old
+  bare-steps body and full-path response), plus `freeze_graph`,
+  `get_graph_path_stats`, `Graph.state`/`Graph.generation` (required),
+  `User.kind`/`User.auth_methods`, and `409` on path update/delete.
+  `scripts/refresh-pathbase-openapi.sh` now rewrites an
+  `application/x-ndjson` request body to `text/plain` instead of
+  dropping the operation: progenitor cannot name `x-ndjson`, and the
+  server's batch handlers read the raw body without checking the
+  header. Because `state` and `generation` are required, responses from
+  a server without Pathbase #468 no longer decode; this release needs
+  that server change deployed first.
 - **`toolpath-cli`** (0.27.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.26.0 — 2026-09-16

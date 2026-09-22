@@ -3221,7 +3221,7 @@ mod tests {
             ("HTTP/1.1 201 Created", graph_document_json()),
             (
                 "HTTP/1.1 201 Created",
-                r#"{"path_id":"p-1","inserted":2,"head":"step-002","generation":1}"#.to_string(),
+                r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":2,"head":"step-002","generation":1}"#.to_string(),
             ),
             (
                 "HTTP/1.1 200 OK",
@@ -3245,7 +3245,7 @@ mod tests {
             first_line(1)
         );
         assert!(
-            first_line(2).ends_with("/paths/p-1/steps HTTP/1.1"),
+            first_line(2).ends_with("/paths/11111111-1111-1111-1111-111111111111/steps HTTP/1.1"),
             "{}",
             first_line(2)
         );
