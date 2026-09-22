@@ -313,7 +313,9 @@ impl<'a> Builder<'a> {
     }
 
     fn build(mut self) -> ConversationView {
-        let mut prev_turn_id: Option<String> = None;
+        // Cursor records no linkage between bubbles; each item parents on
+        // the one emitted before it.
+        let mut prev_id: Option<String> = None;
         for bubble in &self.session.bubbles {
             // Cursor's `/summarize` boundary marker (capabilityType 22) carries
             // no recoverable summary or kept set — those live server-side, not
@@ -322,21 +324,20 @@ impl<'a> Builder<'a> {
             // the projector can write the marker bubble back. See
             // docs/agents/formats/cursor.md.
             if bubble.is_summarization() {
-                self.items.push(Item::Event(summarization_event(
-                    bubble,
-                    prev_turn_id.as_deref(),
-                )));
+                let event = summarization_event(bubble, prev_id.as_deref());
+                prev_id = Some(event.id.clone());
+                self.items.push(Item::Event(event));
                 continue;
             }
             let turn = match bubble.kind {
-                BUBBLE_TYPE_USER => self.user_turn(bubble, prev_turn_id.as_deref()),
-                BUBBLE_TYPE_ASSISTANT => self.assistant_turn(bubble, prev_turn_id.as_deref()),
+                BUBBLE_TYPE_USER => self.user_turn(bubble, prev_id.as_deref()),
+                BUBBLE_TYPE_ASSISTANT => self.assistant_turn(bubble, prev_id.as_deref()),
                 // Unknown bubble kind — skip silently. A new Anysphere
                 // bubble kind would land here; we'd rather emit a
                 // shorter conversation than break the parse.
                 _ => continue,
             };
-            prev_turn_id = Some(turn.id.clone());
+            prev_id = Some(turn.id.clone());
             self.items.push(Item::Turn(turn));
         }
 
@@ -928,8 +929,8 @@ mod tests {
         assert_eq!(after.id, "u2");
         assert_eq!(
             after.parent_id.as_deref(),
-            Some("u1"),
-            "turn chain skips the marker"
+            Some("s1"),
+            "the chain runs through the marker"
         );
     }
 
@@ -946,7 +947,10 @@ mod tests {
         let view = session_to_view(&r.load_session("cl").unwrap());
         let ev = view.items[0].as_event().unwrap();
         assert_eq!(ev.parent_id, None);
-        assert!(view.items[1].as_turn().unwrap().parent_id.is_none());
+        assert_eq!(
+            view.items[1].as_turn().unwrap().parent_id.as_deref(),
+            Some("s1")
+        );
     }
 
     #[test]

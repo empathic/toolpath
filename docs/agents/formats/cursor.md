@@ -538,7 +538,8 @@ summarized context lives server-side. `toolpath-cursor` therefore
 preserves it as an opaque `ConversationEvent` with
 `event_type: "summarization"` at its stream position (`id` = the
 bubble id, `timestamp` = `createdAt`, `data.capabilityType = 22`,
-`parent_id` = the preceding turn's bubble id), and the projector
+`parent_id` = the preceding item's bubble id; the next turn parents
+on the marker), and the projector
 writes the marker bubble back from that event, so a
 cursor → toolpath → cursor round-trip keeps the boundary and
 Cursor's UI renders the session unchanged. Typed compaction support

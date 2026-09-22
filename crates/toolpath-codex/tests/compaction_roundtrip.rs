@@ -137,6 +137,25 @@ fn compacted_event_keeps_its_stream_position_through_roundtrip() {
         "interleaving should survive derive → extract"
     );
 
+    // The chain runs through the marker: no step between the two turns it
+    // separates is a dead end.
+    let path = derive_path(&original, &DeriveConfig::default());
+    let dead: Vec<&str> = toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+        .iter()
+        .map(|s| s.step.id.as_str())
+        .collect();
+    assert!(dead.is_empty(), "unexpected dead ends: {dead:?}");
+    let compacted_step = path
+        .steps
+        .iter()
+        .position(|s| s.step.id.starts_with("compacted"))
+        .expect("compacted step");
+    assert_eq!(
+        path.steps[compacted_step + 1].step.parents,
+        vec![path.steps[compacted_step].step.id.clone()],
+        "the turn after the marker parents on it"
+    );
+
     let summary = "login() lacks session-token validation";
     let compacted = after
         .events()
