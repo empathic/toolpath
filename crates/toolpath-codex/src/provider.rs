@@ -345,13 +345,9 @@ impl<'a> Builder<'a> {
             .collect();
 
         // Assign synthetic ids to surviving turns whose source message didn't
-        // carry one, then link them sequentially via `parent_id` so the shared
-        // `derive_path` can walk a connected DAG. Codex turns don't carry
-        // explicit parent ids on the wire; this preserves the linear ordering
-        // the old `derive_path_from_view` produced. Numbering follows the
-        // post-filter position to match the prior `retain`-then-enumerate id.
+        // carry one. Numbering follows the post-filter position to match the
+        // prior `retain`-then-enumerate id.
         let mut surviving = 0usize;
-        let mut prev: Option<String> = None;
         // Final id of each surviving turn, indexed by its position in
         // `self.turns`; `None` for dropped turns. Seeds the event-id
         // dedup set below.
@@ -364,10 +360,6 @@ impl<'a> Builder<'a> {
             if t.id.is_empty() {
                 t.id = format!("codex-turn-{:04}", surviving);
             }
-            if t.parent_id.is_none() {
-                t.parent_id = prev.clone();
-            }
-            prev = Some(t.id.clone());
             turn_final_id[idx] = Some(t.id.clone());
         }
 
@@ -404,6 +396,18 @@ impl<'a> Builder<'a> {
             items.push(Item::Turn(turn));
         }
         items.extend(events.map(|(_, e)| Item::Event(e)));
+
+        // Codex records no linkage on the wire, so the chain is the rollout
+        // order: each item parents on the one emitted before it.
+        let mut prev: Option<String> = None;
+        for item in &mut items {
+            let (id, parent_id) = match item {
+                Item::Turn(t) => (&t.id, &mut t.parent_id),
+                Item::Event(e) => (&e.id, &mut e.parent_id),
+            };
+            *parent_id = prev.take();
+            prev = Some(id.clone());
+        }
 
         ConversationView {
             id: self.session.id.clone(),

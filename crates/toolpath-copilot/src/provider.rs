@@ -176,7 +176,7 @@ pub fn to_view(session: &Session) -> ConversationView {
                 seq += 1;
                 let mut t = empty_turn(format!("u{seq}"), Role::User, ts);
                 t.text = m.text;
-                push_linked(&mut turns, t);
+                turns.push(t);
             }
             CopilotEvent::AssistantTurnStart => {
                 flush(&mut turns, &mut current);
@@ -404,13 +404,16 @@ pub fn to_view(session: &Session) -> ConversationView {
     }
     items.extend(ev.map(|(_, e)| Item::Event(e)));
 
-    // Stitch the linear parent chain over the turns.
+    // Copilot records no linkage on the wire, so the chain is the event log
+    // order: each item parents on the one emitted before it.
     let mut prev: Option<String> = None;
     for item in &mut items {
-        if let Item::Turn(t) = item {
-            t.parent_id = prev.clone();
-            prev = Some(t.id.clone());
-        }
+        let (id, parent_id) = match item {
+            Item::Turn(t) => (&t.id, &mut t.parent_id),
+            Item::Event(e) => (&e.id, &mut e.parent_id),
+        };
+        *parent_id = prev.take();
+        prev = Some(id.clone());
     }
 
     ConversationView {
@@ -477,13 +480,6 @@ fn append_text(buf: &mut String, more: &str) {
     buf.push_str(more);
 }
 
-fn push_linked(turns: &mut Vec<Turn>, mut t: Turn) {
-    if let Some(prev) = turns.last() {
-        t.parent_id = Some(prev.id.clone());
-    }
-    turns.push(t);
-}
-
 fn turn_has_content(t: &Turn) -> bool {
     // Token usage counts as content: an aborted response is an empty-text,
     // tool-less assistant message that still consumed real tokens, and
@@ -501,7 +497,7 @@ fn flush(turns: &mut Vec<Turn>, current: &mut Option<Turn>) {
     if let Some(t) = current.take()
         && turn_has_content(&t)
     {
-        push_linked(turns, t);
+        turns.push(t);
     }
 }
 
@@ -1146,6 +1142,19 @@ mod tests {
         assert_eq!(
             item_shapes(&view),
             ["turn:go", "turn:working", "event:hook.start", "turn:next"]
+        );
+        let parents: Vec<Option<&str>> = view
+            .items
+            .iter()
+            .map(|i| match i {
+                Item::Turn(t) => t.parent_id.as_deref(),
+                Item::Event(e) => e.parent_id.as_deref(),
+            })
+            .collect();
+        assert_eq!(
+            parents,
+            [None, Some("t0"), Some("t1"), Some("evt-0003")],
+            "the chain runs through the event"
         );
     }
 
