@@ -186,9 +186,7 @@ proptest! {
         // with its original id and parent linkage, after the original —
         // possibly with events/compactions between, but before the next
         // turn. A copy at such a position is the same source entry and must
-        // be dropped without any effect on the derived path — including when
-        // derive spliced the original onto an intervening event (the
-        // comparison normalizes splice artifacts away before deciding).
+        // be dropped without any effect on the derived path.
         // (A same-id turn with *different* linkage is not a replay; the
         // dedup renames it, which is data-preserving, not a no-op.)
         let base = build_view(elems);
