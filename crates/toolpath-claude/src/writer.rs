@@ -1,22 +1,21 @@
 use crate::error::Result;
-use crate::types::Conversation;
+use crate::types::{Conversation, Line};
 use std::io::Write;
 
 pub struct ConversationWriter;
 
 impl ConversationWriter {
-    /// Writes `conv` as Claude Code session-file JSONL: preamble
-    /// lines, then entries, one JSON value per line, each line
-    /// newline-terminated.
+    /// Writes `conv` as Claude Code session-file JSONL: every line in
+    /// file order, headerless lines at their position among the
+    /// entries, one JSON value per line, each line newline-terminated.
     pub fn write_conversation<W: Write>(conv: &Conversation, mut w: W) -> Result<()> {
         // Trailing newline matters: Claude Code appends to this file on resume,
         // and without it the first appended entry lands on the last line.
-        for raw in &conv.preamble {
-            serde_json::to_writer(&mut w, raw)?;
-            w.write_all(b"\n")?;
-        }
-        for entry in &conv.entries {
-            serde_json::to_writer(&mut w, entry)?;
+        for line in conv.lines() {
+            match line {
+                Line::Headerless(raw) => serde_json::to_writer(&mut w, raw)?,
+                Line::Entry(entry) => serde_json::to_writer(&mut w, entry)?,
+            }
             w.write_all(b"\n")?;
         }
         Ok(())
@@ -32,9 +31,7 @@ mod tests {
 
     fn conversation() -> Conversation {
         let mut convo = Conversation::new("test-session".to_string());
-        convo
-            .preamble
-            .push(serde_json::json!({"type": "summary", "summary": "s"}));
+        convo.add_headerless(serde_json::json!({"type": "summary", "summary": "s"}));
         let entries = [
             r#"{"uuid":"uuid-1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
             r#"{"uuid":"uuid-2","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"Hi"}}"#,
@@ -43,6 +40,7 @@ mod tests {
             let entry: ConversationEntry = serde_json::from_str(entry_json).unwrap();
             convo.add_entry(entry);
         }
+        convo.add_headerless(serde_json::json!({"type": "last-prompt", "lastPrompt": "Hello"}));
         convo
     }
 
@@ -57,8 +55,9 @@ mod tests {
         assert!(out.ends_with('\n'));
         assert!(!out.ends_with("\n\n"));
         let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 4);
         assert!(lines[0].contains("\"summary\""));
+        assert!(lines[3].contains("\"last-prompt\""));
         for line in &lines {
             serde_json::from_str::<Value>(line).unwrap();
         }
@@ -73,6 +72,6 @@ mod tests {
         let back = ConversationReader::read_conversation(file.path()).unwrap();
         let entries = |c: &Conversation| serde_json::to_value(&c.entries).unwrap();
         assert_eq!(entries(&back), entries(&convo));
-        assert_eq!(back.preamble, convo.preamble);
+        assert_eq!(back.headerless, convo.headerless);
     }
 }

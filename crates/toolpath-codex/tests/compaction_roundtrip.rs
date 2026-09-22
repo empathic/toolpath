@@ -13,14 +13,14 @@
 //!     crashing on the `compacted` line.
 //!   - Pre-compact user/assistant content survives the round-trip.
 //!   - Post-compact user/assistant content survives the round-trip.
+//!   - The `compacted` marker rides as an opaque event at its rollout
+//!     position — between the pre- and post-compact turns — and keeps
+//!     that position (and its `message` payload) through the
+//!     derive → extract round-trip. Typing the boundary is the
+//!     compaction-provenance follow-up's concern; position and payload
+//!     survival are pinned here.
 //!   - The conversation projects back to JSONL that re-parses through
 //!     `RolloutReader`.
-//!
-//! Known limitation (documented, not asserted): the `compacted`
-//! rollout line itself carries an opaque payload (Codex doesn't model
-//! its inner shape — `Compacted(Value)`). Today the IR drops it on the
-//! floor. Acceptable loss for "good UX" — the surrounding messages
-//! are what users actually read.
 
 use std::path::{Path, PathBuf};
 
@@ -56,7 +56,7 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
 fn fixture_loads_without_panic() {
     let view = load_view();
     assert!(
-        !view.turns.is_empty(),
+        view.turns().next().is_some(),
         "compaction fixture should produce turns"
     );
 }
@@ -69,11 +69,11 @@ fn pre_compact_content_survives_roundtrip() {
     let needles = ["refactor the auth module", "reading the current auth code"];
     for n in needles {
         assert!(
-            original.turns.iter().any(|t| t.text.contains(n)),
+            original.turns().any(|t| t.text.contains(n)),
             "pre-compact text {n:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(n)),
+            after.turns().any(|t| t.text.contains(n)),
             "pre-compact text {n:?} dropped after roundtrip"
         );
     }
@@ -90,14 +90,83 @@ fn post_compact_content_survives_roundtrip() {
     ];
     for n in needles {
         assert!(
-            original.turns.iter().any(|t| t.text.contains(n)),
+            original.turns().any(|t| t.text.contains(n)),
             "post-compact text {n:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(n)),
+            after.turns().any(|t| t.text.contains(n)),
             "post-compact text {n:?} dropped after roundtrip"
         );
     }
+}
+
+/// Item kinds in stream order: `T` for a turn, or the event's type.
+fn item_shape(view: &ConversationView) -> Vec<String> {
+    view.items
+        .iter()
+        .map(|item| match item {
+            toolpath_convo::Item::Turn(_) => "T".to_string(),
+            toolpath_convo::Item::Event(e) => e.event_type.clone(),
+        })
+        .collect()
+}
+
+#[test]
+fn compacted_event_keeps_its_stream_position_through_roundtrip() {
+    let original = load_view();
+    let expected = [
+        "session_meta",
+        "task_started",
+        "T",
+        "T",
+        "compacted",
+        "T",
+        "T",
+        "task_complete",
+    ];
+    assert_eq!(
+        item_shape(&original),
+        expected,
+        "items should preserve the rollout's interleaving"
+    );
+
+    let after = ir_roundtrip(&original);
+    assert_eq!(
+        item_shape(&after),
+        expected,
+        "interleaving should survive derive → extract"
+    );
+
+    // The chain runs through the marker: no step between the two turns it
+    // separates is a dead end.
+    let path = derive_path(&original, &DeriveConfig::default());
+    let dead: Vec<&str> = toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+        .iter()
+        .map(|s| s.step.id.as_str())
+        .collect();
+    assert!(dead.is_empty(), "unexpected dead ends: {dead:?}");
+    let compacted_step = path
+        .steps
+        .iter()
+        .position(|s| s.step.id.starts_with("compacted"))
+        .expect("compacted step");
+    assert_eq!(
+        path.steps[compacted_step + 1].step.parents,
+        vec![path.steps[compacted_step].step.id.clone()],
+        "the turn after the marker parents on it"
+    );
+
+    let summary = "login() lacks session-token validation";
+    let compacted = after
+        .events()
+        .find(|e| e.event_type == "compacted")
+        .expect("compacted event survives roundtrip");
+    assert!(
+        serde_json::to_string(&compacted.data)
+            .expect("serialize event data")
+            .contains(summary),
+        "compacted message payload should survive roundtrip"
+    );
 }
 
 #[test]

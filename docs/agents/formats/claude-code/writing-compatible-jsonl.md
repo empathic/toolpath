@@ -142,6 +142,16 @@ If you read a session and want to write it back out losslessly:
 - **Preserve `content` array ordering.** Text-before-tool_use and
   thinking-before-text within a single assistant entry matter for
   replay semantics.
+- **Preserve headerless line position.** Lines without a `uuid`
+  (`last-prompt`, `ai-title`, `mode`, `permission-mode`,
+  `file-history-snapshot`, …) are written between turns, not only at
+  the top of the file. Write them back where they were read
+  (`toolpath-claude` keeps each with the index of the entry it
+  precedes; see
+  [jsonl-envelope.md §Headerless lines](jsonl-envelope.md#headerless-lines)).
+  Moving them all to the front reads fine in Claude Code but reorders
+  the file on every round-trip and makes any derived, position-keyed
+  representation non-append-only.
 
 ## Starting a fresh session file
 

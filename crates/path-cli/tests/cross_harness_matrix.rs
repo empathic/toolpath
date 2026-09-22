@@ -6,7 +6,7 @@
 //! than aborting on the first; one cell's failures land grouped under
 //! its label so triage is possible from a single test run.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -67,18 +67,14 @@ impl Harness for ClaudeHarness {
         let convo = projector
             .project(view)
             .map_err(|e| format!("project: {}", e))?;
-        let mut lines: Vec<String> = Vec::new();
-        for raw in &convo.preamble {
-            lines.push(serde_json::to_string(raw).map_err(|e| format!("preamble: {}", e))?);
-        }
-        for entry in &convo.entries {
-            lines.push(serde_json::to_string(entry).map_err(|e| format!("entry: {}", e))?);
-        }
+        let mut buf = Vec::new();
+        toolpath_claude::ConversationWriter::write_conversation(&convo, &mut buf)
+            .map_err(|e| format!("write: {}", e))?;
         let tmp = tempfile::Builder::new()
             .suffix(".jsonl")
             .tempfile()
             .map_err(|e| format!("tempfile: {}", e))?;
-        std::fs::write(tmp.path(), lines.join("\n")).map_err(|e| format!("write: {}", e))?;
+        std::fs::write(tmp.path(), &buf).map_err(|e| format!("write: {}", e))?;
         toolpath_claude::ConversationReader::read_conversation(tmp.path())
             .map_err(|e| format!("re-read: {}", e))?;
         Ok(())
@@ -509,10 +505,7 @@ mod invariants {
     }
 
     fn meaningful_turns(view: &ConversationView) -> Vec<&Turn> {
-        view.turns
-            .iter()
-            .filter(|t| !is_system_envelope(t))
-            .collect()
+        view.turns().filter(|t| !is_system_envelope(t)).collect()
     }
 
     pub fn turn_count_and_role_sequence(
@@ -690,8 +683,7 @@ mod invariants {
         // on input/output — the fields every wire carries (codex has no
         // cache_write analog, cursor carries no cache counters at all).
         let usage_seq = |v: &ConversationView| -> Vec<(Option<u32>, Option<u32>)> {
-            v.turns
-                .iter()
+            v.turns()
                 .filter(|t| matches!(t.role, Role::Assistant))
                 .filter_map(|t| t.token_usage.as_ref())
                 .map(|u| (u.input_tokens, u.output_tokens))
@@ -745,13 +737,11 @@ mod invariants {
         failures: &mut Vec<String>,
     ) {
         let pre: Vec<&Turn> = before_target
-            .turns
-            .iter()
+            .turns()
             .filter(|t| matches!(t.role, Role::Assistant))
             .collect();
         let post: Vec<&Turn> = after_target
-            .turns
-            .iter()
+            .turns()
             .filter(|t| matches!(t.role, Role::Assistant))
             .collect();
         for (i, (a, b)) in pre.iter().zip(post.iter()).enumerate() {
@@ -804,18 +794,34 @@ mod invariants {
         }
     }
 
-    /// Edge-set equality on the parent_id graph. Same {(id, parent_id)}
-    /// set across the two views — ordering is allowed to differ but no
-    /// edge may be added or dropped.
+    /// Edge-set equality on the turn parent graph: same {(id, nearest turn
+    /// ancestor)} set across the two views — ordering is allowed to differ
+    /// but no edge may be added or dropped. Parents are resolved past
+    /// events because projectors mint event ids from timestamps they do
+    /// not preserve exactly, and the matrix compares turns, not events.
     pub fn parent_id_graph(
         original: &ConversationView,
         final_: &ConversationView,
         failures: &mut Vec<String>,
     ) {
         let edges = |v: &ConversationView| -> BTreeSet<(String, Option<String>)> {
-            v.turns
-                .iter()
-                .map(|t| (t.id.clone(), t.parent_id.clone()))
+            let event_parents: HashMap<&str, Option<&str>> = v
+                .events()
+                .map(|e| (e.id.as_str(), e.parent_id.as_deref()))
+                .collect();
+            v.turns()
+                .map(|t| {
+                    let mut parent = t.parent_id.as_deref();
+                    let mut hops = event_parents.len();
+                    while let Some(p) = parent
+                        && let Some(next) = event_parents.get(p)
+                        && hops > 0
+                    {
+                        parent = *next;
+                        hops -= 1;
+                    }
+                    (t.id.clone(), parent.map(str::to_string))
+                })
                 .collect()
         };
         let o = edges(original);
@@ -864,7 +870,7 @@ mod invariants {
         failures: &mut Vec<String>,
     ) {
         let count =
-            |v: &ConversationView| -> usize { v.turns.iter().map(|t| t.delegations.len()).sum() };
+            |v: &ConversationView| -> usize { v.turns().map(|t| t.delegations.len()).sum() };
         let o = count(original);
         let f = count(final_);
         if o != f {
@@ -875,7 +881,7 @@ mod invariants {
             return;
         }
 
-        for (i, (a, b)) in original.turns.iter().zip(final_.turns.iter()).enumerate() {
+        for (i, (a, b)) in original.turns().zip(final_.turns()).enumerate() {
             if a.delegations.len() != b.delegations.len() {
                 failures.push(format!(
                     "turn {} delegation count diverged: first={} second={}",
@@ -938,14 +944,12 @@ mod invariants {
         failures: &mut Vec<String>,
     ) {
         let agent_ids = |v: &ConversationView| -> BTreeSet<String> {
-            v.turns
-                .iter()
+            v.turns()
                 .flat_map(|t| t.delegations.iter().map(|d| d.agent_id.clone()))
                 .collect()
         };
         let tool_use_ids = |v: &ConversationView| -> BTreeSet<String> {
-            v.turns
-                .iter()
+            v.turns()
                 .flat_map(|t| t.tool_uses.iter().map(|tu| tu.id.clone()))
                 .collect()
         };
@@ -1099,7 +1103,11 @@ fn matrix_translation() {
                 h.name()
             )
         });
-        eprintln!("loaded {} fixture: {} turns", h.name(), view.turns.len());
+        eprintln!(
+            "loaded {} fixture: {} turns",
+            h.name(),
+            view.turns().count()
+        );
         sources.push((h.name().to_string(), view));
     }
     run_matrix("matrix (real fixtures)", &sources);

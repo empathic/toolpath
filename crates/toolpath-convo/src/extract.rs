@@ -13,7 +13,7 @@ use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
 use crate::{
-    ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation,
+    ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation, Item,
     ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
@@ -71,10 +71,25 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
         view.producer = Some(p);
     }
 
-    // Map from step ID → index into view.turns, for parent lookups.
+    // Map from step ID → index into view.items (of a turn item), for
+    // parent lookups when attaching tool invocations.
     let mut step_to_turn: HashMap<&str, usize> = HashMap::new();
     // Track files_changed for dedup in insertion order.
     let mut files_seen: HashSet<String> = HashSet::new();
+
+    // Session-level `files_changed` rides `meta.extra` (derive writes it
+    // from the view). Recover it first — steps carry `file.write` changes
+    // only where the source had per-turn mutations, so rebuilding from
+    // steps alone drops every file the provider recorded at session level.
+    if let Some(meta) = &path.meta
+        && let Some(list) = meta.extra.get("files_changed").and_then(|v| v.as_array())
+    {
+        for f in list.iter().filter_map(|v| v.as_str()) {
+            if files_seen.insert(f.to_string()) {
+                view.files_changed.push(f.to_string());
+            }
+        }
+    }
 
     for step in &path.steps {
         // Pre-collect file.write entries on this step. They attach to the
@@ -127,24 +142,28 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                 None => continue,
             };
 
+            // The shared-derive path doesn't emit conversation.init; it
+            // encodes provider + session in the artifact key of every
+            // conversation step (e.g. `gemini-cli://<session>`). Pick them
+            // up from the first one — append, event, or compact — so a
+            // path with no turns still keeps its identity.
+            if matches!(
+                structural.change_type.as_str(),
+                "conversation.append" | "conversation.event"
+            ) && view.id.is_empty()
+                && let Some((provider, session)) = artifact_key.split_once("://")
+                && !provider.is_empty()
+                && !session.is_empty()
+            {
+                view.provider_id = Some(provider.to_string());
+                view.id = session.to_string();
+            }
+
             match structural.change_type.as_str() {
                 "conversation.init" => {
                     handle_init(&mut view, artifact_key, &structural.extra);
                 }
                 "conversation.append" => {
-                    // The shared-derive path doesn't emit conversation.init;
-                    // it encodes provider + session in the artifact key of
-                    // each append step (e.g. `gemini-cli://<session>`).
-                    // Pick them up the first time we see one.
-                    if view.id.is_empty()
-                        && let Some((provider, session)) = artifact_key.split_once("://")
-                        && !provider.is_empty()
-                        && !session.is_empty()
-                    {
-                        view.provider_id = Some(provider.to_string());
-                        view.id = session.to_string();
-                    }
-
                     let mut turn = build_turn(step, &structural.extra);
                     // Attach pre-collected file mutations to the turn.
                     // `tool_id` on each mutation links back to the
@@ -152,9 +171,9 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     if !step_mutations.is_empty() {
                         turn.file_mutations = std::mem::take(&mut step_mutations);
                     }
-                    let idx = view.turns.len();
+                    let idx = view.items.len();
                     step_to_turn.insert(&step.step.id, idx);
-                    view.turns.push(turn);
+                    view.items.push(Item::Turn(turn));
                 }
                 "conversation.event" => {
                     let event_type = structural
@@ -163,33 +182,22 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    // Restore the provider's original event id (e.g. the
-                    // source UUID for a Claude attachment). Falls back to
-                    // the synthetic step id for events that didn't have one.
-                    let id = structural
-                        .extra
-                        .get("event_source_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| step.step.id.clone());
                     // Strip the housekeeping keys we added in derive so the
                     // event's data round-trips clean. Restore the original
                     // `type` key from `event_data_type` if it was stashed.
                     let mut data = structural.extra.clone();
                     data.remove("entry_type");
-                    data.remove("event_source_id");
                     if let Some(t) = data.remove("event_data_type") {
                         data.insert("type".to_string(), t);
                     }
 
-                    let event = ConversationEvent {
-                        id,
+                    view.items.push(Item::Event(ConversationEvent {
+                        id: step.step.id.clone(),
                         timestamp: step.step.timestamp.clone(),
                         parent_id: step.step.parents.first().cloned(),
                         event_type,
                         data,
-                    };
-                    view.events.push(event);
+                    }));
                 }
                 "tool.invoke" => {
                     let invocation = build_tool_invocation(&structural.extra);
@@ -206,8 +214,9 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     // Attach to parent turn.
                     if let Some(parent_id) = step.step.parents.first()
                         && let Some(&turn_idx) = step_to_turn.get(parent_id.as_str())
+                        && let Some(Item::Turn(t)) = view.items.get_mut(turn_idx)
                     {
-                        view.turns[turn_idx].tool_uses.push(invocation);
+                        t.tool_uses.push(invocation);
                     }
                 }
                 _ => {
@@ -220,7 +229,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
     // Compute total_usage by summing across turns.
     let mut has_any_usage = false;
     let mut total = TokenUsage::default();
-    for turn in &view.turns {
+    for turn in view.turns() {
         if let Some(usage) = &turn.token_usage {
             has_any_usage = true;
             total.input_tokens = add_opt(total.input_tokens, usage.input_tokens);
@@ -233,14 +242,17 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
         view.total_usage = Some(total);
     }
 
-    // Parse timestamps from first/last turns.
-    if let Some(first) = view.turns.first() {
-        view.started_at = DateTime::parse_from_rfc3339(&first.timestamp)
+    // Parse timestamps from first/last turns. Clone the strings out first
+    // so the `turns()` borrow ends before we assign back into `view`.
+    let first_ts = view.turns().next().map(|t| t.timestamp.clone());
+    let last_ts = view.turns().last().map(|t| t.timestamp.clone());
+    if let Some(ts) = first_ts {
+        view.started_at = DateTime::parse_from_rfc3339(&ts)
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc));
     }
-    if let Some(last) = view.turns.last() {
-        view.last_activity = DateTime::parse_from_rfc3339(&last.timestamp)
+    if let Some(ts) = last_ts {
+        view.last_activity = DateTime::parse_from_rfc3339(&ts)
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc));
     }
@@ -288,8 +300,14 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Model is attributed via the step actor (`agent:{model}`).
-    let model = model_from_actor(&step.step.actor);
+    // Model is attributed via the step actor (`agent:{model}`). An
+    // assistant turn with a `tool:` actor is a harness-synthetic message
+    // (`actor_for_turn` maps `model == "<synthetic>"` there); restore the
+    // marker so re-derivation reproduces the same actor.
+    let model = model_from_actor(&step.step.actor).or_else(|| {
+        (matches!(role, Role::Assistant) && step.step.actor.starts_with("tool:"))
+            .then(|| "<synthetic>".to_string())
+    });
 
     let stop_reason = extra
         .get("stop_reason")
@@ -629,7 +647,7 @@ mod tests {
         let path = make_path(vec![]);
         let view = extract_conversation(&path);
         assert!(view.id.is_empty());
-        assert!(view.turns.is_empty());
+        assert!(view.turns().next().is_none());
         assert!(view.total_usage.is_none());
         assert!(view.started_at.is_none());
         assert!(view.last_activity.is_none());
@@ -700,13 +718,14 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "Fix the bug");
-        assert_eq!(view.turns[0].id, "step-002");
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "I'll fix that.");
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-6"));
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "Fix the bug");
+        assert_eq!(turns[0].id, "step-002");
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "I'll fix that.");
+        assert_eq!(turns[1].model.as_deref(), Some("claude-opus-4-6"));
     }
 
     #[test]
@@ -728,7 +747,10 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns[0].group_id.as_deref(), Some("msg_01abc"));
+        assert_eq!(
+            view.turns().next().unwrap().group_id.as_deref(),
+            Some("msg_01abc")
+        );
     }
 
     #[test]
@@ -769,16 +791,14 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 1);
-        assert_eq!(view.turns[0].tool_uses.len(), 1);
-        assert_eq!(view.turns[0].tool_uses[0].id, "tu-001");
-        assert_eq!(view.turns[0].tool_uses[0].name, "Read");
-        assert_eq!(
-            view.turns[0].tool_uses[0].category,
-            Some(ToolCategory::FileRead)
-        );
-        assert!(view.turns[0].tool_uses[0].result.is_some());
-        assert!(!view.turns[0].tool_uses[0].result.as_ref().unwrap().is_error);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].tool_uses.len(), 1);
+        assert_eq!(turns[0].tool_uses[0].id, "tu-001");
+        assert_eq!(turns[0].tool_uses[0].name, "Read");
+        assert_eq!(turns[0].tool_uses[0].category, Some(ToolCategory::FileRead));
+        assert!(turns[0].tool_uses[0].result.is_some());
+        assert!(!turns[0].tool_uses[0].result.as_ref().unwrap().is_error);
     }
 
     #[test]
@@ -863,9 +883,10 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 1);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
         assert_eq!(
-            view.turns[0].thinking.as_deref(),
+            turns[0].thinking.as_deref(),
             Some("Let me think about this carefully...")
         );
     }
@@ -904,8 +925,9 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert!(view.turns[0].parent_id.is_none());
-        assert_eq!(view.turns[1].parent_id.as_deref(), Some("step-001"));
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert!(turns[0].parent_id.is_none());
+        assert_eq!(turns[1].parent_id.as_deref(), Some("step-001"));
     }
 
     #[test]
@@ -940,8 +962,9 @@ mod tests {
 
         let view = extract_conversation(&path);
         // Only the conversation.append step becomes a turn.
-        assert_eq!(view.turns.len(), 1);
-        assert_eq!(view.turns[0].text, "hello");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].text, "hello");
     }
 
     #[test]
@@ -984,9 +1007,10 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[2].role, Role::System);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[2].role, Role::System);
     }
 
     #[test]
@@ -1043,10 +1067,11 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 1);
-        assert_eq!(view.turns[0].tool_uses.len(), 2);
-        assert_eq!(view.turns[0].tool_uses[0].id, "tu-001");
-        assert_eq!(view.turns[0].tool_uses[1].id, "tu-002");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].tool_uses.len(), 2);
+        assert_eq!(turns[0].tool_uses[0].id, "tu-001");
+        assert_eq!(turns[0].tool_uses[1].id, "tu-002");
     }
 
     #[test]
@@ -1155,7 +1180,7 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert!(view.turns.is_empty());
+        assert!(view.turns().next().is_none());
     }
 
     #[test]
@@ -1178,7 +1203,7 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        let env = view.turns[0].environment.as_ref().unwrap();
+        let env = view.turns().next().unwrap().environment.as_ref().unwrap();
         assert_eq!(env.working_dir.as_deref(), Some("/home/alex/project"));
         assert_eq!(env.vcs_branch.as_deref(), Some("feature/cool"));
         assert!(env.vcs_revision.is_none());
@@ -1202,7 +1227,7 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert!(view.turns[0].environment.is_none());
+        assert!(view.turns().next().unwrap().environment.is_none());
     }
 
     #[test]
@@ -1284,22 +1309,23 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert!(view.turns.is_empty());
-        assert_eq!(view.events.len(), 2);
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert!(view.turns().next().is_none());
+        assert_eq!(events.len(), 2);
 
-        assert_eq!(view.events[0].id, "step-001");
-        assert_eq!(view.events[0].event_type, "attachment");
+        assert_eq!(events[0].id, "step-001");
+        assert_eq!(events[0].event_type, "attachment");
         assert_eq!(
-            view.events[0].data["cwd"],
+            events[0].data["cwd"],
             serde_json::json!("/home/alex/project")
         );
-        assert_eq!(view.events[0].data["version"], serde_json::json!("1.0.30"));
-        assert!(view.events[0].parent_id.is_none());
+        assert_eq!(events[0].data["version"], serde_json::json!("1.0.30"));
+        assert!(events[0].parent_id.is_none());
 
-        assert_eq!(view.events[1].id, "step-002");
-        assert_eq!(view.events[1].event_type, "file-history-snapshot");
-        assert_eq!(view.events[1].parent_id.as_deref(), Some("step-001"));
-        assert!(view.events[1].data.contains_key("snapshot"));
+        assert_eq!(events[1].id, "step-002");
+        assert_eq!(events[1].event_type, "file-history-snapshot");
+        assert_eq!(events[1].parent_id.as_deref(), Some("step-001"));
+        assert!(events[1].data.contains_key("snapshot"));
     }
 
     #[test]
@@ -1317,8 +1343,174 @@ mod tests {
         )]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.events.len(), 1);
-        assert_eq!(view.events[0].event_type, "unknown");
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "unknown");
+    }
+
+    fn bare_turn(id: &str, parent_id: Option<&str>, role: Role, timestamp: &str) -> Turn {
+        Turn {
+            id: id.into(),
+            parent_id: parent_id.map(|s| s.into()),
+            role,
+            timestamp: timestamp.into(),
+            text: "text".into(),
+            thinking: None,
+            tool_uses: vec![],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+            group_id: None,
+            attributed_token_usage: None,
+        }
+    }
+
+    fn bare_event(id: &str, event_type: &str, timestamp: &str) -> ConversationEvent {
+        ConversationEvent {
+            id: id.into(),
+            timestamp: timestamp.into(),
+            parent_id: None,
+            event_type: event_type.into(),
+            data: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_turn_parent_past_event_round_trips_verbatim() {
+        use crate::DeriveConfig;
+
+        // Wire truth: a1's parent is u1. An id-less event (e.g. a Claude
+        // file-history-snapshot line) sits between them in the stream.
+        // derive keeps a1 on u1; extract hands the same parent back.
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![
+                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:00Z")),
+                Item::Event(bare_event(
+                    "",
+                    "file-history-snapshot",
+                    "2026-01-01T00:00:01Z",
+                )),
+                Item::Turn(bare_turn(
+                    "a1",
+                    Some("u1"),
+                    Role::Assistant,
+                    "2026-01-01T00:00:02Z",
+                )),
+            ],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let a1_step = path.steps.iter().find(|s| s.step.id == "a1").unwrap();
+        assert_eq!(a1_step.step.parents, vec!["u1".to_string()]);
+
+        let view = extract_conversation(&path);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns[1].id, "a1");
+        assert_eq!(turns[1].parent_id.as_deref(), Some("u1"));
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert_eq!(events[0].id, "event-0001");
+        assert_eq!(events[0].parent_id, None);
+
+        let again = crate::derive::derive_path(&view, &DeriveConfig::default());
+        assert_eq!(
+            serde_json::to_value(&path).unwrap(),
+            serde_json::to_value(&again).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_turn_parent_naming_an_event_round_trips_verbatim() {
+        use crate::DeriveConfig;
+
+        // A reader that chains through an event (`u1 ← e1 ← a1`) gets the
+        // same chain back: extract restores each parent from `parents[0]`
+        // without walking past event steps.
+        let mut e1 = bare_event("e1", "attachment", "2026-01-01T00:00:01Z");
+        e1.parent_id = Some("u1".into());
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![
+                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:00Z")),
+                Item::Event(e1),
+                Item::Turn(bare_turn(
+                    "a1",
+                    Some("e1"),
+                    Role::Assistant,
+                    "2026-01-01T00:00:02Z",
+                )),
+            ],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let view = extract_conversation(&path);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns[0].parent_id, None);
+        assert_eq!(turns[1].parent_id.as_deref(), Some("e1"));
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert_eq!(events[0].parent_id.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn test_session_files_changed_recovered_from_meta() {
+        use crate::DeriveConfig;
+        // Real providers record session-level files_changed that has no
+        // per-step file.write backing (e.g. Claude without file-history
+        // snapshots); it must survive derive → extract via meta.extra.
+        let source = ConversationView {
+            id: "s1".into(),
+            items: vec![Item::Turn(bare_turn(
+                "u1",
+                None,
+                Role::User,
+                "2026-01-01T00:00:00Z",
+            ))],
+            provider_id: Some("claude-code".into()),
+            files_changed: vec!["/w/a.rs".into(), "/w/b.rs".into()],
+            ..Default::default()
+        };
+        let gen1 = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let view2 = extract_conversation(&gen1);
+        assert_eq!(view2.files_changed, source.files_changed);
+        let gen2 = crate::derive::derive_path(&view2, &DeriveConfig::default());
+        assert_eq!(
+            serde_json::to_value(&gen1).unwrap(),
+            serde_json::to_value(&gen2).unwrap(),
+            "files_changed round-trip must be stable"
+        );
+    }
+
+    #[test]
+    fn test_synthetic_assistant_turn_actor_stable() {
+        use crate::DeriveConfig;
+        // A harness-synthetic assistant message (e.g. Claude's "API Error"
+        // entries) derives to actor `tool:<provider>`; extract must restore
+        // `model = "<synthetic>"` so re-derivation keeps that actor instead
+        // of drifting to `agent:unknown`.
+        let mut t = bare_turn("a1", None, Role::Assistant, "2026-01-01T00:00:00Z");
+        t.model = Some("<synthetic>".into());
+        let source = ConversationView {
+            id: "s1".into(),
+            items: vec![Item::Turn(t)],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+        let gen1 = crate::derive::derive_path(&source, &DeriveConfig::default());
+        assert_eq!(gen1.steps[0].step.actor, "tool:claude-code");
+        let view2 = extract_conversation(&gen1);
+        let gen2 = crate::derive::derive_path(&view2, &DeriveConfig::default());
+        assert_eq!(gen2.steps[0].step.actor, "tool:claude-code");
+        assert_eq!(
+            serde_json::to_value(&gen1).unwrap(),
+            serde_json::to_value(&gen2).unwrap(),
+        );
     }
 
     #[test]
@@ -1352,9 +1544,11 @@ mod tests {
         ]);
 
         let view = extract_conversation(&path);
-        assert_eq!(view.turns.len(), 1);
-        assert_eq!(view.events.len(), 1);
-        assert_eq!(view.turns[0].text, "hello");
-        assert_eq!(view.events[0].event_type, "system");
+        let turns: Vec<&Turn> = view.turns().collect();
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(turns[0].text, "hello");
+        assert_eq!(events[0].event_type, "system");
     }
 }

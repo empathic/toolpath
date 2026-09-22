@@ -25,12 +25,12 @@
 //! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
 //! Codex's protocol and would pollute the JSONL.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Item, Result, Role, ToolInvocation, Turn,
 };
 
 use crate::types::{
@@ -116,8 +116,7 @@ fn project_view(
         .cwd
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
         })
         .unwrap_or_else(|| "/".to_string());
@@ -125,13 +124,13 @@ fn project_view(
     let model = cfg
         .model
         .clone()
-        .or_else(|| view.turns.iter().find_map(|t| t.model.clone()))
+        .or_else(|| view.turns().find_map(|t| t.model.clone()))
         .unwrap_or_else(|| "unknown".to_string());
 
     let session_timestamp = view
         .started_at
         .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-        .or_else(|| view.turns.first().map(|t| t.timestamp.clone()))
+        .or_else(|| view.turns().next().map(|t| t.timestamp.clone()))
         .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
 
     let mut lines: Vec<RolloutLine> = Vec::new();
@@ -141,9 +140,11 @@ fn project_view(
 
     // Find the last assistant turn so we can mark it `phase: "final"`.
     // Codex annotates every other assistant turn with `phase: "commentary"`,
-    // matching what real rollouts look like.
+    // matching what real rollouts look like. Indexed over the turn stream
+    // (events don't count), matching `turn_idx` below.
     let last_assistant_idx = view
-        .turns
+        .turns()
+        .collect::<Vec<_>>()
         .iter()
         .rposition(|t| matches!(t.role, Role::Assistant));
 
@@ -155,55 +156,103 @@ fn project_view(
             .unwrap_or_else(|| format!("{}-t{}", view.id, idx))
     };
 
-    // Line 2: an opening turn_context (real Codex writes it right after
-    // session_meta, before the first user turn). Its turn_id is the first
-    // group's, so leading user turns and the first assistant share it; later
+    // The opening turn_context. Real Codex writes it AFTER the leading
+    // system-envelope messages (permissions/developer instructions,
+    // `<environment_context>`) and immediately before the first real user
+    // prompt — and its session indexer titles a backfilled rollout from the
+    // first user message after the last turn_context, so emitting the
+    // context at the top made a projected session's title the
+    // `<environment_context>` XML instead of the prompt (observed against
+    // codex 0.144.4's `threads` table). Emit it right before the first
+    // non-envelope user turn or first assistant turn; a view with neither
+    // gets it right after session_meta as before. Its turn_id is the first
+    // group's, so the first prompt and the first assistant share it; later
     // group boundaries emit their own. This is what makes the source's
     // grouping survive the round-trip — the reader keys `Turn.group_id`
     // off the turn_context `turn_id`.
     let first_group = view
-        .turns
-        .iter()
+        .turns()
         .enumerate()
         .find(|(_, t)| matches!(t.role, Role::Assistant))
         .map(|(i, t)| group_of(i, t))
         .unwrap_or_else(|| view.id.clone());
-    lines.push(make_turn_context_line(
-        &first_group,
-        &session_timestamp,
-        &cwd,
-        &model,
-    ));
-    let mut current_group = Some(first_group);
+    let opening_ctx_at: Option<usize> = view.items.iter().position(|it| match it {
+        Item::Turn(t) => match t.role {
+            Role::Assistant => true,
+            Role::User => !is_system_caveat(&t.text),
+            _ => false,
+        },
+        _ => false,
+    });
+    if opening_ctx_at.is_none() {
+        lines.push(make_turn_context_line(
+            &first_group,
+            &session_timestamp,
+            &cwd,
+            &model,
+        ));
+    }
+    let mut current_group = Some(first_group.clone());
 
     // Running session-cumulative usage. Codex's `total_token_usage` is
     // cumulative; we advance it by each turn's per-step contribution and
     // emit it after the turn, so a re-read differences it back to the same
     // per-step spend.
     let mut running = toolpath_convo::TokenUsage::default();
-    for (idx, turn) in view.turns.iter().enumerate() {
-        if matches!(turn.role, Role::Assistant) {
-            let group = group_of(idx, turn);
-            if current_group.as_deref() != Some(&group) {
-                lines.push(make_turn_context_line(
-                    &group,
-                    &turn.timestamp,
-                    &cwd,
-                    &model,
-                ));
-                current_group = Some(group);
-            }
+
+    // Last turn-index of each message group, so a group whose total is
+    // repeated on every member turn (e.g. a Gemini split message) advances
+    // `running` exactly once — on the group's final turn — rather than once
+    // per member, which would double-count.
+    let group_last_idx = group_last_indices(view);
+    let group_attributed = groups_with_attribution(view);
+
+    // Walk the full ordered item stream. Only turns project to rollout
+    // lines: events carry raw rollout payloads the projector re-derives
+    // from the turns themselves (session_meta, turn_context, token_count),
+    // so they are dropped rather than replayed.
+    let mut turn_idx = 0usize;
+    for (item_idx, item) in view.items.iter().enumerate() {
+        if Some(item_idx) == opening_ctx_at {
+            lines.push(make_turn_context_line(
+                &first_group,
+                &session_timestamp,
+                &cwd,
+                &model,
+            ));
         }
-        let codex = codex_extras(turn).cloned().unwrap_or_default();
-        let is_final_assistant = Some(idx) == last_assistant_idx;
-        emit_turn_lines(
-            turn,
-            &codex,
-            is_final_assistant,
-            &cwd,
-            &mut lines,
-            &mut running,
-        );
+        match item {
+            Item::Turn(turn) => {
+                if matches!(turn.role, Role::Assistant) {
+                    let group = group_of(turn_idx, turn);
+                    if current_group.as_deref() != Some(&group) {
+                        lines.push(make_turn_context_line(
+                            &group,
+                            &turn.timestamp,
+                            &cwd,
+                            &model,
+                        ));
+                        current_group = Some(group);
+                    }
+                }
+                let codex = codex_extras(turn).cloned().unwrap_or_default();
+                let is_final_assistant = Some(turn_idx) == last_assistant_idx;
+                let contribution =
+                    running_contribution(turn, turn_idx, &group_last_idx, &group_attributed);
+                emit_turn_lines(
+                    turn,
+                    &codex,
+                    is_final_assistant,
+                    contribution,
+                    &cwd,
+                    &mut lines,
+                    &mut running,
+                );
+                turn_idx += 1;
+            }
+
+            Item::Event(_) => {}
+        }
     }
 
     Ok(crate::types::Session {
@@ -211,6 +260,58 @@ fn project_view(
         file_path: PathBuf::new(),
         lines,
     })
+}
+
+/// Last turn-index of each message group, indexed over the turn stream
+/// (matching `turn_idx` in `project_view`). A turn with no `group_id` is its
+/// own group and is omitted.
+fn group_last_indices(view: &ConversationView) -> HashMap<String, usize> {
+    let mut last: HashMap<String, usize> = HashMap::new();
+    for (idx, turn) in view.turns().enumerate() {
+        if let Some(mid) = &turn.group_id {
+            last.insert(mid.clone(), idx);
+        }
+    }
+    last
+}
+
+/// Groups in which any member carries `attributed_token_usage`. In such a
+/// group the attributions already sum to the group total, so a member's
+/// bare `token_usage` (the stamped group total) must not advance `running`
+/// on top of them.
+fn groups_with_attribution(view: &ConversationView) -> HashSet<String> {
+    view.turns()
+        .filter(|t| t.attributed_token_usage.is_some())
+        .filter_map(|t| t.group_id.clone())
+        .collect()
+}
+
+/// The per-step usage this turn contributes to the session-cumulative
+/// `running` counter (and thus the `token_count` line emitted after it):
+///
+/// - `attributed_token_usage` when the source reports a per-step split
+///   (codex-native): each member of a group carries its own slice, summing
+///   to the group total.
+/// - otherwise the turn's `token_usage` — but only when no member of the
+///   group carries an attribution (those already advanced `running` by the
+///   full group total), and for a grouped turn whose total is repeated on
+///   every member (no per-step split), only on the group's last turn, so
+///   the message total is counted once, not once per member.
+fn running_contribution<'a>(
+    turn: &'a Turn,
+    turn_idx: usize,
+    group_last_idx: &HashMap<String, usize>,
+    group_attributed: &HashSet<String>,
+) -> Option<&'a toolpath_convo::TokenUsage> {
+    if let Some(attr) = turn.attributed_token_usage.as_ref() {
+        return Some(attr);
+    }
+    let usage = turn.token_usage.as_ref()?;
+    match &turn.group_id {
+        Some(mid) if group_attributed.contains(mid) => None,
+        Some(mid) if group_last_idx.get(mid) != Some(&turn_idx) => None,
+        _ => Some(usage),
+    }
 }
 
 fn make_session_meta_line(
@@ -284,15 +385,22 @@ fn emit_turn_lines(
     turn: &Turn,
     codex: &Map<String, Value>,
     is_final_assistant: bool,
+    contribution: Option<&toolpath_convo::TokenUsage>,
     session_cwd: &str,
     lines: &mut Vec<RolloutLine>,
     running: &mut toolpath_convo::TokenUsage,
 ) {
     match &turn.role {
         Role::User => emit_user_message(turn, lines),
-        Role::Assistant => {
-            emit_assistant(turn, codex, is_final_assistant, session_cwd, lines, running)
-        }
+        Role::Assistant => emit_assistant(
+            turn,
+            codex,
+            is_final_assistant,
+            contribution,
+            session_cwd,
+            lines,
+            running,
+        ),
         Role::System => emit_developer_message(turn, lines),
         Role::Other(_) => {
             // Unknown roles don't have a clean Codex analog; emit them
@@ -362,6 +470,7 @@ fn emit_assistant(
     turn: &Turn,
     codex: &Map<String, Value>,
     is_final_assistant: bool,
+    contribution: Option<&toolpath_convo::TokenUsage>,
     session_cwd: &str,
     lines: &mut Vec<RolloutLine>,
     running: &mut toolpath_convo::TokenUsage,
@@ -471,15 +580,12 @@ fn emit_assistant(
     }
 
     // Advance the session-cumulative counter by this step's contribution
-    // (its attributed per-step spend, or its group total when no per-step
-    // split exists), then emit `token_count` AFTER the turn — the reader
-    // differences the cumulative and attributes the delta to the step it
-    // follows. Mirrors how real Codex streams cumulative counts per step.
-    if let Some(contribution) = turn
-        .attributed_token_usage
-        .as_ref()
-        .or(turn.token_usage.as_ref())
-    {
+    // (its attributed per-step spend, or its group total once when no
+    // per-step split exists — see `running_contribution`), then emit
+    // `token_count` AFTER the turn — the reader differences the cumulative
+    // and attributes the delta to the step it follows. Mirrors how real
+    // Codex streams cumulative counts per step.
+    if let Some(contribution) = contribution {
         add_codex_usage(running, contribution);
         lines.push(event_msg_line(
             &turn.timestamp,
@@ -505,6 +611,15 @@ fn add_codex_usage(acc: &mut toolpath_convo::TokenUsage, delta: &toolpath_convo:
     add(&mut acc.output_tokens, delta.output_tokens);
     add(&mut acc.cache_read_tokens, delta.cache_read_tokens);
     add(&mut acc.cache_write_tokens, delta.cache_write_tokens);
+    // Breakdowns (e.g. output→reasoning) are cumulative subsets of their
+    // parent class; accumulate them the same way so the running cumulative
+    // carries reasoning and `convo_usage_to_codex_json` can re-emit it.
+    for (class, inner) in &delta.breakdowns {
+        let acc_inner = acc.breakdowns.entry(class.clone()).or_default();
+        for (sub, v) in inner {
+            *acc_inner.entry(sub.clone()).or_insert(0) += v;
+        }
+    }
 }
 
 fn emit_tool_call(
@@ -699,6 +814,12 @@ fn convo_usage_to_codex_json(u: &toolpath_convo::TokenUsage) -> Value {
     if let Some(v) = u.output_tokens {
         m.insert("output_tokens".to_string(), Value::from(v));
     }
+    // `reasoning_output_tokens` ⊆ `output_tokens`; the reader differences it
+    // into `breakdowns["output"]["reasoning"]`, so emit it back from there to
+    // round-trip reasoning provenance (kind v1.2.0).
+    if let Some(r) = u.breakdowns.get("output").and_then(|m| m.get("reasoning")) {
+        m.insert("reasoning_output_tokens".to_string(), Value::from(*r));
+    }
     Value::Object(m)
 }
 
@@ -760,12 +881,11 @@ mod tests {
             id: "session-uuid".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("codex".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }
@@ -1010,6 +1130,148 @@ mod tests {
                 m.payload
             );
         }
+    }
+
+    #[test]
+    fn grouped_turns_repeating_one_total_advance_running_once() {
+        // A message split into two turns that each repeat the SAME total
+        // (no per-step attribution — e.g. a Gemini split message) must
+        // advance the cumulative `token_count` ONCE (the group's total),
+        // not once per member. Otherwise a re-read differences a doubled
+        // cumulative and over-attributes.
+        let mut a1 = assistant_turn("a1", "");
+        a1.group_id = Some("g".into());
+        a1.token_usage = Some(TokenUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            ..Default::default()
+        });
+        let mut a2 = assistant_turn("a2", "answer");
+        a2.group_id = Some("g".into());
+        a2.token_usage = Some(TokenUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            ..Default::default()
+        });
+
+        let s = CodexProjector::default()
+            .project(&view_with(vec![a1, a2]))
+            .unwrap();
+
+        // Every token_count is cumulative; the last one is the session total.
+        let totals: Vec<&Value> = s
+            .lines
+            .iter()
+            .filter(|l| l.payload.get("type").and_then(Value::as_str) == Some("token_count"))
+            .map(|l| &l.payload["info"]["total_token_usage"])
+            .collect();
+        assert!(!totals.is_empty(), "expected at least one token_count");
+        let last = totals.last().unwrap();
+        // Counted once: 20, not 40.
+        assert_eq!(last["output_tokens"], 20);
+        assert_eq!(last["input_tokens"], 100);
+    }
+
+    #[test]
+    fn attributed_group_total_does_not_advance_running_again() {
+        // A group whose interior members carry per-step attributions and
+        // whose final turn carries only the stamped group total: the
+        // attributions (40 + 60) already advance `running` by the full
+        // group total, so the group-final's bare `token_usage` must not
+        // advance it again — otherwise the cumulative ends at 200 and a
+        // re-read attributes double the real spend.
+        let mut a1 = assistant_turn("a1", "first");
+        a1.group_id = Some("g".into());
+        a1.token_usage = None;
+        a1.attributed_token_usage = Some(TokenUsage {
+            output_tokens: Some(40),
+            ..Default::default()
+        });
+        let mut a2 = assistant_turn("a2", "second");
+        a2.group_id = Some("g".into());
+        a2.token_usage = None;
+        a2.attributed_token_usage = Some(TokenUsage {
+            output_tokens: Some(60),
+            ..Default::default()
+        });
+        let mut a3 = assistant_turn("a3", "answer");
+        a3.group_id = Some("g".into());
+        a3.token_usage = Some(TokenUsage {
+            output_tokens: Some(100),
+            ..Default::default()
+        });
+        a3.attributed_token_usage = None;
+
+        let s = CodexProjector::default()
+            .project(&view_with(vec![a1, a2, a3]))
+            .unwrap();
+
+        let totals: Vec<&Value> = s
+            .lines
+            .iter()
+            .filter(|l| l.payload.get("type").and_then(Value::as_str) == Some("token_count"))
+            .map(|l| &l.payload["info"]["total_token_usage"])
+            .collect();
+        let last = totals.last().expect("a token_count line");
+        assert_eq!(last["output_tokens"], 100, "cumulative must end at 100");
+
+        // Re-read: the differenced deltas attribute 100 total, not 200.
+        let view = crate::to_view(&s);
+        let attributed: u32 = view
+            .turns()
+            .filter_map(|t| t.attributed_token_usage.as_ref())
+            .filter_map(|u| u.output_tokens)
+            .sum();
+        assert_eq!(attributed, 100);
+    }
+
+    #[test]
+    fn reasoning_breakdown_round_trips_through_projection() {
+        use std::collections::BTreeMap;
+        // A turn whose token_usage records a reasoning breakdown must project
+        // to a `token_count` carrying `reasoning_output_tokens`, and re-read
+        // back into the IR breakdown — otherwise reasoning provenance is lost
+        // on an IR→Codex→IR round-trip.
+        let mut breakdowns = BTreeMap::new();
+        breakdowns.insert(
+            "output".to_string(),
+            BTreeMap::from([("reasoning".to_string(), 30u32)]),
+        );
+        let mut a = assistant_turn("a1", "answer");
+        a.token_usage = Some(TokenUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(80),
+            breakdowns,
+            ..Default::default()
+        });
+
+        let s = CodexProjector::default()
+            .project(&view_with(vec![a]))
+            .unwrap();
+
+        // Projection: the emitted cumulative token_count carries reasoning.
+        let tc = s
+            .lines
+            .iter()
+            .rfind(|l| l.payload.get("type").and_then(Value::as_str) == Some("token_count"))
+            .expect("a token_count line");
+        assert_eq!(
+            tc.payload["info"]["total_token_usage"]["reasoning_output_tokens"],
+            30
+        );
+
+        // Re-read: the breakdown survives back into the IR.
+        let view = crate::to_view(&s);
+        let turn = view
+            .turns()
+            .find(|t| t.role == Role::Assistant)
+            .expect("assistant turn");
+        let usage = turn
+            .token_usage
+            .as_ref()
+            .or(turn.attributed_token_usage.as_ref())
+            .expect("usage survives");
+        assert_eq!(usage.breakdowns["output"]["reasoning"], 30);
     }
 
     #[test]

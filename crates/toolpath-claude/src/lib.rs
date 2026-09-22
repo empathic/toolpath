@@ -27,8 +27,8 @@ pub use query::{ConversationQuery, HistoryQuery};
 pub use reader::ConversationReader;
 pub use types::{
     CacheCreation, ContentPart, Conversation, ConversationEntry, ConversationMetadata,
-    HistoryEntry, Message, MessageContent, MessageRole, ToolResultContent, ToolResultRef,
-    ToolUseRef, Usage,
+    HeaderlessLine, HistoryEntry, Line, Message, MessageContent, MessageRole, ToolResultContent,
+    ToolResultRef, ToolUseRef, Usage,
 };
 #[cfg(feature = "watcher")]
 pub use watcher::ConversationWatcher;
@@ -159,14 +159,20 @@ impl ClaudeConvo {
             // `sessionId` deeper in the segment is data, not a bridge; the
             // old every-entry filter could erase a whole segment's turns and
             // usage when all its entries carried one (the `.orphaned-*`
-            // failure shape).
+            // failure shape). Headerless lines keep their place: a
+            // segment's leading ones land before its first kept entry.
             let mut past_bridge = false;
-            for entry in &convo.entries {
-                if !past_bridge && chain::is_bridge_entry(entry, segment_id) {
-                    continue;
+            for line in convo.lines() {
+                match line {
+                    types::Line::Headerless(raw) => merged.add_headerless(raw.clone()),
+                    types::Line::Entry(entry) => {
+                        if !past_bridge && chain::is_bridge_entry(entry, segment_id) {
+                            continue;
+                        }
+                        past_bridge = true;
+                        merged.add_entry(entry.clone());
+                    }
                 }
-                past_bridge = true;
-                merged.add_entry(entry.clone());
             }
         }
 
@@ -756,6 +762,57 @@ mod tests {
         // b0 (leading bridge) filtered; b2 (mid-segment foreign id) kept.
         let uuids: Vec<&str> = convo.entries.iter().map(|e| e.uuid.as_str()).collect();
         assert_eq!(uuids, vec!["a1", "b1", "b2"]);
+    }
+
+    #[test]
+    fn test_chain_merge_keeps_headerless_lines_at_their_segment_position() {
+        // Each segment opens with headerless lines. The successor's land
+        // before its own first kept entry, not at the front of the merge.
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let a = [
+            r#"{"type":"permission-mode","permissionMode":"default","sessionId":"session-a"}"#,
+            r#"{"uuid":"a1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Start"}}"#,
+            r#"{"type":"last-prompt","lastPrompt":"Start","sessionId":"session-a"}"#,
+        ];
+        fs::write(project_dir.join("session-a.jsonl"), a.join("\n")).unwrap();
+        let b = [
+            r#"{"type":"file-history-snapshot","messageId":"m-1","snapshot":{"messageId":"m-1","trackedFileBackups":{},"timestamp":"2024-01-01T01:00:00.000Z"},"isSnapshotUpdate":false}"#,
+            r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T01:00:00.000Z"}"#,
+            r#"{"uuid":"b0","type":"user","timestamp":"2024-01-01T01:00:00Z","sessionId":"session-a","message":{"role":"user","content":"Bridge"}}"#,
+            r#"{"uuid":"b1","type":"user","timestamp":"2024-01-01T01:00:01Z","sessionId":"session-b","message":{"role":"user","content":"Own"}}"#,
+            r#"{"type":"ai-title","aiTitle":"t","sessionId":"session-b"}"#,
+        ];
+        fs::write(project_dir.join("session-b.jsonl"), b.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(claude_dir);
+        let manager = ClaudeConvo::with_resolver(resolver);
+        let convo = manager
+            .read_conversation("/test/project", "session-a")
+            .unwrap();
+
+        let lines: Vec<String> = convo
+            .lines()
+            .map(|line| match line {
+                types::Line::Headerless(raw) => raw["type"].as_str().unwrap().to_string(),
+                types::Line::Entry(e) => e.uuid.clone(),
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                "permission-mode",
+                "a1",
+                "last-prompt",
+                "file-history-snapshot",
+                "queue-operation",
+                "b1",
+                "ai-title"
+            ]
+        );
     }
 
     #[test]

@@ -1,0 +1,15 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"headerless-1111-2222-3333-444444444444"}
+{"type":"file-history-snapshot","messageId":"m-1","snapshot":{"messageId":"m-1","trackedFileBackups":{},"timestamp":"2026-01-01T00:00:00.000Z"},"isSnapshotUpdate":false}
+{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"headerless-1111-2222-3333-444444444444","timestamp":"2026-01-01T00:00:01Z","cwd":"/tmp/proj","message":{"role":"user","content":"hello"}}
+{"type":"last-prompt","lastPrompt":"hello","sessionId":"headerless-1111-2222-3333-444444444444"}
+{"type":"ai-title","aiTitle":"Greeting","sessionId":"headerless-1111-2222-3333-444444444444"}
+{"type":"mode","mode":"normal","sessionId":"headerless-1111-2222-3333-444444444444"}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"headerless-1111-2222-3333-444444444444","timestamp":"2026-01-01T00:00:02Z","cwd":"/tmp/proj","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}}
+{"type":"attachment","uuid":"att1","parentUuid":"a1","sessionId":"headerless-1111-2222-3333-444444444444","timestamp":"2026-01-01T00:00:03Z","attachment":{"type":"file","fileName":"a.rs"}}
+{"type":"user","uuid":"u2","parentUuid":"att1","sessionId":"headerless-1111-2222-3333-444444444444","timestamp":"2026-01-01T00:00:04Z","cwd":"/tmp/proj","message":{"role":"user","content":"again"}}
+{"type":"last-prompt","lastPrompt":"again","sessionId":"headerless-1111-2222-3333-444444444444"}
+{"type":"ai-title","aiTitle":"Greeting again","sessionId":"headerless-1111-2222-3333-444444444444"}
+{"type":"queue-operation","operation":"dequeue","timestamp":"2026-01-01T00:00:04.500Z","sessionId":"headerless-1111-2222-3333-444444444444"}
+{"type":"assistant","uuid":"a2","parentUuid":"u2","sessionId":"headerless-1111-2222-3333-444444444444","timestamp":"2026-01-01T00:00:05Z","cwd":"/tmp/proj","message":{"id":"msg_2","type":"message","role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"hi again"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}}
+{"type":"last-prompt","lastPrompt":"again","sessionId":"headerless-1111-2222-3333-444444444444"}
+{"type":"ai-title","aiTitle":"Greeting again","sessionId":"headerless-1111-2222-3333-444444444444"}
