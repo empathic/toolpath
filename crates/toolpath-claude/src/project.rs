@@ -65,10 +65,14 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // under `data["raw"]`. Dump them straight back. A headerless event is
     // identified by that `raw` key — no enumerated type list.
     let mut emitted_preamble = false;
+    // Preamble events by id → their parent. A headerless line has no uuid,
+    // so a parent naming one resolves past it (see `wire_parent`).
+    let mut preamble_parents: HashMap<&str, Option<&str>> = HashMap::new();
     for event in view.events() {
         if let Some(raw) = event.data.get("raw") {
             convo.preamble.push(raw.clone());
             emitted_preamble = true;
+            preamble_parents.insert(&event.id, event.parent_id.as_deref());
         }
     }
     // Cross-harness views won't carry a Claude preamble; emit a default
@@ -143,19 +147,27 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     continue;
                 }
                 consumed_event_ids.insert(event.id.clone());
-                let entry = project_event(event, &view.id);
+                let mut entry = project_event(event, &view.id);
+                entry.parent_uuid = wire_parent(
+                    event.parent_id.as_deref(),
+                    &parent_rewrites,
+                    &preamble_parents,
+                );
+                // A compact_boundary carries its prior entry in
+                // `logicalParentUuid` and writes `parentUuid: null`.
+                if crate::provider::is_compact_boundary(&entry) {
+                    entry.parent_uuid = None;
+                }
                 convo.add_entry(entry);
                 continue;
             }
         };
 
-        // Pre-rewrite this turn's parent_id if a synthesized tool_result
-        // was emitted between it and its IR-recorded parent.
-        let effective_parent = turn
-            .parent_id
-            .as_ref()
-            .and_then(|pid| parent_rewrites.get(pid).cloned())
-            .or_else(|| turn.parent_id.clone());
+        let effective_parent = wire_parent(
+            turn.parent_id.as_deref(),
+            &parent_rewrites,
+            &preamble_parents,
+        );
 
         match &turn.role {
             Role::User => {
@@ -246,6 +258,31 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     }
 
     Ok(convo)
+}
+
+/// An item's wire parent: its IR parent, resolved past any headerless
+/// preamble events (no uuid to name) and redirected to the last synthesized
+/// tool_result entry when one was emitted after that parent.
+fn wire_parent(
+    parent_id: Option<&str>,
+    rewrites: &HashMap<String, String>,
+    preamble_parents: &HashMap<&str, Option<&str>>,
+) -> Option<String> {
+    let mut pid = parent_id?;
+    let mut hops = preamble_parents.len();
+    while let Some(next) = preamble_parents.get(pid) {
+        if hops == 0 {
+            return None;
+        }
+        hops -= 1;
+        pid = (*next)?;
+    }
+    Some(
+        rewrites
+            .get(pid)
+            .cloned()
+            .unwrap_or_else(|| pid.to_string()),
+    )
 }
 
 /// Rebuild a Claude tool-result user entry verbatim from a preserved event.
