@@ -2457,7 +2457,7 @@
             "properties": {
               "document": {
                 "type": "object",
-                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }` on the GET\nendpoints. On the upload-create response it is headers-only (no `steps`)\n— see [`from_graph_headers`]."
+                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }` on the GET\nendpoints. On the upload-create response it is headers-only (no `steps`)\n— see `from_graph_headers`."
               },
               "path_count": {
                 "type": "integer",

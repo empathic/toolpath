@@ -81,6 +81,16 @@ jq '
       )
     else . end;
 
+  # Server doc comments are copied into the rustdoc of the generated
+  # client. A rustdoc intra-doc link ([`name`]) to a server-side item
+  # does not resolve there and fails `cargo doc -D warnings`; keep the
+  # code span, drop the link brackets. (No apostrophes in these
+  # comments: the whole program sits in single quotes.)
+  def unlink_descriptions:
+    if type == "object" and (.description | type) == "string"
+    then .description |= gsub("\\[(?<code>`[^`]+`)\\]"; .code)
+    else . end;
+
   def supported_request_body(key):
     key | IN("application/json", "application/x-www-form-urlencoded",
              "application/octet-stream", "text/plain", "text/x-markdown");
@@ -101,7 +111,7 @@ jq '
       )
     ) | .paths |= with_entries(select((.value | length) > 0));
 
-  walk(downconvert_type_array | downconvert_nullable_ref | rewrite_ndjson_request_body)
+  walk(downconvert_type_array | downconvert_nullable_ref | rewrite_ndjson_request_body | unlink_descriptions)
   | strip_unsupported_operations
 ' "${_tmp}" > "${_dest}"
 echo "refresh: wrote ${_dest} ($(wc -l < "${_dest}") lines, OpenAPI 3.0 form)"
