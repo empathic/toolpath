@@ -678,6 +678,50 @@ enum BatchFailure {
     Transport(reqwest::Error),
     Status(u16, String),
     Other(String),
+    Interrupted,
+}
+
+/// Ctrl-C during a streamed upload. The listener runs on the shared
+/// runtime for the upload's lifetime, so a signal that lands between
+/// batches is still seen by the next one instead of killing the process
+/// and leaving a partial graph behind.
+struct Interrupt {
+    hit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    notify: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl Interrupt {
+    fn watch() -> Self {
+        let this = Self::new(false);
+        let hit = this.hit.clone();
+        let notify = this.notify.clone();
+        block_on(async {
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    hit.store(true, std::sync::atomic::Ordering::SeqCst);
+                    notify.notify_one();
+                }
+            });
+        });
+        this
+    }
+
+    fn new(hit: bool) -> Self {
+        Self {
+            hit: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(hit)),
+            notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    fn hit(&self) -> bool {
+        self.hit.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn wait(&self) {
+        if !self.hit() {
+            self.notify.notified().await;
+        }
+    }
 }
 
 impl BatchFailure {
@@ -707,7 +751,7 @@ impl BatchFailure {
         match self {
             BatchFailure::Transport(_) => true,
             BatchFailure::Status(code, _) => *code >= 500,
-            BatchFailure::Other(_) => false,
+            BatchFailure::Other(_) | BatchFailure::Interrupted => false,
         }
     }
 
@@ -720,14 +764,18 @@ impl BatchFailure {
             BatchFailure::Status(code, msg) if msg.is_empty() => format!("HTTP {code}"),
             BatchFailure::Status(code, msg) => format!("HTTP {code}: {msg}"),
             BatchFailure::Other(msg) => msg.clone(),
+            BatchFailure::Interrupted => "interrupted".to_string(),
         }
     }
 }
 
 /// Run one batch request, retrying transport errors and 5xx responses.
 /// Both batch routes are idempotent for a replayed body, so a retry after
-/// a lost response is safe.
-fn post_batch<T, Fut>(send: impl Fn() -> Fut) -> std::result::Result<T, BatchFailure>
+/// a lost response is safe. A Ctrl-C cancels the in-flight request.
+fn post_batch<T, Fut>(
+    interrupt: &Interrupt,
+    send: impl Fn() -> Fut,
+) -> std::result::Result<T, BatchFailure>
 where
     Fut: std::future::Future<
             Output = std::result::Result<
@@ -738,10 +786,16 @@ where
 {
     let mut retries = 0;
     loop {
+        if interrupt.hit() {
+            return Err(BatchFailure::Interrupted);
+        }
         let result = block_on(async {
-            match send().await {
-                Ok(v) => Ok(v.into_inner()),
-                Err(e) => Err(BatchFailure::from_client_error(e).await),
+            tokio::select! {
+                r = send() => match r {
+                    Ok(v) => Ok(v.into_inner()),
+                    Err(e) => Err(BatchFailure::from_client_error(e).await),
+                },
+                _ = interrupt.wait() => Err(BatchFailure::Interrupted),
             }
         });
         match result {
@@ -763,8 +817,8 @@ where
 /// `budget` bytes. The first batch of a path opens it (`open_graph_path`);
 /// the rest append to it (`append_graph_path_steps`).
 ///
-/// If any batch fails, the partly uploaded graph is deleted (best effort)
-/// before the error is returned. A `404` or `405` on a path's first batch
+/// If any batch fails, or Ctrl-C arrives, the partly uploaded graph is
+/// deleted (best effort) before the error is returned. A `404` or `405` on a path's first batch
 /// means the server lacks the batch routes; the whole document is then
 /// sent with [`graphs_post`] instead. `$ref` path entries are skipped;
 /// callers route documents containing them to [`graphs_post`].
@@ -786,14 +840,47 @@ pub(crate) fn graphs_post_streamed(
     };
     let shell_json = serde_json::to_string(&shell).context("serialize graph")?;
     let created = graphs_post(base_url, token, owner, repo, name, &shell_json, public)?;
-    let graph_id = uuid::Uuid::parse_str(&created.id).context("graph id is not a UUID")?;
 
     let client = pathbase_client_with_timeout(base_url, Some(token), BATCH_TIMEOUT)?;
-    match stream_paths(&client, owner, repo, &graph_id, doc, budget) {
+    stream_and_clean_up(
+        &client,
+        base_url,
+        token,
+        owner,
+        repo,
+        name,
+        doc,
+        public,
+        budget,
+        created,
+        &Interrupt::watch(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stream_and_clean_up(
+    client: &pathbase_client::Client,
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    name: Option<&str>,
+    doc: &toolpath::v1::Graph,
+    public: bool,
+    budget: usize,
+    created: CreatedGraph,
+    interrupt: &Interrupt,
+) -> Result<CreatedGraph> {
+    let graph_id = uuid::Uuid::parse_str(&created.id).context("graph id is not a UUID")?;
+    match stream_paths(client, owner, repo, &graph_id, doc, budget, interrupt) {
         Ok(()) => Ok(created),
         Err(e) => {
             let _ = block_on(client.delete_graph(owner, repo, &graph_id));
             match (&e.failure, e.largest_step) {
+                (BatchFailure::Interrupted, _) => bail!(
+                    "upload to {owner}/{repo} interrupted; the partial graph {} was deleted",
+                    created.id
+                ),
                 (BatchFailure::Status(404 | 405, _), _) if e.opening_path => {
                     eprintln!(
                         "note: {base_url} does not support streamed upload; \
@@ -828,6 +915,7 @@ fn stream_paths(
     graph_id: &uuid::Uuid,
     doc: &toolpath::v1::Graph,
     budget: usize,
+    interrupt: &Interrupt,
 ) -> std::result::Result<(), StreamError> {
     use toolpath::v1::PathOrRef;
 
@@ -872,13 +960,13 @@ fn stream_paths(
                 opening_path: bi == 0,
             };
             if bi == 0 {
-                let opened = post_batch(|| {
+                let opened = post_batch(interrupt, || {
                     client.open_graph_path(owner, repo, graph_id, batch.body.clone())
                 })
                 .map_err(stream_error)?;
                 path_id = opened.path_id;
             } else {
-                post_batch(|| {
+                post_batch(interrupt, || {
                     client.append_graph_path_steps(
                         owner,
                         repo,
@@ -2076,6 +2164,48 @@ pub(crate) mod tests {
         assert_eq!(
             request_line(&reqs[2]),
             format!("DELETE {GRAPH_ROUTE} HTTP/1.1")
+        );
+    }
+
+    #[test]
+    fn graphs_post_streamed_interrupt_deletes_the_graph_before_the_next_batch() {
+        let path = stream_path(8, 200);
+        let server = MockServer::start_sequence(vec![("HTTP/1.1 204 No Content", String::new())]);
+        let doc = toolpath::v1::Graph::from_path(path);
+        let client =
+            pathbase_client_with_timeout(&server.base(), Some("tok"), BATCH_TIMEOUT).unwrap();
+        let created = CreatedGraph {
+            id: "22222222-2222-2222-2222-222222222222".into(),
+            url: String::new(),
+            visibility: pathbase_client::types::Visibility::Unlisted,
+        };
+        let err = stream_and_clean_up(
+            &client,
+            &server.base(),
+            "tok",
+            "alex",
+            "pathstash",
+            Some("big"),
+            &doc,
+            false,
+            1000,
+            created,
+            &Interrupt::new(true),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("interrupted"), "{msg}");
+        assert!(
+            msg.contains("22222222-2222-2222-2222-222222222222"),
+            "{msg}"
+        );
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 1);
+        assert!(
+            request_line(&reqs[0]).starts_with("DELETE "),
+            "{}",
+            request_line(&reqs[0])
         );
     }
 
