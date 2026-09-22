@@ -12,12 +12,11 @@
 //!   - A compacted session loads via the SQLite reader without crashing.
 //!   - `to_view` surfaces the compaction part as a `part.compaction`
 //!     `ConversationEvent` at its position in the item stream, parented
-//!     on the preceding turn (this is the documented contract).
+//!     on the preceding item (this is the documented contract).
 //!   - The event, and the user/assistant content surrounding it, survive
 //!     the IR derive/extract round-trip: `derive_path` emits the event
 //!     as a `conversation.event` step and `extract_conversation`
-//!     restores it, including its `parent_id` (from the `source_parent`
-//!     key stamped at derive time).
+//!     restores it, including its `parent_id` (from the step's parents).
 //!   - The projector emits a functionally equivalent `Session`.
 
 use std::fs;
@@ -182,8 +181,7 @@ fn compaction_event_survives_ir_roundtrip() {
         .expect("no turn after the boundary after roundtrip");
     assert!(after_turn.text.contains("reading the current auth code"));
 
-    // Parent restored from the `source_parent` key stamped at derive time:
-    // the boundary still parents on the turn preceding it in the stream.
+    // The boundary still parents on the turn preceding it in the stream.
     let event = after.items[pos].as_event().unwrap();
     assert_eq!(event.parent_id.as_deref(), Some(before_turn.id.as_str()));
 }
