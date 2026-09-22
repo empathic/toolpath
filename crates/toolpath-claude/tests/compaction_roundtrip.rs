@@ -263,19 +263,12 @@ fn projector_output_is_re_parseable_by_reader() {
         .project(&after)
         .expect("project to claude conversation");
 
-    let mut lines: Vec<String> = Vec::new();
-    for raw in &convo.preamble {
-        lines.push(serde_json::to_string(raw).expect("serialize preamble"));
-    }
-    for entry in &convo.entries {
-        lines.push(serde_json::to_string(entry).expect("serialize entry"));
-    }
-
     let tmp = tempfile::Builder::new()
         .suffix(".jsonl")
         .tempfile()
         .expect("tempfile");
-    std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
+    toolpath_claude::ConversationWriter::write_conversation(&convo, tmp.as_file())
+        .expect("write projected JSONL");
     ConversationReader::read_conversation(tmp.path()).expect("re-read projected JSONL");
 }
 

@@ -396,11 +396,29 @@ pub struct Conversation {
     /// Empty for single-segment conversations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub segment_ids: Vec<String>,
-    /// Raw preamble entries (e.g., permission-mode) that precede
-    /// conversation entries in the JSONL file. These are not
-    /// `ConversationEntry` objects — they have different shapes.
+    /// Lines without a `uuid` (`permission-mode`, `last-prompt`,
+    /// `ai-title`, `file-history-snapshot`, ...), kept verbatim at their
+    /// file position relative to `entries`. Ordered by `before`, then by
+    /// file order within one `before`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub preamble: Vec<serde_json::Value>,
+    pub headerless: Vec<HeaderlessLine>,
+}
+
+/// A JSONL line that is not a [`ConversationEntry`], positioned in the
+/// file by the entry it precedes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeaderlessLine {
+    /// Index into `Conversation::entries` of the entry this line precedes;
+    /// `entries.len()` for a line after the last entry.
+    pub before: usize,
+    pub raw: serde_json::Value,
+}
+
+/// One line of a session file, in file order.
+#[derive(Debug, Clone, Copy)]
+pub enum Line<'a> {
+    Headerless(&'a serde_json::Value),
+    Entry(&'a ConversationEntry),
 }
 
 /// Sets every string-valued `sessionId` key in `value`, at any depth,
@@ -434,8 +452,31 @@ impl Conversation {
             started_at: None,
             last_activity: None,
             segment_ids: Vec::new(),
-            preamble: Vec::new(),
+            headerless: Vec::new(),
         }
+    }
+
+    /// Appends a headerless line at the current end of the file: it
+    /// precedes whatever entry is added next.
+    pub fn add_headerless(&mut self, raw: serde_json::Value) {
+        self.headerless.push(HeaderlessLine {
+            before: self.entries.len(),
+            raw,
+        });
+    }
+
+    /// Every line in file order: each headerless line before the entry
+    /// it precedes, trailing ones after the last entry.
+    pub fn lines(&self) -> impl Iterator<Item = Line<'_>> {
+        let mut headerless = self.headerless.iter().peekable();
+        let mut entries = self.entries.iter().enumerate().peekable();
+        std::iter::from_fn(move || {
+            let next_entry = entries.peek().map_or(usize::MAX, |(i, _)| *i);
+            if let Some(line) = headerless.next_if(|h| h.before <= next_entry) {
+                return Some(Line::Headerless(&line.raw));
+            }
+            entries.next().map(|(_, e)| Line::Entry(e))
+        })
     }
 
     pub fn add_entry(&mut self, entry: ConversationEntry) {
@@ -457,7 +498,7 @@ impl Conversation {
 
     /// Sets the session ID everywhere the format carries it:
     /// `session_id`, every entry's top-level `sessionId` that is
-    /// present, and every string-valued `sessionId` key in preamble
+    /// present, and every string-valued `sessionId` key in headerless
     /// lines at any depth. Claude Code copies the ID into
     /// `worktreeSession.sessionId` on `worktree-state` lines. A
     /// `sessionId` nested inside an entry (a tool result, a snapshot,
@@ -472,21 +513,25 @@ impl Conversation {
         {
             *slot = id.to_string();
         }
-        for raw in &mut self.preamble {
-            set_session_id_keys(raw, id);
+        for line in &mut self.headerless {
+            set_session_id_keys(&mut line.raw, id);
         }
     }
 
     /// Sets the directory everywhere the format carries it:
     /// `project_path`, every entry's `cwd` that is present, and a
-    /// top-level `cwd` on a preamble line.
+    /// top-level `cwd` on a headerless line.
     pub fn reroot(&mut self, dir: &str) {
         self.project_path = Some(dir.to_string());
         for slot in self.entries.iter_mut().filter_map(|e| e.cwd.as_mut()) {
             *slot = dir.to_string();
         }
-        for raw in &mut self.preamble {
-            if let Some(slot) = raw.get_mut(crate::constants::CWD).filter(|v| v.is_string()) {
+        for line in &mut self.headerless {
+            if let Some(slot) = line
+                .raw
+                .get_mut(crate::constants::CWD)
+                .filter(|v| v.is_string())
+            {
                 *slot = serde_json::Value::String(dir.to_string());
             }
         }
@@ -614,16 +659,14 @@ mod tests {
     #[test]
     fn rename_session_sets_every_session_id_key() {
         let mut convo = Conversation::new("old".to_string());
-        convo.preamble.push(serde_json::json!({
+        convo.add_headerless(serde_json::json!({
             "type": "permission-mode", "permissionMode": "default", "sessionId": "old"
         }));
-        convo.preamble.push(serde_json::json!({
+        convo.add_headerless(serde_json::json!({
             "type": "worktree-state", "sessionId": "old",
             "worktreeSession": {"sessionId": "old", "worktreePath": "/wt"}
         }));
-        convo
-            .preamble
-            .push(serde_json::json!({"type": "odd", "sessionId": 7}));
+        convo.add_headerless(serde_json::json!({"type": "odd", "sessionId": 7}));
         convo.add_entry(entry(
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","sessionId":"old","message":{"role":"user","content":"hi"}}"#,
         ));
@@ -640,22 +683,21 @@ mod tests {
                 .iter()
                 .all(|e| e.session_id.as_deref() == Some("new"))
         );
-        assert_eq!(convo.preamble[0]["sessionId"], "new");
-        assert_eq!(convo.preamble[1]["sessionId"], "new");
-        assert_eq!(convo.preamble[1]["worktreeSession"]["sessionId"], "new");
-        assert_eq!(convo.preamble[1]["worktreeSession"]["worktreePath"], "/wt");
-        assert_eq!(convo.preamble[2]["sessionId"], 7);
+        let raw: Vec<&serde_json::Value> = convo.headerless.iter().map(|h| &h.raw).collect();
+        assert_eq!(raw[0]["sessionId"], "new");
+        assert_eq!(raw[1]["sessionId"], "new");
+        assert_eq!(raw[1]["worktreeSession"]["sessionId"], "new");
+        assert_eq!(raw[1]["worktreeSession"]["worktreePath"], "/wt");
+        assert_eq!(raw[2]["sessionId"], 7);
     }
 
     #[test]
     fn reroot_sets_project_path_and_every_present_cwd() {
         let mut convo = Conversation::new("s".to_string());
-        convo.preamble.push(serde_json::json!({
+        convo.add_headerless(serde_json::json!({
             "type": "custom-title", "cwd": "/old", "customTitle": "x"
         }));
-        convo
-            .preamble
-            .push(serde_json::json!({"type": "last-prompt", "lastPrompt": "hi"}));
+        convo.add_headerless(serde_json::json!({"type": "last-prompt", "lastPrompt": "hi"}));
         convo.add_entry(entry(
             r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","cwd":"/old","message":{"role":"user","content":"hi"}}"#,
         ));
@@ -669,8 +711,50 @@ mod tests {
         assert_eq!(convo.project_path.as_deref(), Some("/new"));
         assert_eq!(convo.entries[0].cwd.as_deref(), Some("/new"));
         assert_eq!(convo.entries[1].cwd, None);
-        assert_eq!(convo.preamble[0]["cwd"], "/new");
-        assert!(convo.preamble[1].get("cwd").is_none());
+        assert_eq!(convo.headerless[0].raw["cwd"], "/new");
+        assert!(convo.headerless[1].raw.get("cwd").is_none());
+    }
+
+    #[test]
+    fn lines_interleave_headerless_at_their_position() {
+        let mut convo = Conversation::new("s".to_string());
+        convo.add_headerless(serde_json::json!({"type": "permission-mode"}));
+        convo.add_entry(entry(
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#,
+        ));
+        convo.add_headerless(serde_json::json!({"type": "last-prompt"}));
+        convo.add_headerless(serde_json::json!({"type": "ai-title"}));
+        convo.add_entry(entry(
+            r#"{"uuid":"a1","type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"yo"}}"#,
+        ));
+        convo.add_headerless(serde_json::json!({"type": "mode"}));
+
+        let types: Vec<String> = convo
+            .lines()
+            .map(|line| match line {
+                Line::Headerless(raw) => raw["type"].as_str().unwrap().to_string(),
+                Line::Entry(e) => format!("entry:{}", e.uuid),
+            })
+            .collect();
+        assert_eq!(
+            types,
+            vec![
+                "permission-mode",
+                "entry:u1",
+                "last-prompt",
+                "ai-title",
+                "entry:a1",
+                "mode"
+            ]
+        );
+        assert_eq!(
+            convo
+                .headerless
+                .iter()
+                .map(|h| h.before)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 1, 2]
+        );
     }
 
     fn create_test_conversation() -> Conversation {

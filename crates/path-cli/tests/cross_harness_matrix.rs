@@ -67,18 +67,14 @@ impl Harness for ClaudeHarness {
         let convo = projector
             .project(view)
             .map_err(|e| format!("project: {}", e))?;
-        let mut lines: Vec<String> = Vec::new();
-        for raw in &convo.preamble {
-            lines.push(serde_json::to_string(raw).map_err(|e| format!("preamble: {}", e))?);
-        }
-        for entry in &convo.entries {
-            lines.push(serde_json::to_string(entry).map_err(|e| format!("entry: {}", e))?);
-        }
+        let mut buf = Vec::new();
+        toolpath_claude::ConversationWriter::write_conversation(&convo, &mut buf)
+            .map_err(|e| format!("write: {}", e))?;
         let tmp = tempfile::Builder::new()
             .suffix(".jsonl")
             .tempfile()
             .map_err(|e| format!("tempfile: {}", e))?;
-        std::fs::write(tmp.path(), lines.join("\n")).map_err(|e| format!("write: {}", e))?;
+        std::fs::write(tmp.path(), &buf).map_err(|e| format!("write: {}", e))?;
         toolpath_claude::ConversationReader::read_conversation(tmp.path())
             .map_err(|e| format!("re-read: {}", e))?;
         Ok(())

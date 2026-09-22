@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::ClaudeConvo;
-use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
+use crate::types::{Conversation, ConversationEntry, Line, Message, MessageContent, MessageRole};
 #[cfg(any(feature = "watcher", test))]
 use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
@@ -388,24 +388,27 @@ pub(crate) fn is_compact_boundary(entry: &ConversationEntry) -> bool {
 /// turn's `ToolInvocation.result` fields rather than emitted as separate turns.
 ///
 fn conversation_to_view(convo: &Conversation) -> ConversationView {
-    // Items are built in source order so a compaction boundary lands at its
-    // true position between the turns it separates. Preamble events come
-    // first — they precede all entries in the file.
+    // Items are built in file order, so a compaction boundary or a
+    // headerless line lands at its true position between the entries it
+    // separates.
     let mut items: Vec<Item> = Vec::new();
 
-    // Headerless preamble lines (ai-title, last-prompt, queue-operation,
+    // Headerless lines (ai-title, last-prompt, queue-operation,
     // permission-mode, file-history-snapshot, etc.) become events so they
     // round-trip back to JSONL. They carry no uuid, so nothing on the wire
-    // chains through them; the reader chains them in file order and hangs
-    // the first uuid-bearing entry off the last one (the projector drops
-    // that link again, since it names nothing on the wire).
-    let mut prev_preamble: Option<String> = None;
-    for (idx, raw) in convo.preamble.iter().enumerate() {
-        let mut event = preamble_to_event(idx, raw);
-        event.parent_id = prev_preamble.replace(event.id.clone());
-        items.push(Item::Event(event));
-    }
-    let mut first_after_preamble = true;
+    // chains through them; here each one chains onto the item before it,
+    // and the uuid-bearing entry that follows a run chains onto the run's
+    // last event when its wire parent is the item the run hangs from (the
+    // projector resolves that link back past the run). A run that a
+    // rewind branches away from stays a dead end, like the entries it
+    // followed. Nothing already emitted is ever re-parented: each item's
+    // linkage is fixed when it is read, so a derived step list only grows
+    // as the session file does.
+    let mut headerless_idx = 0usize;
+    let mut last_item_id: Option<String> = None;
+    // `Some(anchor)` while a headerless run is open: the id of the item
+    // before the run, `None` when the run opens the file.
+    let mut run_anchor: Option<Option<String>> = None;
 
     // Map from "absorbed entry UUID" → "the previous turn's UUID". A
     // tool-result-only entry is folded into the assistant turn before it,
@@ -432,10 +435,20 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // renamed step.
     let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let entries = &convo.entries;
-    let mut i = 0;
-    while i < entries.len() {
-        let entry = &entries[i];
+    for line in convo.lines() {
+        let entry = match line {
+            Line::Headerless(raw) => {
+                let mut event = headerless_to_event(headerless_idx, raw);
+                headerless_idx += 1;
+                if run_anchor.is_none() {
+                    run_anchor = Some(last_item_id.clone());
+                }
+                event.parent_id = last_item_id.replace(event.id.clone());
+                items.push(Item::Event(event));
+                continue;
+            }
+            Line::Entry(entry) => entry,
+        };
 
         // Strip re-emitted entries: any non-boundary entry whose uuid already
         // appeared earlier in this conversation. Boundary entries are exempt
@@ -447,7 +460,6 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             && !entry.uuid.is_empty()
             && !seen_uuids.insert(entry.uuid.clone())
         {
-            i += 1;
             continue;
         }
 
@@ -470,11 +482,9 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             {
                 event.parent_id = Some(real.clone());
             }
-            if std::mem::take(&mut first_after_preamble) && event.parent_id.is_none() {
-                event.parent_id = prev_preamble.clone();
-            }
+            chain_past_headerless(&mut event.parent_id, &mut run_anchor, &last_item_id);
+            last_item_id = Some(event.id.clone());
             items.push(Item::Event(event));
-            i += 1;
             continue;
         };
 
@@ -491,7 +501,6 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
             }
-            i += 1;
             continue;
         }
 
@@ -501,12 +510,10 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         {
             turn.parent_id = Some(real.clone());
         }
-        if std::mem::take(&mut first_after_preamble) && turn.parent_id.is_none() {
-            turn.parent_id = prev_preamble.clone();
-        }
+        chain_past_headerless(&mut turn.parent_id, &mut run_anchor, &last_item_id);
         last_turn_uuid = Some(turn.id.clone());
+        last_item_id = Some(turn.id.clone());
         items.push(Item::Turn(turn));
-        i += 1;
     }
 
     let mut turn_refs: Vec<&mut Turn> = items.iter_mut().filter_map(item_turn_mut).collect();
@@ -584,20 +591,35 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     }
 }
 
-/// Build an event from a headerless preamble JSON line (`ai-title`,
-/// `last-prompt`, `queue-operation`, `permission-mode`, `file-history-snapshot`,
-/// or anything else above `entries` in Claude's JSONL).
+/// Closes an open headerless run at a uuid-bearing item: when the item's
+/// wire parent is the item the run hangs from, the item chains onto the
+/// run's last event instead, so the run sits on the head's ancestry.
+fn chain_past_headerless(
+    parent_id: &mut Option<String>,
+    run_anchor: &mut Option<Option<String>>,
+    last_item_id: &Option<String>,
+) {
+    if let Some(anchor) = run_anchor.take()
+        && *parent_id == anchor
+    {
+        *parent_id = last_item_id.clone();
+    }
+}
+
+/// Build an event from a headerless JSON line (`ai-title`, `last-prompt`,
+/// `queue-operation`, `permission-mode`, `file-history-snapshot`, or
+/// anything else without a `uuid` in Claude's JSONL).
 ///
 /// The whole line is preserved verbatim under `data["raw"]`; the projector
-/// dumps it straight back onto `convo.preamble`. We don't model the shape —
+/// writes it back at the event's item position. We don't model the shape —
 /// a headerless line is identified by the presence of `data["raw"]`, not by
 /// an enumerated `type` list. `event_type` carries the line's `type`, purely
 /// informational.
-fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::ConversationEvent {
+fn headerless_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::ConversationEvent {
     let event_type = raw
         .get("type")
         .and_then(|v| v.as_str())
-        .unwrap_or("preamble")
+        .unwrap_or("headerless")
         .to_string();
     let timestamp = raw
         .get("timestamp")
@@ -607,7 +629,7 @@ fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::Con
     let mut data: HashMap<String, serde_json::Value> = HashMap::new();
     data.insert("raw".to_string(), raw.clone());
     toolpath_convo::ConversationEvent {
-        id: format!("claude-preamble-{idx}"),
+        id: format!("claude-headerless-{idx}"),
         timestamp,
         parent_id: None,
         event_type,
@@ -2188,6 +2210,110 @@ mod tests {
                 assert_ne!(t.id, "b0", "Bridge entry should not appear as a Turn");
             }
         }
+    }
+
+    #[test]
+    fn test_headerless_line_between_turns_keeps_its_position_and_chains() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("sess-h.jsonl");
+        fs::write(
+            &file,
+            concat!(
+                r#"{"uuid":"u1","type":"user","parentUuid":null,"timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#,
+                "\n",
+                r#"{"type":"last-prompt","lastPrompt":"hi","sessionId":"sess-h"}"#,
+                "\n",
+                r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"yo"}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let convo = crate::ConversationReader::read_conversation(&file).unwrap();
+        let view = to_view(&convo);
+
+        let shape: Vec<String> = view
+            .items
+            .iter()
+            .map(|item| match item {
+                Item::Turn(t) => {
+                    format!("turn:{}<-{}", t.id, t.parent_id.as_deref().unwrap_or("-"))
+                }
+                Item::Event(e) => format!(
+                    "event:{}<-{}",
+                    e.event_type,
+                    e.parent_id.as_deref().unwrap_or("-")
+                ),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                "turn:u1<--",
+                "event:last-prompt<-u1",
+                "turn:a1<-claude-headerless-0"
+            ]
+        );
+        let event = view.events().next().unwrap();
+        assert_eq!(event.data["raw"]["type"], "last-prompt");
+
+        let path = toolpath_convo::derive_path(&view, &toolpath_convo::DeriveConfig::default());
+        let dead: Vec<&str> = toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+            .iter()
+            .map(|s| s.step.id.as_str())
+            .collect();
+        assert!(dead.is_empty(), "unexpected dead ends: {dead:?}");
+
+        let projected =
+            toolpath_convo::ConversationProjector::project(&crate::ClaudeProjector, &view).unwrap();
+        let lines: Vec<String> = projected
+            .lines()
+            .map(|line| match line {
+                Line::Headerless(raw) => raw["type"].as_str().unwrap().to_string(),
+                Line::Entry(e) => {
+                    format!("{}<-{}", e.uuid, e.parent_uuid.as_deref().unwrap_or("-"))
+                }
+            })
+            .collect();
+        assert_eq!(lines, vec!["u1<--", "last-prompt", "a1<-u1"]);
+    }
+
+    #[test]
+    fn test_headerless_run_a_rewind_branches_from_stays_off_the_chain() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("sess-r.jsonl");
+        fs::write(
+            &file,
+            concat!(
+                r#"{"uuid":"u1","type":"user","parentUuid":null,"timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#,
+                "\n",
+                r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"yo"}]}}"#,
+                "\n",
+                r#"{"type":"last-prompt","lastPrompt":"again","sessionId":"sess-r"}"#,
+                "\n",
+                r#"{"uuid":"u2","type":"user","parentUuid":"u1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":"again"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let convo = crate::ConversationReader::read_conversation(&file).unwrap();
+        let view = to_view(&convo);
+
+        let event = view.events().next().unwrap();
+        assert_eq!(event.parent_id.as_deref(), Some("a1"));
+        let u2 = view.turns().find(|t| t.id == "u2").unwrap();
+        assert_eq!(u2.parent_id.as_deref(), Some("u1"));
+
+        let path = toolpath_convo::derive_path(&view, &toolpath_convo::DeriveConfig::default());
+        let dead: Vec<&str> = toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+            .iter()
+            .map(|s| s.step.id.as_str())
+            .collect();
+        assert_eq!(dead, vec!["a1", "claude-headerless-0"]);
+
+        let projected =
+            toolpath_convo::ConversationProjector::project(&crate::ClaudeProjector, &view).unwrap();
+        let u2 = projected.entries.iter().find(|e| e.uuid == "u2").unwrap();
+        assert_eq!(u2.parent_uuid.as_deref(), Some("u1"));
     }
 
     #[test]

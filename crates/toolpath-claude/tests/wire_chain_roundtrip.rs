@@ -2,10 +2,10 @@
 //!
 //! Claude's headerless lines (`ai-title`, `last-prompt`,
 //! `file-history-snapshot`, …) carry no `uuid`, so nothing on the wire can
-//! ever chain through them. They survive the trip as parentless IR events
-//! (`claude-preamble-N`), and the turns around them keep their recorded
-//! `parentUuid`, so a re-projected session's chain only ever names real
-//! entry uuids.
+//! ever chain through them. They survive the trip as IR events
+//! (`claude-headerless-N`) chained onto the item before them; the
+//! projector resolves a parent naming one past it, so a re-projected
+//! session's chain only ever names real entry uuids.
 //!
 //! Entries that do carry a uuid (attachments, system entries) are chained
 //! through as recorded; a parent naming an absorbed tool-result carrier is
@@ -60,7 +60,7 @@ fn parent_uuid_chain_survives_headerless_lines() {
         .expect("user entry survives");
     assert_eq!(
         user.parent_uuid, None,
-        "first message must stay a root, not chain onto a preamble event step"
+        "first message must stay a root, not chain onto a headerless event step"
     );
 
     let assistant = projected
@@ -74,10 +74,14 @@ fn parent_uuid_chain_survives_headerless_lines() {
         "assistant must chain onto the user message, not a synthesized event id"
     );
 
-    // The snapshot line itself still round-trips (as preamble).
-    assert_eq!(projected.preamble.len(), 1);
+    // The snapshot line itself still round-trips, ahead of the first entry.
+    assert_eq!(projected.headerless.len(), 1);
+    assert_eq!(projected.headerless[0].before, 0);
     assert_eq!(
-        projected.preamble[0].get("type").and_then(|v| v.as_str()),
+        projected.headerless[0]
+            .raw
+            .get("type")
+            .and_then(|v| v.as_str()),
         Some("file-history-snapshot")
     );
 }

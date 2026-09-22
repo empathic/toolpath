@@ -2,7 +2,7 @@
 //!
 //! Thin wrapper around the shared [`toolpath_convo::derive_path`]. All
 //! Claude-specific work (cwd / git_branch / version → `view.base` and
-//! `view.producer`, headerless preamble + non-message entries →
+//! `view.producer`, headerless lines + non-message entries →
 //! `view.events`, tool-result cross-entry assembly, file-write diff
 //! synthesis via `git show HEAD:<path>`) happens in
 //! [`crate::provider::to_view`]; nothing provider-specific lives in this
@@ -124,7 +124,7 @@ mod tests {
                 user_entry("u1", None, "Fix bug", "/tmp/proj"),
                 assistant_entry("a1", Some("u1"), "Done"),
             ],
-            preamble: vec![],
+            headerless: vec![],
             started_at: None,
             last_activity: None,
             segment_ids: vec![],

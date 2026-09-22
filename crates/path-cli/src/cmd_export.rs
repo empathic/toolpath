@@ -731,7 +731,7 @@ fn run_claude(args: ClaudeExportArgs) -> Result<()> {
                 eprintln!(
                     "Exported session {} ({} entries) → {}",
                     session_id,
-                    conversation.preamble.len() + conversation.entries.len(),
+                    conversation.lines().count(),
                     out_path.display()
                 );
                 eprintln!();
