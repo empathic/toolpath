@@ -241,7 +241,7 @@ fn roundtrip_preserves_total_token_usage_when_present() {
 /// This is the bluntest possible UX-loss check: count source lines, count
 /// projected lines, expect them equal. Catches dropped attachments,
 /// metadata headers (ai-title, last-prompt, queue-operation), and the
-/// permission-mode preamble — all of which were silently lost before.
+/// permission-mode line — all of which were silently lost before.
 #[test]
 fn read_then_project_preserves_line_count() {
     let convo = ConversationReader::read_conversation(fixture_path()).expect("read claude fixture");
@@ -255,7 +255,7 @@ fn read_then_project_preserves_line_count() {
         .lines()
         .filter(|l| !l.trim().is_empty())
         .count();
-    let projected_lines = projected.preamble.len() + projected.entries.len();
+    let projected_lines = projected.lines().count();
 
     assert_eq!(
         source_lines, projected_lines,
@@ -292,11 +292,11 @@ fn read_then_project_preserves_metadata_entries() {
     );
 
     assert_eq!(
-        convo.preamble.len(),
-        projected.preamble.len(),
-        "preamble line count diverged ({} → {})",
-        convo.preamble.len(),
-        projected.preamble.len()
+        convo.headerless.len(),
+        projected.headerless.len(),
+        "headerless line count diverged ({} → {})",
+        convo.headerless.len(),
+        projected.headerless.len()
     );
 }
 
@@ -338,7 +338,7 @@ fn read_then_project_preserves_tool_use_result_count() {
 /// toolpath_convo::extract_conversation → ClaudeProjector → JSONL.
 ///
 /// This is the actual `path import` / `path export` flow. Tests headerless
-/// preamble lines (ai-title, last-prompt, file-history-snapshot,
+/// lines (ai-title, last-prompt, file-history-snapshot,
 /// permission-mode), attachments, and assistant entries with bare-thinking
 /// content all survive the cache round-trip — the dimensions that were
 /// dropping ~10–25% of source lines on real sessions.
@@ -380,10 +380,11 @@ fn cache_roundtrip_preserves_line_counts_per_type() {
     // produce at least one entry of that type. Catches whole-category drops
     // (the ai-title / last-prompt / file-history-snapshot regression).
     let projected_types: BTreeSet<String> = projected
-        .preamble
+        .headerless
         .iter()
-        .filter_map(|v| {
-            v.get("type")
+        .filter_map(|h| {
+            h.raw
+                .get("type")
                 .and_then(|t| t.as_str())
                 .map(|s| s.to_string())
         })
@@ -407,18 +408,11 @@ fn projector_output_is_re_parseable_by_reader() {
         .project(&after)
         .expect("project to claude conversation");
 
-    let mut lines: Vec<String> = Vec::new();
-    for raw in &convo.preamble {
-        lines.push(serde_json::to_string(raw).expect("serialize preamble line"));
-    }
-    for entry in &convo.entries {
-        lines.push(serde_json::to_string(entry).expect("serialize entry"));
-    }
-
     let tmp = tempfile::Builder::new()
         .suffix(".jsonl")
         .tempfile()
         .expect("tempfile");
-    std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
+    toolpath_claude::ConversationWriter::write_conversation(&convo, tmp.as_file())
+        .expect("write projected JSONL");
     ConversationReader::read_conversation(tmp.path()).expect("re-read projected JSONL");
 }

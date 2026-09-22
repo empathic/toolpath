@@ -157,3 +157,29 @@ typed surface small while round-tripping arbitrary format drift.
 
 If you're building a new consumer in another language, the same split
 tends to work: a core struct for the hot fields, a map for the rest.
+
+### Headerless lines
+
+Lines without a `uuid` (`permission-mode`, `last-prompt`, `ai-title`,
+`mode`, `atis-latch`, `bridge-session`, `pr-link`, `queue-operation`,
+`file-history-snapshot`, and anything new) are not `ConversationEntry`
+objects. `toolpath-claude` keeps each one verbatim as a
+`HeaderlessLine { before, raw }` on `Conversation.headerless`, where
+`before` is the index of the entry the line precedes (`entries.len()`
+for a trailing line), so its file position survives. They are not a
+file header: Claude Code writes a `last-prompt` / `ai-title` / `mode` /
+`permission-mode` group on every prompt submission, so most of them sit
+between turns, and a real session has several `permission-mode` lines.
+`Conversation::lines()` walks entries and headerless lines together in
+file order; the writer, `to_view` (one `conversation.event` step per
+line, at its position), the chain merge (a successor segment's leading
+headerless lines land before its own first kept entry) and the projector
+all go through that order, so the projected file's per-line type
+sequence matches the source's.
+
+The one position the IR cannot express: a tool-result carrier entry is
+absorbed into the assistant turn it answers, so a headerless run written
+between that assistant entry and the carrier cannot be told from one
+written right after the carrier. The projector writes the run before the
+carrier — Claude Code writes the prompt-submission group while a tool is
+still running far more often than after its result lands.

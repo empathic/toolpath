@@ -39,9 +39,28 @@ non-turn entries survive import/export.
   redirected to the assistant turn on the way in and to the
   synthesized carrier on the way out); a `compact_boundary` takes its
   `logicalParentUuid` as `parent_id` and the projector writes
-  `parentUuid: null` back; headerless preamble lines chain in file
-  order with the first uuid-bearing entry hung off the last one, and
-  the projector drops that link since it names nothing on the wire.
+  `parentUuid: null` back. Headerless lines (`last-prompt`,
+  `ai-title`, `mode`, `permission-mode`, `file-history-snapshot`, …)
+  keep their file position end to end: **Breaking** —
+  `Conversation.preamble: Vec<Value>` is replaced by
+  `Conversation.headerless: Vec<HeaderlessLine>` (`before` = index of
+  the entry the line precedes, `raw` = the line), with
+  `Conversation::add_headerless`, `Conversation::lines()` (every line
+  in file order) and the `Line` enum; the reader, chain merge, writer,
+  `rename_session`/`reroot`, `to_view` and the projector all go
+  through that position. Previously every headerless line derived at
+  the front of the path, so each turn's `last-prompt`/`ai-title`/`mode`
+  group inserted steps before the first turn on every append; now the
+  derived step sequence only grows as the session file does
+  (`wire_order_roundtrip` pins this for every prefix of the fixture).
+  Each headerless event chains onto the item before it, and the
+  uuid-bearing entry after a run chains onto the run's last event when
+  its wire parent is the item the run hangs from, so the run sits on the
+  head's ancestry; the projector resolves that link back past the run
+  (`claude-headerless-N` ids). One position the IR cannot express: a
+  headerless run between an assistant tool-use entry and its absorbed
+  tool-result carrier projects before the carrier (the common shape),
+  so a run recorded after the carrier comes back before it.
 - **`toolpath-codex`** (0.7.0): events interleave with turns at their
   rollout position — a `compacted` marker now derives between its
   surrounding turns instead of after them, pinned through
