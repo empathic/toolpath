@@ -15,13 +15,17 @@ non-turn entries survive import/export.
   iterators. `derive_path` emits `conversation.event` steps
   (previously dropped — a Claude session lost its attachments and
   system entries on import/export), resolves duplicate step ids by
-  renaming to `<id>#<n>`, recognizes byte-identical wire replays at
-  the source level and drops them (the Claude chain-merge shape,
-  including replays of steps that were spliced or renamed), and
-  splices events onto the head's ancestry so they don't dangle as
-  false dead ends. Event steps always stamp `source_parent` (`null` =
-  positional chaining) so `extract_conversation` restores source
-  linkage exactly. New proptest suite pins unique step ids,
+  renaming to `<id>#<n>`, and recognizes byte-identical wire replays
+  at the source level and drops them (the Claude chain-merge shape).
+  Readers own linkage: a step's `parents` is the item's `parent_id`
+  resolved to the step it names (an event's id resolves like a
+  turn's), or empty; `derive_path` never rewires or synthesizes a
+  chain, and `extract_conversation` restores `parent_id` from
+  `parents[0]` for turns and events alike. No transform-recovery keys
+  ride in the document (`source_parent` and `event_source_id` are
+  gone). Readers whose harness records no linkage chain over the
+  ordered item stream, so events sit on the head's ancestry
+  naturally. New proptest suite pins unique step ids,
   derive → extract → derive stability, and replay no-ops over
   randomized interleavings with id collisions.
 - **`toolpath-claude`** (0.14.0): the projector emits events inline at
@@ -30,29 +34,42 @@ non-turn entries survive import/export.
   file. `wire_order_roundtrip` pins the projected entry-type sequence
   to the captured fixture. Byte-identical duplicate-uuid replays (the
   compaction re-emission block) are stripped at read time, with
-  compact boundaries exempt.
+  compact boundaries exempt. Linkage: uuid-bearing entries chain as
+  recorded (a `parentUuid` naming an absorbed tool-result carrier is
+  redirected to the assistant turn on the way in and to the
+  synthesized carrier on the way out); a `compact_boundary` takes its
+  `logicalParentUuid` as `parent_id` and the projector writes
+  `parentUuid: null` back; headerless preamble lines chain in file
+  order with the first uuid-bearing entry hung off the last one, and
+  the projector drops that link since it names nothing on the wire.
 - **`toolpath-codex`** (0.7.0): events interleave with turns at their
   rollout position — a `compacted` marker now derives between its
   surrounding turns instead of after them, pinned through
   derive → extract. Empty carrier turns that carry token accounting
   survive via a keep-mask, and the opening `turn_context` placement
-  matches native rollouts.
+  matches native rollouts. The synthesized chain runs over the merged
+  item stream, so events sit between the turns they separate.
 - **`toolpath-gemini`** (0.7.0): all-zero token usage is dropped,
   split assistant messages group via `group_id` with the snapshot
   counted once, and colliding wire ids dedup with `#N` suffixes.
 - **`toolpath-opencode`** (0.6.0): compaction parts become in-position
-  `part.compaction` events parented on the preceding turn (previously
-  a trailing events vec). Empty compaction-host user messages are
-  suppressed with parents redirected past them; attachment-only user
-  messages still emit turns. Projected timestamps are monotonized so
-  a re-read keeps emission order.
+  `part.compaction` events (previously a trailing events vec), chained
+  onto the preceding item; the turn that follows chains onto the
+  boundary, whether its native `parentID` names the suppressed host
+  or the last pre-boundary message. Empty compaction-host user
+  messages are suppressed; attachment-only user messages still emit
+  turns. Other part events (`file`, `agent`, `retry`, unknown) follow
+  their message's turn in the stream. Projected timestamps are
+  monotonized so a re-read keeps emission order.
 - **`toolpath-cursor`** (0.3.0): `/summarize` marker bubbles
-  (`capabilityType` 22) become `summarization` events and project
-  back to well-formed marker bubbles — the marker survives a full
-  cursor → toolpath → cursor round-trip instead of being dropped.
+  (`capabilityType` 22) become `summarization` events on the bubble
+  chain and project back to well-formed marker bubbles — the marker
+  survives a full cursor → toolpath → cursor round-trip instead of
+  being dropped.
 - **`toolpath-copilot`** (0.2.0): non-turn events carry a turn
-  watermark and merge into `items` in source order; assistant
-  messages whose only content is token usage survive as turns.
+  watermark and merge into `items` in source order, and the
+  synthesized chain runs over that merged stream; assistant messages
+  whose only content is token usage survive as turns.
 - **`toolpath-pi`** (0.7.0): tree parents resolve past discarded
   entries (model changes, labels, folded tool results, the virtual
   root) via `resolve_item_parent`; compaction stays a System turn.

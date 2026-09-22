@@ -74,10 +74,6 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
     // Map from step ID → index into view.items (of a turn item), for
     // parent lookups when attaching tool invocations.
     let mut step_to_turn: HashMap<&str, usize> = HashMap::new();
-    // Map from event step ID → that step's first parent, for undoing
-    // derive's `splice_onto_intervening` when rebuilding turn/compaction
-    // parents (see `parent_past_events`).
-    let mut event_parents: HashMap<String, (usize, Option<String>)> = HashMap::new();
     // Track files_changed for dedup in insertion order.
     let mut files_seen: HashSet<String> = HashSet::new();
 
@@ -95,7 +91,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
         }
     }
 
-    for (step_idx, step) in path.steps.iter().enumerate() {
+    for step in &path.steps {
         // Pre-collect file.write entries on this step. They attach to the
         // turn built from this step's `conversation.append` change (below);
         // the iteration order of `step.change` (HashMap) is non-deterministic
@@ -169,12 +165,6 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                 }
                 "conversation.append" => {
                     let mut turn = build_turn(step, &structural.extra);
-                    turn.parent_id = restore_source_parent(
-                        turn.parent_id.take(),
-                        &structural.extra,
-                        step_idx,
-                        &event_parents,
-                    );
                     // Attach pre-collected file mutations to the turn.
                     // `tool_id` on each mutation links back to the
                     // specific `ToolInvocation` (when set by derive).
@@ -192,45 +182,22 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    // Restore the provider's original event id (e.g. the
-                    // source UUID for a Claude attachment). Falls back to
-                    // the synthetic step id for events that didn't have one.
-                    let id = structural
-                        .extra
-                        .get("event_source_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| step.step.id.clone());
                     // Strip the housekeeping keys we added in derive so the
                     // event's data round-trips clean. Restore the original
                     // `type` key from `event_data_type` if it was stashed.
                     let mut data = structural.extra.clone();
                     data.remove("entry_type");
-                    data.remove("event_source_id");
                     if let Some(t) = data.remove("event_data_type") {
                         data.insert("type".to_string(), t);
                     }
-                    // Source linkage stamped by derive (`null` = root).
-                    // Documents derived before the key existed fall back to
-                    // the resolved step parents.
-                    let parent_id = match data.remove("source_parent") {
-                        Some(serde_json::Value::String(s)) => Some(s),
-                        Some(_) => None,
-                        None => step.step.parents.first().cloned(),
-                    };
 
-                    let event = ConversationEvent {
-                        id,
+                    view.items.push(Item::Event(ConversationEvent {
+                        id: step.step.id.clone(),
                         timestamp: step.step.timestamp.clone(),
-                        parent_id,
+                        parent_id: step.step.parents.first().cloned(),
                         event_type,
                         data,
-                    };
-                    event_parents.insert(
-                        step.step.id.clone(),
-                        (step_idx, step.step.parents.first().cloned()),
-                    );
-                    view.items.push(Item::Event(event));
+                    }));
                 }
                 "tool.invoke" => {
                     let invocation = build_tool_invocation(&structural.extra);
@@ -291,61 +258,6 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
     }
 
     view
-}
-
-/// Resolve a turn's or compaction's parent past any event-derived steps,
-/// back to the nearest turn/compaction ancestor (or `None` at the root).
-///
-/// Providers never build a view in which a turn or compaction parents on an
-/// event — the wire formats chain messages to messages (Claude even rewrites
-/// tool-result parents onto the owning assistant turn at read time). So an
-/// event step in a turn's `step.parents` can only have been put there by
-/// derive's `splice_onto_intervening`, which re-parents through events to
-/// keep them on the head's ancestry. Walking past event steps undoes that
-/// splice, recovering the source-recorded parent — otherwise projectors
-/// would write wire chains through ids that don't exist on the wire (e.g. a
-/// Claude `parentUuid` naming a synthesized `claude-preamble-0` step).
-///
-/// Events restore their own source linkage from the `source_parent` key
-/// derive always stamps on `conversation.event` steps; this walk exists for
-/// turns (stamped only when spliced) and for documents that predate the key.
-/// Restore a turn's or compaction's source parent. Steps whose parents the
-/// derive splice rewired carry the pre-splice parent in `source_parent`
-/// (`null` = root) — read it back verbatim. Documents derived before that
-/// key existed fall back to [`parent_past_events`]'s best-effort walk.
-fn restore_source_parent(
-    parent: Option<String>,
-    extra: &HashMap<String, serde_json::Value>,
-    step_idx: usize,
-    event_parents: &HashMap<String, (usize, Option<String>)>,
-) -> Option<String> {
-    match extra.get("source_parent") {
-        Some(serde_json::Value::String(s)) => Some(s.clone()),
-        Some(serde_json::Value::Null) => None,
-        _ => parent_past_events(parent, step_idx, event_parents),
-    }
-}
-
-fn parent_past_events(
-    parent: Option<String>,
-    step_idx: usize,
-    event_parents: &HashMap<String, (usize, Option<String>)>,
-) -> Option<String> {
-    let mut current = parent;
-    let mut at = step_idx;
-    // The derive splice always rewires onto the immediately-preceding step,
-    // so only adjacent event hops are splice artifacts. A parent naming an
-    // event elsewhere in the path is native linkage and stays untouched.
-    // `at` strictly decreases, so the walk terminates on any input.
-    loop {
-        match current.as_deref().and_then(|id| event_parents.get(id)) {
-            Some((event_idx, next)) if event_idx + 1 == at => {
-                at = *event_idx;
-                current = next.clone();
-            }
-            _ => return current,
-        }
-    }
 }
 
 fn handle_init(
@@ -1467,11 +1379,12 @@ mod tests {
     }
 
     #[test]
-    fn test_turn_parent_resolves_past_spliced_event_steps() {
+    fn test_turn_parent_past_event_round_trips_verbatim() {
         use crate::DeriveConfig;
 
         // Wire truth: a1's parent is u1. An id-less event (e.g. a Claude
         // file-history-snapshot line) sits between them in the stream.
+        // derive keeps a1 on u1; extract hands the same parent back.
         let source = ConversationView {
             id: "sess-1".into(),
             items: vec![
@@ -1492,68 +1405,57 @@ mod tests {
             ..Default::default()
         };
 
-        // derive splices a1 onto the event step so the event lands on the
-        // head's ancestry...
         let path = crate::derive::derive_path(&source, &DeriveConfig::default());
         let a1_step = path.steps.iter().find(|s| s.step.id == "a1").unwrap();
-        assert_eq!(a1_step.step.parents, vec!["event-0001".to_string()]);
+        assert_eq!(a1_step.step.parents, vec!["u1".to_string()]);
 
-        // ...and extract undoes the splice, restoring the wire parent.
         let view = extract_conversation(&path);
         let turns: Vec<&Turn> = view.turns().collect();
         assert_eq!(turns[1].id, "a1");
         assert_eq!(turns[1].parent_id.as_deref(), Some("u1"));
+        let events: Vec<&ConversationEvent> = view.events().collect();
+        assert_eq!(events[0].id, "event-0001");
+        assert_eq!(events[0].parent_id, None);
 
-        // Re-derive is stable: the splice fires again onto the same DAG.
         let again = crate::derive::derive_path(&view, &DeriveConfig::default());
-        let a1_again = again.steps.iter().find(|s| s.step.id == "a1").unwrap();
-        assert_eq!(a1_again.step.parents, vec!["event-0001".to_string()]);
+        assert_eq!(
+            serde_json::to_value(&path).unwrap(),
+            serde_json::to_value(&again).unwrap()
+        );
     }
 
     #[test]
-    fn test_first_turn_parent_resolves_past_leading_events_to_root() {
+    fn test_turn_parent_naming_an_event_round_trips_verbatim() {
         use crate::DeriveConfig;
 
-        // Claude hoists headerless preamble lines to the front of the item
-        // stream as events; derive splices the first turn onto them. The
-        // extracted turn must come back a root — its wire parentUuid is null.
+        // A reader that chains through an event (`u1 ← e1 ← a1`) gets the
+        // same chain back: extract restores each parent from `parents[0]`
+        // without walking past event steps.
+        let mut e1 = bare_event("e1", "attachment", "2026-01-01T00:00:01Z");
+        e1.parent_id = Some("u1".into());
         let source = ConversationView {
             id: "sess-1".into(),
             items: vec![
-                Item::Event(bare_event(
-                    "claude-preamble-0",
-                    "ai-title",
-                    "2026-01-01T00:00:00Z",
+                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:00Z")),
+                Item::Event(e1),
+                Item::Turn(bare_turn(
+                    "a1",
+                    Some("e1"),
+                    Role::Assistant,
+                    "2026-01-01T00:00:02Z",
                 )),
-                Item::Event(bare_event(
-                    "claude-preamble-1",
-                    "file-history-snapshot",
-                    "2026-01-01T00:00:01Z",
-                )),
-                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:02Z")),
             ],
             provider_id: Some("claude-code".into()),
             ..Default::default()
         };
 
         let path = crate::derive::derive_path(&source, &DeriveConfig::default());
-        let u1_step = path.steps.iter().find(|s| s.step.id == "u1").unwrap();
-        assert_eq!(u1_step.step.parents, vec!["claude-preamble-1".to_string()]);
-
         let view = extract_conversation(&path);
         let turns: Vec<&Turn> = view.turns().collect();
-        assert_eq!(turns[0].id, "u1");
-        assert_eq!(
-            turns[0].parent_id, None,
-            "walk resolves through the whole event chain"
-        );
-
-        // The events come back as the roots they were on the wire — the
-        // spliced event-to-event chain is a derive artifact, recorded under
-        // `source_parent` and undone here; re-derive re-splices identically.
+        assert_eq!(turns[0].parent_id, None);
+        assert_eq!(turns[1].parent_id.as_deref(), Some("e1"));
         let events: Vec<&ConversationEvent> = view.events().collect();
-        assert_eq!(events[0].parent_id, None);
-        assert_eq!(events[1].parent_id, None);
+        assert_eq!(events[0].parent_id.as_deref(), Some("u1"));
     }
 
     #[test]
