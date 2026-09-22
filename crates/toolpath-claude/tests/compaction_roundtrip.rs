@@ -171,10 +171,58 @@ fn post_compact_tool_call_pairs_survive_roundtrip() {
 }
 
 #[test]
+fn compact_boundary_links_the_chain() {
+    // On the wire the boundary has `parentUuid: null` and names its prior
+    // entry in `logicalParentUuid` (here the absorbed tool-result carrier,
+    // so the reader resolves it to the assistant turn). The view chains
+    // through the boundary, the derived path has no dead ends, and the
+    // projector writes the null back.
+    let view = load_view();
+    let boundary = view
+        .events()
+        .find(|e| e.event_type == "compact_boundary")
+        .expect("boundary event");
+    assert_eq!(boundary.parent_id.as_deref(), Some("uuid-pre-2"));
+    let summary = view
+        .turns()
+        .find(|t| t.id == "uuid-summary")
+        .expect("summary turn");
+    assert_eq!(summary.parent_id.as_deref(), Some("uuid-boundary"));
+
+    let path = derive_path(&view, &DeriveConfig::default());
+    let dead: Vec<&str> = toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+        .iter()
+        .map(|s| s.step.id.as_str())
+        .collect();
+    assert!(dead.is_empty(), "unexpected dead ends: {dead:?}");
+
+    let convo = ClaudeProjector
+        .project(&extract_conversation(&path))
+        .expect("project");
+    let entry = convo
+        .entries
+        .iter()
+        .find(|e| e.uuid == "uuid-boundary")
+        .expect("projected boundary");
+    assert_eq!(entry.parent_uuid, None);
+    assert_eq!(
+        entry
+            .extra
+            .get("logicalParentUuid")
+            .and_then(|v| v.as_str()),
+        Some("uuid-pre-3")
+    );
+    let summary = convo
+        .entries
+        .iter()
+        .find(|e| e.uuid == "uuid-summary")
+        .expect("projected summary");
+    assert_eq!(summary.parent_uuid.as_deref(), Some("uuid-boundary"));
+}
+
+#[test]
 fn compact_boundary_event_survives_at_stream_position() {
-    // Events restore their source `parent_id` from the stamped
-    // `source_parent` key, so position among the turns — not resolved step
-    // parents — is the round-trip contract asserted here.
+    // Position among the turns is the round-trip contract asserted here.
     let original = load_view();
     let after = ir_roundtrip(&original);
 

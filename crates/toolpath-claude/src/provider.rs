@@ -372,7 +372,7 @@ fn entry_to_turn(entry: &ConversationEntry) -> Option<Turn> {
 /// entry or as `type: "system"` with `subtype: "compact_boundary"`. The
 /// `subtype` field isn't in [`ConversationEntry`]'s typed fields, so it lands
 /// in `extra`.
-fn is_compact_boundary(entry: &ConversationEntry) -> bool {
+pub(crate) fn is_compact_boundary(entry: &ConversationEntry) -> bool {
     entry.entry_type == "compact_boundary"
         || entry
             .extra
@@ -395,20 +395,27 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
 
     // Headerless preamble lines (ai-title, last-prompt, queue-operation,
     // permission-mode, file-history-snapshot, etc.) become events so they
-    // round-trip back to JSONL.
+    // round-trip back to JSONL. They carry no uuid, so nothing on the wire
+    // chains through them; the reader chains them in file order and hangs
+    // the first uuid-bearing entry off the last one (the projector drops
+    // that link again, since it names nothing on the wire).
+    let mut prev_preamble: Option<String> = None;
     for (idx, raw) in convo.preamble.iter().enumerate() {
-        items.push(Item::Event(preamble_to_event(idx, raw)));
+        let mut event = preamble_to_event(idx, raw);
+        event.parent_id = prev_preamble.replace(event.id.clone());
+        items.push(Item::Event(event));
     }
+    let mut first_after_preamble = true;
 
-    // Map from "absorbed-or-skipped entry UUID" → "the previous
-    // turn-or-compaction-bearing entry's UUID". Used so that a later turn
-    // whose wire parentUuid points at an absorbed entry (a tool-result-only
-    // entry, or the folded compaction summary) gets a `parent_id` that still
-    // maps onto a real Item — keeping the IR's chain intact for `derive_path`.
+    // Map from "absorbed entry UUID" → "the previous turn's UUID". A
+    // tool-result-only entry is folded into the assistant turn before it,
+    // so any later entry whose wire parentUuid names the absorbed entry gets
+    // a `parent_id` that still maps onto a real Item. Every other entry
+    // becomes an item under its own uuid, so the wire chain through it
+    // stands as recorded.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
-    // The UUID of the last turn or compaction emitted into `items`, used to
-    // rewrite parents of subsequently absorbed entries.
-    let mut last_anchor_uuid: Option<String> = None;
+    // The UUID of the last turn emitted into `items`.
+    let mut last_turn_uuid: Option<String> = None;
 
     // Duplicate-uuid stripping, defensive: a compacted session can re-emit
     // earlier entries with their original uuids (the entries Claude carries
@@ -445,28 +452,43 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         }
 
         let Some(msg) = &entry.message else {
-            // Message-less entries (attachments, snapshots) survive as
-            // events so the projector can re-emit them.
-            items.push(Item::Event(entry_to_event(entry)));
-            if let Some(prev) = &last_anchor_uuid {
-                parent_rewrites.insert(entry.uuid.clone(), prev.clone());
+            // Message-less entries (attachments, snapshots, compaction
+            // boundaries) survive as events so the projector can re-emit
+            // them. A compact_boundary writes `parentUuid: null` and names
+            // the real prior entry in `logicalParentUuid`; the projector
+            // restores the null on the way out.
+            let mut event = entry_to_event(entry);
+            if event.parent_id.is_none() && is_compact_boundary(entry) {
+                event.parent_id = entry
+                    .extra
+                    .get("logicalParentUuid")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
             }
+            if let Some(pid) = event.parent_id.as_ref()
+                && let Some(real) = parent_rewrites.get(pid)
+            {
+                event.parent_id = Some(real.clone());
+            }
+            if std::mem::take(&mut first_after_preamble) && event.parent_id.is_none() {
+                event.parent_id = prev_preamble.clone();
+            }
+            items.push(Item::Event(event));
             i += 1;
             continue;
         };
 
         // Tool-result-only user entries get merged into the preceding
         // assistant's tool_uses[i].result and dropped from the turn
-        // stream. The next assistant entry's wire parentUuid points at
-        // this entry; we record a rewrite so the IR's turn-to-turn chain
-        // stays connected. (The projector re-synthesizes the wire-level
-        // tool-result entries on the way out from tool_uses[i].result —
-        // their original UUIDs aren't preserved across the roundtrip,
-        // but the Claude UI walks the chain by parentUuid, not by
-        // specific UUIDs, so that's fine.)
+        // stream. The next entry's wire parentUuid points at this entry;
+        // we record a rewrite so the IR's chain stays connected. (The
+        // projector re-synthesizes the wire-level tool-result entries on
+        // the way out from tool_uses[i].result — their original UUIDs
+        // aren't preserved across the roundtrip, but the Claude UI walks
+        // the chain by parentUuid, not by specific UUIDs, so that's fine.)
         if is_tool_result_only(entry) {
             merge_tool_results_into_items(&mut items, msg);
-            if let Some(prev) = &last_anchor_uuid {
+            if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
             }
             i += 1;
@@ -479,7 +501,10 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         {
             turn.parent_id = Some(real.clone());
         }
-        last_anchor_uuid = Some(turn.id.clone());
+        if std::mem::take(&mut first_after_preamble) && turn.parent_id.is_none() {
+            turn.parent_id = prev_preamble.clone();
+        }
+        last_turn_uuid = Some(turn.id.clone());
         items.push(Item::Turn(turn));
         i += 1;
     }
