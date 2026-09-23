@@ -76,6 +76,7 @@ pub(crate) fn derive_claude_session_with(
     // base at all — fall back to the caller's project for those.
     if path.path.base.is_none() && project.starts_with('/') {
         path.path.base = Some(toolpath::v1::Base {
+            from: None,
             uri: format!("file://{project}"),
             ref_str: None,
             branch: None,
