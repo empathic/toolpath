@@ -114,6 +114,15 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // intermediate streaming snapshots: they carry no per-step meaning, the
     // IR doesn't retain them, and the final total is what consumers sum.)
     let mut group_total: HashMap<&str, toolpath_convo::TokenUsage> = HashMap::new();
+    // Claude Code reads the newest assistant line's `message.usage` as the
+    // size of the live context. Another harness's counts describe another
+    // model's context (a Codex session reports its own, often far larger,
+    // window), so a projection carrying them resumes as an overflowing
+    // session with no history. Only Claude-sourced usage is written.
+    let usage_describes_claude = view
+        .provider_id
+        .as_deref()
+        .is_none_or(|p| p == "claude-code");
     for turn in &view.turns {
         if let (Some(mid), Some(usage)) = (turn.group_id.as_deref(), &turn.token_usage) {
             group_total
@@ -147,8 +156,20 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     Some(mid) => group_total.get(mid).cloned(),
                     None => turn.token_usage.clone(),
                 };
+                let (claude_usage, stashed) = if usage_describes_claude {
+                    (wire_usage, None)
+                } else {
+                    (None, wire_usage)
+                };
                 let mut assistant_entry =
-                    assistant_turn_to_entry_with_usage(turn, &view.id, wire_usage.as_ref());
+                    assistant_turn_to_entry_with_usage(turn, &view.id, claude_usage.as_ref());
+                if let Some(u) = stashed
+                    && let Ok(v) = serde_json::to_value(wire_usage_of(&u))
+                {
+                    assistant_entry
+                        .extra
+                        .insert(crate::types::TOOLPATH_USAGE_KEY.to_string(), v);
+                }
                 apply_turn_metadata(&mut assistant_entry, turn);
                 assistant_entry.parent_uuid = effective_parent;
                 convo.add_entry(assistant_entry);
@@ -367,6 +388,19 @@ fn user_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
     }
 }
 
+/// The JSONL `usage` object for an IR usage.
+fn wire_usage_of(u: &toolpath_convo::TokenUsage) -> Usage {
+    Usage {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        // TokenUsage uses cache_write_tokens; Usage uses cache_creation_input_tokens
+        cache_creation_input_tokens: u.cache_write_tokens,
+        cache_read_input_tokens: u.cache_read_tokens,
+        cache_creation: None,
+        service_tier: None,
+    }
+}
+
 /// Build a `ConversationEntry` for an assistant turn. `wire_usage` is the
 /// usage to write on the JSONL line: the IR carries a message's total only
 /// on the group's final turn, but real Claude Code repeats `message.usage`
@@ -379,15 +413,7 @@ fn assistant_turn_to_entry_with_usage(
 ) -> ConversationEntry {
     let content = build_assistant_content(turn);
 
-    let usage = wire_usage.map(|u| Usage {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-        // TokenUsage uses cache_write_tokens; Usage uses cache_creation_input_tokens
-        cache_creation_input_tokens: u.cache_write_tokens,
-        cache_read_input_tokens: u.cache_read_tokens,
-        cache_creation: None,
-        service_tier: None,
-    });
+    let usage = wire_usage.map(wire_usage_of);
 
     ConversationEntry {
         uuid: turn.id.clone(),
@@ -457,7 +483,7 @@ fn build_assistant_content(turn: &Turn) -> MessageContent {
         // `write_file` come through as opaque blocks even when their
         // toolUseResult is well-formed.
         let name = canonical_claude_tool_name(tu);
-        let input = canonical_claude_tool_input(tu, &name);
+        let input = object_input(canonical_claude_tool_input(tu, &name));
         parts.push(ContentPart::ToolUse {
             id: tu.id.clone(),
             name,
@@ -466,6 +492,16 @@ fn build_assistant_content(turn: &Turn) -> MessageContent {
     }
 
     MessageContent::Parts(parts)
+}
+
+/// The Messages API rejects a `tool_use` whose `input` is not an object
+/// (Codex custom tools carry a bare string), so wrap anything else as
+/// `{"input": <value>}`.
+fn object_input(input: serde_json::Value) -> serde_json::Value {
+    match input {
+        serde_json::Value::Object(_) => input,
+        other => serde_json::json!({ "input": other }),
+    }
 }
 
 /// Pick Claude's native tool name. Same shape as `tool_native_name` on
@@ -1076,6 +1112,39 @@ mod tests {
         &convo.entries
     }
 
+    #[test]
+    fn other_harnesses_usage_is_not_written() {
+        let mut a = assistant_turn("a1", "Done");
+        a.parent_id = Some("u1".into());
+        a.token_usage = Some(toolpath_convo::TokenUsage {
+            input_tokens: Some(788_052),
+            output_tokens: Some(6_174),
+            ..Default::default()
+        });
+        let mut view = make_view("sess-1", vec![user_turn("u1", "Go"), a]);
+        view.provider_id = Some("codex".into());
+        let convo = ClaudeProjector.project(&view).unwrap();
+        for e in &convo.entries {
+            if let Some(m) = &e.message {
+                assert!(m.usage.is_none(), "codex usage leaked onto a Claude line");
+            }
+        }
+        let stashed = convo
+            .entries
+            .iter()
+            .find_map(|e| e.extra.get(crate::types::TOOLPATH_USAGE_KEY))
+            .expect("usage kept under the toolpath key");
+        assert_eq!(stashed["input_tokens"], 788_052);
+        view.provider_id = Some("claude-code".into());
+        let convo = ClaudeProjector.project(&view).unwrap();
+        assert!(
+            convo
+                .entries
+                .iter()
+                .any(|e| e.message.as_ref().is_some_and(|m| m.usage.is_some()))
+        );
+    }
+
     // ── Message-group usage re-expansion ─────────────────────────────
 
     #[test]
@@ -1651,5 +1720,17 @@ mod tests {
         assert!(!json_str.contains("\"userType\""));
         assert!(!json_str.contains("\"requestId\""));
         assert!(!json_str.contains("\"gitBranch\""));
+    }
+
+    #[test]
+    fn non_object_tool_input_is_wrapped() {
+        assert_eq!(
+            object_input(serde_json::json!("*** Begin Patch")),
+            serde_json::json!({"input": "*** Begin Patch"})
+        );
+        assert_eq!(
+            object_input(serde_json::json!({"cmd": "ls"})),
+            serde_json::json!({"cmd": "ls"})
+        );
     }
 }

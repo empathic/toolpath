@@ -100,7 +100,13 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let file_mutations = compute_file_mutations(&tool_uses, entry.cwd.as_deref());
 
-    let token_usage = msg.usage.as_ref().map(|u| TokenUsage {
+    let stashed: Option<crate::types::Usage> = msg
+        .usage
+        .is_none()
+        .then(|| entry.extra.get(crate::types::TOOLPATH_USAGE_KEY))
+        .flatten()
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let token_usage = msg.usage.as_ref().or(stashed.as_ref()).map(|u| TokenUsage {
         input_tokens: u.input_tokens,
         output_tokens: u.output_tokens,
         cache_read_tokens: u.cache_read_input_tokens,
