@@ -4,7 +4,7 @@
 # `path resume --remote`, which plans, uploads, launches claude under
 # tmux, and attaches.
 #
-# `path` does the resume (`p import claude`, `resume --remote`). This
+# `path` does the resume (`resume --remote --session`). This
 # script does the host bootstrap in shell: VM creation, credential
 # seeding, and the working-tree sync. Each step marked [shell] is a
 # candidate to move into `path`.
@@ -74,10 +74,12 @@
 #   1. cargo build -p path-cli --features resume-remote; the script runs
 #      the binary cargo reports building and does not touch any
 #      installed `path`.
-#   2. Resolve the session. `path p import claude --no-cache` writes
-#      the document to $TMPDIR/path-resume-remote/. The remote session
-#      ID comes from `p export claude --content-addressed-session-id`:
-#      the same document yields the same ID on every run. With
+#   2. Resolve the remote session ID for the probe (step 4).
+#      `path p import claude --no-cache` writes the document to
+#      $TMPDIR/path-resume-remote/, and `p export claude
+#      --content-addressed-session-id` names it: the same document
+#      yields the same ID on every run. The handoff (step 6) names the
+#      session itself and derives it again in memory. With
 #      --create, the VM name is rr-<first 8 characters of the --session
 #      ID> and the destination checks run here, once it is known.
 #   3. Optional VM creation (--create).
@@ -406,7 +408,7 @@ fi
 
 # ── 6. Hand off to path resume ────────────────────────────────────────────
 
-RESUME_ARGS=(resume "$DOC" --remote "$REMOTE" -C "$REMOTE_DIR")
+RESUME_ARGS=(resume --remote "$REMOTE" --session "$SESSION" --project "$PROJECT" -C "$REMOTE_DIR")
 [[ $DRY_RUN -eq 0 ]] || RESUME_ARGS+=(--dry-run)
 step "path ${RESUME_ARGS[*]}"
 echo "After a detach (ctrl-b d), re-run this script to reattach; the live tmux session is reused and nothing is re-uploaded."
