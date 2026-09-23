@@ -37,8 +37,12 @@ All notable changes to the Toolpath workspace are documented here.
 - **`path-cli`** (0.26.0): `path resume --remote` takes launch
   arguments after `--`, appended to the remote `claude -r <id>` (for
   example `-- --permission-mode acceptEdits`). The plan prints them.
-  The Claude Code plugin's `/path:resume --remote` passes through
-  anything after `--`.
+- **Claude Code plugin** (0.3.1): `/path:resume --remote` passes through
+  anything after `--`. The version bump ensures installed copies receive
+  the command update.
+- **Dependencies:** update `h2` to 0.4.16, `rustls` to 0.23.45,
+  `quinn-proto` to 0.11.15, and `russh` to 0.63.3 for the latest security
+  and maintenance fixes.
 - **`toolpath-cli`** (0.26.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.25.0 — 2026-09-16
