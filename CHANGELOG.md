@@ -2,6 +2,23 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.27.0 — 2026-09-16
+
+- **`path-cli`** (0.27.0): `p import claude --remote <user@host>
+  --session <id>` pulls a Claude session back from an ssh host into
+  the local cache (behind the `resume-remote` cargo feature). Two
+  read-only calls find the session and its chain; each segment is
+  fetched with one `cat` and derived locally. The document is rooted at
+  the local project directory and records the destination and the
+  remote directory under `path.meta.remote`. `-C` is the remote project
+  directory, defaulting as for `resume --remote`.
+- **`toolpath-claude`** (0.13.4): `resolve_chain_with_map` and
+  `build_succession_map` are public. `build_succession_map` builds the
+  predecessor to successor map over `(stem, first sessionId)` pairs
+  under the rule the on-disk index applies: a dotted stem (a rotation
+  artifact) continues nothing.
+- **`toolpath-cli`** (0.27.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.26.0 — 2026-09-16
 
 - **`path-cli`** (0.26.0): `path resume --remote` takes launch

@@ -19,22 +19,13 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
-use std::time::Duration;
 
+use crate::claude_session::swap_home;
 use crate::harness::Harness;
 use crate::ssh::{
     DEAD_PEER_TIMEOUT, Destination, RemoteCommand, Transport, fail_unless_success, parse_facts,
+    require_absolute_path, transfer_timeout,
 };
-
-/// Wall-clock bound on a probe, a kill, or the launch, so a timeout
-/// means a live remote that is stuck.
-const COMMAND_TIMEOUT: Duration = DEAD_PEER_TIMEOUT;
-
-/// Wall-clock bound on the upload: `COMMAND_TIMEOUT` plus one second per
-/// 64 KiB, the time a 512 kbit/s uplink needs.
-fn upload_timeout(bytes: usize) -> Duration {
-    COMMAND_TIMEOUT + Duration::from_secs((bytes / (64 * 1024)) as u64)
-}
 
 /// Locations probed for `claude` when `command -v` finds nothing,
 /// relative to the remote home. An ssh exec channel runs a non-login
@@ -313,7 +304,7 @@ fn upload(
         [target.session_file.as_str(), &bytes.to_string()],
     )
     .stdin(jsonl);
-    let output = transport.run(dest, &command, upload_timeout(bytes))?;
+    let output = transport.run(dest, &command, transfer_timeout(bytes as u64))?;
     fail_unless_success(&output, "uploading the session", dest)
 }
 
@@ -329,7 +320,7 @@ fn kill_dead_session(
         "-t",
         &format!("={}", target.tmux_name),
     ]);
-    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    let output = transport.run(dest, &command, DEAD_PEER_TIMEOUT)?;
     fail_unless_success(&output, "killing the dead tmux session", dest)
 }
 
@@ -358,7 +349,7 @@ fn launch(target: &RemoteTarget, dest: &Destination, transport: &dyn Transport) 
             claude_command.as_str(),
         ],
     );
-    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    let output = transport.run(dest, &command, DEAD_PEER_TIMEOUT)?;
     fail_unless_success(&output, "launching the tmux session", dest)
 }
 
@@ -405,7 +396,7 @@ struct HostFacts {
 /// Remote home, claude path, and tmux presence, in one read-only call.
 fn probe_host(transport: &dyn Transport, dest: &Destination) -> Result<HostFacts> {
     let command = RemoteCommand::from_script(include_str!("probe_host.sh"), CLAUDE_PROBE_LOCATIONS);
-    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    let output = transport.run(dest, &command, DEAD_PEER_TIMEOUT)?;
     fail_unless_success(&output, "host probe", dest)?;
     let [home, claude, tmux] = parse_facts(&output, HOST_FACT_TAGS)?;
 
@@ -453,7 +444,7 @@ fn probe_project_dir(
             target.session_file.as_str(),
         ],
     );
-    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    let output = transport.run(dest, &command, DEAD_PEER_TIMEOUT)?;
     fail_unless_success(&output, "project directory probe", dest)?;
     let [pwd, session, pane_dead, target] = parse_facts(&output, DIR_FACT_TAGS)?;
     Ok(ProjectDirFacts {
@@ -464,41 +455,10 @@ fn probe_project_dir(
     })
 }
 
-/// The local cwd with the local home swapped for the remote home,
-/// checked by [`crate::claude_session::parse_posix_dir`].
-fn swap_home(local_cwd: &Path, local_home: &Path, remote_home: &str) -> Result<String> {
-    let suffix = local_cwd
-        .strip_prefix(local_home)
-        .ok()
-        .and_then(Path::to_str)
-        .with_context(|| {
-            format!(
-                "the local cwd {} is not under the local home {}; pass -C <remote-dir>",
-                local_cwd.display(),
-                local_home.display()
-            )
-        })?;
-    let dir = if suffix.is_empty() {
-        remote_home.to_string()
-    } else {
-        format!("{}/{}", remote_home.trim_end_matches('/'), suffix)
-    };
-    crate::claude_session::parse_posix_dir(&dir)
-}
-
 /// `path-<first 8 characters of the session ID>`. The ID is a
 /// hyphenated UUID, so the name is always a valid tmux session name.
 fn format_tmux_session_name(session_id: &str) -> String {
     format!("path-{}", &session_id[..8])
-}
-
-/// A value captured from the remote may only become a path component
-/// if it starts with `/`.
-fn require_absolute_path(value: &str, what: &str, dest: &Destination) -> Result<String> {
-    if !value.starts_with('/') {
-        bail!("{what} from {dest} is not an absolute path (got {value:?})");
-    }
-    Ok(value.to_string())
 }
 
 /// A yes-or-no fact from a probe script. Any other value is an
@@ -965,21 +925,6 @@ mod tests {
         );
         let err = run(&fake, true).unwrap_err();
         assert!(err.to_string().contains("tmux not found"), "{err:#}");
-    }
-
-    #[test]
-    fn the_default_remote_dir_swaps_the_home() {
-        let local_home = Path::new("/home/local");
-        assert_eq!(
-            swap_home(Path::new("/home/local/a/b"), local_home, HOME).unwrap(),
-            "/home/remote/a/b"
-        );
-        assert_eq!(
-            swap_home(Path::new("/home/local"), local_home, HOME).unwrap(),
-            HOME
-        );
-        let err = swap_home(Path::new("/elsewhere"), local_home, HOME).unwrap_err();
-        assert!(err.to_string().contains("pass -C"), "{err:#}");
     }
 
     #[test]

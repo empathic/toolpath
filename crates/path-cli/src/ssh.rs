@@ -60,6 +60,13 @@ const KEEPALIVE_MAX: usize = 3;
 pub(crate) const DEAD_PEER_TIMEOUT: Duration =
     KEEPALIVE_INTERVAL.saturating_mul(KEEPALIVE_MAX as u32 + 1);
 
+/// Wall-clock bound on a command that moves `bytes` over the link:
+/// [`DEAD_PEER_TIMEOUT`] plus one second per 64 KiB, the time a
+/// 512 kbit/s link needs.
+pub(crate) fn transfer_timeout(bytes: u64) -> Duration {
+    DEAD_PEER_TIMEOUT + Duration::from_secs(bytes / (64 * 1024))
+}
+
 /// The port of a [`Destination`] that names none.
 const DEFAULT_PORT: u16 = 22;
 
@@ -762,13 +769,44 @@ pub(crate) fn parse_facts<const N: usize>(output: &Output, tags: [&str; N]) -> R
         .filter_map(|(line, tag)| line.strip_prefix(tag)?.strip_prefix('='))
         .collect();
     if lines.len() != N || values.len() != N {
-        bail!(
-            "unexpected output from the remote (a login banner or notice?); output was:\n{}{}",
-            stdout.trim_end(),
-            format_stderr_tail(&output.stderr)
-        );
+        return Err(unexpected_output(output));
     }
     Ok(std::array::from_fn(|i| values[i].to_string()))
+}
+
+/// The error for remote output that is not the expected `<tag>=<value>`
+/// lines: stdout, then stderr behind a `(stderr)` marker.
+fn unexpected_output(output: &Output) -> anyhow::Error {
+    anyhow::anyhow!(
+        "unexpected output from the remote (a login banner or notice?); output was:\n{}{}",
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        format_stderr_tail(&output.stderr)
+    )
+}
+
+/// Parse `<tag>=<value>` lines from stdout: every line carries `tag`,
+/// in any number (zero included). Any other shape (a login banner, a
+/// notice) errors with stdout, then stderr behind a `(stderr)` marker.
+pub(crate) fn parse_tagged_lines(output: &Output, tag: &str) -> Result<Vec<String>> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .map(|line| {
+            line.strip_prefix(tag)
+                .and_then(|rest| rest.strip_prefix('='))
+                .map(str::to_string)
+                .ok_or_else(|| unexpected_output(output))
+        })
+        .collect()
+}
+
+/// A value captured from the remote may only become a path component
+/// if it starts with `/`.
+pub(crate) fn require_absolute_path(value: &str, what: &str, dest: &Destination) -> Result<String> {
+    if !value.starts_with('/') {
+        bail!("{what} from {dest} is not an absolute path (got {value:?})");
+    }
+    Ok(value.to_string())
 }
 
 /// Scripted transport for tests: `reply` queues one `run` result;
@@ -1081,6 +1119,39 @@ mod tests {
                 parse_facts(&out, ["A", "B", "C"]).unwrap(),
                 ["1", "", "/x y"]
             );
+        }
+
+        #[test]
+        fn parse_tagged_lines_reads_every_value() {
+            let out = output(0, "R=a\t1\nR=\n", "");
+            assert_eq!(parse_tagged_lines(&out, "R").unwrap(), ["a\t1", ""]);
+            assert!(
+                parse_tagged_lines(&output(0, "", ""), "R")
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        #[test]
+        fn parse_tagged_lines_rejects_a_banner_and_other_tags() {
+            let banner = output(0, "Welcome!\nR=a\n", "warning: x\n");
+            let err = parse_tagged_lines(&banner, "R").unwrap_err().to_string();
+            assert!(err.contains("login banner"), "{err}");
+            assert!(err.ends_with("R=a\n(stderr) warning: x"), "{err}");
+            assert!(parse_tagged_lines(&output(0, "S=a\n", ""), "R").is_err());
+        }
+
+        #[test]
+        fn require_absolute_path_names_the_value_and_the_host() {
+            let dest = Destination::parse("u@h").unwrap();
+            assert_eq!(
+                require_absolute_path("/home/x", "remote $HOME", &dest).unwrap(),
+                "/home/x"
+            );
+            let err = require_absolute_path("home/x", "remote $HOME", &dest)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("remote $HOME from u@h"), "{err}");
         }
 
         #[test]

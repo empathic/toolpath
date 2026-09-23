@@ -29,16 +29,6 @@ use crate::remote::RepoSpec;
 #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
 mod remote_session;
 
-/// Claude Code names the session file `<id>.jsonl` and resumes it
-/// with `claude -r <id>`, and it accepts only a UUID there. The value
-/// is returned in the hyphenated lower-case form.
-#[cfg(not(target_os = "emscripten"))]
-fn parse_uuid_arg(raw: &str) -> Result<String> {
-    let id = uuid::Uuid::parse_str(raw)
-        .with_context(|| format!("the session ID must be a UUID (got {raw:?})"))?;
-    Ok(id.hyphenated().to_string())
-}
-
 /// Arguments of `p export claude`.
 #[derive(clap::Args, Debug, Default)]
 pub struct ClaudeExportArgs {
@@ -70,7 +60,7 @@ pub struct ClaudeExportArgs {
         long,
         value_name = "UUID",
         conflicts_with = "new_session_id",
-        value_parser = parse_uuid_arg
+        value_parser = crate::claude_session::parse_uuid_arg
     )]
     pub(crate) session_id: Option<String>,
 
@@ -2560,22 +2550,6 @@ mod tests {
 
     fn values_of<'a>(lines: &'a [serde_json::Value], key: &str) -> Vec<&'a str> {
         lines.iter().filter_map(|v| v.get(key)?.as_str()).collect()
-    }
-
-    #[test]
-    fn parse_uuid_arg_normalizes_a_uuid_and_rejects_other_text() {
-        assert_eq!(
-            parse_uuid_arg("402A3CA5-2530-407E-9029-F96879A0B1C2").unwrap(),
-            "402a3ca5-2530-407e-9029-f96879a0b1c2"
-        );
-        assert_eq!(
-            parse_uuid_arg("402a3ca52530407e9029f96879a0b1c2").unwrap(),
-            "402a3ca5-2530-407e-9029-f96879a0b1c2"
-        );
-        for bad in ["", "my-template", "402a3ca5-2530-407e-9029"] {
-            let err = parse_uuid_arg(bad).unwrap_err().to_string();
-            assert!(err.contains("must be a UUID"), "{bad:?}: {err}");
-        }
     }
 
     #[test]

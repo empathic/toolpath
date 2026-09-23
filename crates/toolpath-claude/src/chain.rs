@@ -14,9 +14,12 @@ use std::collections::{HashMap, HashSet};
 
 /// Resolve a chain using a pre-built succession map.
 ///
-/// Walks backwards from `session_id` to the head, then forwards to the
-/// tail. Returns the chain in chronological order (oldest first).
-pub(crate) fn resolve_chain_with_map(
+/// `succession` maps a segment's file stem to the stem of the segment
+/// that continues it: the successor is the file whose first entry with
+/// a `sessionId` names the predecessor. Walks backwards from
+/// `session_id` to the head, then forwards to the tail. Returns the
+/// chain in chronological order (oldest first).
+pub fn resolve_chain_with_map(
     succession: &HashMap<String, String>,
     session_id: &str,
 ) -> Vec<String> {
@@ -50,6 +53,42 @@ pub(crate) fn resolve_chain_with_map(
     }
 
     chain
+}
+
+/// The stem of the segment that `stem` continues, or `None` when it
+/// continues nothing. `first_session_id` reads the first `sessionId`
+/// in the segment, which for a successor names its predecessor;
+/// `first_session_id` is called only for an undotted stem.
+///
+/// A dotted stem (`<uuid>.orphaned-<ts>-<hash>`) is a rotation
+/// artifact. Its entries carry the original session's ID, which the
+/// mangled stem no longer equals, so it would read as a successor of
+/// that session and every one of its entries as a bridge entry. It
+/// continues nothing.
+pub(crate) fn find_predecessor(
+    stem: &str,
+    first_session_id: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if stem.contains('.') {
+        return None;
+    }
+    first_session_id().filter(|sid| sid != stem)
+}
+
+/// Predecessor stem to successor stem over `(stem, first sessionId)`
+/// pairs, under the rule the on-disk chain index applies:
+/// a segment continues the segment its first `sessionId` names, a
+/// dotted stem continues nothing.
+pub fn build_succession_map<'a>(
+    segments: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> HashMap<String, String> {
+    segments
+        .into_iter()
+        .filter_map(|(stem, first_session_id)| {
+            find_predecessor(stem, || first_session_id.map(str::to_string))
+                .map(|pred| (pred, stem.to_string()))
+        })
+        .collect()
 }
 
 /// Cached index of session succession relationships.
@@ -90,30 +129,18 @@ impl ChainIndex {
             }
             self.known_files.insert(file_stem.clone());
 
-            // Rotation artifacts (`<uuid>.orphaned-<ts>-<hash>`) open with a
-            // foreign-looking `sessionId` — their entries' own uuid, which the
-            // mangled stem no longer equals — so the old classifier chained
-            // them in as successors, whereupon every entry of the segment read
-            // as a bridge entry and the whole segment (turns, usage) silently
-            // vanished from the merged conversation. A session stem never
-            // contains a dot; anything dotted is classified standalone here
-            // and excluded from chain_heads() below.
-            if file_stem.contains('.') {
-                self.non_successors.insert(file_stem.clone());
-                continue;
-            }
-
             let path = resolver.conversation_file(project_path, file_stem)?;
-            if let Some(first_sid) = ConversationReader::read_first_session_id(&path) {
-                if first_sid != *file_stem {
-                    // This file is a successor of first_sid
-                    self.succession.insert(first_sid.clone(), file_stem.clone());
-                    self.reverse.insert(file_stem.clone(), first_sid);
-                } else {
+            match find_predecessor(file_stem, || {
+                ConversationReader::read_first_session_id(&path)
+            }) {
+                Some(predecessor) => {
+                    self.succession
+                        .insert(predecessor.clone(), file_stem.clone());
+                    self.reverse.insert(file_stem.clone(), predecessor);
+                }
+                None => {
                     self.non_successors.insert(file_stem.clone());
                 }
-            } else {
-                self.non_successors.insert(file_stem.clone());
             }
         }
 
@@ -384,6 +411,37 @@ mod tests {
         let chain = resolve_chain_with_map(&succession, "session-a");
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0], "session-a");
+    }
+
+    // ── build_succession_map tests ─────────────────────────────────────────
+
+    #[test]
+    fn build_succession_map_follows_the_first_session_id_and_skips_dotted_stems() {
+        let map = build_succession_map([
+            ("session-a", Some("session-a")),
+            ("session-b", Some("session-a")),
+            (
+                "session-b.orphaned-1787626221622-ac84712d",
+                Some("session-a"),
+            ),
+            ("session-c", None),
+        ]);
+        assert_eq!(
+            map,
+            HashMap::from([("session-a".to_string(), "session-b".to_string())])
+        );
+        assert_eq!(
+            resolve_chain_with_map(&map, "session-a"),
+            vec!["session-a", "session-b"]
+        );
+    }
+
+    #[test]
+    fn a_dotted_stem_never_reads_its_file() {
+        assert_eq!(
+            find_predecessor("session-a.orphaned-1-x", || panic!("read")),
+            None
+        );
     }
 
     // ── is_bridge_entry tests ────────────────────────────────────────
