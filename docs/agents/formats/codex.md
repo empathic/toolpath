@@ -402,6 +402,26 @@ The matching `custom_tool_call_output`:
 
 `output` is a JSON string (double-encoded).
 
+Newer rollouts (observed September 2026, both `function_call_output` and
+`custom_tool_call_output`) write `output` as an array of content parts
+instead of a string:
+
+```json
+{
+  "type": "custom_tool_call_output",
+  "id": "ctco_01a0b109-…",
+  "call_id": "call_gs8L…",
+  "output": [
+    {"type": "input_text", "text": "Script completed\nWall time 0.1 seconds\nOutput:\n"},
+    {"type": "input_text", "text": "{\"chunk_id\":\"5954a6\",\"exit_code\":0,\"output\":\"…\"}"}
+  ]
+}
+```
+
+Parts may also be `{"type": "input_image", "image_url": …}`. The reader
+concatenates the text parts in order and renders an image part as
+`[image]`, so both shapes land in `ToolInvocation.result.content`.
+
 ## `event_msg` — CLI-side events
 
 Inner `type` values observed in my fixture:

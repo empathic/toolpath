@@ -1092,6 +1092,33 @@ mod tests {
         assert_eq!(view.turns[1].model.as_deref(), Some("gpt-5.4"));
     }
 
+    #[test]
+    fn array_form_tool_outputs_attach_to_their_calls() {
+        // Newer rollouts write `output` as content parts, not a string.
+        let body = minimal_session().replace(
+            r#""output":"{\"output\":\"ok\"}""#,
+            r#""output":[{"type":"input_text","text":"Script completed\n"},{"type":"input_image","image_url":"data:x"},{"type":"input_text","text":"ok"}]"#,
+        );
+        assert!(body.contains("input_image"), "fixture rewritten");
+        let (_t, mgr, id) = setup_session_fixture(&body);
+        let view = to_view(&mgr.read_session(&id).unwrap());
+        let patch = view
+            .turns
+            .iter()
+            .flat_map(|t| &t.tool_uses)
+            .find(|u| u.id == "call_2")
+            .expect("apply_patch call");
+        let result = patch.result.as_ref().expect("output attached");
+        assert_eq!(result.content, "Script completed\n[image]ok");
+        assert!(
+            !view
+                .events
+                .iter()
+                .any(|e| e.event_type.contains("custom_tool_call_output")),
+            "not left behind as an opaque event"
+        );
+    }
+
     /// Two API rounds. Codex's `token_count` events carry cumulative
     /// session totals in `total_token_usage` and the round's own spend in
     /// `last_token_usage`; per-turn accounting must use the latter.
