@@ -331,10 +331,10 @@ fn upload(
     dest: &Destination,
     transport: &dyn Transport,
 ) -> Result<()> {
-    let mut conversation = crate::cmd_export::build_claude_conversation(document)?;
+    let mut conversation = crate::projection::claude::build_claude_conversation(document)?;
     conversation.rename_session(&target.session_id);
     conversation.reroot(&target.project_dir);
-    let jsonl = crate::cmd_export::serialize_jsonl(&conversation)?.into_bytes();
+    let jsonl = crate::projection::claude::serialize_jsonl(&conversation)?.into_bytes();
 
     eprintln!(
         "Uploading session {} to {dest}:{}",
