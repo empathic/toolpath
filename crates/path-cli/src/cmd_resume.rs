@@ -43,10 +43,13 @@
 //! (`--dry-run` stops there), then upload, launch, and attach as the
 //! remote state requires; `--no-attach` prints the attach command
 //! after the launch instead of attaching; arguments after `--`
-//! reach the remote `claude`. With `--remote`,
-//! `-C` names the remote project directory; the default is the local
-//! cwd with the local home swapped for the remote home. All of it
-//! compiles only with the `resume-remote` cargo feature on unix.
+//! reach the remote `claude`. `--session <id>` names a Claude session
+//! in the local project directory (`--project`, default: the current
+//! directory) in place of `<input>`, and the document is derived from
+//! the session on disk. With `--remote`, `-C` names the remote project
+//! directory; the default is the local project directory with the
+//! local home swapped for the remote home. All of it compiles only
+//! with the `resume-remote` cargo feature on unix.
 //!
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
 //! for the full design.
@@ -68,7 +71,12 @@ pub struct ResumeArgs {
     /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
     /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
     /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
-    pub input: String,
+    #[cfg_attr(
+        all(unix, feature = "resume-remote"),
+        arg(required_unless_present = "session", conflicts_with = "session")
+    )]
+    #[cfg_attr(not(all(unix, feature = "resume-remote")), arg(required = true))]
+    pub input: Option<String>,
 
     /// Working directory to run the resumed harness from. Defaults to
     /// the current shell cwd. The on-disk projection is keyed on this
@@ -128,7 +136,18 @@ pub(crate) fn run_remote(
             }
         }
     }
-    let resolved = resolve_input(&args)?;
+    let (resolved, local_cwd) = match &args.remote.session {
+        Some(session) => {
+            let project = match &args.remote.project {
+                Some(project) => std::fs::canonicalize(project)
+                    .with_context(|| format!("resolve --project {}", project.display()))?,
+                None => std::env::current_dir()?,
+            };
+            let resolved = remote::resolve_session(session, &project, config)?;
+            (resolved, project)
+        }
+        None => (resolve_input(&args)?, std::env::current_dir()?),
+    };
     let document = extract_the_only_path(&resolved.graph)?;
     require_an_agent_turn(document)?;
     remote::require_harness_is_claude(args.harness, resolved.source_harness)?;
@@ -146,7 +165,7 @@ pub(crate) fn run_remote(
             no_attach: args.remote.no_attach,
             launch_args: &args.remote.launch_args,
             local_home: home,
-            local_cwd: &std::env::current_dir()?,
+            local_cwd: &local_cwd,
             term: config.term.as_deref(),
         },
         &transport,
@@ -293,7 +312,10 @@ pub(crate) struct ResolvedInput {
 /// which one parse below turns into the `Graph`, so a parse error
 /// names the input it came from.
 pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
-    let raw = args.input.as_str();
+    let raw = args
+        .input
+        .as_deref()
+        .context("a document <input> is required")?;
 
     enum Shape<'a> {
         PathbaseUrl(&'a str),
@@ -713,7 +735,7 @@ mod tests {
         std::fs::write(&doc_file, graph.to_json().unwrap()).unwrap();
 
         let args = ResumeArgs {
-            input: doc_file.to_string_lossy().to_string(),
+            input: Some(doc_file.to_string_lossy().to_string()),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
             ..Default::default()
@@ -849,7 +871,7 @@ mod tests {
         std::fs::write(&p, graph.to_json().unwrap()).unwrap();
 
         let args = ResumeArgs {
-            input: p.to_string_lossy().to_string(),
+            input: Some(p.to_string_lossy().to_string()),
             ..Default::default()
         };
         let ResolvedInput {
@@ -880,10 +902,10 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 200 OK", body_static);
 
         let args = ResumeArgs {
-            input: format!(
+            input: Some(format!(
                 "{}/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
                 server.base()
-            ),
+            )),
             no_cache: true, // skip cache write in tests
             ..Default::default()
         };
@@ -942,10 +964,10 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 500 Internal Server Error", "boom");
 
         let args = ResumeArgs {
-            input: format!(
+            input: Some(format!(
                 "{}/u/alex/repos/pathstash/graphs/{FIXTURE_UUID}",
                 server.base()
-            ),
+            )),
             ..Default::default()
         };
         let result = resolve_input(&args);
@@ -973,7 +995,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let args = ResumeArgs {
-            input: "definitely/not/a/real/cache/id".to_string(),
+            input: Some("definitely/not/a/real/cache/id".to_string()),
             ..Default::default()
         };
         let err = resolve_input(&args).unwrap_err();
