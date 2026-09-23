@@ -42,6 +42,7 @@ nav: home
 </div>
 
 <div id="playground-section" class="playground" hidden>
+<h2>Try it</h2>
 <p class="playground-desc">
 Real <code>path</code> commands on example documents, running in your browser.
 Nothing to install.

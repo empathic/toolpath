@@ -184,7 +184,9 @@
       "  " +
         copperBold("path query") +
         " --input <file> '<filter>' Run a jq filter over steps",
-      "      " + dim("e.g. 'map(.step.actor) | unique'") + " Who worked on it",
+      "      " +
+        dim("e.g. 'map(.change | keys[]) | unique'") +
+        " Files touched",
       "      " +
         dim("e.g. 'map(select(.step.actor | startswith(\"agent:\")))'"),
       "  " +
@@ -1390,7 +1392,7 @@
         .then(function () {
           shell.term.write(copperBold("path") + " " + pencil("$") + " ");
           shell.autoType(
-            "path query --input path-01-pr.path.json --pretty 'group_by(.step.actor) | map({actor: .[0].step.actor, steps: length})'",
+            "path query --input path-01-pr.path.json --pretty 'map(.step.actor) | unique'",
             function () {
               shell.prompt();
             },
