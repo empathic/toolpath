@@ -51,13 +51,16 @@ while [ $# -gt 0 ]; do
 done
 [ "$remote" = yes ] || exit 0
 
-help="$("$ensure_path" exec resume --help 2>/dev/null || true)"
+# The hook runs with no permission prompt, so it uses only a `path` that
+# is already installed; `which` never downloads one.
+bin="$("$ensure_path" which 2>/dev/null)" || exit 0
+help="$("$bin" resume --help 2>/dev/null || true)"
 case "$help" in
     *--session*) ;;
     *) exit 0 ;;
 esac
 
-cmd=("$ensure_path" exec resume --session "$session_id" --project "$cwd")
+cmd=("$bin" resume --session "$session_id" --project "$cwd")
 [ "$dry_run" = yes ] || cmd+=(--no-attach)
 cmd+=("${words[@]}")
 

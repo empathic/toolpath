@@ -141,6 +141,16 @@ out="$(env -u CLAUDE_CODE_SESSION_ID PATH="/usr/bin:/bin" "$ENSURE" current-sess
 [ "$out" = "unknown" ] || fail "current-session without env: expected unknown, got $out"
 ok "current-session reports the env var without resolving a binary"
 
+# 4a. which prints an installed binary and exits 1 when there is none, and
+#     the install dirs stay empty.
+out="$(PATH="$STUB1:$PATH" "$ENSURE" which)"
+[ "$out" = "$STUB1/path" ] || fail "which: expected $STUB1/path, got $out"
+out="$(PATH="/usr/bin:/bin" "$ENSURE" which 2>&1)" && fail "which with no binary must exit 1, got: $out"
+[ -z "$out" ] || fail "which with no binary must print nothing, got: $out"
+[ ! -e "$TOOLPATH_INSTALL_DIR/path" ] && [ ! -e "$TOOLPATH_CONFIG_DIR/bin/path" ] \
+    || fail "which installed a binary"
+ok "which resolves an installed binary and never installs one"
+
 # 4b. The send hook. A stub `path` answers `resume --help` with the
 #     `--session` flag and `resume ... --remote <dest>` with a plan on
 #     stderr and the attach command on stdout, recording its arguments.
@@ -235,6 +245,12 @@ out="$(send_hook "--remote u@h -- --append-system-prompt \\\"be brief\\\"")"
 out="$(printf '{"session_id":"sess-1","cwd":"/proj","command_name":"path:resume","command_args":"--remote u@h","prompt":"/path:resume --remote u@h"}' \
     | CLAUDE_PLUGIN_ROOT="$PWD/$PLUGIN" TOOLPATH_BIN="$STUB1/path" PATH="/usr/bin:/bin" "$SEND_HOOK")"
 [ -z "$out" ] || fail "send hook must pass through when path lacks --session, got: $out"
+# No `path` at all lets the prompt through and installs nothing.
+out="$(printf '{"session_id":"sess-1","cwd":"/proj","command_name":"path:resume","command_args":"--remote u@h","prompt":"/path:resume --remote u@h"}' \
+    | CLAUDE_PLUGIN_ROOT="$PWD/$PLUGIN" PATH="/usr/bin:/bin" "$SEND_HOOK")"
+[ -z "$out" ] || fail "send hook must pass through when no path is installed, got: $out"
+[ ! -e "$TOOLPATH_INSTALL_DIR/path" ] && [ ! -e "$TOOLPATH_CONFIG_DIR/bin/path" ] \
+    || fail "send hook installed a binary"
 ok "send hook sends the current session and blocks with the attach command"
 
 # 5. A binary older than MIN_VERSION warns on stderr but still resolves.
