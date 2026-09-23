@@ -709,7 +709,9 @@
     font-weight: 700;
     margin: 0 0 var(--space-md);
     line-height: 1.15;
-    letter-spacing: 0.08em;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    color: var(--text);
   }
   .hero .tagline {
     font-size: 0.95rem;
@@ -802,34 +804,55 @@
   .copy-btn.copied .check-icon {
     display: block;
   }
-  .try-it-btn {
+  .hero-eyebrow {
+    font-family: var(--font);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin: 0 0 var(--space-sm);
+  }
+  .hero h1 span {
+    color: var(--accent);
+  }
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm) var(--space-lg);
+  }
+  .hero-cta,
+  .hero-link {
     font-family: var(--font);
     font-size: 0.72rem;
     font-weight: 600;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--accent);
-    background: transparent;
+    text-decoration: none;
+  }
+  .hero-cta {
+    color: var(--bg);
+    background: var(--accent);
     border: 1px solid var(--accent);
-    padding: 0.3rem 0.8rem;
-    margin-left: 0.75rem;
-    cursor: pointer;
+    padding: 0.4rem 0.9rem;
     transition:
       background 0.15s,
       color 0.15s;
-    vertical-align: middle;
   }
-  .try-it-btn:hover {
-    background: var(--accent);
-    color: var(--bg);
+  .hero-cta:hover {
+    background: transparent;
+    color: var(--accent);
   }
-  .try-it-btn:disabled {
+  .hero-link {
+    color: var(--accent);
+  }
+  .hero-link:disabled {
     opacity: 0.4;
     cursor: default;
   }
-  .hero-install .try-it-btn {
-    margin-left: 0;
-    margin-top: 0.85rem;
+  .hero-link .cli-name {
+    text-transform: none;
   }
   .hero + .divider {
     margin-bottom: var(--space-lg);
@@ -976,6 +999,152 @@
     margin: var(--space-xl) 0;
   }
 
+  /* --- Homepage: figures with an inline label --- */
+  .figure-block,
+  .pp-figure {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    padding: var(--space-md) 1.25rem 1.25rem;
+    margin: 1.25rem 0;
+  }
+  .figure-label {
+    display: block;
+    font-family: var(--font);
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: var(--space-md);
+  }
+  .log-list {
+    margin: 0;
+    display: grid;
+  }
+  .log-list > div {
+    display: grid;
+    grid-template-columns: 11rem minmax(0, 1fr);
+    gap: var(--space-md);
+    padding: 0.45rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .log-list dt {
+    font-family: var(--font);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .log-list dd {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+  }
+  .stakes {
+    border-left: 3px solid var(--alert);
+    padding: 0.2rem 0 0.2rem var(--space-md);
+  }
+  .stakes strong {
+    color: var(--text);
+  }
+
+  /* Parse in / project out */
+  .pp {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.2fr) auto minmax(
+        0,
+        1fr
+      );
+    align-items: center;
+    gap: var(--space-sm);
+  }
+  .pp-side {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.3rem;
+  }
+  .pp-side li {
+    font-family: var(--font);
+    font-size: 0.72rem;
+    padding: 0.28rem 0.55rem;
+    border: 1px solid var(--border-strong);
+    background: var(--bg);
+    margin: 0;
+  }
+  .pp-side .pp-tool {
+    border-style: dashed;
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .pp-arrow {
+    display: grid;
+    justify-items: center;
+    gap: 0.15rem;
+    font-family: var(--font);
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .pp-arrow span {
+    font-size: 1.1rem;
+    font-weight: 400;
+  }
+  .pp-doc {
+    display: grid;
+    gap: 0.35rem;
+    padding: var(--space-md);
+    border: 2px solid var(--accent);
+    background: var(--bg);
+    font-family: var(--font);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+  }
+  .pp-doc b {
+    color: var(--text);
+    font-weight: 600;
+    margin-right: 0.35rem;
+  }
+  .pp-doc-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+
+  /* Adopters and commitments */
+  .objects-pairs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .adopter-card {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .commitments {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 var(--space-xl);
+  }
+  .commitments > div {
+    padding: var(--space-md) 0;
+    border-top: 1px solid var(--border-strong);
+  }
+  .commitments h3 {
+    margin: 0 0 0.3rem;
+    font-size: 0.9rem;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+  .commitments p {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+
   /* --- Responsive --- */
   @media (max-width: 640px) {
     html {
@@ -989,9 +1158,10 @@
     .hero h1 {
       font-size: 1.6rem;
     }
+    /* The hero carries copy and actions; the contour art would push the
+       playground a full screen down on a phone. */
     .topo-hero {
-      width: 80%;
-      max-width: 300px;
+      display: none;
     }
     .topo-float-right {
       float: none;
@@ -1002,9 +1172,18 @@
     .objects {
       grid-template-columns: 1fr;
     }
-    .try-it-btn {
-      margin-left: 0;
-      margin-top: var(--space-sm);
+    .log-list > div {
+      grid-template-columns: 1fr;
+      gap: 0.1rem;
+    }
+    .pp {
+      grid-template-columns: 1fr;
+    }
+    .pp-arrow span {
+      transform: rotate(90deg);
+    }
+    .commitments {
+      grid-template-columns: 1fr;
     }
   }
 }

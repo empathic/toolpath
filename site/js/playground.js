@@ -184,9 +184,7 @@
       "  " +
         copperBold("path query") +
         " --input <file> '<filter>' Run a jq filter over steps",
-      "      " +
-        dim("e.g. 'map(select(.dead_end))'") +
-        "    Find abandoned branches",
+      "      " + dim("e.g. 'map(.step.actor) | unique'") + " Who worked on it",
       "      " +
         dim("e.g. 'map(select(.step.actor | startswith(\"agent:\")))'"),
       "  " +
@@ -1392,7 +1390,7 @@
         .then(function () {
           shell.term.write(copperBold("path") + " " + pencil("$") + " ");
           shell.autoType(
-            "path query --input path-01-pr.path.json --pretty 'map(select(.dead_end)) | map(.step.id)'",
+            "path query --input path-01-pr.path.json --pretty 'group_by(.step.actor) | map({actor: .[0].step.actor, steps: length})'",
             function () {
               shell.prompt();
             },
