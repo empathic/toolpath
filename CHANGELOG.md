@@ -2,6 +2,39 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.29.0 — 2026-09-24
+
+- **`path-cli`** (0.29.0): authenticated uploads (`path share`,
+  `p export pathbase`) of a document larger than 4 MiB are sent as
+  several requests instead of one. The CLI creates the graph with
+  `paths: []`, then sends each path as batches of RFC-jsonl lines of at
+  most 4 MiB: the first batch to `POST …/graphs/{id}/paths`, the rest to
+  `POST …/graphs/{id}/paths/{path_id}/steps`. Every batch but the last
+  ends with an added `Head` line, so the stored path is valid after each
+  request. A step's signatures travel with the step, a step larger than
+  the budget is sent alone, and steps are sent parents-first. A batch
+  that fails with a transport error or a 5xx is retried up to 3 times;
+  on any other failure, or on Ctrl-C, the partly uploaded graph is deleted and the
+  error is reported (a 413 names the step and its size). Documents at or
+  under 4 MiB, documents containing a `$ref` path entry or a path with
+  no steps, and anonymous uploads still use the single request. When
+  the server answers `404` or `405` to a path's first batch it does not
+  implement the batch routes: the CLI deletes the empty graph, prints a
+  note, and sends the whole document in one request as before.
+- **`pathbase-client`** (0.2.1): regenerate from the Pathbase branch
+  that adds streamed upload. New operations `open_graph_path`
+  (`POST …/graphs/{id}/paths`) and `append_graph_path_steps`
+  (`POST …/graphs/{id}/paths/{path_id}/steps`, replacing the old
+  bare-steps body and full-path response), plus `freeze_graph`,
+  `get_graph_path_stats`, `Graph.state`/`Graph.generation` (required),
+  `User.kind`/`User.auth_methods`, and `409` on path update/delete.
+  The committed spec keeps the server's `application/x-ndjson` bodies
+  and doc links; `build.rs` maps `x-ndjson` to `text/plain` (progenitor
+  cannot name `x-ndjson`; the batch handlers read the raw body without
+  checking the header) and strips rustdoc link brackets from
+  descriptions. `scripts/refresh-pathbase-openapi.sh` no longer drops
+  `x-ndjson` operations. Because `state` and `generation` are required,
+  this release targets a server with Pathbase #468 deployed.
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>

@@ -1505,7 +1505,7 @@ fn share_explicit_args_uploads_via_anon() {
         use std::io::Read;
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc-123","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc-123","visibility":"unlisted","state":"mutable","generation":0,"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -1582,7 +1582,7 @@ fn share_anon_fixture() -> (
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","state":"mutable","generation":0,"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -1632,7 +1632,7 @@ fn one_shot_anon_server() -> (u16, std::thread::JoinHandle<()>) {
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","state":"mutable","generation":0,"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -2099,7 +2099,7 @@ fn authed_upload_server(requests: usize) -> (u16, std::thread::JoinHandle<Vec<St
             } else {
                 (
                     "201 Created",
-                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/u/team/repos/sessions/graphs/fe94b6f9","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#,
+                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/u/team/repos/sessions/graphs/fe94b6f9","visibility":"unlisted","state":"mutable","generation":0,"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#,
                 )
             };
             let resp = format!(

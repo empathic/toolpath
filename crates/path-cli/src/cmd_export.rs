@@ -912,7 +912,9 @@ pub(crate) fn run_pathbase_inner(
     body: &str,
     summary_source: &str,
 ) -> Result<()> {
-    use crate::cmd_pathbase::{AuthMode, anon_graphs_post, graphs_post, repos_post};
+    use crate::cmd_pathbase::{
+        AuthMode, BATCH_BUDGET, anon_graphs_post, graphs_post, graphs_post_streamed, repos_post,
+    };
     use pathbase_client::types::Visibility;
 
     // Validate locally so we give a clean error rather than relying on
@@ -956,15 +958,34 @@ pub(crate) fn run_pathbase_inner(
     };
 
     let name = args.name.or_else(|| Some(derive_name(&doc)));
-    let created = graphs_post(
-        &base_url,
-        &token,
-        &owner,
-        &repo,
-        name.as_deref(),
-        body,
-        args.public,
-    )?;
+    // The streamed routes take inline paths with at least one step; any
+    // other document goes up in one request whatever its size.
+    let streamable = doc.paths.iter().all(|p| match p {
+        toolpath::v1::PathOrRef::Path(p) => !p.steps.is_empty(),
+        toolpath::v1::PathOrRef::Ref(_) => false,
+    });
+    let created = if body.len() <= BATCH_BUDGET || !streamable {
+        graphs_post(
+            &base_url,
+            &token,
+            &owner,
+            &repo,
+            name.as_deref(),
+            body,
+            args.public,
+        )?
+    } else {
+        graphs_post_streamed(
+            &base_url,
+            &token,
+            &owner,
+            &repo,
+            name.as_deref(),
+            &doc,
+            args.public,
+            BATCH_BUDGET,
+        )?
+    };
 
     // The visibility we surface is what the server actually applied,
     // not what we requested. If server-side policy ever clamps the
@@ -2006,6 +2027,112 @@ mod tests {
             err.to_string().contains("Not logged in"),
             "expected `Not logged in` error, got: {err}"
         );
+    }
+
+    fn authed_upload(base_url: String, doc: &toolpath::v1::Graph) -> Result<()> {
+        run_pathbase_inner(
+            crate::cmd_pathbase::AuthMode::Authed {
+                token: "tok".to_string(),
+                username: "alex".to_string(),
+            },
+            base_url,
+            PathbaseUploadArgs {
+                url: None,
+                anon: false,
+                repo: Some(RepoSpec {
+                    owner: "alex".to_string(),
+                    name: "pathstash".to_string(),
+                }),
+                name: None,
+                public: false,
+            },
+            &serde_json::to_string(doc).unwrap(),
+            "test",
+        )
+    }
+
+    fn pad_first_step(doc: &mut toolpath::v1::Graph, bytes: usize) {
+        let toolpath::v1::PathOrRef::Path(path) = &mut doc.paths[0] else {
+            panic!("expected an inline path");
+        };
+        let change = path.steps[0].change.values_mut().next().unwrap();
+        change.raw = Some("x".repeat(bytes));
+    }
+
+    #[test]
+    fn pathbase_small_document_uploads_in_one_request() {
+        use crate::cmd_pathbase::tests::{MockServer, graph_document_json};
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            Box::leak(graph_document_json().into_boxed_str()),
+        );
+        authed_upload(server.base(), &make_path_doc()).unwrap();
+
+        let req = String::from_utf8(server.request()).unwrap();
+        assert!(
+            req.starts_with("POST /api/v1/u/alex/repos/pathstash/graphs "),
+            "got: {req}"
+        );
+        assert!(req.contains(r#""id":"step-001""#), "got: {req}");
+    }
+
+    #[test]
+    fn pathbase_over_budget_document_is_streamed() {
+        use crate::cmd_pathbase::tests::{MockServer, graph_document_json};
+        let mut doc = make_path_doc();
+        pad_first_step(&mut doc, crate::cmd_pathbase::BATCH_BUDGET);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            (
+                "HTTP/1.1 201 Created",
+                r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":2,"head":"step-002","generation":1}"#.to_string(),
+            ),
+            (
+                "HTTP/1.1 200 OK",
+                r#"{"inserted":1,"head":"step-002","generation":2}"#.to_string(),
+            ),
+        ]);
+        authed_upload(server.base(), &doc).unwrap();
+
+        let reqs = server.requests();
+        let first_line = |i: usize| {
+            let text = String::from_utf8_lossy(&reqs[i]);
+            text.lines().next().unwrap().to_string()
+        };
+        assert_eq!(
+            first_line(0),
+            "POST /api/v1/u/alex/repos/pathstash/graphs HTTP/1.1"
+        );
+        assert!(
+            first_line(1).ends_with("/paths HTTP/1.1"),
+            "{}",
+            first_line(1)
+        );
+        assert!(
+            first_line(2).ends_with("/paths/11111111-1111-1111-1111-111111111111/steps HTTP/1.1"),
+            "{}",
+            first_line(2)
+        );
+    }
+
+    #[test]
+    fn pathbase_over_budget_document_with_ref_uploads_in_one_request() {
+        use crate::cmd_pathbase::tests::{MockServer, graph_document_json};
+        let mut doc = make_path_doc();
+        pad_first_step(&mut doc, crate::cmd_pathbase::BATCH_BUDGET);
+        doc.paths
+            .push(toolpath::v1::PathOrRef::Ref(toolpath::v1::PathRef {
+                ref_url: "https://example.com/other.path.json".to_string(),
+            }));
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            Box::leak(graph_document_json().into_boxed_str()),
+        );
+        authed_upload(server.base(), &doc).unwrap();
+
+        let req = server.request();
+        assert!(req.len() > crate::cmd_pathbase::BATCH_BUDGET);
+        assert!(req.starts_with(b"POST /api/v1/u/alex/repos/pathstash/graphs "));
     }
 
     #[test]
