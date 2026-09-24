@@ -55,6 +55,13 @@ pub struct ConversationEntry {
     pub extra: HashMap<String, Value>,
 }
 
+/// Entry key under which a projection keeps usage that must not go in
+/// `message.usage`: counts from another harness, which Claude Code would
+/// read as the live context size. Claude Code ignores the key; this
+/// crate's reader falls back to it when `message.usage` is absent, so
+/// token accounting survives a round trip.
+pub const TOOLPATH_USAGE_KEY: &str = "toolpathUsage";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {

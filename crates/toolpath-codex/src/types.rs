@@ -393,7 +393,9 @@ impl FunctionCall {
 pub struct FunctionCallOutput {
     pub call_id: String,
 
-    /// Textual tool output (often a multi-line summary).
+    /// Textual tool output (often a multi-line summary). Newer rollouts
+    /// write an array of content parts, normalized to text on read.
+    #[serde(deserialize_with = "output_text")]
     pub output: String,
 
     #[serde(flatten, skip_serializing_if = "HashMap::is_empty", default)]
@@ -424,10 +426,34 @@ pub struct CustomToolCall {
 pub struct CustomToolCallOutput {
     pub call_id: String,
 
+    /// Tool output text; newer rollouts write an array of content parts.
+    #[serde(deserialize_with = "output_text")]
     pub output: String,
 
     #[serde(flatten, skip_serializing_if = "HashMap::is_empty", default)]
     pub extra: HashMap<String, Value>,
+}
+
+/// Deserialize a tool output that is either a string or, in newer
+/// rollouts, an array of content parts (`{"type":"input_text","text":…}`,
+/// `{"type":"input_image",…}`). Text parts are concatenated in order; an
+/// image part becomes `[image]`; any other shape is kept as its JSON.
+fn output_text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::String(s) => s,
+        Value::Array(parts) => parts
+            .iter()
+            .map(|p| match p.get("text").and_then(Value::as_str) {
+                Some(t) => t.to_string(),
+                None if p.get("type").and_then(Value::as_str) == Some("input_image") => {
+                    "[image]".to_string()
+                }
+                None => p.to_string(),
+            })
+            .collect(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    })
 }
 
 // ── Event messages (CLI-side events) ────────────────────────────────

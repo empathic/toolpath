@@ -72,6 +72,25 @@ and `worktreePath` inside `worktree-state.worktreeSession`. How the
 loader uses them on resume is not known. A writer that moves a session
 to another directory decides for each whether to rewrite it.
 
+### 4. `message.usage` is read as the live context size
+
+On resume, Claude Code takes the newest assistant entry's
+`message.usage` as the size of the context it is continuing. A usage
+that exceeds the model's window yields a session that resumes with no
+history at all: no error, the model sees only the new prompt. Observed
+with Claude Code 2.1.280 on a Codex session projected with Codex's own
+counts (`input_tokens: 788052`); removing `usage` from the assistant
+entries made the same file resume with its full history.
+
+Write `usage` only when it describes a Claude context: a Claude-sourced
+session, unchanged. Omit it for sessions from other harnesses, and for
+any session whose content was reduced after the counts were taken (a
+compaction). A missing `usage` is tolerated. Toolpath's projector keeps
+other harnesses' counts under a top-level `toolpathUsage` key on the
+entry (same shape as `usage`), which Claude Code ignores and
+`toolpath-claude`'s reader falls back to, so accounting survives a round
+trip.
+
 ## Strong conventions
 
 Real Claude Code entries always carry these envelope fields. The
@@ -162,8 +181,8 @@ That's enough for Claude Code to see the session. A functioning
 
 ## What we haven't verified
 
-- Exact tolerance for truncated or missing `usage` objects on
-  synthetic assistant entries.
+- Exact tolerance for truncated `usage` objects (missing ones are
+  fine; see hard rule 4).
 - Whether `toolUseResult` top-level summaries are ever consulted by
   the loader, or are purely for UI/debugging.
 - How strict the loader is about `messageId` uniqueness across

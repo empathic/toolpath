@@ -2,6 +2,30 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-codex 0.6.2 — 2026-09-23
+
+Codex sessions resumed in Claude Code came up empty; these two fixes make
+them load with their full history and tool results.
+
+- **`toolpath-codex`** (0.6.2): newer rollouts write a tool call's
+  `output` as an array of content parts rather than a string; the reader
+  now accepts both (text parts concatenated, images as `[image]`), so
+  tool results attach to their calls again instead of surviving only as
+  opaque `response_item.*_output` events. Existing cache entries are not
+  re-derived until their rollout changes: refresh one with
+  `path p import codex --session <id> --force`.
+- **`toolpath-claude`** (0.13.4, unpublished; joins the entry under
+  path-cli 0.27.0): the projector writes `message.usage` only for
+  Claude-sourced sessions. Claude Code reads the newest assistant line's
+  usage as the live context size, and another harness's counts (a Codex
+  session reports its own, far larger, window) made a projected session
+  resume with no history at all. Those counts now ride a
+  `toolpathUsage` entry key that Claude Code ignores and the reader
+  falls back to, so accounting still round-trips. The projector also
+  wraps a non-object tool input (Codex custom tools carry a bare
+  string) as `{"input": …}`; the Messages API rejects the session
+  otherwise.
+
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>
