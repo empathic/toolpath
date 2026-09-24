@@ -1,6 +1,6 @@
 pub mod artifact;
 mod cache;
-#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+#[cfg(not(target_os = "emscripten"))]
 mod claude_session;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
@@ -38,6 +38,8 @@ mod fuzzy;
 pub mod harness;
 mod io;
 pub mod kinds;
+#[cfg(not(target_os = "emscripten"))]
+mod projection;
 mod providers;
 mod query;
 mod remote;

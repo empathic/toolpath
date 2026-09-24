@@ -2,9 +2,9 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## path-cli 0.27.0 — 2026-09-21
+## path-cli 0.29.0 — 2026-09-24
 
-- **`path-cli`** (0.27.0): authenticated uploads (`path share`,
+- **`path-cli`** (0.29.0): authenticated uploads (`path share`,
   `p export pathbase`) of a document larger than 4 MiB are sent as
   several requests instead of one. The CLI creates the graph with
   `paths: []`, then sends each path as batches of RFC-jsonl lines of at
@@ -35,6 +35,37 @@ All notable changes to the Toolpath workspace are documented here.
   descriptions. `scripts/refresh-pathbase-openapi.sh` no longer drops
   `x-ndjson` operations. Because `state` and `generation` are required,
   this release targets a server with Pathbase #468 deployed.
+## path-cli 0.28.0 — 2026-09-16
+
+- **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>
+  [--project <dir>]` sends a Claude session named by its ID, the way
+  `share` and `p import claude` name one, in place of a document. The
+  document is derived in memory from the session on disk, so a session
+  goes to a host without an import first, and the derived text hashes
+  to the same remote session ID. `--project` defaults to the current
+  directory. The Claude Code plugin (0.4.0) `/path:resume --remote`
+  sends the current session that way, with no import into the cache
+  first. `scripts/resume-remote.sh` hands off the same way, and its
+  sync is explicit: `--sync` (implied by `--create`) pushes the
+  working tree one way with no delete, in place of a probe that
+  guessed from the remote session file.
+- **`toolpath-cli`** (0.28.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.27.0 — 2026-09-16
+
+- **`path-cli`** (0.27.0): `p import claude --remote <user@host>
+  --session <id>` pulls a Claude session back from an ssh host into
+  the local cache (behind the `resume-remote` cargo feature). Two
+  read-only calls find the session and its chain; each segment is
+  fetched with one `cat` and derived locally. The document is rooted at
+  the local project directory and records the destination and the
+  remote directory under `path.meta.remote`. `-C` is the remote project
+  directory, defaulting as for `resume --remote`.
+- **`toolpath-claude`** (0.13.4): `resolve_chain_with_map` and
+  `build_succession_map` are public. `build_succession_map` builds the
+  predecessor to successor map over `(stem, first sessionId)` pairs
+  under the rule the on-disk index applies: a dotted stem (a rotation
+  artifact) continues nothing.
 - **`toolpath-cli`** (0.27.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.26.0 — 2026-09-16

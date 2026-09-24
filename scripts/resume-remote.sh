@@ -4,22 +4,23 @@
 # `path resume --remote`, which plans, uploads, launches claude under
 # tmux, and attaches.
 #
-# `path` does the resume (`p import claude`, `resume --remote`). This
+# `path` does the resume (`resume --remote --session`). This
 # script does the host bootstrap in shell: VM creation, credential
 # seeding, and the working-tree sync. Each step marked [shell] is a
 # candidate to move into `path`.
 #
 # Usage:
 #   scripts/resume-remote.sh <user@host> [options]
-#   scripts/resume-remote.sh --create <vm-name> [options]
+#   scripts/resume-remote.sh --create [options]
 #
 # Options:
-#   --create <name>    Create an exe.dev VM named <name> first
-#                      (`ssh exe.dev new`), install tmux on it via the
-#                      first-boot setup script, wait until ssh and tmux
-#                      answer, then continue with --setup against
-#                      exedev@<name>.exe.xyz. The exeuntu image ships
-#                      claude at /usr/local/bin/claude.
+#   --create           Create an exe.dev VM named rr-<first 8 characters
+#                      of the --session ID> first (`ssh exe.dev new`),
+#                      install tmux on it via the first-boot setup
+#                      script, wait until ssh and tmux answer, then
+#                      continue with --setup against exedev@<that
+#                      name>.exe.xyz. The exeuntu image ships claude at
+#                      /usr/local/bin/claude.
 #   --session <id>     Claude session id to push. Default: the newest
 #                      session recorded for --project.
 #   --project <dir>    Local project directory the session belongs to.
@@ -32,8 +33,13 @@
 #                      ~/.claude/.credentials.json, and write a minimal
 #                      ~/.claude.json that skips onboarding and trusts the
 #                      project directory. Idempotent.
-#   --no-sync          Do not push the working tree to the remote.
-#   --no-pause         Do not wait for Enter between steps.
+#   --sync             Push the working tree (tracked, untracked, and
+#                      uncommitted files, plus .git; minus target/ and
+#                      anything .gitignore lists) into the remote project
+#                      dir. One-way: a file on both sides takes the local
+#                      content, and nothing on the remote is deleted, so
+#                      a remote that edited its tree keeps the edits to
+#                      files that exist only there. --create implies it.
 #   --dry-run          Print the setup and sync commands instead of
 #                      running them, and stop after the `path resume`
 #                      plan. Every remote call is read-only. With
@@ -43,8 +49,8 @@
 # Preconditions. Each one is checked before the first remote write. A
 # failed check exits 1 with a message.
 #   Local:
-#   - cargo, git, ssh, jq are on PATH. rsync is on PATH
-#     unless --no-sync. scp is on PATH with --setup.
+#   - cargo, git, ssh, jq are on PATH. rsync is on PATH with --sync.
+#     scp is on PATH with --setup.
 #   - stdin is a terminal unless --dry-run (tmux attach needs one).
 #   - <user@host> has both parts, each matching
 #     [A-Za-z0-9][A-Za-z0-9._-]*. `path resume --remote` requires the
@@ -66,34 +72,31 @@
 #   resume --remote` runs its own read-only probes after it):
 #   - The reply is exactly the TP_* lines the probe prints. A login
 #     banner or a registration notice fails the run verbatim.
-#   - The probe reports $HOME and whether the target session file
-#     exists. The file's absence means the run uploads, which gates the
-#     sync.
+#   - The probe reports $HOME.
 #
 # Steps (always in this order):
 #   1. cargo build -p path-cli --features resume-remote; the script runs
-#      target/debug/path and does not touch any installed `path`.
-#   2. Resolve the session. `path p import claude --no-cache` writes
-#      the document to $TMPDIR/path-resume-remote/. The remote session
-#      ID comes from `p export claude --content-addressed-session-id`:
-#      the same document yields the same ID on every run.
+#      the binary cargo reports building and does not touch any
+#      installed `path`.
+#   2. Resolve the session: --session, else the newest session recorded
+#      for --project. With --create, the VM name is rr-<first 8
+#      characters of the session ID> and the destination checks run
+#      here, once it is known.
 #   3. Optional VM creation (--create).
-#   4. [shell] The probe: remote home and whether the target session
-#      file exists. Derive <remote-dir> from the remote home unless
-#      -C is given. An absent file means the run uploads.
-#   5. Optional remote seeding (--setup). When the run uploads, rsync
-#      the working tree (tracked, untracked, and uncommitted files,
-#      plus .git; minus target/ and anything .gitignore lists) into the
-#      remote project dir. --delete makes the remote mirror the local
-#      tree. The remote has no Rust toolchain. --dry-run prints these
-#      commands instead of running them.
-#   6. Hand off: `path resume <doc> --remote <dest> -C <remote-dir>`.
-#      It re-probes read-only, prints the plan, and does what the
-#      remote state asks: a live tmux session is attached to as is, a
-#      present session file is launched as is, an absent file is
-#      uploaded first. To reset a remote session, delete its file on
-#      the remote and re-run. --dry-run stops after its plan. Detach
-#      with ctrl-b d; re-run the script to reattach.
+#   4. [shell] The probe: the remote home. Derive <remote-dir> from it
+#      unless -C is given.
+#   5. Optional remote seeding (--setup). With --sync, rsync the
+#      working tree into the remote project dir. The remote has no
+#      Rust toolchain. --dry-run prints these commands instead of
+#      running them.
+#   6. Hand off: `path resume --remote <dest> --session <id> --project
+#      <dir> -C <remote-dir>`. It derives the session in memory, probes
+#      read-only, prints the plan, and does what the remote state asks:
+#      a live tmux session is attached to as is, a present session file
+#      is launched as is, an absent file is uploaded first. To reset a
+#      remote session, delete its file on the remote and re-run.
+#      --dry-run stops after its plan. Detach with ctrl-b d; re-run the
+#      script to reattach.
 
 set -euo pipefail
 
@@ -107,7 +110,7 @@ usage() {
 
 [[ $# -ge 1 ]] || usage
 REMOTE=""
-VM_NAME=""
+CREATE=0
 case "$1" in
     -h|--help) usage 0 ;;
     --create) ;;
@@ -118,33 +121,25 @@ SESSION=""
 PROJECT="$PWD"
 REMOTE_DIR=""
 SETUP=0
-SYNC=1
-PAUSE=1
+SYNC=0
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --create) VM_NAME="$2"; SETUP=1; shift 2 ;;
+        --create) CREATE=1; SETUP=1; SYNC=1; shift ;;
         --session) SESSION="$2"; shift 2 ;;
         --project) PROJECT="$2"; shift 2 ;;
         -C) REMOTE_DIR="$2"; shift 2 ;;
         --setup) SETUP=1; shift ;;
-        --no-sync) SYNC=0; shift ;;
-        --no-pause) PAUSE=0; shift ;;
+        --sync) SYNC=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage 0 ;;
         *) echo "unknown option: $1" >&2; usage ;;
     esac
 done
 
-if [[ -n "$VM_NAME" && -n "$REMOTE" ]]; then
-    echo "pass either <user@host> or --create <vm-name>, not both" >&2; exit 2
-fi
-if [[ -n "$VM_NAME" ]]; then
-    case "$VM_NAME" in
-        *[!a-z0-9-]*|"") echo "--create name must match [a-z0-9-]+ (got '$VM_NAME')" >&2; exit 2 ;;
-    esac
-    REMOTE="exedev@$VM_NAME.exe.xyz"
+if [[ $CREATE -eq 1 && -n "$REMOTE" ]]; then
+    echo "pass either <user@host> or --create, not both" >&2; exit 2
 fi
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -155,11 +150,6 @@ run()  { show "$@"; "$@"; }
 skip() { printf '\033[2m$ %s\033[0m  (skipped: dry run)\n' "$*" >&2; }
 die()  { echo "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 is required on PATH"; }
-pause() {
-    [[ $PAUSE -eq 1 ]] || return 0
-    printf '\n[Enter to continue] '
-    read -r _ </dev/tty
-}
 
 PLAIN_PATH_RE='^/[A-Za-z0-9/._-]*$'
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -173,6 +163,27 @@ check_plain_path() {
         */./*)  die "$2 must not contain a . component (got '$1')" ;;
         *//*)   die "$2 must not contain an empty component (got '$1')" ;;
     esac
+}
+
+# check_destination: dies unless $REMOTE matches $DEST_RE and `ssh -G`
+# resolves it to itself. `path resume --remote` reads no ~/.ssh/config,
+# so the destination must mean the same thing to OpenSSH (which seeds
+# and syncs) as to the command: its own host, port 22, its own user,
+# and no proxy or certificate. `ssh -G` prints proxycommand, proxyjump,
+# and certificatefile lines only when they are set.
+SSH_CONFIG=""
+ssh_option() { awk -v key="$1" '$1 == key { print $2; exit }' <<<"$SSH_CONFIG"; }
+check_destination() {
+    [[ $REMOTE =~ $DEST_RE ]] || die "<user@host> must match $DEST_RE (got '$REMOTE')"
+    SSH_CONFIG="$(ssh -G "$REMOTE" 2>/dev/null)" || die "ssh -G $REMOTE failed"
+    [[ $(ssh_option hostname) == "${REMOTE#*@}" ]] || die "ssh resolves $REMOTE to host $(ssh_option hostname); path resume --remote reads no ~/.ssh/config"
+    [[ $(ssh_option port) == 22 ]] || die "ssh resolves $REMOTE to port $(ssh_option port); path resume --remote reads no ~/.ssh/config"
+    [[ $(ssh_option user) == "${REMOTE%@*}" ]] || die "ssh resolves $REMOTE to user $(ssh_option user); path resume --remote reads no ~/.ssh/config"
+    local key
+    for key in proxycommand proxyjump certificatefile; do
+        [[ -z $(ssh_option "$key") ]] || die "ssh sets $key for $REMOTE; path resume --remote reads no ~/.ssh/config"
+    done
+    echo "destination: $REMOTE"
 }
 
 # remote_facts <script> <tag>...: runs <script> on the remote in one
@@ -201,20 +212,7 @@ need cargo; need git; need ssh; need jq
 [[ $SYNC -eq 0 ]] || need rsync
 [[ $SETUP -eq 0 ]] || need scp
 [[ $DRY_RUN -eq 1 || -t 0 ]] || die "stdin is not a terminal; path resume --remote attaches and needs one (pass --dry-run to stop at the plan)"
-[[ $REMOTE =~ $DEST_RE ]] || die "<user@host> must match $DEST_RE (got '$REMOTE')"
-# `path resume --remote` reads no ~/.ssh/config, so the destination must
-# mean the same thing to OpenSSH (which seeds and syncs) as to the
-# command: its own host, port 22, its own user, and no proxy or
-# certificate. `ssh -G` prints proxycommand, proxyjump, and
-# certificatefile lines only when they are set.
-SSH_CONFIG="$(ssh -G "$REMOTE" 2>/dev/null)" || die "ssh -G $REMOTE failed"
-ssh_option() { awk -v key="$1" '$1 == key { print $2; exit }' <<<"$SSH_CONFIG"; }
-[[ $(ssh_option hostname) == "${REMOTE#*@}" ]] || die "ssh resolves $REMOTE to host $(ssh_option hostname); path resume --remote reads no ~/.ssh/config"
-[[ $(ssh_option port) == 22 ]] || die "ssh resolves $REMOTE to port $(ssh_option port); path resume --remote reads no ~/.ssh/config"
-[[ $(ssh_option user) == "${REMOTE%@*}" ]] || die "ssh resolves $REMOTE to user $(ssh_option user); path resume --remote reads no ~/.ssh/config"
-for key in proxycommand proxyjump certificatefile; do
-    [[ -z $(ssh_option "$key") ]] || die "ssh sets $key for $REMOTE; path resume --remote reads no ~/.ssh/config"
-done
+[[ $CREATE -eq 1 ]] || check_destination
 [[ $HOME == /* ]] || die "local \$HOME is not absolute (got '$HOME')"
 [[ -d $PROJECT ]] || die "--project is not a directory: $PROJECT"
 PROJECT="$(cd "$PROJECT" && pwd -P)"
@@ -225,18 +223,30 @@ if [[ -n $REMOTE_DIR ]]; then
     check_plain_path "$REMOTE_DIR" "-C"
 fi
 if [[ $SETUP -eq 1 ]]; then
-    CREDS="$HOME/.claude/.credentials.json"
+    # The local Claude Code config dir: CLAUDE_CONFIG_DIR when set, else
+    # ~/.claude. path reads sessions from it, and the seed copies its
+    # login. .claude.json sits inside the dir when CLAUDE_CONFIG_DIR is
+    # set, else in the home.
+    CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    CREDS="$CONFIG_DIR/.credentials.json"
+    if [[ -n ${CLAUDE_CONFIG_DIR:-} ]]; then
+        CLAUDE_JSON="$CLAUDE_CONFIG_DIR/.claude.json"
+    else
+        CLAUDE_JSON="$HOME/.claude.json"
+    fi
     [[ -f "$CREDS" ]] || die "missing $CREDS; log into claude locally first"
-    [[ -f "$HOME/.claude.json" ]] || die "missing ~/.claude.json"
+    [[ -f "$CLAUDE_JSON" ]] || die "missing $CLAUDE_JSON"
 fi
-echo "ok: local tools, $REMOTE, $PROJECT"
+echo "ok: local tools, $PROJECT"
 
 # ── 1. Build ──────────────────────────────────────────────────────────────
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 step "Build path from $(git -C "$ROOT" rev-parse --short HEAD) ($(git -C "$ROOT" branch --show-current))"
-run cargo build -q -p path-cli --features resume-remote --manifest-path "$ROOT/Cargo.toml"
-PATH_BIN="$ROOT/target/debug/path"
+show cargo build -q -p path-cli --features resume-remote --manifest-path "$ROOT/Cargo.toml"
+PATH_BIN="$(cargo build -q -p path-cli --features resume-remote --manifest-path "$ROOT/Cargo.toml" --message-format=json-render-diagnostics \
+    | jq -r 'select(.reason == "compiler-artifact" and .target.name == "path" and (.target.kind | index("bin"))) | .executable')"
+[[ -x $PATH_BIN ]] || die "cargo build did not report the path binary (got '$PATH_BIN')"
 "$PATH_BIN" --version
 
 # ── 2. Resolve the session ────────────────────────────────────────────────
@@ -252,15 +262,15 @@ if [[ -z "$SESSION" ]]; then
     echo "first message:  $(cut -f5 <<<"$ROW" | cut -c1-100)"
 fi
 
-WORK_DIR="${TMPDIR:-/tmp}/path-resume-remote"
-(umask 077; mkdir -p "$WORK_DIR")
-DOC="$WORK_DIR/$SESSION.json"
-run "$PATH_BIN" p import claude --project "$PROJECT" --session "$SESSION" --no-cache >"$DOC"
-echo "doc: $DOC ($(wc -c <"$DOC") bytes)"
+if [[ $CREATE -eq 1 ]]; then
+    VM_NAME="rr-${SESSION:0:8}"
+    REMOTE="exedev@$VM_NAME.exe.xyz"
+    check_destination
+fi
 
 # ── 3. Create the VM (optional) ───────────────────────────────────────────
 
-if [[ -n "$VM_NAME" ]]; then
+if [[ $CREATE -eq 1 ]]; then
     step "Create exe.dev VM $VM_NAME"
     if ssh -n -o BatchMode=yes exe.dev ls --json 2>/dev/null | grep -q "\"$VM_NAME\""; then
         echo "VM $VM_NAME already exists; skipping creation" >&2
@@ -294,36 +304,15 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tmux
     fi
 fi
 
-# ── 4. [shell] Probe: remote home, target session file ───────────────────
-
-step "Derive the remote session id"
-JSONL="$WORK_DIR/$SESSION.jsonl"
-run "$PATH_BIN" p export claude --input "$DOC" --content-addressed-session-id >"$JSONL"
-# The remote session ID is the sessionId every line that carries one
-# agrees on. `sort -u` yields one line only when they agree. The ID
-# hashes the document, so it is independent of --cwd.
-REMOTE_ID="$(jq -r '.sessionId // empty' "$JSONL" | sort -u)"
-[[ $REMOTE_ID =~ $UUID_RE ]] || die "the projected JSONL does not carry one sessionId (got '$REMOTE_ID')"
-echo "remote session id: $REMOTE_ID"
+# ── 4. [shell] Probe: remote home ─────────────────────────────────────────
 
 # probe_script: read-only. `path resume --remote` re-checks everything
-# it plans on; this probe only feeds the pre-steps: the remote home
-# (for -C derivation and the --setup trust entry) and whether the
-# target session file exists (an absent file means the run uploads,
-# which gates the sync). __SUFFIX__ is the project path relative to
-# the local home ('.' for the home itself); __DIR__ is the -C value or
-# empty. Both match $PLAIN_PATH_RE or are empty, so plain substitution
-# is safe. The slug must match `sanitize_project_path` in
-# crates/toolpath-claude/src/paths.rs (/, _, and . become -).
+# it plans on; this probe only feeds the pre-steps with the remote home
+# (for -C derivation and the --setup trust entry).
 probe_script() {
-    sed "s|__DIR__|$REMOTE_DIR|; s|__SUFFIX__|$1|; s|__ID__|$REMOTE_ID|" <<'EOF'
+    cat <<'EOF'
 set -u
 printf 'TP_HOME=%s\n' "$HOME"
-d='__DIR__'
-if [ -z "$d" ]; then d="$HOME/__SUFFIX__"; d="${d%/.}"; fi
-slug=$(printf '%s' "$d" | tr '/_.' '---')
-if [ -e "$HOME/.claude/projects/$slug/__ID__.jsonl" ]; then e=yes; else e=no; fi
-printf 'TP_TARGET=%s\n' "$e"
 EOF
 }
 
@@ -338,18 +327,14 @@ fi
 
 step "Probe $REMOTE (read-only)"
 show "ssh -n $REMOTE <probe script>"
-remote_facts "$(probe_script "$SUFFIX")" TP_HOME TP_TARGET
+remote_facts "$(probe_script)" TP_HOME
 REMOTE_HOME="${PF_VALS[0]}"
 check_plain_path "$REMOTE_HOME" "remote \$HOME"
 if [[ -z $REMOTE_DIR ]]; then
     if [[ $SUFFIX == . ]]; then REMOTE_DIR="$REMOTE_HOME"; else REMOTE_DIR="$REMOTE_HOME/$SUFFIX"; fi
     check_plain_path "$REMOTE_DIR" "the derived remote project dir"
 fi
-TARGET_EXISTS="${PF_VALS[1]}"
-[[ $TARGET_EXISTS == yes || $TARGET_EXISTS == no ]] || die "bad target state '$TARGET_EXISTS'"
-UPLOAD=1
-[[ $TARGET_EXISTS == no ]] || UPLOAD=0
-echo "ok: home=$REMOTE_HOME dir=$REMOTE_DIR target=$TARGET_EXISTS"
+echo "ok: home=$REMOTE_HOME dir=$REMOTE_DIR"
 
 # ── 5. Seed (optional) and sync ───────────────────────────────────────────
 
@@ -358,47 +343,44 @@ if [[ $SETUP -eq 1 ]]; then
     if [[ $DRY_RUN -eq 1 ]]; then
         skip "ssh -n $REMOTE mkdir -p ~/.claude $REMOTE_DIR"
         skip "scp -pq $CREDS $REMOTE:.claude/"
-        skip "jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
+        skip "jq '...' $CLAUDE_JSON | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
     else
         run ssh -n "$REMOTE" "mkdir -p ~/.claude $REMOTE_DIR"
         run scp -pq "$CREDS" "$REMOTE:.claude/"
-        show "jq '...' ~/.claude.json | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
+        show "jq '...' $CLAUDE_JSON | ssh $REMOTE 'umask 077; cat > ~/.claude.json'"
         jq --arg dir "$REMOTE_DIR" '{
             hasCompletedOnboarding: true,
             theme: (.theme // "dark"),
             oauthAccount,
             projects: { ($dir): { hasTrustDialogAccepted: true } }
-        }' "$HOME/.claude.json" | ssh "$REMOTE" 'umask 077; cat > ~/.claude.json'
+        }' "$CLAUDE_JSON" | ssh "$REMOTE" 'umask 077; cat > ~/.claude.json'
         echo "seeded ~/.claude/.credentials.json and ~/.claude.json"
     fi
 fi
 
-if [[ $SYNC -eq 1 && $UPLOAD -eq 1 ]]; then
+if [[ $SYNC -eq 1 ]]; then
     step "Sync $PROJECT to $REMOTE:$REMOTE_DIR"
     if [[ $DRY_RUN -eq 1 ]]; then
         skip "ssh -n $REMOTE mkdir -p $REMOTE_DIR"
-        skip "rsync -az --delete --exclude=target/ --filter=':- .gitignore' $PROJECT/ $REMOTE:$REMOTE_DIR/"
+        skip "rsync -az --exclude=target/ --filter=':- .gitignore' $PROJECT/ $REMOTE:$REMOTE_DIR/"
     else
         run ssh -n "$REMOTE" "mkdir -p $REMOTE_DIR"
-        run rsync -az --delete --stats \
+        run rsync -az --stats \
             --exclude=target/ --filter=':- .gitignore' \
             "$PROJECT/" "$REMOTE:$REMOTE_DIR/" | grep -E '^(Number of (regular )?files|Total transferred)'
     fi
-elif [[ $SYNC -eq 1 ]]; then
-    echo "sync skipped: the remote session file exists, so the run does not upload"
 fi
 
 # ── 6. Hand off to path resume ────────────────────────────────────────────
 
-RESUME_ARGS=(resume "$DOC" --remote "$REMOTE" -C "$REMOTE_DIR")
+RESUME_ARGS=(resume --remote "$REMOTE" --session "$SESSION" --project "$PROJECT" -C "$REMOTE_DIR")
 [[ $DRY_RUN -eq 0 ]] || RESUME_ARGS+=(--dry-run)
 step "path ${RESUME_ARGS[*]}"
-echo "After a detach (ctrl-b d), re-run this script to reattach; the live tmux session is reused and nothing is re-uploaded."
-if [[ -n "$VM_NAME" ]]; then
+echo "After a detach (ctrl-b d), re-run this script to reattach; the live tmux session is reused, nothing is re-uploaded, and nothing is synced without --sync."
+if [[ $CREATE -eq 1 ]]; then
     cat <<EOF
 Tear down the VM when finished:
   ssh exe.dev rm $VM_NAME
 EOF
 fi
-pause
 exec "$PATH_BIN" "${RESUME_ARGS[@]}"

@@ -214,7 +214,7 @@ pub fn write_path_to_temp(dir: &Path, path: toolpath::v1::Path) -> PathBuf {
 /// Construct `ResumeArgs` for a file-input + explicit-harness test.
 pub fn args_explicit(input: PathBuf, cwd: &Path, harness: Harness) -> ResumeArgs {
     ResumeArgs {
-        input: input.to_string_lossy().to_string(),
+        input: Some(input.to_string_lossy().to_string()),
         cwd: Some(cwd.to_path_buf()),
         harness: Some(harness),
         ..Default::default()

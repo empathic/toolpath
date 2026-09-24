@@ -18,23 +18,14 @@
 //! component.
 
 use anyhow::{Context, Result, bail};
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
 
+use crate::claude_session::swap_home;
 use crate::harness::Harness;
 use crate::ssh::{
     DEAD_PEER_TIMEOUT, Destination, RemoteCommand, Transport, fail_unless_success, parse_facts,
+    require_absolute_path, transfer_timeout,
 };
-
-/// Wall-clock bound on a probe, a kill, or the launch, so a timeout
-/// means a live remote that is stuck.
-const COMMAND_TIMEOUT: Duration = DEAD_PEER_TIMEOUT;
-
-/// Wall-clock bound on the upload: `COMMAND_TIMEOUT` plus one second per
-/// 64 KiB, the time a 512 kbit/s uplink needs.
-fn upload_timeout(bytes: usize) -> Duration {
-    COMMAND_TIMEOUT + Duration::from_secs((bytes / (64 * 1024)) as u64)
-}
 
 /// Locations probed for `claude` when `command -v` finds nothing,
 /// relative to the remote home. An ssh exec channel runs a non-login
@@ -62,7 +53,8 @@ pub struct RemoteArgs {
     /// Resume on this ssh destination instead of this machine
     /// (`user@host` or `user@host:port`; Claude only). With `--remote`,
     /// `-C` names the remote project directory; default: the local cwd
-    /// with the local home swapped for the remote home. The session is
+    /// (--project when given) with the local home swapped for the
+    /// remote home. The session is
     /// uploaded when the remote lacks it, `claude -r` starts under tmux,
     /// and this terminal attaches; a live tmux session or a present
     /// session file on the remote is used as is. Detach with ctrl-b d.
@@ -85,6 +77,47 @@ pub struct RemoteArgs {
     /// --remote.
     #[arg(last = true, requires = "dest", value_name = "ARGS")]
     pub launch_args: Vec<String>,
+
+    /// Send this Claude session, named by its ID as `p list claude`
+    /// prints it, in place of `<input>`: the document is derived from
+    /// the session on disk. Only with --remote.
+    #[arg(
+        long,
+        requires = "dest",
+        value_name = "ID",
+        value_parser = crate::claude_session::parse_uuid_arg,
+        conflicts_with_all = ["force", "no_cache", "url"]
+    )]
+    pub session: Option<String>,
+
+    /// The local project directory --session is in. Default: the
+    /// current directory. Its home swap is the default remote project
+    /// directory. Only with --session.
+    #[arg(long, requires = "session", value_name = "DIR")]
+    pub project: Option<PathBuf>,
+}
+
+/// Derive the document of the Claude session `session` of `project`,
+/// a canonical path. `json` is the text the remote session ID hashes.
+pub(super) fn resolve_session(
+    session: &str,
+    project: &Path,
+    config: &crate::config::Config,
+) -> Result<super::ResolvedInput> {
+    let project = project.to_str().context("--project must be valid UTF-8")?;
+    let manager = crate::providers::claude_convo(config);
+    let derived = crate::derive::derive_claude_session_with(&manager, project, session)?;
+    let json = derived
+        .doc
+        .to_json()
+        .context("serialize the derived document")?;
+    let graph = derived.doc;
+    let source_harness = graph.single_path().and_then(super::infer_source_harness);
+    Ok(super::ResolvedInput {
+        graph,
+        source_harness,
+        json,
+    })
 }
 
 /// Error unless the harness being resumed into is Claude, the one the
@@ -298,10 +331,10 @@ fn upload(
     dest: &Destination,
     transport: &dyn Transport,
 ) -> Result<()> {
-    let mut conversation = crate::cmd_export::build_claude_conversation(document)?;
+    let mut conversation = crate::projection::claude::build_claude_conversation(document)?;
     conversation.rename_session(&target.session_id);
     conversation.reroot(&target.project_dir);
-    let jsonl = crate::cmd_export::serialize_jsonl(&conversation)?.into_bytes();
+    let jsonl = crate::projection::claude::serialize_jsonl(&conversation)?.into_bytes();
 
     eprintln!(
         "Uploading session {} to {dest}:{}",
@@ -313,7 +346,7 @@ fn upload(
         [target.session_file.as_str(), &bytes.to_string()],
     )
     .stdin(jsonl);
-    let output = transport.run(dest, &command, upload_timeout(bytes))?;
+    let output = transport.run(dest, &command, transfer_timeout(bytes as u64))?;
     fail_unless_success(&output, "uploading the session", dest)
 }
 
@@ -329,7 +362,7 @@ fn kill_dead_session(
         "-t",
         &format!("={}", target.tmux_name),
     ]);
-    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    let output = transport.run(dest, &command, DEAD_PEER_TIMEOUT)?;
     fail_unless_success(&output, "killing the dead tmux session", dest)
 }
 
@@ -358,7 +391,7 @@ fn launch(target: &RemoteTarget, dest: &Destination, transport: &dyn Transport) 
             claude_command.as_str(),
         ],
     );
-    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    let output = transport.run(dest, &command, DEAD_PEER_TIMEOUT)?;
     fail_unless_success(&output, "launching the tmux session", dest)
 }
 
@@ -405,7 +438,7 @@ struct HostFacts {
 /// Remote home, claude path, and tmux presence, in one read-only call.
 fn probe_host(transport: &dyn Transport, dest: &Destination) -> Result<HostFacts> {
     let command = RemoteCommand::from_script(include_str!("probe_host.sh"), CLAUDE_PROBE_LOCATIONS);
-    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    let output = transport.run(dest, &command, DEAD_PEER_TIMEOUT)?;
     fail_unless_success(&output, "host probe", dest)?;
     let [home, claude, tmux] = parse_facts(&output, HOST_FACT_TAGS)?;
 
@@ -453,7 +486,7 @@ fn probe_project_dir(
             target.session_file.as_str(),
         ],
     );
-    let output = transport.run(dest, &command, COMMAND_TIMEOUT)?;
+    let output = transport.run(dest, &command, DEAD_PEER_TIMEOUT)?;
     fail_unless_success(&output, "project directory probe", dest)?;
     let [pwd, session, pane_dead, target] = parse_facts(&output, DIR_FACT_TAGS)?;
     Ok(ProjectDirFacts {
@@ -464,41 +497,10 @@ fn probe_project_dir(
     })
 }
 
-/// The local cwd with the local home swapped for the remote home,
-/// checked by [`crate::claude_session::parse_posix_dir`].
-fn swap_home(local_cwd: &Path, local_home: &Path, remote_home: &str) -> Result<String> {
-    let suffix = local_cwd
-        .strip_prefix(local_home)
-        .ok()
-        .and_then(Path::to_str)
-        .with_context(|| {
-            format!(
-                "the local cwd {} is not under the local home {}; pass -C <remote-dir>",
-                local_cwd.display(),
-                local_home.display()
-            )
-        })?;
-    let dir = if suffix.is_empty() {
-        remote_home.to_string()
-    } else {
-        format!("{}/{}", remote_home.trim_end_matches('/'), suffix)
-    };
-    crate::claude_session::parse_posix_dir(&dir)
-}
-
 /// `path-<first 8 characters of the session ID>`. The ID is a
 /// hyphenated UUID, so the name is always a valid tmux session name.
 fn format_tmux_session_name(session_id: &str) -> String {
     format!("path-{}", &session_id[..8])
-}
-
-/// A value captured from the remote may only become a path component
-/// if it starts with `/`.
-fn require_absolute_path(value: &str, what: &str, dest: &Destination) -> Result<String> {
-    if !value.starts_with('/') {
-        bail!("{what} from {dest} is not an absolute path (got {value:?})");
-    }
-    Ok(value.to_string())
 }
 
 /// A yes-or-no fact from a probe script. Any other value is an
@@ -549,6 +551,46 @@ mod tests {
 
     fn dest() -> Destination {
         Destination::parse("user@host").unwrap()
+    }
+
+    /// A one-turn session file under `<claude dir>/projects/<slug>`,
+    /// recorded against `cwd`, derives from disk.
+    #[test]
+    fn a_session_id_with_project_derives_the_session_on_disk() {
+        let claude_dir = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let project = std::fs::canonicalize(project.path()).unwrap();
+        let cwd = project.to_str().unwrap();
+        let slug = toolpath_claude::PathResolver::new()
+            .with_claude_dir(claude_dir.path())
+            .project_dir(cwd)
+            .unwrap();
+        std::fs::create_dir_all(&slug).unwrap();
+        let session = "b7e1c0de-0000-4000-8000-000000000001";
+        std::fs::write(
+            slug.join(format!("{session}.jsonl")),
+            format!(
+                "{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{session}\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"{cwd}\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n\
+                 {{\"type\":\"assistant\",\"uuid\":\"a1\",\"parentUuid\":\"u1\",\"sessionId\":\"{session}\",\"timestamp\":\"2026-01-01T00:00:01Z\",\"cwd\":\"{cwd}\",\"message\":{{\"role\":\"assistant\",\"content\":\"hello\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        let config = crate::config::Config {
+            claude_config_dir: Some(claude_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let resolved = resolve_session(session, &project, &config).unwrap();
+        assert_eq!(resolved.source_harness, Some(Harness::Claude));
+        let path = resolved.graph.single_path().unwrap();
+        assert_eq!(path.steps.len(), 2);
+        assert!(
+            path.steps[0]
+                .change
+                .contains_key(&format!("claude-code://{session}")),
+            "{:?}",
+            path.steps[0].change.keys().collect::<Vec<_>>()
+        );
+        assert!(resolved.json.contains(session));
     }
 
     const HOME: &str = "/home/remote";
@@ -965,21 +1007,6 @@ mod tests {
         );
         let err = run(&fake, true).unwrap_err();
         assert!(err.to_string().contains("tmux not found"), "{err:#}");
-    }
-
-    #[test]
-    fn the_default_remote_dir_swaps_the_home() {
-        let local_home = Path::new("/home/local");
-        assert_eq!(
-            swap_home(Path::new("/home/local/a/b"), local_home, HOME).unwrap(),
-            "/home/remote/a/b"
-        );
-        assert_eq!(
-            swap_home(Path::new("/home/local"), local_home, HOME).unwrap(),
-            HOME
-        );
-        let err = swap_home(Path::new("/elsewhere"), local_home, HOME).unwrap_err();
-        assert!(err.to_string().contains("pass -C"), "{err:#}");
     }
 
     #[test]
