@@ -35,6 +35,8 @@ fn main() {
     let mut spec: Value = serde_json::from_str(&spec_text).expect("parse openapi.json");
 
     downgrade_to_oas_30(&mut spec);
+    rewrite_ndjson_request_bodies(&mut spec);
+    unlink_descriptions(&mut spec);
 
     let spec: openapiv3::OpenAPI =
         serde_json::from_value(spec).expect("downgraded spec doesn't match openapiv3 model");
@@ -49,6 +51,80 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
     let out_file = out_dir.join("pathbase_client.rs");
     fs::write(&out_file, formatted).unwrap_or_else(|e| panic!("write {}: {e}", out_file.display()));
+}
+
+/// Progenitor 0.14 generates a raw `body: String` parameter only for
+/// `text/plain` (and `text/x-markdown`) request bodies and panics on any
+/// content type it does not know. The streamed-upload routes take
+/// `application/x-ndjson` with schema `{type: string}`; rename the key so
+/// they generate. The client then sends `Content-Type: text/plain`; the
+/// server reads the raw body and does not check the header.
+fn rewrite_ndjson_request_bodies(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Object(body)) = map.get_mut("requestBody")
+                && let Some(Value::Object(content)) = body.get_mut("content")
+                && let Some(media) = content.remove("application/x-ndjson")
+            {
+                content.insert("text/plain".into(), media);
+            }
+            for v in map.values_mut() {
+                rewrite_ndjson_request_bodies(v);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                rewrite_ndjson_request_bodies(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Server doc comments become rustdoc on the generated client. A rustdoc
+/// intra-doc link (``[`name`]``) to a server-side item does not resolve
+/// there and fails `cargo doc -D warnings`; keep the code span, drop the
+/// link brackets.
+fn unlink_descriptions(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(text)) = map.get_mut("description")
+                && text.contains("[`")
+            {
+                *text = unlink(text);
+            }
+            for v in map.values_mut() {
+                unlink_descriptions(v);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                unlink_descriptions(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn unlink(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[`") {
+        out.push_str(&rest[..start]);
+        let span = &rest[start + 1..];
+        match span[1..].find('`') {
+            Some(i) if span[i + 2..].starts_with(']') => {
+                out.push_str(&span[..i + 2]);
+                rest = &span[i + 3..];
+            }
+            _ => {
+                out.push_str("[`");
+                rest = &rest[start + 2..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Walk the document and rewrite OAS 3.1 idioms into OAS 3.0 ones.
