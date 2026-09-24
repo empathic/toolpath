@@ -62,38 +62,14 @@ jq '
 
   # Progenitor 0.14 accepts request bodies of application/json,
   # application/x-www-form-urlencoded, application/octet-stream,
-  # text/plain and text/x-markdown, and JSON responses only. The
-  # streamed-upload routes take application/x-ndjson with schema
-  # {type: string}; rewrite that key to text/plain so progenitor
-  # generates a `body: String` parameter. The generated client then
-  # sends `Content-Type: text/plain`, which the server accepts: those
-  # handlers read the raw body and do not check the header. Operations
-  # still using an unsupported content type after the rewrite are
-  # dropped so the build does not panic on
-  # `UnexpectedFormat("unexpected content type: ...")`.
-  def rewrite_ndjson_request_body:
-    if type == "object"
-       and has("requestBody")
-       and ((.requestBody.content // {}) | has("application/x-ndjson"))
-    then
-      .requestBody.content |= with_entries(
-        if .key == "application/x-ndjson" then .key = "text/plain" else . end
-      )
-    else . end;
-
-  # Server doc comments are copied into the rustdoc of the generated
-  # client. A rustdoc intra-doc link ([`name`]) to a server-side item
-  # does not resolve there and fails `cargo doc -D warnings`; keep the
-  # code span, drop the link brackets. (No apostrophes in these
-  # comments: the whole program sits in single quotes.)
-  def unlink_descriptions:
-    if type == "object" and (.description | type) == "string"
-    then .description |= gsub("\\[(?<code>`[^`]+`)\\]"; .code)
-    else . end;
-
+  # text/plain and text/x-markdown, and JSON responses only.
+  # application/x-ndjson is kept: build.rs maps it to text/plain.
+  # Operations using any other content type are dropped so the build
+  # does not panic on `UnexpectedFormat("unexpected content type: ...")`.
   def supported_request_body(key):
     key | IN("application/json", "application/x-www-form-urlencoded",
-             "application/octet-stream", "text/plain", "text/x-markdown");
+             "application/octet-stream", "text/plain", "text/x-markdown",
+             "application/x-ndjson");
 
   def has_unsupported_content(op):
     ((op.requestBody.content // {}) | keys | any(supported_request_body(.) | not))
@@ -111,7 +87,7 @@ jq '
       )
     ) | .paths |= with_entries(select((.value | length) > 0));
 
-  walk(downconvert_type_array | downconvert_nullable_ref | rewrite_ndjson_request_body | unlink_descriptions)
+  walk(downconvert_type_array | downconvert_nullable_ref)
   | strip_unsupported_operations
 ' "${_tmp}" > "${_dest}"
 echo "refresh: wrote ${_dest} ($(wc -l < "${_dest}") lines, OpenAPI 3.0 form)"

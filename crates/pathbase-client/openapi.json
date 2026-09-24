@@ -1231,7 +1231,7 @@
         "requestBody": {
           "description": "Toolpath JSONL lines, one `{\"<Variant>\": ...}` object per line, starting with `PathOpen`.",
           "content": {
-            "text/plain": {
+            "application/x-ndjson": {
               "schema": {
                 "type": "string"
               }
@@ -1761,7 +1761,7 @@
         "requestBody": {
           "description": "Toolpath JSONL lines, one `{\"<Variant>\": ...}` object per line. `PathOpen` is not accepted here.",
           "content": {
-            "text/plain": {
+            "application/x-ndjson": {
               "schema": {
                 "type": "string"
               }
@@ -2457,7 +2457,7 @@
             "properties": {
               "document": {
                 "type": "object",
-                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }` on the GET\nendpoints. On the upload-create response it is headers-only (no `steps`)\n— see `from_graph_headers`."
+                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }` on the GET\nendpoints. On the upload-create response it is headers-only (no `steps`)\n— see [`from_graph_headers`]."
               },
               "path_count": {
                 "type": "integer",
