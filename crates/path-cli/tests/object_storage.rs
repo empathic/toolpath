@@ -93,7 +93,8 @@ fn export_then_import_round_trips_through_a_folder() {
         .args(["--input", doc.to_str().unwrap()])
         .args(["--to", &folder.path().to_string_lossy()])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains("Resume it with"));
     let uri = String::from_utf8(out.get_output().stdout.clone())
         .unwrap()
         .trim()
@@ -128,6 +129,36 @@ fn export_then_import_round_trips_through_a_folder() {
 }
 
 #[test]
+fn every_export_is_recorded_in_the_local_ledger() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+
+    let ledger: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config.path().join("exports.json")).unwrap())
+            .unwrap();
+    let dest = folder.path().to_string_lossy().to_string();
+    let entry = &ledger[&dest]["doc"];
+    assert!(
+        entry["uri"]
+            .as_str()
+            .unwrap()
+            .ends_with("2026-01-01-hello--claude-code-g1.json"),
+        "{ledger}"
+    );
+    assert_eq!(entry["sha256"].as_str().unwrap().len(), 64);
+    assert!(entry["uploader"].as_str().unwrap().contains('@'));
+}
+
+#[test]
 fn re_exporting_a_session_overwrites_its_own_object() {
     // Every part of the name is a pure function of the document, so a
     // re-share must not leave a trail of near-duplicates.
@@ -153,6 +184,60 @@ fn re_exporting_a_session_overwrites_its_own_object() {
         objects,
         vec!["2026-01-01-hello--claude-code-g1.json".to_string()]
     );
+}
+
+#[test]
+fn re_exporting_prints_replaced_instead_of_uploaded() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Uploaded"))
+        .stderr(predicate::str::contains("Replaced").not());
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Replaced"))
+        .stderr(predicate::str::contains("Uploaded").not());
+}
+
+#[test]
+fn export_notes_when_it_creates_the_destination_directory() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let dest = root.path().join("new").join("deeper");
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &dest.to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(format!(
+            "note: created {}",
+            dest.to_string_lossy()
+        )));
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &dest.to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("note: created").not());
 }
 
 #[test]
@@ -782,6 +867,26 @@ fn list_object_json_carries_the_parsed_name_parts() {
 }
 
 #[test]
+fn list_object_on_a_missing_local_directory_errors() {
+    let config = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let missing = root.path().join("nope");
+
+    cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &missing.to_string_lossy(),
+            "--format",
+            "tsv",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not exist"));
+}
+
+#[test]
 fn list_object_on_an_empty_destination_exits_zero() {
     let config = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();
@@ -849,6 +954,33 @@ fn import_object_with_a_destination_imports_every_document_under_it() {
 }
 
 #[test]
+fn import_object_with_a_destination_is_idempotent() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    cmd(config.path())
+        .args(["p", "import", "object", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+
+    cmd(config.path())
+        .args(["p", "import", "object", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("2 unchanged"));
+
+    let mut ids = folder_names(&config.path().join("documents"));
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "object-claude-code-path-claude-code-aaaa.json".to_string(),
+            "object-claude-code-path-claude-code-bbbb.json".to_string()
+        ]
+    );
+}
+
+#[test]
 fn import_object_with_a_destination_skips_bad_objects_and_exits_nonzero() {
     let config = tempfile::tempdir().unwrap();
     let folder = folder_with_two_docs(config.path());
@@ -860,11 +992,167 @@ fn import_object_with_a_destination_skips_bad_objects_and_exits_nonzero() {
         .failure()
         .stderr(predicate::str::contains("skipping"))
         .stderr(predicate::str::contains("garbage.json"))
+        .stderr(predicate::str::contains("garbage.json/").not())
         .stderr(predicate::str::contains(
             "1 object(s) could not be imported",
         ));
 
     assert_eq!(folder_names(&config.path().join("documents")).len(), 2);
+}
+
+// ── --all and --dry-run ─────────────────────────────────────────────
+
+fn seed_cache(config: &Path, id: &str) {
+    let documents = config.join("documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc_with_id(work.path(), id);
+    std::fs::copy(&doc, documents.join(format!("{id}.json"))).unwrap();
+}
+
+#[test]
+fn export_all_uploads_every_cached_document_except_imports_and_skips_unchanged_on_rerun() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    // Cache IDs are `<source>-<graph id>`; the fixture's graph id is the
+    // cache id itself, which is what a real derive produces too.
+    seed_cache(config.path(), "claude-path-claude-code-aaaa");
+    seed_cache(config.path(), "codex-path-codex-bbbb");
+    seed_cache(config.path(), "object-path-claude-code-cccc");
+    seed_cache(config.path(), "pathbase-alex-pathstash-dddd");
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "2 uploaded, 0 unchanged, 0 failed",
+        ))
+        .stderr(predicate::str::contains("Resume it with").not());
+    assert_eq!(
+        folder_names(folder.path()),
+        vec![
+            "2026-01-01-hello--claude-code-claude-path-claude-code-aaaa.json".to_string(),
+            "2026-01-01-hello--claude-code-codex-path-codex-bbbb.json".to_string(),
+        ]
+    );
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "0 uploaded, 2 unchanged, 0 failed",
+        ));
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all", "--include-imported"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "2 uploaded, 2 unchanged, 0 failed",
+        ));
+    assert_eq!(folder_names(folder.path()).len(), 4);
+}
+
+#[test]
+fn export_all_with_an_empty_cache_exits_zero() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "0 uploaded, 0 unchanged, 0 failed",
+        ));
+    assert!(folder_names(folder.path()).is_empty());
+}
+
+#[test]
+fn export_all_with_only_imported_documents_exits_zero_and_says_why() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    seed_cache(config.path(), "object-path-claude-code-cccc");
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "0 uploaded, 0 unchanged, 0 failed",
+        ))
+        .stderr(predicate::str::contains("1 skipped as imported"));
+    assert!(folder_names(folder.path()).is_empty());
+}
+
+#[test]
+fn dry_run_all_reports_a_would_upload_tally() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    seed_cache(config.path(), "claude-path-claude-code-aaaa");
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all", "--dry-run"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "1 would upload, 0 unchanged, 0 failed",
+        ));
+    assert!(folder_names(folder.path()).is_empty());
+}
+
+#[test]
+fn export_all_reports_a_bad_document_and_keeps_going() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    seed_cache(config.path(), "claude-path-claude-code-aaaa");
+    let documents = config.path().join("documents");
+    std::fs::write(documents.join("claude-broken.json"), "not json").unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--all"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("warning: claude-broken"))
+        .stderr(predicate::str::contains(
+            "1 uploaded, 0 unchanged, 1 failed",
+        ));
+    assert_eq!(folder_names(folder.path()).len(), 1);
+}
+
+#[test]
+fn dry_run_prints_the_plan_and_writes_nothing() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--dry-run"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("would write"))
+        .stderr(predicate::str::contains(
+            "2026-01-01-hello--claude-code-g1.json",
+        ))
+        .stderr(predicate::str::contains(
+            "credentials: none needed (folder)",
+        ))
+        .stderr(predicate::str::contains("mode:        overwrite"));
+    assert!(folder_names(folder.path()).is_empty());
+    assert!(!config.path().join("exports.json").exists());
 }
 
 // ── path resume with object storage ─────────────────────────────────
@@ -897,4 +1185,29 @@ fn resume_help_lists_object_storage_inputs() {
         .stdout(predicate::str::contains("s3://"))
         .stdout(predicate::str::contains("s3a://"))
         .stdout(predicate::str::contains("folder"));
+}
+
+#[test]
+fn query_source_help_lists_object_and_pathbase() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["query", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("object"))
+        .stdout(predicate::str::contains("pathbase"));
+}
+
+#[test]
+fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", "claude-does-not-exist"])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path p cache ls"))
+        .stderr(predicate::str::contains("path cache ls").not());
 }

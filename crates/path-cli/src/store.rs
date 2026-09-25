@@ -271,6 +271,15 @@ pub(crate) struct ObjectUri {
     url: Url,
 }
 
+/// What [`ObjectUri::put`] actually did: whether the write replaced an
+/// object that was already there, and how many ancestor directories (for
+/// a folder destination) it had to create to get there.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct PutOutcome {
+    pub replaced: bool,
+    pub created_dirs: usize,
+}
+
 impl std::fmt::Display for ObjectUri {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&friendly(&self.url))
@@ -322,6 +331,18 @@ impl ObjectUri {
         crate::cache::make_id("object", &id)
     }
 
+    /// The URI's exact wire form, always carrying an explicit scheme.
+    /// Unlike the friendly `Display` form (a bare path for `file://`),
+    /// this round-trips through [`ObjectUri::parse`] without falling
+    /// into its scheme-less/directory branch, which unconditionally
+    /// appends a trailing slash (`Url::from_directory_path`) — the
+    /// right behavior for a destination, but wrong for a single
+    /// object. Use this, not `to_string()`, whenever a URI needs to be
+    /// handed to something that re-parses it.
+    pub(crate) fn as_str(&self) -> &str {
+        self.url.as_str()
+    }
+
     /// Download the object as UTF-8 text.
     pub(crate) fn get(&self, cfg: &S3Settings) -> Result<String> {
         let opened = open(&self.url, cfg)?;
@@ -338,11 +359,41 @@ impl ObjectUri {
     /// Overwrite is intentional: the object name is a pure function of
     /// the document, so re-sharing a session that has grown replaces
     /// its own object rather than accumulating near-duplicates.
-    pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8]) -> Result<()> {
+    pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8]) -> Result<PutOutcome> {
+        // For a folder, count the directories that don't exist yet so the
+        // caller can say when this write created the destination.
+        let created_dirs = if self.url.scheme() == "file" {
+            self.url
+                .to_file_path()
+                .ok()
+                .map(|target| {
+                    target
+                        .ancestors()
+                        .skip(1)
+                        .take_while(|d| !d.exists())
+                        .count()
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
         let opened = open(&self.url, cfg)?;
+
+        // Whether this write replaces an existing object, decided before
+        // the put so the answer reflects the state the caller is about to
+        // change. Any head error other than `NotFound` (a transient read
+        // failure, a backend that doesn't support head) is treated as
+        // "new": it's informational only, and guessing wrong here must
+        // never block the upload itself.
+        let replaced = block_on(opened.store.head(&opened.path)).is_ok();
+
         let payload = object_store::PutPayload::from(body.to_vec());
         block_on(opened.store.put(&opened.path, payload))
-            .map(|_| ())
+            .map(|_| PutOutcome {
+                replaced,
+                created_dirs,
+            })
             .map_err(|e| explain_location(e, "write", &self.to_string(), opened.source.as_ref()))
     }
 }
@@ -432,6 +483,21 @@ impl Destination {
         })
     }
 
+    /// Error clearly for a `file://` destination whose directory does not
+    /// exist, rather than silently listing nothing: the local backend
+    /// treats an absent directory the same as an empty one. A no-op for
+    /// `s3`/`s3a`, where "doesn't exist yet" and "empty" are genuinely
+    /// indistinguishable (and both fine).
+    pub(crate) fn ensure_local_dir_exists(&self) -> Result<()> {
+        if self.base.scheme() == "file"
+            && let Ok(path) = self.base.to_file_path()
+            && !path.exists()
+        {
+            bail!("{self} does not exist");
+        }
+        Ok(())
+    }
+
     /// The `.json` objects sitting directly under this destination,
     /// newest first.
     ///
@@ -478,6 +544,10 @@ impl Destination {
         let base_path = url.path().trim_end_matches('/').to_string();
         url.set_path(&format!("{base_path}/{}.json", name.0));
         ObjectUri { url }
+    }
+
+    pub(crate) fn scheme(&self) -> &str {
+        self.base.scheme()
     }
 }
 
@@ -828,9 +898,22 @@ fn is_ambiguously_relative(raw: &str) -> bool {
         || raw.starts_with("../")
         || raw == "."
         || raw == ".."
-        // Windows: `C:\…` and `\\server\share`.
-        || raw.starts_with('\\')
-        || raw.as_bytes().get(1) == Some(&b':'))
+        || windows_absolute(raw))
+}
+
+/// True for `C:traces`-style and `\\server\share`-style absolute
+/// spellings, which only mean something on Windows: on macOS/Linux
+/// `C:traces` is a bare relative path (the trap this function guards
+/// against), and treating it as absolute would silently write to
+/// `./C:traces`.
+#[cfg(windows)]
+fn windows_absolute(raw: &str) -> bool {
+    raw.starts_with('\\') || raw.as_bytes().get(1) == Some(&b':')
+}
+
+#[cfg(not(windows))]
+fn windows_absolute(_raw: &str) -> bool {
+    false
 }
 
 /// Expand a leading `~/`. Shells normally do this, but a quoted or
@@ -989,6 +1072,16 @@ mod tests {
         // Saying "relative, I meant it" is accepted.
         assert!(Destination::parse("./my-bucket/traces").is_ok());
         assert!(Destination::parse("../sibling").is_ok());
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn a_windows_drive_path_is_rejected_as_ambiguous_off_windows() {
+        // `C:traces` only means something on Windows; on macOS/Linux it's
+        // a bare relative path, and treating it as absolute would create
+        // `./C:traces` while reporting success.
+        let err = Destination::parse("C:traces").unwrap_err().to_string();
+        assert!(err.contains("ambiguous"), "{err}");
     }
 
     #[test]

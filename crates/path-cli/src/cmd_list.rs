@@ -1175,6 +1175,7 @@ fn run_object(destination: String, fmt: ListFormat) -> Result<()> {
         use crate::store::{Destination, ObjectName};
 
         let dest = Destination::parse(&destination)?;
+        dest.ensure_local_dir_exists()?;
         let settings = crate::store::effective_settings()?;
         let entries = dest.list(&settings)?;
 

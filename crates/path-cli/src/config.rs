@@ -42,6 +42,8 @@ pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
 /// S3 connection settings, written by `path auth s3 login`
 /// (see `store`).
 pub(crate) const S3_SETTINGS_FILE_NAME: &str = "s3.json";
+/// Local record of every object-storage upload (see `export_ledger`).
+pub(crate) const EXPORTS_FILE_NAME: &str = "exports.json";
 
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root
