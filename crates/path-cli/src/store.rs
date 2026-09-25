@@ -3,10 +3,11 @@
 //! Transport is [`object_store`], so one code path covers real AWS S3,
 //! any S3-compatible endpoint (Cloudflare R2, MinIO, Ceph, Backblaze
 //! B2), and a plain local directory via `file://`. A folder is a
-//! first-class destination, not a testing affordance: `path target
-//! ~/Dropbox/traces` is a complete setup, needing no credentials at
-//! all. It is also what the tests round-trip against, so share and
-//! resume are exercised end-to-end without a network.
+//! first-class destination, not a testing affordance: `--to ~/Dropbox/traces`
+//! is a complete setup, needing no credentials at all — credentials are
+//! resolved only for `s3://`. It is also what the tests round-trip
+//! against, so share and resume are exercised end-to-end without a
+//! network.
 //!
 //! The module owns two separable things:
 //!
@@ -85,6 +86,16 @@ pub(crate) struct S3Settings {
     /// costs nothing at rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Refuse to replace an existing object by default (a create-only
+    /// put). `--no-overwrite` on a command does the same per call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_overwrite: Option<bool>,
+    /// `AES256` or `aws:kms`; passed through as `x-amz-server-side-encryption`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_side_encryption: Option<String>,
+    /// KMS key for `aws:kms` encryption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sse_kms_key_id: Option<String>,
     /// Set by [`merge_env`] when the access key came from
     /// `AWS_ACCESS_KEY_ID` rather than the stored file, so the resolver
     /// can report the source honestly. Never persisted.
@@ -94,8 +105,9 @@ pub(crate) struct S3Settings {
 
 /// The credential resolution this settings blob implies.
 ///
-/// `profile` is threaded through so `--profile` on a command reaches
-/// the resolver; everything else comes from the ambient AWS setup.
+/// `profile` names an AWS profile stored by `path auth s3 login
+/// --profile`; `AWS_PROFILE` is the per-invocation override, as with
+/// every other AWS tool.
 impl S3Settings {
     /// Resolve against the real environment, propagating the error. The
     /// resolver already answers "nothing configured" with the instance
@@ -248,6 +260,13 @@ fn store_options(
         .unwrap_or_else(|| DEFAULT_REGION.to_string());
     opts.push(("aws_region", region));
 
+    push(
+        &mut opts,
+        "aws_server_side_encryption",
+        &cfg.server_side_encryption,
+    );
+    push(&mut opts, "aws_sse_kms_key_id", &cfg.sse_kms_key_id);
+
     if let Some(v) = cfg.virtual_hosted_style {
         opts.push(("aws_virtual_hosted_style_request", v.to_string()));
     }
@@ -271,6 +290,16 @@ pub(crate) struct ObjectUri {
     url: Url,
 }
 
+/// How an object is written: overwrite (default) or create-only, and
+/// what metadata to attach. Metadata reaches S3 as `x-amz-meta-*`
+/// headers; the local backend rejects attributes, so it is dropped for
+/// folders rather than failing the write.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PutSpec {
+    pub create_only: bool,
+    pub metadata: Vec<(&'static str, String)>,
+}
+
 /// What [`ObjectUri::put`] actually did: whether the write replaced an
 /// object that was already there, and how many ancestor directories (for
 /// a folder destination) it had to create to get there.
@@ -288,6 +317,33 @@ impl std::fmt::Display for ObjectUri {
 
 /// True for anything `path resume` / `p import` should route to object
 /// storage rather than to Pathbase or the local cache.
+/// The destination a command was given, or the `[share] remote`
+/// default when it names an object destination. The error for neither
+/// says how to set one, since that is the one-time step that makes
+/// every later invocation flag-free.
+pub(crate) fn destination_or_default(
+    given: Option<&str>,
+    config: &crate::config::Config,
+) -> Result<Destination> {
+    if let Some(raw) = given {
+        return Destination::parse(raw);
+    }
+    match crate::share_config::default_object_destination(config)? {
+        Some(found) => {
+            let crate::remote::Remote::Object(raw) = &found.remote else {
+                unreachable!("default_object_destination filters to Object")
+            };
+            Destination::parse(raw)
+                .with_context(|| format!("default destination from {}", found.origin))
+        }
+        None => bail!(
+            "no destination given and no default set. Pass one (`s3://bucket/prefix`, \
+             a folder), or set the default once with \
+             `path auth s3 login --to s3://bucket/prefix`."
+        ),
+    }
+}
+
 pub(crate) fn looks_like_object_uri(s: &str) -> bool {
     SCHEMES.iter().any(|p| s.starts_with(&format!("{p}://")))
 }
@@ -354,15 +410,15 @@ impl ObjectUri {
         String::from_utf8(bytes.to_vec()).with_context(|| format!("{self} is not valid UTF-8"))
     }
 
-    /// Upload `body` to the object, overwriting any existing one.
-    ///
-    /// Overwrite is intentional: the object name is a pure function of
-    /// the document, so re-sharing a session that has grown replaces
-    /// its own object rather than accumulating near-duplicates.
-    pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8]) -> Result<PutOutcome> {
-        // For a folder, count the directories that don't exist yet so the
-        // caller can say when this write created the destination.
-        let created_dirs = if self.url.scheme() == "file" {
+    /// Upload `body` to the object. Overwrite by default: the object name
+    /// is a pure function of the document, so re-sharing a session that
+    /// has grown replaces its own object rather than accumulating
+    /// near-duplicates. `spec.create_only` turns an existing object into
+    /// an error instead, for destinations that are a record.
+    pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8], spec: &PutSpec) -> Result<PutOutcome> {
+        // For a folder, remember which directories don't exist yet so
+        // only the ones this write creates get tightened.
+        let created_dirs: Vec<PathBuf> = if self.url.scheme() == "file" {
             self.url
                 .to_file_path()
                 .ok()
@@ -371,30 +427,67 @@ impl ObjectUri {
                         .ancestors()
                         .skip(1)
                         .take_while(|d| !d.exists())
-                        .count()
+                        .map(std::path::Path::to_path_buf)
+                        .collect()
                 })
-                .unwrap_or(0)
+                .unwrap_or_default()
         } else {
-            0
+            Vec::new()
         };
 
         let opened = open(&self.url, cfg)?;
 
         // Whether this write replaces an existing object, decided before
         // the put so the answer reflects the state the caller is about to
-        // change. Any head error other than `NotFound` (a transient read
-        // failure, a backend that doesn't support head) is treated as
-        // "new": it's informational only, and guessing wrong here must
-        // never block the upload itself.
-        let replaced = block_on(opened.store.head(&opened.path)).is_ok();
+        // change. A create-only put can never replace anything -- it fails
+        // instead -- so skip the extra request in that case. Any head
+        // error other than `NotFound` (a transient read failure, a
+        // backend that doesn't support head) is treated as "new": it's
+        // informational only, and guessing wrong here must never block
+        // the upload itself.
+        let replaced = if spec.create_only {
+            false
+        } else {
+            block_on(opened.store.head(&opened.path)).is_ok()
+        };
 
+        let mut options = object_store::PutOptions::default();
+        if spec.create_only {
+            options.mode = object_store::PutMode::Create;
+        }
+        if matches!(self.url.scheme(), "s3" | "s3a") {
+            let mut attributes = object_store::Attributes::new();
+            for (key, value) in &spec.metadata {
+                attributes.insert(
+                    object_store::Attribute::Metadata((*key).into()),
+                    value.clone().into(),
+                );
+            }
+            options.attributes = attributes;
+        }
         let payload = object_store::PutPayload::from(body.to_vec());
-        block_on(opened.store.put(&opened.path, payload))
-            .map(|_| PutOutcome {
-                replaced,
-                created_dirs,
-            })
-            .map_err(|e| explain_location(e, "write", &self.to_string(), opened.source.as_ref()))
+        match block_on(opened.store.put_opts(&opened.path, payload, options)) {
+            Ok(_) => {
+                if self.url.scheme() == "file"
+                    && let Ok(target) = self.url.to_file_path()
+                {
+                    tighten_local_permissions(&target, &created_dirs);
+                }
+                Ok(PutOutcome {
+                    replaced,
+                    created_dirs: created_dirs.len(),
+                })
+            }
+            Err(object_store::Error::AlreadyExists { .. }) => {
+                bail!("{self} already exists; drop --no-overwrite to replace it")
+            }
+            Err(e) => Err(explain_location(
+                e,
+                "write",
+                &self.to_string(),
+                opened.source.as_ref(),
+            )),
+        }
     }
 }
 
@@ -468,7 +561,7 @@ impl std::fmt::Display for Destination {
 pub(crate) struct ObjectEntry {
     pub uri: ObjectUri,
     /// Filename without the `.json` extension — for legible names this
-    /// is `<date>-<slug>-<cache-id>`, which is the whole point.
+    /// is `<date>-<topic>--<graph id>`, which is the whole point.
     pub stem: String,
     pub size: u64,
     pub modified: Option<chrono::DateTime<chrono::Utc>>,
@@ -929,6 +1022,23 @@ fn expand_tilde(raw: &str) -> PathBuf {
     }
 }
 
+/// A folder destination gets the same protection as the cache: the
+/// object 0600, and every directory this write created 0700. Directories
+/// that already existed (a Dropbox root, a shared mount) are left as the
+/// user had them. Best effort: a permission failure on a foreign
+/// filesystem must not turn a successful upload into an error.
+#[cfg(unix)]
+fn tighten_local_permissions(file: &std::path::Path, created_dirs: &[PathBuf]) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600));
+    for dir in created_dirs {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+#[cfg(not(unix))]
+fn tighten_local_permissions(_file: &std::path::Path, _created_dirs: &[PathBuf]) {}
+
 /// Render a location for humans: a `file://` URL shows as the plain
 /// path it names, which is both shorter and directly pasteable into
 /// `path resume`. Everything else shows as its URL.
@@ -1293,7 +1403,7 @@ mod tests {
         let uri = dest.uri_for(&ObjectName::bare("claude-abc"));
         let body = br#"{"graph":{"id":"g"},"paths":[]}"#;
 
-        uri.put(&cfg, body).unwrap();
+        uri.put(&cfg, body, &PutSpec::default()).unwrap();
         assert_eq!(uri.get(&cfg).unwrap(), String::from_utf8_lossy(body));
         assert!(dir.path().join("claude-abc.json").is_file());
     }
@@ -1305,9 +1415,73 @@ mod tests {
         let cfg = S3Settings::default();
         let uri = dest.uri_for(&ObjectName::bare("claude-abc"));
 
-        uri.put(&cfg, b"{\"v\":1}").unwrap();
-        uri.put(&cfg, b"{\"v\":2}").unwrap();
+        uri.put(&cfg, b"{\"v\":1}", &PutSpec::default()).unwrap();
+        uri.put(&cfg, b"{\"v\":2}", &PutSpec::default()).unwrap();
         assert_eq!(uri.get(&cfg).unwrap(), "{\"v\":2}");
+    }
+
+    #[test]
+    fn a_create_only_put_refuses_to_replace_an_existing_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
+        let cfg = S3Settings::default();
+        let uri = dest.uri_for(&ObjectName::bare("claude-abc"));
+        let create_only = PutSpec {
+            create_only: true,
+            ..Default::default()
+        };
+
+        uri.put(&cfg, b"{\"v\":1}", &create_only).unwrap();
+        let err = uri
+            .put(&cfg, b"{\"v\":2}", &create_only)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(err.contains("--no-overwrite"), "{err}");
+        assert_eq!(uri.get(&cfg).unwrap(), "{\"v\":1}");
+
+        // The default still overwrites.
+        uri.put(&cfg, b"{\"v\":3}", &PutSpec::default()).unwrap();
+        assert_eq!(uri.get(&cfg).unwrap(), "{\"v\":3}");
+    }
+
+    #[test]
+    fn metadata_is_not_sent_to_a_folder() {
+        // The local backend rejects attributes outright; a folder export
+        // carrying uploader metadata must still succeed.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
+        let uri = dest.uri_for(&ObjectName::bare("claude-abc"));
+        let spec = PutSpec {
+            create_only: false,
+            metadata: vec![("toolpath-graph-id", "g1".to_string())],
+        };
+        uri.put(&S3Settings::default(), b"{}", &spec).unwrap();
+    }
+
+    #[test]
+    fn store_options_carry_server_side_encryption() {
+        let (opts, _) = store_options(
+            &S3Settings {
+                access_key_id: Some("AK".to_string()),
+                secret_access_key: Some("SK".to_string()),
+                server_side_encryption: Some("aws:kms".to_string()),
+                sse_kms_key_id: Some("arn:aws:kms:us-east-1:1:key/k".to_string()),
+                ..Default::default()
+            },
+            "s3",
+        )
+        .unwrap();
+        let get = |k: &str| {
+            opts.iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("aws_server_side_encryption"), Some("aws:kms"));
+        assert_eq!(
+            get("aws_sse_kms_key_id"),
+            Some("arn:aws:kms:us-east-1:1:key/k")
+        );
     }
 
     #[test]
@@ -1315,7 +1489,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = Destination::parse(&format!("{}/a/b/c", dir.path().display())).unwrap();
         dest.uri_for(&ObjectName::bare("claude-abc"))
-            .put(&S3Settings::default(), b"{}")
+            .put(&S3Settings::default(), b"{}", &PutSpec::default())
             .unwrap();
         assert!(dir.path().join("a/b/c/claude-abc.json").is_file());
     }
@@ -1555,7 +1729,7 @@ mod tests {
 
         for name in ["2026-08-01-older-claude-a", "2026-08-09-newer-claude-b"] {
             dest.uri_for(&ObjectName::bare(name))
-                .put(&cfg, b"{}")
+                .put(&cfg, b"{}", &PutSpec::default())
                 .unwrap();
             // Distinct mtimes; the local backend stamps on write.
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1579,13 +1753,13 @@ mod tests {
         let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
         let cfg = S3Settings::default();
         dest.uri_for(&ObjectName::bare("here"))
-            .put(&cfg, b"{}")
+            .put(&cfg, b"{}", &PutSpec::default())
             .unwrap();
 
         let nested = Destination::parse(&format!("{}/deeper", dir.path().display())).unwrap();
         nested
             .uri_for(&ObjectName::bare("there"))
-            .put(&cfg, b"{}")
+            .put(&cfg, b"{}", &PutSpec::default())
             .unwrap();
 
         let entries = dest.list(&cfg).unwrap();

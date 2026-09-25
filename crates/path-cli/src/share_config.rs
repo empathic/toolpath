@@ -42,10 +42,7 @@ use crate::remote::{RepoSpec, parse_remote, parse_repo_spec};
 /// errors.
 #[derive(Debug)]
 pub(crate) struct ConfiguredRemote {
-    pub(crate) repo: RepoSpec,
-    /// Server base URL when the remote is a full Pathbase repo URL;
-    /// `None` for bare `owner/name` (credentialed/default server).
-    pub(crate) base_url: Option<String>,
+    pub(crate) remote: crate::remote::Remote,
     pub(crate) display: String,
     pub(crate) origin: String,
 }
@@ -86,6 +83,86 @@ fn canonicalize_prefix(p: &Path) -> PathBuf {
 struct GlobalConfig {
     #[serde(default)]
     project: Vec<ProjectRule>,
+    #[serde(default)]
+    share: ShareSection,
+}
+
+/// The `[share]` table, validated here; `config::Config` carries it
+/// at run time.
+#[derive(Debug, Default, Deserialize)]
+struct ShareSection {
+    #[serde(default)]
+    remote: Option<String>,
+}
+
+/// The origin string for `[share] remote`, the same shape the rules
+/// use: the file, then what in it.
+fn share_remote_origin(config_path: &Path, home: Option<&Path>) -> String {
+    format!("{} ([share] remote)", home_relative(config_path, home))
+}
+
+/// The default share remote from `config.toml` `[share] remote`, if
+/// set: the fallback below every `[[project]]` rule and above the
+/// built-in Pathbase default. The value was read by `Config::load`;
+/// this parses it against the remote grammar.
+pub(crate) fn default_remote(config: &crate::config::Config) -> Result<Option<ConfiguredRemote>> {
+    let Some(value) = config.share.remote.as_deref() else {
+        return Ok(None);
+    };
+    let path = config.config_dir()?.join(crate::config::CONFIG_FILE_NAME);
+    let origin = share_remote_origin(&path, config.home_dir().map(PathBuf::as_path));
+    let remote = parse_remote(value, &origin)?;
+    Ok(Some(ConfiguredRemote {
+        remote,
+        display: value.to_string(),
+        origin,
+    }))
+}
+
+/// The default object destination, when `[share] remote` names one:
+/// what `path resume` browses with no input and what `p list object`
+/// and `p export object` use with no destination. A Pathbase default
+/// is `None` here — those commands cannot browse a repo.
+pub(crate) fn default_object_destination(
+    config: &crate::config::Config,
+) -> Result<Option<ConfiguredRemote>> {
+    Ok(default_remote(config)?
+        .filter(|found| matches!(found.remote, crate::remote::Remote::Object(_))))
+}
+
+/// Set `[share] remote` in the config file at `path`, creating the
+/// file from the template when absent and keeping everything else in
+/// it — comments, `[[project]]` rules, key order — as written. The
+/// result is validated before it is saved, so the file can never be
+/// left in a state `share` would reject.
+pub(crate) fn write_default_remote(path: &Path, home: Option<&Path>, value: &str) -> Result<()> {
+    let display = home_relative(path, home);
+    parse_remote(value, &format!("{display} ([share] remote)"))?;
+    crate::cmd_config::ensure_config_file(path)?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("failed to read {display}"))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("failed to parse {display}; fix it with `path config edit`"))?;
+    if !doc.contains_table("share") {
+        let mut table = toml_edit::Table::new();
+        if doc.as_table().is_empty() {
+            // A file of comments only (the template) parses as trailing
+            // text, which would print after the new table. Carry it
+            // over as the table's prefix so it stays at the top.
+            let lead = doc.trailing().as_str().unwrap_or("").to_string();
+            if !lead.is_empty() {
+                table.decor_mut().set_prefix(format!("{lead}\n"));
+                doc.set_trailing("");
+            }
+        }
+        doc["share"] = toml_edit::Item::Table(table);
+    }
+    doc["share"]["remote"] = toml_edit::value(value);
+    let text = doc.to_string();
+    validate_config_text(&text, &display)?;
+    std::fs::write(path, text).with_context(|| format!("failed to write {display}"))?;
+    Ok(())
 }
 
 /// One `[[project]]` rule: a selector for the sessions it applies to,
@@ -224,10 +301,9 @@ fn global_rule(
         .remote
         .as_deref()
         .expect("remote-less rules were skipped");
-    let (repo, base_url) = parse_remote(value, &origin)?;
+    let remote = parse_remote(value, &origin)?;
     Ok(Some(ConfiguredRemote {
-        repo,
-        base_url,
+        remote,
         display: value.to_string(),
         origin,
     }))
@@ -257,6 +333,9 @@ pub(crate) fn validate_config_text(text: &str, file: &str) -> Result<usize> {
         if let Some(remote) = rule.remote.as_deref() {
             parse_remote(remote, &where_)?;
         }
+    }
+    if let Some(remote) = config.share.remote.as_deref() {
+        parse_remote(remote, &format!("{file} ([share] remote)"))?;
     }
     Ok(config.project.len())
 }
@@ -296,7 +375,10 @@ mod tests {
     }
 
     fn repo_str(found: &ConfiguredRemote) -> String {
-        format!("{}/{}", found.repo.owner, found.repo.name)
+        match &found.remote {
+            crate::remote::Remote::Pathbase { repo, .. } => format!("{}/{}", repo.owner, repo.name),
+            other => panic!("expected a Pathbase remote, got {other:?}"),
+        }
     }
 
     #[test]
@@ -326,7 +408,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(repo_str(&found), "team/sessions");
-        assert_eq!(found.base_url, None);
+        assert!(matches!(
+            found.remote,
+            crate::remote::Remote::Pathbase { base_url: None, .. }
+        ));
         assert_eq!(found.display, "team/sessions");
         assert!(
             found.origin.contains("config.toml"),
@@ -498,8 +583,148 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(repo_str(&found), "team/sessions");
-        assert_eq!(found.base_url.as_deref(), Some("https://pathbase.dev"));
+        assert!(matches!(
+            found.remote,
+            crate::remote::Remote::Pathbase {
+                base_url: Some(ref u),
+                ..
+            } if u == "https://pathbase.dev"
+        ));
         assert_eq!(found.display, "https://pathbase.dev/u/team/sessions");
+    }
+
+    fn config_with_share_remote(dir: &Path, remote: &str) -> crate::config::Config {
+        std::fs::write(
+            dir.join("config.toml"),
+            format!("[share]\nremote = {remote:?}\n"),
+        )
+        .unwrap();
+        crate::config::Config {
+            toolpath_config_dir: Some(dir.to_path_buf()),
+            share: crate::config::ShareConfig {
+                remote: Some(remote.to_string()),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn default_remote_parses_share_remote_with_its_origin() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config_with_share_remote(temp.path(), "s3://team-bucket/traces");
+        let found = default_remote(&config).unwrap().expect("set");
+        assert!(
+            matches!(found.remote, crate::remote::Remote::Object(ref d) if d == "s3://team-bucket/traces")
+        );
+        assert_eq!(found.display, "s3://team-bucket/traces");
+        assert!(
+            found.origin.ends_with("config.toml ([share] remote)"),
+            "{}",
+            found.origin
+        );
+        assert!(default_object_destination(&config).unwrap().is_some());
+
+        let pathbase = config_with_share_remote(temp.path(), "team/sessions");
+        assert_eq!(
+            repo_str(&default_remote(&pathbase).unwrap().unwrap()),
+            "team/sessions"
+        );
+        assert!(default_object_destination(&pathbase).unwrap().is_none());
+
+        assert!(
+            default_remote(&crate::config::Config::default())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn default_remote_rejects_a_bad_value_naming_the_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config_with_share_remote(temp.path(), "ftp://nope");
+        let err = default_remote(&config).unwrap_err().to_string();
+        assert!(err.contains("[share] remote"), "got: {err}");
+        let err =
+            validate_config_text("[share]\nremote = \"ftp://nope\"\n", "my.toml").unwrap_err();
+        assert!(
+            err.to_string().contains("my.toml ([share] remote)"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn write_default_remote_keeps_the_rest_of_the_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config.toml");
+        write(
+            &config,
+            "# my notes\n\n[[project]]\ndir = \"/work\" # here\nremote = \"team/sessions\"\n",
+        );
+        write_default_remote(&config, None, "s3://team-bucket/traces").unwrap();
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(text.starts_with("# my notes\n"), "{text}");
+        assert!(text.contains("dir = \"/work\" # here\n"), "{text}");
+        assert!(
+            text.contains("[share]\nremote = \"s3://team-bucket/traces\"\n"),
+            "{text}"
+        );
+        assert_eq!(validate_config_text(&text, "config.toml").unwrap(), 1);
+
+        // A second write replaces the value in place.
+        write_default_remote(&config, None, "~/traces").unwrap();
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(text.matches("[share]").count(), 1, "{text}");
+        assert!(text.contains("remote = \"~/traces\""), "{text}");
+
+        // A bad value is rejected before anything is written.
+        let err = write_default_remote(&config, None, "ftp://nope").unwrap_err();
+        assert!(err.to_string().contains("[share] remote"), "got: {err:#}");
+        assert!(
+            std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("~/traces")
+        );
+    }
+
+    #[test]
+    fn write_default_remote_creates_the_file_from_the_template() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("nested").join("config.toml");
+        write_default_remote(&config, None, "/srv/traces").unwrap();
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(text.starts_with("# Toolpath user configuration."), "{text}");
+        assert!(
+            text.contains("[share]\nremote = \"/srv/traces\"\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_object_destination_remote_resolves_to_an_object_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = temp.path().join("config.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[[project]]\ndir = {:?}\nremote = \"s3://team-bucket/traces\"\n",
+                project.display().to_string()
+            ),
+        )
+        .unwrap();
+        let found = resolve_remote_from(&config, None, &project)
+            .unwrap()
+            .expect("rule matches");
+        assert!(
+            matches!(found.remote, crate::remote::Remote::Object(ref d) if d == "s3://team-bucket/traces")
+        );
+        assert_eq!(found.display, "s3://team-bucket/traces");
+        assert_eq!(
+            validate_config_text(&std::fs::read_to_string(&config).unwrap(), "config.toml")
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

@@ -453,6 +453,69 @@ fn a_destination_holding_one_document_resumes_it_without_asking() {
     assert_eq!(recorder.captured().binary, "claude");
 }
 
+/// With no input, `path resume` browses `[share] remote` — the place
+/// `path share` writes to by default — so the round trip needs no
+/// address on either side.
+#[test]
+fn no_input_browses_the_default_destination() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+    let bucket = tempfile::tempdir().unwrap();
+    let config_dir = std::path::PathBuf::from(std::env::var_os("TOOLPATH_CONFIG_DIR").unwrap());
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "[share]\nremote = {:?}\n",
+            bucket.path().display().to_string()
+        ),
+    )
+    .unwrap();
+
+    let graph = toolpath::v1::Graph::from_path(make_convo_path(
+        "agent:claude-code",
+        "claude-code://resume-default-one",
+    ));
+    seed_object(bucket.path(), "2026-08-07-default-one-claude-abc", &graph);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(
+        ResumeArgs {
+            input: None,
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(Harness::Claude),
+            ..Default::default()
+        },
+        &recorder,
+    )
+    .unwrap();
+
+    assert_eq!(recorder.captured().binary, "claude");
+}
+
+#[test]
+fn no_input_without_a_default_says_how_to_set_one() {
+    let _env = env_lock();
+    let _home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("claude");
+    let cwd = tempfile::tempdir().unwrap();
+
+    let err = run_with_strategy(
+        ResumeArgs {
+            input: None,
+            cwd: Some(cwd.path().to_path_buf()),
+            harness: Some(Harness::Claude),
+            ..Default::default()
+        },
+        &RecordingExec::default(),
+    )
+    .unwrap_err();
+    let s = err.to_string();
+    assert!(s.contains("path auth s3 login --to"), "actual: {s}");
+}
+
 #[test]
 fn an_empty_destination_says_how_to_fill_it() {
     let _env = env_lock();

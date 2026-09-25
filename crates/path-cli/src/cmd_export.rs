@@ -251,7 +251,7 @@ pub enum ExportTarget {
     Object(ObjectExportArgs),
 }
 
-pub fn run(target: ExportTarget) -> Result<()> {
+pub fn run(target: ExportTarget, config: &crate::config::Config) -> Result<()> {
     match target {
         ExportTarget::Claude(args) => run_claude(args),
         ExportTarget::Gemini {
@@ -299,7 +299,7 @@ pub fn run(target: ExportTarget) -> Result<()> {
             name,
             public,
         }),
-        ExportTarget::Object(args) => run_object(args),
+        ExportTarget::Object(args) => run_object(args, config),
     }
 }
 
@@ -323,9 +323,11 @@ pub(crate) struct ObjectExportArgs {
     pub include_imported: bool,
 
     /// Destination: `s3://bucket/prefix`, or a folder (`~/traces`,
-    /// `file:///srv/traces`).
+    /// `file:///srv/traces`). Defaults to `[share] remote` in
+    /// `~/.toolpath/config.toml` when that names an object destination
+    /// (`path auth s3 login --to <destination>` sets it).
     #[arg(long, value_name = "DESTINATION")]
-    pub to: String,
+    pub to: Option<String>,
 
     /// Upload even if the input does not validate as a toolpath document
     #[arg(long)]
@@ -924,24 +926,20 @@ pub(crate) struct ExportOptions {
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) enum ObjectOutcome {
     Uploaded(crate::store::ObjectUri),
-    // The URI isn't read back out by any caller in this task; `path
-    // share --to` (Task 16) is the consumer that will report it.
-    #[allow(dead_code)]
     Unchanged(crate::store::ObjectUri),
-    #[allow(dead_code)]
     DryRun(crate::store::ObjectUri),
 }
 
-fn run_object(args: ObjectExportArgs) -> Result<()> {
+fn run_object(args: ObjectExportArgs, config: &crate::config::Config) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = args;
+        let _ = (args, config);
         anyhow::bail!("'path p export object' requires a native environment with network access");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let dest = crate::store::Destination::parse(&args.to)?;
+        let dest = crate::store::destination_or_default(args.to.as_deref(), config)?;
         let settings = crate::store::effective_settings()?;
         let opts = ExportOptions {
             force: args.force,
@@ -1117,7 +1115,7 @@ pub(crate) fn export_body(
         }
         eprintln!(
             "  mode:        {}",
-            if opts.no_overwrite {
+            if opts.no_overwrite || settings.no_overwrite.unwrap_or(false) {
                 "create-only"
             } else {
                 "overwrite"
@@ -1126,7 +1124,21 @@ pub(crate) fn export_body(
         return Ok(ObjectOutcome::DryRun(uri));
     }
 
-    let outcome = uri.put(settings, body.as_bytes())?;
+    let graph_id = crate::store::ObjectName::id_of(&name.to_string()).to_string();
+    let spec = crate::store::PutSpec {
+        create_only: opts.no_overwrite || settings.no_overwrite.unwrap_or(false),
+        metadata: vec![
+            ("toolpath-graph-id", graph_id),
+            ("toolpath-sha256", sha256.clone()),
+            ("toolpath-uploader", crate::export_ledger::uploader()),
+            (
+                "toolpath-cli-version",
+                env!("CARGO_PKG_VERSION").to_string(),
+            ),
+            ("toolpath-uploaded-at", chrono::Utc::now().to_rfc3339()),
+        ],
+    };
+    let outcome = uri.put(settings, body.as_bytes(), &spec)?;
     crate::export_ledger::record(
         &crate::export_ledger::ledger_path()?,
         &dest.to_string(),

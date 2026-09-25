@@ -1912,8 +1912,8 @@ fn share_no_harness_non_tty_prints_recipe() {
         .args(["share"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("path import"))
-        .stderr(predicate::str::contains("path export pathbase"));
+        .stderr(predicate::str::contains("path p import"))
+        .stderr(predicate::str::contains("path p export pathbase"));
 }
 
 // ── share: configured repo mappings (`~/.toolpath/config.toml`, `.toolpath.toml`) ──
@@ -1980,6 +1980,139 @@ fn share_configured_repo_requires_login() {
         .failure()
         .stderr(predicate::str::contains("team/sessions"))
         .stderr(predicate::str::contains("path auth login"));
+}
+
+/// `--to` sends the session to object storage instead of Pathbase: no
+/// login, no server, one legible object in the destination.
+#[test]
+fn share_to_a_folder_writes_one_object_and_needs_no_pathbase() {
+    let (temp, project) = claude_session_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+
+    let out = cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent/credentials")
+        .env("AWS_CONFIG_FILE", "/nonexistent/config")
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache", "--to"])
+        .arg(folder.path())
+        .assert()
+        .success();
+    let uri = String::from_utf8(out.get_output().stdout.clone())
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(uri.contains("--claude-code-"), "{uri}");
+    let names: Vec<String> = std::fs::read_dir(folder.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 1, "{names:?}");
+    assert!(names[0].ends_with(".json"));
+}
+
+/// A `[[project]]` rule whose remote is a destination routes `share`
+/// there without `--to`, and says so.
+#[test]
+fn share_follows_a_configured_object_destination() {
+    let (temp, project) = claude_session_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg.path().join("config.toml"),
+        format!(
+            "[[project]]\ndir = {:?}\nremote = {:?}\n",
+            project.display().to_string(),
+            folder.path().display().to_string()
+        ),
+    )
+    .unwrap();
+
+    cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent/credentials")
+        .env("AWS_CONFIG_FILE", "/nonexistent/config")
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache", "--url", "http://127.0.0.1:1"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Sharing to"))
+        .stderr(predicate::str::contains("Uploaded"))
+        // A configured object remote must not touch Pathbase at all: no
+        // login hint, no "uploading anonymously" notice, no network call
+        // to the (unreachable) --url.
+        .stderr(predicate::str::contains("path auth login").not())
+        .stderr(predicate::str::contains("anonymously").not());
+    assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 1);
+}
+
+/// `[share] remote` in the personal config is the default for every
+/// session no rule claims: bare `share` exports there, says so, and
+/// prints the resume line — without touching Pathbase.
+#[test]
+fn share_uses_the_default_object_remote_without_flags() {
+    let (temp, project) = claude_session_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg.path().join("config.toml"),
+        format!(
+            "[share]\nremote = {:?}\n",
+            folder.path().display().to_string()
+        ),
+    )
+    .unwrap();
+
+    let out = cmd()
+        .env("HOME", temp.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent/credentials")
+        .env("AWS_CONFIG_FILE", "/nonexistent/config")
+        .args([
+            "share",
+            "--harness",
+            "claude",
+            "--session",
+            "session-abc",
+            "--project",
+        ])
+        .arg(&project)
+        .args(["--no-cache", "--url", "http://127.0.0.1:1"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Sharing to"))
+        .stderr(predicate::str::contains("[share] remote"))
+        .stderr(predicate::str::contains("Resume it with: path resume "))
+        .stderr(predicate::str::contains("path auth login").not())
+        .stderr(predicate::str::contains("anonymously").not());
+    let uri = String::from_utf8(out.get_output().stdout.clone())
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(
+        uri.starts_with(&folder.path().display().to_string()),
+        "{uri}"
+    );
+    assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 1);
 }
 
 /// A repo-tracked `.toolpath.toml` is deliberately not consulted (it

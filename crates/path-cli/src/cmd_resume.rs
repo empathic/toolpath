@@ -73,11 +73,10 @@ pub struct ResumeArgs {
     /// also `s3a://`, `file:///dir/key.json`), a destination to pick from
     /// (`s3://bucket/prefix`, a folder), a path to a local toolpath JSON
     /// file, or a cache ID (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
-    #[cfg_attr(
-        all(unix, feature = "resume-remote"),
-        arg(required_unless_present = "session", conflicts_with = "session")
-    )]
-    #[cfg_attr(not(all(unix, feature = "resume-remote")), arg(required = true))]
+    /// Omitted, the default destination — `[share] remote` in
+    /// `~/.toolpath/config.toml`, set by `path auth s3 login --to` — is
+    /// browsed instead.
+    #[cfg_attr(all(unix, feature = "resume-remote"), arg(conflicts_with = "session"))]
     pub input: Option<String>,
 
     /// Working directory to run the resumed harness from. Defaults to
@@ -113,8 +112,8 @@ pub struct ResumeArgs {
     pub remote: remote::RemoteArgs,
 }
 
-pub fn run(args: ResumeArgs) -> Result<()> {
-    run_with_strategy(args, &RealExec)
+pub(crate) fn run(args: ResumeArgs, config: &crate::config::Config) -> Result<()> {
+    run_with_strategy_with(args, &RealExec, config)
 }
 
 /// `path resume --remote <dest>`: the resume on an ssh host.
@@ -124,6 +123,14 @@ pub(crate) fn run_remote(
     args: ResumeArgs,
     config: &crate::config::Config,
 ) -> Result<()> {
+    // The local command browses the default destination when given no
+    // input; the remote one does not, since it launches on another host
+    // rather than opening a picker here.
+    if args.input.is_none() && args.remote.session.is_none() {
+        anyhow::bail!(
+            "`path resume --remote` needs a document <input> or --session <id>; one is required"
+        );
+    }
     if !args.remote.dry_run && !args.remote.no_attach {
         use std::io::IsTerminal;
         for (stream, is_tty) in [
@@ -149,7 +156,7 @@ pub(crate) fn run_remote(
             let resolved = remote::resolve_session(session, &project, config)?;
             (resolved, project)
         }
-        None => (resolve_input(&args)?, std::env::current_dir()?),
+        None => (resolve_input(&args, config)?, std::env::current_dir()?),
     };
     let document = extract_the_only_path(&resolved.graph)?;
     require_an_agent_turn(document)?;
@@ -180,13 +187,24 @@ pub(crate) fn run_remote(
 }
 
 /// Internal entry point that the integration tests call with a
-/// `RecordingExec` strategy. Production callers use [`run`].
+/// `RecordingExec` strategy. Production callers use `run`.
+/// Transitional: loads a `Config` here because `Config` is
+/// crate-private and the integration tests cannot pass one.
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
+    let config = crate::config::Config::load()?;
+    run_with_strategy_with(args, exec, &config)
+}
+
+fn run_with_strategy_with(
+    args: ResumeArgs,
+    exec: &dyn ExecStrategy,
+    config: &crate::config::Config,
+) -> Result<()> {
     let ResolvedInput {
         graph,
         source_harness,
         ..
-    } = resolve_input(&args)?;
+    } = resolve_input(&args, config)?;
     let path = extract_the_only_path(&graph)?;
     require_an_agent_turn(path)?;
 
@@ -444,11 +462,42 @@ pub(crate) struct ResolvedInput {
 /// resolution" for the order. Every shape yields the document text,
 /// which one parse below turns into the `Graph`, so a parse error
 /// names the input it came from.
-pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
+pub(crate) fn resolve_input(
+    args: &ResumeArgs,
+    config: &crate::config::Config,
+) -> Result<ResolvedInput> {
+    // No input: browse the default destination, when one is set and is
+    // a place this command can list. The value is whatever the user
+    // wrote in config (`~/traces`, `s3://…`), so it is treated as a
+    // container outright rather than re-classified below.
+    let default_container = match args.input {
+        Some(_) => None,
+        None => match crate::share_config::default_remote(config)? {
+            Some(found) => match found.remote {
+                crate::remote::Remote::Object(dest) => {
+                    eprintln!("Browsing {} ({})", found.display, found.origin);
+                    Some(dest)
+                }
+                crate::remote::Remote::Pathbase { .. } => anyhow::bail!(
+                    "the default remote is a Pathbase repo ({} — {}), which cannot be browsed; \
+                     pass a document URL, or make the default an object destination with \
+                     `path auth s3 login --to s3://bucket/prefix`",
+                    found.display,
+                    found.origin
+                ),
+            },
+            None => anyhow::bail!(
+                "nothing to resume: pass a Pathbase URL, an object in storage, a destination \
+                 to pick from, a file, or a cache ID — or set a default destination once with \
+                 `path auth s3 login --to s3://bucket/prefix` and `path resume` alone browses it"
+            ),
+        },
+    };
     let raw = args
         .input
         .as_deref()
-        .context("a document <input> is required")?;
+        .or(default_container.as_deref())
+        .expect("input or default container");
 
     enum Shape<'a> {
         PathbaseUrl(&'a str),
@@ -466,7 +515,9 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
     // to browse rather than a document to load.
     let names_a_document = raw.trim_end_matches('/').ends_with(".json");
 
-    let shape = if raw.starts_with("http://") || raw.starts_with("https://") {
+    let shape = if default_container.is_some() {
+        Shape::ObjectContainer(raw)
+    } else if raw.starts_with("http://") || raw.starts_with("https://") {
         Shape::PathbaseUrl(raw)
     } else if crate::store::looks_like_object_uri(raw) {
         if names_a_document {
@@ -1039,7 +1090,7 @@ mod tests {
             graph: g,
             source_harness: harness,
             ..
-        } = resolve_input(&args).unwrap();
+        } = resolve_input(&args, &crate::config::Config::default()).unwrap();
         require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Claude));
     }
@@ -1074,7 +1125,7 @@ mod tests {
             graph: g,
             source_harness: harness,
             ..
-        } = resolve_input(&args).unwrap();
+        } = resolve_input(&args, &crate::config::Config::default()).unwrap();
         require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
@@ -1131,7 +1182,7 @@ mod tests {
             )),
             ..Default::default()
         };
-        let result = resolve_input(&args);
+        let result = resolve_input(&args, &crate::config::Config::default());
 
         // Restore env before asserting so a panic doesn't poison sibling tests.
         unsafe {
@@ -1159,7 +1210,7 @@ mod tests {
             input: Some("definitely/not/a/real/cache/id".to_string()),
             ..Default::default()
         };
-        let err = resolve_input(&args).unwrap_err();
+        let err = resolve_input(&args, &crate::config::Config::default()).unwrap_err();
         let s = err.to_string();
         assert!(s.contains("couldn't resolve"), "actual: {s}");
     }

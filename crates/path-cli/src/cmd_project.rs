@@ -24,7 +24,7 @@ pub enum ProjectTarget {
     },
 }
 
-pub fn run(target: ProjectTarget) -> Result<()> {
+pub fn run(target: ProjectTarget, config: &crate::config::Config) -> Result<()> {
     match target {
         ProjectTarget::Claude { input, output } => crate::cmd_export::run(
             crate::cmd_export::ExportTarget::Claude(crate::cmd_export::ClaudeExportArgs {
@@ -32,6 +32,7 @@ pub fn run(target: ProjectTarget) -> Result<()> {
                 output,
                 ..Default::default()
             }),
+            config,
         ),
     }
 }

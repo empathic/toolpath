@@ -2,6 +2,87 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.29.0 — 2026-09-25
+
+**Share and resume over object storage.** `path-cli` (0.29.0) can write
+toolpath documents to an S3 bucket, any S3-compatible endpoint (R2,
+MinIO, Ceph, B2), or a plain folder — and read them back.
+
+```bash
+path p export object --input claude-abc --to s3://my-bucket/traces
+path p export object --all --to ~/Dropbox/toolpath-traces   # every cached session; unchanged ones skipped
+path p list object s3://my-bucket/traces --format tsv
+path p import object s3://my-bucket/traces                  # every document under the prefix
+path share --to s3://my-bucket/traces
+path resume s3://my-bucket/traces                            # pick from the bucket
+```
+
+**Objects are named to be read and to be parsed.** A document lands at
+`<date>-<topic>--<id>.json`, e.g.
+`2026-08-07-add-s3-support--claude-code-de09d54b-b91f-4be7-a757-3ff3d004fb35.json`.
+The date is the session's first step; `--` is reserved, so automation
+takes everything after the last `--`. Every part is a function of the
+document, never of the input filename, so a re-export overwrites its
+own object. Imports land in the cache as `object-<id>`.
+
+**The ID is the session itself.** For an agent session it is the
+conversation artifact key the document already carries — the
+`<source>://<session-id>` key that the agent-coding-session kind
+specifies on the `conversation.append` entry — slugified. So two
+sessions share a key only if a harness issued one session ID twice;
+nothing is truncated or hashed to make a name fit. A document with no
+conversation artifact (git-derived, hand-written) falls back to
+`graph.id`, which is unique within a document but not across a bucket:
+two git documents from different repositories on the same branch both
+derive `path-main` and replace each other unless `--no-overwrite` is
+set.
+
+**Credentials come from wherever you already keep them.** `~/.aws`
+profiles, `AWS_PROFILE`, environment keys, and SSO / `role_arn` /
+`credential_process` profiles via `aws configure export-credentials`.
+A folder needs none and never consults them. An expired SSO session is
+offered `aws sso login` on a terminal and fails with that command
+otherwise; a resolution failure on `s3://` is an error, never a silent
+fall-through to instance metadata. `path auth s3 login` stores
+connection settings for endpoints the AWS tooling doesn't know;
+`path auth s3 status` says which credential source won and as which
+key; `path auth s3 whoami` asks STS.
+
+**A record store when you want one.** `--no-overwrite` (or a stored
+`no_overwrite`) makes puts create-only; `auth s3 login --sse aws:kms
+--kms-key-id …` sets server-side encryption; S3 objects carry
+`toolpath-*` metadata naming the graph ID, sha256, uploader, CLI
+version, and time — the uploader is `$USER@$HOSTNAME` as reported by
+the exporting process (attribution, not authentication; the bucket's
+CloudTrail data events or server access logs are the authoritative
+record of the principal behind each write); every upload is recorded
+locally in `~/.toolpath/exports.json`. Folder objects are 0600. No
+`path` command deletes an object — use bucket lifecycle rules or the
+AWS CLI for retention and erasure — and Object Lock makes erasure
+impossible by design, so choose its retention period accordingly.
+
+**One login, no addresses after it.** `path auth s3 login --to
+s3://bucket/prefix` (or a folder) writes `[share] remote` in
+`~/.toolpath/config.toml`, the default for every session no
+`[[project]]` rule claims. After it, `path share` exports there and
+prints the resume line, `path resume` with no input browses it and
+opens the picker, and `p list object` / `p export object` need no
+destination. `--to`, `--repo`, and `--anon` on a single command still
+win, a `[[project]]` rule still wins for its sessions, and a Pathbase
+repo works as the default too (`path config edit`). `path auth s3
+status` reports the default. `Config::load` now layers `config.toml`
+under the environment, so every command sees the file through one
+figment root; a file that does not parse fails with a `path config
+edit` hint.
+
+`p export object` validates the document before uploading (`--force`
+to skip). `--dry-run` prints the resolved location, endpoint, region,
+credential source, and put mode. `[[project]] remote` in
+`~/.toolpath/config.toml` accepts an object destination. `path query
+--source` warns when it matches nothing.
+
+**`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>

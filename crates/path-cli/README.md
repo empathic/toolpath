@@ -99,6 +99,95 @@ path p import claude --project /path/to/project --session abc123
 path p import claude --project /path/to/project --all
 ```
 
+### p export object / p import object / p list object
+
+Object storage — an S3 bucket, an S3-compatible endpoint, or a folder —
+as a backup, a hand-off between machines, or a team's shared record.
+
+```bash
+# One session, or every cached session (unchanged ones are skipped)
+path p export object --input claude-abc --to s3://my-bucket/traces
+path p export object --all --to ~/Dropbox/toolpath-traces
+
+# See what is there without downloading anything
+path p list object s3://my-bucket/traces --format tsv
+
+# Bring one back, or everything under a prefix
+path p import object s3://my-bucket/traces/2026-03-04-fix-the-parser--path-claude-code-abc.json
+path p import object s3://my-bucket/traces
+
+# Nightly, from cron: sync the cache, push what changed
+path p cache sync && path p export object --all --to s3://team-bucket/traces
+```
+
+Make a destination the default once and drop the addresses:
+
+```bash
+path auth s3 login --to s3://team-bucket/traces   # writes [share] remote in ~/.toolpath/config.toml
+
+path share                     # picker; exports there and prints the resume line
+path resume                    # browses the bucket, opens the picker
+path p list object             # what is there
+path p export object --all     # push what changed
+```
+
+The default is `[share] remote` in `~/.toolpath/config.toml` and may
+also be a Pathbase repo (`path config edit`). A `--to` on the command
+or a `[[project]]` rule for the session's directory still wins, and
+`--repo` / `--anon` still send a single share to Pathbase.
+
+Objects are named `<date>-<topic>--<id>.json`, and `--` is reserved:
+split on the last `--` to get the ID. Objects hold the full document —
+every turn, verbatim diffs, and tool output — so treat the bucket as you
+would the sessions themselves.
+
+For an agent session the ID is the session itself: the conversation
+artifact key the document already carries, `<source>://<session-id>`,
+slugified. A Claude Code session lands at
+`2026-03-04-fix-the-parser--claude-code-de09d54b-b91f-4be7-a757-3ff3d004fb35.json`.
+Two sessions therefore share a key only if a harness issued the same
+session ID twice; nothing is truncated or hashed to make the name fit.
+
+A document with no conversation artifact — git-derived, or hand-written
+— has no session identity, so its ID falls back to `graph.id`. That is
+unique within a document but says nothing across a shared bucket: two
+git documents from different repositories on the same branch both derive
+`path-main` and will replace each other. Use `--no-overwrite` on a
+bucket where that matters.
+
+Credentials: a folder needs none. For `s3://`, your `~/.aws` profiles
+(SSO included, via the AWS CLI), `AWS_PROFILE`, or environment keys are
+used automatically; `path auth s3 login` stores settings for endpoints
+the AWS tooling doesn't know (MinIO, R2). `path auth s3 status` shows
+which credential source is in effect; `path auth s3 whoami` asks STS.
+
+#### Object storage as a record store
+
+By default a re-export replaces a session's own object. For a bucket
+that must be a record:
+
+- `path auth s3 login --no-overwrite` makes every put create-only
+  (`--no-overwrite` on a single export does the same once).
+- `path auth s3 login --sse aws:kms --kms-key-id <key>` sets server-side
+  encryption; a bucket policy that denies unencrypted puts then works.
+- S3 objects carry `x-amz-meta-toolpath-graph-id`, `-sha256`,
+  `-uploader`, `-cli-version`, and `-uploaded-at`. `-uploader` is
+  `$USER@$HOSTNAME` as reported by the exporting process — attribution,
+  not authentication.
+- `~/.toolpath/exports.json` records every upload from this machine.
+
+The bucket supplies the rest: Versioning and Object Lock for
+immutability, bucket-owner-enforced ownership, server access logging,
+and CloudTrail data events for the authoritative principal behind each
+write — the CloudTrail data events or server access logs, not the
+`-uploader` metadata above, are the authoritative record of who wrote
+an object.
+
+No `path` command removes an object. Use bucket lifecycle rules or the
+AWS CLI for retention and erasure. Object Lock, recommended above,
+makes erasure impossible by design for as long as its retention period
+runs, so choose that period deliberately.
+
 ### query
 
 Load every step in the local cache into one JSON array and transform it with

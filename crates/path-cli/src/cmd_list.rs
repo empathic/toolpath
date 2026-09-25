@@ -74,9 +74,11 @@ pub enum ListSource {
     /// `s3://bucket/prefix`, or a folder. Rows are built from object
     /// names alone; nothing is downloaded.
     Object {
-        /// Destination: `s3://bucket/prefix`, `~/traces`, `file:///srv/traces`
+        /// Destination: `s3://bucket/prefix`, `~/traces`, `file:///srv/traces`.
+        /// Defaults to `[share] remote` in `~/.toolpath/config.toml` when
+        /// that names an object destination.
         #[arg(value_name = "DESTINATION")]
-        destination: String,
+        destination: Option<String>,
     },
 }
 
@@ -126,7 +128,7 @@ pub fn run(
         ListSource::Opencode { project } => run_opencode(project, fmt, config),
         ListSource::Cursor { project } => run_cursor(project, fmt, config),
         ListSource::Pi { project, base } => run_pi(project, base, fmt, config),
-        ListSource::Object { destination } => run_object(destination, fmt),
+        ListSource::Object { destination } => run_object(destination, fmt, config),
     }
 }
 
@@ -1163,7 +1165,7 @@ fn emit_pi_tsv(project: &str, m: &toolpath_pi::SessionMeta) {
 
 // ── Object storage ──────────────────────────────────────────────────────────
 
-fn run_object(destination: String, fmt: ListFormat) -> Result<()> {
+fn run_object(destination: Option<String>, fmt: ListFormat, config: &Config) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
         let _ = (destination, fmt);
@@ -1172,9 +1174,9 @@ fn run_object(destination: String, fmt: ListFormat) -> Result<()> {
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        use crate::store::{Destination, ObjectName};
+        use crate::store::ObjectName;
 
-        let dest = Destination::parse(&destination)?;
+        let dest = crate::store::destination_or_default(destination.as_deref(), config)?;
         dest.ensure_local_dir_exists()?;
         let settings = crate::store::effective_settings()?;
         let entries = dest.list(&settings)?;

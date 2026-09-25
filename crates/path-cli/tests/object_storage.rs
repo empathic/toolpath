@@ -517,6 +517,69 @@ fn auth_s3_login_stores_status_shows_and_logout_clears() {
     assert!(!stored.exists());
 }
 
+/// `auth s3 login --to` is the one-time step after which the plumbing
+/// needs no destination: it lands in `config.toml`, status reports it,
+/// and export and list use it.
+#[test]
+fn auth_s3_login_to_sets_the_default_the_plumbing_then_uses() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let dest = folder.path().display().to_string();
+
+    // Nothing stored, nothing given: the error says how to set one.
+    cmd(config.path())
+        .args(["p", "export", "object", "--input", doc.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path auth s3 login --to"));
+
+    // `--to` alone stores no connection settings and asks for none.
+    cmd(config.path())
+        .args(["auth", "s3", "login", "--to", &dest])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Default destination set to"))
+        .stdout(predicate::str::contains("S3 settings saved").not());
+    assert!(!config.path().join("s3.json").exists());
+    let toml = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+    assert!(
+        toml.contains(&format!("[share]\nremote = {dest:?}\n")),
+        "{toml}"
+    );
+
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("destination:"))
+        .stdout(predicate::str::contains(&dest));
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--input", doc.to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Uploaded"));
+    let names = folder_names(folder.path());
+    assert_eq!(names.len(), 1, "{names:?}");
+
+    cmd(config.path())
+        .args(["p", "list", "object", "--format", "tsv"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&names[0]));
+
+    // A bad destination is refused and the stored one stays.
+    cmd(config.path())
+        .args(["auth", "s3", "login", "--to", "ftp://nope"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("[share] remote"));
+    let toml = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+    assert!(toml.contains(&dest), "{toml}");
+}
+
 #[test]
 fn auth_s3_login_merges_into_the_existing_settings() {
     let config = tempfile::tempdir().unwrap();
@@ -657,7 +720,12 @@ fn auth_s3_login_without_a_terminal_or_flags_is_an_error() {
         .args(["auth", "s3", "login"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Nothing to store"));
+        .stderr(predicate::str::contains("Nothing to store"))
+        // The suggestion is to get prompted, not to type the secret on
+        // the command line where it lands in shell history.
+        .stderr(predicate::str::contains("--access-key-id"))
+        .stderr(predicate::str::contains("be prompted"))
+        .stderr(predicate::str::contains("shell history"));
 }
 
 // ── credential resolution, end to end ───────────────────────────────
@@ -1155,6 +1223,84 @@ fn dry_run_prints_the_plan_and_writes_nothing() {
     assert!(!config.path().join("exports.json").exists());
 }
 
+// ── --no-overwrite and record-store settings ────────────────────────
+
+#[test]
+fn no_overwrite_refuses_the_second_export_of_the_same_document() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--no-overwrite"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+    cmd(config.path())
+        .args(["p", "export", "object", "--no-overwrite"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"))
+        .stderr(predicate::str::contains("--no-overwrite"));
+    // Without the flag the default overwrite still applies.
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+}
+
+#[test]
+fn a_stored_no_overwrite_applies_to_every_export() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+
+    cmd(config.path())
+        .args([
+            "auth",
+            "s3",
+            "login",
+            "--no-overwrite",
+            "--sse",
+            "aws:kms",
+            "--kms-key-id",
+            "alias/traces",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("create-only"))
+        .stdout(predicate::str::contains("aws:kms"))
+        .stdout(predicate::str::contains("alias/traces"));
+
+    for expect_ok in [true, false] {
+        let assert = cmd(config.path())
+            .args(["p", "export", "object"])
+            .args(["--input", doc.to_str().unwrap()])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert();
+        if expect_ok {
+            assert.success();
+        } else {
+            assert
+                .failure()
+                .stderr(predicate::str::contains("already exists"));
+        }
+    }
+
+    cmd(config.path())
+        .args(["auth", "s3", "login", "--overwrite"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("create-only").not());
+}
+
 // ── path resume with object storage ─────────────────────────────────
 
 #[test]
@@ -1210,4 +1356,166 @@ fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
         .failure()
         .stderr(predicate::str::contains("path p cache ls"))
         .stderr(predicate::str::contains("path cache ls").not());
+}
+
+#[cfg(unix)]
+#[test]
+fn folder_exports_are_private_and_created_directories_are_too() {
+    use std::os::unix::fs::PermissionsExt;
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let dest = root.path().join("new").join("deeper");
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &dest.to_string_lossy()])
+        .assert()
+        .success();
+
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode(&dest.join("2026-01-01-hello--claude-code-g1.json")),
+        0o600
+    );
+    assert_eq!(mode(&dest), 0o700);
+    assert_eq!(mode(&root.path().join("new")), 0o700);
+    // A directory that existed before the export is left alone.
+    let before = mode(root.path());
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &dest.to_string_lossy()])
+        .assert()
+        .success();
+    assert_eq!(mode(root.path()), before);
+}
+
+#[test]
+fn help_text_describes_nothing_that_does_not_exist() {
+    let config = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["auth", "s3", "login", "--help"],
+        vec!["auth", "s3", "--help"],
+        vec!["p", "export", "object", "--help"],
+        vec!["p", "import", "object", "--help"],
+        vec!["resume", "--help"],
+    ] {
+        let out = cmd(config.path()).args(&args).assert().success();
+        let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+        assert!(!text.contains("path target"), "{args:?}: {text}");
+    }
+    cmd(config.path())
+        .args(["p", "export", "object", "--help"])
+        .assert()
+        .stdout(predicate::str::contains("full document"))
+        .stdout(predicate::str::contains("--<graph id>"));
+}
+
+#[test]
+fn top_level_help_summaries_mention_object_storage() {
+    let config = tempfile::tempdir().unwrap();
+    let out = cmd(config.path()).args(["--help"]).assert().success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let share_line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("share"))
+        .unwrap();
+    assert!(share_line.contains("object storage"), "{share_line}");
+    let auth_line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("auth"))
+        .unwrap();
+    assert!(
+        auth_line.contains('S') && auth_line.to_lowercase().contains("s3"),
+        "{auth_line}"
+    );
+}
+
+#[test]
+fn share_help_lists_to_near_the_top() {
+    let config = tempfile::tempdir().unwrap();
+    let out = cmd(config.path())
+        .args(["share", "--help"])
+        .assert()
+        .success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let to_pos = text.find("--to <DESTINATION>").expect("--to flag in help");
+    let url_pos = text.find("--url <URL>").expect("--url flag in help");
+    assert!(
+        to_pos < url_pos,
+        "--to should be listed before --url:\n{text}"
+    );
+}
+
+// ── live S3 (opt in) ────────────────────────────────────────────────
+
+/// Round-trips one document through a real S3 endpoint. Ignored unless
+/// run explicitly with the environment below; `scripts/test-object-storage-live.sh`
+/// wires it to a MinIO container.
+#[test]
+#[ignore = "needs TOOLPATH_S3_TEST_BUCKET and credentials; run via scripts/test-object-storage-live.sh"]
+fn live_s3_round_trip() {
+    let bucket = std::env::var("TOOLPATH_S3_TEST_BUCKET").expect("TOOLPATH_S3_TEST_BUCKET");
+    let endpoint = std::env::var("TOOLPATH_S3_TEST_ENDPOINT").ok();
+    let key = std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID");
+    let secret = std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY");
+    let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc_with_id(work.path(), "path-live-test-0001");
+    let prefix = format!("s3://{bucket}/toolpath-live-{}", std::process::id());
+
+    let mut export = cmd(config.path());
+    export
+        .env("AWS_ACCESS_KEY_ID", &key)
+        .env("AWS_SECRET_ACCESS_KEY", &secret)
+        .env("AWS_REGION", &region)
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &prefix]);
+    if let Some(e) = &endpoint {
+        export.env("AWS_ENDPOINT_URL_S3", e);
+    }
+    let out = export.assert().success();
+    let uri = String::from_utf8(out.get_output().stdout.clone())
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(
+        uri.ends_with("2026-01-01-hello--path-live-test-0001.json"),
+        "{uri}"
+    );
+
+    let mut list = cmd(config.path());
+    list.env("AWS_ACCESS_KEY_ID", &key)
+        .env("AWS_SECRET_ACCESS_KEY", &secret)
+        .env("AWS_REGION", &region)
+        .args(["p", "list", "object", &prefix, "--format", "tsv"]);
+    if let Some(e) = &endpoint {
+        list.env("AWS_ENDPOINT_URL_S3", e);
+    }
+    list.assert()
+        .success()
+        .stdout(predicate::str::starts_with("path-live-test-0001\t"));
+
+    let mut import = cmd(config.path());
+    import
+        .env("AWS_ACCESS_KEY_ID", &key)
+        .env("AWS_SECRET_ACCESS_KEY", &secret)
+        .env("AWS_REGION", &region)
+        .args(["p", "import", "object", &uri]);
+    if let Some(e) = &endpoint {
+        import.env("AWS_ENDPOINT_URL_S3", e);
+    }
+    import.assert().success();
+    assert!(
+        config
+            .path()
+            .join("documents/object-path-live-test-0001.json")
+            .is_file()
+    );
 }
