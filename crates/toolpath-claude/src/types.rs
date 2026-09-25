@@ -603,6 +603,34 @@ pub struct ConversationMetadata {
     pub first_user_message: Option<String>,
 }
 
+impl ConversationMetadata {
+    /// Folds the metadata of the next segment of the same session chain
+    /// into `self`. Call it once per segment, oldest segment first. The
+    /// chain keeps the identity (`session_id`, `project_path`,
+    /// `file_path`) of its first segment.
+    pub(crate) fn merge_newer_segment(&mut self, newer: ConversationMetadata) {
+        let ConversationMetadata {
+            session_id: _,
+            project_path: _,
+            file_path: _,
+            message_count,
+            started_at,
+            last_activity,
+            first_user_message,
+        } = newer;
+        self.message_count += message_count;
+        self.started_at = match (self.started_at, started_at) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        self.last_activity = match (self.last_activity, last_activity) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        self.first_user_message = self.first_user_message.take().or(first_user_message);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1304,5 +1332,75 @@ mod tests {
     fn test_conversation_title_empty() {
         let convo = Conversation::new("empty".to_string());
         assert!(convo.title(50).is_none());
+    }
+
+    fn segment(id: &str, messages: usize, times: Option<(&str, &str)>) -> ConversationMetadata {
+        let at = |t: &str| t.parse::<DateTime<Utc>>().unwrap();
+        ConversationMetadata {
+            session_id: id.to_string(),
+            project_path: "/p".to_string(),
+            file_path: format!("/p/{id}.jsonl").into(),
+            message_count: messages,
+            started_at: times.map(|(s, _)| at(s)),
+            last_activity: times.map(|(_, e)| at(e)),
+            first_user_message: None,
+        }
+    }
+
+    #[test]
+    fn merge_newer_segment_keeps_the_first_segment_identity() {
+        let mut chain = segment("a", 1, None);
+        chain.merge_newer_segment(segment("b", 2, None));
+        assert_eq!(chain.session_id, "a");
+        assert_eq!(chain.file_path, std::path::PathBuf::from("/p/a.jsonl"));
+        assert_eq!(chain.message_count, 3);
+    }
+
+    #[test]
+    fn merge_newer_segment_spans_the_earliest_start_to_the_latest_activity() {
+        let mut chain = segment(
+            "a",
+            1,
+            Some(("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z")),
+        );
+        chain.merge_newer_segment(segment(
+            "b",
+            1,
+            Some(("2024-01-02T00:00:00Z", "2024-01-02T01:00:00Z")),
+        ));
+        assert_eq!(
+            chain.started_at.unwrap().to_rfc3339(),
+            "2024-01-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            chain.last_activity.unwrap().to_rfc3339(),
+            "2024-01-02T01:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn merge_newer_segment_without_timestamps_keeps_the_chain_times() {
+        let mut chain = segment(
+            "a",
+            1,
+            Some(("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z")),
+        );
+        chain.merge_newer_segment(segment("b", 0, None));
+        assert!(chain.started_at.is_some());
+        assert!(chain.last_activity.is_some());
+    }
+
+    #[test]
+    fn merge_newer_segment_keeps_the_oldest_first_prompt() {
+        let mut chain = segment("a", 1, None);
+        chain.merge_newer_segment(ConversationMetadata {
+            first_user_message: Some("second".to_string()),
+            ..segment("b", 1, None)
+        });
+        chain.merge_newer_segment(ConversationMetadata {
+            first_user_message: Some("third".to_string()),
+            ..segment("c", 1, None)
+        });
+        assert_eq!(chain.first_user_message.as_deref(), Some("second"));
     }
 }
