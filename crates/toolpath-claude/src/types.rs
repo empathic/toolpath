@@ -601,6 +601,23 @@ pub struct ConversationMetadata {
     /// First non-empty user-prompt text. Used as a human-readable title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_user_message: Option<String>,
+    /// The newest title `/rename` set (a `custom-title` line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_title: Option<String>,
+    /// The newest title Claude Code generated (an `ai-title` line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_title: Option<String>,
+}
+
+impl ConversationMetadata {
+    /// A human-readable title: the `/rename` title, else the generated
+    /// title, else the first user prompt.
+    pub fn title(&self) -> Option<&str> {
+        self.custom_title
+            .as_deref()
+            .or(self.ai_title.as_deref())
+            .or(self.first_user_message.as_deref())
+    }
 }
 
 #[cfg(test)]
@@ -1304,5 +1321,25 @@ mod tests {
     fn test_conversation_title_empty() {
         let convo = Conversation::new("empty".to_string());
         assert!(convo.title(50).is_none());
+    }
+
+    #[test]
+    fn title_prefers_the_rename_then_the_generated_title_then_the_first_prompt() {
+        let mut meta = ConversationMetadata {
+            session_id: "a".to_string(),
+            project_path: "/p".to_string(),
+            file_path: "/p/a.jsonl".into(),
+            message_count: 1,
+            started_at: None,
+            last_activity: None,
+            first_user_message: Some("fix the build".to_string()),
+            custom_title: None,
+            ai_title: None,
+        };
+        assert_eq!(meta.title(), Some("fix the build"));
+        meta.ai_title = Some("Build fix".to_string());
+        assert_eq!(meta.title(), Some("Build fix"));
+        meta.custom_title = Some("release blocker".to_string());
+        assert_eq!(meta.title(), Some("release blocker"));
     }
 }
