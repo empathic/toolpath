@@ -15,8 +15,8 @@
 //!    no credentials involved. Where a document lands is a function of
 //!    the destination and the document itself, nothing else.
 //! 2. [`S3Settings`] — *how to reach* an `s3://` destination: region,
-//!    endpoint, addressing style, and credentials, taken from the
-//!    conventional `AWS_*` environment variables.
+//!    endpoint, addressing style, and credentials, persisted at
+//!    `~/.toolpath/s3.json` by `path auth s3 login`.
 //!
 //! Keeping those apart is what lets `--to ~/traces` skip the whole
 //! credential story, and lets one stored credential serve any number
@@ -34,6 +34,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
+use crate::config::config_dir;
+
 pub(crate) const DEFAULT_REGION: &str = "us-east-1";
 
 /// URL schemes routed to object storage. Deliberately narrower than
@@ -46,7 +48,7 @@ const SCHEMES: [&str; 3] = ["s3", "s3a", "file"];
 
 // ── S3 connection settings ──────────────────────────────────────────────
 
-/// How to reach an `s3://` destination.
+/// The blob persisted at `~/.toolpath/s3.json` (0600).
 ///
 /// Connection and credentials only — deliberately *not* a destination.
 /// A destination is named per call (`--to s3://bucket/prefix`), so one
@@ -78,14 +80,40 @@ pub(crate) struct S3Settings {
     pub virtual_hosted_style: Option<bool>,
 }
 
-/// The connection settings in effect: the conventional AWS environment
-/// variables, so an already-configured shell just works.
+pub(crate) fn config_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join(crate::config::S3_SETTINGS_FILE_NAME))
+}
+
+pub(crate) fn load_stored(path: &std::path::Path) -> Result<Option<S3Settings>> {
+    crate::config::read_private_json(path)
+}
+
+pub(crate) fn store(path: &std::path::Path, cfg: &S3Settings) -> Result<()> {
+    crate::config::write_private_json(path, cfg)
+}
+
+pub(crate) fn clear(path: &std::path::Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(anyhow!("remove {}: {e}", path.display())),
+    }
+}
+
+/// The stored settings with environment variables filling any gap.
+///
+/// Precedence is stored-then-env, not env-then-stored: the point of
+/// `path auth s3 login` is that what you configured is what you get.
+/// Env vars are the fallback for environments that never ran `login`
+/// (CI, containers), and they use the conventional AWS names so an
+/// already-configured shell just works.
 ///
 /// Recognized: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 /// `AWS_SESSION_TOKEN`, `AWS_REGION` (then `AWS_DEFAULT_REGION`), and
 /// `AWS_ENDPOINT_URL_S3` (then `AWS_ENDPOINT_URL`).
 pub(crate) fn effective_settings() -> Result<S3Settings> {
-    Ok(merge_env(S3Settings::default(), |k| std::env::var(k).ok()))
+    let stored = load_stored(&config_path()?)?.unwrap_or_default();
+    Ok(merge_env(stored, |k| std::env::var(k).ok()))
 }
 
 /// [`effective_settings`] with the environment injected, so tests don't
@@ -812,6 +840,32 @@ mod tests {
             ..Default::default()
         });
         assert!(!opts.iter().any(|(k, _)| *k == "aws_allow_http"));
+    }
+
+    #[test]
+    fn stored_settings_round_trip_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s3.json");
+        let cfg = S3Settings {
+            region: Some("us-east-2".to_string()),
+            access_key_id: Some("AK".to_string()),
+            secret_access_key: Some("SK".to_string()),
+            ..Default::default()
+        };
+        store(&path, &cfg).unwrap();
+        assert_eq!(load_stored(&path).unwrap().unwrap(), cfg);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        clear(&path).unwrap();
+        assert!(load_stored(&path).unwrap().is_none());
+        // Clearing settings that aren't there is not an error.
+        clear(&path).unwrap();
     }
 
     // ── Round trips against a local folder ───────────────────────────
