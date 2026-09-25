@@ -177,8 +177,8 @@ impl ClaudeConvo {
 
     /// Reads conversation metadata without loading the full content.
     ///
-    /// **Chain-aware:** aggregates `message_count` (sum), `started_at`
-    /// (earliest), and `last_activity` (latest) across all segments.
+    /// **Chain-aware:** merges the metadata of every segment, oldest
+    /// first, with a rule per field.
     pub fn read_conversation_metadata(
         &self,
         project_path: &str,
@@ -190,43 +190,17 @@ impl ClaudeConvo {
             return self.io.read_conversation_metadata(project_path, session_id);
         }
 
-        let head = &chain[0];
-        let mut total_messages = 0usize;
-        let mut started_at = None;
-        let mut last_activity = None;
-        let mut file_path = std::path::PathBuf::new();
-        let mut first_user_message: Option<String> = None;
-
-        for (i, segment_id) in chain.iter().enumerate() {
-            let meta = self
-                .io
-                .read_conversation_metadata(project_path, segment_id)?;
-            total_messages += meta.message_count;
-
-            if started_at.is_none() || meta.started_at < started_at {
-                started_at = meta.started_at;
-            }
-            if last_activity.is_none() || meta.last_activity > last_activity {
-                last_activity = meta.last_activity;
-            }
-            if i == 0 {
-                file_path = meta.file_path;
-            }
-            // Chain is oldest-first; keep the first non-empty user prompt.
-            if first_user_message.is_none() && meta.first_user_message.is_some() {
-                first_user_message = meta.first_user_message;
-            }
+        let mut merged = self
+            .io
+            .read_conversation_metadata(project_path, &chain[0])?;
+        for segment_id in &chain[1..] {
+            merged.merge_newer_segment(
+                self.io
+                    .read_conversation_metadata(project_path, segment_id)?,
+            );
         }
-
-        Ok(ConversationMetadata {
-            session_id: head.clone(),
-            project_path: project_path.to_string(),
-            file_path,
-            message_count: total_messages,
-            started_at,
-            last_activity,
-            first_user_message,
-        })
+        merged.project_path = project_path.to_string();
+        Ok(merged)
     }
 
     /// Lists logical conversation IDs for a project (chain heads only).
