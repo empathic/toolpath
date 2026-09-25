@@ -601,9 +601,24 @@ pub struct ConversationMetadata {
     /// First non-empty user-prompt text. Used as a human-readable title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_user_message: Option<String>,
+    /// The newest title `/rename` set (a `custom-title` line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_title: Option<String>,
+    /// The newest title Claude Code generated (an `ai-title` line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_title: Option<String>,
 }
 
 impl ConversationMetadata {
+    /// A human-readable title: the `/rename` title, else the generated
+    /// title, else the first user prompt.
+    pub fn title(&self) -> Option<&str> {
+        self.custom_title
+            .as_deref()
+            .or(self.ai_title.as_deref())
+            .or(self.first_user_message.as_deref())
+    }
+
     /// Folds the metadata of the next segment of the same session chain
     /// into `self`. Call it once per segment, oldest segment first. The
     /// chain keeps the identity (`session_id`, `project_path`,
@@ -617,6 +632,8 @@ impl ConversationMetadata {
             started_at,
             last_activity,
             first_user_message,
+            custom_title,
+            ai_title,
         } = newer;
         self.message_count += message_count;
         self.started_at = match (self.started_at, started_at) {
@@ -628,6 +645,8 @@ impl ConversationMetadata {
             (a, b) => a.or(b),
         };
         self.first_user_message = self.first_user_message.take().or(first_user_message);
+        self.custom_title = custom_title.or(self.custom_title.take());
+        self.ai_title = ai_title.or(self.ai_title.take());
     }
 }
 
@@ -1344,6 +1363,8 @@ mod tests {
             started_at: times.map(|(s, _)| at(s)),
             last_activity: times.map(|(_, e)| at(e)),
             first_user_message: None,
+            custom_title: None,
+            ai_title: None,
         }
     }
 
@@ -1402,5 +1423,33 @@ mod tests {
             ..segment("c", 1, None)
         });
         assert_eq!(chain.first_user_message.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn merge_newer_segment_keeps_the_newest_titles() {
+        let mut chain = ConversationMetadata {
+            custom_title: Some("old name".to_string()),
+            ai_title: Some("old summary".to_string()),
+            ..segment("a", 1, None)
+        };
+        chain.merge_newer_segment(ConversationMetadata {
+            ai_title: Some("new summary".to_string()),
+            ..segment("b", 1, None)
+        });
+        assert_eq!(chain.custom_title.as_deref(), Some("old name"));
+        assert_eq!(chain.ai_title.as_deref(), Some("new summary"));
+    }
+
+    #[test]
+    fn title_prefers_the_rename_then_the_generated_title_then_the_first_prompt() {
+        let mut meta = ConversationMetadata {
+            first_user_message: Some("fix the build".to_string()),
+            ..segment("a", 1, None)
+        };
+        assert_eq!(meta.title(), Some("fix the build"));
+        meta.ai_title = Some("Build fix".to_string());
+        assert_eq!(meta.title(), Some("Build fix"));
+        meta.custom_title = Some("release blocker".to_string());
+        assert_eq!(meta.title(), Some("release blocker"));
     }
 }

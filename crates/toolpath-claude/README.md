@@ -67,14 +67,15 @@ println!("{} entries", convo.entries.len());
 let latest = manager.most_recent_conversation("/Users/alex/project")?;
 
 // Lightweight metadata — useful as a "session picker" surface. The
-// `first_user_message` field is the first non-empty user-prompt text,
-// extracted during the metadata pass with no extra I/O.
+// metadata pass reads the session's titles (`custom_title` from
+// `/rename`, `ai_title` from Claude Code) and its first prompt with no
+// extra I/O; `title()` picks the first one present, in that order.
 for meta in manager.list_conversation_metadata("/Users/alex/project")? {
     println!(
         "{} ({}msgs): {}",
         meta.session_id,
         meta.message_count,
-        meta.first_user_message.as_deref().unwrap_or("(no prompt)"),
+        meta.title().unwrap_or("(no prompt)"),
     );
 }
 
