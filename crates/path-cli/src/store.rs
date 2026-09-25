@@ -160,6 +160,12 @@ impl std::fmt::Display for ObjectUri {
     }
 }
 
+/// True for anything `path resume` / `p import` should route to object
+/// storage rather than to Pathbase or the local cache.
+pub(crate) fn looks_like_object_uri(s: &str) -> bool {
+    SCHEMES.iter().any(|p| s.starts_with(&format!("{p}://")))
+}
+
 impl ObjectUri {
     /// Parse a full object reference. A container with no key names a
     /// place, not a document, so it's rejected here — the share side
@@ -258,6 +264,17 @@ impl std::fmt::Display for Destination {
     }
 }
 
+/// One object found by [`Destination::list`].
+#[derive(Debug, Clone)]
+pub(crate) struct ObjectEntry {
+    pub uri: ObjectUri,
+    /// Filename without the `.json` extension — for legible names this
+    /// is `<date>-<slug>-<cache-id>`, which is the whole point.
+    pub stem: String,
+    pub size: u64,
+    pub modified: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 impl Destination {
     /// Parse a user-supplied destination. See [`parse_location`] for
     /// how a scheme-less value is read.
@@ -265,6 +282,45 @@ impl Destination {
         Ok(Destination {
             base: parse_location(raw)?,
         })
+    }
+
+    /// The `.json` objects sitting directly under this destination,
+    /// newest first.
+    ///
+    /// Deliberately non-recursive: a destination is a place you share
+    /// *to*, so its immediate contents are what a picker should offer.
+    /// Nothing is downloaded — legible object names carry enough for a
+    /// picker row, which is exactly why they're worth the length.
+    pub(crate) fn list(&self, cfg: &S3Settings) -> Result<Vec<ObjectEntry>> {
+        let (store, prefix) = open(&self.base, cfg)?;
+        let listed = block_on(store.list_with_delimiter(Some(&prefix)))
+            .map_err(|e| explain_location(e, "list", &friendly(&self.base)))?;
+
+        let mut out: Vec<ObjectEntry> = listed
+            .objects
+            .into_iter()
+            .filter(|m| m.location.as_ref().ends_with(".json"))
+            .map(|m| {
+                let name = m
+                    .location
+                    .filename()
+                    .unwrap_or_default()
+                    .trim_end_matches(".json")
+                    .to_string();
+                let mut url = self.base.clone();
+                let base_path = url.path().trim_end_matches('/').to_string();
+                url.set_path(&format!("{base_path}/{name}.json"));
+                ObjectEntry {
+                    uri: ObjectUri { url },
+                    stem: name,
+                    size: m.size,
+                    modified: Some(m.last_modified),
+                }
+            })
+            .collect();
+        // Newest first: the session you want is nearly always recent.
+        out.sort_by(|a, b| b.modified.cmp(&a.modified).then(a.stem.cmp(&b.stem)));
+        Ok(out)
     }
 
     pub(crate) fn uri_for(&self, name: &ObjectName) -> ObjectUri {
@@ -580,6 +636,16 @@ mod tests {
     fn container_without_a_key_is_not_an_object() {
         let err = ObjectUri::parse("s3://my-bucket").unwrap_err().to_string();
         assert!(err.contains("no object key"), "{err}");
+    }
+
+    #[test]
+    fn looks_like_object_uri_only_matches_known_schemes() {
+        assert!(looks_like_object_uri("s3://b/k"));
+        assert!(looks_like_object_uri("s3a://b/k"));
+        assert!(looks_like_object_uri("file:///tmp/k.json"));
+        // https belongs to Pathbase; a bare id belongs to the cache.
+        assert!(!looks_like_object_uri("https://pathbase.dev/a/b/c"));
+        assert!(!looks_like_object_uri("claude-abc"));
     }
 
     #[test]
@@ -905,4 +971,57 @@ mod tests {
     }
 
     // ── Listing ──────────────────────────────────────────────────────
+
+    #[test]
+    fn listing_returns_shared_documents_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
+        let cfg = S3Settings::default();
+
+        for name in ["2026-08-01-older-claude-a", "2026-08-09-newer-claude-b"] {
+            dest.uri_for(&ObjectName::bare(name))
+                .put(&cfg, b"{}")
+                .unwrap();
+            // Distinct mtimes; the local backend stamps on write.
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Noise that isn't a shared document.
+        std::fs::write(dir.path().join("README.txt"), "hi").unwrap();
+
+        let entries = dest.list(&cfg).unwrap();
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(entries[0].stem, "2026-08-09-newer-claude-b");
+        assert_eq!(entries[1].stem, "2026-08-01-older-claude-a");
+        assert!(entries[0].uri.to_string().ends_with(".json"));
+        assert!(entries[0].size > 0);
+    }
+
+    #[test]
+    fn listing_does_not_recurse_into_sub_prefixes() {
+        // A destination is a place you share *to*; its immediate
+        // contents are what a picker should offer.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
+        let cfg = S3Settings::default();
+        dest.uri_for(&ObjectName::bare("here"))
+            .put(&cfg, b"{}")
+            .unwrap();
+
+        let nested = Destination::parse(&format!("{}/deeper", dir.path().display())).unwrap();
+        nested
+            .uri_for(&ObjectName::bare("there"))
+            .put(&cfg, b"{}")
+            .unwrap();
+
+        let entries = dest.list(&cfg).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].stem, "here");
+    }
+
+    #[test]
+    fn listing_an_empty_destination_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
+        assert!(dest.list(&S3Settings::default()).unwrap().is_empty());
+    }
 }
