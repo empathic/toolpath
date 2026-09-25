@@ -2,6 +2,21 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.29.0 — 2026-09-25
+
+- **`toolpath-claude`** (0.13.5): the listing metadata carries a
+  session's titles. `custom_title` is the newest `/rename`, and
+  `ai_title` is the newest title Claude Code generated.
+  `ConversationMetadata::title()` picks the rename, then the generated
+  title, then the first prompt. The metadata pass reads session-level
+  lines, which carry no `uuid`. A session chain's metadata merges with
+  a rule for every field; a segment without timestamps no longer clears
+  the chain's start and last activity.
+- **`path-cli`** (0.29.0): the Claude session pickers (`p import
+  claude`, `share`) show a session's title. `p list claude --format
+  json` adds a `title` key.
+- **`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>
