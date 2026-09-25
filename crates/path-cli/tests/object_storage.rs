@@ -253,7 +253,9 @@ fn auth_s3_login_stores_status_shows_and_logout_clears() {
         .stdout(predicate::str::contains("AKIAEXAMPLE"))
         // The secret is stored but never printed back in full.
         .stdout(predicate::str::contains("supersecretvalue").not())
-        .stdout(predicate::str::contains("****alue"));
+        .stdout(predicate::str::contains("****alue"))
+        // And status says which source a share would actually use.
+        .stdout(predicate::str::contains("credentials: stored by"));
 
     cmd(config.path())
         .args(["auth", "s3", "logout"])
@@ -300,4 +302,50 @@ fn auth_s3_login_without_a_terminal_or_flags_is_an_error() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Nothing to store"));
+}
+
+// ── credential resolution, end to end ───────────────────────────────
+
+#[test]
+fn a_profile_is_picked_up_with_no_toolpath_configuration_at_all() {
+    // The whole point: someone who has run `aws configure` gets S3
+    // access without telling us anything.
+    let config = tempfile::tempdir().unwrap();
+    let aws = tempfile::tempdir().unwrap();
+    let creds = aws.path().join("credentials");
+    std::fs::write(
+        &creds,
+        "[default]\naws_access_key_id = AKIAPROFILE\naws_secret_access_key = s3cret\n",
+    )
+    .unwrap();
+
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .env("AWS_SHARED_CREDENTIALS_FILE", &creds)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("credentials: profile `default`"));
+}
+
+#[test]
+fn no_credentials_anywhere_reports_the_instance_chain_not_a_failure() {
+    // On a server this is the correct answer, not an error.
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EC2/ECS/EKS credential chain"));
+}
+
+#[test]
+fn an_unknown_profile_says_which_profile_and_how_to_list_them() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .env("AWS_PROFILE", "typo")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no such profile"))
+        .stdout(predicate::str::contains("aws configure list-profiles"));
 }

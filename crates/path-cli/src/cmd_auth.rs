@@ -29,9 +29,9 @@ pub enum AuthOp {
     Status,
     /// Verify the stored session against the server and print the current user
     Whoami,
-    /// Store S3 connection settings and credentials for `s3://`
-    /// destinations. The conventional `AWS_*` environment variables
-    /// fill whatever is not stored.
+    /// Store S3 credentials for endpoints AWS tooling doesn't know
+    /// about (MinIO, R2, Ceph). Your `~/.aws` profiles — SSO included —
+    /// are picked up automatically and need none of this.
     S3 {
         #[command(subcommand)]
         op: S3Op,
@@ -84,6 +84,12 @@ pub struct S3LoginArgs {
     /// Session token for temporary (STS / assumed-role) credentials
     #[arg(long)]
     pub session_token: Option<String>,
+
+    /// AWS profile to resolve credentials from, instead of storing keys.
+    /// Works with SSO and assume-role profiles — those are resolved
+    /// through the AWS CLI, so nothing expires in our config.
+    #[arg(long)]
+    pub profile: Option<String>,
 
     /// Address the bucket as `bucket.host/key` instead of `host/bucket/key`
     #[arg(long)]
@@ -216,6 +222,7 @@ fn s3_login(path: &Path, args: S3LoginArgs) -> Result<()> {
     set(&mut cfg.access_key_id, args.access_key_id);
     set(&mut cfg.secret_access_key, args.secret_access_key);
     set(&mut cfg.session_token, args.session_token);
+    set(&mut cfg.profile, args.profile);
     if args.virtual_hosted_style {
         cfg.virtual_hosted_style = Some(true);
     }
@@ -244,6 +251,10 @@ fn s3_login(path: &Path, args: S3LoginArgs) -> Result<()> {
 /// about credentials they already stored.
 fn prompt_missing(cfg: &mut S3Settings) -> Result<()> {
     println!("Store S3 connection settings for `s3://` share and resume targets.");
+    println!();
+    println!("If you already use the AWS CLI, you probably need none of this — your");
+    println!("`~/.aws` profiles are picked up automatically, including SSO. This is");
+    println!("for endpoints the AWS tooling doesn't know about (MinIO, R2, Ceph).");
     println!("Leave any field blank to skip it.");
     println!();
 
@@ -279,6 +290,7 @@ fn s3_status(path: &Path) -> Result<()> {
     } else {
         print_settings(&effective, &stored.unwrap_or_default());
     }
+    print_credential_source(&effective);
     Ok(())
 }
 
@@ -331,6 +343,32 @@ fn print_settings(effective: &S3Settings, stored: &S3Settings) {
         effective.session_token.as_deref().map(redact).as_deref(),
         stored.session_token.is_some(),
     );
+    line(
+        "profile",
+        effective.profile.as_deref(),
+        stored.profile.is_some(),
+    );
+}
+
+/// Say which credentials a share would actually use.
+///
+/// The first question when an upload fails is *which* credential was
+/// tried — a stored key, an AWS profile, or nothing at all are three
+/// completely different fixes, and only this line distinguishes them.
+fn print_credential_source(effective: &S3Settings) {
+    match effective.resolve_real() {
+        Ok(r) => {
+            println!("  credentials: {}", r.source);
+            if let Some(region) = &r.region
+                && effective.region.is_none()
+            {
+                println!("  region:      {region} (from the profile)");
+            }
+        }
+        // The reason *is* the answer here — "no such profile" tells the
+        // user exactly what to fix.
+        Err(e) => println!("  credentials: unresolved — {e:#}"),
+    }
 }
 
 /// Show enough of a secret to recognize which one it is, and no more.
