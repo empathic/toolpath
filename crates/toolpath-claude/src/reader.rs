@@ -88,6 +88,8 @@ impl ConversationReader {
         let mut started_at = None;
         let mut last_activity = None;
         let mut first_user_message: Option<String> = None;
+        let mut custom_title: Option<String> = None;
+        let mut ai_title: Option<String> = None;
 
         for line in reader.lines() {
             let line = line?;
@@ -95,9 +97,26 @@ impl ConversationReader {
                 continue;
             }
 
-            if let Ok(entry) = serde_json::from_str::<ConversationEntry>(&line)
-                && !entry.uuid.is_empty()
-            {
+            let Ok(entry) = serde_json::from_str::<ConversationEntry>(&line) else {
+                continue;
+            };
+
+            // Session-level lines, such as titles, carry no `uuid`.
+            let title = match entry.entry_type.as_str() {
+                "custom-title" => Some((crate::constants::CUSTOM_TITLE, &mut custom_title)),
+                "ai-title" => Some((crate::constants::AI_TITLE, &mut ai_title)),
+                _ => None,
+            };
+            if let Some((key, newest)) = title {
+                if let Some(text) = entry.extra.get(key).and_then(|v| v.as_str())
+                    && !text.trim().is_empty()
+                {
+                    *newest = Some(text.trim().to_string());
+                }
+                continue;
+            }
+
+            if !entry.uuid.is_empty() {
                 if entry.message.is_some() {
                     message_count += 1;
                 }
@@ -136,6 +155,8 @@ impl ConversationReader {
             started_at,
             last_activity,
             first_user_message,
+            custom_title,
+            ai_title,
         })
     }
 
@@ -330,6 +351,29 @@ mod tests {
         assert_eq!(meta.project_path, "/Users/alex/Devel/myproject");
         assert!(meta.started_at.is_some());
         assert!(meta.last_activity.is_some());
+    }
+
+    #[test]
+    fn metadata_reads_the_newest_titles_from_lines_without_a_uuid() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("session-1.jsonl");
+        fs::write(
+            &file_path,
+            r#"{"type":"user","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Fix the build"}}
+{"type":"ai-title","aiTitle":"Build fix","sessionId":"session-1"}
+{"type":"custom-title","customTitle":"release blocker","sessionId":"session-1"}
+{"type":"ai-title","aiTitle":"  Build fix, part two  ","sessionId":"session-1"}
+{"type":"custom-title","customTitle":"   ","sessionId":"session-1"}
+{"type":"assistant","uuid":"u2","timestamp":"2024-01-01T00:01:00Z","message":{"role":"assistant","content":"Fixed."}}
+"#,
+        )
+        .unwrap();
+
+        let meta = ConversationReader::read_conversation_metadata(&file_path).unwrap();
+        assert_eq!(meta.message_count, 2);
+        assert_eq!(meta.custom_title.as_deref(), Some("release blocker"));
+        assert_eq!(meta.ai_title.as_deref(), Some("Build fix, part two"));
+        assert_eq!(meta.first_user_message.as_deref(), Some("Fix the build"));
     }
 
     #[test]

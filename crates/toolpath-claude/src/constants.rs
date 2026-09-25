@@ -8,3 +8,9 @@ pub(crate) const SESSION_ID: &str = "sessionId";
 
 /// The working directory a line was recorded in.
 pub(crate) const CWD: &str = "cwd";
+
+/// The title on a `custom-title` line: the name `/rename` set.
+pub(crate) const CUSTOM_TITLE: &str = "customTitle";
+
+/// The title on an `ai-title` line: the name Claude Code generated.
+pub(crate) const AI_TITLE: &str = "aiTitle";

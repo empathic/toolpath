@@ -582,7 +582,7 @@ fn pick_claude_in_project(
                     m.last_activity,
                     &count(m.message_count, "msgs"),
                     None,
-                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                    m.title().unwrap_or("(no prompt)"),
                 ),
             )
         })
@@ -635,7 +635,7 @@ fn pick_claude_global(
                     m.last_activity,
                     &count(m.message_count, "msgs"),
                     Some(&project_short(&m.project_path)),
-                    m.first_user_message.as_deref().unwrap_or("(no prompt)"),
+                    m.title().unwrap_or("(no prompt)"),
                 ),
             )
         })
