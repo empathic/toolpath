@@ -349,6 +349,7 @@ fn list_claude_sessions(
                         "started_at": m.started_at.map(|t| t.to_rfc3339()),
                         "last_activity": m.last_activity.map(|t| t.to_rfc3339()),
                         "first_user_message": m.first_user_message,
+                        "title": m.title(),
                     })
                 })
                 .collect();
@@ -409,6 +410,7 @@ fn list_claude_sessions_all(manager: &toolpath_claude::ClaudeConvo, fmt: ListFor
                         "started_at": m.started_at.map(|t| t.to_rfc3339()),
                         "last_activity": m.last_activity.map(|t| t.to_rfc3339()),
                         "first_user_message": m.first_user_message,
+                        "title": m.title(),
                     })
                 })
                 .collect();

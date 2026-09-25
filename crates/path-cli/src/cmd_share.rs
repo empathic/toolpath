@@ -179,14 +179,13 @@ fn collect_claude(
         };
         let matches_cwd = paths_match(project_path, canonical_cwd);
         for m in metas {
+            let title = m.title().unwrap_or("(no prompt)").to_string();
             out.push(ArtifactRow {
                 artifact_type: ArtifactType::Claude,
                 path: Some(m.project_path),
                 cwd: None,
                 session_id: m.session_id,
-                title: m
-                    .first_user_message
-                    .unwrap_or_else(|| "(no prompt)".to_string()),
+                title,
                 last_activity: m.last_activity,
                 message_count: Some(m.message_count),
                 matches_cwd,
