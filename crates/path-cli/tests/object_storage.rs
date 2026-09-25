@@ -40,10 +40,12 @@ fn cmd(config_dir: &Path) -> Command {
     c
 }
 
-/// A minimal single-step agent document, written to `dir/doc.json`.
-fn write_doc(dir: &Path) -> std::path::PathBuf {
+/// A minimal single-step agent document with graph id `id`, written to
+/// `dir/doc.json`. Two documents with different ids and the same
+/// basename are how collision tests are built.
+fn write_doc_with_id(dir: &Path, id: &str) -> std::path::PathBuf {
     let body = serde_json::json!({
-        "graph": { "id": "g1" },
+        "graph": { "id": id },
         "paths": [{
             "path": { "id": "p1", "head": "s1" },
             "steps": [{
@@ -52,7 +54,8 @@ fn write_doc(dir: &Path) -> std::path::PathBuf {
                     "actor": "agent:claude-code",
                     "timestamp": "2026-01-01T00:00:00Z"
                 },
-                "change": { "claude-code://object-int": { "structural": {
+                // Object names use the conversation artifact key, not `graph.id`.
+                "change": { format!("claude-code://{id}"): { "structural": {
                     "type": "conversation.append", "role": "user", "text": "hello"
                 }}}
             }]
@@ -61,6 +64,19 @@ fn write_doc(dir: &Path) -> std::path::PathBuf {
     let p = dir.join("doc.json");
     std::fs::write(&p, serde_json::to_string(&body).unwrap()).unwrap();
     p
+}
+
+fn write_doc(dir: &Path) -> std::path::PathBuf {
+    write_doc_with_id(dir, "g1")
+}
+
+fn folder_names(folder: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 // ── p export object / p import object ───────────────────────────────
@@ -83,13 +99,17 @@ fn export_then_import_round_trips_through_a_folder() {
         .trim()
         .to_string();
 
-    // Legible name: date and topic lead, cache id trails. The fixture
-    // is a 2026-01-01 session whose first prompt is "hello".
+    // Legible name: date and topic lead, the session identity trails.
     assert!(
-        uri.ends_with("/2026-01-01-hello-doc.json"),
+        uri.ends_with("/2026-01-01-hello--claude-code-g1.json"),
         "unexpected location: {uri}"
     );
-    assert!(folder.path().join("2026-01-01-hello-doc.json").is_file());
+    assert!(
+        folder
+            .path()
+            .join("2026-01-01-hello--claude-code-g1.json")
+            .is_file()
+    );
 
     cmd(config.path())
         .args(["p", "import", "object", &format!("file://{uri}")])
@@ -100,8 +120,11 @@ fn export_then_import_round_trips_through_a_folder() {
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(ids.len(), 1, "expected one cached doc, got {ids:?}");
-    assert!(ids[0].starts_with("file-"), "unexpected cache id: {ids:?}");
+    assert_eq!(
+        ids,
+        vec!["object-claude-code-g1.json".to_string()],
+        "unexpected cache id: {ids:?}"
+    );
 }
 
 #[test]
@@ -126,7 +149,146 @@ fn re_exporting_a_session_overwrites_its_own_object() {
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(objects, vec!["2026-01-01-hello-doc.json".to_string()]);
+    assert_eq!(
+        objects,
+        vec!["2026-01-01-hello--claude-code-g1.json".to_string()]
+    );
+}
+
+#[test]
+fn two_documents_with_the_same_basename_land_on_two_keys() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let doc_a = write_doc_with_id(a.path(), "path-claude-code-aaaa");
+    let doc_b = write_doc_with_id(b.path(), "path-claude-code-bbbb");
+
+    for doc in [&doc_a, &doc_b] {
+        cmd(config.path())
+            .args(["p", "export", "object"])
+            .args(["--input", doc.to_str().unwrap()])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        folder_names(folder.path()),
+        vec![
+            "2026-01-01-hello--claude-code-path-claude-code-aaaa.json".to_string(),
+            "2026-01-01-hello--claude-code-path-claude-code-bbbb.json".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn the_same_document_from_a_cache_id_and_a_file_lands_on_one_key() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc_with_id(work.path(), "path-claude-code-aaaa");
+    // The same bytes under a cache ID that has nothing to do with the
+    // file's basename.
+    let documents = config.path().join("documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    std::fs::copy(&doc, documents.join("claude-path-claude-code-aaaa.json")).unwrap();
+
+    for input in [doc.to_str().unwrap(), "claude-path-claude-code-aaaa"] {
+        cmd(config.path())
+            .args(["p", "export", "object"])
+            .args(["--input", input])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert()
+            .success();
+    }
+    assert_eq!(
+        folder_names(folder.path()),
+        vec!["2026-01-01-hello--claude-code-path-claude-code-aaaa.json".to_string()]
+    );
+}
+
+#[test]
+fn a_non_document_is_refused_before_anything_is_written() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let junk = work.path().join("id_rsa");
+    std::fs::write(&junk, "PRIVATE KEY MATERIAL\nnot json at all\n").unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", junk.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not a toolpath document"));
+    assert!(folder_names(folder.path()).is_empty());
+}
+
+#[test]
+fn a_schema_invalid_document_is_refused_unless_forced() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // Parses as a Graph (the Rust struct only requires `actor` to be a
+    // string), but the schema's actor pattern (`type:name`) rejects it.
+    let bad = work.path().join("bad.json");
+    std::fs::write(
+        &bad,
+        r#"{"graph":{"id":"g-bad"},"paths":[{"path":{"id":"p","head":"s"},"steps":[{"step":{"id":"s","actor":"not-a-valid-actor","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#,
+    )
+    .unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", bad.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a valid toolpath document"));
+    assert!(folder_names(folder.path()).is_empty());
+
+    cmd(config.path())
+        .args(["p", "export", "object", "--force"])
+        .args(["--input", bad.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("uploading anyway"));
+    assert_eq!(folder_names(folder.path()).len(), 1);
+}
+
+#[test]
+fn a_document_whose_graph_id_has_no_usable_characters_is_refused() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // No conversation artifact: this exercises the `graph.id` fallback.
+    let body = serde_json::json!({
+        "graph": { "id": "!!!" },
+        "paths": [{
+            "path": { "id": "p1", "head": "s1" },
+            "steps": [{
+                "step": {
+                    "id": "s1", "parents": [],
+                    "actor": "human:alex",
+                    "timestamp": "2026-01-01T00:00:00Z"
+                },
+                "change": { "src/main.rs": { "raw": "@@ -1 +1 @@\n-a\n+b" } }
+            }]
+        }]
+    });
+    let doc = work.path().join("doc.json");
+    std::fs::write(&doc, serde_json::to_string(&body).unwrap()).unwrap();
+
+    cmd(config.path())
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no usable characters"));
+    assert!(folder_names(folder.path()).is_empty());
 }
 
 #[test]
@@ -142,7 +304,12 @@ fn the_s3_subcommand_alias_still_works() {
         .args(["--to", &folder.path().to_string_lossy()])
         .assert()
         .success();
-    assert!(folder.path().join("2026-01-01-hello-doc.json").is_file());
+    assert!(
+        folder
+            .path()
+            .join("2026-01-01-hello--claude-code-g1.json")
+            .is_file()
+    );
 }
 
 #[test]
@@ -255,7 +422,7 @@ fn auth_s3_login_stores_status_shows_and_logout_clears() {
         .stdout(predicate::str::contains("supersecretvalue").not())
         .stdout(predicate::str::contains("****alue"))
         // And status says which source a share would actually use.
-        .stdout(predicate::str::contains("credentials: stored by"));
+        .stdout(predicate::str::contains("credentials:       stored by"));
 
     cmd(config.path())
         .args(["auth", "s3", "logout"])
@@ -281,6 +448,110 @@ fn auth_s3_login_merges_into_the_existing_settings() {
     let raw = std::fs::read_to_string(config.path().join("s3.json")).unwrap();
     assert!(raw.contains("AKIAEXAMPLE"), "{raw}");
     assert!(raw.contains("us-west-2"), "{raw}");
+}
+
+#[test]
+fn auth_s3_status_reports_env_keys_as_the_environment() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .env("AWS_ACCESS_KEY_ID", "AKIAENVENVENVENV1234")
+        .env("AWS_SECRET_ACCESS_KEY", "s3cret")
+        .env("AWS_REGION", "us-west-2")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("AWS_ACCESS_KEY_ID (environment)"))
+        .stdout(predicate::str::contains("stored by").not());
+}
+
+#[test]
+fn auth_s3_status_prints_the_key_id_for_a_profile_and_skips_the_login_advice() {
+    let config = tempfile::tempdir().unwrap();
+    let aws = tempfile::tempdir().unwrap();
+    let creds = aws.path().join("credentials");
+    std::fs::write(
+        &creds,
+        "[default]\naws_access_key_id = AKIAPROFILE\naws_secret_access_key = s3cret\n",
+    )
+    .unwrap();
+
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .env("AWS_SHARED_CREDENTIALS_FILE", &creds)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("access key id:     AKIAPROFILE"))
+        .stdout(predicate::str::contains(
+            "region:            us-east-1 (default)",
+        ))
+        .stdout(predicate::str::contains("Run `path auth s3 login`").not());
+}
+
+#[test]
+fn auth_s3_status_advises_login_only_when_nothing_resolves() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["auth", "s3", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EC2/ECS/EKS credential chain"))
+        .stdout(predicate::str::contains("Run `path auth s3 login`"));
+}
+
+#[test]
+fn auth_s3_whoami_runs_sts_with_the_resolved_credentials() {
+    let config = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = dir.path().join("env.log");
+    let aws = bin.join("aws");
+    std::fs::write(
+        &aws,
+        format!(
+            "#!/bin/sh\necho \"$AWS_ACCESS_KEY_ID\" >> {}\nif [ \"$1\" = \"sts\" ]; then echo '{{\"Account\":\"123456789012\",\"Arn\":\"arn:aws:iam::123456789012:user/alex\",\"UserId\":\"AIDAEXAMPLE\"}}'; exit 0; fi\nexit 1\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    cmd(config.path())
+        .env("PATH", &bin)
+        .env("AWS_ACCESS_KEY_ID", "AKIAENVENVENVENV1234")
+        .env("AWS_SECRET_ACCESS_KEY", "s3cret")
+        .args(["auth", "s3", "whoami"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "arn:aws:iam::123456789012:user/alex",
+        ))
+        .stdout(predicate::str::contains("account:     123456789012"))
+        .stdout(predicate::str::contains(
+            "credentials: AWS_ACCESS_KEY_ID (environment)",
+        ));
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap().trim(),
+        "AKIAENVENVENVENV1234"
+    );
+}
+
+#[test]
+fn auth_s3_whoami_without_the_aws_cli_says_so() {
+    let config = tempfile::tempdir().unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .env("PATH", empty.path())
+        .env("AWS_ACCESS_KEY_ID", "AKIAENVENVENVENV1234")
+        .env("AWS_SECRET_ACCESS_KEY", "s3cret")
+        .args(["auth", "s3", "whoami"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`aws` isn't on PATH"));
 }
 
 #[test]
@@ -324,7 +595,9 @@ fn a_profile_is_picked_up_with_no_toolpath_configuration_at_all() {
         .env("AWS_SHARED_CREDENTIALS_FILE", &creds)
         .assert()
         .success()
-        .stdout(predicate::str::contains("credentials: profile `default`"));
+        .stdout(predicate::str::contains(
+            "credentials:       profile `default`",
+        ));
 }
 
 #[test]
@@ -348,4 +621,280 @@ fn an_unknown_profile_says_which_profile_and_how_to_list_them() {
         .success()
         .stdout(predicate::str::contains("no such profile"))
         .stdout(predicate::str::contains("aws configure list-profiles"));
+}
+
+/// A fake `aws` on PATH that logs every invocation to `log` and reports
+/// an expired SSO session, plus an `~/.aws/config` declaring an SSO
+/// profile so resolution has to go through the CLI.
+fn expired_sso_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = dir.path().join("aws-calls.log");
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" >> {}\necho 'Error loading SSO Token: Token for https://x.awsapps.com/start does not exist' >&2\nexit 255\n",
+        log.display()
+    );
+    let aws = bin.join("aws");
+    std::fs::write(&aws, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&aws, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let config = dir.path().join("aws-config");
+    std::fs::write(
+        &config,
+        "[profile sso-team]\nsso_start_url = https://x.awsapps.com/start\nsso_region = us-east-1\nsso_account_id = 123456789012\nsso_role_name = Dev\nregion = us-east-1\n",
+    )
+    .unwrap();
+    (dir, bin, log)
+}
+
+#[test]
+fn a_folder_export_never_spawns_the_aws_cli() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let (fixture, bin, log) = expired_sso_fixture();
+
+    cmd(config.path())
+        .env("PATH", &bin)
+        .env("AWS_CONFIG_FILE", fixture.path().join("aws-config"))
+        .env("AWS_PROFILE", "sso-team")
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", &folder.path().to_string_lossy()])
+        .assert()
+        .success();
+
+    assert!(
+        !log.exists(),
+        "the AWS CLI was spawned for a folder export: {:?}",
+        std::fs::read_to_string(&log)
+    );
+    assert_eq!(folder_names(folder.path()).len(), 1);
+}
+
+#[test]
+fn an_expired_sso_session_on_s3_fails_with_the_login_command_not_imds() {
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path());
+    let (fixture, bin, log) = expired_sso_fixture();
+
+    cmd(config.path())
+        .env("PATH", &bin)
+        .env("AWS_CONFIG_FILE", fixture.path().join("aws-config"))
+        .env("AWS_PROFILE", "sso-team")
+        .args(["p", "export", "object"])
+        .args(["--input", doc.to_str().unwrap()])
+        .args(["--to", "s3://audit-bucket/traces"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("aws sso login --profile sso-team"))
+        .stderr(predicate::str::contains("169.254.169.254").not());
+
+    let calls = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(calls.contains("configure export-credentials"), "{calls}");
+    assert!(
+        !calls.contains("sso login"),
+        "no terminal, so no login must be attempted: {calls}"
+    );
+}
+
+// ── p list object ───────────────────────────────────────────────────
+
+fn folder_with_two_docs(config: &Path) -> tempfile::TempDir {
+    let folder = tempfile::tempdir().unwrap();
+    for id in ["path-claude-code-aaaa", "path-claude-code-bbbb"] {
+        let work = tempfile::tempdir().unwrap();
+        let doc = write_doc_with_id(work.path(), id);
+        cmd(config)
+            .args(["p", "export", "object"])
+            .args(["--input", doc.to_str().unwrap()])
+            .args(["--to", &folder.path().to_string_lossy()])
+            .assert()
+            .success();
+    }
+    folder
+}
+
+#[test]
+fn list_object_tsv_is_one_line_per_document_with_the_id_first() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    let out = cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "tsv",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let mut rows: Vec<Vec<&str>> = stdout.lines().map(|l| l.split('\t').collect()).collect();
+    rows.sort();
+    assert_eq!(rows.len(), 2, "{stdout}");
+    assert_eq!(rows[0][0], "claude-code-path-claude-code-aaaa");
+    assert_eq!(rows[0][1], "2026-01-01");
+    assert_eq!(rows[0][2], "hello");
+    assert!(
+        rows[0][5].ends_with("2026-01-01-hello--claude-code-path-claude-code-aaaa.json"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn list_object_json_carries_the_parsed_name_parts() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    let out = cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(v["source"], "object");
+    let objects = v["objects"].as_array().unwrap();
+    assert_eq!(objects.len(), 2);
+    let ids: Vec<&str> = objects.iter().map(|o| o["id"].as_str().unwrap()).collect();
+    assert!(
+        ids.contains(&"claude-code-path-claude-code-aaaa"),
+        "{ids:?}"
+    );
+    assert_eq!(objects[0]["date"], "2026-01-01");
+    assert_eq!(objects[0]["topic"], "hello");
+    assert!(objects[0]["size"].as_u64().unwrap() > 0);
+    assert!(objects[0]["uri"].as_str().unwrap().ends_with(".json"));
+}
+
+#[test]
+fn list_object_on_an_empty_destination_exits_zero() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+
+    cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "tsv",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"objects\": []"));
+    cmd(config.path())
+        .args([
+            "p",
+            "list",
+            "object",
+            &folder.path().to_string_lossy(),
+            "--format",
+            "pretty",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no documents in"));
+}
+
+// ── p import object <destination> ───────────────────────────────────
+
+#[test]
+fn import_object_with_a_destination_imports_every_document_under_it() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    cmd(config.path())
+        .args(["p", "import", "object", &folder.path().to_string_lossy()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Imported").count(2));
+
+    let mut ids = folder_names(&config.path().join("documents"));
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "object-claude-code-path-claude-code-aaaa.json".to_string(),
+            "object-claude-code-path-claude-code-bbbb.json".to_string()
+        ]
+    );
+}
+
+#[test]
+fn import_object_with_a_destination_skips_bad_objects_and_exits_nonzero() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+    std::fs::write(folder.path().join("garbage.json"), "not json").unwrap();
+
+    cmd(config.path())
+        .args(["p", "import", "object", &folder.path().to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("skipping"))
+        .stderr(predicate::str::contains("garbage.json"))
+        .stderr(predicate::str::contains(
+            "1 object(s) could not be imported",
+        ));
+
+    assert_eq!(folder_names(&config.path().join("documents")).len(), 2);
+}
+
+// ── path resume with object storage ─────────────────────────────────
+
+#[test]
+fn resume_a_destination_without_a_terminal_points_at_the_lister() {
+    let config = tempfile::tempdir().unwrap();
+    let folder = folder_with_two_docs(config.path());
+
+    cmd(config.path())
+        .args([
+            "resume",
+            &folder.path().to_string_lossy(),
+            "--harness",
+            "claude",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path p list object"))
+        .stderr(predicate::str::contains("fzf").not());
+}
+
+#[test]
+fn resume_help_lists_object_storage_inputs() {
+    let config = tempfile::tempdir().unwrap();
+    cmd(config.path())
+        .args(["resume", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("s3://"))
+        .stdout(predicate::str::contains("s3a://"))
+        .stdout(predicate::str::contains("folder"));
 }

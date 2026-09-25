@@ -308,9 +308,7 @@ fn object_store_input_downloads_projects_and_caches() {
             input: Some(uri),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         },
         &recorder,
     )
@@ -355,8 +353,7 @@ fn object_store_input_with_no_cache_leaves_the_cache_empty() {
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
             no_cache: true,
-            force: false,
-            url: None,
+            ..Default::default()
         },
         &recorder,
     )
@@ -389,9 +386,7 @@ fn object_store_input_prefers_the_cache_over_a_refetch() {
         input: Some(uri.clone()),
         cwd: Some(cwd.path().to_path_buf()),
         harness: Some(Harness::Claude),
-        no_cache: false,
-        force: false,
-        url: None,
+        ..Default::default()
     };
     run_with_strategy(args(), &RecordingExec::default()).unwrap();
 
@@ -415,9 +410,7 @@ fn missing_object_reports_not_found() {
             input: Some(format!("file://{}/absent.json", bucket.path().display())),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         },
         &RecordingExec::default(),
     )
@@ -451,9 +444,7 @@ fn a_destination_holding_one_document_resumes_it_without_asking() {
             input: Some(bucket.path().to_string_lossy().into_owned()),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         },
         &recorder,
     )
@@ -475,9 +466,7 @@ fn an_empty_destination_says_how_to_fill_it() {
             input: Some(bucket.path().to_string_lossy().into_owned()),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         },
         &RecordingExec::default(),
     )
@@ -508,9 +497,7 @@ fn a_destination_url_without_a_json_suffix_is_browsed_not_fetched() {
             input: Some(format!("file://{}", bucket.path().display())),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         },
         &recorder,
     )

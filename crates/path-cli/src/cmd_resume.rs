@@ -69,8 +69,10 @@ mod remote;
 pub struct ResumeArgs {
     /// Toolpath document to resume from. Accepted shapes: a Pathbase
     /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
-    /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
-    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
+    /// (`owner/repo/slug`), an object in storage (`s3://bucket/key.json`,
+    /// also `s3a://`, `file:///dir/key.json`), a destination to pick from
+    /// (`s3://bucket/prefix`, a folder), a path to a local toolpath JSON
+    /// file, or a cache ID (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
     #[cfg_attr(
         all(unix, feature = "resume-remote"),
         arg(required_unless_present = "session", conflicts_with = "session")
@@ -88,15 +90,16 @@ pub struct ResumeArgs {
     #[arg(long, value_enum)]
     pub harness: Option<Harness>,
 
-    /// Skip the cache entirely when fetching from Pathbase: don't read
-    /// an existing entry, don't write the fetched body. Useful for
-    /// ephemeral environments where you don't want the cache to grow.
+    /// Skip the cache entirely when fetching from Pathbase or object
+    /// storage: don't read an existing entry, don't write the fetched
+    /// body. Useful for ephemeral environments where you don't want the
+    /// cache to grow.
     #[arg(long)]
     pub no_cache: bool,
 
-    /// Force a re-fetch from Pathbase even if a cache entry exists,
-    /// overwriting it with the new bytes. Default behavior is to use
-    /// the cached doc on hit and never round-trip.
+    /// Force a re-fetch from Pathbase or object storage even if a cache
+    /// entry exists, overwriting it with the new bytes. Default behavior
+    /// is to use the cached doc on hit and never round-trip.
     #[arg(long)]
     pub force: bool,
 
@@ -352,14 +355,11 @@ fn pick_from_destination(raw: &str) -> Result<crate::store::ObjectUri> {
     }
 
     if !crate::fuzzy::available() {
-        eprintln!("{} documents in {dest}:", entries.len());
-        for e in entries.iter().take(20) {
-            eprintln!("  {}", e.uri);
-        }
-        if entries.len() > 20 {
-            eprintln!("  … and {} more", entries.len() - 20);
-        }
-        anyhow::bail!("picking needs `fzf` on PATH and a TTY; pass a full location instead");
+        anyhow::bail!(
+            "picking one of {} documents needs an interactive terminal; list them with \
+             `path p list object {dest}` and pass a full location instead",
+            entries.len()
+        );
     }
 
     let lines: Vec<String> = entries

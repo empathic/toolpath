@@ -85,6 +85,11 @@ pub(crate) struct S3Settings {
     /// costs nothing at rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Set by [`merge_env`] when the access key came from
+    /// `AWS_ACCESS_KEY_ID` rather than the stored file, so the resolver
+    /// can report the source honestly. Never persisted.
+    #[serde(skip)]
+    pub credentials_from_env: bool,
 }
 
 /// The credential resolution this settings blob implies.
@@ -92,14 +97,12 @@ pub(crate) struct S3Settings {
 /// `profile` is threaded through so `--profile` on a command reaches
 /// the resolver; everything else comes from the ambient AWS setup.
 impl S3Settings {
-    pub(crate) fn resolved_credentials(&self) -> Option<crate::aws_creds::Resolved> {
-        self.resolve_real().ok()
-    }
-
-    /// [`resolved_credentials`](Self::resolved_credentials), keeping the
-    /// error. Anything *reporting* on credentials wants the reason —
-    /// "no such profile" is the whole answer, and swallowing it leaves
-    /// the user with nothing to act on.
+    /// Resolve against the real environment, propagating the error. The
+    /// resolver already answers "nothing configured" with the instance
+    /// chain, so an error here is an explicit failure (a named profile
+    /// that doesn't exist, an expired SSO session with nobody to ask) —
+    /// callers that want to *report* a failure, rather than silently
+    /// fall through to the instance chain, need the reason.
     pub(crate) fn resolve_real(&self) -> Result<crate::aws_creds::Resolved> {
         self.resolve_with(&crate::aws_creds::Env {
             home: std::env::var_os("HOME").map(PathBuf::from),
@@ -110,10 +113,8 @@ impl S3Settings {
         })
     }
 
-    /// [`resolved_credentials`](Self::resolved_credentials) against an
-    /// injected environment, and propagating the error so callers that
-    /// want to *report* a failure (rather than fall through to the
-    /// instance chain) can.
+    /// [`resolve_real`](Self::resolve_real) against an injected
+    /// environment, so tests don't have to mutate process-global state.
     pub(crate) fn resolve_with(
         &self,
         env: &crate::aws_creds::Env<'_>,
@@ -126,7 +127,11 @@ impl S3Settings {
             }),
             _ => None,
         };
-        crate::aws_creds::resolve(stored, self.profile.as_deref(), env)
+        let mut resolved = crate::aws_creds::resolve(stored, self.profile.as_deref(), env)?;
+        if self.credentials_from_env && resolved.source == crate::aws_creds::Source::Stored {
+            resolved.source = crate::aws_creds::Source::Environment;
+        }
+        Ok(resolved)
     }
 }
 
@@ -173,10 +178,16 @@ pub(crate) fn merge_env<F: Fn(&str) -> Option<String>>(mut cfg: S3Settings, env:
         keys.iter()
             .find_map(|k| env(k).filter(|v| !v.trim().is_empty()))
     };
-    cfg.access_key_id = cfg.access_key_id.or_else(|| first(&["AWS_ACCESS_KEY_ID"]));
-    cfg.secret_access_key = cfg
-        .secret_access_key
-        .or_else(|| first(&["AWS_SECRET_ACCESS_KEY"]));
+    if cfg.access_key_id.is_none()
+        && let (Some(key), Some(secret)) = (
+            first(&["AWS_ACCESS_KEY_ID"]),
+            first(&["AWS_SECRET_ACCESS_KEY"]),
+        )
+    {
+        cfg.access_key_id = Some(key);
+        cfg.secret_access_key = Some(secret);
+        cfg.credentials_from_env = true;
+    }
     cfg.session_token = cfg.session_token.or_else(|| first(&["AWS_SESSION_TOKEN"]));
     cfg.region = cfg
         .region
@@ -187,23 +198,41 @@ pub(crate) fn merge_env<F: Fn(&str) -> Option<String>>(mut cfg: S3Settings, env:
     cfg
 }
 
-/// Settings as `object_store` key/value options. Unrecognized keys are
-/// ignored by `parse_url_opts`, so the same list is safe to pass for a
-/// `file://` URL as for `s3://`.
-fn store_options(cfg: &S3Settings) -> Vec<(&'static str, String)> {
+/// Settings as `object_store` key/value options, plus which credential
+/// source won.
+///
+/// Only an `s3`/`s3a` URL resolves credentials at all. A folder needs
+/// none, so for `file` this returns nothing and never touches `~/.aws`
+/// or spawns the AWS CLI — which also means a folder export can never
+/// trip an SSO login prompt.
+///
+/// A resolution *error* propagates. The resolver already answers
+/// "nothing configured" with the instance chain, so an error here is
+/// an explicit failure (a named profile that doesn't exist, an expired
+/// SSO session with nobody to ask), and silently falling through to
+/// instance metadata would write under whatever principal the machine
+/// happens to have.
+#[allow(clippy::type_complexity)]
+fn store_options(
+    cfg: &S3Settings,
+    scheme: &str,
+) -> Result<(
+    Vec<(&'static str, String)>,
+    Option<crate::aws_creds::Source>,
+)> {
     fn push(opts: &mut Vec<(&'static str, String)>, k: &'static str, v: &Option<String>) {
         if let Some(v) = v.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
             opts.push((k, v.to_string()));
         }
     }
 
-    let mut opts: Vec<(&'static str, String)> = Vec::new();
+    if !matches!(scheme, "s3" | "s3a") {
+        return Ok((Vec::new(), None));
+    }
 
-    // Credentials come from `resolve_credentials`, not straight off
-    // `cfg` — a stored key is only one of the places they can live, and
-    // the common laptop case is an AWS profile we had to go find.
-    let resolved = cfg.resolved_credentials();
-    if let Some(c) = resolved.as_ref().and_then(|r| r.credentials.as_ref()) {
+    let mut opts: Vec<(&'static str, String)> = Vec::new();
+    let resolved = cfg.resolve_real()?;
+    if let Some(c) = &resolved.credentials {
         opts.push(("aws_access_key_id", c.access_key_id.clone()));
         opts.push(("aws_secret_access_key", c.secret_access_key.clone()));
         if let Some(t) = &c.session_token {
@@ -215,7 +244,7 @@ fn store_options(cfg: &S3Settings) -> Vec<(&'static str, String)> {
     let region = cfg
         .region
         .clone()
-        .or_else(|| resolved.as_ref().and_then(|r| r.region.clone()))
+        .or_else(|| resolved.region.clone())
         .unwrap_or_else(|| DEFAULT_REGION.to_string());
     opts.push(("aws_region", region));
 
@@ -231,7 +260,7 @@ fn store_options(cfg: &S3Settings) -> Vec<(&'static str, String)> {
     {
         opts.push(("aws_allow_http", "true".to_string()));
     }
-    opts
+    Ok((opts, Some(resolved.source)))
 }
 
 // ── Locations ───────────────────────────────────────────────────────────
@@ -269,31 +298,38 @@ impl ObjectUri {
         Ok(ObjectUri { url })
     }
 
-    /// The cache id a download of this object lands at, e.g.
-    /// `s3-my-bucket-traces_claude-abc`.
+    /// The cache ID a download of this object lands at: `object-<id>`,
+    /// where the ID is read from the object name (see [`ObjectName::id_of`]).
+    /// A function of the URI alone, so a cache hit costs no request; a
+    /// function of the *name* rather than the whole URI, so the same
+    /// document fetched from two prefixes is one cache entry and a
+    /// re-export of it names itself the same way.
     pub(crate) fn cache_id(&self) -> String {
-        let source = match self.url.scheme() {
-            "s3a" => "s3",
-            other => other,
-        };
-        let host = self.url.host_str().unwrap_or_default();
-        let key = self.url.path().trim_matches('/');
-        let inner = if host.is_empty() {
-            key.to_string()
+        let stem = self
+            .url
+            .path()
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(".json");
+        let id = slugify(ObjectName::id_of(stem));
+        let id = if id.len() > 100 {
+            truncate_slug(&id, 100)
         } else {
-            format!("{host}-{key}")
+            id
         };
-        crate::cache::make_id(source, &inner)
+        crate::cache::make_id("object", &id)
     }
 
     /// Download the object as UTF-8 text.
     pub(crate) fn get(&self, cfg: &S3Settings) -> Result<String> {
-        let (store, path) = open(&self.url, cfg)?;
+        let opened = open(&self.url, cfg)?;
         let bytes = block_on(async {
-            let result = store.get(&path).await?;
+            let result = opened.store.get(&opened.path).await?;
             result.bytes().await
         })
-        .map_err(|e| explain_location(e, "read", &self.to_string()))?;
+        .map_err(|e| explain_location(e, "read", &self.to_string(), opened.source.as_ref()))?;
         String::from_utf8(bytes.to_vec()).with_context(|| format!("{self} is not valid UTF-8"))
     }
 
@@ -303,40 +339,64 @@ impl ObjectUri {
     /// the document, so re-sharing a session that has grown replaces
     /// its own object rather than accumulating near-duplicates.
     pub(crate) fn put(&self, cfg: &S3Settings, body: &[u8]) -> Result<()> {
-        let (store, path) = open(&self.url, cfg)?;
+        let opened = open(&self.url, cfg)?;
         let payload = object_store::PutPayload::from(body.to_vec());
-        block_on(store.put(&path, payload))
+        block_on(opened.store.put(&opened.path, payload))
             .map(|_| ())
-            .map_err(|e| explain_location(e, "write", &self.to_string()))
+            .map_err(|e| explain_location(e, "write", &self.to_string(), opened.source.as_ref()))
     }
 }
 
-fn open(url: &Url, cfg: &S3Settings) -> Result<(Box<dyn ObjectStore>, object_store::path::Path)> {
-    open_with(url, cfg, Vec::new())
+/// An open store plus the path inside it, and which credential source
+/// was used (`None` for a folder).
+struct Opened {
+    store: Box<dyn ObjectStore>,
+    path: object_store::path::Path,
+    source: Option<crate::aws_creds::Source>,
 }
 
-fn open_with(
-    url: &Url,
-    cfg: &S3Settings,
-    extra: Vec<(&'static str, String)>,
-) -> Result<(Box<dyn ObjectStore>, object_store::path::Path)> {
-    let mut opts = store_options(cfg);
-    opts.extend(extra);
-    object_store::parse_url_opts(url, opts).with_context(|| format!("open {}", friendly(url)))
+fn open(url: &Url, cfg: &S3Settings) -> Result<Opened> {
+    let (opts, source) = store_options(cfg, url.scheme())?;
+    let (store, path) = object_store::parse_url_opts(url, opts)
+        .with_context(|| format!("open {}", friendly(url)))?;
+    Ok(Opened {
+        store,
+        path,
+        source,
+    })
 }
 
-/// Strip `object_store`'s internals out of an error message.
+/// Strip `object_store`'s internals out of an error message and keep
+/// the cause.
 ///
 /// Its transport errors carry a retry epilogue — "after 10 retries,
 /// max_retries: 10, retry_timeout: 180s" — plus a `Generic S3 error:`
-/// prefix. Neither tells a user anything actionable, and both bury the
-/// part that does.
+/// or `Generic LocalFileSystem error:` prefix. Neither tells a user
+/// anything actionable. The *innermost* source ("connection refused",
+/// "File name too long") is the actionable part and lives at the
+/// bottom of the chain, so it is appended when the head doesn't
+/// already say it.
 fn terse(err: &object_store::Error) -> String {
-    let msg = err.to_string();
-    let msg = msg.split(", after ").next().unwrap_or(&msg);
-    msg.trim_start_matches("Generic S3 error: ")
+    let top = err.to_string();
+    let head = top
+        .split(", after ")
+        .next()
+        .unwrap_or(&top)
+        .trim_start_matches("Generic S3 error: ")
+        .trim_start_matches("Generic LocalFileSystem error: ")
         .trim_end_matches([' ', '-'])
-        .to_string()
+        .to_string();
+
+    let mut cause: Option<String> = None;
+    let mut cur: &dyn std::error::Error = err;
+    while let Some(next) = cur.source() {
+        cause = Some(next.to_string());
+        cur = next;
+    }
+    match cause {
+        Some(c) if !c.is_empty() && !head.contains(&c) => format!("{head}: {c}"),
+        _ => head,
+    }
 }
 
 /// Where `path share` writes when the target is object storage: a
@@ -380,9 +440,11 @@ impl Destination {
     /// Nothing is downloaded — legible object names carry enough for a
     /// picker row, which is exactly why they're worth the length.
     pub(crate) fn list(&self, cfg: &S3Settings) -> Result<Vec<ObjectEntry>> {
-        let (store, prefix) = open(&self.base, cfg)?;
-        let listed = block_on(store.list_with_delimiter(Some(&prefix)))
-            .map_err(|e| explain_location(e, "list", &friendly(&self.base)))?;
+        let opened = open(&self.base, cfg)?;
+        let listed =
+            block_on(opened.store.list_with_delimiter(Some(&opened.path))).map_err(|e| {
+                explain_location(e, "list", &friendly(&self.base), opened.source.as_ref())
+            })?;
 
         let mut out: Vec<ObjectEntry> = listed
             .objects
@@ -423,18 +485,25 @@ impl Destination {
 
 /// What a shared document is called in the destination.
 ///
-/// `<date>-<slug>-<cache-id>`, e.g.
-/// `2026-08-07-add-s3-support-to-share-claude-6f2a1c9e`.
+/// `<date>-<topic>--<id>`, e.g.
+/// `2026-08-07-add-s3-support-to-share--claude-code-de09d54b-b91f-4be7-a757-3ff3d004fb35`.
 ///
 /// Two requirements pull in opposite directions and both are load-bearing:
 ///
-/// - **Stable.** Every component is a pure function of the document, so
-///   re-sharing a session that has grown overwrites its own object
-///   instead of leaving a trail of near-duplicates.
+/// - **Stable and unique.** Every component is a pure function of the
+///   document, never of the input filename, so re-sharing a session that
+///   has grown overwrites its own object instead of leaving a trail of
+///   near-duplicates. The ID half is the session's own conversation
+///   artifact key (see [`session_key`]), so two sessions collide only if
+///   the harness issued one identifier twice. A document with no
+///   conversation artifact falls back to `graph.id`, which is unique
+///   within a document but says nothing across a shared store: two git
+///   documents from different repositories on the same branch do collide,
+///   and `--no-overwrite` is the guard for that case.
 /// - **Legible.** A destination is a folder someone will open, or a
-///   bucket someone will page through. `claude-6f2a1c9e.json` tells
-///   them nothing; the date sorts chronologically under a plain
-///   lexicographic listing, and the slug says which session it is.
+///   bucket someone will page through. The bare ID tells them nothing;
+///   the date sorts chronologically under a plain lexicographic
+///   listing, and the topic says which session it is.
 ///
 /// Legibility also buys the picker: `path resume <destination>` builds
 /// its rows from names alone, so browsing a hundred shared sessions
@@ -448,30 +517,109 @@ impl std::fmt::Display for ObjectName {
     }
 }
 
+/// The three pieces of an object name, recovered from its stem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NameParts {
+    pub date: Option<String>,
+    pub topic: Option<String>,
+    pub id: String,
+}
+
 impl ObjectName {
     /// Longest slug we'll put in a name. Long enough to recognize a
-    /// session, short enough that the cache id stays visible in a
+    /// session, short enough that the ID stays visible in a
     /// terminal-width listing.
     const SLUG_MAX: usize = 48;
+    /// Longest ID we'll put in a name verbatim. Derived IDs are ~40
+    /// chars; anything longer is a hand-written document, and a name
+    /// must stay under filesystem limits however long that ID is.
+    const ID_MAX: usize = 64;
+    /// Reserved: the slugger collapses dash runs, so neither the date
+    /// nor the topic can contain it, and automation splits on the last
+    /// occurrence to get the ID.
+    pub(crate) const ID_SEPARATOR: &'static str = "--";
 
-    pub(crate) fn new(cache_id: &str, date: Option<&str>, title: Option<&str>) -> Self {
-        let mut parts: Vec<String> = Vec::new();
+    pub(crate) fn new(id: &str, date: Option<&str>, title: Option<&str>) -> Self {
+        let mut prefix: Vec<String> = Vec::new();
         if let Some(d) = date.map(slugify).filter(|d| !d.is_empty()) {
-            parts.push(d);
+            prefix.push(d);
         }
         if let Some(t) = title.map(slugify).filter(|t| !t.is_empty()) {
-            parts.push(truncate_slug(&t, Self::SLUG_MAX));
+            prefix.push(truncate_slug(&t, Self::SLUG_MAX));
         }
-        parts.push(slugify(cache_id));
-        ObjectName(parts.join("-"))
+        let id = bounded_id(id);
+        if prefix.is_empty() {
+            ObjectName(id)
+        } else {
+            ObjectName(format!("{}{}{id}", prefix.join("-"), Self::ID_SEPARATOR))
+        }
     }
 
-    /// The name for a document with no usable metadata — the cache id
+    /// The name for a document with no usable metadata — the ID
     /// alone, which is what the whole scheme degrades to.
     #[cfg(test)]
-    pub(crate) fn bare(cache_id: &str) -> Self {
-        Self::new(cache_id, None, None)
+    pub(crate) fn bare(id: &str) -> Self {
+        Self::new(id, None, None)
     }
+
+    /// The ID half of a name stem: everything after the last `--`. A
+    /// stem with no separator (a name from before the separator
+    /// existed, or a bare ID) is taken whole.
+    pub(crate) fn id_of(stem: &str) -> &str {
+        stem.rsplit_once(Self::ID_SEPARATOR)
+            .map(|(_, id)| id)
+            .unwrap_or(stem)
+    }
+
+    /// Split a stem into date, topic, and ID. The date is recognized
+    /// only as a leading `YYYY-MM-DD`; everything else before the
+    /// separator is the topic.
+    pub(crate) fn parse(stem: &str) -> NameParts {
+        let (prefix, id) = match stem.rsplit_once(Self::ID_SEPARATOR) {
+            Some((p, id)) => (Some(p), id),
+            None => (None, stem),
+        };
+        let mut date = None;
+        let mut topic = None;
+        if let Some(prefix) = prefix {
+            let looks_like_date = prefix.len() >= 10
+                && prefix.as_bytes()[..10].iter().enumerate().all(|(i, b)| {
+                    if i == 4 || i == 7 {
+                        *b == b'-'
+                    } else {
+                        b.is_ascii_digit()
+                    }
+                })
+                && (prefix.len() == 10 || prefix.as_bytes()[10] == b'-');
+            if looks_like_date {
+                date = Some(prefix[..10].to_string());
+                let rest = prefix[10..].trim_start_matches('-');
+                if !rest.is_empty() {
+                    topic = Some(rest.to_string());
+                }
+            } else if !prefix.is_empty() {
+                topic = Some(prefix.to_string());
+            }
+        }
+        NameParts {
+            date,
+            topic,
+            id: id.to_string(),
+        }
+    }
+}
+
+/// Slug of an ID, bounded: past `ID_MAX` the slug is cut on a dash
+/// boundary at 48 and suffixed with 8 hex characters of the raw ID's
+/// SHA-256, so two long IDs that share a prefix still get distinct names.
+fn bounded_id(raw: &str) -> String {
+    use sha2::Digest;
+    let slug = slugify(raw);
+    if slug.len() <= ObjectName::ID_MAX {
+        return slug;
+    }
+    let digest = hex::encode(sha2::Sha256::digest(raw.as_bytes()));
+    format!("{}-{}", truncate_slug(&slug, 48), &digest[..8])
 }
 
 /// Lowercase, ASCII-alphanumeric, single dashes, no leading/trailing
@@ -505,16 +653,19 @@ fn truncate_slug(slug: &str, max: usize) -> String {
     }
 }
 
-/// Name a document for a destination, reading the date and topic out of
-/// the document itself so `share` and `p export object` agree without
-/// either of them having to know where the document came from.
-pub(crate) fn name_for(doc: &toolpath::v1::Graph, cache_id: &str) -> ObjectName {
+/// Name a document for a destination: date and topic from the document
+/// itself, identity from its conversation artifact key (see
+/// [`session_key`]) or, for a document that has none, from `graph.id`.
+/// Nothing about the input path is consulted, so `share` and
+/// `p export object` agree, and two different documents that happen to
+/// share a filename land on two keys.
+pub(crate) fn name_for(doc: &toolpath::v1::Graph) -> ObjectName {
     let path = doc.paths.iter().find_map(|p| match p {
         toolpath::v1::PathOrRef::Path(p) => Some(p.as_ref()),
         toolpath::v1::PathOrRef::Ref(_) => None,
     });
     let Some(path) = path else {
-        return ObjectName::new(cache_id, None, None);
+        return ObjectName::new(&doc.graph.id, None, None);
     };
 
     // Earliest step wins: a session is dated when it started, so the
@@ -527,18 +678,39 @@ pub(crate) fn name_for(doc: &toolpath::v1::Graph, cache_id: &str) -> ObjectName 
         .and_then(|ts| ts.split('T').next())
         .map(str::to_string);
 
-    ObjectName::new(cache_id, date.as_deref(), topic_of(path).as_deref())
+    let id = session_key(path).unwrap_or(doc.graph.id.as_str());
+    ObjectName::new(id, date.as_deref(), topic_of(path).as_deref())
 }
 
-/// [`name_for`] against the serialized document — the exact bytes about
-/// to be uploaded, so the name always describes what actually lands.
-/// Degrades to the bare cache id if the body doesn't parse, because a
-/// worse name is better than a failed share.
-pub(crate) fn name_for_body(body: &str, cache_id: &str) -> ObjectName {
-    match toolpath::v1::Graph::from_json(body) {
-        Ok(doc) => name_for(&doc, cache_id),
-        Err(_) => ObjectName::new(cache_id, None, None),
+/// The session a path describes, as its conversation artifact key.
+///
+/// The agent-coding-session kind specifies that key as
+/// `<source>://<conversation-id>` on the `conversation.append` entry, so
+/// it already carries the provider and the harness's own session ID.
+/// That pair is the identity a store shared between machines needs, and
+/// it is unique because the harness that issued it says so — not because
+/// we truncated an ID and hoped. Documents with no conversation artifact
+/// (git-derived, hand-written) have no session identity, so callers fall
+/// back to `graph.id`.
+///
+/// Keys are visited in sorted order so a path whose steps carry several
+/// conversation artifacts still names the same one every run.
+fn session_key(path: &toolpath::v1::Path) -> Option<&str> {
+    for step in &path.steps {
+        let mut keys: Vec<&String> = step.change.keys().collect();
+        keys.sort();
+        for key in keys {
+            let is_conversation = step
+                .change
+                .get(key)
+                .and_then(|c| c.structural.as_ref())
+                .is_some_and(|s| s.change_type == "conversation.append");
+            if is_conversation && key.contains("://") {
+                return Some(key.as_str());
+            }
+        }
     }
+    None
 }
 
 /// The first user prompt, which is what a session is *about*.
@@ -689,8 +861,15 @@ fn friendly(url: &Url) -> String {
 /// Turn an `object_store` error into something a user can act on. Its
 /// `NotFound` and `Unauthenticated` variants are the two that matter:
 /// the first usually means a typo'd key, the second an unconfigured or
-/// stale credential.
-fn explain_location(err: object_store::Error, verb: &str, location: &str) -> anyhow::Error {
+/// stale credential. A request that ended up at instance metadata
+/// because nothing local resolved gets the real explanation instead of
+/// a link-local IP.
+fn explain_location(
+    err: object_store::Error,
+    verb: &str,
+    location: &str,
+    source: Option<&crate::aws_creds::Source>,
+) -> anyhow::Error {
     match err {
         object_store::Error::NotFound { .. } => anyhow!("{location} not found"),
         object_store::Error::Unauthenticated { .. }
@@ -700,7 +879,20 @@ fn explain_location(err: object_store::Error, verb: &str, location: &str) -> any
                  credentials, or check the bucket policy for the ones you have."
             )
         }
-        e => anyhow!("failed to {verb} {location}: {}", terse(&e)),
+        e => {
+            let msg = terse(&e);
+            if matches!(source, Some(crate::aws_creds::Source::InstanceChain))
+                && msg.contains("169.254.169.254")
+            {
+                anyhow!(
+                    "failed to {verb} {location}: no credentials found (tried ~/.aws, the \
+                     environment, and the EC2/ECS/EKS chain). Run `path auth s3 login` or set \
+                     AWS_PROFILE."
+                )
+            } else {
+                anyhow!("failed to {verb} {location}: {msg}")
+            }
+        }
     }
 }
 
@@ -835,13 +1027,30 @@ mod tests {
     }
 
     #[test]
-    fn cache_id_flattens_the_key() {
-        let uri = ObjectUri::parse("s3://bkt/traces/claude-abc.json").unwrap();
-        assert_eq!(uri.cache_id(), "s3-bkt-traces_claude-abc");
+    fn cache_id_is_the_document_id_from_the_object_name() {
+        let uri = ObjectUri::parse("s3://bkt/traces/2026-01-01-hello--path-claude-code-abc.json")
+            .unwrap();
+        assert_eq!(uri.cache_id(), "object-path-claude-code-abc");
         // s3a is the same store under a different scheme spelling, so
-        // it must not fork the cache.
-        let alias = ObjectUri::parse("s3a://bkt/traces/claude-abc.json").unwrap();
+        // it must not fork the cache; neither must the container.
+        let alias =
+            ObjectUri::parse("s3a://other/prefix/2026-01-01-hello--path-claude-code-abc.json")
+                .unwrap();
         assert_eq!(alias.cache_id(), uri.cache_id());
+        let local =
+            ObjectUri::parse("file:///srv/traces/2026-01-01-hello--path-claude-code-abc.json")
+                .unwrap();
+        assert_eq!(local.cache_id(), uri.cache_id());
+    }
+
+    #[test]
+    fn cache_id_of_a_legacy_name_is_the_whole_stem_bounded() {
+        let uri = ObjectUri::parse("s3://bkt/traces/2026-01-01-hello-doc.json").unwrap();
+        assert_eq!(uri.cache_id(), "object-2026-01-01-hello-doc");
+
+        let long = format!("s3://bkt/{}.json", "k".repeat(300));
+        let id = ObjectUri::parse(&long).unwrap().cache_id();
+        assert!(id.len() <= "object-".len() + 100, "{}", id.len());
     }
 
     // ── S3 settings ──────────────────────────────────────────────────
@@ -873,13 +1082,46 @@ mod tests {
     }
 
     #[test]
-    fn store_options_carry_credentials_and_endpoint() {
-        let opts = store_options(&S3Settings {
-            access_key_id: Some("AK".to_string()),
-            secret_access_key: Some("SK".to_string()),
-            endpoint: Some("http://127.0.0.1:9000".to_string()),
-            ..Default::default()
+    fn env_supplied_keys_resolve_as_the_environment_source() {
+        let merged = merge_env(S3Settings::default(), |k| match k {
+            "AWS_ACCESS_KEY_ID" => Some("AKIAENV".to_string()),
+            "AWS_SECRET_ACCESS_KEY" => Some("SK".to_string()),
+            _ => None,
         });
+        assert!(merged.credentials_from_env);
+        let resolved = merged
+            .resolve_with(&crate::aws_creds::Env {
+                home: None,
+                var: &|_: &str| None,
+                aws_cli: &|_: &str| anyhow::bail!("unused"),
+                sso_login: &|_: &str| Ok(()),
+                confirm: &|_: &str| false,
+            })
+            .unwrap();
+        assert_eq!(resolved.source, crate::aws_creds::Source::Environment);
+        assert_eq!(resolved.credentials.unwrap().access_key_id, "AKIAENV");
+
+        // Stored keys stay "stored".
+        let stored = S3Settings {
+            access_key_id: Some("AKIASTORED".to_string()),
+            secret_access_key: Some("SK".to_string()),
+            ..Default::default()
+        };
+        assert!(!merge_env(stored.clone(), |_| None).credentials_from_env);
+    }
+
+    #[test]
+    fn store_options_carry_credentials_and_endpoint() {
+        let (opts, source) = store_options(
+            &S3Settings {
+                access_key_id: Some("AK".to_string()),
+                secret_access_key: Some("SK".to_string()),
+                endpoint: Some("http://127.0.0.1:9000".to_string()),
+                ..Default::default()
+            },
+            "s3",
+        )
+        .unwrap();
         let get = |k: &str| {
             opts.iter()
                 .find(|(key, _)| *key == k)
@@ -891,15 +1133,35 @@ mod tests {
         // Plaintext endpoints have to be opted into explicitly.
         assert_eq!(get("aws_allow_http"), Some("true"));
         assert_eq!(get("aws_region"), Some(DEFAULT_REGION));
+        assert_eq!(source, Some(crate::aws_creds::Source::Stored));
     }
 
     #[test]
     fn https_endpoint_does_not_allow_http() {
-        let opts = store_options(&S3Settings {
-            endpoint: Some("https://minio.example".to_string()),
-            ..Default::default()
-        });
+        let (opts, _) = store_options(
+            &S3Settings {
+                endpoint: Some("https://minio.example".to_string()),
+                ..Default::default()
+            },
+            "s3",
+        )
+        .unwrap();
         assert!(!opts.iter().any(|(k, _)| *k == "aws_allow_http"));
+    }
+
+    #[test]
+    fn a_folder_never_resolves_credentials() {
+        // A stored profile that does not exist would make resolution
+        // fail — and must not even be attempted for a folder.
+        let cfg = S3Settings {
+            profile: Some("definitely-not-a-profile".to_string()),
+            ..Default::default()
+        };
+        let (opts, source) = store_options(&cfg, "file").unwrap();
+        assert!(opts.is_empty());
+        assert_eq!(source, None);
+        let err = store_options(&cfg, "s3").unwrap_err().to_string();
+        assert!(err.contains("definitely-not-a-profile"), "{err}");
     }
 
     #[test]
@@ -1002,11 +1264,11 @@ mod tests {
     }
 
     #[test]
-    fn a_name_leads_with_the_date_and_topic() {
+    fn a_name_leads_with_the_date_and_topic_and_ends_with_the_document_id() {
         let doc = doc_with("Add S3 support to share", "2026-08-07T09:15:00Z");
         assert_eq!(
-            name_for(&doc, "claude-abc123").to_string(),
-            "2026-08-07-add-s3-support-to-share-claude-abc123"
+            name_for(&doc).to_string(),
+            "2026-08-07-add-s3-support-to-share--claude-code-s"
         );
     }
 
@@ -1015,7 +1277,7 @@ mod tests {
         // The date comes from the *earliest* step, so appending turns
         // can't move the object and leave a duplicate behind.
         let short = doc_with("Fix the parser", "2026-08-07T09:15:00Z");
-        let name = name_for(&short, "claude-abc");
+        let name = name_for(&short);
 
         let mut grown = short.clone();
         if let toolpath::v1::PathOrRef::Path(p) = &mut grown.paths[0] {
@@ -1024,7 +1286,7 @@ mod tests {
             later.step.timestamp = "2026-08-09T18:00:00Z".to_string();
             p.steps.push(later);
         }
-        assert_eq!(name_for(&grown, "claude-abc"), name);
+        assert_eq!(name_for(&grown), name);
     }
 
     #[test]
@@ -1033,28 +1295,75 @@ mod tests {
             "Add support to share and resume to and from S3 and a way to configure credentials",
             "2026-08-07T00:00:00Z",
         );
-        let name = name_for(&doc, "claude-abc").to_string();
+        let name = name_for(&doc).to_string();
         assert!(
             name.starts_with("2026-08-07-add-support-to-share"),
             "{name}"
         );
-        assert!(name.ends_with("-claude-abc"), "{name}");
-        assert!(!name.contains("--"), "no empty slug segments: {name}");
+        assert!(name.ends_with("--claude-code-s"), "{name}");
+        // The separator appears exactly once: the slugger collapses dash runs.
+        assert_eq!(name.matches("--").count(), 1, "{name}");
+    }
+
+    #[test]
+    fn the_id_half_is_the_session_not_the_document_id() {
+        // Two documents from the same session but with different
+        // `graph.id`s (a re-derive that renamed the graph, say) are the
+        // same session and must land on the same key.
+        let a = doc_with("Fix the parser", "2026-08-07T09:15:00Z");
+        let mut b = toolpath::v1::Graph::from_json(&a.to_json().unwrap()).unwrap();
+        b.graph.id = "some-other-graph-id".to_string();
+        assert_eq!(name_for(&a), name_for(&b));
+        assert!(
+            name_for(&a).to_string().ends_with("--claude-code-s"),
+            "{}",
+            name_for(&a)
+        );
+    }
+
+    #[test]
+    fn two_sessions_take_two_keys_even_with_the_same_graph_id() {
+        // The inverse: one `graph.id`, two harness sessions. Keying on
+        // the session is what keeps the second from replacing the first.
+        let a = doc_with("Fix the parser", "2026-08-07T09:15:00Z");
+        let raw = a
+            .to_json()
+            .unwrap()
+            .replace("claude-code://s", "claude-code://other");
+        let b = toolpath::v1::Graph::from_json(&raw).unwrap();
+        assert_eq!(b.graph.id, a.graph.id);
+        assert_ne!(name_for(&a), name_for(&b));
+        assert!(name_for(&b).to_string().ends_with("--claude-code-other"));
+    }
+
+    #[test]
+    fn a_document_with_no_conversation_artifact_falls_back_to_the_graph_id() {
+        // Git-derived and hand-written documents have no session identity.
+        let body = serde_json::json!({
+            "graph": { "id": "path-main" },
+            "paths": [{
+                "path": { "id": "p1", "head": "s1" },
+                "steps": [{
+                    "step": { "id": "s1", "parents": [], "actor": "human:alex",
+                              "timestamp": "2026-08-07T00:00:00Z" },
+                    "change": { "src/main.rs": { "raw": "@@ -1 +1 @@\n-a\n+b" } }
+                }]
+            }]
+        });
+        let doc = toolpath::v1::Graph::from_json(&body.to_string()).unwrap();
+        assert_eq!(name_for(&doc).to_string(), "2026-08-07--path-main");
     }
 
     #[test]
     fn a_prompt_of_pure_punctuation_degrades_to_date_and_id() {
         let doc = doc_with("!!! ???", "2026-08-07T00:00:00Z");
-        assert_eq!(
-            name_for(&doc, "claude-abc").to_string(),
-            "2026-08-07-claude-abc"
-        );
+        assert_eq!(name_for(&doc).to_string(), "2026-08-07--claude-code-s");
     }
 
     #[test]
     fn a_synthesized_title_is_not_worth_slugging() {
         // `derive_path` writes "claude-code session: abc" when it has
-        // nothing better; repeating the id would waste the legible half
+        // nothing better; repeating the ID would waste the legible half
         // of the name.
         let body = serde_json::json!({
             "graph": { "id": "g1" },
@@ -1069,19 +1378,78 @@ mod tests {
             }]
         });
         let doc = toolpath::v1::Graph::from_json(&body.to_string()).unwrap();
+        assert_eq!(name_for(&doc).to_string(), "2026-08-07--g1");
+    }
+
+    #[test]
+    fn a_document_with_no_date_or_topic_is_named_by_its_id_alone() {
+        let doc =
+            toolpath::v1::Graph::from_json(r#"{"graph":{"id":"path-claude-code-abc"},"paths":[]}"#)
+                .unwrap();
+        assert_eq!(name_for(&doc).to_string(), "path-claude-code-abc");
+    }
+
+    #[test]
+    fn the_id_is_read_back_from_after_the_last_separator() {
         assert_eq!(
-            name_for(&doc, "claude-abc").to_string(),
-            "2026-08-07-claude-abc"
+            ObjectName::id_of("2026-08-07-fix-the-parser--path-claude-code-abc"),
+            "path-claude-code-abc"
+        );
+        // Legacy names without a separator: the whole stem is the ID.
+        assert_eq!(
+            ObjectName::id_of("2026-08-07-fix-the-parser-doc"),
+            "2026-08-07-fix-the-parser-doc"
+        );
+        assert_eq!(
+            ObjectName::id_of("path-claude-code-abc"),
+            "path-claude-code-abc"
         );
     }
 
     #[test]
-    fn an_unparseable_body_still_gets_a_name() {
-        // A worse name beats a failed share.
-        assert_eq!(
-            name_for_body("not json", "claude-abc").to_string(),
-            "claude-abc"
+    fn parse_splits_date_topic_and_id() {
+        let p = ObjectName::parse("2026-08-07-fix-the-parser--path-claude-code-abc");
+        assert_eq!(p.date.as_deref(), Some("2026-08-07"));
+        assert_eq!(p.topic.as_deref(), Some("fix-the-parser"));
+        assert_eq!(p.id, "path-claude-code-abc");
+
+        let p = ObjectName::parse("2026-08-07--g1");
+        assert_eq!(p.date.as_deref(), Some("2026-08-07"));
+        assert_eq!(p.topic, None);
+        assert_eq!(p.id, "g1");
+
+        let p = ObjectName::parse("g1");
+        assert_eq!((p.date, p.topic, p.id.as_str()), (None, None, "g1"));
+
+        // A topic that happens to start with digits is not a date.
+        let p = ObjectName::parse("2026-fixes--g1");
+        assert_eq!(p.date, None);
+        assert_eq!(p.topic.as_deref(), Some("2026-fixes"));
+    }
+
+    #[test]
+    fn an_overlong_id_is_bounded_with_a_hash_suffix() {
+        let long = "x".repeat(200);
+        let name = ObjectName::new(&long, None, None).to_string();
+        assert!(name.len() <= 64, "{}", name.len());
+        assert!(name.starts_with(&"x".repeat(48)), "{name}");
+        // 48 x's, a dash, 8 hex chars.
+        assert_eq!(name.len(), 48 + 1 + 8, "{name}");
+        // Two different overlong IDs get different names.
+        let other = format!("{}y", "x".repeat(199));
+        assert_ne!(
+            ObjectName::new(&other, None, None),
+            ObjectName::new(&long, None, None)
         );
+    }
+
+    #[test]
+    fn an_id_never_contains_the_separator() {
+        // slugify collapses dash runs, so `--` in a raw ID can't leak
+        // into the name and confuse `id_of`.
+        let name = ObjectName::new("weird--id", Some("2026-01-01"), Some("topic")).to_string();
+        assert_eq!(name, "2026-01-01-topic--weird-id");
+        assert_eq!(ObjectName::id_of(&name), "weird-id");
     }
 
     // ── Listing ──────────────────────────────────────────────────────
@@ -1137,5 +1505,51 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = Destination::parse(&dir.path().to_string_lossy()).unwrap();
         assert!(dest.list(&S3Settings::default()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn terse_keeps_the_innermost_cause() {
+        let inner =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
+        let err = object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(inner),
+        };
+        let msg = terse(&err);
+        assert!(msg.contains("connection refused"), "{msg}");
+        assert!(!msg.starts_with("Generic S3 error"), "{msg}");
+    }
+
+    #[test]
+    fn terse_strips_the_local_filesystem_prefix() {
+        let inner = std::io::Error::other("File name too long (os error 63)");
+        let err = object_store::Error::Generic {
+            store: "LocalFileSystem",
+            source: Box::new(inner),
+        };
+        let msg = terse(&err);
+        assert!(!msg.contains("Generic LocalFileSystem error"), "{msg}");
+        assert!(msg.contains("File name too long"), "{msg}");
+    }
+
+    #[test]
+    fn an_imds_failure_with_no_credentials_explains_where_it_looked() {
+        let inner = std::io::Error::other(
+            "Error performing PUT http://169.254.169.254/latest/api/token in 1.5s",
+        );
+        let err = object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(inner),
+        };
+        let msg = explain_location(
+            err,
+            "write",
+            "s3://b/k.json",
+            Some(&crate::aws_creds::Source::InstanceChain),
+        )
+        .to_string();
+        assert!(msg.contains("no credentials found"), "{msg}");
+        assert!(msg.contains("~/.aws"), "{msg}");
+        assert!(!msg.contains("169.254.169.254"), "{msg}");
     }
 }

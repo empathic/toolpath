@@ -197,13 +197,14 @@ pub enum ImportSource {
         url: Option<String>,
     },
     /// Import from object storage — an S3 bucket, an S3-compatible
-    /// endpoint, or a folder. S3 credentials come from your `~/.aws`
-    /// profiles, the AWS environment, or `path auth s3 login`; a folder
-    /// needs none.
+    /// endpoint, or a folder. A full object URL imports one document; a
+    /// destination (bucket prefix or folder) imports every `.json`
+    /// document directly under it, skipping any that fail and exiting 1
+    /// at the end if one did.
     #[command(alias = "s3")]
     Object {
-        /// Object URL: `s3://bucket/key.json` (also `s3a://`, and
-        /// `file:///dir/key.json` for a local folder)
+        /// Object URL (`s3://bucket/key.json`, `file:///dir/key.json`) or
+        /// a destination (`s3://bucket/prefix`, `~/traces`)
         #[arg(index = 1)]
         target: String,
     },
@@ -224,8 +225,15 @@ pub struct ImportArgs {
 }
 
 pub fn run(args: ImportArgs, pretty: bool, config: &Config) -> Result<()> {
-    let docs = derive(args.source, config)?;
-    emit(&docs, args.force, args.no_cache, pretty, config)
+    let (docs, skipped) = match args.source {
+        ImportSource::Object { target } => derive_object(target)?,
+        other => (derive(other, config)?, 0),
+    };
+    emit(&docs, args.force, args.no_cache, pretty, config)?;
+    if skipped > 0 {
+        anyhow::bail!("{skipped} object(s) could not be imported (see warnings above)");
+    }
+    Ok(())
 }
 
 #[cfg_attr(target_os = "emscripten", expect(unused_variables))]
@@ -350,7 +358,7 @@ fn derive(source: ImportSource, config: &Config) -> Result<Vec<DerivedDoc>> {
             base,
         } => derive_pi(project, session, all, base, config),
         ImportSource::Pathbase { target, url } => derive_pathbase(target, url),
-        ImportSource::Object { target } => derive_object(target),
+        ImportSource::Object { .. } => unreachable!("handled in run"),
     }
 }
 
@@ -1581,16 +1589,41 @@ fn derive_pathbase(target: String, url_flag: Option<String>) -> Result<Vec<Deriv
     }
 }
 
-fn derive_object(target: String) -> Result<Vec<DerivedDoc>> {
+fn derive_object(target: String) -> Result<(Vec<DerivedDoc>, usize)> {
     #[cfg(target_os = "emscripten")]
     {
         let _ = target;
         anyhow::bail!("'path p import object' requires a native environment with network access");
     }
-
     #[cfg(not(target_os = "emscripten"))]
     {
-        Ok(vec![crate::derive::object_fetch_to_doc(&target)?])
+        // A shared document is always `<name>.json`; anything else names
+        // a place to import everything from.
+        if target.trim_end_matches('/').ends_with(".json") {
+            return Ok((vec![crate::derive::object_fetch_to_doc(&target)?], 0));
+        }
+        let dest = crate::store::Destination::parse(&target)?;
+        let settings = crate::store::effective_settings()?;
+        let entries = dest.list(&settings)?;
+        if entries.is_empty() {
+            anyhow::bail!("no documents in {dest}");
+        }
+        let mut docs = Vec::with_capacity(entries.len());
+        let mut skipped = 0;
+        for entry in entries {
+            let uri = entry.uri.to_string();
+            match crate::derive::object_fetch_to_doc(&uri) {
+                Ok(doc) => docs.push(doc),
+                Err(e) => {
+                    eprintln!("warning: skipping {uri}: {e:#}");
+                    skipped += 1;
+                }
+            }
+        }
+        if docs.is_empty() {
+            anyhow::bail!("{skipped} object(s) failed; nothing imported");
+        }
+        Ok((docs, skipped))
     }
 }
 
