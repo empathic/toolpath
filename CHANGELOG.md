@@ -60,6 +60,7 @@ credential source, and put mode. `[[project]] remote` in
 --source` warns when it matches nothing.
 
 **`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>
