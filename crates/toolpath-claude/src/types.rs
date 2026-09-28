@@ -258,6 +258,20 @@ impl Message {
 }
 
 impl ConversationEntry {
+    /// Claude Code wrote this entry itself, not the user or the model:
+    /// it is marked `isMeta`, or `text`, the entry's message text,
+    /// starts with a marker Claude Code writes.
+    pub(crate) fn is_harness_written(&self, text: &str) -> bool {
+        use crate::constants::{HARNESS_TEXT_PREFIXES, IS_META};
+        let meta = self
+            .extra
+            .get(IS_META)
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let text = text.trim_start();
+        meta || HARNESS_TEXT_PREFIXES.iter().any(|p| text.starts_with(p))
+    }
+
     /// Role of the message, if present.
     pub fn role(&self) -> Option<&MessageRole> {
         self.message.as_ref().map(|m| &m.role)

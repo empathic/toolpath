@@ -2,6 +2,15 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.5 — 2026-09-28
+
+- **`toolpath-claude`** (0.13.5): the listing's `first_user_message`
+  skips the user entries Claude Code writes itself: `isMeta` entries
+  (image sources, command caveats, system reminders), interrupt
+  markers, slash-command echoes, command output, and task
+  notifications. A session that starts with a slash command no longer
+  takes the command caveat as its first prompt.
+
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>
