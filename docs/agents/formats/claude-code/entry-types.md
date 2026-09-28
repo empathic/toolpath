@@ -86,6 +86,23 @@ entry.
 An internal system-inserted user-role note. Rare; discriminator is a
 subfield inside the content, not a top-level type.
 
+### Entries Claude Code writes itself
+
+Some user entries are not text the user typed:
+
+- `isMeta: true` entries: the source of a pasted image
+  (`[Image: source: <path>]`, beside the prompt that carries the
+  image), the caveat before command output (`<local-command-caveat>`),
+  and system reminders (`<system-reminder>`).
+- Entries without `isMeta`, known by how their text starts: interrupt
+  markers (`[Request interrupted by user]`), slash-command echoes
+  (`<command-name>`, `<command-message>`), command output
+  (`<local-command-stdout>`, `<local-command-stderr>`), and task
+  notifications (`<task-notification>`).
+
+`toolpath-claude`'s listing skips them when it picks a session's first
+prompt.
+
 ### Classifying a user entry
 
 The envelope alone does not tell you which subclass a `user` entry is —
