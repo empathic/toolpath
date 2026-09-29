@@ -177,8 +177,8 @@ impl ClaudeConvo {
 
     /// Reads conversation metadata without loading the full content.
     ///
-    /// **Chain-aware:** aggregates `message_count` (sum), `started_at`
-    /// (earliest), and `last_activity` (latest) across all segments.
+    /// **Chain-aware:** merges the metadata of every segment, oldest
+    /// first, with a rule per field.
     pub fn read_conversation_metadata(
         &self,
         project_path: &str,
@@ -190,43 +190,17 @@ impl ClaudeConvo {
             return self.io.read_conversation_metadata(project_path, session_id);
         }
 
-        let head = &chain[0];
-        let mut total_messages = 0usize;
-        let mut started_at = None;
-        let mut last_activity = None;
-        let mut file_path = std::path::PathBuf::new();
-        let mut first_user_message: Option<String> = None;
-
-        for (i, segment_id) in chain.iter().enumerate() {
-            let meta = self
+        let mut merged = self
+            .io
+            .read_conversation_metadata(project_path, &chain[0])?;
+        for segment_id in &chain[1..] {
+            let newer = self
                 .io
                 .read_conversation_metadata(project_path, segment_id)?;
-            total_messages += meta.message_count;
-
-            if started_at.is_none() || meta.started_at < started_at {
-                started_at = meta.started_at;
-            }
-            if last_activity.is_none() || meta.last_activity > last_activity {
-                last_activity = meta.last_activity;
-            }
-            if i == 0 {
-                file_path = meta.file_path;
-            }
-            // Chain is oldest-first; keep the first non-empty user prompt.
-            if first_user_message.is_none() && meta.first_user_message.is_some() {
-                first_user_message = meta.first_user_message;
-            }
+            merged = merge_newer_segment(merged, newer);
         }
-
-        Ok(ConversationMetadata {
-            session_id: head.clone(),
-            project_path: project_path.to_string(),
-            file_path,
-            message_count: total_messages,
-            started_at,
-            last_activity,
-            first_user_message,
-        })
+        merged.project_path = project_path.to_string();
+        Ok(merged)
     }
 
     /// Lists logical conversation IDs for a project (chain heads only).
@@ -416,9 +390,50 @@ impl ClaudeConvo {
     }
 }
 
+/// Merges the metadata of a session chain with the metadata of its
+/// next segment. `merged` describes the segments so far. The result
+/// describes the chain up to and including `newer`. Call it once per
+/// segment, oldest segment first. The merge is not commutative:
+/// `merged` and `newer` are not interchangeable.
+///
+/// Each field merges by its own rule:
+///
+/// - `session_id`: keep the first segment's value.
+/// - `project_path`: keep the first segment's value.
+/// - `file_path`: keep the first segment's value.
+/// - `message_count`: add the two counts.
+/// - `started_at`: keep the earlier of the two times, or the one time
+///   that is present.
+/// - `last_activity`: keep the later of the two times, or the one time
+///   that is present.
+/// - `first_user_message`: keep the message of `merged`, or take the
+///   newer segment's when `merged` has none. The result is the first
+///   message of the oldest segment that has one.
+fn merge_newer_segment(
+    merged: ConversationMetadata,
+    newer: ConversationMetadata,
+) -> ConversationMetadata {
+    ConversationMetadata {
+        session_id: merged.session_id,
+        project_path: merged.project_path,
+        file_path: merged.file_path,
+        message_count: merged.message_count + newer.message_count,
+        started_at: match (merged.started_at, newer.started_at) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        },
+        last_activity: match (merged.last_activity, newer.last_activity) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        },
+        first_user_message: merged.first_user_message.or(newer.first_user_message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use std::fs;
     use tempfile::TempDir;
 
@@ -803,5 +818,83 @@ mod tests {
         assert!(meta.started_at.is_some());
         assert!(meta.last_activity.is_some());
         assert!(meta.last_activity > meta.started_at);
+    }
+
+    fn segment(id: &str, messages: usize, times: Option<(&str, &str)>) -> ConversationMetadata {
+        let at = |t: &str| t.parse::<DateTime<Utc>>().unwrap();
+        ConversationMetadata {
+            session_id: id.to_string(),
+            project_path: "/p".to_string(),
+            file_path: format!("/p/{id}.jsonl").into(),
+            message_count: messages,
+            started_at: times.map(|(s, _)| at(s)),
+            last_activity: times.map(|(_, e)| at(e)),
+            first_user_message: None,
+        }
+    }
+
+    #[test]
+    fn merge_newer_segment_keeps_the_first_segment_identity() {
+        let merged = merge_newer_segment(segment("a", 1, None), segment("b", 2, None));
+        assert_eq!(merged.session_id, "a");
+        assert_eq!(merged.file_path, std::path::PathBuf::from("/p/a.jsonl"));
+        assert_eq!(merged.message_count, 3);
+    }
+
+    #[test]
+    fn merge_newer_segment_spans_the_earliest_start_to_the_latest_activity() {
+        let merged = merge_newer_segment(
+            segment(
+                "a",
+                1,
+                Some(("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z")),
+            ),
+            segment(
+                "b",
+                1,
+                Some(("2024-01-02T00:00:00Z", "2024-01-02T01:00:00Z")),
+            ),
+        );
+        assert_eq!(
+            merged.started_at.unwrap().to_rfc3339(),
+            "2024-01-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            merged.last_activity.unwrap().to_rfc3339(),
+            "2024-01-02T01:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn merge_newer_segment_without_timestamps_keeps_the_chain_times() {
+        let merged = merge_newer_segment(
+            segment(
+                "a",
+                1,
+                Some(("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z")),
+            ),
+            segment("b", 0, None),
+        );
+        assert!(merged.started_at.is_some());
+        assert!(merged.last_activity.is_some());
+    }
+
+    #[test]
+    fn merge_newer_segment_keeps_the_oldest_first_prompt() {
+        let merged = merge_newer_segment(
+            segment("a", 1, None),
+            ConversationMetadata {
+                first_user_message: Some("second".to_string()),
+                ..segment("b", 1, None)
+            },
+        );
+        let merged = merge_newer_segment(
+            merged,
+            ConversationMetadata {
+                first_user_message: Some("third".to_string()),
+                ..segment("c", 1, None)
+            },
+        );
+        assert_eq!(merged.first_user_message.as_deref(), Some("second"));
     }
 }
