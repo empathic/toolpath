@@ -2,6 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.5 — 2026-09-29
+
+- **`toolpath-claude`** (0.13.5): `read_conversation` keeps the
+  session-level lines (titles, permission mode, file history
+  snapshots) of every file of a session chain. The merged read of a
+  chain dropped them.
+
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>
