@@ -409,6 +409,10 @@ impl ClaudeConvo {
 /// - `first_user_message`: keep the message of `merged`, or take the
 ///   newer segment's when `merged` has none. The result is the first
 ///   message of the oldest segment that has one.
+/// - `custom_title`: take the newer segment's title, or keep the title
+///   of `merged` when the newer segment has none.
+/// - `ai_title`: take the newer segment's title, or keep the title of
+///   `merged` when the newer segment has none.
 fn merge_newer_segment(
     merged: ConversationMetadata,
     newer: ConversationMetadata,
@@ -427,6 +431,8 @@ fn merge_newer_segment(
             (a, b) => a.or(b),
         },
         first_user_message: merged.first_user_message.or(newer.first_user_message),
+        custom_title: newer.custom_title.or(merged.custom_title),
+        ai_title: newer.ai_title.or(merged.ai_title),
     }
 }
 
@@ -830,6 +836,8 @@ mod tests {
             started_at: times.map(|(s, _)| at(s)),
             last_activity: times.map(|(_, e)| at(e)),
             first_user_message: None,
+            custom_title: None,
+            ai_title: None,
         }
     }
 
@@ -896,5 +904,22 @@ mod tests {
             },
         );
         assert_eq!(merged.first_user_message.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn merge_newer_segment_keeps_the_newest_titles() {
+        let merged = merge_newer_segment(
+            ConversationMetadata {
+                custom_title: Some("old name".to_string()),
+                ai_title: Some("old summary".to_string()),
+                ..segment("a", 1, None)
+            },
+            ConversationMetadata {
+                ai_title: Some("new summary".to_string()),
+                ..segment("b", 1, None)
+            },
+        );
+        assert_eq!(merged.custom_title.as_deref(), Some("old name"));
+        assert_eq!(merged.ai_title.as_deref(), Some("new summary"));
     }
 }
