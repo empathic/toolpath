@@ -130,7 +130,8 @@ impl ClaudeConvo {
     ///
     /// **Chain-aware:** if this session is part of a chain (file rotation),
     /// all segments are merged into a single `Conversation` with bridge
-    /// entries filtered out and `segment_ids` populated.
+    /// entries filtered out and `segment_ids` populated. The merged
+    /// `preamble` holds every segment's lines, oldest segment first.
     ///
     /// Use [`Self::read_segment`] for single-file access.
     pub fn read_conversation(&self, project_path: &str, session_id: &str) -> Result<Conversation> {
@@ -169,6 +170,7 @@ impl ClaudeConvo {
                 past_bridge = true;
                 merged.add_entry(entry.clone());
             }
+            merged.preamble.extend(convo.preamble);
         }
 
         merged.segment_ids = chain;
@@ -757,6 +759,36 @@ mod tests {
         // b0 (leading bridge) filtered; b2 (mid-segment foreign id) kept.
         let uuids: Vec<&str> = convo.entries.iter().map(|e| e.uuid.as_str()).collect();
         assert_eq!(uuids, vec!["a1", "b1", "b2"]);
+    }
+
+    #[test]
+    fn test_read_conversation_keeps_the_session_level_lines_of_a_chain() {
+        let (temp, manager) = setup_chained_conversations();
+        let project_dir = temp.path().join(".claude/projects/-test-project");
+        let append = |file: &str, line: &str| {
+            let path = project_dir.join(file);
+            let text = fs::read_to_string(&path).unwrap();
+            fs::write(&path, format!("{text}\n{line}")).unwrap();
+        };
+        append(
+            "session-a.jsonl",
+            r#"{"type":"ai-title","aiTitle":"old title","sessionId":"session-a"}"#,
+        );
+        append(
+            "session-c.jsonl",
+            r#"{"type":"ai-title","aiTitle":"new title","sessionId":"session-c"}"#,
+        );
+
+        let convo = manager
+            .read_conversation("/test/project", "session-a")
+            .unwrap();
+        let titles: Vec<&str> = convo
+            .preamble
+            .iter()
+            .filter_map(|line| line["aiTitle"].as_str())
+            .collect();
+        assert_eq!(titles, ["old title", "new title"]);
+        assert_eq!(convo.entries.len(), 3);
     }
 
     #[test]
