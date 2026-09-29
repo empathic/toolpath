@@ -103,8 +103,12 @@ impl ConversationReader {
 
             // Session-level lines, such as titles, carry no `uuid`.
             let title = match entry.entry_type.as_str() {
-                "custom-title" => Some((crate::constants::CUSTOM_TITLE, &mut custom_title)),
-                "ai-title" => Some((crate::constants::AI_TITLE, &mut ai_title)),
+                crate::constants::CUSTOM_TITLE_LINE_TYPE => {
+                    Some((crate::constants::CUSTOM_TITLE_KEY, &mut custom_title))
+                }
+                crate::constants::AI_TITLE_LINE_TYPE => {
+                    Some((crate::constants::AI_TITLE_KEY, &mut ai_title))
+                }
                 _ => None,
             };
             if let Some((key, newest)) = title {
