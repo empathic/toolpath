@@ -2,6 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.6 — 2026-09-29
+
+- **`toolpath-claude`** (0.13.6): `derive_path` writes the session's
+  title into `path.meta.title`: the newest `/rename`, else the newest
+  title Claude Code generated. A session with no title line keeps
+  `Claude session: <first 8 characters of the ID>`.
+
 ## path-cli 0.29.0 — 2026-09-25
 
 - **`toolpath-claude`** (0.13.5): the listing metadata carries a

@@ -8,6 +8,9 @@
 //! [`crate::provider::to_view`]; nothing provider-specific lives in this
 //! module.
 
+use crate::constants::{
+    AI_TITLE_KEY, AI_TITLE_LINE_TYPE, CUSTOM_TITLE_KEY, CUSTOM_TITLE_LINE_TYPE, LINE_TYPE,
+};
 use crate::provider::to_view;
 use crate::types::Conversation;
 use toolpath::v1::Path;
@@ -34,11 +37,31 @@ pub fn derive_path(conversation: &Conversation, config: &DeriveConfig) -> Path {
     });
     let cfg = toolpath_convo::DeriveConfig {
         base_uri,
-        title: Some(format!("Claude session: {}", prefix)),
+        title: Some(
+            find_session_title(conversation)
+                .unwrap_or_else(|| format!("Claude session: {}", prefix)),
+        ),
         include_thinking: config.include_thinking,
         ..Default::default()
     };
     toolpath_convo::derive_path(&view, &cfg)
+}
+
+/// Finds the session's title in its title lines: the newest name
+/// `/rename` set, else the newest name Claude Code generated. A blank
+/// title does not count.
+fn find_session_title(conversation: &Conversation) -> Option<String> {
+    let find_newest = |line_type: &str, key: &str| {
+        conversation.preamble.iter().rev().find_map(|line| {
+            if line.get(LINE_TYPE)?.as_str()? != line_type {
+                return None;
+            }
+            let title = line.get(key)?.as_str()?.trim();
+            (!title.is_empty()).then(|| title.to_string())
+        })
+    };
+    find_newest(CUSTOM_TITLE_LINE_TYPE, CUSTOM_TITLE_KEY)
+        .or_else(|| find_newest(AI_TITLE_LINE_TYPE, AI_TITLE_KEY))
 }
 
 /// Derive Toolpath Paths from multiple conversations in a project.
@@ -129,6 +152,36 @@ mod tests {
             last_activity: None,
             segment_ids: vec![],
         }
+    }
+
+    fn title_of(preamble: Vec<serde_json::Value>) -> Option<String> {
+        let convo = Conversation {
+            preamble,
+            ..make_convo()
+        };
+        derive_path(&convo, &DeriveConfig::default())
+            .meta
+            .unwrap()
+            .title
+    }
+
+    #[test]
+    fn derive_path_title_is_the_session_title() {
+        let ai = |title: &str| serde_json::json!({"type": "ai-title", "aiTitle": title});
+        let custom =
+            |title: &str| serde_json::json!({"type": "custom-title", "customTitle": title});
+        assert_eq!(
+            title_of(vec![]).as_deref(),
+            Some("Claude session: sess-1ab")
+        );
+        assert_eq!(
+            title_of(vec![ai("Build fix"), ai("Build fix, part two"), ai("  ")]).as_deref(),
+            Some("Build fix, part two")
+        );
+        assert_eq!(
+            title_of(vec![custom("release blocker"), ai("Build fix")]).as_deref(),
+            Some("release blocker")
+        );
     }
 
     #[test]

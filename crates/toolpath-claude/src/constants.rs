@@ -9,8 +9,17 @@ pub(crate) const SESSION_ID: &str = "sessionId";
 /// The working directory a line was recorded in.
 pub(crate) const CWD: &str = "cwd";
 
+/// The kind of a line.
+pub(crate) const LINE_TYPE: &str = "type";
+
+/// The kind of the line that holds the name `/rename` set.
+pub(crate) const CUSTOM_TITLE_LINE_TYPE: &str = "custom-title";
+
 /// The title on a `custom-title` line: the name `/rename` set.
-pub(crate) const CUSTOM_TITLE: &str = "customTitle";
+pub(crate) const CUSTOM_TITLE_KEY: &str = "customTitle";
+
+/// The kind of the line that holds the name Claude Code generated.
+pub(crate) const AI_TITLE_LINE_TYPE: &str = "ai-title";
 
 /// The title on an `ai-title` line: the name Claude Code generated.
-pub(crate) const AI_TITLE: &str = "aiTitle";
+pub(crate) const AI_TITLE_KEY: &str = "aiTitle";
