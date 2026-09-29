@@ -497,9 +497,8 @@ fn path_matches_project_under(path: &Path, project_under: &FsPath) -> bool {
 }
 
 fn base_fs_path(path: &Path) -> Option<PathBuf> {
-    let base = path.path.base.as_ref()?;
-    let fs = base.uri.strip_prefix("file://")?;
-    Some(canonicalize_or_self(FsPath::new(fs)))
+    let dir = crate::derive::parse_base_dir(path)?;
+    Some(canonicalize_or_self(FsPath::new(dir)))
 }
 
 fn canonicalize_or_self(p: &FsPath) -> PathBuf {

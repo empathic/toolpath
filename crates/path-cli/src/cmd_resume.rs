@@ -64,18 +64,41 @@ use crate::harness::Harness;
 
 #[cfg(all(unix, feature = "resume-remote"))]
 mod remote;
+#[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
+mod tui;
 
 #[derive(Args, Debug, Default)]
 pub struct ResumeArgs {
     /// Toolpath document to resume from. Accepted shapes: a Pathbase
     /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
     /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
-    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
+    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`). With no
+    /// input, a terminal UI lists the sessions in the document cache
+    /// (builds with the `resume-tui` feature only).
     #[cfg_attr(
-        all(unix, feature = "resume-remote"),
+        all(
+            unix,
+            feature = "resume-remote",
+            not(all(feature = "resume-tui", not(target_os = "emscripten")))
+        ),
         arg(required_unless_present = "session", conflicts_with = "session")
     )]
-    #[cfg_attr(not(all(unix, feature = "resume-remote")), arg(required = true))]
+    #[cfg_attr(
+        all(
+            unix,
+            feature = "resume-remote",
+            feature = "resume-tui",
+            not(target_os = "emscripten")
+        ),
+        arg(conflicts_with = "session")
+    )]
+    #[cfg_attr(
+        not(any(
+            all(unix, feature = "resume-remote"),
+            all(feature = "resume-tui", not(target_os = "emscripten"))
+        )),
+        arg(required = true)
+    )]
     pub input: Option<String>,
 
     /// Working directory to run the resumed harness from. Defaults to
@@ -179,6 +202,10 @@ pub(crate) fn run_remote(
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
+    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
+    if args.input.is_none() {
+        return tui::run(args, exec);
+    }
     let ResolvedInput {
         graph,
         source_harness,
@@ -1159,6 +1186,90 @@ mod tests {
 
     fn scoped_home_for_resume() -> ScopedHomeForResume {
         ScopedHomeForResume::new()
+    }
+
+    /// Environment variables set for the guard's lifetime.
+    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
+    struct ScopedVars(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
+    impl ScopedVars {
+        fn set(vars: &[(&'static str, &std::path::Path)]) -> Self {
+            Self(
+                vars.iter()
+                    .map(|(name, value)| {
+                        let prev = std::env::var_os(name);
+                        unsafe {
+                            std::env::set_var(name, value);
+                        }
+                        (*name, prev)
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
+    impl Drop for ScopedVars {
+        fn drop(&mut self) {
+            for (name, prev) in &self.0 {
+                unsafe {
+                    match prev {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
+    #[test]
+    fn resume_with_no_input_syncs_the_cache_and_resumes_the_chosen_session() {
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let project_dir = std::fs::canonicalize(project.path()).unwrap();
+        let claude_dir = home.path().join(".claude");
+        let _vars = ScopedVars::set(&[
+            ("HOME", home.path()),
+            ("CLAUDE_CONFIG_DIR", &claude_dir),
+            (
+                crate::config::CONFIG_DIR_ENV,
+                &home.path().join(".toolpath"),
+            ),
+        ]);
+        let _path_guard = ScopedPathForResume::with_binaries(&["claude"]);
+
+        let session_id = "11111111-2222-3333-4444-555555555555";
+        let session_dir = claude_dir.join("projects/-work-project");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let lines = [
+            serde_json::json!({"type": "user", "uuid": "u1", "timestamp": "2026-01-02T00:00:00Z", "cwd": project_dir, "sessionId": session_id, "message": {"role": "user", "content": "Fix the build"}}),
+            serde_json::json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1", "timestamp": "2026-01-02T00:00:01Z", "cwd": project_dir, "sessionId": session_id, "message": {"role": "assistant", "content": "Fixed."}}),
+        ];
+        std::fs::write(
+            session_dir.join(format!("{session_id}.jsonl")),
+            lines.map(|line| line.to_string()).join("\n"),
+        )
+        .unwrap();
+
+        let recorder = RecordingExec::default();
+        tui::run_with_chooser(
+            ResumeArgs::default(),
+            &recorder,
+            &tui::FixedChooser {
+                title: "Claude session: 11111111".to_string(),
+            },
+        )
+        .unwrap();
+
+        let cap = recorder.captured();
+        assert_eq!(cap.binary, "claude");
+        assert_eq!(cap.args[0], "-r");
+        assert_eq!(cap.cwd, project_dir);
     }
 
     struct ScopedPathForResume {

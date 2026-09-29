@@ -863,12 +863,7 @@ fn share_explicit(
 /// (codex/opencode/copilot/cursor), which carry no `--project`, feed the
 /// configured-repo lookup.
 fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
-    let base = doc.single_path()?.path.base.as_ref()?;
-    let dir = base.uri.strip_prefix("file://")?;
-    if dir.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(dir))
+    crate::derive::parse_base_dir(doc.single_path()?).map(PathBuf::from)
 }
 
 /// Where an upload goes: the repo (`None` = the pathstash default) and

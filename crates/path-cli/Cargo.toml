@@ -1,6 +1,6 @@
 [package]
 name = "path-cli"
-version = "0.28.0"
+version = "0.29.0"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -76,6 +76,10 @@ skim = { version = "4.7", default-features = false, features = ["frizbee"], opti
 # crate directly to build a tab regex. Skim already pulls `regex` in
 # transitively, so this just makes it explicit.
 regex = { version = "1", optional = true }
+# Terminal UI for `path resume` with no input (the `resume-tui`
+# feature). skim pulls the same ratatui and crossterm versions in, so
+# the default build's dependency set does not grow.
+ratatui = { version = "0.30", optional = true }
 
 [target.'cfg(target_os = "emscripten")'.dependencies]
 toolpath-claude = { workspace = true }
@@ -97,6 +101,9 @@ embedded-picker = ["dep:skim", "dep:regex"]
 # `--cwd`, `path resume --remote`, `--dry-run`, and the ssh transport
 # module. Pulls in the in-process SSH client.
 resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url", "dep:typed-path", "dep:crossterm"]
+# `path resume` with no input: a terminal UI over the sessions in the
+# document cache. Experimental, off by default.
+resume-tui = ["dep:ratatui", "dep:crossterm"]
 
 [dev-dependencies]
 assert_cmd = "2"
