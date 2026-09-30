@@ -73,7 +73,6 @@ pub struct ResumeArgs {
     /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
     /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`). With no
     /// input, a terminal UI lists the sessions in the document cache.
-    #[cfg_attr(all(unix, feature = "resume-remote"), arg(conflicts_with = "session"))]
     pub input: Option<String>,
 
     /// Working directory to run the resumed harness from. Defaults to
