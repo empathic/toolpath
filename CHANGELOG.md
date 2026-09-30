@@ -2,6 +2,15 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.29.0 — 2026-09-29
+
+- **`path-cli`** (0.29.0): `path resume` with no input opens a
+  terminal UI over the agent sessions in the document cache. It syncs
+  the cache, shows the sessions by project over a time window (`t`)
+  with lanes, filters on `/`, and resumes the chosen session in its
+  source harness and its own directory.
+- **`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.28.0 — 2026-09-16
 
 - **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>

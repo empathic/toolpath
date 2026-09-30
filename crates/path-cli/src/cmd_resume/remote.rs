@@ -46,9 +46,14 @@ const FLAG_NO: &str = "no";
 /// The facts `probe_project_dir.sh` prints, in order.
 const DIR_FACT_TAGS: [&str; 4] = ["TP_PWD", "TP_SESSION", "TP_PANE_DEAD", "TP_TARGET"];
 
+/// The clap group of the two ways to name the document of a remote
+/// resume: `<input>` or `--session`. A remote resume takes exactly one.
+const DOCUMENT_GROUP: &str = "document";
+
 /// The `path resume` flags for a remote resume.
 #[derive(clap::Args, Debug, Default)]
 #[command(next_help_heading = "Remote resume")]
+#[command(group(clap::ArgGroup::new(DOCUMENT_GROUP).args(["input", "session"])))]
 pub struct RemoteArgs {
     /// Resume on this ssh destination instead of this machine
     /// (`user@host` or `user@host:port`; Claude only). With `--remote`,
@@ -58,7 +63,12 @@ pub struct RemoteArgs {
     /// uploaded when the remote lacks it, `claude -r` starts under tmux,
     /// and this terminal attaches; a live tmux session or a present
     /// session file on the remote is used as is. Detach with ctrl-b d.
-    #[arg(long = "remote", value_name = "DEST", value_parser = Destination::parse)]
+    #[arg(
+        long = "remote",
+        value_name = "DEST",
+        value_parser = Destination::parse,
+        requires = DOCUMENT_GROUP
+    )]
     pub dest: Option<Destination>,
 
     /// Stop after printing the plan. Only with --remote.
