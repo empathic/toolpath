@@ -60,7 +60,6 @@ impl Chooser for FixedChooser {
             .sessions()
             .iter()
             .find(|session| session.title == self.title)
-            .cloned()
             .with_context(|| format!("no session with the title {:?}", self.title))?;
         Ok(Some(model.selection(session)))
     }
@@ -123,14 +122,17 @@ pub(crate) fn run_with_chooser(
 /// Resumes the chosen session through `path resume <cache id>`, in its
 /// source harness when that is installed.
 fn resume(selection: Selection, args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
-    let Selection { session, dir } = selection;
-    let source = session
-        .harness
+    let Selection {
+        harness,
+        cache_id,
+        dir,
+    } = selection;
+    let source = harness
         .harness()
         .filter(|harness| super::harness_available(*harness, None));
     super::run_with_strategy(
         ResumeArgs {
-            input: Some(session.cache_id),
+            input: Some(cache_id),
             cwd: Some(dir.into()),
             harness: args.harness.or(source),
             ..args

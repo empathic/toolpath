@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, FixedOffset, Utc};
 
 use super::landing::{self, Action, Page};
+use crate::artifact::ArtifactType;
 use crate::cache::SessionSummary;
 
 /// `session`'s title or directory contains `filter`, case aside.
@@ -39,7 +40,9 @@ pub enum Effect {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
-    pub session: SessionSummary,
+    pub harness: ArtifactType,
+    /// The cached document the resume reads.
+    pub cache_id: String,
     /// The directory the resume runs in: the session's own, or `here`.
     pub dir: String,
 }
@@ -222,13 +225,17 @@ impl Model {
 
     /// The resume of `session`: in its own directory when that exists
     /// and `-C` named none, else `here`.
-    pub fn selection(&self, session: SessionSummary) -> Selection {
+    pub fn selection(&self, session: &SessionSummary) -> Selection {
         let dir = if session.dir_exists && !self.here_pinned {
             session.dir.clone()
         } else {
             self.here.clone()
         };
-        Selection { session, dir }
+        Selection {
+            harness: session.harness,
+            cache_id: session.cache_id.clone(),
+            dir,
+        }
     }
 
     pub fn update(&mut self, key: Key) -> Option<Effect> {
@@ -242,7 +249,7 @@ impl Model {
             Key::End => self.cursor = last,
             Key::Enter => match items.get(self.cursor) {
                 Some(Action::Session(i)) => {
-                    return Some(Effect::Resume(self.selection(self.sessions[*i].clone())));
+                    return Some(Effect::Resume(self.selection(&self.sessions[*i])));
                 }
                 Some(Action::More(dir)) => {
                     self.expanded.insert(dir.clone());
@@ -276,7 +283,6 @@ impl Model {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::artifact::ArtifactType;
 
     pub(crate) fn now() -> DateTime<Utc> {
         "2026-09-23T12:00:00Z".parse().unwrap()
@@ -293,6 +299,8 @@ pub(crate) mod tests {
             title: title.to_string(),
             started_at: Some(last - chrono::Duration::hours(1)),
             last_activity: Some(last),
+            turn_count: 2,
+            model: None,
         }
     }
 
@@ -349,7 +357,7 @@ pub(crate) mod tests {
         let Some(Effect::Resume(selection)) = m.update(Key::Enter) else {
             panic!("enter on a session resumes it");
         };
-        assert_eq!(selection.session.title, "b");
+        assert_eq!(selection.cache_id, "claude-b");
         assert_eq!(selection.dir, "/p");
     }
 
@@ -359,9 +367,9 @@ pub(crate) mod tests {
             dir_exists: false,
             ..session("/gone", "a", 1)
         };
-        assert_eq!(model(vec![]).selection(gone).dir, "/work/here");
+        assert_eq!(model(vec![]).selection(&gone).dir, "/work/here");
         let pinned = model(vec![]).with_here_pinned(true);
-        assert_eq!(pinned.selection(session("/p", "a", 1)).dir, "/work/here");
+        assert_eq!(pinned.selection(&session("/p", "a", 1)).dir, "/work/here");
     }
 
     #[test]
