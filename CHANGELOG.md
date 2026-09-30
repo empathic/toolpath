@@ -2,6 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.30.0 — 2026-09-30
+
+- **`path-cli`** (0.30.0): the terminal UI of `path resume` shows a
+  detail pane for the session under the cursor: when it was last
+  active, how long it ran, and its project.
+- **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a
