@@ -79,29 +79,6 @@ scripts/quality_gates.sh          # or: just ci; --verbose streams each gate's o
 
 Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
 
-If `cargo` is not on your PATH, `flake.nix` carries a devShell with everything the
-justfile and `scripts/quality_gates.sh` assume — the Rust toolchain plus shellcheck,
-node/pnpm, jq, curl and fzf, with openssl wired up for `openssl-sys`:
-
-```bash
-nix develop                                   # or: nix develop --command <cmd>
-nix develop --command ./scripts/quality_gates.sh
-```
-
-The shell's Rust comes from nixpkgs and is **ahead of** the 1.94.0 pin — `rust-toolchain.toml`
-is read by rustup, which the shell does not provide. Clippy gains lints between releases, so
-green in the shell is evidence, not proof; the pinned toolchain is the real gate.
-
-The same flake builds the binary and exports a home-manager module, so a nix consumer can
-take this repo as a flake input and follow a ref of it instead of pinning a rev by hand:
-
-```bash
-nix build .#toolpath          # → result/bin/path; version read from crates/path-cli/Cargo.toml
-# programs.toolpath.{enable,package,devBin} via homeManagerModules.toolpath (modules/toolpath.nix)
-```
-
-The package skips the workspace tests (`doCheck = false`); CI is the gate.
-
 ## CLI usage
 
 The binary is called `path` (package: `path-cli`; the older `toolpath-cli` package is a deprecated shim that still installs the same binary for users running `cargo install toolpath-cli`).
