@@ -64,7 +64,6 @@ use crate::harness::Harness;
 
 #[cfg(all(unix, feature = "resume-remote"))]
 mod remote;
-#[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
 mod tui;
 
 #[derive(Args, Debug, Default)]
@@ -73,32 +72,8 @@ pub struct ResumeArgs {
     /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
     /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
     /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`). With no
-    /// input, a terminal UI lists the sessions in the document cache
-    /// (builds with the `resume-tui` feature only).
-    #[cfg_attr(
-        all(
-            unix,
-            feature = "resume-remote",
-            not(all(feature = "resume-tui", not(target_os = "emscripten")))
-        ),
-        arg(required_unless_present = "session", conflicts_with = "session")
-    )]
-    #[cfg_attr(
-        all(
-            unix,
-            feature = "resume-remote",
-            feature = "resume-tui",
-            not(target_os = "emscripten")
-        ),
-        arg(conflicts_with = "session")
-    )]
-    #[cfg_attr(
-        not(any(
-            all(unix, feature = "resume-remote"),
-            all(feature = "resume-tui", not(target_os = "emscripten"))
-        )),
-        arg(required = true)
-    )]
+    /// input, a terminal UI lists the sessions in the document cache.
+    #[cfg_attr(all(unix, feature = "resume-remote"), arg(conflicts_with = "session"))]
     pub input: Option<String>,
 
     /// Working directory to run the resumed harness from. Defaults to
@@ -202,7 +177,6 @@ pub(crate) fn run_remote(
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
-    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
     if args.input.is_none() {
         return tui::run(args, exec);
     }
@@ -1189,10 +1163,8 @@ mod tests {
     }
 
     /// Environment variables set for the guard's lifetime.
-    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
     struct ScopedVars(Vec<(&'static str, Option<std::ffi::OsString>)>);
 
-    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
     impl ScopedVars {
         fn set(vars: &[(&'static str, &std::path::Path)]) -> Self {
             Self(
@@ -1209,7 +1181,6 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
     impl Drop for ScopedVars {
         fn drop(&mut self) {
             for (name, prev) in &self.0 {
@@ -1223,7 +1194,6 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "resume-tui", not(target_os = "emscripten")))]
     #[test]
     fn resume_with_no_input_syncs_the_cache_and_resumes_the_chosen_session() {
         let _env = crate::config::TEST_ENV_LOCK
