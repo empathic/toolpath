@@ -500,7 +500,7 @@ mod tests {
             session("/home/u/toolpath", "fix the parser", 1),
             session("/home/u/pathbase", "write the docs", 30),
         ]);
-        let rows = paint(&m, 80, 30);
+        let rows = paint(&m, 80, 40);
         assert_eq!(rows[0], " path resume");
         assert!(rows[2].contains("today") && rows[2].contains("7 days"));
         assert!(rows[4].starts_with(" ~/toolpath"), "{:?}", rows[4]);
@@ -511,7 +511,7 @@ mod tests {
         assert!(rows[14].starts_with("›  fix the parser"), "{:?}", rows[14]);
         assert!(rows[14].ends_with("1h ago      1h00"), "{:?}", rows[14]);
         assert!(rows[17].starts_with("   write the docs"), "{:?}", rows[17]);
-        assert_eq!(rows[29], " enter resume  t time  / filter  q quit");
+        assert_eq!(rows[39], " enter resume  t time  / filter  q quit");
     }
 
     #[test]
@@ -526,13 +526,22 @@ mod tests {
 
     #[test]
     fn the_pane_shows_the_session_under_the_cursor() {
-        let m = model(vec![session("/home/u/toolpath", "Parser fix", 3)]);
-        let rows = paint(&m, 60, 30);
+        let m = model(vec![crate::cache::SessionSummary {
+            turn_count: 12,
+            model: Some("claude-opus-5".to_string()),
+            ..session("/home/u/toolpath", "Parser fix", 3)
+        }]);
+        let rows = paint(&m, 60, 36);
         let pane = rows.iter().position(|row| row == " Parser fix").unwrap();
         assert_eq!(rows[pane - 1], "─".repeat(60));
         assert_eq!(
             rows[pane..pane + 4],
-            [" Parser fix", " 09:00 · 1h00", "", " Project  ~/toolpath",]
+            [
+                " Parser fix",
+                " Wed 09:00 · 1h00 · 12 turns · claude-opus-5",
+                "",
+                " Project  ~/toolpath",
+            ]
         );
         assert_eq!(rows[pane + 4], "");
         assert!(rows[4].starts_with(" ~/toolpath"), "lanes: {:?}", rows[4]);
@@ -545,7 +554,7 @@ mod tests {
         assert!(rows[3].starts_with("─"), "{:?}", rows[3]);
         assert_eq!(rows[14], " fix the parser");
         assert_eq!(rows[17], " Project  ~/toolpath");
-        assert_eq!(paint(&m, 60, 19)[13], "");
+        assert!(!paint(&m, 60, 19).contains(&" Project  ~/toolpath".to_string()));
     }
 
     #[test]

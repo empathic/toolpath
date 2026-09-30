@@ -36,7 +36,8 @@ pub struct Page {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Detail {
     pub name: String,
-    /// When the session was last active, and how long it ran.
+    /// When the session was last active, how long it ran, how many
+    /// turns it has, and its model.
     pub facts: String,
     pub project: String,
 }
@@ -152,25 +153,30 @@ fn age_days(m: &Model, t: DateTime<Utc>) -> i64 {
     (day(m.now()) - day(t)).num_days()
 }
 
-/// `HH:MM` today, `Www HH:MM` within the week, `MM-DD` within the
-/// year, else `YYYY-MM-DD`; `-` when unknown. Local time.
+/// `Www HH:MM` within the week, `MM-DD` within the year, else
+/// `YYYY-MM-DD`; `-` when unknown. Local time.
 fn when(m: &Model, t: Option<DateTime<Utc>>) -> String {
     let Some(t) = t else {
         return "-".to_string();
     };
     let local = t.with_timezone(&m.tz());
     match age_days(m, t) {
-        i64::MIN..=0 => local.format("%H:%M").to_string(),
-        1..=6 => local.format("%a %H:%M").to_string(),
+        i64::MIN..=6 => local.format("%a %H:%M").to_string(),
         7..=364 => local.format("%m-%d").to_string(),
         _ => local.format("%Y-%m-%d").to_string(),
     }
 }
 
 fn detail(m: &Model, s: &SessionSummary) -> Detail {
+    let mut facts = vec![
+        when(m, s.last_activity),
+        duration(s),
+        plural(s.turn_count, "turn", "turns"),
+    ];
+    facts.extend(s.model.clone());
     Detail {
         name: one_line(&s.title),
-        facts: [when(m, s.last_activity), duration(s)].join(" · "),
+        facts: facts.join(" · "),
         project: tilde(&s.dir, m.home()),
     }
 }
@@ -419,21 +425,28 @@ mod tests {
 
     #[test]
     fn the_detail_is_the_session_under_the_cursor() {
-        let first = session("/home/u/p", "Parser fix", 3);
-        let second = session("/home/u/p", "Greeting", 30);
+        let first = SessionSummary {
+            turn_count: 12,
+            model: Some("claude-opus-5".to_string()),
+            ..session("/home/u/p", "Parser fix", 3)
+        };
+        let second = SessionSummary {
+            turn_count: 1,
+            ..session("/home/u/p", "Greeting", 30)
+        };
         let mut m = model(vec![first, second]);
         assert_eq!(
             m.page().detail,
             Some(Detail {
                 name: "Parser fix".to_string(),
-                facts: "09:00 · 1h00".to_string(),
+                facts: "Wed 09:00 · 1h00 · 12 turns · claude-opus-5".to_string(),
                 project: "~/p".to_string(),
             })
         );
 
         m.update(Key::Down);
         let detail = m.page().detail.unwrap();
-        assert_eq!(detail.facts, "Tue 06:00 · 1h00");
+        assert_eq!(detail.facts, "Tue 06:00 · 1h00 · 1 turn");
     }
 
     #[test]

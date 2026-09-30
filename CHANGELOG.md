@@ -2,6 +2,13 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.31.0 — 2026-09-30
+
+- **`path-cli`** (0.31.0): the detail pane of `path resume` shows the
+  session's turn count and its model, and the day of the week for
+  every session of the last week, today included.
+- **`toolpath-cli`** (0.31.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.30.0 — 2026-09-30
 
 - **`path-cli`** (0.30.0): the terminal UI of `path resume` shows a

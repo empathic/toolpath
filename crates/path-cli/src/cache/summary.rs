@@ -6,6 +6,7 @@ use std::path::Path as FsPath;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use toolpath::v1::{Graph, Path};
+use toolpath_convo::Role;
 
 use crate::artifact::ArtifactType;
 
@@ -29,6 +30,10 @@ pub(crate) struct SessionSummary {
     pub title: String,
     pub started_at: Option<DateTime<Utc>>,
     pub last_activity: Option<DateTime<Utc>>,
+    /// The turns on the ancestry of the head.
+    pub turn_count: usize,
+    /// The model of the last agent turn.
+    pub model: Option<String>,
 }
 
 impl SessionSummary {
@@ -65,6 +70,13 @@ impl SessionSummary {
                 .iter()
                 .filter_map(|step| step.step.timestamp.parse::<DateTime<Utc>>().ok())
         };
+        let head_ancestry = toolpath::v1::query::ancestors(&path.steps, &path.path.head);
+        let conversation = toolpath_convo::extract_conversation(path);
+        let turns: Vec<_> = conversation
+            .turns
+            .iter()
+            .filter(|turn| head_ancestry.contains(&turn.id))
+            .collect();
         Some(Self {
             harness,
             cache_id: cache_id.to_string(),
@@ -83,6 +95,12 @@ impl SessionSummary {
                 .unwrap_or_default(),
             started_at: times().min(),
             last_activity: times().max(),
+            turn_count: turns.len(),
+            model: turns
+                .iter()
+                .rev()
+                .find(|turn| turn.role == Role::Assistant)
+                .and_then(|turn| turn.model.clone()),
         })
     }
 }
@@ -92,37 +110,49 @@ mod tests {
     use super::*;
     use toolpath_convo::{ConversationView, Role, Turn};
 
+    /// The `n`th turn of a session, after turn `n - 1`.
+    fn turn(n: usize, role: Role, text: &str, timestamp: &str) -> Turn {
+        Turn {
+            id: format!("t{n}"),
+            parent_id: n.checked_sub(1).map(|p| format!("t{p}")),
+            group_id: None,
+            role,
+            timestamp: timestamp.to_string(),
+            text: text.to_string(),
+            thinking: None,
+            tool_uses: vec![],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            attributed_token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+        }
+    }
+
     /// The document of a session with a prompt and an answer, as a
     /// derive writes it, with `title` when the session has one.
     fn derive(title: Option<&str>, turns: &[(Role, &str, &str)]) -> Path {
-        let view = ConversationView {
-            id: "1a2b3c4d-0000-0000-0000-000000000000".to_string(),
-            provider_id: Some("claude-code".to_string()),
-            turns: turns
+        derive_turns(
+            title,
+            turns
                 .iter()
                 .enumerate()
-                .map(|(n, (role, text, timestamp))| Turn {
-                    id: format!("t{n}"),
-                    parent_id: n.checked_sub(1).map(|p| format!("t{p}")),
-                    group_id: None,
-                    role: role.clone(),
-                    timestamp: timestamp.to_string(),
-                    text: text.to_string(),
-                    thinking: None,
-                    tool_uses: vec![],
-                    model: None,
-                    stop_reason: None,
-                    token_usage: None,
-                    attributed_token_usage: None,
-                    environment: None,
-                    delegations: vec![],
-                    file_mutations: vec![],
-                })
+                .map(|(n, (role, text, timestamp))| turn(n, role.clone(), text, timestamp))
                 .collect(),
+        )
+    }
+
+    fn derive_turns(title: Option<&str>, turns: Vec<Turn>) -> Path {
+        let conversation = ConversationView {
+            id: "1a2b3c4d-0000-0000-0000-000000000000".to_string(),
+            provider_id: Some("claude-code".to_string()),
+            turns,
             ..Default::default()
         };
         toolpath_convo::derive_path(
-            &view,
+            &conversation,
             &toolpath_convo::DeriveConfig {
                 base_uri: Some("file:///work/project".to_string()),
                 title: title.map(str::to_string),
@@ -151,8 +181,34 @@ mod tests {
                 title: "Parser fix".to_string(),
                 started_at: Some("2026-09-23T10:00:00Z".parse().unwrap()),
                 last_activity: Some("2026-09-23T10:30:00Z".parse().unwrap()),
+                turn_count: 3,
+                model: None,
             }
         );
+    }
+
+    #[test]
+    fn the_facts_come_from_the_turns_on_the_live_line() {
+        let mut first = turn(1, Role::Assistant, "Started.", "2026-09-23T10:10:00Z");
+        first.model = Some("claude-opus-4".to_string());
+        let mut answer = turn(2, Role::Assistant, "Done.", "2026-09-23T10:30:00Z");
+        answer.model = Some("claude-opus-5".to_string());
+        let mut path = derive_turns(
+            None,
+            vec![
+                turn(0, Role::User, "fix it", "2026-09-23T10:00:00Z"),
+                first,
+                answer,
+            ],
+        );
+        // A dead end: a turn off the head's ancestry.
+        let mut dead = path.steps[0].clone();
+        dead.step.id = "dead".to_string();
+        path.steps.push(dead);
+
+        let summary = SessionSummary::from_path(ArtifactType::Claude, "claude-x", &path).unwrap();
+        assert_eq!(summary.turn_count, 3);
+        assert_eq!(summary.model.as_deref(), Some("claude-opus-5"));
     }
 
     #[test]
