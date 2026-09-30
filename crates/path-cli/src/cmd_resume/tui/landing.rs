@@ -6,7 +6,8 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, FixedOffset, Utc};
 
-use super::model::{Model, Session, Window};
+use super::model::{Model, Window};
+use crate::cache::SessionSummary;
 
 /// What a selectable line does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,7 +212,7 @@ fn ago(t: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
 }
 
 /// `45s`, `12m`, `2h10`, `3d`; `-` when either end is unknown.
-fn duration(s: &Session) -> String {
+fn duration(s: &SessionSummary) -> String {
     let (Some(start), Some(end)) = (s.started_at, s.last_activity) else {
         return "-".to_string();
     };
@@ -416,7 +417,7 @@ mod tests {
 
     #[test]
     fn a_project_shows_its_newest_rows_until_enter_on_the_more_line() {
-        let rows: Vec<Session> = (1..=7)
+        let rows: Vec<SessionSummary> = (1..=7)
             .map(|n| session("/p", &format!("s{n}"), n))
             .collect();
         let mut m = model(rows);
@@ -442,7 +443,7 @@ mod tests {
 
     #[test]
     fn the_filter_lifts_the_row_limit() {
-        let rows: Vec<Session> = (1..=7)
+        let rows: Vec<SessionSummary> = (1..=7)
             .map(|n| session("/p", &format!("s{n}"), n))
             .collect();
         let mut m = model(rows);

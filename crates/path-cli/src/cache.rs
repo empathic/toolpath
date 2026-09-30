@@ -11,6 +11,11 @@ use toolpath::v1::Graph;
 
 use crate::config::config_dir;
 
+#[cfg(not(target_os = "emscripten"))]
+mod summary;
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) use summary::SessionSummary;
+
 /// An entry surfaced by `list_cached`.
 #[derive(Debug, Clone)]
 pub(crate) struct CacheEntry {

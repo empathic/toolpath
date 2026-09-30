@@ -8,29 +8,12 @@ use std::collections::HashSet;
 use chrono::{DateTime, FixedOffset, Utc};
 
 use super::landing::{self, Action, Page};
-use crate::artifact::ArtifactType;
+use crate::cache::SessionSummary;
 
-/// One session in the document cache: the facts a row shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Session {
-    pub harness: ArtifactType,
-    /// The cached document a resume reads.
-    pub cache_id: String,
-    /// The directory the session ran in; empty when the document names
-    /// none.
-    pub dir: String,
-    /// `dir` is a directory on this machine, so a resume can run there.
-    pub dir_exists: bool,
-    pub title: String,
-    pub started_at: Option<DateTime<Utc>>,
-    pub last_activity: Option<DateTime<Utc>>,
-}
-
-impl Session {
-    fn matches(&self, filter: &str) -> bool {
-        let filter = filter.to_lowercase();
-        self.title.to_lowercase().contains(&filter) || self.dir.to_lowercase().contains(&filter)
-    }
+/// `session`'s title or directory contains `filter`, case aside.
+fn matches(session: &SessionSummary, filter: &str) -> bool {
+    let filter = filter.to_lowercase();
+    session.title.to_lowercase().contains(&filter) || session.dir.to_lowercase().contains(&filter)
 }
 
 /// A key press, already mapped from the terminal's event type.
@@ -56,7 +39,7 @@ pub enum Effect {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
-    pub session: Session,
+    pub session: SessionSummary,
     /// The directory the resume runs in: the session's own, or `here`.
     pub dir: String,
 }
@@ -134,7 +117,7 @@ impl Window {
 
 #[derive(Debug, Clone)]
 pub struct Model {
-    sessions: Vec<Session>,
+    sessions: Vec<SessionSummary>,
     /// The directory `path resume` runs from (`-C`, else the shell cwd).
     here: String,
     /// `-C` was given: `here` is the resume directory, not the session's.
@@ -159,7 +142,7 @@ impl Model {
     /// `sessions` in any order; `here` the directory `path resume` runs
     /// from; `now` the moment the page counts against.
     pub fn new(
-        sessions: Vec<Session>,
+        sessions: Vec<SessionSummary>,
         here: String,
         home: Option<String>,
         now: DateTime<Utc>,
@@ -189,7 +172,7 @@ impl Model {
         self
     }
 
-    pub fn sessions(&self) -> &[Session] {
+    pub fn sessions(&self) -> &[SessionSummary] {
         &self.sessions
     }
     pub fn here(&self) -> &str {
@@ -218,7 +201,7 @@ impl Model {
     }
 
     /// `session` was active in the window.
-    pub fn in_window(&self, session: &Session) -> bool {
+    pub fn in_window(&self, session: &SessionSummary) -> bool {
         session
             .last_activity
             .is_some_and(|last| last >= self.window.start(self.now, self.tz))
@@ -226,9 +209,9 @@ impl Model {
 
     /// `session` is on the page: a match of the open filter, else a
     /// session in the window.
-    pub fn shows(&self, session: &Session) -> bool {
+    pub fn shows(&self, session: &SessionSummary) -> bool {
         match &self.filter {
-            Some(text) if !text.is_empty() => session.matches(text),
+            Some(text) if !text.is_empty() => matches(session, text),
             _ => self.in_window(session),
         }
     }
@@ -239,7 +222,7 @@ impl Model {
 
     /// The resume of `session`: in its own directory when that exists
     /// and `-C` named none, else `here`.
-    pub fn selection(&self, session: Session) -> Selection {
+    pub fn selection(&self, session: SessionSummary) -> Selection {
         let dir = if session.dir_exists && !self.here_pinned {
             session.dir.clone()
         } else {
@@ -293,15 +276,16 @@ impl Model {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::artifact::ArtifactType;
 
     pub(crate) fn now() -> DateTime<Utc> {
         "2026-09-23T12:00:00Z".parse().unwrap()
     }
 
     /// A session in `dir` that ran for 1 hour and ended `hours_ago`.
-    pub(crate) fn session(dir: &str, title: &str, hours_ago: i64) -> Session {
+    pub(crate) fn session(dir: &str, title: &str, hours_ago: i64) -> SessionSummary {
         let last = now() - chrono::Duration::hours(hours_ago);
-        Session {
+        SessionSummary {
             harness: ArtifactType::Claude,
             cache_id: format!("claude-{title}"),
             dir: dir.to_string(),
@@ -312,7 +296,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn model(sessions: Vec<Session>) -> Model {
+    pub(crate) fn model(sessions: Vec<SessionSummary>) -> Model {
         Model::new(
             sessions,
             "/work/here".to_string(),
@@ -371,7 +355,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_resume_runs_here_when_the_directory_is_gone_or_c_names_one() {
-        let gone = Session {
+        let gone = SessionSummary {
             dir_exists: false,
             ..session("/gone", "a", 1)
         };
