@@ -259,12 +259,10 @@ fn cache_id_input_loads_and_projects() {
     .unwrap();
 
     let resume_args = ResumeArgs {
-        input: cache_id.to_string(),
+        input: Some(cache_id.to_string()),
         cwd: Some(cwd.path().to_path_buf()),
         harness: Some(Harness::Claude),
-        no_cache: false,
-        force: false,
-        url: None,
+        ..Default::default()
     };
 
     let recorder = RecordingExec::default();
@@ -317,7 +315,7 @@ fn agentless_path_returns_clear_error() {
     let _path = ScopedPath::with_binary("claude");
     let cwd = tempfile::tempdir().unwrap();
 
-    // human:* actor — should be rejected by ensure_path_with_agent.
+    // human:* actor — should be rejected by require_an_agent_turn.
     let path = make_convo_path("human:alex", "claude-code://noop");
     let doc_file = write_path_to_temp(cwd.path(), path);
 

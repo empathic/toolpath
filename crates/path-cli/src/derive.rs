@@ -13,6 +13,7 @@ use crate::cache::make_id;
 use crate::config::Config;
 use crate::providers;
 
+#[derive(Debug)]
 pub(crate) struct DerivedDoc {
     pub(crate) cache_id: String,
     pub(crate) doc: Graph,

@@ -633,3 +633,23 @@ fn query_project_under_scopes_sync_and_read() {
         .stdout(predicate::str::contains("0"))
         .stderr(predicate::str::contains("synced").not());
 }
+
+#[test]
+fn an_unknown_source_warns_instead_of_silently_returning_nothing() {
+    let cfg = tempfile::tempdir().unwrap();
+    seed(
+        cfg.path(),
+        "claude-abc",
+        r#"{"graph":{"id":"g"},"paths":[]}"#,
+    );
+
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["query", "--no-sync", "--source", "objekt", "length"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("0"))
+        .stderr(predicate::str::contains(
+            "no cached documents with source `objekt`",
+        ));
+}

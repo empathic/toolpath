@@ -4,6 +4,13 @@
 //! `$CONFIG_DIR/documents/` under `<source>-<inner-id>.json` and prints the
 //! path to stdout. `--no-cache` sends the JSON to stdout instead, for shell
 //! composition with `render | query | validate`.
+//!
+//! `p import claude --remote <user@host> --session <id>` reads the
+//! session off an ssh host instead of `~/.claude`; the flow lives in
+//! `remote` and compiles only with the `resume-remote` cargo feature.
+
+#[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
+mod remote;
 
 #[cfg(not(target_os = "emscripten"))]
 use crate::fuzzy;
@@ -87,6 +94,10 @@ pub enum ImportSource {
         /// Process all sessions in the project
         #[arg(long)]
         all: bool,
+
+        #[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
+        #[command(flatten)]
+        remote: remote::RemoteImportArgs,
     },
     /// Import from Gemini CLI conversation logs
     Gemini {
@@ -280,10 +291,28 @@ fn derive(source: ImportSource, config: &Config) -> Result<Vec<DerivedDoc>> {
             no_ci,
             no_comments,
         } => derive_github(url, repo, pr, no_ci, no_comments),
+        #[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
+        ImportSource::Claude {
+            project,
+            session: Some(session),
+            remote:
+                remote::RemoteImportArgs {
+                    dest: Some(dest),
+                    cwd,
+                },
+            ..
+        } => Ok(vec![remote::derive_from_args(
+            project,
+            &session,
+            &dest,
+            cwd.as_deref(),
+            config,
+        )?]),
         ImportSource::Claude {
             project,
             session,
             all,
+            ..
         } => derive_claude(project, session, all, config),
         ImportSource::Gemini {
             project,

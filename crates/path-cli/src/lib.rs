@@ -1,6 +1,8 @@
 pub mod artifact;
 mod cache;
 #[cfg(not(target_os = "emscripten"))]
+mod claude_session;
+#[cfg(not(target_os = "emscripten"))]
 mod cmd_auth;
 mod cmd_cache;
 #[cfg(not(target_os = "emscripten"))]
@@ -36,6 +38,8 @@ mod fuzzy;
 pub mod harness;
 mod io;
 pub mod kinds;
+#[cfg(not(target_os = "emscripten"))]
+mod projection;
 mod providers;
 mod query;
 mod remote;
@@ -44,6 +48,8 @@ mod schema;
 mod share_config;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]
 mod skim_picker;
+#[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
+mod ssh;
 mod sync;
 mod term;
 
@@ -151,7 +157,13 @@ pub fn run() -> Result<()> {
         #[cfg(not(target_os = "emscripten"))]
         Commands::Share { args } => cmd_share::run(args),
         #[cfg(not(target_os = "emscripten"))]
-        Commands::Resume { args } => cmd_resume::run(args),
+        Commands::Resume { args } => {
+            #[cfg(all(unix, feature = "resume-remote"))]
+            if let Some(dest) = args.remote.dest.clone() {
+                return cmd_resume::run_remote(dest, args, &config);
+            }
+            cmd_resume::run(args)
+        }
         Commands::Query { args } => cmd_query::run(args, cli.pretty, &config),
         Commands::Kind { args } => cmd_kind::run(args),
         #[cfg(not(target_os = "emscripten"))]

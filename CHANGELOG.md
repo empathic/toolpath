@@ -2,6 +2,186 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.29.0 — 2026-09-29
+
+- **`path-cli`** (0.29.0): `path resume` with no input opens a
+  terminal UI over the agent sessions in the document cache. It syncs
+  the cache, shows the sessions by project over a time window (`t`)
+  with lanes, filters on `/`, and resumes the chosen session in its
+  source harness and its own directory.
+- **`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.28.0 — 2026-09-16
+
+- **`path-cli`** (0.28.0): `path resume --remote <dest> --session <id>
+  [--project <dir>]` sends a Claude session named by its ID, the way
+  `share` and `p import claude` name one, in place of a document. The
+  document is derived in memory from the session on disk, so a session
+  goes to a host without an import first, and the derived text hashes
+  to the same remote session ID. `--project` defaults to the current
+  directory. The Claude Code plugin (0.4.0) `/path:resume --remote`
+  sends the current session that way, with no import into the cache
+  first. `scripts/resume-remote.sh` hands off the same way, and its
+  sync is explicit: `--sync` (implied by `--create`) pushes the
+  working tree one way with no delete, in place of a probe that
+  guessed from the remote session file.
+- **`toolpath-cli`** (0.28.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.27.0 — 2026-09-16
+
+- **`path-cli`** (0.27.0): `p import claude --remote <user@host>
+  --session <id>` pulls a Claude session back from an ssh host into
+  the local cache (behind the `resume-remote` cargo feature). Two
+  read-only calls find the session and its chain; each segment is
+  fetched with one `cat` and derived locally. The document is rooted at
+  the local project directory and records the destination and the
+  remote directory under `path.meta.remote`. `-C` is the remote project
+  directory, defaulting as for `resume --remote`.
+- **`toolpath-claude`** (0.13.4): `resolve_chain_with_map` and
+  `build_succession_map` are public. `build_succession_map` builds the
+  predecessor to successor map over `(stem, first sessionId)` pairs
+  under the rule the on-disk index applies: a dotted stem (a rotation
+  artifact) continues nothing.
+- **`toolpath-cli`** (0.27.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.26.0 — 2026-09-16
+
+- **`path-cli`** (0.26.0): `path resume --remote` takes launch
+  arguments after `--`, appended to the remote `claude -r <id>` (for
+  example `-- --permission-mode acceptEdits`). The plan prints them.
+- **Claude Code plugin** (0.3.1): `/path:resume --remote` passes through
+  anything after `--`. The version bump ensures installed copies receive
+  the command update.
+- **Dependencies:** update `h2` to 0.4.16, `rustls` to 0.23.45,
+  `quinn-proto` to 0.11.15, and `russh` to 0.63.3 for the latest security
+  and maintenance fixes.
+- **`toolpath-cli`** (0.26.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.25.0 — 2026-09-16
+
+- **`path-cli`** (0.25.0): `path resume --remote` takes `--no-attach`:
+  upload and launch as the remote state requires, then print the `ssh -t`
+  command that attaches a terminal to the tmux session on stdout and
+  exit 0 instead of attaching. Needs no TTY, so an agent tool call can
+  run it. Requires `--remote`, conflicts with `--dry-run`. The Claude
+  Code plugin (0.3.0) gains `/path:resume --remote <user@host>`, which
+  sends the current session to an ssh host and hands the user the
+  attach line.
+- **`toolpath-cli`** (0.25.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.24.0 — 2026-09-15
+
+- **`path-cli`** (0.24.0): `path resume --remote` attaches this terminal
+  to the tmux session after the upload and the launch, over a PTY
+  channel: raw mode, keystrokes, output, and resizes forwarded, tmux's
+  exit status passed through. Without `--dry-run` the command needs a
+  TTY on stdin and stdout. `crossterm` is a new optional dependency of
+  the `resume-remote` feature. `scripts/resume-remote.sh` execs the
+  command in place of its own attach step.
+- **`toolpath-cli`** (0.24.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.23.0 — 2026-09-15
+
+- **`path-cli`** (0.23.0): `path resume --remote` runs the resume it
+  plans (behind the `resume-remote` cargo feature). An absent session
+  file is uploaded over ssh stdin: the local host projects the
+  conversation in memory under the content-addressed ID and the remote
+  project directory, and the remote writes a temporary name (0600),
+  checks the byte count, and links it into place, so a file that
+  appears between the probe and the upload is kept and the upload errors.
+  A present file is launched as is: `claude -r <id>` in a detached
+  tmux session named `path-<first 8 of the ID>`, with `remain-on-exit
+  failed` so a claude that exits non-zero leaves a dead pane whose
+  error the attach shows; the probe reports the session and whether
+  its pane is dead, and a dead session is killed before the launch. A
+  live session is left as is. The command prints the `ssh -t <dest>
+  tmux attach-session` command; the attach is the caller's.
+  `scripts/resume-remote.sh` hands off to the command after its
+  bootstrap steps (VM creation, `--setup` seeding, working-tree sync)
+  and attaches when it returns.
+- **`toolpath-cli`** (0.23.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.22.0 — 2026-09-14
+
+- **`path-cli`** (0.22.0): `path resume` takes `--remote <user@host>`
+  (Claude only) and `--dry-run` behind the `resume-remote` cargo
+  feature. The command plans a resume on an ssh host: two read-only
+  ssh calls report the remote home, the claude path, tmux, the physical
+  project directory, the tmux session state, and the session file's
+  existence. `-C` names the remote project directory; the default is
+  the local cwd with the local home swapped for the remote home. The
+  session ID is the one `p export claude --content-addressed-session-id` gives.
+  The plan prints what a run does (attach, launch, or upload).
+  `--dry-run` stops after the plan; without it the command stops with
+  an error, because upload, launch, and attach are not implemented yet.
+  The transport is the internal ssh module, an in-process SSH client
+  (`russh`) compiled only with the feature; each probe has a 60s
+  wall-clock timeout.
+- **`toolpath-cli`** (0.22.0): lockstep bump of the deprecated shim.
+
+## path-cli 0.21.0 — 2026-09-10
+
+- **Fix:** `path auth login` creates `~/.toolpath/credentials.json` with
+  mode 0600 from the first byte instead of writing it and restricting it
+  afterwards, so a permissive umask never leaves the token readable by
+  other users, even briefly.
+- **Fix:** error hints name commands that exist. "run `path cache ls`" and
+  "run `path import <source>`" (both removed without alias in 0.10.0)
+  now read `path p cache ls` and `path p import <source>`, and the
+  multi-path error from `path resume` no longer suggests a `split`
+  command that never existed.
+- **Fix:** `path query --source <name>` warns on stderr when no cached
+  document has that source prefix instead of silently answering the
+  empty question.
+- **`path-cli`** (0.21.0): `p export claude` takes `--content-addressed-session-id`
+  behind the `resume-remote` cargo feature. The flag renames the
+  session to a content-addressed ID: a v4-shaped UUID from the first
+  128 bits of the SHA-256 of the input document's RFC 8785 (JCS) form.
+  The same document yields the same ID on every run, so a second
+  export of it into the same project is refused instead of duplicated.
+  `--cwd` does not change the ID. The `--output` message names the
+  session ID. `scripts/resume-remote.sh` exports with the flag and
+  reads the remote session ID back from the JSONL.
+- **`path-cli`** (0.21.0): `p export claude` takes `--session-id <UUID>`,
+  without the feature. It renames the projected session the way
+  `--content-addressed-session-id` does, to the ID the caller gives. The
+  document's own session is not touched, so one document exports as
+  several sessions. A value that is not a UUID is rejected at parse
+  time, and the flag excludes `--content-addressed-session-id`.
+- **`path-cli`** (0.21.0): `p export claude` takes `--new-session-id`,
+  without the feature. It renames the projected session to a fresh
+  random v4 UUID, so a second export of one document gets an address
+  of its own. The export names the session it wrote on stderr in
+  every output mode, stdout included, because a random ID is
+  otherwise only readable out of the JSONL.
+- **`toolpath-cli`** (0.21.0): lockstep bump of the deprecated shim.
+
+## toolpath-claude 0.13.3 — 2026-09-10
+
+- **`toolpath-claude`** (0.13.3): `Conversation::rename_session(id)` sets
+  the session ID everywhere the format carries it: `session_id`, every
+  entry's `sessionId` that is present, and every string-valued
+  `sessionId` key in preamble lines at any depth.
+
+## path-cli 0.20.0 — 2026-09-10
+
+- **`path-cli`** (0.20.0): new cargo feature `resume-remote`, off by
+  default. It gates `p export claude --cwd <dir>`, which roots the
+  session: the directory becomes the `cwd` of every line that carries
+  one; it must be an absolute POSIX path in normalized form (no `.`,
+  `..`, or empty component; one trailing `/` is dropped), does not have
+  to exist on this machine, and conflicts with `--project`. Message
+  content and tool results are not touched. `scripts/resume-remote.sh`
+  builds with the feature and passes the flag.
+- **`toolpath-cli`** (0.20.0): lockstep bump of the deprecated shim.
+
+## toolpath-claude 0.13.2 — 2026-09-10
+
+- **`toolpath-claude`** (0.13.2): `Conversation::reroot(dir)` sets the
+  directory everywhere the format carries it: `project_path`, every
+  entry's `cwd` that is present, and a top-level `cwd` on a preamble
+  line.
+
 ## toolpath-cli 0.19.0 — 2026-09-05
 
 - Follow `path-cli` to 0.19.0. The shim's dependency was still pinned to

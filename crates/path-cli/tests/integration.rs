@@ -555,6 +555,33 @@ fn export_copilot_to_output_file() {
     assert!(jsonl.contains("hello copilot"), "user prompt round-trips");
 }
 
+/// The minted ID is random, so stdout alone does not tell the caller
+/// what it exported. The ID goes to stderr, which keeps the JSONL on
+/// stdout pipeable.
+#[test]
+fn export_claude_to_stdout_names_the_minted_session_on_stderr() {
+    let doc = examples_dir().join("path-02-local-session.path.json");
+    let out = cmd()
+        .args(["p", "export", "claude", "--new-session-id"])
+        .arg("--input")
+        .arg(&doc)
+        .assert()
+        .success();
+    let out = out.get_output();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let id = stderr
+        .trim()
+        .strip_prefix("Wrote session ")
+        .and_then(|rest| rest.strip_suffix(" to stdout"))
+        .unwrap_or_else(|| panic!("stderr does not name the session: {stderr:?}"))
+        .to_string();
+    assert!(uuid::Uuid::parse_str(&id).is_ok(), "{id:?} is not a UUID");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!("\"sessionId\":\"{id}\"")),
+        "the JSONL on stdout carries the ID stderr named"
+    );
+}
+
 #[test]
 fn export_help_lists_claude_and_pathbase() {
     cmd()
@@ -564,6 +591,233 @@ fn export_help_lists_claude_and_pathbase() {
         .success()
         .stdout(predicate::str::contains("claude"))
         .stdout(predicate::str::contains("pathbase"));
+}
+
+#[cfg(feature = "resume-remote")]
+mod resume_remote {
+    use super::*;
+
+    #[test]
+    fn export_claude_help_lists_the_remote_session_flags() {
+        cmd()
+            .args(["p", "export", "claude", "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Remote session:"))
+            .stdout(predicate::str::contains("--content-addressed-session-id"))
+            .stdout(predicate::str::contains("--cwd <DIR>"));
+    }
+
+    #[test]
+    fn resume_no_attach_conflicts_with_dry_run() {
+        cmd()
+            .args([
+                "resume",
+                "doc.json",
+                "--remote",
+                "u@h",
+                "--no-attach",
+                "--dry-run",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+
+    #[test]
+    fn import_claude_help_lists_the_remote_host_flags() {
+        cmd()
+            .args(["p", "import", "claude", "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Remote host:"))
+            .stdout(predicate::str::contains("--remote <DEST>"))
+            .stdout(predicate::str::contains("-C, --cwd <DIR>"));
+    }
+
+    #[test]
+    fn import_claude_cwd_requires_remote() {
+        cmd()
+            .args(["p", "import", "claude", "-C", "/remote/project"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>"));
+    }
+
+    #[test]
+    fn import_claude_remote_conflicts_with_all() {
+        cmd()
+            .args(["p", "import", "claude", "--remote", "u@h", "--all"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+
+    #[test]
+    fn import_claude_remote_needs_a_session() {
+        cmd()
+            .args(["p", "import", "claude", "--remote", "u@h"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "required arguments were not provided",
+            ))
+            .stderr(predicate::str::contains("--session"));
+    }
+
+    const SESSION: &str = "b7e1c0de-0000-4000-8000-000000000001";
+
+    #[test]
+    fn resume_session_requires_remote() {
+        cmd()
+            .args(["resume", "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("--session <ID>"))
+            .stdout(predicate::str::contains("--project <DIR>"));
+        cmd()
+            .args(["resume", "--session", SESSION])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>"));
+        cmd()
+            .args([
+                "resume",
+                "--session",
+                SESSION,
+                "--project",
+                ".",
+                "--remote",
+                "u@h",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>").not());
+    }
+
+    #[test]
+    fn resume_takes_a_document_or_a_session_not_both() {
+        cmd()
+            .args(["resume", "--remote", "u@h"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("required"));
+        cmd()
+            .args([
+                "resume",
+                "doc.json",
+                "--session",
+                SESSION,
+                "--remote",
+                "u@h",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+        cmd()
+            .args(["resume", "--session", "not-a-uuid", "--remote", "u@h"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("must be a UUID"));
+    }
+
+    #[test]
+    fn resume_launch_args_require_remote() {
+        cmd()
+            .args([
+                "resume",
+                "doc.json",
+                "--",
+                "--permission-mode",
+                "acceptEdits",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>"));
+    }
+
+    #[test]
+    fn resume_no_attach_requires_remote() {
+        cmd()
+            .args(["resume", "doc.json", "--no-attach"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--remote <DEST>"));
+    }
+
+    /// The test harness pipes stdin and stdout, so without the flag the
+    /// TTY check is the first error.
+    #[test]
+    fn resume_no_attach_skips_the_terminal_check() {
+        cmd()
+            .args(["resume", "missing.json", "--remote", "u@h"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("needs an interactive terminal"));
+        cmd()
+            .args(["resume", "missing.json", "--remote", "u@h", "--no-attach"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("needs an interactive terminal").not());
+    }
+
+    #[test]
+    fn export_claude_cwd_conflicts_with_project() {
+        cmd()
+            .args(["p", "export", "claude", "--input", "doc.json"])
+            .args(["--project", ".", "--cwd", "/remote/project"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+
+    #[test]
+    fn export_claude_rejects_an_unnormalized_cwd() {
+        cmd()
+            .args([
+                "p", "export", "claude", "--input", "doc.json", "--cwd", "rel/dir",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "invalid value 'rel/dir' for '--cwd <DIR>'",
+            ))
+            .stderr(predicate::str::contains("absolute POSIX path"));
+    }
+}
+
+#[cfg(not(feature = "resume-remote"))]
+#[test]
+fn import_claude_help_omits_the_remote_host_flags() {
+    cmd()
+        .args(["p", "import", "claude", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Remote host").not())
+        .stdout(predicate::str::contains("--remote").not());
+}
+
+#[cfg(not(feature = "resume-remote"))]
+#[test]
+fn resume_help_omits_session() {
+    cmd()
+        .args(["resume", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--session").not())
+        .stdout(predicate::str::contains("--project").not());
+}
+
+#[cfg(not(feature = "resume-remote"))]
+#[test]
+fn export_claude_help_omits_the_remote_session_flags() {
+    cmd()
+        .args(["p", "export", "claude", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Remote session").not())
+        .stdout(predicate::str::contains("--content-addressed-session-id").not())
+        .stdout(predicate::str::contains("--cwd").not());
 }
 
 #[test]
@@ -1970,4 +2224,24 @@ fn share_url_remote_targets_embedded_server() {
         starts_b[0].starts_with("POST /api/v1/u/team/repos/proj/graphs"),
         "server B gets the upload at the remote's repo: {starts_b:?}"
     );
+}
+
+/// The plumbing spellings replaced the top-level ones in 0.10.0; hints in
+/// errors must point at the commands that exist.
+#[test]
+fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "export", "pathbase"])
+        .args([
+            "--input",
+            "claude-does-not-exist",
+            "--url",
+            "http://127.0.0.1:1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path p cache ls"))
+        .stderr(predicate::str::contains("path cache ls").not());
 }

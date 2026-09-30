@@ -25,6 +25,20 @@ pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
     toolpath_claude::ClaudeConvo::with_resolver(resolver)
 }
 
+/// The in-process ssh client, with the agent socket and the `.ssh`
+/// directory taken from [`Config`].
+#[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
+pub(crate) fn ssh_client(config: &Config) -> anyhow::Result<crate::ssh::SshClient> {
+    use anyhow::Context as _;
+    let home = config
+        .home_dir()
+        .context("cannot determine the home directory")?;
+    crate::ssh::SshClient::new(
+        config.ssh_auth_sock.clone(),
+        home.join(crate::ssh::SSH_DIR_NAME),
+    )
+}
+
 pub(crate) fn gemini_convo(config: &Config) -> toolpath_gemini::GeminiConvo {
     let mut resolver = toolpath_gemini::PathResolver::new();
     if let Some(home) = config.home_dir() {

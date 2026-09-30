@@ -64,6 +64,60 @@ A complete Toolpath document is small enough to read in one breath:
 
 That's the canonical fixture [`step-01-minimal.json`](https://github.com/empathic/toolpath/blob/main/examples/step-01-minimal.json) — one author, one timestamp, one file changed, one diff. Every Toolpath document looks like this. The objects nest the same way. Bigger documents just hold more of them.
 
+## Steps form a DAG
+
+Steps form a DAG via parent references. Dead ends are implicit: steps not in the
+ancestry of `path.head`.
+
+<div class="dag-figure">
+<span class="fig-label">FIG_001 &nbsp; STEP DAG</span>
+<svg class="dag-svg" viewBox="0 0 780 200" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="DAG diagram showing steps with a dead-end branch and a head branch">
+<style>
+  .e-active { stroke: var(--text); }
+  .e-inactive { stroke: var(--text-secondary); }
+  .e-base { stroke: var(--accent); }
+  .n-fill-human { fill: var(--accent); fill-opacity: 0.18; }
+  .n-fill-agent { fill: var(--accent); fill-opacity: 0.30; }
+  .n-fill-dead { fill: var(--alert); fill-opacity: 0.18; }
+  .n-stroke-accent { stroke: var(--accent); }
+  .n-stroke-dead { stroke: var(--alert); }
+  .t-text { fill: var(--text); }
+  .t-secondary { fill: var(--text-secondary); }
+  .t-accent { fill: var(--accent); }
+  .t-alert { fill: var(--alert); }
+</style>
+<line x1="108" y1="100" x2="172" y2="100" class="e-active" stroke-width="2"/>
+<path d="M280,100 L310,100 Q320,100 320,90 L320,45 Q320,35 330,35 L352,35" class="e-inactive" stroke-width="1.5" stroke-dasharray="6 3" fill="none"/>
+<path d="M280,100 L310,100 Q320,100 320,110 L320,165 Q320,175 330,175 L352,175" class="e-active" stroke-width="2" fill="none"/>
+<line x1="460" y1="35" x2="532" y2="35" class="e-inactive" stroke-width="1.5" stroke-dasharray="6 3"/>
+<line x1="460" y1="175" x2="532" y2="175" class="e-active" stroke-width="2"/>
+<line x1="640" y1="175" x2="672" y2="175" class="e-active" stroke-width="2"/>
+<rect x="0" y="78" width="108" height="44" class="n-fill-human n-stroke-accent" stroke-width="1.5"/>
+<text x="54" y="97" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" class="t-text">step-1</text>
+<text x="54" y="112" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" class="t-secondary">human:alex</text>
+<rect x="172" y="78" width="108" height="44" class="n-fill-agent n-stroke-accent" stroke-width="1.5"/>
+<text x="226" y="97" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" class="t-text">step-2</text>
+<text x="226" y="112" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" class="t-secondary">agent:claude</text>
+<rect x="352" y="13" width="108" height="44" class="n-fill-dead n-stroke-dead" stroke-width="1.5" stroke-dasharray="5 3"/>
+<text x="406" y="32" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" class="t-text">step-3a</text>
+<text x="406" y="47" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" class="t-secondary">agent:claude</text>
+<rect x="532" y="13" width="108" height="44" class="n-fill-dead n-stroke-dead" stroke-width="1.5" stroke-dasharray="5 3"/>
+<text x="586" y="32" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" class="t-text">step-4a</text>
+<text x="586" y="47" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" class="t-secondary">agent:claude</text>
+<rect x="352" y="153" width="108" height="44" class="n-fill-agent n-stroke-accent" stroke-width="1.5"/>
+<text x="406" y="172" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" class="t-text">step-3b</text>
+<text x="406" y="187" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" class="t-secondary">tool:rustfmt</text>
+<rect x="532" y="153" width="108" height="44" class="n-fill-human n-stroke-accent" stroke-width="1.5"/>
+<text x="586" y="172" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" class="t-text">step-4b</text>
+<text x="586" y="187" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" class="t-secondary">human:alex</text>
+<rect x="672" y="153" width="108" height="44" class="n-fill-human n-stroke-accent" stroke-width="3"/>
+<text x="726" y="172" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="700" class="t-text">step-5b</text>
+<text x="726" y="187" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" class="t-secondary">human:alex</text>
+<text x="586" y="72" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600" class="t-alert" letter-spacing="0.08em">DEAD END</text>
+<text x="726" y="146" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600" class="t-accent" letter-spacing="0.08em">HEAD</text>
+</svg>
+</div>
+
 ## A real example
 
 The minimal example above shows the shape. To see what a Toolpath document looks like when actual work has happened, open the **exploration** fixture in the visualizer. It's a single Path with seven steps and the four DAG features that recur everywhere:
@@ -75,6 +129,17 @@ The minimal example above shows the shape. To see what a Toolpath document looks
 - **`step-004`** lists two parents (`step-003b`, `step-003c`) — that's a **merge** of two parallel branches.
 
 → Open it in the [visualizer](/visualizer/) (it's the default example) and the structure clicks immediately.
+
+## What Toolpath adds to git
+
+| What                   | Git                         | Toolpath                                         |
+| ---------------------- | --------------------------- | ------------------------------------------------ |
+| Who made the change    | Single author per commit    | Typed actors: `human:`, `agent:`, `tool:`, `ci:` |
+| Why they changed it    | Unstructured commit message | `meta.intent` + linked refs                      |
+| Abandoned approaches   | Lost when branch is deleted | Dead ends preserved in the DAG                   |
+| Multi-actor provenance | Collapsed into one commit   | Each actor gets their own step                   |
+| Verification           | GPG on whole commit         | Scoped signatures: author, reviewer, CI          |
+| Granularity            | Commit-level                | Sub-commit: multiple steps between commits       |
 
 ## File extensions
 

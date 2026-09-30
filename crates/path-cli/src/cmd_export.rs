@@ -24,32 +24,71 @@ use std::path::PathBuf;
 
 #[cfg(not(target_os = "emscripten"))]
 use crate::cache::cache_ref;
+#[cfg(not(target_os = "emscripten"))]
+use crate::projection::{
+    claude::{build_claude_conversation, serialize_jsonl, write_into_claude_project},
+    codex::{serialize_codex_jsonl, write_into_codex_project},
+    copilot::{build_copilot_session, project_copilot},
+    cursor::{build_cursor_session, write_into_cursor_db},
+    gemini::{print_gemini_summary, write_into_gemini_project, write_main_and_subs},
+    opencode::{build_opencode_session, write_into_opencode_db},
+    pi::{serialize_pi_jsonl, write_into_pi_project},
+};
 use crate::remote::RepoSpec;
+
+#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+mod remote_session;
+
+/// Arguments of `p export claude`.
+#[derive(clap::Args, Debug, Default)]
+pub struct ClaudeExportArgs {
+    /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+    #[arg(short, long)]
+    pub(crate) input: String,
+
+    /// Target project directory. With this flag, writes the JSONL into
+    /// `~/.claude/projects/<sanitized>/<session>.jsonl` so `claude -r <id>`
+    /// can resume it. Defaults to cwd when no `--output` is given.
+    #[arg(short, long)]
+    pub(crate) project: Option<PathBuf>,
+
+    /// Output JSONL to this file. Mutually exclusive with --project.
+    #[arg(short, long, conflicts_with = "project")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// Overwrite the session file if this session id already exists in
+    /// the target project. Without it the export refuses rather than
+    /// clobbering local history.
+    #[arg(long)]
+    pub(crate) force: bool,
+
+    /// Rename the session to this ID (a UUID). The document's own
+    /// session is not touched, so one document can be exported as
+    /// several sessions. Mutually exclusive with --new-session-id.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(
+        long,
+        value_name = "UUID",
+        conflicts_with = "new_session_id",
+        value_parser = crate::claude_session::parse_uuid_arg
+    )]
+    pub(crate) session_id: Option<String>,
+
+    /// Rename the session to a fresh random UUID. Every export mints
+    /// a different ID; the export prints it. Mutually exclusive with
+    /// --session-id.
+    #[arg(long)]
+    pub(crate) new_session_id: bool,
+
+    #[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+    #[command(flatten)]
+    pub(crate) remote: remote_session::RemoteSessionArgs,
+}
 
 #[derive(Subcommand, Debug)]
 pub enum ExportTarget {
     /// Project a toolpath document into a Claude Code session
-    Claude {
-        /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
-        #[arg(short, long)]
-        input: String,
-
-        /// Target project directory. With this flag, writes the JSONL into
-        /// `~/.claude/projects/<sanitized>/<session>.jsonl` so `claude -r <id>`
-        /// can resume it. Defaults to cwd when no `--output` is given.
-        #[arg(short, long)]
-        project: Option<PathBuf>,
-
-        /// Output JSONL to this file. Mutually exclusive with --project.
-        #[arg(short, long, conflicts_with = "project")]
-        output: Option<PathBuf>,
-
-        /// Overwrite the session file if this session id already exists in
-        /// the target project. Without it the export refuses rather than
-        /// clobbering local history.
-        #[arg(long)]
-        force: bool,
-    },
+    Claude(ClaudeExportArgs),
     /// Project a toolpath document into a Gemini CLI session
     Gemini {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
@@ -204,12 +243,7 @@ pub enum ExportTarget {
 
 pub fn run(target: ExportTarget) -> Result<()> {
     match target {
-        ExportTarget::Claude {
-            input,
-            project,
-            output,
-            force,
-        } => run_claude(input, project, output, force),
+        ExportTarget::Claude(args) => run_claude(args),
         ExportTarget::Gemini {
             input,
             project,
@@ -281,151 +315,6 @@ pub(crate) struct PathbaseUploadArgs {
     pub(crate) public: bool,
 }
 
-// ── pub(crate) project_<harness> wrappers ────────────────────────────
-//
-// These compose the private build + write helpers below and return the
-// projected session id. They are called by `path resume`; the existing
-// `run_<harness>` functions are untouched.
-
-/// Outcome of projecting a Path into a Claude project directory.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) enum ClaudeProjection {
-    /// The session file was written.
-    Written { session_id: String },
-    /// A session with this id already exists in the target project; nothing
-    /// was written. Resuming the local copy is the least destructive move —
-    /// it may be newer than the shared document.
-    AlreadyLocal { session_id: String },
-}
-
-/// Project `path` into a Claude session under `project_dir`.
-///
-/// Never overwrites: if the session already exists locally the projection is
-/// skipped and `AlreadyLocal` is returned (callers that want to clobber go
-/// through `p export claude --force`).
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_claude(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<ClaudeProjection> {
-    let conv = build_claude_conversation(path)?;
-    if claude_session_file(&conv.session_id, project_dir)?.is_some() {
-        return Ok(ClaudeProjection::AlreadyLocal {
-            session_id: conv.session_id,
-        });
-    }
-    let jsonl = serialize_jsonl(&conv)?;
-    write_into_claude_project(&conv, &jsonl, project_dir, false)?;
-    Ok(ClaudeProjection::Written {
-        session_id: conv.session_id,
-    })
-}
-
-/// Path of the session file for `session_id` under `project_dir`'s Claude
-/// project directory, if it exists.
-#[cfg(not(target_os = "emscripten"))]
-fn claude_session_file(session_id: &str, project_dir: &std::path::Path) -> Result<Option<PathBuf>> {
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let resolver = toolpath_claude::PathResolver::new();
-    let claude_project_dir = resolver
-        .project_dir(&project_dir.to_string_lossy())
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Claude project dir: {}", e))?;
-    let candidate = claude_project_dir.join(format!("{}.jsonl", session_id));
-    Ok(candidate.exists().then_some(candidate))
-}
-
-/// Project `path` into a Gemini session under `project_dir` and return
-/// the resulting session UUID.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_gemini(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<String> {
-    use toolpath_convo::ConversationProjector;
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let project_path = project_dir.to_string_lossy().to_string();
-
-    let view = toolpath_convo::extract_conversation(path);
-    let project_hash = toolpath_gemini::paths::project_hash(&project_path);
-    let projector = toolpath_gemini::project::GeminiProjector::new()
-        .with_project_hash(project_hash)
-        .with_project_path(project_path.clone());
-    let conv = projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
-    if conv.session_uuid.is_empty() {
-        anyhow::bail!("Projected conversation has no session UUID");
-    }
-    write_into_gemini_project(&conv, &project_path)?;
-    Ok(conv.session_uuid)
-}
-
-/// Project `path` into a Codex session and return the resulting session id.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_codex(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<String> {
-    use toolpath_convo::ConversationProjector;
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let cwd_str = project_dir.to_string_lossy().to_string();
-
-    let view = toolpath_convo::extract_conversation(path);
-    let projector = toolpath_codex::project::CodexProjector::new().with_cwd(cwd_str);
-    let session = projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
-    if session.id.is_empty() {
-        anyhow::bail!("Projected session has no id");
-    }
-    write_into_codex_project(&session)?;
-    Ok(session.id)
-}
-
-/// Build a Copilot [`Session`](toolpath_copilot::Session) from `path`, rooted
-/// at `project_dir` with a fresh session id.
-///
-/// **Preview / ✅ verified.** The emitted `events.jsonl` shape loads and
-/// resumes in the real `copilot --resume` (copilot 1.0.67/1.0.68); see
-/// `docs/agents/formats/copilot-cli/writing-compatible.md`.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn build_copilot_session(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<toolpath_copilot::Session> {
-    use toolpath_convo::ConversationProjector;
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let cwd_str = project_dir.to_string_lossy().to_string();
-
-    let mut view = toolpath_convo::extract_conversation(path);
-    // Fresh session id so we never clobber an existing Copilot session; root
-    // the session at the resume directory.
-    view.id = uuid::Uuid::new_v4().to_string();
-    let base = view.base.get_or_insert_with(Default::default);
-    base.working_dir = Some(cwd_str);
-
-    toolpath_copilot::CopilotProjector::new()
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))
-}
-
-/// Project `path` into a GitHub Copilot CLI session under `project_dir`
-/// (writing `~/.copilot/session-state/<id>/` + a `session-store.db` row) and
-/// return the freshly-generated session id. Only ever INSERTs a new id.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_copilot(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<String> {
-    let session = build_copilot_session(path, project_dir)?;
-    write_into_copilot_project(&session)?;
-    Ok(session.id)
-}
-
 /// `path p export copilot` — project a document into a Copilot session on
 /// disk (`--project`), to a file (`--output`), or to stdout (neither).
 fn run_copilot(input: String, project: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
@@ -474,186 +363,67 @@ fn run_copilot(input: String, project: Option<PathBuf>, output: Option<PathBuf>)
     }
 }
 
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_copilot_project(session: &toolpath_copilot::Session) -> Result<()> {
-    let resolver = toolpath_copilot::PathResolver::new();
-    let state_dir = resolver
-        .session_state_dir()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve ~/.copilot/session-state: {}", e))?;
-    let sess_dir = state_dir.join(&session.id);
-    std::fs::create_dir_all(&sess_dir).with_context(|| format!("create {}", sess_dir.display()))?;
-
-    // events.jsonl
-    let mut lines: Vec<String> = Vec::with_capacity(session.lines.len());
-    for line in &session.lines {
-        lines.push(serde_json::to_string(line)?);
+/// The content-addressed session ID when `--content-addressed-session-id`
+/// is set, else `None`.
+#[cfg(all(feature = "resume-remote", not(target_os = "emscripten")))]
+fn resolve_content_addressed_session_id(
+    args: &ClaudeExportArgs,
+    document_json: &str,
+) -> Result<Option<String>> {
+    if !args.remote.content_addressed_session_id {
+        return Ok(None);
     }
-    let events_path = sess_dir.join("events.jsonl");
-    std::fs::write(&events_path, format!("{}\n", lines.join("\n")))
-        .with_context(|| format!("write {}", events_path.display()))?;
-
-    // workspace.yaml
-    std::fs::write(
-        sess_dir.join("workspace.yaml"),
-        copilot_workspace_yaml(session),
-    )
-    .with_context(|| "write workspace.yaml")?;
-
-    // session-store.db `sessions` row — the resume picker reads this index.
-    let db_path = resolver
-        .session_store_db()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve session-store.db: {}", e))?;
-    let registration = register_copilot_session(&db_path, session);
-
-    eprintln!(
-        "Exported Copilot session {} ({} events) → {}",
-        session.id,
-        session.lines.len(),
-        events_path.display()
-    );
-    match registration {
-        Ok(true) => eprintln!("  registered in {}", db_path.display()),
-        Ok(false) => eprintln!(
-            "  warning: {} not found — `copilot --resume` won't see this session",
-            db_path.display()
-        ),
-        Err(e) => eprintln!(
-            "  warning: failed to register in session-store.db: {} — `copilot --resume` may not see this session",
-            e
-        ),
-    }
-    eprintln!();
-    eprintln!("⚠️  Preview: resume into Copilot CLI is unverified — the synthesized");
-    eprintln!("    session may not load in `copilot --resume`.");
-    eprintln!(
-        "Loadable via:  path p import copilot --session {}",
-        session.id
-    );
-    eprintln!("Resume with:   copilot --resume {}", session.id);
-    Ok(())
+    crate::claude_session::generate_content_addressed_session_id(document_json).map(Some)
 }
 
-#[cfg(not(target_os = "emscripten"))]
-fn copilot_workspace_yaml(session: &toolpath_copilot::Session) -> String {
-    let ws = session.workspace.clone().unwrap_or_default();
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut out = String::new();
-    out.push_str(&format!("id: {}\n", session.id));
-    if let Some(cwd) = &ws.git_root {
-        out.push_str(&format!("cwd: {cwd}\n"));
-        out.push_str(&format!("git_root: {cwd}\n"));
-    }
-    if let Some(repo) = &ws.repository {
-        out.push_str(&format!("repository: {repo}\n"));
-        out.push_str("host_type: github\n");
-    }
-    if let Some(branch) = &ws.branch {
-        out.push_str(&format!("branch: {branch}\n"));
-    }
-    out.push_str("client_name: toolpath\n");
-    out.push_str("user_named: false\n");
-    out.push_str(&format!("created_at: {now}\n"));
-    out.push_str(&format!("updated_at: {now}\n"));
-    out
+/// Without the `resume-remote` feature there is no `--content-addressed-session-id`.
+#[cfg(all(not(feature = "resume-remote"), not(target_os = "emscripten")))]
+fn resolve_content_addressed_session_id(
+    _args: &ClaudeExportArgs,
+    _document_json: &str,
+) -> Result<Option<String>> {
+    Ok(None)
 }
 
-/// Insert a row into `session-store.db`'s `sessions` table (observed schema).
-/// Returns `Ok(false)` when the DB doesn't exist yet.
+/// The ID the exported session takes, or `None` to keep the ID the
+/// document carries. clap makes the naming flags mutually exclusive,
+/// so at most one arm answers.
 #[cfg(not(target_os = "emscripten"))]
-fn register_copilot_session(
-    db_path: &std::path::Path,
-    session: &toolpath_copilot::Session,
-) -> std::result::Result<bool, rusqlite::Error> {
-    if !db_path.exists() {
-        return Ok(false);
+fn exported_session_id(args: &ClaudeExportArgs, document_json: &str) -> Result<Option<String>> {
+    if let Some(id) = &args.session_id {
+        return Ok(Some(id.clone()));
     }
-    let conn = rusqlite::Connection::open(db_path)?;
-    let ws = session.workspace.clone().unwrap_or_default();
-    let cwd = ws.git_root.unwrap_or_default();
-    let summary = copilot_first_user_message(session);
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT OR REPLACE INTO sessions
-            (id, cwd, repository, host_type, branch, summary, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![
-            session.id,
-            cwd,
-            ws.repository,
-            "github",
-            ws.branch,
-            summary,
-            now,
-            now,
-        ],
-    )?;
-    Ok(true)
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn copilot_first_user_message(session: &toolpath_copilot::Session) -> String {
-    session.first_user_text().unwrap_or_default()
-}
-
-/// Project `path` into an opencode session under `project_dir` and return
-/// the resulting session id.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_opencode(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<String> {
-    let session = build_opencode_session(path, Some(project_dir))?;
-    let id = session.id.clone();
-    write_into_opencode_db(&session, project_dir)?;
-    Ok(id)
-}
-
-/// Project `path` into a Pi session under `project_dir` and return the
-/// resulting session id.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_pi(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<String> {
-    use toolpath_convo::ConversationProjector;
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let cwd_str = project_dir.to_string_lossy().to_string();
-
-    let view = toolpath_convo::extract_conversation(path);
-    let projector = toolpath_pi::project::PiProjector::new().with_cwd(cwd_str.clone());
-    let session = projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))?;
-    if session.header.id.is_empty() {
-        anyhow::bail!("Projected session has no id");
+    if args.new_session_id {
+        return Ok(Some(uuid::Uuid::new_v4().to_string()));
     }
-    write_into_pi_project(&session, &cwd_str)?;
-    Ok(session.header.id)
+    resolve_content_addressed_session_id(args, document_json)
 }
 
-fn run_claude(
-    input: String,
-    project: Option<PathBuf>,
-    output: Option<PathBuf>,
-    force: bool,
-) -> Result<()> {
+fn run_claude(args: ClaudeExportArgs) -> Result<()> {
     #[cfg(target_os = "emscripten")]
     {
-        let _ = (input, project, output, force);
+        let _ = args;
         anyhow::bail!("'path export claude' requires a native environment");
     }
 
     #[cfg(not(target_os = "emscripten"))]
     {
-        let path = load_path_doc(&input)?;
-        let conversation = build_claude_conversation(&path)?;
+        let document_json = read_doc_json(&args.input)?;
+        let path = parse_path_doc(&document_json)?;
+        let mut conversation = build_claude_conversation(&path)?;
+        if let Some(id) = exported_session_id(&args, &document_json)? {
+            conversation.rename_session(&id);
+        }
+        #[cfg(feature = "resume-remote")]
+        if let Some(dir) = &args.remote.cwd {
+            conversation.reroot(dir);
+        }
         let jsonl = serialize_jsonl(&conversation)?;
 
-        match (project, output) {
+        match (args.project, args.output) {
             (Some(project_dir), None) => {
                 let out_path =
-                    write_into_claude_project(&conversation, &jsonl, &project_dir, force)?;
+                    write_into_claude_project(&conversation, &jsonl, &project_dir, args.force)?;
                 let session_id = &conversation.session_id;
                 eprintln!(
                     "Exported session {} ({} entries) → {}",
@@ -668,10 +438,16 @@ fn run_claude(
             (None, Some(out_path)) => {
                 std::fs::write(&out_path, &jsonl)
                     .with_context(|| format!("write {}", out_path.display()))?;
-                eprintln!("Wrote {} bytes to {}", jsonl.len(), out_path.display());
+                eprintln!(
+                    "Wrote session {} ({} bytes) to {}",
+                    conversation.session_id,
+                    jsonl.len(),
+                    out_path.display()
+                );
             }
             (None, None) => {
                 println!("{}", jsonl);
+                eprintln!("Wrote session {} to stdout", conversation.session_id);
             }
             (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
         }
@@ -682,67 +458,24 @@ fn run_claude(
 
 #[cfg(not(target_os = "emscripten"))]
 fn load_path_doc(input: &str) -> Result<toolpath::v1::Path> {
+    parse_path_doc(&read_doc_json(input)?)
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn read_doc_json(input: &str) -> Result<String> {
     let file = cache_ref(input)?;
-    let json = std::fs::read_to_string(&file)
-        .with_context(|| format!("Failed to read {}", file.display()))?;
-    let doc = toolpath::v1::Graph::from_json(&json)
+    std::fs::read_to_string(&file).with_context(|| format!("Failed to read {}", file.display()))
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn parse_path_doc(json: &str) -> Result<toolpath::v1::Path> {
+    let doc = toolpath::v1::Graph::from_json(json)
         .map_err(|e| anyhow::anyhow!("Failed to parse toolpath document: {}", e))?;
     doc.into_single_path().ok_or_else(|| {
         anyhow::anyhow!(
             "expected a single-path graph; the source graph holds zero or multiple paths"
         )
     })
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn build_claude_conversation(path: &toolpath::v1::Path) -> Result<toolpath_claude::Conversation> {
-    use toolpath_convo::ConversationProjector;
-    let view = toolpath_convo::extract_conversation(path);
-    let projector = toolpath_claude::ClaudeProjector;
-    projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn serialize_jsonl(conv: &toolpath_claude::Conversation) -> Result<String> {
-    let mut buf = Vec::new();
-    toolpath_claude::ConversationWriter::write_conversation(conv, &mut buf)?;
-    Ok(String::from_utf8(buf).expect("serde_json emits UTF-8"))
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_claude_project(
-    conv: &toolpath_claude::Conversation,
-    jsonl: &str,
-    project_dir: &std::path::Path,
-    force: bool,
-) -> Result<PathBuf> {
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-    let project_path = project_dir.to_string_lossy();
-
-    let resolver = toolpath_claude::PathResolver::new();
-    let claude_project_dir = resolver
-        .project_dir(&project_path)
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Claude project dir: {}", e))?;
-
-    std::fs::create_dir_all(&claude_project_dir)
-        .with_context(|| format!("create {}", claude_project_dir.display()))?;
-
-    let session_id = &conv.session_id;
-    let out_path = claude_project_dir.join(format!("{}.jsonl", session_id));
-    if !force && out_path.exists() {
-        anyhow::bail!(
-            "Session {} already exists in this project ({}). Resume it directly with \
-             `claude -r {}`, or pass --force to overwrite the local session file.",
-            session_id,
-            out_path.display(),
-            session_id
-        );
-    }
-    std::fs::write(&out_path, jsonl).with_context(|| format!("write {}", out_path.display()))?;
-    Ok(out_path)
 }
 
 // ── Gemini ────────────────────────────────────────────────────────────
@@ -806,44 +539,6 @@ fn build_gemini_conversation(
     Ok(conversation)
 }
 
-/// `--project` mode: write the resume-ready layout under
-/// `~/.gemini/tmp/<slot>/chats/`.
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_gemini_project(
-    conversation: &toolpath_gemini::types::Conversation,
-    project_path: &str,
-) -> Result<()> {
-    let resolver = toolpath_gemini::PathResolver::new();
-    let chats_dir = resolver
-        .chats_dir(project_path)
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Gemini chats dir: {}", e))?;
-    std::fs::create_dir_all(&chats_dir)
-        .with_context(|| format!("create {}", chats_dir.display()))?;
-
-    // Drop a `.project_root` marker so `list_project_dirs` and any
-    // tooling that walks `tmp/` can pick us up even without a
-    // `projects.json` entry.
-    if let Some(slot_dir) = chats_dir.parent() {
-        let marker = slot_dir.join(".project_root");
-        if !marker.exists() {
-            let _ = std::fs::write(&marker, format!("{}\n", project_path));
-        }
-    }
-
-    let main_stem = gemini_main_stem(conversation);
-    let main_path = chats_dir.join(format!("{}.json", main_stem));
-    let written = write_main_and_subs(conversation, &main_path)?;
-
-    print_summary(conversation, &written, &chats_dir);
-    eprintln!();
-    eprintln!("Resume with:");
-    eprintln!(
-        "  cd {} && gemini --resume {}",
-        project_path, conversation.session_uuid
-    );
-    Ok(())
-}
-
 /// `--output` mode: write the main chat file to the caller-specified
 /// path; sub-agents (if any) land in a sibling `<session-uuid>/` dir.
 #[cfg(not(target_os = "emscripten"))]
@@ -863,7 +558,7 @@ fn write_to_output_path(
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    print_summary(conversation, &written, &parent);
+    print_gemini_summary(conversation, &written, &parent);
     Ok(())
 }
 
@@ -885,88 +580,6 @@ fn write_to_stdout(conversation: &toolpath_gemini::types::Conversation) -> Resul
         );
     }
     Ok(())
-}
-
-/// Write `conversation.main` to `main_path` and any sub-agents to a
-/// sibling `<main_dir>/<session-uuid>/<stem>.json`. Returns every path
-/// written, in order.
-#[cfg(not(target_os = "emscripten"))]
-fn write_main_and_subs(
-    conversation: &toolpath_gemini::types::Conversation,
-    main_path: &std::path::Path,
-) -> Result<Vec<PathBuf>> {
-    std::fs::write(main_path, serde_json::to_string_pretty(&conversation.main)?)
-        .with_context(|| format!("write {}", main_path.display()))?;
-    let mut written: Vec<PathBuf> = vec![main_path.to_path_buf()];
-
-    if !conversation.sub_agents.is_empty() {
-        let parent = main_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let sub_dir = parent.join(&conversation.session_uuid);
-        std::fs::create_dir_all(&sub_dir)
-            .with_context(|| format!("create {}", sub_dir.display()))?;
-        for (i, sub) in conversation.sub_agents.iter().enumerate() {
-            let stem = if sub.session_id.is_empty() {
-                format!("subagent-{}", i)
-            } else {
-                sub.session_id.clone()
-            };
-            let sub_path = sub_dir.join(format!("{}.json", stem));
-            std::fs::write(&sub_path, serde_json::to_string_pretty(sub)?)
-                .with_context(|| format!("write {}", sub_path.display()))?;
-            written.push(sub_path);
-        }
-    }
-    Ok(written)
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn print_summary(
-    conversation: &toolpath_gemini::types::Conversation,
-    written: &[PathBuf],
-    location: &std::path::Path,
-) {
-    let total_messages = conversation.main.messages.len()
-        + conversation
-            .sub_agents
-            .iter()
-            .map(|s| s.messages.len())
-            .sum::<usize>();
-    let sub_n = conversation.sub_agents.len();
-    eprintln!(
-        "Exported Gemini session {} ({} messages across main + {} sub-agent{}) → {}",
-        conversation.session_uuid,
-        total_messages,
-        sub_n,
-        if sub_n == 1 { "" } else { "s" },
-        location.display()
-    );
-    for path in written {
-        eprintln!("  wrote {}", path.display());
-    }
-}
-
-/// On-disk stem for a Gemini main chat file:
-/// `session-<YYYY-MM-DDTHH-MM>-<first8-of-uuid>`.
-///
-/// The `session-` prefix is mandatory — Gemini CLI's `--list-sessions`
-/// filters on it before opening any file, so a file without it is
-/// invisible to `--resume`. The short suffix matches Gemini's own
-/// naming convention. Falls back to `session-<uuid>` if no timestamp is
-/// available on the projected conversation.
-#[cfg(not(target_os = "emscripten"))]
-fn gemini_main_stem(convo: &toolpath_gemini::types::Conversation) -> String {
-    let short: String = convo.session_uuid.chars().take(8).collect();
-    let ts = convo
-        .started_at
-        .or(convo.last_activity)
-        .or(convo.main.start_time)
-        .or(convo.main.last_updated);
-    match ts {
-        Some(t) => format!("session-{}-{}", t.format("%Y-%m-%dT%H-%M"), short),
-        None => format!("session-{}", convo.session_uuid),
-    }
 }
 
 // ── Pi ────────────────────────────────────────────────────────────────
@@ -1020,39 +633,6 @@ fn build_pi_session(input: &str, cwd: &str) -> Result<toolpath_pi::PiSession> {
     Ok(session)
 }
 
-/// `--project` mode: write the resume-ready layout under
-/// `~/.pi/agent/sessions/--<encoded-cwd>--/<session>.jsonl`.
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_pi_project(session: &toolpath_pi::PiSession, cwd: &str) -> Result<()> {
-    let resolver = toolpath_pi::PathResolver::new();
-    let project_dir = resolver.project_dir(cwd);
-    std::fs::create_dir_all(&project_dir)
-        .with_context(|| format!("create {}", project_dir.display()))?;
-
-    let stem = pi_session_stem(session);
-    let out_path = project_dir.join(format!("{}.jsonl", stem));
-    let bytes = serialize_pi_jsonl(session)?;
-    std::fs::write(&out_path, &bytes).with_context(|| format!("write {}", out_path.display()))?;
-
-    let entry_count = session.entries.len().saturating_sub(1); // minus header
-    eprintln!(
-        "Exported Pi session {} ({} entries) → {}",
-        session.header.id,
-        entry_count,
-        out_path.display()
-    );
-    eprintln!();
-    eprintln!("Loadable via:");
-    eprintln!(
-        "  path import pi --session {} --project {}",
-        session.header.id, cwd
-    );
-    eprintln!();
-    eprintln!("Open conversation with:");
-    eprintln!("  pi --session {}", session.header.id);
-    Ok(())
-}
-
 /// `--output` mode: write JSONL to the caller-specified path.
 #[cfg(not(target_os = "emscripten"))]
 fn write_pi_to_output_path(
@@ -1076,37 +656,6 @@ fn write_pi_to_stdout(session: &toolpath_pi::PiSession) -> Result<()> {
     let bytes = serialize_pi_jsonl(session)?;
     print!("{}", bytes);
     Ok(())
-}
-
-/// Stem for a Pi session JSONL filename. Pi's own files use
-/// `<date>_<uuid>.jsonl`; for projected sessions the session id is
-/// already unique enough, so we use it directly with a safe-character
-/// fallback for unusual UUIDs.
-#[cfg(not(target_os = "emscripten"))]
-fn pi_session_stem(session: &toolpath_pi::PiSession) -> String {
-    // Strip any dashes-replaced-as-underscores oddities; for plain
-    // UUIDs / short ids, the value is already filename-safe.
-    session
-        .header
-        .id
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-        .collect()
-}
-
-/// Serialize a `PiSession` to its JSONL on-disk shape: header line
-/// followed by one entry per line. Returns the joined string with a
-/// trailing newline (Pi's reader is happy with or without it; we add
-/// one to match the convention real Pi sessions use).
-#[cfg(not(target_os = "emscripten"))]
-fn serialize_pi_jsonl(session: &toolpath_pi::PiSession) -> Result<String> {
-    let mut lines: Vec<String> = Vec::with_capacity(session.entries.len());
-    for entry in &session.entries {
-        lines.push(serde_json::to_string(entry)?);
-    }
-    let mut out = lines.join("\n");
-    out.push('\n');
-    Ok(out)
 }
 
 // ── Codex ─────────────────────────────────────────────────────────────
@@ -1161,147 +710,6 @@ fn build_codex_session(input: &str, cwd: &str) -> Result<toolpath_codex::Session
     Ok(session)
 }
 
-/// `--project` mode: write the resume-ready layout under
-/// `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. The date partitioning
-/// matches Codex's own filing convention; the timestamp prefix is
-/// derived from the session's first event time.
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_codex_project(session: &toolpath_codex::Session) -> Result<()> {
-    let session_ts = codex_session_timestamp(session)?;
-    let resolver = toolpath_codex::PathResolver::new();
-    let sessions_root = resolver
-        .sessions_root()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Codex sessions dir: {}", e))?;
-
-    // sessions/YYYY/MM/DD/
-    let date_dir = sessions_root
-        .join(session_ts.format("%Y").to_string())
-        .join(session_ts.format("%m").to_string())
-        .join(session_ts.format("%d").to_string());
-    std::fs::create_dir_all(&date_dir).with_context(|| format!("create {}", date_dir.display()))?;
-
-    let stem = codex_rollout_stem(session, &session_ts);
-    let out_path = date_dir.join(format!("{}.jsonl", stem));
-    let bytes = serialize_codex_jsonl(session)?;
-    std::fs::write(&out_path, &bytes).with_context(|| format!("write {}", out_path.display()))?;
-
-    // `codex resume` reads from state_5.sqlite, not the filesystem;
-    // without a thread row the rollout file is invisible.
-    let codex_dir = resolver
-        .codex_dir()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve ~/.codex dir: {}", e))?;
-    let registration = register_codex_thread(&codex_dir, session, &out_path, &session_ts);
-
-    eprintln!(
-        "Exported Codex session {} ({} lines) → {}",
-        session.id,
-        session.lines.len(),
-        out_path.display()
-    );
-    match registration {
-        Ok(true) => eprintln!("  registered in {}/state_5.sqlite", codex_dir.display()),
-        Ok(false) => eprintln!(
-            "  warning: state_5.sqlite not found at {} — `codex resume` won't see this session",
-            codex_dir.display()
-        ),
-        Err(e) => eprintln!(
-            "  warning: failed to register thread in state_5.sqlite: {} — `codex resume` may not see this session",
-            e
-        ),
-    }
-    eprintln!();
-    eprintln!("Loadable via:");
-    eprintln!("  path import codex --session {}", session.id);
-    eprintln!();
-    eprintln!("Open conversation with:");
-    eprintln!("  codex resume {}", session.id);
-    Ok(())
-}
-
-/// Schema-fragile: targets the `state_5.sqlite` shape. Returns
-/// `Ok(false)` when the DB doesn't exist.
-#[cfg(not(target_os = "emscripten"))]
-fn register_codex_thread(
-    codex_dir: &std::path::Path,
-    session: &toolpath_codex::Session,
-    rollout_path: &std::path::Path,
-    session_ts: &chrono::DateTime<chrono::Utc>,
-) -> std::result::Result<bool, rusqlite::Error> {
-    let db_path = codex_dir.join("state_5.sqlite");
-    if !db_path.exists() {
-        return Ok(false);
-    }
-    let conn = rusqlite::Connection::open(&db_path)?;
-
-    let created_at = session_ts.timestamp();
-    let created_at_ms = session_ts.timestamp_millis();
-    let (cwd, model_provider, cli_version) = match session.meta() {
-        Some(m) => (
-            m.cwd.to_string_lossy().to_string(),
-            m.model_provider.clone().unwrap_or_else(|| "openai".into()),
-            m.cli_version,
-        ),
-        None => ("/".to_string(), "openai".to_string(), String::new()),
-    };
-    let first_user_message = first_user_message_text(session);
-    let title = first_user_message.chars().take(200).collect::<String>();
-    let has_user_event: i64 = if first_user_message.is_empty() { 0 } else { 1 };
-    let sandbox_policy_json = serde_json::json!({
-        "type": "workspace-write",
-        "writable_roots": [],
-        "network_access": false,
-        "exclude_tmpdir_env_var": false,
-        "exclude_slash_tmp": false,
-    })
-    .to_string();
-
-    conn.execute(
-        "INSERT OR REPLACE INTO threads (
-            id, rollout_path, created_at, updated_at, source, model_provider,
-            cwd, title, sandbox_policy, approval_mode, tokens_used, has_user_event,
-            archived, cli_version, first_user_message, memory_mode,
-            created_at_ms, updated_at_ms
-         ) VALUES (
-            ?1, ?2, ?3, ?4, 'cli', ?5,
-            ?6, ?7, ?8, 'on-request', 0, ?9,
-            0, ?10, ?11, 'enabled',
-            ?12, ?13
-         )",
-        rusqlite::params![
-            session.id,
-            rollout_path.to_string_lossy(),
-            created_at,
-            created_at,
-            model_provider,
-            cwd,
-            title,
-            sandbox_policy_json,
-            has_user_event,
-            cli_version,
-            first_user_message,
-            created_at_ms,
-            created_at_ms,
-        ],
-    )?;
-    Ok(true)
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn first_user_message_text(session: &toolpath_codex::Session) -> String {
-    use toolpath_codex::types::{ResponseItem, RolloutItem};
-    for line in &session.lines {
-        if let RolloutItem::ResponseItem(ResponseItem::Message(m)) = line.item()
-            && m.role == "user"
-        {
-            let t = m.text();
-            if !t.is_empty() {
-                return t;
-            }
-        }
-    }
-    String::new()
-}
-
 /// `--output` mode: write JSONL to the caller-specified path.
 #[cfg(not(target_os = "emscripten"))]
 fn write_codex_to_output_path(
@@ -1325,52 +733,6 @@ fn write_codex_to_stdout(session: &toolpath_codex::Session) -> Result<()> {
     let bytes = serialize_codex_jsonl(session)?;
     print!("{}", bytes);
     Ok(())
-}
-
-/// Pull the session's intended timestamp out of its session_meta line.
-/// Falls back to the wall clock at projection time when the metadata
-/// is missing or unparseable — Codex's directory layout requires SOME
-/// date to file under.
-#[cfg(not(target_os = "emscripten"))]
-fn codex_session_timestamp(
-    session: &toolpath_codex::Session,
-) -> Result<chrono::DateTime<chrono::Utc>> {
-    if let Some(meta) = session.meta()
-        && let Ok(dt) = meta.timestamp.parse::<chrono::DateTime<chrono::Utc>>()
-    {
-        return Ok(dt);
-    }
-    Ok(chrono::Utc::now())
-}
-
-/// Filename stem matching Codex's own naming:
-/// `rollout-YYYY-MM-DDThh-mm-ss-<session-uuid>`.
-#[cfg(not(target_os = "emscripten"))]
-fn codex_rollout_stem(
-    session: &toolpath_codex::Session,
-    ts: &chrono::DateTime<chrono::Utc>,
-) -> String {
-    let stamp = ts.format("%Y-%m-%dT%H-%M-%S").to_string();
-    let uuid_safe: String = session
-        .id
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-        .collect();
-    format!("rollout-{}-{}", stamp, uuid_safe)
-}
-
-/// Serialize a Codex `Session` to JSONL — one [`RolloutLine`] per line,
-/// trailing newline included. This matches the on-disk shape Codex's
-/// rollout recorder writes.
-#[cfg(not(target_os = "emscripten"))]
-fn serialize_codex_jsonl(session: &toolpath_codex::Session) -> Result<String> {
-    let mut lines: Vec<String> = Vec::with_capacity(session.lines.len());
-    for line in &session.lines {
-        lines.push(serde_json::to_string(line)?);
-    }
-    let mut out = lines.join("\n");
-    out.push('\n');
-    Ok(out)
 }
 
 // ── Opencode ──────────────────────────────────────────────────────────
@@ -1403,187 +765,6 @@ fn run_opencode(input: String, project: Option<PathBuf>, output: Option<PathBuf>
         }
         Ok(())
     }
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn build_opencode_session(
-    path: &toolpath::v1::Path,
-    project_dir: Option<&std::path::Path>,
-) -> Result<toolpath_opencode::Session> {
-    use toolpath_convo::ConversationProjector;
-    use toolpath_opencode::project::OpencodeProjector;
-
-    let view = toolpath_convo::extract_conversation(path);
-    let mut projector = OpencodeProjector::new();
-    if let Some(dir) = project_dir {
-        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        projector = projector.with_directory(canonical);
-    }
-    projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_opencode_db(
-    session: &toolpath_opencode::Session,
-    project_dir: &std::path::Path,
-) -> Result<()> {
-    use toolpath_opencode::PathResolver;
-
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-
-    let resolver = PathResolver::new();
-    let db_path = resolver
-        .db_path()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve opencode db path: {}", e))?;
-    if !db_path.exists() {
-        anyhow::bail!(
-            "opencode database not found at {} — has opencode been run on this machine?",
-            db_path.display()
-        );
-    }
-
-    let mut conn = rusqlite::Connection::open(&db_path)
-        .with_context(|| format!("open {}", db_path.display()))?;
-    let tx = conn.transaction()?;
-
-    ensure_opencode_project(&tx, &session.project_id, &project_dir, session.time_created)?;
-    insert_opencode_session(&tx, session)?;
-    let mut message_count = 0_usize;
-    let mut part_count = 0_usize;
-    for message in &session.messages {
-        insert_opencode_message(&tx, message)?;
-        message_count += 1;
-        for part in &message.parts {
-            insert_opencode_part(&tx, part)?;
-            part_count += 1;
-        }
-    }
-    tx.commit()?;
-
-    eprintln!(
-        "Exported opencode session {} ({} messages, {} parts) → {}",
-        session.id,
-        message_count,
-        part_count,
-        db_path.display()
-    );
-    eprintln!();
-    eprintln!("Loadable via:");
-    eprintln!("  path import opencode --session {}", session.id);
-    eprintln!();
-    eprintln!("Open conversation with:");
-    eprintln!("  opencode --session {}", session.id);
-    Ok(())
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn ensure_opencode_project(
-    tx: &rusqlite::Transaction<'_>,
-    project_id: &str,
-    worktree: &std::path::Path,
-    time_now: i64,
-) -> Result<()> {
-    use rusqlite::OptionalExtension;
-    let exists: bool = tx
-        .query_row(
-            "SELECT 1 FROM project WHERE id = ?1",
-            rusqlite::params![project_id],
-            |_| Ok(true),
-        )
-        .optional()?
-        .unwrap_or(false);
-    if exists {
-        return Ok(());
-    }
-    tx.execute(
-        "INSERT INTO project (id, worktree, vcs, name, time_created, time_updated, sandboxes)
-         VALUES (?1, ?2, 'git', NULL, ?3, ?3, '[]')",
-        rusqlite::params![project_id, worktree.to_string_lossy(), time_now],
-    )?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn insert_opencode_session(
-    tx: &rusqlite::Transaction<'_>,
-    session: &toolpath_opencode::Session,
-) -> Result<()> {
-    tx.execute(
-        "INSERT OR REPLACE INTO session
-            (id, project_id, workspace_id, parent_id, slug, directory, title,
-             version, share_url, summary_additions, summary_deletions, summary_files,
-             time_created, time_updated, time_compacting, time_archived)
-         VALUES
-            (?1, ?2, ?3, ?4, ?5, ?6, ?7,
-             ?8, ?9, ?10, ?11, ?12,
-             ?13, ?14, ?15, ?16)",
-        rusqlite::params![
-            session.id,
-            session.project_id,
-            session.workspace_id,
-            session.parent_id,
-            session.slug,
-            session.directory.to_string_lossy(),
-            session.title,
-            session.version,
-            session.share_url,
-            session.summary_additions,
-            session.summary_deletions,
-            session.summary_files,
-            session.time_created,
-            session.time_updated,
-            session.time_compacting,
-            session.time_archived,
-        ],
-    )?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn insert_opencode_message(
-    tx: &rusqlite::Transaction<'_>,
-    message: &toolpath_opencode::Message,
-) -> Result<()> {
-    let data = serde_json::to_string(&message.data)
-        .with_context(|| format!("serialize message {}", message.id))?;
-    tx.execute(
-        "INSERT OR REPLACE INTO message (id, session_id, time_created, time_updated, data)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![
-            message.id,
-            message.session_id,
-            message.time_created,
-            message.time_updated,
-            data,
-        ],
-    )?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn insert_opencode_part(
-    tx: &rusqlite::Transaction<'_>,
-    part: &toolpath_opencode::Part,
-) -> Result<()> {
-    let data =
-        serde_json::to_string(&part.data).with_context(|| format!("serialize part {}", part.id))?;
-    tx.execute(
-        "INSERT OR REPLACE INTO part
-            (id, message_id, session_id, time_created, time_updated, data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![
-            part.id,
-            part.message_id,
-            part.session_id,
-            part.time_created,
-            part.time_updated,
-            data,
-        ],
-    )?;
-    Ok(())
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -1644,216 +825,6 @@ fn run_cursor(input: String, project: Option<PathBuf>, output: Option<PathBuf>) 
         }
         Ok(())
     }
-}
-
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn project_cursor(
-    path: &toolpath::v1::Path,
-    project_dir: &std::path::Path,
-) -> Result<String> {
-    let session = build_cursor_session(path, Some(project_dir))?;
-    let id = session.data.composer_id.clone();
-    write_into_cursor_db(&session, project_dir)?;
-    Ok(id)
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn build_cursor_session(
-    path: &toolpath::v1::Path,
-    project_dir: Option<&std::path::Path>,
-) -> Result<toolpath_cursor::CursorSession> {
-    use toolpath_convo::ConversationProjector;
-    use toolpath_cursor::{CursorProjector, PathResolver};
-
-    let view = toolpath_convo::extract_conversation(path);
-    let mut projector = CursorProjector::new();
-    if let Some(dir) = project_dir {
-        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        // Cursor filters sidebar composers by `workspaceIdentifier.id`.
-        // Reuse the existing id when present, otherwise pre-create a
-        // workspaceStorage entry so Cursor adopts ours on next open.
-        let resolver = PathResolver::new();
-        if let Ok(ensured) =
-            resolver.ensure_workspace_storage_entry(&canonical, stable_workspace_id_for)
-        {
-            projector = projector.with_workspace_id(ensured.id);
-            if ensured.created {
-                eprintln!(
-                    "note: created workspaceStorage entry for {} so Cursor recognizes the projected composer",
-                    canonical.display()
-                );
-            }
-        }
-        projector = projector.with_workspace_path(canonical);
-    }
-    projector
-        .project(&view)
-        .map_err(|e| anyhow::anyhow!("Projection failed: {}", e))
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn stable_workspace_id_for(folder: &std::path::Path) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(folder.to_string_lossy().as_bytes());
-    let digest = hasher.finalize();
-    hex::encode(&digest[..16])
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn write_into_cursor_db(
-    session: &toolpath_cursor::CursorSession,
-    project_dir: &std::path::Path,
-) -> Result<()> {
-    use toolpath_cursor::PathResolver;
-
-    let project_dir = std::fs::canonicalize(project_dir)
-        .with_context(|| format!("resolve project path {}", project_dir.display()))?;
-
-    let resolver = PathResolver::new();
-    let db_path = resolver
-        .db_path()
-        .map_err(|e| anyhow::anyhow!("Cannot resolve Cursor state.vscdb path: {}", e))?;
-    if !db_path.exists() {
-        anyhow::bail!(
-            "Cursor state.vscdb not found at {} — has Cursor.app been run on this machine?",
-            db_path.display()
-        );
-    }
-
-    let mut conn = rusqlite::Connection::open(&db_path)
-        .with_context(|| format!("open {}", db_path.display()))?;
-    let tx = conn.transaction()?;
-
-    upsert_cursor_composer_header(&tx, session)?;
-    upsert_cursor_kv(
-        &tx,
-        &format!(
-            "{}{}",
-            toolpath_cursor::reader::COMPOSER_DATA_PREFIX,
-            session.data.composer_id
-        ),
-        &serde_json::to_string(&session.data)?,
-    )?;
-    tx.commit()?;
-    let tx = conn.transaction()?;
-
-    let mut bubble_count = 0_usize;
-    for bubble in &session.bubbles {
-        let key = format!(
-            "{}{}:{}",
-            toolpath_cursor::reader::BUBBLE_PREFIX,
-            session.data.composer_id,
-            bubble.bubble_id
-        );
-        upsert_cursor_kv(&tx, &key, &serde_json::to_string(bubble)?)?;
-        bubble_count += 1;
-    }
-
-    let mut blob_count = 0_usize;
-    for (hash, body) in &session.content_blobs {
-        let composer_key = format!("{}{}", toolpath_cursor::reader::CONTENT_PREFIX, hash);
-        upsert_cursor_kv(&tx, &composer_key, body)?;
-        blob_count += 1;
-    }
-
-    tx.commit()?;
-
-    eprintln!(
-        "Exported Cursor composer {} ({} bubbles, {} blobs) → {}",
-        session.data.composer_id,
-        bubble_count,
-        blob_count,
-        db_path.display()
-    );
-    eprintln!();
-    eprintln!("Loadable via:");
-    eprintln!(
-        "  path import cursor --session {}",
-        session.data.composer_id
-    );
-    eprintln!();
-    eprintln!("Open the workspace in Cursor.app:");
-    for line in cursor_open_hints(&project_dir) {
-        eprintln!("  {line}");
-    }
-    Ok(())
-}
-
-fn cursor_open_hints(workspace: &std::path::Path) -> Vec<String> {
-    let ws = workspace.display().to_string();
-    let cursor_on_path = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .any(|d| d.join("cursor").is_file());
-    if cursor_on_path {
-        return vec![format!("cursor {ws}")];
-    }
-    #[cfg(target_os = "macos")]
-    {
-        vec![format!("open -a Cursor {ws}")]
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        vec![format!("xdg-open {ws}")]
-    }
-    #[cfg(not(unix))]
-    {
-        vec![format!("cursor {ws}")]
-    }
-}
-
-#[cfg(not(target_os = "emscripten"))]
-fn upsert_cursor_kv(tx: &rusqlite::Transaction<'_>, key: &str, value: &str) -> Result<()> {
-    tx.execute(
-        "INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
-        rusqlite::params![key, value],
-    )?;
-    Ok(())
-}
-
-/// Merge our new composer head into `ItemTable.composer.composerHeaders`.
-/// Cursor's sidebar enumerates composers from this blob; without an
-/// entry our composer wouldn't show up.
-#[cfg(not(target_os = "emscripten"))]
-fn upsert_cursor_composer_header(
-    tx: &rusqlite::Transaction<'_>,
-    session: &toolpath_cursor::CursorSession,
-) -> Result<()> {
-    use rusqlite::OptionalExtension;
-    use toolpath_cursor::reader::HEADERS_KEY;
-
-    let raw: Option<String> = tx
-        .query_row(
-            "SELECT value FROM ItemTable WHERE key = ?1",
-            rusqlite::params![HEADERS_KEY],
-            |r| r.get(0),
-        )
-        .optional()?;
-
-    let mut headers: toolpath_cursor::ComposerHeaders = match raw {
-        Some(s) => serde_json::from_str(&s).unwrap_or_default(),
-        None => toolpath_cursor::ComposerHeaders::default(),
-    };
-
-    let Some(new_head) = session.head.clone() else {
-        anyhow::bail!(
-            "Projected Cursor session has no head (composer would be invisible in Cursor.app)"
-        );
-    };
-
-    let composer_id = session.data.composer_id.clone();
-    headers
-        .all_composers
-        .retain(|h| h.composer_id != composer_id);
-    headers.all_composers.insert(0, new_head);
-
-    let payload = serde_json::to_string(&headers)?;
-    tx.execute(
-        "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?1, ?2)",
-        rusqlite::params![HEADERS_KEY, payload],
-    )?;
-    Ok(())
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -2062,6 +1033,7 @@ fn derive_name(doc: &toolpath::v1::Graph) -> String {
 #[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
     use super::*;
+    use crate::projection::test_support::make_convo_path;
     use std::collections::HashMap;
     use toolpath::v1::{ArtifactChange, PathIdentity, Step, StepIdentity, StructuralChange};
 
@@ -2142,12 +1114,11 @@ mod tests {
         let doc = make_path_doc();
         std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
 
-        run_claude(
-            input_path.to_string_lossy().to_string(),
-            None,
-            Some(output_path.clone()),
-            false,
-        )
+        run_claude(ClaudeExportArgs {
+            input: input_path.to_string_lossy().to_string(),
+            output: Some(output_path.clone()),
+            ..Default::default()
+        })
         .unwrap();
 
         let out = std::fs::read_to_string(&output_path).unwrap();
@@ -2190,8 +1161,11 @@ mod tests {
         };
         std::fs::write(&input_path, serde_json::to_string(&multi).unwrap()).unwrap();
 
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude(ClaudeExportArgs {
+            input: input_path.to_string_lossy().to_string(),
+            ..Default::default()
+        })
+        .unwrap_err();
         assert!(err.to_string().contains("single-path graph"));
     }
 
@@ -2200,8 +1174,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let input_path = temp.path().join("input.json");
         std::fs::write(&input_path, "not json").unwrap();
-        let err =
-            run_claude(input_path.to_string_lossy().to_string(), None, None, false).unwrap_err();
+        let err = run_claude(ClaudeExportArgs {
+            input: input_path.to_string_lossy().to_string(),
+            ..Default::default()
+        })
+        .unwrap_err();
         assert!(err.to_string().contains("parse") || err.to_string().contains("Failed"));
     }
 
@@ -2436,6 +1413,121 @@ mod tests {
 
         // No sub-agents in this fixture → no sibling UUID dir.
         assert!(!out_path.parent().unwrap().join(session_uuid).exists());
+    }
+
+    /// Runs `p export claude --output` with `args` on `doc` and parses
+    /// the lines.
+    fn export_claude_lines(
+        doc: &toolpath::v1::Graph,
+        args: ClaudeExportArgs,
+    ) -> Vec<serde_json::Value> {
+        let temp = tempfile::tempdir().unwrap();
+        let input_path = temp.path().join("input.json");
+        let output_path = temp.path().join("out.jsonl");
+        std::fs::write(&input_path, serde_json::to_string(doc).unwrap()).unwrap();
+        run_claude(ClaudeExportArgs {
+            input: input_path.to_string_lossy().to_string(),
+            output: Some(output_path.clone()),
+            ..args
+        })
+        .unwrap();
+        std::fs::read_to_string(&output_path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn values_of<'a>(lines: &'a [serde_json::Value], key: &str) -> Vec<&'a str> {
+        lines.iter().filter_map(|v| v.get(key)?.as_str()).collect()
+    }
+
+    #[test]
+    fn session_id_flag_stamps_the_given_id() {
+        let doc = make_path_doc();
+        let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+        let source_ids = values_of(&plain, "sessionId");
+        assert_eq!(
+            source_ids.len(),
+            plain.len(),
+            "every line carries a sessionId"
+        );
+
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(!source_ids.contains(&given));
+        let renamed = export_claude_lines(
+            &doc,
+            ClaudeExportArgs {
+                session_id: Some(given.to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(renamed.len(), plain.len());
+        let ids = values_of(&renamed, "sessionId");
+        assert_eq!(ids.len(), source_ids.len());
+        assert!(ids.iter().all(|s| *s == given));
+    }
+
+    #[test]
+    fn new_session_id_flag_mints_a_distinct_id_per_export() {
+        let doc = make_path_doc();
+        let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+        let source_ids = values_of(&plain, "sessionId");
+        let args = || ClaudeExportArgs {
+            new_session_id: true,
+            ..Default::default()
+        };
+        let first = export_claude_lines(&doc, args());
+        let second = export_claude_lines(&doc, args());
+
+        let id_of = |lines: &[serde_json::Value]| {
+            let ids = values_of(lines, "sessionId");
+            assert_eq!(ids.len(), source_ids.len());
+            let id = ids[0].to_string();
+            assert!(ids.iter().all(|s| *s == id), "one ID on every line");
+            let parsed = uuid::Uuid::parse_str(&id).unwrap();
+            assert_eq!(parsed.get_version_num(), 4);
+            assert!(!source_ids.contains(&id.as_str()));
+            id
+        };
+        assert_ne!(id_of(&first), id_of(&second));
+    }
+
+    /// Parses `p export claude --input x <extra>` the way the binary
+    /// does, so the test sees clap's value parsers and conflicts.
+    fn parse_export_claude(extra: &[&str]) -> Result<(), clap::Error> {
+        use clap::Parser;
+        #[derive(Parser, Debug)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: ExportTarget,
+        }
+        Cli::try_parse_from(
+            ["test", "claude", "--input", "x"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+        .map(|_| ())
+    }
+
+    #[test]
+    fn session_id_flag_takes_only_a_uuid() {
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(parse_export_claude(&["--session-id", given]).is_ok());
+        assert!(
+            parse_export_claude(&["--session-id", "my-template"]).is_err(),
+            "clap must reject a session ID that is not a UUID"
+        );
+    }
+
+    #[test]
+    fn session_id_and_new_session_id_are_mutually_exclusive() {
+        let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+        assert!(parse_export_claude(&["--new-session-id"]).is_ok());
+        assert!(
+            parse_export_claude(&["--session-id", given, "--new-session-id"]).is_err(),
+            "clap must reject simultaneous --session-id and --new-session-id"
+        );
     }
 
     #[test]
@@ -3116,142 +2208,6 @@ mod tests {
         assert!(err.to_string().contains("single-path"));
     }
 
-    // ── project_<harness> wrapper tests ──────────────────────────────
-
-    /// Build a minimal `toolpath::v1::Path` with a single `conversation.append`
-    /// step using the given `artifact_key` (e.g. `"claude-code://my-session"`).
-    /// The projectors read `view.id` from the first `<provider>://<id>` artifact
-    /// key they see, so this gives them a non-empty session id to work with.
-    fn make_convo_path(artifact_key: &str) -> toolpath::v1::Path {
-        let mut extra = HashMap::new();
-        extra.insert("role".to_string(), serde_json::json!("user"));
-        extra.insert("text".to_string(), serde_json::json!("hello"));
-        let step = toolpath::v1::Step {
-            step: toolpath::v1::StepIdentity {
-                id: "s1".to_string(),
-                parents: vec![],
-                actor: "human:test".to_string(),
-                timestamp: "2026-01-01T00:00:00Z".to_string(),
-            },
-            change: {
-                let mut m = HashMap::new();
-                m.insert(
-                    artifact_key.to_string(),
-                    toolpath::v1::ArtifactChange {
-                        raw: None,
-                        structural: Some(toolpath::v1::StructuralChange {
-                            change_type: "conversation.append".to_string(),
-                            extra,
-                        }),
-                    },
-                );
-                m
-            },
-            meta: None,
-        };
-        toolpath::v1::Path {
-            path: toolpath::v1::PathIdentity {
-                id: "test-path".to_string(),
-                base: None,
-                head: "s1".to_string(),
-                graph_ref: None,
-            },
-            steps: vec![step],
-            meta: None,
-        }
-    }
-
-    #[test]
-    fn project_claude_returns_session_id_and_writes_jsonl() {
-        let temp = tempfile::tempdir().unwrap();
-        let fake_home = temp.path().join("home");
-        std::fs::create_dir_all(&fake_home).unwrap();
-        let cwd = temp.path().join("proj");
-        std::fs::create_dir_all(&cwd).unwrap();
-
-        // Use a deterministic session id embedded in the artifact key.
-        let session_id = "claude-wrapper-test-session";
-        let path = make_convo_path(&format!("claude-code://{}", session_id));
-
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = project_claude(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-
-        let returned_id = match result.expect("project_claude should succeed") {
-            ClaudeProjection::Written { session_id } => session_id,
-            ClaudeProjection::AlreadyLocal { .. } => panic!("fresh project dir must be Written"),
-        };
-        assert_eq!(returned_id, session_id);
-
-        let claude_projects = fake_home.join(".claude/projects");
-        assert!(
-            claude_projects.exists(),
-            "claude projects dir missing under HOME"
-        );
-    }
-
-    #[test]
-    fn project_claude_never_overwrites_an_existing_session() {
-        let temp = tempfile::tempdir().unwrap();
-        let fake_home = temp.path().join("home");
-        std::fs::create_dir_all(&fake_home).unwrap();
-        let cwd = temp.path().join("proj");
-        std::fs::create_dir_all(&cwd).unwrap();
-
-        let session_id = "claude-clobber-test-session";
-        let path = make_convo_path(&format!("claude-code://{}", session_id));
-
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let first = project_claude(&path, &cwd);
-        // Simulate local divergence: the session gained content after the
-        // first projection.
-        let session_file = claude_session_file(session_id, &cwd)
-            .unwrap()
-            .expect("first projection must have written the session file");
-        let mut contents = std::fs::read_to_string(&session_file).unwrap();
-        contents.push_str("{\"local\":\"divergence\"}\n");
-        std::fs::write(&session_file, &contents).unwrap();
-
-        let second = project_claude(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-
-        assert!(matches!(
-            first.expect("first projection should succeed"),
-            ClaudeProjection::Written { .. }
-        ));
-        match second.expect("second projection should succeed") {
-            ClaudeProjection::AlreadyLocal { session_id: id } => assert_eq!(id, session_id),
-            ClaudeProjection::Written { .. } => panic!("existing session must not be re-projected"),
-        }
-        assert_eq!(
-            std::fs::read_to_string(&session_file).unwrap(),
-            contents,
-            "existing session file must be untouched"
-        );
-    }
-
     #[test]
     fn export_claude_refuses_existing_session_without_force() {
         let temp = tempfile::tempdir().unwrap();
@@ -3274,9 +2230,17 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", &fake_home);
         }
-        let first = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let second = run_claude(input.clone(), Some(cwd.clone()), None, false);
-        let forced = run_claude(input, Some(cwd.clone()), None, true);
+        let export = |input: String, force: bool| {
+            run_claude(ClaudeExportArgs {
+                input,
+                project: Some(cwd.clone()),
+                force,
+                ..Default::default()
+            })
+        };
+        let first = export(input.clone(), false);
+        let second = export(input.clone(), false);
+        let forced = export(input, true);
         unsafe {
             match prior_home {
                 Some(v) => std::env::set_var("HOME", v),
@@ -3293,188 +2257,228 @@ mod tests {
         forced.expect("re-export with --force should succeed");
     }
 
-    #[test]
-    fn project_gemini_returns_session_id_and_writes_chat_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let fake_home = temp.path().join("home");
-        std::fs::create_dir_all(&fake_home).unwrap();
-        let cwd = temp.path().join("proj");
-        std::fs::create_dir_all(&cwd).unwrap();
+    #[cfg(feature = "resume-remote")]
+    mod resume_remote {
+        use super::*;
+        use crate::claude_session::generate_content_addressed_session_id;
+        use crate::cmd_export::remote_session::RemoteSessionArgs;
 
-        let session_uuid = "11111111-2222-3333-4444-aaaaaaaaaaaa";
-        let path = make_convo_path(&format!("gemini-cli://{}", session_uuid));
-
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
+        /// `make_path_doc` with `cwd` recorded on every step, plus one
+        /// headerless line that carries a `cwd`.
+        fn make_path_doc_with_cwd(cwd: &str) -> toolpath::v1::Graph {
+            let mut path = make_path_doc().into_single_path().unwrap();
+            for step in &mut path.steps {
+                for change in step.change.values_mut() {
+                    if let Some(structural) = change.structural.as_mut() {
+                        structural
+                            .extra
+                            .insert("cwd".to_string(), serde_json::json!(cwd));
+                    }
+                }
+            }
+            let artifact_key = path.steps[0].change.keys().next().unwrap().clone();
+            let mut extra = HashMap::new();
+            extra.insert("entry_type".to_string(), serde_json::json!("custom-title"));
+            extra.insert(
+                "raw".to_string(),
+                serde_json::json!({"type": "custom-title", "cwd": cwd, "customTitle": "x"}),
+            );
+            path.steps.push(Step {
+                step: StepIdentity {
+                    id: "step-003".to_string(),
+                    parents: vec!["step-002".to_string()],
+                    actor: "tool:claude-code".to_string(),
+                    timestamp: "2024-01-01T00:00:02Z".to_string(),
+                },
+                change: HashMap::from([(
+                    artifact_key,
+                    ArtifactChange {
+                        raw: None,
+                        structural: Some(StructuralChange {
+                            change_type: "conversation.event".to_string(),
+                            extra,
+                        }),
+                    },
+                )]),
+                meta: None,
+            });
+            path.path.head = "step-003".to_string();
+            toolpath::v1::Graph::from_path(path)
         }
-        let result = project_gemini(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
+
+        #[test]
+        fn cwd_flag_rewrites_every_cwd() {
+            let doc = make_path_doc_with_cwd("/old/project");
+            let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+            let old = values_of(&plain, "cwd");
+            assert!(!old.is_empty());
+            assert!(old.iter().all(|c| *c == "/old/project"));
+
+            let rooted = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        cwd: Some("/new/dir".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert_eq!(rooted.len(), plain.len());
+            let new = values_of(&rooted, "cwd");
+            assert_eq!(new.len(), old.len());
+            assert!(new.iter().all(|c| *c == "/new/dir"));
+            let preamble = rooted
+                .iter()
+                .find(|v| v["type"] == "custom-title")
+                .expect("the headerless line survives export");
+            assert_eq!(preamble["cwd"], "/new/dir");
+        }
+
+        #[test]
+        fn cwd_flag_leaves_session_ids_alone() {
+            let doc = make_path_doc_with_cwd("/old/project");
+            let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+            let rooted = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        cwd: Some("/new/dir".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                values_of(&plain, "sessionId"),
+                values_of(&rooted, "sessionId")
+            );
+        }
+
+        #[test]
+        fn content_addressed_session_id_excludes_the_other_naming_flags() {
+            let given = "402a3ca5-2530-407e-9029-f96879a0b1c2";
+            assert!(parse_export_claude(&["--content-addressed-session-id"]).is_ok());
+            for extra in [
+                ["--content-addressed-session-id", "--new-session-id"].as_slice(),
+                ["--content-addressed-session-id", "--session-id", given].as_slice(),
+            ] {
+                assert!(
+                    parse_export_claude(extra).is_err(),
+                    "clap must reject --content-addressed-session-id with {extra:?}"
+                );
             }
         }
 
-        let returned_id = result.expect("project_gemini should succeed");
-        assert_eq!(returned_id, session_uuid);
+        #[test]
+        fn content_addressed_session_id_flag_stamps_the_content_addressed_id() {
+            let doc = make_path_doc();
+            let plain = export_claude_lines(&doc, ClaudeExportArgs::default());
+            let source_ids = values_of(&plain, "sessionId");
+            assert_eq!(
+                source_ids.len(),
+                plain.len(),
+                "every line carries a sessionId"
+            );
 
-        let gemini_tmp = fake_home.join(".gemini/tmp");
-        assert!(gemini_tmp.exists(), "gemini tmp dir missing under HOME");
-    }
-
-    #[test]
-    fn project_codex_returns_session_id_and_writes_rollout() {
-        let temp = tempfile::tempdir().unwrap();
-        let fake_home = temp.path().join("home");
-        std::fs::create_dir_all(&fake_home).unwrap();
-        let cwd = temp.path().join("proj");
-        std::fs::create_dir_all(&cwd).unwrap();
-
-        let session_uuid = "019dabc6-cccc-dddd-eeee-ffffffffffff";
-        let path = make_convo_path(&format!("codex://{}", session_uuid));
-
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
+            let expected =
+                generate_content_addressed_session_id(&serde_json::to_string(&doc).unwrap())
+                    .unwrap();
+            assert!(!source_ids.contains(&expected.as_str()));
+            let addressed = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        content_addressed_session_id: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            assert_eq!(addressed.len(), plain.len());
+            let ids = values_of(&addressed, "sessionId");
+            assert_eq!(ids.len(), source_ids.len());
+            assert!(ids.iter().all(|s| *s == expected));
         }
-        let result = project_codex(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
+
+        #[test]
+        fn cwd_flag_does_not_change_the_content_addressed_id() {
+            let doc = make_path_doc_with_cwd("/old/project");
+            let addressed = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        content_addressed_session_id: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            let rerooted = export_claude_lines(
+                &doc,
+                ClaudeExportArgs {
+                    remote: RemoteSessionArgs {
+                        content_addressed_session_id: true,
+                        cwd: Some("/new/dir".to_string()),
+                    },
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                values_of(&addressed, "sessionId"),
+                values_of(&rerooted, "sessionId")
+            );
+        }
+
+        #[test]
+        fn content_addressed_export_names_the_project_file() {
+            let temp = tempfile::tempdir().unwrap();
+            let fake_home = temp.path().join("home");
+            std::fs::create_dir_all(&fake_home).unwrap();
+            let cwd = temp.path().join("proj");
+            std::fs::create_dir_all(&cwd).unwrap();
+
+            let path = make_convo_path("claude-code://claude-addressed-file-test-session");
+            let input_path = temp.path().join("input.json");
+            let doc = toolpath::v1::Graph::from_path(path);
+            std::fs::write(&input_path, serde_json::to_string(&doc).unwrap()).unwrap();
+            let args = ClaudeExportArgs {
+                input: input_path.to_string_lossy().to_string(),
+                project: Some(cwd.clone()),
+                remote: RemoteSessionArgs {
+                    content_addressed_session_id: true,
+                    cwd: None,
+                },
+                ..Default::default()
+            };
+
+            let _g = crate::config::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let prior_home = std::env::var_os("HOME");
+            unsafe {
+                std::env::set_var("HOME", &fake_home);
             }
-        }
+            let result = run_claude(args);
+            unsafe {
+                match prior_home {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
 
-        let returned_id = result.expect("project_codex should succeed");
-        assert_eq!(returned_id, session_uuid);
-
-        let codex_sessions = fake_home.join(".codex/sessions");
-        assert!(codex_sessions.exists(), "codex sessions dir missing");
-    }
-
-    #[test]
-    fn project_opencode_returns_session_id_and_inserts_row() {
-        let temp = tempfile::tempdir().unwrap();
-        let fake_home = temp.path().join("home");
-        std::fs::create_dir_all(&fake_home).unwrap();
-        let cwd = temp.path().join("proj");
-        std::fs::create_dir_all(&cwd).unwrap();
-
-        // Bootstrap the opencode DB (no public schema helper exists; inline
-        // the same DDL used in the existing opencode_writes_into_db_with_project test).
-        let data_dir = fake_home.join(".local/share/opencode");
-        std::fs::create_dir_all(&data_dir).unwrap();
-        let db_path = data_dir.join("opencode.db");
-        {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute_batch(
-                r#"
-                CREATE TABLE project (
-                  id text PRIMARY KEY, worktree text NOT NULL, vcs text, name text,
-                  icon_url text, icon_color text,
-                  time_created integer NOT NULL, time_updated integer NOT NULL,
-                  time_initialized integer, sandboxes text NOT NULL, commands text
-                );
-                CREATE TABLE session (
-                  id text PRIMARY KEY, project_id text NOT NULL, parent_id text,
-                  slug text NOT NULL, directory text NOT NULL, title text NOT NULL,
-                  version text NOT NULL, share_url text,
-                  summary_additions integer, summary_deletions integer,
-                  summary_files integer, summary_diffs text, revert text, permission text,
-                  time_created integer NOT NULL, time_updated integer NOT NULL,
-                  time_compacting integer, time_archived integer, workspace_id text
-                );
-                CREATE TABLE message (
-                  id text PRIMARY KEY, session_id text NOT NULL,
-                  time_created integer NOT NULL, time_updated integer NOT NULL,
-                  data text NOT NULL
-                );
-                CREATE TABLE part (
-                  id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
-                  time_created integer NOT NULL, time_updated integer NOT NULL,
-                  data text NOT NULL
-                );
-                "#,
+            result.expect("content-addressed export should succeed");
+            let expected = generate_content_addressed_session_id(
+                &std::fs::read_to_string(&input_path).unwrap(),
             )
             .unwrap();
+            let canon = std::fs::canonicalize(&cwd).unwrap();
+            let file = toolpath_claude::PathResolver::new()
+                .with_home(&fake_home)
+                .project_dir(canon.to_str().unwrap())
+                .unwrap()
+                .join(format!("{expected}.jsonl"));
+            assert!(file.is_file(), "{}", file.display());
         }
-
-        // opencode session ids are derived from view.id via mint_session_id,
-        // which adds the `ses_` prefix if not already present.
-        let path = make_convo_path("opencode://ses_wrapper-test");
-
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        let prior_xdg = std::env::var_os("XDG_DATA_HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-            std::env::remove_var("XDG_DATA_HOME");
-        }
-        let result = project_opencode(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            match prior_xdg {
-                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
-                None => std::env::remove_var("XDG_DATA_HOME"),
-            }
-        }
-
-        let returned_id = result.expect("project_opencode should succeed");
-        assert_eq!(returned_id, "ses_wrapper-test");
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM session WHERE id = ?1",
-                [&returned_id],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1, "expected one session row with id {returned_id}");
-    }
-
-    #[test]
-    fn project_pi_returns_session_id_and_writes_jsonl() {
-        let temp = tempfile::tempdir().unwrap();
-        let fake_home = temp.path().join("home");
-        std::fs::create_dir_all(&fake_home).unwrap();
-        let cwd = temp.path().join("proj");
-        std::fs::create_dir_all(&cwd).unwrap();
-
-        let session_id = "pi-wrapper-test-session";
-        let path = make_convo_path(&format!("pi://{}", session_id));
-
-        let _g = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prior_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &fake_home);
-        }
-        let result = project_pi(&path, &cwd);
-        unsafe {
-            match prior_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-
-        let returned_id = result.expect("project_pi should succeed");
-        assert_eq!(returned_id, session_id);
-
-        let pi_sessions = fake_home.join(".pi/agent/sessions");
-        assert!(pi_sessions.exists(), "pi sessions dir missing");
     }
 }

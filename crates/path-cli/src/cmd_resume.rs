@@ -35,6 +35,22 @@
 //! integration tests use [`RecordingExec`] to capture
 //! `(binary, args, cwd)` without launching anything.
 //!
+//! ## Remote
+//!
+//! `--remote <user@host>` (Claude only) resumes the session on an ssh
+//! host under tmux instead of this machine. The flow lives in
+//! the `remote` module: two read-only probes, the printed plan
+//! (`--dry-run` stops there), then upload, launch, and attach as the
+//! remote state requires; `--no-attach` prints the attach command
+//! after the launch instead of attaching; arguments after `--`
+//! reach the remote `claude`. `--session <id>` names a Claude session
+//! in the local project directory (`--project`, default: the current
+//! directory) in place of `<input>`, and the document is derived from
+//! the session on disk. With `--remote`, `-C` names the remote project
+//! directory; the default is the local project directory with the
+//! local home swapped for the remote home. All of it compiles only
+//! with the `resume-remote` cargo feature on unix.
+//!
 //! See `docs/superpowers/specs/2026-05-08-path-resume-command-design.md`
 //! for the full design.
 
@@ -46,13 +62,18 @@ use std::path::PathBuf;
 
 use crate::harness::Harness;
 
-#[derive(Args, Debug)]
+#[cfg(all(unix, feature = "resume-remote"))]
+mod remote;
+mod tui;
+
+#[derive(Args, Debug, Default)]
 pub struct ResumeArgs {
     /// Toolpath document to resume from. Accepted shapes: a Pathbase
     /// URL (`https://host/owner/repo/slug`), a bare Pathbase shorthand
     /// (`owner/repo/slug`), a path to a local toolpath JSON file, or a
-    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`).
-    pub input: String,
+    /// cache id (e.g. `claude-abc`, `pathbase-foo-bar-baz`). With no
+    /// input, a terminal UI lists the sessions in the document cache.
+    pub input: Option<String>,
 
     /// Working directory to run the resumed harness from. Defaults to
     /// the current shell cwd. The on-disk projection is keyed on this
@@ -80,17 +101,91 @@ pub struct ResumeArgs {
     /// then `$PATHBASE_URL`, then `https://pathbase.dev`.
     #[arg(long)]
     pub url: Option<String>,
+
+    #[cfg(all(unix, feature = "resume-remote"))]
+    #[command(flatten)]
+    pub remote: remote::RemoteArgs,
 }
 
 pub fn run(args: ResumeArgs) -> Result<()> {
     run_with_strategy(args, &RealExec)
 }
 
+/// `path resume --remote <dest>`: the resume on an ssh host.
+#[cfg(all(unix, feature = "resume-remote"))]
+pub(crate) fn run_remote(
+    dest: crate::ssh::Destination,
+    args: ResumeArgs,
+    config: &crate::config::Config,
+) -> Result<()> {
+    if !args.remote.dry_run && !args.remote.no_attach {
+        use std::io::IsTerminal;
+        for (stream, is_tty) in [
+            ("stdin", std::io::stdin().is_terminal()),
+            ("stdout", std::io::stdout().is_terminal()),
+        ] {
+            if !is_tty {
+                anyhow::bail!(
+                    "`path resume --remote` needs an interactive terminal for the \
+                     tmux attach: {stream} is not a TTY (pass --no-attach to launch \
+                     without attaching, or --dry-run to stop at the plan)"
+                );
+            }
+        }
+    }
+    let (resolved, local_cwd) = match &args.remote.session {
+        Some(session) => {
+            let project = match &args.remote.project {
+                Some(project) => std::fs::canonicalize(project)
+                    .with_context(|| format!("resolve --project {}", project.display()))?,
+                None => std::env::current_dir()?,
+            };
+            let resolved = remote::resolve_session(session, &project, config)?;
+            (resolved, project)
+        }
+        None => (resolve_input(&args)?, std::env::current_dir()?),
+    };
+    let document = extract_the_only_path(&resolved.graph)?;
+    require_an_agent_turn(document)?;
+    remote::require_harness_is_claude(args.harness, resolved.source_harness)?;
+    let home = config
+        .home_dir()
+        .context("cannot determine the home directory")?;
+    let transport = crate::providers::ssh_client(config)?;
+    let status = remote::resume(
+        &remote::RemoteResume {
+            document,
+            document_json: &resolved.json,
+            dest: &dest,
+            remote_dir: args.cwd.as_deref(),
+            dry_run: args.remote.dry_run,
+            no_attach: args.remote.no_attach,
+            launch_args: &args.remote.launch_args,
+            local_home: home,
+            local_cwd: &local_cwd,
+            term: config.term.as_deref(),
+        },
+        &transport,
+    )?;
+    if status != 0 {
+        std::process::exit(status as i32);
+    }
+    Ok(())
+}
+
 /// Internal entry point that the integration tests call with a
 /// `RecordingExec` strategy. Production callers use [`run`].
 pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
-    let (graph, source_harness) = resolve_input(&args)?;
-    let path = ensure_path_with_agent(&graph)?;
+    if args.input.is_none() {
+        return tui::run(args, exec);
+    }
+    let ResolvedInput {
+        graph,
+        source_harness,
+        ..
+    } = resolve_input(&args)?;
+    let path = extract_the_only_path(&graph)?;
+    require_an_agent_turn(path)?;
 
     let cwd = match args.cwd.as_ref() {
         Some(p) => {
@@ -161,26 +256,31 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
     None
 }
 
-/// Validate that a parsed Toolpath document is a single inline Path
-/// carrying at least one `agent:*` actor. Returns the inner Path borrow
-/// on success.
-pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
+/// The one `Path` of a document. An empty graph, more than one path,
+/// or a `$ref` in place of the path errors.
+pub(crate) fn extract_the_only_path(g: &Graph) -> Result<&TPath> {
     if g.paths.is_empty() {
         anyhow::bail!("resume needs a `Path`; expected one path, got an empty graph");
     }
     if g.paths.len() > 1 {
         anyhow::bail!(
-            "resume needs a single `Path`; input is a graph with {} paths. \
-             Pick one with `path query …` or split first.",
+            "resume needs a single `Path`; this document holds {} paths. Pass a \
+             single-path document, or export one path with `path p render md \
+             --input <file>` to inspect them.",
             g.paths.len()
         );
     }
-    let path = match &g.paths[0] {
-        PathOrRef::Path(p) => p.as_ref(),
+    match &g.paths[0] {
+        PathOrRef::Path(p) => Ok(p.as_ref()),
         PathOrRef::Ref(_) => anyhow::bail!(
             "resume needs an inline `Path`; got a $ref. Resolve it first with `path import` or fetch the document."
         ),
-    };
+    }
+}
+
+/// Error unless some step of `path` has an `agent:` actor. A path
+/// with none has no agent session to resume.
+pub(crate) fn require_an_agent_turn(path: &TPath) -> Result<()> {
     let has_agent = path
         .steps
         .iter()
@@ -190,14 +290,32 @@ pub(crate) fn ensure_path_with_agent(g: &Graph) -> Result<&TPath> {
             "no agent session in input — `path resume` only works on harness-derived paths"
         );
     }
-    Ok(path)
+    Ok(())
 }
 
-/// Resolve the user-supplied `<input>` argument into a parsed `Graph`
-/// plus the source harness inferred from its single inline path (if
-/// any). See spec § "Input resolution" for the order.
-pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>)> {
-    let raw = args.input.as_str();
+/// A resolved input: the parsed document, its source harness, and
+/// the JSON text it was parsed from. The text is kept because the
+/// remote session ID hashes the document text, not a type
+/// round-trip.
+#[derive(Debug)]
+pub(crate) struct ResolvedInput {
+    pub(crate) graph: Graph,
+    pub(crate) source_harness: Option<Harness>,
+    #[cfg(all(unix, feature = "resume-remote"))]
+    pub(crate) json: String,
+}
+
+/// Resolve the user-supplied `<input>` argument into a
+/// [`ResolvedInput`]: the parsed `Graph` plus the source harness
+/// inferred from its single inline path (if any). See spec § "Input
+/// resolution" for the order. Every shape yields the document text,
+/// which one parse below turns into the `Graph`, so a parse error
+/// names the input it came from.
+pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
+    let raw = args
+        .input
+        .as_deref()
+        .context("a document <input> is required")?;
 
     enum Shape<'a> {
         PathbaseUrl(&'a str),
@@ -216,7 +334,7 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
         Shape::CacheId(raw)
     };
 
-    let graph: Graph = match shape {
+    let (json, source) = match shape {
         Shape::PathbaseUrl(u) | Shape::PathbaseShorthand(u) => {
             // Probe the local cache before going to the network. The cache
             // id is purely a function of the parsed (owner, repo, id), so
@@ -233,8 +351,7 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
                 let json = std::fs::read_to_string(&cache_path)
                     .with_context(|| format!("read {}", cache_path.display()))?;
                 eprintln!("Resolved {} → {} (cached)", raw, cache_id);
-                Graph::from_json(&json)
-                    .map_err(|e| anyhow::anyhow!("cached toolpath document is invalid: {}", e))?
+                (json, format!("cache entry {}", cache_path.display()))
             } else {
                 let derived = crate::derive::pathbase_fetch_to_doc(u, args.url.as_deref())?;
                 if !args.no_cache {
@@ -244,14 +361,17 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
                     crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
                     eprintln!("Resolved {} → {}", raw, derived.cache_id);
                 }
-                derived.doc
+                let json = derived
+                    .doc
+                    .to_json()
+                    .context("serialize the fetched document")?;
+                (json, "fetched from Pathbase".to_string())
             }
         }
-        Shape::FilePath(p) => {
-            let json = std::fs::read_to_string(p).with_context(|| format!("read {}", p))?;
-            Graph::from_json(&json)
-                .map_err(|e| anyhow::anyhow!("not a valid toolpath document: {}", e))?
-        }
+        Shape::FilePath(p) => (
+            std::fs::read_to_string(p).with_context(|| format!("read {}", p))?,
+            format!("file {p}"),
+        ),
         Shape::CacheId(id) => {
             let file = crate::cache::cache_ref(id).map_err(|e| {
                 anyhow::anyhow!(
@@ -262,13 +382,19 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<(Graph, Option<Harness>
             })?;
             let json = std::fs::read_to_string(&file)
                 .with_context(|| format!("read {}", file.display()))?;
-            Graph::from_json(&json)
-                .map_err(|e| anyhow::anyhow!("not a valid toolpath document: {}", e))?
+            (json, format!("cache entry {}", file.display()))
         }
     };
 
-    let harness = graph.single_path().and_then(infer_source_harness);
-    Ok((graph, harness))
+    let graph = Graph::from_json(&json)
+        .map_err(|e| anyhow::anyhow!("not a valid toolpath document ({source}): {e}"))?;
+    let source_harness = graph.single_path().and_then(infer_source_harness);
+    Ok(ResolvedInput {
+        graph,
+        source_harness,
+        #[cfg(all(unix, feature = "resume-remote"))]
+        json,
+    })
 }
 
 /// Probe `$PATH` (or `path_override`, for tests) for a given binary name.
@@ -460,21 +586,21 @@ pub(crate) fn project_into_harness(
     cwd: &std::path::Path,
 ) -> Result<String> {
     match harness {
-        Harness::Claude => match crate::cmd_export::project_claude(path, cwd)? {
-            crate::cmd_export::ClaudeProjection::Written { session_id } => Ok(session_id),
-            crate::cmd_export::ClaudeProjection::AlreadyLocal { session_id } => {
+        Harness::Claude => match crate::projection::claude::project_claude(path, cwd)? {
+            crate::projection::claude::ClaudeProjection::Written { session_id } => Ok(session_id),
+            crate::projection::claude::ClaudeProjection::AlreadyLocal { session_id } => {
                 eprintln!(
                     "Session {session_id} already exists in this project; resuming the local copy."
                 );
                 Ok(session_id)
             }
         },
-        Harness::Gemini => crate::cmd_export::project_gemini(path, cwd),
-        Harness::Codex => crate::cmd_export::project_codex(path, cwd),
-        Harness::Copilot => crate::cmd_export::project_copilot(path, cwd),
-        Harness::Opencode => crate::cmd_export::project_opencode(path, cwd),
-        Harness::Cursor => crate::cmd_export::project_cursor(path, cwd),
-        Harness::Pi => crate::cmd_export::project_pi(path, cwd),
+        Harness::Gemini => crate::projection::gemini::project_gemini(path, cwd),
+        Harness::Codex => crate::projection::codex::project_codex(path, cwd),
+        Harness::Copilot => crate::projection::copilot::project_copilot(path, cwd),
+        Harness::Opencode => crate::projection::opencode::project_opencode(path, cwd),
+        Harness::Cursor => crate::projection::cursor::project_cursor(path, cwd),
+        Harness::Pi => crate::projection::pi::project_pi(path, cwd),
     }
 }
 
@@ -602,19 +728,17 @@ mod tests {
         // project_claude can consume, reusing the existing helper.
         let mut path = make_convo_path_for_resume("claude-code://resume-test-session");
         // Overwrite the actor to agent:claude-code so run_with_strategy can
-        // pass the ensure_path_with_agent check.
+        // pass the require_an_agent_turn check.
         path.steps[0].step.actor = "agent:claude-code".to_string();
 
         let graph = toolpath::v1::Graph::from_path(path);
         std::fs::write(&doc_file, graph.to_json().unwrap()).unwrap();
 
         let args = ResumeArgs {
-            input: doc_file.to_string_lossy().to_string(),
+            input: Some(doc_file.to_string_lossy().to_string()),
             cwd: Some(cwd.path().to_path_buf()),
             harness: Some(Harness::Claude),
-            no_cache: false,
-            force: false,
-            url: None,
+            ..Default::default()
         };
 
         let recorder = RecordingExec::default();
@@ -693,47 +817,49 @@ mod tests {
     }
 
     #[test]
-    fn ensure_path_with_agent_accepts_single_path_with_agent_actor() {
+    fn extract_the_only_path_accepts_a_single_path() {
         let g = Graph::from_path(make_path_with_actor("agent:claude-code"));
-        assert!(ensure_path_with_agent(&g).is_ok());
+        let path = extract_the_only_path(&g).unwrap();
+        assert!(require_an_agent_turn(path).is_ok());
     }
 
     #[test]
-    fn ensure_path_with_agent_rejects_empty_graph() {
+    fn extract_the_only_path_rejects_empty_graph() {
         let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
         g.paths.clear();
-        let err = ensure_path_with_agent(&g).unwrap_err();
+        let err = extract_the_only_path(&g).unwrap_err();
         assert!(err.to_string().contains("expected"));
         assert!(err.to_string().contains("empty"));
     }
 
     #[test]
-    fn ensure_path_with_agent_rejects_multi_path_graph() {
+    fn extract_the_only_path_rejects_multi_path_graph() {
         let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
         g.paths.push(PathOrRef::Path(Box::new(make_path_with_actor(
             "agent:claude-code",
         ))));
-        let err = ensure_path_with_agent(&g).unwrap_err();
+        let err = extract_the_only_path(&g).unwrap_err();
         let s = err.to_string();
         assert!(s.contains("single `Path`"), "actual: {s}");
         assert!(s.contains("2 paths"), "actual: {s}");
     }
 
     #[test]
-    fn ensure_path_with_agent_rejects_agentless_path() {
+    fn require_an_agent_turn_rejects_a_path_without_one() {
         let g = Graph::from_path(make_path_with_actor("human:alex"));
-        let err = ensure_path_with_agent(&g).unwrap_err();
+        let path = extract_the_only_path(&g).unwrap();
+        let err = require_an_agent_turn(path).unwrap_err();
         assert!(err.to_string().contains("no agent session"));
     }
 
     #[test]
-    fn ensure_path_with_agent_rejects_path_ref_only_graph() {
+    fn extract_the_only_path_rejects_path_ref_only_graph() {
         use toolpath::v1::PathRef;
         let mut g = Graph::from_path(make_path_with_actor("agent:claude-code"));
         g.paths = vec![PathOrRef::Ref(PathRef {
             ref_url: "$ref://something".into(),
         })];
-        let err = ensure_path_with_agent(&g).unwrap_err();
+        let err = extract_the_only_path(&g).unwrap_err();
         assert!(err.to_string().contains("inline `Path`"), "actual: {}", err);
     }
 
@@ -745,15 +871,15 @@ mod tests {
         std::fs::write(&p, graph.to_json().unwrap()).unwrap();
 
         let args = ResumeArgs {
-            input: p.to_string_lossy().to_string(),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            input: Some(p.to_string_lossy().to_string()),
+            ..Default::default()
         };
-        let (g, harness) = resolve_input(&args).unwrap();
-        let _path = ensure_path_with_agent(&g).unwrap();
+        let ResolvedInput {
+            graph: g,
+            source_harness: harness,
+            ..
+        } = resolve_input(&args).unwrap();
+        require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Claude));
     }
 
@@ -776,18 +902,19 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 200 OK", body_static);
 
         let args = ResumeArgs {
-            input: format!(
+            input: Some(format!(
                 "{}/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537",
                 server.base()
-            ),
-            cwd: None,
-            harness: None,
+            )),
             no_cache: true, // skip cache write in tests
-            force: false,
-            url: None,
+            ..Default::default()
         };
-        let (g, harness) = resolve_input(&args).unwrap();
-        let _ = ensure_path_with_agent(&g).unwrap();
+        let ResolvedInput {
+            graph: g,
+            source_harness: harness,
+            ..
+        } = resolve_input(&args).unwrap();
+        require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
 
@@ -837,15 +964,11 @@ mod tests {
         let server = MockServer::start("HTTP/1.1 500 Internal Server Error", "boom");
 
         let args = ResumeArgs {
-            input: format!(
+            input: Some(format!(
                 "{}/u/alex/repos/pathstash/graphs/{FIXTURE_UUID}",
                 server.base()
-            ),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            )),
+            ..Default::default()
         };
         let result = resolve_input(&args);
 
@@ -857,8 +980,12 @@ mod tests {
             }
         }
 
-        let (g, harness) = result.expect("resolve_input should reuse cache without refetching");
-        let _ = ensure_path_with_agent(&g).unwrap();
+        let ResolvedInput {
+            graph: g,
+            source_harness: harness,
+            ..
+        } = result.expect("resolve_input should reuse cache without refetching");
+        require_an_agent_turn(extract_the_only_path(&g).unwrap()).unwrap();
         assert_eq!(harness, Some(Harness::Codex));
     }
 
@@ -868,12 +995,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let args = ResumeArgs {
-            input: "definitely/not/a/real/cache/id".to_string(),
-            cwd: None,
-            harness: None,
-            no_cache: false,
-            force: false,
-            url: None,
+            input: Some("definitely/not/a/real/cache/id".to_string()),
+            ..Default::default()
         };
         let err = resolve_input(&args).unwrap_err();
         let s = err.to_string();
@@ -1036,6 +1159,86 @@ mod tests {
 
     fn scoped_home_for_resume() -> ScopedHomeForResume {
         ScopedHomeForResume::new()
+    }
+
+    /// Environment variables set for the guard's lifetime.
+    struct ScopedVars(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl ScopedVars {
+        fn set(vars: &[(&'static str, &std::path::Path)]) -> Self {
+            Self(
+                vars.iter()
+                    .map(|(name, value)| {
+                        let prev = std::env::var_os(name);
+                        unsafe {
+                            std::env::set_var(name, value);
+                        }
+                        (*name, prev)
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    impl Drop for ScopedVars {
+        fn drop(&mut self) {
+            for (name, prev) in &self.0 {
+                unsafe {
+                    match prev {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resume_with_no_input_syncs_the_cache_and_resumes_the_chosen_session() {
+        let _env = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let project_dir = std::fs::canonicalize(project.path()).unwrap();
+        let claude_dir = home.path().join(".claude");
+        let _vars = ScopedVars::set(&[
+            ("HOME", home.path()),
+            ("CLAUDE_CONFIG_DIR", &claude_dir),
+            (
+                crate::config::CONFIG_DIR_ENV,
+                &home.path().join(".toolpath"),
+            ),
+        ]);
+        let _path_guard = ScopedPathForResume::with_binaries(&["claude"]);
+
+        let session_id = "11111111-2222-3333-4444-555555555555";
+        let session_dir = claude_dir.join("projects/-work-project");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let lines = [
+            serde_json::json!({"type": "user", "uuid": "u1", "timestamp": "2026-01-02T00:00:00Z", "cwd": project_dir, "sessionId": session_id, "message": {"role": "user", "content": "Fix the build"}}),
+            serde_json::json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1", "timestamp": "2026-01-02T00:00:01Z", "cwd": project_dir, "sessionId": session_id, "message": {"role": "assistant", "content": "Fixed."}}),
+        ];
+        std::fs::write(
+            session_dir.join(format!("{session_id}.jsonl")),
+            lines.map(|line| line.to_string()).join("\n"),
+        )
+        .unwrap();
+
+        let recorder = RecordingExec::default();
+        tui::run_with_chooser(
+            ResumeArgs::default(),
+            &recorder,
+            &tui::FixedChooser {
+                title: "Claude session: 11111111".to_string(),
+            },
+        )
+        .unwrap();
+
+        let cap = recorder.captured();
+        assert_eq!(cap.binary, "claude");
+        assert_eq!(cap.args[0], "-r");
+        assert_eq!(cap.cwd, project_dir);
     }
 
     struct ScopedPathForResume {
