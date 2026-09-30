@@ -16,6 +16,9 @@ use crate::artifact::ArtifactType;
 /// The actor prefix of an agent's step.
 const AGENT_ACTOR: &str = "agent:";
 
+/// The scheme of a local directory in `path.base.uri`.
+const FILE_SCHEME: &str = "file://";
+
 /// Reads a [`Session`] from each cached document of an agent harness
 /// that the manifest in `config_dir` names. A document that cannot be
 /// read or holds no session is left out with a warning on stderr.
@@ -77,7 +80,11 @@ fn summarize_session(harness: ArtifactType, cache_id: &str, path: &TPath) -> Opt
     Some(Session {
         harness,
         cache_id: cache_id.to_string(),
-        dir: crate::derive::parse_base_dir(path)
+        dir: path
+            .path
+            .base
+            .as_ref()
+            .and_then(|base| base.uri.strip_prefix(FILE_SCHEME))
             .unwrap_or_default()
             .to_string(),
         dir_exists: false,

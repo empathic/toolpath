@@ -30,21 +30,6 @@ pub(crate) fn doc_inner_id(doc: &Graph) -> String {
     doc.graph.id.clone()
 }
 
-/// The scheme of a local directory in `path.base.uri`.
-const FILE_SCHEME: &str = "file://";
-
-/// Parses the local directory out of `path`'s base. `None` when the
-/// path has no base, the base is not a `file://` URI, or the URI names
-/// no directory.
-pub(crate) fn parse_base_dir(path: &toolpath::v1::Path) -> Option<&str> {
-    path.path
-        .base
-        .as_ref()?
-        .uri
-        .strip_prefix(FILE_SCHEME)
-        .filter(|dir| !dir.is_empty())
-}
-
 /// Derive a single Claude conversation given an explicit project + session.
 /// Used by `cmd_share` after its picker has resolved the pair; mirrors the
 /// `(Some(p), Some(s), _)` arm in [`derive_claude_with_manager`].
