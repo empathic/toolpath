@@ -2,6 +2,24 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.30.0 — 2026-09-30
+
+- **`path-cli`** (0.30.0): one Pathbase login per server.
+  `~/.toolpath/credentials.json` keeps a login for each server it has
+  seen, so logging in to `http://pathbase.localhost` no longer signs you
+  out of `https://pathbase.dev`. Switch between them with `--url` or
+  `$PATHBASE_URL`; with neither, commands use the most recent login.
+  `path auth logout`, `status` and `whoami` take `--url`; `status` with
+  no `--url` lists every login and marks the default. A command only
+  ever sends the token stored for the server it is talking to —
+  previously `p import pathbase` sent the stored token to whatever host
+  the URL named. `$PATHBASE_URL` now also outranks the stored login for
+  uploads, as the docs already said. The file stays readable by older
+  binaries: its top level is still the most recent login, with the
+  others under a new `sessions` key. Every write now forces the file to
+  `0600`, not only the first.
+- **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

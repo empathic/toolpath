@@ -886,22 +886,13 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
     }
 }
 
-/// Resolve the upload target URL from the CLI flag, the stored session,
-/// or the default. Mirrors the order used inside `run_pathbase_inner` so
-/// `cmd_share`'s pre-flight resolution agrees with the eventual upload.
+/// Resolve the upload target URL: the CLI flag, `$PATHBASE_URL`, the
+/// most recent login, then the default. Mirrors the order used inside
+/// `run_pathbase_inner` so `cmd_share`'s pre-flight resolution agrees
+/// with the eventual upload.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn resolve_upload_base_url(args: &PathbaseUploadArgs) -> String {
-    use crate::cmd_pathbase::{credentials_path, load_session, resolve_url};
-
-    if let Some(u) = &args.url {
-        return resolve_url(Some(u.clone()));
-    }
-    if let Ok(path) = credentials_path()
-        && let Ok(Some(s)) = load_session(&path)
-    {
-        return s.url;
-    }
-    resolve_url(None)
+    crate::cmd_pathbase::resolve_session_url(args.url.clone())
 }
 
 #[cfg(not(target_os = "emscripten"))]
