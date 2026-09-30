@@ -11,6 +11,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub(crate) use crate::config::PATHBASE_URL_ENV;
@@ -248,28 +249,25 @@ pub(crate) enum AuthMode {
 /// anonymous, *before* any picker/derive/cache work. Behavior:
 ///
 /// - `--anon` → `Anon`, no credentials check.
-/// - No stored credentials and no auth-requiring flags → `Anon` with the
-///   "not logged in — uploading anonymously" notice.
-/// - Stored credentials present → call `api_me` against the target URL.
+/// - No login stored for `base_url`'s server and no auth-requiring flags →
+///   `Anon` with the "not logged in — uploading anonymously" notice. A
+///   login for some other server is never sent here.
+/// - A login for this server → call `api_me` against it.
 ///   - On success → `Authed { token, username }`.
 ///   - On failure with no auth-requiring flags (`--repo`/`--public`/`--slug`)
 ///     → fall back to `Anon` with a stderr notice explaining why.
 ///   - On failure with auth-requiring flags → propagate the error so the
 ///     user knows their explicit request can't be satisfied.
-///
-/// `host_of(base_url) != host_of(stored.url)` triggers an advisory warning
-/// before the credentials probe so the user sees the mismatch even if
-/// `api_me` happens to succeed.
 pub(crate) fn preflight_auth(base_url: &str, anon: bool, needs_auth: bool) -> Result<AuthMode> {
     if anon {
         return Ok(AuthMode::Anon);
     }
-    let stored = load_session(&credentials_path()?)?;
+    let stored = load_session_for(&credentials_path()?, base_url)?;
 
     let go_anon = stored.is_none() && !needs_auth;
     if go_anon {
         eprintln!(
-            "note: not logged in — uploading anonymously (not listable). \
+            "note: not logged in to {base_url} — uploading anonymously (not listable). \
              Run `path auth login --url {base_url}` for a listable upload."
         );
         return Ok(AuthMode::Anon);
@@ -277,15 +275,10 @@ pub(crate) fn preflight_auth(base_url: &str, anon: bool, needs_auth: bool) -> Re
 
     let session = match stored {
         Some(s) => s,
-        None => bail!("Not logged in. Run `path auth login` or pass `--anon`."),
+        None => bail!(
+            "Not logged in to {base_url}. Run `path auth login --url {base_url}` or pass `--anon`."
+        ),
     };
-
-    if host_of(base_url) != host_of(&session.url) {
-        eprintln!(
-            "warning: stored credentials are for {}, but you're uploading to {}.",
-            session.url, base_url
-        );
-    }
 
     match api_me(base_url, &session.token) {
         Ok(user) => Ok(AuthMode::Authed {
@@ -657,7 +650,71 @@ pub(crate) fn credentials_path() -> Result<PathBuf> {
     Ok(config_dir()?.join(crate::config::CREDENTIALS_FILE_NAME))
 }
 
+/// On-disk shape of `credentials.json`: one login per server.
+///
+/// The top-level `url`/`token`/`user` are the most recent login — the
+/// server commands default to when neither `--url` nor `$PATHBASE_URL`
+/// names one — and are exactly the single-session object older
+/// binaries wrote and still read (they ignore `sessions`). `sessions`
+/// holds every login, keyed by [`session_key`]. A file with no
+/// `sessions` is the old format and reads as a one-entry map.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CredentialsFile {
+    #[serde(flatten)]
+    current: StoredSession,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    sessions: BTreeMap<String, StoredSession>,
+}
+
+impl CredentialsFile {
+    fn new(current: StoredSession) -> Self {
+        let mut sessions = BTreeMap::new();
+        sessions.insert(session_key(&current.url), current.clone());
+        Self { current, sessions }
+    }
+
+    /// Every login, including an old-format file's single one.
+    fn all(&self) -> BTreeMap<String, StoredSession> {
+        let mut all = self.sessions.clone();
+        all.entry(session_key(&self.current.url))
+            .or_insert_with(|| self.current.clone());
+        all
+    }
+}
+
+/// Map key for a server: `scheme://host[:port]`, lowercased, so
+/// `https://Pathbase.dev/` and `https://pathbase.dev` are one login and
+/// `http://` and `https://` on the same host are two.
+pub(crate) fn session_key(url: &str) -> String {
+    host_of(url.trim_end_matches('/')).to_ascii_lowercase()
+}
+
+fn read_credentials(path: &Path) -> Result<Option<CredentialsFile>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) if s.trim().is_empty() => Ok(None),
+        Ok(s) => Ok(Some(serde_json::from_str(&s).with_context(|| {
+            format!("decode credentials at {}", path.display())
+        })?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow!("read {}: {e}", path.display())),
+    }
+}
+
+/// Record a login and make it the most recent one. Logins to other
+/// servers are kept.
 pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
+    let mut file = match read_credentials(path)? {
+        Some(existing) => CredentialsFile {
+            current: s.clone(),
+            sessions: existing.all(),
+        },
+        None => CredentialsFile::new(s.clone()),
+    };
+    file.sessions.insert(session_key(&s.url), s.clone());
+    write_credentials(path, &file)
+}
+
+fn write_credentials(path: &Path, file: &CredentialsFile) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("credentials path has no parent: {}", path.display()))?;
@@ -668,11 +725,11 @@ pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
         let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
     }
 
-    let payload = serde_json::to_string_pretty(s)?;
+    let payload = serde_json::to_string_pretty(file)?;
     #[cfg(unix)]
     {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         // Open already restricted to 0600 so there is never a moment
         // where the token exists world/group-readable under a permissive
         // umask. `truncate` rather than `create_new`: the file is
@@ -684,6 +741,10 @@ pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
             .mode(0o600)
             .open(path)
             .with_context(|| format!("open {}", path.display()))?;
+        // `mode` only applies when the file is created; tighten a file
+        // that already existed before any token is written into it.
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("chmod {}", path.display()))?;
         f.write_all(payload.as_bytes())
             .with_context(|| format!("write {}", path.display()))?;
     }
@@ -694,15 +755,57 @@ pub(crate) fn store_session(path: &Path, s: &StoredSession) -> Result<()> {
     Ok(())
 }
 
+/// The most recent login, whichever server it was for.
 pub(crate) fn load_session(path: &Path) -> Result<Option<StoredSession>> {
-    match std::fs::read_to_string(path) {
-        Ok(s) if s.trim().is_empty() => Ok(None),
-        Ok(s) => Ok(Some(serde_json::from_str(&s).with_context(|| {
-            format!("decode credentials at {}", path.display())
-        })?)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(anyhow!("read {}: {e}", path.display())),
+    Ok(read_credentials(path)?.map(|f| f.current))
+}
+
+/// The login for `url`'s server, if there is one. Never returns another
+/// server's token.
+pub(crate) fn load_session_for(path: &Path, url: &str) -> Result<Option<StoredSession>> {
+    let key = session_key(url);
+    Ok(read_credentials(path)?.and_then(|f| f.all().remove(&key)))
+}
+
+/// Every stored login, ordered by server.
+pub(crate) fn load_all_sessions(path: &Path) -> Result<Vec<StoredSession>> {
+    Ok(read_credentials(path)?
+        .map(|f| f.all().into_values().collect())
+        .unwrap_or_default())
+}
+
+/// Forget the login for `url`'s server and keep the others. If it was
+/// the most recent one, the next remaining login takes its place; if
+/// none remain, the file is removed.
+pub(crate) fn clear_session_for(path: &Path, url: &str) -> Result<()> {
+    let Some(file) = read_credentials(path)? else {
+        return Ok(());
+    };
+    let key = session_key(url);
+    let mut sessions = file.all();
+    sessions.remove(&key);
+    let current = if session_key(&file.current.url) == key {
+        match sessions.values().next() {
+            Some(next) => next.clone(),
+            None => return clear_session(path),
+        }
+    } else {
+        file.current
+    };
+    write_credentials(path, &CredentialsFile { current, sessions })
+}
+
+/// The server a stored-login command acts on: `--url`, then
+/// `$PATHBASE_URL`, then the most recent login, then the default.
+pub(crate) fn resolve_session_url(cli_url: Option<String>) -> String {
+    if cli_url.is_some() || std::env::var(PATHBASE_URL_ENV).is_ok() {
+        return resolve_url(cli_url);
     }
+    credentials_path()
+        .ok()
+        .and_then(|p| load_session(&p).ok().flatten())
+        .map(|s| s.url)
+        .unwrap_or_else(|| resolve_url(None))
 }
 
 pub(crate) fn clear_session(path: &Path) -> Result<()> {
@@ -807,11 +910,168 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn store_tightens_an_existing_permissive_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        std::fs::write(&path, "").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        store_session(&path, &sample()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600 after rewrite, got {mode:o}");
+    }
+
     #[test]
     fn clear_on_missing_file_is_ok() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nope.json");
         assert!(clear_session(&path).is_ok());
+    }
+
+    fn session_at(url: &str, username: &str, token: &str) -> StoredSession {
+        StoredSession {
+            url: url.into(),
+            token: token.into(),
+            user: User {
+                id: format!("id-{username}"),
+                username: username.into(),
+                email: None,
+                display_name: None,
+            },
+        }
+    }
+
+    #[test]
+    fn session_key_normalizes_case_and_trailing_slash_but_keeps_scheme() {
+        assert_eq!(session_key("https://Pathbase.dev/"), "https://pathbase.dev");
+        assert_eq!(
+            session_key("http://pathbase.localhost"),
+            "http://pathbase.localhost"
+        );
+        assert_ne!(
+            session_key("http://pathbase.dev"),
+            session_key("https://pathbase.dev")
+        );
+        assert_eq!(
+            session_key("http://127.0.0.1:9000/api"),
+            "http://127.0.0.1:9000"
+        );
+    }
+
+    #[test]
+    fn old_single_session_file_reads_as_one_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        // Exactly what binaries before per-server logins wrote.
+        std::fs::write(
+            &path,
+            r#"{"url":"https://pathbase.dev","token":"old","user":{"id":"1","username":"alice"}}"#,
+        )
+        .unwrap();
+        assert_eq!(load_session(&path).unwrap().unwrap().token, "old");
+        assert_eq!(
+            load_session_for(&path, "https://pathbase.dev/")
+                .unwrap()
+                .unwrap()
+                .token,
+            "old"
+        );
+        assert!(
+            load_session_for(&path, "http://pathbase.localhost")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(load_all_sessions(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn logins_to_two_servers_are_kept_side_by_side() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        store_session(&path, &session_at("https://pathbase.dev", "alice", "prod")).unwrap();
+        store_session(
+            &path,
+            &session_at("http://pathbase.localhost", "dev", "local"),
+        )
+        .unwrap();
+
+        let prod = load_session_for(&path, "https://pathbase.dev")
+            .unwrap()
+            .unwrap();
+        let local = load_session_for(&path, "http://pathbase.localhost")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (prod.token.as_str(), local.token.as_str()),
+            ("prod", "local")
+        );
+        // The most recent login is the default.
+        assert_eq!(load_session(&path).unwrap().unwrap().token, "local");
+        assert_eq!(load_all_sessions(&path).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn relogin_to_same_server_replaces_its_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        store_session(&path, &session_at("https://pathbase.dev", "alice", "a")).unwrap();
+        store_session(&path, &session_at("https://pathbase.dev/", "alice", "b")).unwrap();
+        let all = load_all_sessions(&path).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].token, "b");
+    }
+
+    #[test]
+    fn new_file_stays_readable_as_a_single_session() {
+        // Older binaries decode the whole file as one `StoredSession`;
+        // the top level must stay the most recent login.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        store_session(&path, &session_at("https://pathbase.dev", "alice", "prod")).unwrap();
+        store_session(
+            &path,
+            &session_at("http://pathbase.localhost", "dev", "local"),
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let old_reader: StoredSession = serde_json::from_str(&raw).unwrap();
+        assert_eq!(old_reader.token, "local");
+    }
+
+    #[test]
+    fn logout_of_one_server_keeps_the_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        store_session(&path, &session_at("https://pathbase.dev", "alice", "prod")).unwrap();
+        store_session(
+            &path,
+            &session_at("http://pathbase.localhost", "dev", "local"),
+        )
+        .unwrap();
+
+        // Logging out of the default promotes the remaining login.
+        clear_session_for(&path, "http://pathbase.localhost").unwrap();
+        assert!(
+            load_session_for(&path, "http://pathbase.localhost")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(load_session(&path).unwrap().unwrap().token, "prod");
+
+        clear_session_for(&path, "https://pathbase.dev").unwrap();
+        assert!(!path.exists(), "last logout removes the file");
+    }
+
+    #[test]
+    fn logout_of_unknown_server_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        store_session(&path, &session_at("https://pathbase.dev", "alice", "prod")).unwrap();
+        clear_session_for(&path, "http://elsewhere.test").unwrap();
+        assert_eq!(load_session(&path).unwrap().unwrap().token, "prod");
+        assert!(clear_session_for(&dir.path().join("missing.json"), "https://x.test").is_ok());
     }
 
     #[test]
