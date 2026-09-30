@@ -1,6 +1,7 @@
-//! The session page: the sessions by project, and the same sessions
-//! as lanes over the time window. Pure: takes the model,
-//! returns a [`Page`] of sections and the actions its lines trigger.
+//! The session page: the sessions by project, the same sessions as
+//! lanes over the time window, and the detail of the session under
+//! the cursor. Pure: takes the model, returns a [`Page`] of sections
+//! and the actions its lines trigger.
 
 use std::collections::HashMap;
 
@@ -26,7 +27,18 @@ pub struct Page {
     /// The time windows, the current one marked.
     pub windows: Vec<(String, bool)>,
     pub lanes: Lanes,
+    /// The session under the cursor.
+    pub detail: Option<Detail>,
     pub keys: String,
+}
+
+/// A session in the detail pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Detail {
+    pub name: String,
+    /// When the session was last active, and how long it ran.
+    pub facts: String,
+    pub project: String,
 }
 
 /// The sessions on the page as spans over the time window, one lane
@@ -134,16 +146,41 @@ fn projects(m: &Model) -> Vec<Project> {
     projects
 }
 
+/// Days between `t` and today, local time.
+fn age_days(m: &Model, t: DateTime<Utc>) -> i64 {
+    let day = |t: DateTime<Utc>| t.with_timezone(&m.tz()).date_naive();
+    (day(m.now()) - day(t)).num_days()
+}
+
+/// `HH:MM` today, `Www HH:MM` within the week, `MM-DD` within the
+/// year, else `YYYY-MM-DD`; `-` when unknown. Local time.
+fn when(m: &Model, t: Option<DateTime<Utc>>) -> String {
+    let Some(t) = t else {
+        return "-".to_string();
+    };
+    let local = t.with_timezone(&m.tz());
+    match age_days(m, t) {
+        i64::MIN..=0 => local.format("%H:%M").to_string(),
+        1..=6 => local.format("%a %H:%M").to_string(),
+        7..=364 => local.format("%m-%d").to_string(),
+        _ => local.format("%Y-%m-%d").to_string(),
+    }
+}
+
+fn detail(m: &Model, s: &SessionSummary) -> Detail {
+    Detail {
+        name: one_line(&s.title),
+        facts: [when(m, s.last_activity), duration(s)].join(" · "),
+        project: tilde(&s.dir, m.home()),
+    }
+}
+
 fn session_line(m: &Model, i: usize, item: usize) -> Line {
     let s = &m.sessions()[i];
-    let days = |t: DateTime<Utc>| {
-        let day = |t: DateTime<Utc>| t.with_timezone(&m.tz()).date_naive();
-        (day(m.now()) - day(t)).num_days()
-    };
     let age = match s.last_activity {
         Some(t) if m.now() - t < chrono::Duration::hours(1) => Age::Hour,
-        Some(t) if days(t) <= 0 => Age::Today,
-        Some(t) if days(t) < 7 => Age::Week,
+        Some(t) if age_days(m, t) <= 0 => Age::Today,
+        Some(t) if age_days(m, t) < 7 => Age::Week,
         _ => Age::Older,
     };
     Line {
@@ -316,8 +353,14 @@ pub fn page(m: &Model) -> Page {
         more: projects.len().saturating_sub(LANES_MAX),
     };
 
+    let detail = match items.get(m.cursor()) {
+        Some(Action::Session(i)) => Some(detail(m, &sessions[*i])),
+        _ => None,
+    };
+
     Page {
         sections,
+        detail,
         items,
         windows: Window::ALL
             .iter()
@@ -372,6 +415,36 @@ mod tests {
                 vec!["~/old 1", "> a"],
             ]
         );
+    }
+
+    #[test]
+    fn the_detail_is_the_session_under_the_cursor() {
+        let first = session("/home/u/p", "Parser fix", 3);
+        let second = session("/home/u/p", "Greeting", 30);
+        let mut m = model(vec![first, second]);
+        assert_eq!(
+            m.page().detail,
+            Some(Detail {
+                name: "Parser fix".to_string(),
+                facts: "09:00 · 1h00".to_string(),
+                project: "~/p".to_string(),
+            })
+        );
+
+        m.update(Key::Down);
+        let detail = m.page().detail.unwrap();
+        assert_eq!(detail.facts, "Tue 06:00 · 1h00");
+    }
+
+    #[test]
+    fn a_line_that_is_no_session_has_no_detail() {
+        let rows: Vec<SessionSummary> = (1..=6)
+            .map(|n| session("/p", &format!("s{n}"), n))
+            .collect();
+        let mut m = model(rows);
+        m.update(Key::End);
+        assert_eq!(m.page().detail, None);
+        assert_eq!(model(vec![]).page().detail, None);
     }
 
     #[test]

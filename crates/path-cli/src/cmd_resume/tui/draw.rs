@@ -8,11 +8,18 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Tabs};
 
-use super::landing::{self, Action, Age, LANES_MAX, Lanes, Style as LineStyle};
+use super::landing::{self, Action, Age, Detail, LANES_MAX, Lanes, Style as LineStyle};
 use super::view::Screen;
 
-/// Terminals shorter than this show the page without the lanes.
+/// Terminals shorter than this show the page without the detail pane.
+const PANE_MIN_HEIGHT: u16 = 20;
+/// The lanes show when the page without the detail pane is this tall.
 const LANES_MIN_HEIGHT: u16 = 24;
+/// The detail pane's lines: the name, the facts, a blank, and the
+/// project.
+const PANE_HEIGHT: u16 = 4;
+/// The label column of the detail pane.
+const LABEL_WIDTH: usize = 9;
 
 /// Brand tokens (site/BRAND.md, dark theme).
 const ACCENT: Color = Color::Rgb(201, 126, 63);
@@ -311,12 +318,27 @@ fn lane_lines(lanes: &Lanes, width: usize, selected: Option<usize>) -> Vec<Line<
     out
 }
 
+/// The detail pane's lines for `detail`.
+fn detail_lines(detail: &Detail) -> Vec<Line<'static>> {
+    let label = |text: &str| Span::styled(format!("{text:<LABEL_WIDTH$}"), Style::new().fg(DIM));
+    let value = |text: &str| Span::styled(text.to_string(), Style::new().fg(TEXT));
+    vec![
+        Line::from(Span::styled(
+            detail.name.clone(),
+            Style::new().fg(ACCENT).bold(),
+        )),
+        Line::from(Span::styled(detail.facts.clone(), Style::new().fg(TEXT2))),
+        Line::default(),
+        Line::from(vec![label("Project"), value(&detail.project)]),
+    ]
+}
+
 /// The session page over the whole frame: the title, the time tabs, the
-/// lanes, the sessions by project, the filter, and the keys line.
-/// `state` is the session list's scroll state, kept across frames:
-/// ratatui scrolls it the minimum to show the cursor. With the cursor
-/// on the first item, the list scrolls to its top, so the heading over
-/// that item shows.
+/// lanes, the sessions by project, the detail pane, the filter, and the
+/// keys line. `state` is the session list's scroll state, kept across
+/// frames: ratatui scrolls it the minimum to show the cursor. With the
+/// cursor on the first item, the list scrolls to its top, so the
+/// heading over that item shows.
 pub fn draw(frame: &mut Frame<'_>, screen: &Screen, state: &mut ListState) {
     let area = frame.area();
     let width = area.width as usize;
@@ -350,7 +372,13 @@ pub fn draw(frame: &mut Frame<'_>, screen: &Screen, state: &mut ListState) {
         Some(Action::Session(i)) => Some(*i),
         _ => None,
     };
-    let lanes = if area.height >= LANES_MIN_HEIGHT {
+    // The pane's rule and the pane itself.
+    let (pane_rule_height, pane_height) = if area.height >= PANE_MIN_HEIGHT {
+        (1, PANE_HEIGHT)
+    } else {
+        (0, 0)
+    };
+    let lanes = if area.height - pane_rule_height - pane_height >= LANES_MIN_HEIGHT {
         lane_lines(&page.lanes, width, selected_session)
     } else {
         Vec::new()
@@ -367,6 +395,8 @@ pub fn draw(frame: &mut Frame<'_>, screen: &Screen, state: &mut ListState) {
         rule_area,
         columns_area,
         body,
+        pane_rule_area,
+        pane_area,
         filter_area,
         keys_area,
     ] = Layout::vertical([
@@ -376,6 +406,8 @@ pub fn draw(frame: &mut Frame<'_>, screen: &Screen, state: &mut ListState) {
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
+        Constraint::Length(pane_rule_height),
+        Constraint::Length(pane_height),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
@@ -408,6 +440,20 @@ pub fn draw(frame: &mut Frame<'_>, screen: &Screen, state: &mut ListState) {
         *state.offset_mut() = 0;
     }
     frame.render_stateful_widget(List::new(items), body, state);
+
+    if pane_height > 0 {
+        frame.render_widget(Paragraph::new(rule(width)), pane_rule_area);
+        if let Some(detail) = &page.detail {
+            frame.render_widget(
+                Paragraph::new(Text::from(detail_lines(detail))),
+                Rect {
+                    x: pane_area.x + 1,
+                    width: pane_area.width.saturating_sub(2),
+                    ..pane_area
+                },
+            );
+        }
+    }
 
     if let Some(filter) = &screen.filter {
         let line = Line::from(vec![
@@ -476,6 +522,30 @@ mod tests {
         let rows = paint(&m, 60, 12);
         assert!(rows[5].starts_with(" ~/toolpath"), "{:?}", rows[5]);
         assert_eq!(rows[10], " / p_");
+    }
+
+    #[test]
+    fn the_pane_shows_the_session_under_the_cursor() {
+        let m = model(vec![session("/home/u/toolpath", "Parser fix", 3)]);
+        let rows = paint(&m, 60, 30);
+        let pane = rows.iter().position(|row| row == " Parser fix").unwrap();
+        assert_eq!(rows[pane - 1], "─".repeat(60));
+        assert_eq!(
+            rows[pane..pane + 4],
+            [" Parser fix", " 09:00 · 1h00", "", " Project  ~/toolpath",]
+        );
+        assert_eq!(rows[pane + 4], "");
+        assert!(rows[4].starts_with(" ~/toolpath"), "lanes: {:?}", rows[4]);
+    }
+
+    #[test]
+    fn a_terminal_of_20_rows_shows_the_pane_and_no_lanes() {
+        let m = model(vec![session("/home/u/toolpath", "fix the parser", 1)]);
+        let rows = paint(&m, 60, 20);
+        assert!(rows[3].starts_with("─"), "{:?}", rows[3]);
+        assert_eq!(rows[14], " fix the parser");
+        assert_eq!(rows[17], " Project  ~/toolpath");
+        assert_eq!(paint(&m, 60, 19)[13], "");
     }
 
     #[test]
