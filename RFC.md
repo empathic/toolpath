@@ -306,6 +306,15 @@ recording an AI coding conversation, where each conversational-turn step
 carries a `"conversation.append"` structural change with the turn's role,
 text, and so on. See the linked spec for the full contract.
 
+The kind's `token_usage` does not say whether `input_tokens` includes cache
+reads and writes, and producers differ: `toolpath-claude` and
+`toolpath-otel` emit additive classes (`input_tokens` excludes
+`cache_read_tokens` and `cache_write_tokens`, and the three sum to the
+prompt), while `toolpath-codex` passes Codex's inclusive count through.
+Consumers that price or sum classes should read a producer's basis from its
+format reference (`docs/agents/formats/`); a future kind version is the
+place to make it normative.
+
 #### Actor Definitions
 
 `meta.actors` maps actor strings to full definitions:

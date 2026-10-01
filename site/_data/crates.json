@@ -80,6 +80,14 @@
     "role": "Reads Pi (pi.dev) coding-agent session JSONL from `~/.pi/agent/sessions/`, implements `ConversationProvider`, and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Preserves Pi's in-file conversation tree (id/parentId) as a DAG and follows `parentSession` links across files."
   },
   {
+    "name": "toolpath-otel",
+    "version": "0.1.0",
+    "description": "Derive Toolpath provenance documents from OpenTelemetry LLM traces (OTLP)",
+    "docs": "https://docs.rs/toolpath-otel",
+    "crate": "https://crates.io/crates/toolpath-otel",
+    "role": "Takes the OTLP/HTTP JSON request bodies (traces and logs) of one agent session and walks every span and its correlated log records through profiles: `openrouter` (OpenRouter Broadcast), `semconv` (the OpenTelemetry GenAI semantic conventions, as emitted by the official instrumentations) and a minimal explicit-only `openinference`. Stitches the requests into a turn DAG with chained content ids and derives a Toolpath `Path` via `toolpath-convo`'s shared `derive_path`, keeping per-step usage, cost and routing under `extra[\"otel\"]`; write, edit and `apply_patch` tool calls become file changes. Pure functions over parsed JSON, so Pathbase can call it server-side."
+  },
+  {
     "name": "toolpath-cursor",
     "version": "0.2.0",
     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",

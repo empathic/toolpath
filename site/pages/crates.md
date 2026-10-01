@@ -25,13 +25,15 @@ path-cli (binary: path)
  +-- toolpath-dot     -> toolpath
  +-- toolpath-md      -> toolpath
 
+toolpath-otel        -> toolpath, toolpath-convo (library only; no CLI wiring yet)
+
 pathbase-client      (no toolpath deps; built from crates/pathbase-client/openapi.json)
 
 toolpath-cli (deprecated shim, binary: path)
  +-- path-cli
 ```
 
-Cross-dependencies between satellite crates: `toolpath-claude -> toolpath-convo`, `toolpath-gemini -> toolpath-convo`, `toolpath-codex -> toolpath-convo`, `toolpath-copilot -> toolpath-convo`, `toolpath-opencode -> toolpath-convo`, `toolpath-cursor -> toolpath-convo`, `toolpath-pi -> toolpath-convo`.
+Cross-dependencies between satellite crates: `toolpath-claude -> toolpath-convo`, `toolpath-gemini -> toolpath-convo`, `toolpath-codex -> toolpath-convo`, `toolpath-copilot -> toolpath-convo`, `toolpath-opencode -> toolpath-convo`, `toolpath-cursor -> toolpath-convo`, `toolpath-pi -> toolpath-convo`, `toolpath-otel -> toolpath-convo`.
 
 {% for crate in crates %}
 

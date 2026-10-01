@@ -49,6 +49,13 @@ culting.
 - **[`pi.md`](pi.md)** — Pi (pi.dev) terminal coding agent sessions
   under `~/.pi/agent/sessions/--<encoded-cwd>--/`, JSONL with a
   session header line plus tree-shaped entries.
+- **[`otel.md`](otel.md)** — OpenTelemetry LLM traces and logs: the
+  OTLP/HTTP JSON request bodies `toolpath-otel` reads, how the walker
+  resolves spans and log records against input profiles (`openrouter`,
+  `semconv`, `openinference`), and the OpenRouter Broadcast profile (one
+  `LLM Generation` span per API request with the full prompt history,
+  completion, usage, cost and routing). Not an on-disk harness store:
+  the caller collects a session's request bodies.
 
 The Claude Code reference is the most detailed because it's the
 longest-standing provider and has the most moving parts (JSONL
