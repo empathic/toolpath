@@ -1,5 +1,7 @@
 //! Fixture-driven tests over the crate internals.
 
+#[cfg(all(feature = "protobuf", feature = "compression"))]
+mod binary_input;
 mod captures;
 mod captures_event;
 pub(crate) mod classifier;

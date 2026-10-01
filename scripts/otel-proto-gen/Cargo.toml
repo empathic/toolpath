@@ -1,0 +1,13 @@
+# Maintainer-only generator for crates/toolpath-otel/src/proto/. Run it through
+# scripts/otel-proto-gen.sh, never directly. Its own [workspace] keeps it out of
+# the toolpath workspace; Cargo.lock is committed so `--locked` reproduces it.
+[package]
+name = "otel-proto-gen"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+prost-build = "=0.14.4"
