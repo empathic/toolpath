@@ -1,6 +1,7 @@
 //! `path resume` with no input: a terminal UI over the agent sessions
-//! in the document cache. It syncs the cache, shows the sessions by
-//! project over a time window, and hands the chosen one to the same
+//! in the document cache. It syncs the cache, opens the page, shows
+//! the sessions by project over a time window as a thread reads them
+//! from the cached documents, and hands the chosen one to the same
 //! projection and exec as `path resume <input>`.
 //!
 //! The core is pure: [`model`] holds the state and the transitions,
@@ -9,10 +10,11 @@
 //! imperative shell: the cache, the terminal, the key mapping, and the
 //! resume itself.
 //!
-//! The UI sits behind [`Chooser`]: it takes the model and returns the
-//! user's [`Selection`]. [`TerminalChooser`] runs the event loop. In
-//! a test build, `FixedChooser` answers without a terminal, so a test
-//! drives the whole pipeline (sync, rows, projection, exec) headless.
+//! The UI sits behind [`Chooser`]: it takes the model and the reads of
+//! the cached documents and returns the user's [`Selection`].
+//! [`TerminalChooser`] runs the event loop. In a test build, `FixedChooser` answers
+//! without a terminal, so a test drives the whole pipeline (sync, rows,
+//! projection, exec) headless.
 
 mod draw;
 mod landing;
@@ -21,6 +23,8 @@ mod rows;
 mod view;
 
 use std::io::IsTerminal;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -28,21 +32,31 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use super::{ExecStrategy, ResumeArgs};
 use crate::artifact::ArtifactType;
 use model::{Effect, Key, Model, Selection};
+use rows::DocumentRead;
+
+/// How long the event loop waits for a key before it loads the
+/// documents read in that time.
+const KEY_WAIT: Duration = Duration::from_millis(50);
 
 /// How the session gets chosen.
 pub(crate) trait Chooser {
-    /// `None` means the user quit.
-    fn choose(&self, model: Model) -> Result<Option<Selection>>;
+    /// `reads` brings each cached document as it is read. `None` means
+    /// the user quit.
+    fn choose(&self, model: Model, reads: Receiver<DocumentRead>) -> Result<Option<Selection>>;
 }
 
 /// The ratatui screen.
 struct TerminalChooser;
 
 impl Chooser for TerminalChooser {
-    fn choose(&self, mut model: Model) -> Result<Option<Selection>> {
+    fn choose(&self, mut model: Model, reads: Receiver<DocumentRead>) -> Result<Option<Selection>> {
+        let mut unread = Vec::new();
         let mut terminal = ratatui::init();
-        let outcome = event_loop(&mut terminal, &mut model);
+        let outcome = event_loop(&mut terminal, &mut model, &reads, &mut unread);
         ratatui::restore();
+        for (cache_id, e) in unread {
+            eprintln!("warning: cache entry {cache_id} left out: {e:#}");
+        }
         outcome
     }
 }
@@ -55,7 +69,10 @@ pub(crate) struct FixedChooser {
 
 #[cfg(test)]
 impl Chooser for FixedChooser {
-    fn choose(&self, model: Model) -> Result<Option<Selection>> {
+    fn choose(&self, mut model: Model, reads: Receiver<DocumentRead>) -> Result<Option<Selection>> {
+        for read in reads {
+            model.load(read.session?.into_iter().collect(), 1);
+        }
         let session = model
             .sessions()
             .iter()
@@ -75,7 +92,8 @@ pub(crate) fn run(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()> {
     run_with_chooser(args, exec, &TerminalChooser)
 }
 
-/// The pipeline around the chooser: sync, rows, choose, resume.
+/// The pipeline around the chooser: sync, choose while a thread reads
+/// the rows, resume.
 pub(crate) fn run_with_chooser(
     args: ResumeArgs,
     exec: &dyn ExecStrategy,
@@ -98,22 +116,25 @@ pub(crate) fn run_with_chooser(
     if let Err(e) = crate::sync::sync_bundle(&config_dir, &bundle, &harnesses, None, &mut ()) {
         eprintln!("warning: cache sync skipped: {e:#}");
     }
-    let sessions = rows::load_sessions(&config_dir)?;
-    if sessions.is_empty() {
+    let documents = rows::list_documents(&config_dir, &harnesses)?;
+    if documents.is_empty() {
         anyhow::bail!("the document cache holds no agent session to resume");
     }
 
     let model = Model::new(
-        sessions,
+        Vec::new(),
         here.to_string_lossy().into_owned(),
         config
             .home_dir()
             .map(|home| home.to_string_lossy().into_owned()),
         chrono::Utc::now(),
     )
+    .with_documents_to_read(documents.len())
     .with_here_pinned(args.cwd.is_some())
     .with_offset(*chrono::Local::now().offset());
-    match chooser.choose(model)? {
+    let (sender, reads) = mpsc::channel();
+    std::thread::spawn(move || rows::read_sessions(&documents, &sender));
+    match chooser.choose(model, reads)? {
         None => std::process::exit(130),
         Some(selection) => resume(selection, args, exec),
     }
@@ -142,15 +163,48 @@ fn resume(selection: Selection, args: ResumeArgs, exec: &dyn ExecStrategy) -> Re
 }
 
 /// Runs the UI until the user picks a session (`Some`) or quits
-/// (`None`).
+/// (`None`). While `reads` is open, the loop loads the sessions of
+/// the documents read since the last frame into the model and collects
+/// the documents that could not be read, as cache ID and error, into
+/// `unread`.
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     model: &mut Model,
+    reads: &Receiver<DocumentRead>,
+    unread: &mut Vec<(String, anyhow::Error)>,
 ) -> Result<Option<Selection>> {
     let mut list = ratatui::widgets::ListState::default();
+    let mut reading = true;
+    let mut stale = true;
     loop {
-        let screen = view::view(model);
-        terminal.draw(|frame| draw::draw(frame, &screen, &mut list))?;
+        let mut sessions = Vec::new();
+        let mut documents = 0;
+        while reading {
+            match reads.try_recv() {
+                Ok(read) => {
+                    documents += 1;
+                    match read.session {
+                        Ok(session) => sessions.extend(session),
+                        Err(e) => unread.push((read.cache_id, e)),
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => reading = false,
+            }
+        }
+        if documents > 0 {
+            model.load(sessions, documents);
+            stale = true;
+        }
+        if stale {
+            let screen = view::view(model);
+            terminal.draw(|frame| draw::draw(frame, &screen, &mut list))?;
+            stale = false;
+        }
+        if reading && !event::poll(KEY_WAIT)? {
+            continue;
+        }
+        stale = true;
         let Event::Key(key) = event::read()? else {
             continue;
         };
