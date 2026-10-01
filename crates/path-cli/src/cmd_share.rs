@@ -823,7 +823,10 @@ fn share_explicit(
         // the upload uses the fresh body, not the cache. Always
         // overwrite so cache and upload agree (use `--no-cache` to skip
         // the cache write entirely).
-        let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        let written = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+        if let Some(index_error) = &written.index_error {
+            eprintln!("warning: document index not updated: {index_error:#}");
+        }
         // Transitional: `share` does not take `&Config` yet; load one
         // for the engine. A load failure degrades like a manifest-write
         // failure.
@@ -837,7 +840,7 @@ fn share_explicit(
             "Cached {} session → {} ({})",
             harness.name(),
             derived.cache_id,
-            path.display()
+            written.path.display()
         );
     }
 

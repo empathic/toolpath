@@ -70,7 +70,9 @@ fn run_ls() -> Result<()> {
 
 #[cfg_attr(target_os = "emscripten", expect(unused_variables))]
 fn run_rm(id: &str, config: &Config) -> Result<()> {
-    remove_cached(id)?;
+    if let Some(index_error) = remove_cached(id)? {
+        eprintln!("warning: document index not updated: {index_error:#}");
+    }
     // The artifact is still real — downgrade its manifest record to
     // "known, not cached" so the next sync can re-materialize it.
     #[cfg(not(target_os = "emscripten"))]
@@ -130,6 +132,9 @@ struct Progress {
     total: usize,
     done: usize,
     tty: bool,
+    /// Documents of this type that the document index did not record.
+    /// The first failure prints its error; `end` prints the count.
+    index_failures: usize,
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -141,6 +146,7 @@ impl Progress {
             total: 0,
             done: 0,
             tty: std::io::stderr().is_terminal(),
+            index_failures: 0,
         }
     }
 
@@ -193,8 +199,24 @@ impl SyncObserver for Progress {
         );
     }
 
+    fn index_failed(&mut self, cache_id: &str, error: &anyhow::Error) {
+        self.index_failures += 1;
+        if self.index_failures == 1 {
+            self.interrupt();
+            eprintln!("warning: document index not updated for {cache_id}: {error:#}");
+        }
+    }
+
     fn end(&mut self) {
         self.interrupt();
+        if self.index_failures > 1 {
+            eprintln!(
+                "warning: document index not updated for {} {} documents",
+                self.index_failures,
+                self.label.trim_end()
+            );
+        }
+        self.index_failures = 0;
     }
 }
 
@@ -240,6 +262,7 @@ mod tests {
             total: 3,
             done: 0,
             tty: false,
+            index_failures: 0,
         };
         progress.tick();
         progress.tick();

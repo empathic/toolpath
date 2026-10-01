@@ -79,6 +79,9 @@ pub(crate) trait SyncObserver {
     fn begin(&mut self, _artifact_type: ArtifactType, _pending: usize) {}
     fn tick(&mut self) {}
     fn failed(&mut self, _artifact: &ArtifactRef, _error: &anyhow::Error) {}
+    /// The document `cache_id` is in the cache and the document index
+    /// does not hold it.
+    fn index_failed(&mut self, _cache_id: &str, _error: &anyhow::Error) {}
     fn end(&mut self) {}
 }
 
@@ -264,7 +267,10 @@ fn sync_artifacts(
                 // force: sync owns refresh semantics — a re-sync or a
                 // prior manual `p import` of the same session must not
                 // error on the existing cache entry.
-                write_cached(&derived.cache_id, &derived.doc, true)?;
+                let written = write_cached(&derived.cache_id, &derived.doc, true)?;
+                if let Some(index_error) = &written.index_error {
+                    observer.index_failed(&derived.cache_id, index_error);
+                }
                 stage(
                     &mut writes,
                     SyncRecord {
@@ -749,6 +755,43 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "cache-index")]
+    #[test]
+    fn an_index_failure_goes_to_the_observer_and_the_document_is_synced() {
+        struct IndexFailures(Vec<String>);
+        impl SyncObserver for IndexFailures {
+            fn index_failed(&mut self, cache_id: &str, _error: &anyhow::Error) {
+                self.0.push(cache_id.to_string());
+            }
+        }
+
+        with_cfg(|home, config_dir| {
+            write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+            std::fs::create_dir_all(config_dir).unwrap();
+            std::fs::write(
+                config_dir.join(crate::config::INDEX_FILE_NAME),
+                "not a database. ".repeat(16),
+            )
+            .unwrap();
+            let bundle = claude_bundle(home);
+            let mut observer = IndexFailures(Vec::new());
+            let outcomes = sync_bundle(
+                config_dir,
+                &bundle,
+                &[ArtifactType::Claude],
+                None,
+                &mut observer,
+            )
+            .unwrap();
+            assert_eq!((outcomes[0].1.new, outcomes[0].1.failed), (1, 0));
+            let cache_id = load_manifest(config_dir).unwrap()["claude"]["sess-aaa"]
+                .cache_id
+                .clone()
+                .unwrap();
+            assert_eq!(observer.0, [cache_id]);
+        });
+    }
+
     #[test]
     fn rotated_session_resyncs_under_its_head_id() {
         with_cfg(|home, config_dir| {
@@ -848,7 +891,7 @@ mod tests {
             let artifact = derived.provenance.as_ref().unwrap();
             assert_eq!(artifact.id, "sess-aaa");
             assert!(artifact.modified.is_some() && artifact.size.is_some());
-            crate::cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
+            let _ = crate::cache::write_cached(&derived.cache_id, &derived.doc, true).unwrap();
             let config = Config {
                 home: Some(home.to_path_buf()),
                 toolpath_config_dir: Some(config_dir.to_path_buf()),
