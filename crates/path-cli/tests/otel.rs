@@ -421,3 +421,62 @@ fn imported_tool_calls_are_categorized_by_their_harness_provider() {
         }
     }
 }
+
+/// A Gemini CLI session infers as `unknown`; its `run_shell_command`
+/// heredoc is a shell write because the Gemini provider crate names it a
+/// shell tool and no provider disagrees.
+#[test]
+fn a_gemini_shell_heredoc_write_is_recorded() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let attr = |k: &str, v: String| json!({"key": k, "value": {"stringValue": v}});
+    let script = "cat <<'EOF' > out.txt\nhello\nEOF";
+    let call = json!({"id": "c1", "type": "function", "function": {
+        "name": "run_shell_command",
+        "arguments": json!({"command": script}).to_string()
+    }});
+    let user = json!({"role": "user", "content": "write out.txt"});
+    let span = |id: &str, start: u64, messages: Value, completion: Value| {
+        json!({
+            "traceId": format!("t-{id}"), "spanId": "r", "name": "LLM Generation",
+            "startTimeUnixNano": start.to_string(), "endTimeUnixNano": (start + 1).to_string(),
+            "attributes": [
+                attr("gen_ai.response.id", id.into()), attr("session.id", "gem".into()),
+                attr("gen_ai.prompt", json!({"messages": messages}).to_string()),
+                attr("gen_ai.completion", completion.to_string())
+            ]
+        })
+    };
+    let body = json!({"resourceSpans": [{"scopeSpans": [{"spans": [
+        span("g1", 10, json!([user]), json!({"completion": "", "toolCalls": [call]})),
+        span("g2", 20, json!([
+            user,
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": "c1", "content": ""}
+        ]), json!({"completion": "done"})),
+    ]}]}]});
+    let file = dir.path().join("gemini.json");
+    std::fs::write(&file, body.to_string()).unwrap();
+    let a = import(home.path())
+        .args(["--no-cache", "--input"])
+        .arg(&file)
+        .assert()
+        .success();
+    let docs = docs(&output(&a).0);
+    let writes: Vec<(&String, &Value)> = docs[0]["paths"][0]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["change"].as_object().unwrap())
+        .filter(|(k, _)| k.ends_with("out.txt"))
+        .collect();
+    assert_eq!(writes.len(), 1, "{:#}", docs[0]);
+    assert_eq!(
+        writes[0].1["structural"]["otel"]["source"], "shell-heredoc",
+        "{:#}",
+        writes[0].1
+    );
+    let (harness, uses) = tool_categories(&docs[0]);
+    assert_eq!(harness, "unknown");
+    assert_eq!(uses, [("run_shell_command".to_string(), json!("shell"))]);
+}

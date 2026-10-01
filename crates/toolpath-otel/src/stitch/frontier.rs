@@ -1,13 +1,15 @@
 //! The settled frontier: which turns an incremental send may emit.
 
-use super::{Node, TurnGraph, stitch};
+use super::{Node, ToolOutcome, TurnGraph, stitch};
 use crate::ToolClassifier;
 use crate::branch::{Branches, classify};
 use crate::derive::categories;
+use crate::harness::shell_writes::may_move_shell;
 use crate::harness::{SourceHarness, infer_harness, prefix_harnesses, signals};
 use crate::session::Session;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use toolpath_convo::ToolCategory;
 
 /// The session's harness, decided when its first turn settles: inferred
 /// from the shortest prefix of `session.generations` (feed order) whose
@@ -127,8 +129,9 @@ fn emits_at(
     STITCHED.with(|c| c.set(c.get() + k));
     debug_assert_eq!(harness, infer_harness(&signals(&feed)));
     let graph = stitch(&feed);
-    let branches = classify(&graph, &categories(classifier, harness));
-    !emitted_turns(&graph, &branches, final_).is_empty()
+    let category = categories(classifier, harness);
+    let branches = classify(&graph, &category);
+    !emitted_turns(&graph, &branches, final_, &category).is_empty()
 }
 
 /// Sessions up to this long are checked against the naive search on every
@@ -148,8 +151,9 @@ fn naive_first_settle(
         let feed = prefix(session, k);
         let harness = infer_harness(&signals(&feed));
         let graph = stitch(&feed);
-        let branches = classify(&graph, &categories(classifier, harness));
-        if !emitted_turns(&graph, &branches, final_ && k == n).is_empty() {
+        let category = categories(classifier, harness);
+        let branches = classify(&graph, &category);
+        if !emitted_turns(&graph, &branches, final_ && k == n, &category).is_empty() {
             return (k, harness);
         }
     }
@@ -177,10 +181,29 @@ fn prefix(session: &Session, k: usize) -> Cow<'_, Session> {
 
 /// Ids of the turns an incremental send may emit: settled turns (no later
 /// generation can change their payload, marks or parents) whose parents,
-/// extra parents included, are all emitted. `final_` settles every turn.
-/// Relies on `graph.nodes` being in view order, parents first, and on
-/// `branches` being the classification of `graph`.
-pub fn emitted_turns(graph: &TurnGraph, branches: &Branches, final_: bool) -> HashSet<String> {
+/// extra parents included, are all emitted. A turn's shell-write stamps
+/// also read where calls off its ancestry, from generations before its
+/// first, left a persistent shell, so a turn also waits for every
+/// unsettled turn that may move one ([`shell_generation`]) and comes from
+/// an earlier generation. `final_` settles every turn. Relies on
+/// `graph.nodes` being in view order, parents first, and on `branches`
+/// being the classification of `graph` under `category`.
+pub fn emitted_turns(
+    graph: &TurnGraph,
+    branches: &Branches,
+    final_: bool,
+    category: &dyn Fn(&str) -> Option<ToolCategory>,
+) -> HashSet<String> {
+    let unsettled_move = (!final_)
+        .then(|| {
+            graph
+                .nodes
+                .iter()
+                .filter(|n| !is_settled(n) && moves_shell(n, None, category))
+                .map(shell_generation)
+                .min()
+        })
+        .flatten();
     let mut extra: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
     for &(node, parent) in &branches.merges {
         extra[node].push(parent);
@@ -193,11 +216,35 @@ pub fn emitted_turns(graph: &TurnGraph, branches: &Branches, final_: bool) -> Ha
             && extra[i]
                 .iter()
                 .all(|&p| emitted.contains(&graph.nodes[p].id));
-        if settled && parents_emitted {
+        let unblocked = unsettled_move.is_none_or(|g| node.first_generation <= g);
+        if settled && parents_emitted && unblocked {
             emitted.insert(node.id.clone());
         }
     }
     emitted
+}
+
+/// Whether an answer to one of the turn's calls, the one it has (`results`,
+/// else its own) or one still to come, can decide where it leaves a
+/// persistent shell ([`may_move_shell`]).
+pub(crate) fn moves_shell(
+    node: &Node,
+    results: Option<&BTreeMap<String, ToolOutcome>>,
+    category: &dyn Fn(&str) -> Option<ToolCategory>,
+) -> bool {
+    let results = results.unwrap_or(&node.results);
+    node.message.tool_calls.iter().any(|c| {
+        let result = results.get(&c.id).map(|r| r.content.as_str());
+        let name = &c.function.name;
+        may_move_shell(name, category(name), &c.function.parsed_arguments(), result)
+    })
+}
+
+/// The earliest generation a shell move of this turn can be attributed to:
+/// turns whose first generation is later read it off their ancestry.
+pub(crate) fn shell_generation(node: &Node) -> usize {
+    node.producer
+        .map_or(node.first_generation, |p| p.min(node.first_generation))
 }
 
 /// Every call has a result no later prompt can replace, and a produced turn
@@ -241,7 +288,7 @@ mod tests {
         let unknown =
             |name: &str| crate::tests::classifier::provider_tool_category("unknown", name);
         let b = crate::branch::classify(g, &unknown);
-        super::emitted_turns(g, &b, final_)
+        super::emitted_turns(g, &b, final_, &unknown)
     }
 
     fn graph(gens: Vec<Generation>) -> TurnGraph {
@@ -474,8 +521,8 @@ mod tests {
         let at = |k: usize, h| {
             let feed = prefix(&s, k);
             let graph = stitch(&feed);
-            !super::emitted_turns(&graph, &classify(&graph, &categories(tools(), h)), false)
-                .is_empty()
+            let category = categories(tools(), h);
+            !super::emitted_turns(&graph, &classify(&graph, &category), false, &category).is_empty()
         };
         assert!(at(2, SourceHarness::ClaudeCode));
         assert!(!at(3, SourceHarness::Codex));
