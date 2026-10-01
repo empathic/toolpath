@@ -413,6 +413,116 @@ Every canonical JSON field has a corresponding line kind:
 | `steps[*]` (entire step including inner `meta`) | `Step` |
 | `steps[*].meta.signatures` entries | `Signature` with `target: "step:<id>"` |
 
+## Delta Emission
+
+A writer that ships a growing path to a reader in batches (for example, a
+live session uploaded while it runs) sends only what the reader lacks.
+`toolpath::v1::jsonl::delta_lines(path, stored, opened)` returns the lines
+that bring a reader holding the step ids in `stored` up to `path`. `opened`
+says whether the reader has the path yet:
+
+- **First send** (`opened` false): `PathOpen` (id, base, `graph_ref`,
+  meta), one `ActorDef` per actor, every step not in `stored` with its
+  step-level `Signature` lines after it, then `Head`.
+- **Incremental send** (`opened` true): an `ActorDef` for every actor
+  (re-sending is idempotent), the steps not in `stored` with their
+  `Signature` lines, `Head`, then one `PathMeta` patch carrying the current
+  `title`, `kind`, `source`, `intent`, `description`, `refs` and `extra`.
+  `refs` is always present and replaces the reader's list, so an empty list
+  clears it. The patch is left out only when the path has no `meta`.
+
+`opened` is the only signal of a first send; `stored` never implies it, so
+a path that exists while its stored ids are unknown (`stored` empty), or a
+new path whose steps continue another's (`stored` naming those), each gets
+the right opening line. A second `PathOpen` for one path is rejected by a
+reader as a duplicate.
+
+The delta is set-based: every step not in `stored` goes out, wherever it
+sits in document order, so a step placed before stored ones (a branch
+learned late, say) is sent like any other. Steps go out parents-first: in
+document order when that order already is parents-first, otherwise in a
+stable topological order (ready steps taken in document order), so a reader
+that links parents on arrival always holds the parent first. A delta never emits `PathClose` or path-level
+signatures, so the stream stays open. Ids in `stored` that the path no
+longer carries are ignored, though they still satisfy a new step's parent
+reference. A new step whose parent is neither stored nor new is an error
+(`DeltaError::DanglingParent`), and so is a parent cycle among the new
+steps, including a step that lists itself (`DeltaError::Cycle`).
+
+Concatenating the first send and any number of deltas reads back (see
+[Reading JSONL](#reading-jsonl)) to a document equal, up to step order, to
+a one-shot write of the final path, minus path-level signatures. Limits
+follow from the line kinds: a delta cannot retract a step, unset a metadata
+field or remove an `extra` key, and it cannot detect a changed
+payload for a stored id. A reader appends every `Step` line it sees, so the
+caller must pass exactly the ids the reader holds; a step sent twice is
+held twice.
+
+Keeping stored steps stable is the caller's contract. A caller that can
+see the content the reader holds reports a stored step it would now derive
+differently as `DeltaError::Amended` (naming the steps) instead of sending
+a delta; appending cannot repair it. The steps contain
+unordered maps, so compare them in a canonical form. Serializing through a
+JSON value with sorted keys works only while nothing in the build enables
+serde_json's `preserve_order` feature, which cargo unifies across the whole
+dependency graph; callers that compare bytes should canonicalize with JCS
+(RFC 8785), as signatures do.
+
+Numbers round-trip exactly only through a correctly rounded parser: a
+writer emits the shortest representation of each double, and a parser that
+rounds the last bit differently reads back another value (serde_json needs
+its `float_roundtrip` feature, which the `toolpath` crate enables). Readers
+that reconcile amounts such as costs should not compare doubles for
+equality at all, but convert them to integer units first.
+
+### Batching
+
+A store that applies each request body on its own (Pathbase's streamed
+upload, say) needs every body to leave it holding a valid path, so a long
+send is split with care. `toolpath::v1::jsonl::batch_lines(lines, held,
+limits, head)` splits a line stream for a reader holding the step ids in
+`held` into bodies, and `delta_bodies(path, stored, opened, limits, head)`
+does so for a delta: `opened` false starts the first body with `PathOpen`,
+`opened` true with a `PathMeta` patch (when the path has meta), whatever
+`stored` holds. A store
+that skips an identical resent step may be given any subset of what it
+holds as `stored`; one that appends every `Step` line needs the exact set.
+For a whole-path upload, `Path::to_jsonl_lines` gives the one-shot lines
+(order the steps with `parents_first` first) and `held` is empty.
+
+The bodies keep these rules:
+
+- **Opening lines first.** The first body starts with `PathOpen`, then any
+  `PathMeta` patches, then the `ActorDef`s, wherever the input has them. A
+  `PathOpen` anywhere but the first input line is an error. Putting the
+  patch first lets metadata a later send depends on commit with the first
+  steps rather than after the last.
+- **Steps stay whole.** A `Step` travels with the step `Signature` lines
+  that follow it; one elsewhere is an error. Bodies keep the input's step
+  order, so a parents-first input stays parents-first across bodies. A
+  step whose parent is neither held nor sent earlier is an error.
+- **A `Head` per body.** Every body ends with a `Head` naming a step the
+  reader holds once that body lands. The last body takes the input's last
+  `Head` (other `Head` lines are dropped) and also carries the path-level
+  `Signature`s before it and the `PathClose` after it. Other bodies take
+  the head a rule chooses: the body's last step, the latest held step of a
+  given order (the main line, so a provisional head stays off side
+  branches), or the caller's choice. A head the reader would not hold is
+  an error, and so is a body with no steps and no head.
+- **Limits.** A body holds at most `max_steps` steps and `max_bytes` bytes.
+  A step is never split, so a step larger than the byte limit (with its
+  signatures, plus the opening lines when it is first and the closing lines
+  when it is last) goes in a body of its own, over the limit. Every body
+  but a lone one holds at least one step: the opening lines stay with the
+  first step.
+- **No reserved meta keys.** `actors` or `signatures` as an `extra` key of
+  `PathOpen.meta` or of a `PathMeta` patch is an error; those travel only
+  as `ActorDef` and `Signature` lines.
+
+Concatenated, the bodies read back as the input lines would: the
+intermediate `Head` lines are overwritten by the last one, and the moved
+`PathMeta` patches are applied before the steps rather than after them.
+
 ## Signatures
 
 Canonicalization is unchanged. Signatures are computed over the canonical

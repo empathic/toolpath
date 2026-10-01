@@ -137,11 +137,16 @@ pub mod v1 {
     /// [`Graph::from_jsonl_reader`] / [`Graph::from_jsonl_str`], write with
     /// [`Graph::to_jsonl_writer`] / [`Graph::to_jsonl_string`]. The
     /// Path-level methods of the same name remain available for callers
-    /// operating directly on an inner `Path`.
+    /// operating directly on an inner `Path`. [`jsonl::delta_lines`] emits
+    /// only the lines a reader holding some of the steps still lacks;
+    /// [`jsonl::batch_lines`] and [`jsonl::delta_bodies`] split lines into
+    /// request bodies that each end with a `Head`.
     pub mod jsonl {
         pub use crate::jsonl::{
-            ActorDefBody, HeadBody, JsonlError, JsonlLine, PathCloseBody, PathMetaBody,
-            PathMetaPatch, PathOpenBody, PathOpenMeta, SignatureBody, StepBody,
+            ActorDefBody, BatchError, BatchLimits, Body, DeltaError, HeadBody, HeadContext,
+            HeadRule, JsonlError, JsonlLine, PathCloseBody, PathMetaBody, PathMetaPatch,
+            PathOpenBody, PathOpenMeta, SignatureBody, StepBody, actor_def_lines, batch_lines,
+            delta_bodies, delta_lines, parents_first, step_lines,
         };
     }
 
