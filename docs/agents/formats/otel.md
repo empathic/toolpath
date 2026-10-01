@@ -6,14 +6,16 @@ Read by `toolpath-otel`. The OpenRouter Broadcast profile was observed in M0
 instrumentations against local mock servers (see Pinned instrumentation
 behavior; the event-mode captures, with content on log records, are
 described under Event-mode captures). Keep in sync with
-`crates/toolpath-otel/src/{lib,otlp,walk,session,stitch,branch,provider,derive,hash}.rs`,
+`crates/toolpath-otel/src/{lib,otlp,walk,session,stitch,branch,provider,derive,hash,jsonl,record,generation}.rs`,
+`crates/toolpath-otel/src/stitch/frontier.rs`,
 `crates/toolpath-otel/src/walk/logs.rs`,
 `crates/toolpath-otel/src/harness/` and
 `crates/toolpath-otel/src/profile/{openrouter,semconv,openinference}.rs`.
 
 There is no local store: a collector (or OpenRouter Broadcast) delivers
 OTLP/HTTP request bodies, and the caller hands the bodies of one session to
-`toolpath_otel::derive_path`.
+`toolpath_otel::derive_path`, or reads each body once into generation
+records (`read_generations`) and derives from those.
 
 ## Input
 
@@ -202,7 +204,27 @@ producer differently: `toolpath-codex` writes Codex's `originator`
 (`codex-tui`, `codex_exec`, …), and `toolpath-pi` sets no producer.
 `toolpath-otel`'s harness set has no Gemini CLI entry and no cwd marker for
 it, so a Gemini session records whatever the rules find (usually
-`unknown`). The working directory becomes `path.base`:
+`unknown`).
+
+The harness is decided when the session's first turn settles, and
+frozen: the signals are read from the shortest prefix of the session's
+generations (start order for `derive_path`, feed order for incremental
+sends) after which a non-final incremental send would emit a step
+(Incremental JSONL), or from every generation when none does. The system
+prompt and tool list are there from the first call, so a later call that
+uses another tool does not change the tool categories, the delegation
+calls or `producer.name` of a session already under way.
+The first send stores it as `meta.otel.harness`, and every later send
+derives with the stored one (`Remote::harness`), so tool categories,
+delegation calls and file changes of a sent step never change. Without it
+the prefix follows from the feed order alone (`meta.otel.generation_ids`),
+with the same answer, and the one-shot derivation of the final feed order
+gets it too. The exception: a `Settle::Final` send before any turn settled
+followed by a late arrival, and a continuation's first send over a path
+sent that way, can decide another harness without it (the call is
+`Amended`). Always pass the stored `meta.otel.harness`.
+
+The working directory becomes `path.base`:
 
 | Harness | cwd marker |
 |---|---|
@@ -668,6 +690,14 @@ report only side requests, skeletons, unreturned sub-agents, unplaced
 steps and real abandoned attempts; select on `.change[].structural.otel.branch` to tell
 them apart.
 
+An incremental send (Incremental JSONL, "Marks and holds") holds back a
+turn whose marks or parents a later generation could still set: until the
+main line is decided, a side request's turns until `Settle::Final`, and every
+turn of a delegating thread after a delegation call until that call's
+sub-agent has answered. A sub-agent's own turns need no hold of their own:
+a thread is matched only to a call before it, so a turn that arrives
+before its call keeps the marks it has.
+
 ## Tool call ids and results
 
 A tool call with no id (Gemini calls carry none on the wire) is given the
@@ -768,6 +798,273 @@ outside it: their positional ids never equal the source's `""`.
    `execute_tool` result used as the fallback above.
 4. The JSON formatting of tool-call arguments (parsed and compared as
    values; `echo` keeps the history's raw form where it differs).
+
+## Generation records
+
+`read_generations(requests, profile)` is the read half of `derive_path`: it
+runs the walker over any request bodies (any sessions, any grouping) and
+returns a `GenerationBatch { records, messages }` with the walker's skip
+counts. `derive_path_from_records(records, messages, config)` and
+`derive_jsonl` are the derive half; `messages` is a lookup
+`Fn(&MessageHash) -> Option<&StoredMessage>`. A store keeps the records of
+every delivery and upserts the messages by hash, instead of the raw
+bodies.
+
+- **Record (`GenerationRecord`, `FORMAT` 1).** JSON
+  `{"format": 1, "generation": {…}, "prompt": "<hash>"}`. `generation` is
+  the neutral per-call record (the `Generation` fields: `id`, `trace_id`,
+  `start_ns`, `end_ns`, `session_id`, `request_session_id`, `user_id`,
+  `client_key`, `completion`, `usage`, `cost`, `request_model`,
+  `response_model`, `provider`, `finish_reason`, `profile`, `source_meta`,
+  and when not at their defaults `continues`, `history`, `absent`,
+  `tool_results`, `compacted`) without its `messages`;
+  `prompt` is the hash of the last prompt message (absent for an empty
+  prompt). A call skipped as truncated is a marker, `{"format": 1,
+  "truncated": {"generation_id", "session_id", "profile"}}` (`session_id`
+  absent when the call carries none), which sets `meta.otel.truncated` as
+  the raw read does: a marker without a session id marks the session it is
+  derived with. Deserializing a record of a newer format, with both or
+  neither of `generation`/`truncated`, with inline `messages`, or without
+  a `profile`, fails.
+- **Message (`StoredMessage`).** JSON `{"parent": "<hash>", "message":
+  {…}}`: the prompt message as the client sent it (`role`, `content`
+  verbatim, and `tool_calls`, `tool_call_id`, `name`, `is_error`,
+  `reasoning_details` when present) and the hash of the message before it
+  (absent for the first). Its `MessageHash` is 64 lowercase hex of
+  `sha256("toolpath-otel/message\0" ‖ parent ‖ "\0" ‖ canonical(message))`,
+  `parent` as hex text (empty for the first message) and `canonical` the
+  crate's canonical JSON, RFC 8785 (JCS), the same function step stability
+  uses. JCS spells a number by its value, so messages that differ only in
+  how a number is written (`1` and `1.0`, `0` and `-0.0`) share a hash, and
+  a store keyed by hash keeps the spelling it saw first: deriving from
+  records can then differ from deriving from the bodies in that spelling
+  only. JCS writes every number as an IEEE 754 double, so integers past
+  2^53 that round alike (`9007199254740993`, `9007199254740992`) collapse
+  the same way. The crate assumes serde_json without `arbitrary_precision`:
+  with that feature on anywhere in a build, a number no double holds
+  (`1e400`) parses from client input and canonicalization panics, and
+  numbers carried verbatim into step content change spelling. A hash
+  names the whole prompt prefix it ends, so each distinct prefix is stored
+  once. It is not the normalize `content_hash` (which drops tool
+  arguments, reasoning and part metadata) and is part of no derived id.
+- **Ids.** Every derived id (turn ids, the session key, path and session
+  ids) depends only on record and message content, never on which delivery
+  a record came from or when it was read. Deriving from records, in memory
+  or after a JSON round trip, gives the same document as deriving from the
+  bodies (fixture tests, whole and per delivery; the e2e corpus, 11/11
+  sessions).
+- **Per-delivery reads.** Reading one delivery at a time equals one read of
+  all of them as long as no call's telemetry spans two deliveries
+  (OpenRouter Broadcast sends each call's trace whole; split span and log
+  deliveries, as in the event-mode captures, must be read together). A
+  generation id in two deliveries' records is deduplicated at derive time
+  and counted in the derive call's `skipped.duplicate`:
+  `derive_path_from_records` keeps the copy the walker would (better-ranked
+  profile, else the earlier record), whatever the record order;
+  `derive_jsonl` keeps the first record, records being in arrival order,
+  so a copy received later never replaces one already sent (Feed order,
+  not start order). Every other skip is counted by `read_generations`.
+- **Storage.** Each OpenRouter request repeats the whole history, so raw
+  bodies, or records with inline prompts, grow with the square of the
+  session. Records plus chained messages grow with its new messages: a
+  record is ids, completion and usage (a few hundred bytes to a few KB),
+  and a message is stored once per distinct prefix. 1,000 synthetic
+  full-history calls: 2.26 GB of OTLP, 917 MB of prompt JSON repeated
+  inline, 3.1 MB of records and 2.2 MB of messages; the e2e corpus (99
+  deliveries): 25.2 MB of OTLP, 0.23 MB of records, 0.57 MB of messages.
+- **Rebuild.** Deriving walks each record's chain back from `prompt`.
+  Prompts that are prefixes of another share one list, so each message is
+  copied once per prompt no other prompt extends, not once per record. A
+  missing message, or a chain of more than 2^20 messages (a looping store),
+  is `OtelError::MessageMissing(hash)`. Stitching then finds each prompt's
+  longest earlier prefix by its message hashes instead of comparing
+  messages, so a call costs its new messages, not its prompt's length.
+  Deriving from bodies compares content, so two spellings of one message
+  (above) never merge there.
+- **Trust and compatibility.** The message lookup must return the message
+  stored under exactly the hash asked for; derivation does not recompute
+  it, so a wrong store derives wrong content under the right ids. A reader
+  drops record fields it does not know, so a field added later that
+  reaches step content comes with a new `FORMAT`, and one path is derived
+  by one version of the crate.
+- **Read.** The read parses a message the first time its exact text
+  appears and reuses it for every later prompt that repeats it; prompts of
+  one read that extend each other share one list. `read_generations`
+  canonicalizes each distinct message once and hashes each distinct prefix
+  once.
+
+## Incremental JSONL
+
+`derive_jsonl(records, messages, config, remote, settle, limits)`
+derives from generation records (above) and returns the request bodies
+(`Vec<toolpath::v1::jsonl::Body>`: each one append, its NDJSON `text`, the
+`step_ids` it holds and the `head` it names), built by `toolpath`'s
+batcher, `delta_bodies` (see `docs/RFC-jsonl.md` "Delta Emission" and
+"Batching"), that bring a stored path up to the session's settled turns. It
+is stateless: `remote` is read back from the store (Pathbase #486) on every
+call, and nothing is kept between calls. Only turns on the settled frontier
+are sent, so no later call amends a sent step; `Settle::Final` settles
+every turn and is passed once the session is over.
+
+- **`Remote`.** `opened`: the path exists. `fed`: the stored path's
+  `meta.otel.generation_ids`, the feed order of the generations derived so
+  far (empty before the first send). `stored`: step ids the path holds, any
+  subset of them. Pathbase skips a resent step whose payload is identical
+  and rejects one that differs (`400 invalid_document`), so a step left out
+  of `stored` only costs a resend; `stored = ∅` resends every settled step
+  each call, and is what a caller passes until Pathbase can list a path's
+  step ids. Claiming an id the path lacks is not safe: its children would
+  lose their parent edge and a `Head` naming it is refused. A claimed id
+  that the `fed` generations do not derive (stored under another feed
+  order, or another session's) is not trusted and goes out again, where the
+  server's payload check decides. `harness`: the stored path's
+  `meta.otel.harness`, used for every derivation of the call (the sent
+  steps, the fed generations they are compared against, the head); `None`
+  before the first send decides it from the feed order (Harness and
+  working directory). A name the crate does not record is
+  `OtelError::UnknownHarness`. `base`: every step id of the frozen path a
+  continuation continues (Continuation, below); empty otherwise.
+- **Bodies.** The first body starts with the meta line: a `PathOpen` when
+  `opened` is false, else a `PathMeta` patch carrying every meta key. Either
+  holds the new feed order as `meta.otel.generation_ids`, so the feed order
+  commits in the same transaction as the first steps, and a send cut short
+  after any body leaves a store whose meta matches its steps. Actor
+  definitions follow, then the steps parents-first, split within `limits`
+  (`BatchLimits::new(max_bytes, max_steps)`; `None` is no limit, and a step
+  is never split). Every body ends with a `Head` naming a step stored by
+  then: the latest settled main-line step in start-order view order among
+  those stored (another step only while no main-line step is), and the
+  real head on the last body. Sending the same bodies again
+  is a no-op. No bodies means no turn has settled (a non-final call before
+  any turn is echoed). `PathClose` and path-level signatures are never sent.
+- **Feed order, not start order.** The session is derived with the `fed`
+  generations first, in that order, then the rest by `(start_ns, id)`.
+  OpenRouter delivers a generation when it completes, so concurrent
+  requests (parallel calls, sub-agents, a long request overlapping short
+  ones) arrive out of start order. Ordering by start alone would let a late
+  generation become a sent turn's first carrier or producer and rewrite a
+  stored step. In feed order it is derived after everything sent: its new
+  turns are appended (a fork is new steps with other parents), and when it
+  produced a turn the reader already holds as history, its per-request
+  record is a new unplaced step, a dead end that goes out as soon as its
+  parent has. A `Delta` generation fed
+  before its continuation target keeps chaining from the root, as sent, and
+  `meta.otel.missing_continuations` still lists the target; a
+  prompt-absent skeleton fed late chains from the generation fed just
+  before it. With in-order arrival, feed order is start order and the sends
+  read back to `derive_path`; otherwise to `derive_path` of the session in
+  feed order, except for `Head` (below) and `path.base`. A session without
+  a client session id is keyed by its first fed generation, so a late
+  generation never changes its path id. A `fed` id the records lack is
+  `OtelError::FedGenerationMissing`. A sub-agent request fed before the
+  request that made its delegation call cannot be matched to that call (a
+  thread matches only an earlier call), so its thread is an ordinary root:
+  if it produces two turns first it is the main line, and the real main
+  line is held as a side request until `Settle::Final` and reads as dead ends.
+  That holds for the rest of the stream (no sent step changes) but differs
+  from `derive_path`; it is rare with OpenRouter, where the delegating
+  request completes before the sub-agent starts. Of two records of one
+  call (with `ProfileSelection::Auto`, an app-side `semconv` span and the
+  Broadcast root share its `gen-…` id), the stream keeps the one received
+  first and `derive_path` the better-ranked profile's: they agree when that
+  copy arrives first. With one profile consulted
+  (`ProfileSelection::OpenRouter`, as Pathbase reads) it cannot arise.
+- **Head.** `Head` is the settled main-line step that `derive_path` in
+  start order places last in view order, so a late sub-agent or side
+  request never takes the head from the main line (which would turn the
+  main conversation into dead ends). After `Settle::Final` it is the one-shot head whenever the stream
+  holds that step; it lacks it only when a `Delta` generation or skeleton
+  was fed before the generation it continues, and `Head` is then the step
+  both share that the one-shot places last. `meta.otel.cost_usd` sums in
+  start order, so totals do not depend on arrival order.
+- **Marks and holds.** A sent step never changes, so its marks
+  (`extra.otel.branch`, `delegation`, `delegations`) and its parents must
+  be known when it settles. Marks depend only on earlier turns in feed
+  order or the turn's own data (Sub-agents, side requests and the head),
+  and a non-final call also holds back, whatever their own state:
+  - every unmarked turn outside a continuing tree (one a `Delta` with a
+    missing continuation target started), until the main line is decided
+    (a leading system message has produced two turns outside sub-agent
+    threads), since until then it could still become a side request's;
+  - a side request's turns, until `Settle::Final`;
+  - an unmarked system turn with no child yet, since it takes its first
+    child's sub-agent mark (and `delegation`);
+  - every later turn of a delegating thread below a delegation call,
+    until that call's sub-agent has answered: any of them could be the
+    turn that receives the answer and gains the sub-agent's last turn as
+    an extra parent. Once the answer is found the receiving turn is known
+    and the others go out. A call whose sub-agent never answers holds its
+    thread until `Settle::Final`.
+  The harness behind tool categories and delegation calls is fixed by
+  the generations that settle the first turn (Harness and working
+  directory), so a later generation never recategorises a sent call.
+  A sub-agent's merge is the first answer received in feed order, and
+  threads take delegation calls first come, first served, so a second
+  answer or a duplicate prompt never moves a mark or an extra parent.
+  A merged answer (the sub-agent's answer, an extra parent) settles at the
+  generation by which its merge is seen, without waiting for an echo. A
+  sub-agent can still be resumed (Claude Code `SendMessage`, Codex
+  `send_message`/`resume_agent`/`followup_task`), and its next request
+  echoes the answer, with reasoning the completion lacked; such an echo is
+  part of the answer's step only when its generation comes at or before
+  the merging one in feed order (it settled the turn first), and left off
+  otherwise, in the stream and in `derive_path` alike. A turn goes out
+  only when every parent, extra parents included, has gone out, and the
+  steps sent are pruned to a fixpoint over every step parent.
+- **Amended.** A step sent unsettled (only a `Settle::Final` call sends those) can
+  still change when a later generation settles it: a prompt carrying the
+  real result of a call sent with its fallback result, or a different echo.
+  That is a mutation of sent content, never an append: it is recorded
+  through Pathbase's mutation log (a planned RFC), never by sending or
+  copying the step again. For the steps in `stored` (whenever it is not
+  empty), `derive_jsonl` compares every one against the derivation of the
+  `fed` generations and returns
+  `OtelError::Delta(DeltaError::Amended { steps })` with nothing to send. A
+  step left out of `stored` cannot be checked: its changed version goes out
+  and Pathbase refuses the body (`400 invalid_document`) with nothing
+  written.
+- **Continuation.** Generations that arrive after the path is frozen go to
+  a new path, under the same rules as any path: no step id is ever reused,
+  and frozen ancestors are never copied. Every send of the new path passes
+  the frozen path's step ids as `base`: the first with the frozen path's
+  `fed`, empty `stored` and `opened` false (the bodies start with a
+  `PathOpen`), later ones with the new path's `fed`, `stored` and `opened`
+  true. The bodies hold only new steps; each root's parents name the
+  frozen steps it continues from, which may be any frozen step (a late
+  sub-agent forks off old history), not only the frozen head. `Head`
+  always names a step of the new path, never a `base` step. `base` steps
+  are checked like stored ones: one the new generations would change is
+  `Amended` (a mutation of the frozen path). Its path id comes from the session key, like the frozen path's;
+  set `DeriveConfig::convo.path_id` when both live in one graph. Pathbase
+  accepting a continuation root anchored on any frozen step is an open
+  point (#486 drops a parent edge it cannot resolve within the path).
+- **One sender per path.** Two callers deriving from the same stored state
+  at once can each commit a different feed order; the store serializes
+  bodies, not derive-then-send.
+- **Delta sessions.** A session continued by `Delta` history never echoes an
+  earlier assistant turn, and neither does a prompt-absent skeleton, so
+  before `Settle::Final` nothing past the first generation's prompt is sent.
+- **Unanswered calls.** A call no prompt ever answers holds its turn, and
+  that turn's subtree, back until `Settle::Final`; an abandoned retry holds back
+  only its own branch.
+- **`path.base` is fixed at the first send.** `PathOpen` carries it and a
+  `PathMeta` patch cannot change it, so when a later generation is the
+  first to reveal the working directory the stored path has no base where a
+  one-shot `derive_path` would.
+- **Cost.** A call derives the whole session from its records, and with a
+  non-empty `stored` derives the `fed` generations again to compare every
+  stored step: about 0.23 s of CPU for 1,000 full-history calls (2.26 GB
+  of OTLP) and 0.78 s for 2,000, against 1.65 s at 1,000 when every call
+  re-read the raw bodies. With `stored` empty it skips the comparison
+  (0.18 s at 1,000) but resends every settled step.
+- **Soundness.** The whole session is derived and the unsettled steps
+  dropped. That equals deriving only the settled turns, because a step
+  depends only on its own turn, its parent's id and the generations that
+  supply its payload, and every kept step's ancestors are kept and settled.
+  Appending a generation to the feed order leaves every settled turn's
+  payload, marks and parents as they were (Marks and holds). One-shot
+  `derive_path` of the session in the final feed order gives the same
+  marks and parents as the stream's final state, in every arrival order.
 
 ## Pinned instrumentation behavior (captures)
 
