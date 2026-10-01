@@ -1,6 +1,6 @@
 [package]
 name = "path-cli"
-version = "0.29.0"
+version = "0.32.0"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -101,6 +101,10 @@ embedded-picker = ["dep:skim", "dep:regex"]
 # `--cwd`, `path resume --remote`, `--dry-run`, and the ssh transport
 # module. Pulls in the in-process SSH client.
 resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url", "dep:typed-path"]
+# The document index (`cache::index`): experimental, off by default.
+# A SQLite file beside the document cache holds the facts a listing
+# reads, and `path resume` with no input reads its rows from it.
+cache-index = []
 
 [dev-dependencies]
 assert_cmd = "2"

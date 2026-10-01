@@ -4,6 +4,9 @@
 //! between external formats and toolpath JSON. Users refer to cached
 //! documents by a short id (filename without `.json`) instead of full
 //! paths. The `p cache ls | rm` subcommands make the directory legible.
+//!
+//! With the `cache-index` feature, the document index (the `index`
+//! module) holds the facts of each document that a listing reads.
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::PathBuf;
@@ -11,6 +14,10 @@ use toolpath::v1::Graph;
 
 use crate::config::config_dir;
 
+#[cfg(all(test, not(target_os = "emscripten")))]
+pub(crate) mod fixtures;
+#[cfg(all(feature = "cache-index", not(target_os = "emscripten")))]
+pub(crate) mod index;
 #[cfg(not(target_os = "emscripten"))]
 mod summary;
 #[cfg(not(target_os = "emscripten"))]

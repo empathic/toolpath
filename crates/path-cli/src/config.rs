@@ -39,6 +39,10 @@ pub(crate) const MANIFEST_LOCK_FILE_NAME: &str = "manifest.json.lock";
 pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 /// The document cache directory (see `cache`).
 pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
+/// The SQLite index over the document cache (see `cache::index`).
+/// SQLite keeps its `-wal` and `-shm` files next to it.
+#[cfg(all(feature = "cache-index", not(target_os = "emscripten")))]
+pub(crate) const INDEX_FILE_NAME: &str = "index.sqlite";
 
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root
