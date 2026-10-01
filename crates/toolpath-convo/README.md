@@ -101,6 +101,78 @@ let writes: Vec<_> = turn.tool_uses.iter()
     .collect();
 ```
 
+## Shell writes
+
+Agents often write files through their shell tool rather than a write
+tool. `shell_writes::parse_script` reads a shell script's text and reports,
+per simple command, the heredoc writes it makes (`cat <<'EOF' > file`,
+`cat >> file <<EOF`, `tee [-a] file <<EOF`) and the patches it feeds to
+`apply_patch <<'EOF'`, with literal `cd`s folded into relative paths.
+`shell_writes::parse_argv` reads a program's argv the same way: a shell's
+`-c` script is parsed, `apply_patch PATCH` is a patch, and any other
+program is one `ShellItem::Other`. It is pure and conservative: anything
+it cannot follow exactly (subshells, command substitution, compound
+commands) is reported as `ShellItem::Other`, and a write whose target
+cannot be resolved as `ShellItem::Unresolved` with its reason, never
+guessed at. A command that plainly writes files in a form it does not
+follow (`cat > f <<A <<B`, `cat <<EOF | tee f`, `echo hi > f`,
+`make 2> err.log`) is `ShellItem::Unmodeled`, listing each target (output
+redirects to a file on any descriptor and `tee` file arguments, not
+`/dev/` paths) as written and, when literal in a known directory,
+resolved; never its content. A script it does not split is not searched
+for targets. What an item means for a file change, and what outcome the
+call had, is up to the provider.
+
+Simple commands are split at `&&`, `||`, `;`, `|`, `&` and newlines, and
+each write or patch carries a `StatusLink`: `Sole` (the script's exit status
+is its own), `ImpliedBySuccess` (a zero exit means it ran and exited zero)
+or `Independent`. A literal `cd DIR` moves later relative paths only while
+an unbroken `&&` chain follows it, since a `cd` that failed before `;`
+leaves the script where it was; after any other directory change (`cd $X`,
+`pushd`, `source`, `eval`, an env-prefixed `cd`, …) relative targets are
+unresolvable, and a patch's `dir` is `ScriptDir::Unknown`.
+`ParsedScript::dir_changes` lists the commands that may change the
+working directory of the shell the script runs in, for callers whose shell
+persists across calls: `ScriptDir::At` (absolute) for a literal `cd /DIR`,
+`ScriptDir::Unknown` for any other (`cd sub`, `pushd`, `source`, `eval`,
+`trap`, `alias`, a non-literal command word such as `$CD`, or a script it
+cannot match); `may_change_dir` is `true` when it is not empty.
+`ParsedScript::dir_on_success` is where a zero exit status leaves that
+shell: `Start` with no change, `At` (relative to the start, or absolute)
+when every change is a literal `cd` in an `&&` chain from the script's
+start, `Unknown` otherwise (`cd -N` and zsh's `cd +N` included).
+`ParsedScript::command_words` holds each simple command's words from its
+command word on. Subshells
+(`( … )`, `$( … )`, backquotes, process substitution), quoted text and
+heredoc bodies are skipped, so Claude Code's
+`git commit -m "$(cat <<'EOF' … EOF)"` names no change. It over-reports
+(a function body counts even if never called) and never under-reports,
+except that functions and aliases the shell already had are invisible.
+
+Parsing follows bash: `\r` is a word character, a line ending in an odd
+number of `\` in an unquoted heredoc continues before the terminator test,
+and `<<-` strips leading tabs from the terminator line as well as the body.
+A tag counts as quoted when any part of it is quoted or escaped (`'T'`,
+`"T"`, `\T`); a target is non-literal when it has `$`, a leading `~`, a
+glob or a brace outside quotes.
+
+`shell_writes::parse_patch` reads the files of a V4A patch (the
+`*** Begin Patch` … `*** End Patch` text Codex's `apply_patch` takes):
+one `PatchFile` per `*** Add File:`, `*** Update File:` (with its
+`*** Move to:`) or `*** Delete File:`, an added file carrying its content.
+Update hunks are not unified diffs, so an update carries none.
+`HeredocPatch::files` reads a patch found in a script.
+
+```rust,ignore
+use toolpath_convo::shell_writes::{parse_script, ShellItem};
+
+for item in parse_script("cat <<'EOF' > notes.md\nhello\nEOF").items {
+    if let ShellItem::Write(w) = item {
+        assert_eq!((w.path.as_str(), w.body.as_str()), ("notes.md", "hello\n"));
+    }
+}
+```
+
 ## Watching
 
 Dispatch on `WatcherEvent` with `match` — three variants, exhaustive:
