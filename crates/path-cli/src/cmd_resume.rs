@@ -226,6 +226,23 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
             "opencode" => return Some(Harness::Opencode),
             "cursor" => return Some(Harness::Cursor),
             "pi" => return Some(Harness::Pi),
+            // otel actors are `agent:<model>`, so actor sniffing would
+            // mistake a model for a harness.
+            "otel" => {
+                let recorded = path
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.extra.get("otel"))
+                    .and_then(|o| o.get("harness"))
+                    .and_then(|h| h.as_str());
+                return match recorded {
+                    Some("claude-code") => Some(Harness::Claude),
+                    Some("codex") => Some(Harness::Codex),
+                    Some("opencode") => Some(Harness::Opencode),
+                    Some("pi") => Some(Harness::Pi),
+                    _ => None,
+                };
+            }
             _ => {} // fall through to actor sniffing
         }
     }
@@ -780,6 +797,52 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(infer_source_harness(&path), Some(Harness::Claude));
+    }
+
+    fn otel_path(actor: &str, otel: Option<serde_json::Value>) -> toolpath::v1::Path {
+        let mut path = make_path_with_actor(actor);
+        let mut meta = PathMeta {
+            source: Some("otel".to_string()),
+            ..Default::default()
+        };
+        if let Some(o) = otel {
+            meta.extra.insert("otel".to_string(), o);
+        }
+        path.meta = Some(meta);
+        path
+    }
+
+    #[test]
+    fn infer_source_harness_otel_uses_the_recorded_harness() {
+        for (recorded, want) in [
+            ("claude-code", Harness::Claude),
+            ("codex", Harness::Codex),
+            ("opencode", Harness::Opencode),
+            ("pi", Harness::Pi),
+        ] {
+            let path = otel_path(
+                "agent:anthropic/claude-sonnet-4",
+                Some(serde_json::json!({"harness": recorded})),
+            );
+            assert_eq!(infer_source_harness(&path), Some(want), "{recorded}");
+        }
+    }
+
+    #[test]
+    fn infer_source_harness_otel_unknown_harness_goes_to_the_picker() {
+        // `agent:codex-mini` is a model; sniffing it would pick Codex.
+        let path = otel_path(
+            "agent:codex-mini",
+            Some(serde_json::json!({"harness": "unknown"})),
+        );
+        assert_eq!(infer_source_harness(&path), None);
+    }
+
+    #[test]
+    fn infer_source_harness_otel_without_extras_goes_to_the_picker() {
+        // `agent:gemini-2.5-pro` would sniff as Gemini.
+        let path = otel_path("agent:gemini-2.5-pro", None);
+        assert_eq!(infer_source_harness(&path), None);
     }
 
     #[test]

@@ -38,6 +38,7 @@ mod fuzzy;
 pub mod harness;
 mod io;
 pub mod kinds;
+mod otel_tools;
 #[cfg(not(target_os = "emscripten"))]
 mod projection;
 mod providers;
