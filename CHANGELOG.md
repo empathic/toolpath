@@ -2,7 +2,7 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## toolpath-claude 0.13.5, toolpath-codex 0.6.2, toolpath-copilot 0.1.1, toolpath-pi 0.6.2 — unreleased
+## toolpath-claude 0.13.5, toolpath-codex 0.6.2, toolpath-copilot 0.1.1, toolpath-gemini 0.6.2, toolpath-pi 0.6.2 — unreleased
 
 - **`toolpath-claude`** (0.13.5): `meta.producer.name` is `claude-code` on
   every derived path; a session with no recorded CLI version used to
@@ -21,6 +21,11 @@ All notable changes to the Toolpath workspace are documented here.
   (was `copilot-cli`), matching `meta.source`. The projector writes
   Copilot's own `producer: "copilot-agent"` on `session.start` instead
   of copying the view's producer name.
+- **`toolpath-gemini`** (0.6.2): token classes are now additive:
+  `input_tokens` excludes `cached` (Gemini's wire `input`, its
+  `promptTokenCount`, includes the cached prompt tokens, so cached input
+  was counted twice by consumers summing the classes);
+  `GeminiProjector` folds the cached count back into the wire `input`.
 - **`toolpath-pi`** (0.6.2): derived paths carry
   `meta.producer.name = "pi"` (previously no producer).
 

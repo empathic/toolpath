@@ -242,18 +242,30 @@ not concatenated into the visible text.
 
 | Field | Meaning |
 |---|---|
-| `input` | Prompt + context tokens sent to the model. |
+| `input` | Prompt + context tokens sent to the model (`promptTokenCount`; **includes** `cached`). |
 | `output` | Generated tokens (excluding reasoning). |
-| `cached` | Tokens reused from Gemini's prompt cache. |
+| `cached` | Tokens reused from Gemini's prompt cache (`cachedContentTokenCount`; a subset of `input`). |
 | `thoughts` | Reasoning/thinking tokens (Gemini 3+). |
 | `tool` | Tool-result tokens billed separately. |
 | `total` | Sum of the above (not always exactly — Gemini's total occasionally includes overhead). |
 
-All fields are optional. `input` → `input_tokens` and `cached` →
-`cache_read_tokens` map cleanly to the common `TokenUsage` schema. The
+All fields are optional. `cached` → `cache_read_tokens` and
+`input − cached` → `input_tokens` (see below). The
 standalone `tool` and `total` counters are Gemini-specific and are
 preserved raw in a provider-namespaced extras bucket
 (`Turn.extra["gemini"]["tokens"]`).
+
+#### `cached` is inside `input`
+
+Gemini follows the Gemini API's usage semantics: `input` is the
+`promptTokenCount`, which counts every prompt token, and `cached` is the
+`cachedContentTokenCount` subset of it. Real sessions confirm it —
+`total == input + output + thoughts` with no separate `cached` term even
+when `cached` is non-zero. Toolpath's token classes are additive
+(`input_tokens` excludes cache reads, as in Anthropic's usage), so
+`toolpath-gemini` derives `input_tokens = input − cached` (saturating)
+and `cache_read_tokens = cached`. `GeminiProjector` adds `cached` back
+into the wire `input`, so a round trip reproduces the session's numbers.
 
 #### `thoughts` is additive reasoning — folded into `output_tokens`
 

@@ -279,8 +279,14 @@ fn tokens_from_common(u: &TokenUsage) -> Tokens {
         .get("output")
         .and_then(|m| m.get("reasoning"))
         .copied();
+    // Derived `input_tokens` excludes cache reads; Gemini's `input` includes
+    // them.
+    let input = match (u.input_tokens, u.cache_read_tokens) {
+        (None, None) => None,
+        (i, c) => Some(i.unwrap_or(0).saturating_add(c.unwrap_or(0))),
+    };
     Tokens {
-        input: u.input_tokens,
+        input,
         output: match (u.output_tokens, thoughts) {
             (Some(o), Some(r)) => Some(o.saturating_sub(r)),
             (o, _) => o,
@@ -584,6 +590,26 @@ mod tests {
     }
 
     #[test]
+    fn tokens_from_common_folds_cached_back_into_input() {
+        // Derived `input_tokens` excludes cache reads; Gemini's wire
+        // `input` includes them.
+        let usage = TokenUsage {
+            input_tokens: Some(675),
+            cache_read_tokens: Some(8887),
+            ..Default::default()
+        };
+        let tokens = tokens_from_common(&usage);
+        assert_eq!(tokens.input, Some(9562));
+        assert_eq!(tokens.cached, Some(8887));
+
+        let cached_only = TokenUsage {
+            cache_read_tokens: Some(5),
+            ..Default::default()
+        };
+        assert_eq!(tokens_from_common(&cached_only).input, Some(5));
+    }
+
+    #[test]
     fn tokens_from_common_without_breakdown_leaves_output_unchanged() {
         let usage = TokenUsage {
             output_tokens: Some(337),
@@ -725,7 +751,7 @@ mod tests {
             .project(&view_with(vec![t]))
             .unwrap();
         let tokens = convo.main.messages[0].tokens.as_ref().unwrap();
-        assert_eq!(tokens.input, Some(100));
+        assert_eq!(tokens.input, Some(120));
         assert_eq!(tokens.output, Some(50));
         assert_eq!(tokens.cached, Some(20));
         // thoughts/tool/total unknown on the fallback path
