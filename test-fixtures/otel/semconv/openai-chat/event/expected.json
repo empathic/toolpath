@@ -1,0 +1,68 @@
+{
+  "scenario": "openai-chat",
+  "requests": 3,
+  "generation_ids": [
+    "chatcmpl-fixture-1",
+    "chatcmpl-fixture-2",
+    "chatcmpl-fixture-3"
+  ],
+  "response_ids": [
+    "chatcmpl-fixture-1",
+    "chatcmpl-fixture-2",
+    "chatcmpl-fixture-3"
+  ],
+  "sessions": 1,
+  "turn_roles": [
+    "system",
+    "user",
+    "assistant",
+    "assistant",
+    "user",
+    "assistant"
+  ],
+  "system_text": "You are a coding assistant.",
+  "tool_calls": [
+    {
+      "id": "call_fixture_1",
+      "name": "read_file",
+      "input": {
+        "path": "src/lib.rs"
+      },
+      "result": "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+    }
+  ],
+  "completion_texts": [
+    "",
+    "It exports one function, add.",
+    "One public add function."
+  ],
+  "extra_choices": [
+    [],
+    [],
+    [
+      "Exports a single adder."
+    ]
+  ],
+  "usage_served": [
+    {
+      "input": 42,
+      "output": 9,
+      "cache_read": 0
+    },
+    {
+      "input": 70,
+      "output": 8,
+      "cache_read": 32
+    },
+    {
+      "input": 90,
+      "output": 12,
+      "cache_read": 0
+    }
+  ],
+  "n_requested": [
+    1,
+    1,
+    2
+  ]
+}

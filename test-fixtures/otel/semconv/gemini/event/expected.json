@@ -1,0 +1,66 @@
+{
+  "scenario": "gemini",
+  "requests": 3,
+  "generation_ids": null,
+  "response_ids": [
+    "gemini-fixture-1",
+    "gemini-fixture-2",
+    "gemini-fixture-3"
+  ],
+  "sessions": 1,
+  "turn_roles": [
+    "system",
+    "user",
+    "assistant",
+    "assistant",
+    "user",
+    "assistant"
+  ],
+  "system_text": "You are a coding assistant.",
+  "tool_calls": [
+    {
+      "id": "read_file_0",
+      "name": "read_file",
+      "input": {
+        "path": "src/a.rs"
+      },
+      "result": "{\"output\":\"pub fn a() {}\"}"
+    },
+    {
+      "id": "read_file_1",
+      "name": "read_file",
+      "input": {
+        "path": "src/b.rs"
+      },
+      "result": "{\"output\":\"pub fn b() {}\"}"
+    }
+  ],
+  "ids_sent_by_mock": false,
+  "completion_texts": [
+    "",
+    "They export a and b.",
+    "One public add function."
+  ],
+  "extra_choices": [
+    [],
+    [],
+    []
+  ],
+  "usage_served": [
+    {
+      "prompt": 30,
+      "candidates": 12,
+      "thoughts": 4
+    },
+    {
+      "prompt": 55,
+      "candidates": 9,
+      "thoughts": 0
+    },
+    {
+      "prompt": 70,
+      "candidates": 6,
+      "thoughts": 0
+    }
+  ]
+}
