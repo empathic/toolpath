@@ -5,6 +5,7 @@ mod derive;
 mod entries;
 mod error;
 mod generation;
+mod group;
 mod harness;
 mod hash;
 mod input;
@@ -26,6 +27,8 @@ mod walk;
 mod tests;
 
 pub use error::{OtelError, Result};
+pub use group::{SessionRequests, derive_session, group_sessions};
+pub use hash::derived_session_id;
 pub use input::{DecodeLimits, decode_input, decode_input_with_limit, decode_input_with_limits};
 pub use jsonl::{Remote, Settle, derive_jsonl};
 pub use profile::ProfileSelection;
@@ -201,7 +204,18 @@ pub fn derive(sessions: &[&[Value]], config: &DeriveConfig) -> Result<Derived<Gr
 /// [`OtelError::MixedSessions`] when generations carry more than one
 /// session id; [`OtelError::NoGenerations`] when no generation can be read.
 pub fn derive_path(requests: &[Value], config: &DeriveConfig) -> Result<Derived<Path>> {
-    let (session, skipped) = read_session(requests, config)?;
+    derive_keyed(requests, config, None)
+}
+
+fn derive_keyed(
+    requests: &[Value],
+    config: &DeriveConfig,
+    key: Option<&str>,
+) -> Result<Derived<Path>> {
+    let (mut session, skipped) = read_session(requests, config)?;
+    if let Some(key) = key {
+        session.key = key.to_string();
+    }
     Ok(Derived {
         output: derive::derive_session(&session, &config.convo, config.tool_category.as_ref()),
         skipped,

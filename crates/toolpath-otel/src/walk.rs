@@ -10,7 +10,8 @@ pub use memo::ReadCx;
 use crate::error::{OtelError, Result};
 use crate::generation::Generation;
 use crate::otlp::Delivery;
-use crate::profile::{self, Ident, Profile, ProfileSelection, SpanRef, TraceView, Unit};
+use crate::otlp::LogRecord;
+use crate::profile::{self, Ident, LogRef, Profile, ProfileSelection, SpanRef, TraceView, Unit};
 use crate::record::{self, MessageHash, StoredMessage};
 use serde::Serialize;
 use serde_json::Value;
@@ -83,7 +84,7 @@ pub fn read_deliveries<'a>(
     deliveries: impl IntoIterator<Item = &'a Value>,
     sel: ProfileSelection,
 ) -> Result<ReadOutcome> {
-    read_as(deliveries, profile::consulted(sel), Prompts::Messages)
+    read_as(deliveries, profile::consulted(sel), Prompts::Messages, None)
 }
 
 /// [`read_deliveries`] with each prompt as the [`MessageHash`] of its last
@@ -93,7 +94,7 @@ pub fn read_records<'a>(
     deliveries: impl IntoIterator<Item = &'a Value>,
     sel: ProfileSelection,
 ) -> Result<ReadOutcome> {
-    read_as(deliveries, profile::consulted(sel), Prompts::Hashes)
+    read_as(deliveries, profile::consulted(sel), Prompts::Hashes, None)
 }
 
 /// [`read_deliveries`] over an explicit profile list (rank = index).
@@ -102,13 +103,57 @@ pub(crate) fn read_with<'a>(
     deliveries: impl IntoIterator<Item = &'a Value>,
     profiles: &[&dyn Profile],
 ) -> Result<ReadOutcome> {
-    read_as(deliveries, profiles, Prompts::Messages)
+    read_as(deliveries, profiles, Prompts::Messages, None)
+}
+
+/// Which unit each span and log record of a read travelled with, and what
+/// each unit produced. Spans and records are numbered in input order, every
+/// list element counted, so the input must hold no unreadable element.
+#[derive(Debug, Default)]
+pub(crate) struct Attribution {
+    /// Per span: its own unit when a candidate, its absorbing ancestor's
+    /// when absorbed by the ancestor rule.
+    pub spans: Vec<Option<usize>>,
+    /// Per log record, duplicates included.
+    pub logs: Vec<Option<UnitId>>,
+    pub units: HashMap<UnitId, UnitOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum UnitId {
+    /// A candidate span, by its span number.
+    Span(usize),
+    /// An orphan log unit, in walk order.
+    Orphan(usize),
+}
+
+/// The generation a unit produced, or the one its skip names.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct UnitOutcome {
+    pub generation_id: Option<String>,
+    pub session_id: Option<String>,
+}
+
+/// [`read_deliveries`] plus the [`Attribution`] of every span and record.
+pub(crate) fn read_attributed(
+    deliveries: &[Value],
+    sel: ProfileSelection,
+) -> Result<(ReadOutcome, Attribution)> {
+    let mut attribution = Attribution::default();
+    let out = read_as(
+        deliveries,
+        profile::consulted(sel),
+        Prompts::Messages,
+        Some(&mut attribution),
+    )?;
+    Ok((out, attribution))
 }
 
 fn read_as<'a>(
     deliveries: impl IntoIterator<Item = &'a Value>,
     profiles: &[&dyn Profile],
     prompts: Prompts,
+    mut attribution: Option<&mut Attribution>,
 ) -> Result<ReadOutcome> {
     let mut parsed: Vec<Delivery> = Vec::new();
     for value in deliveries {
@@ -117,6 +162,14 @@ fn read_as<'a>(
         }
         // Lenient types: an object never fails to read.
         parsed.push(Delivery::read(value));
+    }
+    let log_order = if attribution.is_some() {
+        log_numbers(&parsed)
+    } else {
+        HashMap::new()
+    };
+    if let Some(a) = attribution.as_deref_mut() {
+        a.logs = vec![None; log_order.len()];
     }
 
     let spans: Vec<SpanRef<'_>> = parsed
@@ -135,12 +188,25 @@ fn read_as<'a>(
     let roles: Vec<Role> = spans.iter().map(|s| resolve(profiles, s)).collect();
     // Ancestor rule: a candidate with a qualifying ancestor is absorbed.
     let index = span_index(&spans);
-    let roles: Vec<Role> = (0..spans.len())
-        .map(|i| match absorbing_ancestor(i, &spans, &roles, &index) {
-            Some(_) => Role::Absorbed,
-            None => roles[i],
-        })
+    let ancestors: Vec<Option<usize>> = (0..spans.len())
+        .map(|i| absorbing_ancestor(i, &spans, &roles, &index))
         .collect();
+    let roles: Vec<Role> = roles
+        .iter()
+        .zip(&ancestors)
+        .map(|(role, a)| if a.is_some() { Role::Absorbed } else { *role })
+        .collect();
+    if let Some(a) = attribution.as_deref_mut() {
+        a.spans = roles
+            .iter()
+            .zip(&ancestors)
+            .enumerate()
+            .map(|(i, (role, ancestor))| match role {
+                Role::Candidate(_) => Some(i),
+                _ => *ancestor,
+            })
+            .collect();
+    }
     // TraceView sees each (traceId, spanId) once, first in input order.
     let mut by_trace: HashMap<String, Vec<SpanRef<'_>>> = HashMap::new();
     for (i, s) in spans.iter().enumerate() {
@@ -205,7 +271,7 @@ fn read_as<'a>(
             logs: unit_logs.remove(&i).unwrap_or_default(),
         };
         let trace = trace_view(&s.span.trace_id);
-        run_unit(
+        let outcome = run_unit(
             profiles[rank],
             rank,
             &unit,
@@ -214,9 +280,12 @@ fn read_as<'a>(
             &mut dedupe,
             &mut out,
         );
+        if let Some(a) = attribution.as_deref_mut() {
+            a.record(UnitId::Span(i), &unit.logs, outcome, &log_order);
+        }
     }
 
-    for orphan in orphan_units {
+    for (k, orphan) in orphan_units.into_iter().enumerate() {
         let first = orphan.logs[0];
         let trace_id = &*first.record.trace_id;
         let trace = if trace_id.is_empty() {
@@ -230,7 +299,7 @@ fn read_as<'a>(
             span: None,
             logs: orphan.logs,
         };
-        run_unit(
+        let outcome = run_unit(
             profiles[orphan.profile],
             orphan.profile,
             &unit,
@@ -239,6 +308,12 @@ fn read_as<'a>(
             &mut dedupe,
             &mut out,
         );
+        if let Some(a) = attribution.as_deref_mut() {
+            a.record(UnitId::Orphan(k), &unit.logs, outcome, &log_order);
+        }
+    }
+    if let Some(a) = attribution {
+        a.attribute_remaining_logs(&parsed, &spans, &log_order);
     }
     for (at, id) in dedupe.failed {
         if dedupe.seen.contains_key(&id) {
@@ -277,6 +352,86 @@ fn read_as<'a>(
     Ok(out)
 }
 
+/// Every log record's address → its number in input order.
+/// A log record's address, which numbers it within one read.
+type LogPtr = *const ();
+
+fn log_ptr(r: &LogRecord<'_>) -> LogPtr {
+    std::ptr::from_ref(r).cast()
+}
+
+fn log_numbers(parsed: &[Delivery<'_>]) -> HashMap<LogPtr, usize> {
+    parsed
+        .iter()
+        .flat_map(|d| &d.resource_logs)
+        .flat_map(|rl| &rl.scope_logs)
+        .flat_map(|sl| &sl.log_records)
+        .enumerate()
+        .map(|(n, r)| (log_ptr(r), n))
+        .collect()
+}
+
+impl Attribution {
+    fn record(
+        &mut self,
+        unit: UnitId,
+        logs: &[LogRef<'_>],
+        outcome: UnitOutcome,
+        log_order: &HashMap<LogPtr, usize>,
+    ) {
+        for l in logs {
+            if let Some(&n) = log_order.get(&log_ptr(l.record)) {
+                self.logs[n] = Some(unit);
+            }
+        }
+        self.units.insert(unit, outcome);
+    }
+
+    /// A record no unit read follows the first copy of itself a unit read,
+    /// else the unit of the span it names.
+    fn attribute_remaining_logs(
+        &mut self,
+        parsed: &[Delivery],
+        spans: &[SpanRef<'_>],
+        log_order: &HashMap<LogPtr, usize>,
+    ) {
+        let records: Vec<&LogRecord<'_>> = parsed
+            .iter()
+            .flat_map(|d| &d.resource_logs)
+            .flat_map(|rl| &rl.scope_logs)
+            .flat_map(|sl| &sl.log_records)
+            .collect();
+        debug_assert_eq!(records.len(), log_order.len());
+        let mut by_copy: HashMap<_, UnitId> = HashMap::new();
+        for (r, unit) in records.iter().zip(&self.logs) {
+            if let Some(u) = unit {
+                by_copy.entry(logs::dedupe_key(r)).or_insert(*u);
+            }
+        }
+        let mut by_span: HashMap<logs::SpanKey, usize> = HashMap::new();
+        for (s, unit) in spans.iter().zip(&self.spans) {
+            if let Some(u) = unit
+                && !s.span.span_id.is_empty()
+            {
+                by_span
+                    .entry(logs::span_key(&s.span.trace_id, &s.span.span_id))
+                    .or_insert(*u);
+            }
+        }
+        for (r, unit) in records.iter().zip(self.logs.iter_mut()) {
+            if unit.is_some() {
+                continue;
+            }
+            *unit = by_copy.get(&logs::dedupe_key(r)).copied().or_else(|| {
+                (!r.span_id.is_empty())
+                    .then(|| by_span.get(&logs::span_key(&r.trace_id, &r.span_id)))
+                    .flatten()
+                    .map(|&u| UnitId::Span(u))
+            });
+        }
+    }
+}
+
 #[derive(Default)]
 struct Dedupe {
     /// id -> (rank, slot in `kept`, the kept unit's ident).
@@ -301,7 +456,7 @@ fn run_unit<'a>(
     cx: &mut ReadCx<'a>,
     dedupe: &mut Dedupe,
     out: &mut ReadOutcome,
-) {
+) -> UnitOutcome {
     let skip = |reason: SkipReason, ident: &Ident, by_profile: bool| Skipped {
         generation_id: ident.generation_id.clone(),
         session_id: ident.session_id.clone(),
@@ -310,9 +465,13 @@ fn run_unit<'a>(
     };
     if let Some(reason) = p.pre_skip(unit) {
         out.skipped.push(skip(reason, &Ident::default(), true));
-        return;
+        return UnitOutcome::default();
     }
     let ident = p.identify(unit);
+    let named = UnitOutcome {
+        generation_id: ident.generation_id.clone(),
+        session_id: ident.session_id.clone(),
+    };
     if unit
         .span
         .and_then(|s| s.status.as_ref())
@@ -320,7 +479,7 @@ fn run_unit<'a>(
     {
         out.skipped
             .push(skip(SkipReason::ErrorStatus, &ident, false));
-        return;
+        return named;
     }
     if ident
         .generation_id
@@ -329,7 +488,7 @@ fn run_unit<'a>(
         .is_some_and(|(kept_rank, ..)| *kept_rank <= rank)
     {
         out.skipped.push(skip(SkipReason::Duplicate, &ident, false));
-        return;
+        return named;
     }
     cx.tail = None;
     match p.extract(unit, trace, cx) {
@@ -343,6 +502,10 @@ fn run_unit<'a>(
                 g.id
             );
             g.profile = p.name().to_string();
+            let produced = UnitOutcome {
+                generation_id: Some(g.id.clone()),
+                session_id: g.session_id.clone(),
+            };
             // Only after a successful extract, so a truncated first
             // copy never suppresses a good redelivery.
             if let Some((kept_rank, slot, old)) = dedupe.seen.remove(&g.id) {
@@ -354,7 +517,7 @@ fn run_unit<'a>(
                         ..skip(SkipReason::Duplicate, &ident, false)
                     });
                     dedupe.seen.insert(g.id, (kept_rank, slot, old));
-                    return;
+                    return produced;
                 }
                 dedupe.kept[slot] = None;
                 out.skipped.push(Skipped {
@@ -368,12 +531,14 @@ fn run_unit<'a>(
                 .seen
                 .insert(g.id.clone(), (rank, dedupe.kept.len(), ident));
             dedupe.kept.push(Some((g, tail)));
+            produced
         }
         Err(reason) => {
             if let Some(id) = &ident.generation_id {
                 dedupe.failed.push((out.skipped.len(), id.clone()));
             }
             out.skipped.push(skip(reason, &ident, true));
+            named
         }
     }
 }

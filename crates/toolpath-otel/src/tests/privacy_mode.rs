@@ -1,8 +1,9 @@
-//! OpenRouter Privacy Mode spans that carry a `session.id`. The id is the
+//! OpenRouter Privacy Mode spans. With a `session.id`, the id is the
 //! session key (docs/agents/formats/otel.md, Sessions and ids), so a
 //! request whose prompt was withheld is a prompt-absent skeleton in the same
 //! session and chains from the previous generation's completion
-//! (otel.md, Skeletons).
+//! (otel.md, Skeletons). Without one, each withheld request is a delta and
+//! forms its own Layer T session.
 
 use crate::tests::otel::{ProfileSelection, group_sessions, read_deliveries, stitch};
 use serde_json::{Value, json};
@@ -23,6 +24,54 @@ fn root(trace: &str, id: &str, start: u64, session: Option<&str>, prompt: Option
         "scopeSpans": [{"scope": {"name": "openrouter"}, "spans": [{"traceId": trace, "spanId": "0000000000000001",
         "name": "LLM Generation", "kind": 3, "startTimeUnixNano": start.to_string(),
         "endTimeUnixNano": (start + 1).to_string(), "attributes": attrs, "status": {"code": 1}}]}]}]})
+}
+
+#[test]
+fn sessionless_privacy_mode_requests_form_their_own_trace_sessions() {
+    let d = [
+        root("t1", "gen-a", 1, None, None),
+        root("t2", "gen-b", 2, None, None),
+    ];
+    let out = read_deliveries(&d, ProfileSelection::Auto).unwrap();
+    let sessions = group_sessions(out.generations);
+    let keys: Vec<&str> = sessions.iter().map(|s| s.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            crate::session::trace_key(Some("k"), "t1").as_str(),
+            crate::session::trace_key(Some("k"), "t2").as_str(),
+        ]
+    );
+}
+
+#[test]
+fn sessionless_privacy_mode_bodies_group_into_one_trace_session_each() {
+    let d = [
+        root("t1", "gen-a", 1, None, None),
+        root("t2", "gen-b", 2, None, None),
+    ];
+    let grouped = crate::group::group_sessions(&d, ProfileSelection::Auto)
+        .unwrap()
+        .output;
+    let keys: Vec<&str> = grouped.iter().map(|s| s.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            crate::session::trace_key(Some("k"), "t1").as_str(),
+            crate::session::trace_key(Some("k"), "t2").as_str(),
+        ]
+    );
+    for (s, body) in grouped.iter().zip(&d) {
+        assert_eq!(s.session_id, None);
+        assert_eq!(s.requests, std::slice::from_ref(body));
+        let p = crate::group::derive_session(s, &Default::default())
+            .unwrap()
+            .output;
+        assert_eq!(
+            p.meta.unwrap().extra["otel"]["derived_session_id"],
+            s.derived_session_id()
+        );
+    }
 }
 
 #[test]

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use toolpath::v1::Graph;
 use toolpath_otel::{
     DeriveConfig, OtelError, ProfileSelection, SkipCounts, derive, derive_graph, derive_path,
+    derive_session, group_sessions,
 };
 
 #[path = "../src/tests/classifier.rs"]
@@ -450,4 +451,30 @@ fn skip_counts_ride_on_no_generations_and_sum_over_a_graph() {
     let g = derive_graph(&[&claude, &codex], &cfg).unwrap().skipped;
     assert_eq!((g.connection_test, g.error_status, g.total()), (1, 1, 2));
     assert_eq!(derive(&[&claude], &cfg).unwrap().skipped.connection_test, 1);
+}
+
+#[test]
+fn a_batch_of_every_conversation_groups_back_into_each_one() {
+    let config = config();
+    let batch: Vec<Value> = CONVERSATIONS
+        .iter()
+        .flat_map(|f| requests(&format!("openrouter/{f}")))
+        .collect();
+    let grouped = group_sessions(&batch, ProfileSelection::Auto).unwrap();
+    assert_eq!(grouped.output.len(), CONVERSATIONS.len());
+    let mut got: Vec<Value> = grouped
+        .output
+        .iter()
+        .map(|s| serde_json::to_value(derive_session(s, &config).unwrap().output).unwrap())
+        .collect();
+    let mut want: Vec<Value> = CONVERSATIONS
+        .iter()
+        .map(|f| {
+            let p = derive_path(&requests(&format!("openrouter/{f}")), &config).unwrap();
+            serde_json::to_value(p.output).unwrap()
+        })
+        .collect();
+    got.sort_by_key(|v| v.to_string());
+    want.sort_by_key(|v| v.to_string());
+    assert_eq!(got, want);
 }

@@ -95,7 +95,7 @@ pub struct ResourceSpans<'a> {
 }
 
 impl<'a> ResourceSpans<'a> {
-    fn read(v: &'a Value) -> Option<Self> {
+    pub fn read(v: &'a Value) -> Option<Self> {
         let [resource, scope_spans] = fields(v, ["resource", "scopeSpans"])?;
         Some(ResourceSpans {
             resource: lenient(resource, Resource::read),
@@ -111,7 +111,7 @@ pub struct ScopeSpans<'a> {
 }
 
 impl<'a> ScopeSpans<'a> {
-    fn read(v: &'a Value) -> Option<Self> {
+    pub fn read(v: &'a Value) -> Option<Self> {
         let [scope, spans] = fields(v, ["scope", "spans"])?;
         Some(ScopeSpans {
             scope: lenient(scope, Scope::read),
@@ -236,7 +236,7 @@ pub struct ResourceLogs<'a> {
 }
 
 impl<'a> ResourceLogs<'a> {
-    fn read(v: &'a Value) -> Option<Self> {
+    pub fn read(v: &'a Value) -> Option<Self> {
         let [resource, scope_logs] = fields(v, ["resource", "scopeLogs"])?;
         Some(ResourceLogs {
             resource: lenient(resource, Resource::read),
@@ -252,7 +252,7 @@ pub struct ScopeLogs<'a> {
 }
 
 impl<'a> ScopeLogs<'a> {
-    fn read(v: &'a Value) -> Option<Self> {
+    pub fn read(v: &'a Value) -> Option<Self> {
         let [scope, records] = fields(v, ["scope", "logRecords"])?;
         Some(ScopeLogs {
             scope: lenient(scope, Scope::read),
