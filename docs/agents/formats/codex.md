@@ -618,6 +618,140 @@ but richer. Any Toolpath derivation should prefer
 `patch_apply_end.changes` over reconstructing diffs from raw patches
 in `custom_tool_call.input`.
 
+### Shell writes
+
+`patch_apply_end` covers only patches Codex applied itself. A model can
+also write files through a shell call, and the rollout then has no
+file-change event:
+
+| Tool | Script | Output status (the output's own) |
+|---|---|---|
+| `exec_command` (unified exec) | `arguments.cmd`; start dir `arguments.workdir` | the header, a run of lines opening with `Chunk ID:` or `Wall time:` and ending at `Output:`: `Process exited with code N`, or `Process running with session ID S` (a later `write_stdin {session_id: S}` output reports the exit). Older CLIs echo `Command: <script>` first; a heredoc body in that echo is never read as the header |
+| `shell` | `arguments.command`: `["bash", "-lc", "<script>"]`, or an argv such as `["apply_patch", "<patch>"]`; `arguments.workdir` | JSON string `{"output": …, "metadata": {"exit_code": N, …}}` |
+| `shell_command` | `arguments.command` (a string) | first line `Exit code: N` |
+
+`exec_command_end` (when present; newer CLIs omit it for `exec_command`,
+see `test-fixtures/codex/convo.jsonl`) carries `exit_code`, `status`
+(`completed`, `failed`, `declined`, …) and the resolved `cwd`.
+
+**Interception.** Codex recognizes `apply_patch` in a shell call (the
+argv `["apply_patch"|"applypatch", "<patch>"]`, and a script that is
+exactly `[cd DIR &&] apply_patch <<'EOF' … EOF`), applies it as its own
+patch tool, and writes `patch_apply_end` under the **shell call's**
+`call_id` (codex-rs shell and unified-exec handlers; no fixture in this
+repo shows it). A patch that fails verification writes no
+`patch_apply_end`, and the output starts `apply_patch verification
+failed:` (the text a failed `apply_patch` custom tool call gets, see the
+`sample-codex-python` fixture). A patch Codex does not intercept (inside
+a longer script) runs as a program and leaves no event.
+
+**How `toolpath-codex` records them.** The script is read with
+`toolpath_convo::shell_writes`, a harness-neutral reader whose rules
+(recognized forms, `cd` folding, `StatusLink`, unresolvable targets, the
+V4A patch reader `parse_patch`) are in the
+[toolpath-convo README](../../../crates/toolpath-convo/README.md#shell-writes).
+Every recognized write is recorded, whatever its outcome:
+
+- heredoc writes (`cat <<T > f`, `cat > f <<T`, `>|`, `1>`, `>>`,
+  `tee [-a] f <<T`, `<<-`) become `file.write` changes. A script with a
+  subshell, `$( )`, backquotes, a compound command or an extra redirect
+  records nothing.
+- `apply_patch` in a shell call (heredoc or argv) becomes one `file.write`
+  per patched file, **only when the call has no `patch_apply_end`**; with
+  one, that event's change is the single record and the patch text only
+  forgets tracked content. The `patch_apply_end` change keeps its diff and
+  gains the same stamp (`source: "shell-apply-patch"`, one execution per
+  file with `patch_apply_end` set to the event's `success`), so a failed
+  intercepted patch reads as a failure. Added files carry their content and a `@@ -0,0` diff,
+  deletes the known prior content, updates no diff, as `patch_apply_end`
+  would give them.
+- a write whose target cannot be resolved (non-literal: `$`, leading `~`,
+  a glob or a brace; or relative after a directory change the reader
+  cannot follow, such as `cd sub; cat > f <<EOF`), and each file of a
+  shell patch whose relative path cannot be resolved, is never a change
+  and never a guessed path. It is recorded as an attempt on the step's
+  conversation change, in
+  `structural.extra.codex.unresolved_shell_writes[]`, with keys
+  `tool_id`, `tool`, `path_as_written`, `reason`
+  (`not_literal`/`unknown_dir`), `via`, the outcome keys below,
+  `sole_command`, `implied_by_success`, and `redirect`/`body` for a write
+  or `operation` for a patch file. Codex shells start every call afresh,
+  so a directory change never carries over from an earlier call.
+
+Each inferred change carries `structural.extra.codex`:
+
+```json
+"codex": {
+  "source": "shell-heredoc",
+  "outcome": "success",
+  "executions": [{
+    "tool_id": "call_1", "tool": "exec_command",
+    "redirect": "write", "via": "cat",
+    "outcome": "success", "outcome_basis": "exit_code", "exit_code": 0,
+    "sole_command": true, "implied_by_success": true,
+    "tag": "EOF", "tag_quoted": true, "body": "print(1)\n"
+  }]
+}
+```
+
+`source` is `shell-heredoc` or `shell-apply-patch` (absent when a
+`patch_apply_end` for a non-shell call later in the same step took the
+change over);
+`outcome` summarizes the executions (any `failure`, else any `unknown`,
+else `success`). The outcome is the **call's**; `sole_command` says the
+write is the whole script (`StatusLink::Sole`), `implied_by_success` that
+the call's success means the write ran and succeeded (any `StatusLink`
+but `Independent`: not backgrounded, not in a pipeline, not right after
+`||`, and only `&&` after it).
+`outcome_basis`, in precedence order:
+
+| Basis | Evidence | `outcome` |
+|---|---|---|
+| `exit_code` | `exec_command_end.exit_code`; else the output's status (table above); a still-running process takes the exit reported by the first `write_stdin` poll of its session after the call (`exit_via` names that call), unless another call reports running under the same session id first (ids can be reused, for instance after a resume) | `success` for 0, else `failure` |
+| `exec_status` | `exec_command_end.status` other than `completed`, with no exit code (`exec_status` records it) | `failure` |
+| `patch_apply_end` | an intercepted shell `apply_patch`: the event's `success`, unless the call's own evidence above says it failed | `success`/`failure` |
+| `is_error` | an output flagged `is_error` | `failure` |
+| `still_running` | `Process running …` and no poll reported the exit | `unknown` |
+| `error_text` | a shell `apply_patch` answered `apply_patch verification failed` | `failure` |
+| `no_error_reported` | an output with none of the above | `success` |
+| `no_result` | no output and no `exec_command_end` | `unknown` |
+
+Heredoc executions carry `redirect` (`write`/`append`), `via`
+(`cat`/`tee`), `tag`, `tag_quoted`, `body` (as written), when set
+`strip_tabs` and `may_expand` (unquoted tag over a body with `$`, `` ` ``
+or `\`), and for appends `append_base`: `tracked` (content known earlier
+in the session), `script` (an earlier write in the same script, which may
+not have run) or `unknown`. Patch executions carry `via`
+(`apply_patch`/`applypatch`), `operation`, and the tag keys only for a
+heredoc patch.
+
+Paths: relative targets resolve against `exec_command_end.cwd`, else the
+call's `workdir` (joined onto the turn's cwd when relative), else the
+turn's cwd, with the script's literal `cd`s folded in, so keys are
+absolute like `patch_apply_end`'s. Appends diff against the file's
+content as last written by a heredoc write or patch add earlier in the
+session that is known to have happened (its call succeeded and
+`implied_by_success` holds; a `patch_apply_end` add with `success`); a
+write not known to have happened, a patch update, delete or move, an
+unresolved target naming the file, any other shell command naming it,
+and any other tool without `patch_apply_end` changes naming it (read,
+search and network tools aside) forget it. A non-literal target, a
+file-writing tool naming no path (`write_file`, `edit`, `replace`,
+`apply_patch` with no parseable patch) and a delegation tool forget
+everything. An append onto
+unknown content records `operation: "append"` and no diff. Several writes
+to one path in one step fold into one change listing every execution.
+In a step with an inferred write, `ConversationView` consumers see the
+step's `file_mutations` rebuilt in call order, one per path, the last
+write to a path replacing any earlier one (including a
+`patch_apply_end` mutation), the rule `derive_path` applies to changes.
+Attempts are placed through the step's `tool_uses`, which
+`derive_path` always includes.
+
+`structural.extra` is flattened into `structural` when serialized, so in
+a document the stamp is `structural.codex`. Filter example:
+`path query 'map(select(any(.change[]; .structural.codex.source? == "shell-heredoc")))'`
+
 ## Built-in tool catalogue
 
 Verified by enumerating handler modules under
@@ -859,6 +993,9 @@ The mapping below is what the provider actually emits. Source:
 | `custom_tool_call` / `_output` paired by `call_id` | same (raw `input` string preserved) |
 | `event_msg.exec_command_end` | back-fills `Turn.tool_uses[].result` with exit code / stdout / stderr |
 | `event_msg.patch_apply_end.changes[<file>]` | sibling `ArtifactChange` on the tool-call's turn with the unified diff as `raw` and `codex.{add,update,delete}` as `structural` |
+| heredoc write in `exec_command` / `shell` / `shell_command` | `file.write` on the call's turn, `structural.extra.codex.source = "shell-heredoc"` (see [Shell writes](#shell-writes)) |
+| `apply_patch` in a shell call with no `patch_apply_end` | `file.write` per patched file, `structural.extra.codex.source = "shell-apply-patch"` |
+| shell write whose target cannot be resolved | attempt in the step's conversation change, `structural.extra.codex.unresolved_shell_writes[]` |
 | `event_msg.token_count.info.total_token_usage` | cumulative; differenced per step → `Turn.attributed_token_usage`, summed per round → `Turn.token_usage` (round's final turn) + `ConversationView.total_usage` |
 | `event_msg.token_count.info.total_token_usage.reasoning_output_tokens` (⊆ output, cumulative) | differenced per step → `breakdowns["output"]["reasoning"]` on `attributed_token_usage`; summed per round onto `token_usage` (informational, never summed into the total) |
 | `event_msg` non-turn types (`task_started`, `task_complete`, `user_message`, `agent_message`, etc.) | `ConversationView.events` as typed `ConversationEvent`s |
@@ -866,10 +1003,12 @@ The mapping below is what the provider actually emits. Source:
 
 ### Fidelity guarantees
 
-- **File changes** are lossless. Adds carry the full file content; the
-  derive layer synthesizes a git-style `@@ -0,0 +N @@` diff header
-  and prefixes every line with `+`. Updates carry Codex's real
-  unified diff verbatim. No diff reconstruction from V4A patch input.
+- **File changes** from `patch_apply_end` are lossless. Adds carry the
+  full file content; the derive layer synthesizes a git-style
+  `@@ -0,0 +N @@` diff header and prefixes every line with `+`. Updates
+  carry Codex's real unified diff verbatim. No diff reconstruction from
+  V4A patch input. Shell writes are inferred from the command text and
+  marked `structural.extra.codex` ([Shell writes](#shell-writes)).
 - **Wire-level round-trip** is asserted by
   [`tests/roundtrip.rs`](../../../crates/toolpath-codex/tests/roundtrip.rs):
   every `RolloutLine` in the fixture re-serializes to byte-equivalent

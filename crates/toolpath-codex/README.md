@@ -19,6 +19,12 @@ documents so every Codex-assisted change has a traceable origin.
 - **Derivation**: produces `toolpath::v1::Path` documents. File
   changes from `patch_apply_end` surface as sibling artifacts with
   the real unified diff as the `raw` perspective — no fidelity loss.
+  Files written through shell calls (heredocs, shell-run `apply_patch`
+  with no `patch_apply_end`) are inferred from the command and marked
+  `structural.codex`, with every execution's outcome (a shell
+  `apply_patch` Codex reported keeps its `patch_apply_end` change, marked
+  the same way); targets that
+  cannot be resolved are recorded as attempts, never as guessed paths.
 
 ## Mapping
 
@@ -33,6 +39,7 @@ documents so every Codex-assisted change has a traceable origin.
 | `response_item.function_call` + `function_call_output` paired by `call_id` | `Turn.tool_uses[].{input,result}` |
 | `response_item.custom_tool_call` (e.g. `apply_patch`) | same, with raw `input` string preserved |
 | `event_msg.patch_apply_end.changes[file]` | Sibling `ArtifactChange` on that step with `raw = unified_diff` |
+| shell call writing a file (`cat <<EOF > f`, `apply_patch <<EOF`, `shell ["apply_patch", …]`) | `file.write` on that step with `structural.codex = {source, outcome, executions}`; unresolvable targets in the step's `structural.codex.unresolved_shell_writes` |
 | Other `event_msg` types | `ConversationEvent` on the `ConversationView` |
 
 ## Usage
