@@ -3165,6 +3165,7 @@ dependencies = [
  "toolpath-github",
  "toolpath-md",
  "toolpath-opencode",
+ "toolpath-otel",
  "toolpath-pi",
  "typed-path",
  "url",

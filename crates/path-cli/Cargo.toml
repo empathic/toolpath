@@ -52,6 +52,7 @@ toolpath-copilot = { workspace = true }
 toolpath-opencode = { workspace = true }
 toolpath-cursor = { workspace = true }
 toolpath-pi = { workspace = true }
+toolpath-otel = { workspace = true, features = ["compression", "protobuf"] }
 toolpath-convo = { workspace = true }
 toolpath-github = { workspace = true }
 pathbase-client = { workspace = true }
@@ -87,6 +88,7 @@ toolpath-gemini = { workspace = true }
 toolpath-codex = { workspace = true }
 toolpath-copilot = { workspace = true }
 toolpath-pi = { workspace = true }
+toolpath-otel = { workspace = true, features = ["compression", "protobuf"] }
 
 [features]
 default = ["embedded-picker"]
