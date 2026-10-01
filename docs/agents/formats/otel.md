@@ -738,9 +738,9 @@ outside it: their positional ids never equal the source's `""`.
 
 The committed captures under `test-fixtures/otel/semconv/` and
 `test-fixtures/otel/openinference/` were recorded against local mock servers
-by a maintainer capture harness, `scripts/otel-fixtures/` (not part of
-this crate's change; it holds the versions, the capture and verify
-commands, and the hygiene rules). Each capture directory
+by the maintainer capture harness in `scripts/otel-fixtures/` (its README
+holds the versions, the capture and verify commands, and the hygiene
+rules). Each capture directory
 holds `traces.json` plus `manifest.json` and `expected.json`; each `event/`
 capture also holds `logs.json` (see Event-mode captures). The raw protobuf
 request bodies the capture harness keeps (`traces.binpb`, `logs.binpb`) are
