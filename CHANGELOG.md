@@ -2,6 +2,77 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-codex 0.6.2 — 2026-10-01
+
+- **`toolpath-codex`** (0.6.2): records files Codex writes through its shell
+  tools (`exec_command`, `shell`, `shell_command`) as `file.write` changes,
+  read with `toolpath_convo::shell_writes`. Heredoc writes
+  (`cat <<'EOF' > file`, `cat > file <<EOF`, `tee [-a] file <<EOF`, `>>`
+  appends, `<<-`, chained scripts, literal `cd`s) become changes;
+  `apply_patch` run through a shell call (`apply_patch <<'EOF'`, or
+  `shell`'s argv `["apply_patch", "<patch>"]`) becomes one change per
+  patched file only when the rollout has no `patch_apply_end` for that
+  call, so a patch Codex intercepted and reported is never counted twice;
+  that reported change gains the same stamp, with the outcome from
+  `patch_apply_end.success` (`outcome_basis: patch_apply_end`). Every
+  execution is recorded whatever its outcome: each inferred change carries
+  `structural.extra.codex` with `source` (`shell-heredoc` or
+  `shell-apply-patch`), a summary `outcome` and one `executions` entry per
+  run with its `outcome`, `outcome_basis` and `exit_code` (from
+  `exec_command_end`, else the output's own status line, else the first
+  `write_stdin` poll of the call's session after it), `sole_command` and
+  `implied_by_success`. A target that cannot be resolved (non-literal, or
+  relative after a directory change the reader cannot follow) is never a
+  change or a guessed path: it is recorded as an attempt in the step's
+  conversation change, `structural.extra.codex.unresolved_shell_writes`.
+  Relative paths resolve against `exec_command_end.cwd`, the call's
+  `workdir` or the turn's cwd, so keys are absolute like
+  `patch_apply_end`'s. Appends diff against content known from earlier
+  writes that are known to have happened, and are structural-only
+  otherwise; any other tool that may have written a file forgets it.
+  `files_changed` gains inferred paths at their call's position. Sessions
+  with no shell writes derive unchanged; no public API change. V4A patch
+  text is read with `toolpath_convo::shell_writes::parse_patch`. Requires
+  `toolpath-convo` 0.11.2.
+
+## toolpath-convo 0.11.2 — 2026-10-01
+
+- **`toolpath-convo`** (0.11.2): new `shell_writes` module, a pure,
+  harness-neutral reader of the files a shell script writes through
+  heredocs. `parse_script(script)` returns the script's simple commands as
+  `ShellItem`s: `Write` for `cat <<TAG > file`, `cat > file <<TAG` and
+  `tee [-a|--append] file <<TAG` (`>|`, `1>`, `>>`, `<<-`, quoted or
+  unquoted tags), `Patch` for `apply_patch <<TAG` / `applypatch <<TAG` (the
+  way Codex runs its patch tool through a shell), `Unresolved` for a write
+  whose target cannot be resolved (non-literal, including brace expansion,
+  or relative after a directory change it cannot follow), and `Other` for
+  anything else, with literal `cd`s folded into relative paths. A `cd`
+  moves later relative paths only along an unbroken `&&` chain; any other
+  directory change (`cd` after `;`, `source`, `eval`, an env-prefixed `cd`,
+  …) makes them unresolvable, never guessed. Each `Write`/`Patch` carries a
+  `StatusLink` (`Sole`, `ImpliedBySuccess`, `Independent`) saying what the
+  script's exit status tells about it, and `ParsedScript::dir_changes`
+  (with `may_change_dir`) the commands that may change the directory of
+  the shell it runs in, skipping subshells, quoted text and heredoc
+  bodies: `ScriptDir::At` for a literal `cd /DIR`, `Unknown` for any
+  other; `dir_on_success` is the directory a zero exit status implies the
+  shell was left in, and `command_words` each simple command's words. zsh's
+  `cd +N`/`cd -N` is not a path. `parse_argv(argv)` reads an argv: a
+  shell's `-c` script, `apply_patch PATCH`, or one `Other`
+  (`python3 -c …` is never read as shell). Unquoted heredoc bodies join
+  `\`-newline lines before the terminator test, and `\r` is a word
+  character, as in bash. Conservative: a script with a subshell, command
+  substitution, backquotes, a group or a compound command is one `Other`,
+  as is any write form it cannot follow exactly (extra redirects,
+  env-prefixed commands). Additive; `FileMutation` and `derive_path` are
+  unchanged.
+- **`toolpath-convo`** (0.11.2): `shell_writes::parse_patch(patch)` reads
+  the files of a V4A patch (Codex's `apply_patch` format) as `PatchFile`s:
+  `op` (`PatchOp::{Add, Update, Delete}`), `path`, `move_to` and an added
+  file's `added` content; `HeredocPatch::files` applies it to a patch read
+  from a script. One parser for every provider that sees `apply_patch`
+  text.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

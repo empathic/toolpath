@@ -14,9 +14,10 @@
 //!    see the matching `*_output` by `call_id`.
 //! 5. `event_msg.exec_command_end` enriches the already-emitted tool
 //!    invocation with the exit code / stdout / stderr.
-//! 6. `event_msg.patch_apply_end` is captured on the current turn's
-//!    `extra["codex"]["patch_changes"]` — the derive layer consumes it
-//!    for file-artifact sibling changes.
+//! 6. `event_msg.patch_apply_end` becomes `Turn.file_mutations` on the
+//!    turn holding the call; `derive_path` emits each as a `file.write`.
+//!    Files written by shell calls are inferred after the walk
+//!    (`crate::shell_writes`), with their `extra["codex"]` stamps.
 //! 7. Token accounting. `turn_context` / `task_started` open an API round
 //!    (`turn_id`); assistant turns in it share that ID as `Turn.group_id`.
 //!    `event_msg.token_count` carries the SESSION-cumulative
@@ -35,6 +36,7 @@
 use std::collections::HashMap;
 
 use crate::io::ConvoIO;
+use crate::shell_writes::{self, Ctx, Evidence, ExecEnd, Known, Stamps};
 use crate::types::{
     EventMsg, ExecCommandEnd, Message, PatchApplyEnd, PatchChange, ResponseItem, RolloutItem,
     Session, TokenCountInfo,
@@ -173,6 +175,11 @@ pub fn native_name(category: ToolCategory, args: &Value) -> Option<&'static str>
 /// Convert a parsed Codex [`Session`] to the provider-agnostic
 /// [`ConversationView`] shape.
 pub fn to_view(session: &Session) -> ConversationView {
+    Builder::new(session).build().0
+}
+
+/// [`to_view`] plus the `extra["codex"]` stamps of shell writes.
+pub(crate) fn to_view_with_stamps(session: &Session) -> (ConversationView, Stamps) {
     Builder::new(session).build()
 }
 
@@ -208,6 +215,9 @@ struct Builder<'a> {
     total_usage_set: bool,
     files_changed_order: Vec<String>,
     files_changed_seen: std::collections::HashSet<String>,
+    evidence: Evidence,
+    /// `files_changed_order.len()` when each call was attached.
+    call_anchor: HashMap<String, usize>,
 }
 
 impl<'a> Builder<'a> {
@@ -226,10 +236,12 @@ impl<'a> Builder<'a> {
             total_usage_set: false,
             files_changed_order: Vec::new(),
             files_changed_seen: std::collections::HashSet::new(),
+            evidence: Evidence::new(),
+            call_anchor: HashMap::new(),
         }
     }
 
-    fn build(mut self) -> ConversationView {
+    fn build(mut self) -> (ConversationView, Stamps) {
         for line in &self.session.lines {
             match line.item() {
                 RolloutItem::SessionMeta(m) => {
@@ -336,6 +348,9 @@ impl<'a> Builder<'a> {
             prev = Some(t.id.clone());
         }
 
+        let session_cwd = base.as_ref().and_then(|b| b.working_dir.clone());
+        let stamps = self.infer_shell_writes(session_cwd.as_deref());
+
         // Disambiguate event ids. `event_from_raw` synthesizes
         // `<event_type>-<timestamp>`, which collides when codex emits
         // multiple events of the same type at the same timestamp (rare
@@ -352,7 +367,7 @@ impl<'a> Builder<'a> {
             }
         }
 
-        ConversationView {
+        let view = ConversationView {
             id: self.session.id.clone(),
             started_at: self.session.started_at(),
             last_activity: self.session.last_activity(),
@@ -368,7 +383,45 @@ impl<'a> Builder<'a> {
             events: self.events,
             base,
             producer,
+        };
+        (view, stamps)
+    }
+
+    /// Folds shell writes into each turn, in conversation order.
+    fn infer_shell_writes(&mut self, session_cwd: Option<&str>) -> Stamps {
+        let stdin = shell_writes::stdin_exits(
+            self.turns.iter().flat_map(|t| t.tool_uses.iter()),
+            &self.evidence,
+        );
+        let mut known = Known::new();
+        let mut stamps = Stamps::default();
+        let mut first_seen = Vec::new();
+        for turn in self.turns.iter_mut() {
+            let ctx = Ctx {
+                evidence: &self.evidence,
+                stdin: &stdin,
+                cwd: turn
+                    .environment
+                    .as_ref()
+                    .and_then(|e| e.working_dir.as_deref())
+                    .or(session_cwd),
+            };
+            let tw =
+                shell_writes::turn_writes(&turn.tool_uses, &turn.file_mutations, &ctx, &mut known);
+            if let Some(mutations) = tw.mutations {
+                turn.file_mutations = mutations;
+            }
+            stamps.files.extend(tw.stamps);
+            stamps.unresolved.extend(tw.unresolved);
+            first_seen.extend(tw.first_seen);
         }
+        if !first_seen.is_empty() {
+            let order = std::mem::take(&mut self.files_changed_order);
+            self.files_changed_order =
+                shell_writes::merge_files_changed(order, &first_seen, &self.call_anchor);
+            self.files_changed_seen = self.files_changed_order.iter().cloned().collect();
+        }
+        stamps
     }
 
     fn handle_response_item(&mut self, timestamp: &str, ri: ResponseItem) {
@@ -414,6 +467,7 @@ impl<'a> Builder<'a> {
                     .get("is_error")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                self.record_output(&out.call_id, &out.output, is_error);
                 self.attach_tool_output(&out.call_id, &out.output, is_error);
             }
             ResponseItem::CustomToolCall(ct) => {
@@ -426,6 +480,7 @@ impl<'a> Builder<'a> {
                     .get("is_error")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                self.record_output(&out.call_id, &out.output, is_error);
                 self.attach_tool_output(&out.call_id, &out.output, is_error);
             }
             ResponseItem::Other { kind, payload } => {
@@ -501,6 +556,9 @@ impl<'a> Builder<'a> {
     }
 
     fn attach_tool_call(&mut self, timestamp: &str, call_id: String, name: String, input: Value) {
+        self.call_anchor
+            .entry(call_id.clone())
+            .or_insert(self.files_changed_order.len());
         let category = tool_category(&name);
         let invocation = ToolInvocation {
             id: call_id.clone(),
@@ -527,6 +585,14 @@ impl<'a> Builder<'a> {
         self.call_index.insert(call_id, (turn_idx, tool_idx));
     }
 
+    fn record_output(&mut self, call_id: &str, output: &str, is_error: bool) {
+        self.evidence
+            .entry(call_id.to_string())
+            .or_default()
+            .outputs
+            .push((output.to_string(), is_error));
+    }
+
     fn attach_tool_output(&mut self, call_id: &str, output: &str, is_error: bool) {
         if let Some((turn_idx, tool_idx)) = self.call_index.get(call_id).copied() {
             let turn = &mut self.turns[turn_idx];
@@ -545,6 +611,14 @@ impl<'a> Builder<'a> {
     }
 
     fn apply_exec_command_end(&mut self, exec: &ExecCommandEnd) {
+        self.evidence
+            .entry(exec.call_id.clone())
+            .or_default()
+            .exec_end = Some(ExecEnd {
+            exit_code: exec.exit_code,
+            status: exec.status.clone(),
+            cwd: exec.cwd.as_ref().map(|c| c.to_string_lossy().to_string()),
+        });
         if let Some((turn_idx, tool_idx)) = self.call_index.get(&exec.call_id).copied() {
             let turn = &mut self.turns[turn_idx];
             if let Some(inv) = turn.tool_uses.get_mut(tool_idx) {
@@ -579,6 +653,8 @@ impl<'a> Builder<'a> {
     }
 
     fn apply_patch_apply_end(&mut self, patch: &PatchApplyEnd) {
+        let ev = self.evidence.entry(patch.call_id.clone()).or_default();
+        ev.patch_end = Some(ev.patch_end.unwrap_or(true) && patch.success);
         let loc = self.call_index.get(&patch.call_id).copied();
 
         // `patch.changes` is a HashMap — iterate in sorted order so the
@@ -760,7 +836,7 @@ fn patch_change_to_file_mutation(path: &str, change: &PatchChange) -> FileMutati
     fm
 }
 
-fn synth_add_diff(content: &str) -> String {
+pub(crate) fn synth_add_diff(content: &str) -> String {
     let lines: Vec<&str> = content.split('\n').collect();
     let effective: &[&str] = if lines.last() == Some(&"") {
         &lines[..lines.len().saturating_sub(1)]
@@ -776,7 +852,7 @@ fn synth_add_diff(content: &str) -> String {
     buf
 }
 
-fn synth_delete_diff(original: &str) -> String {
+pub(crate) fn synth_delete_diff(original: &str) -> String {
     let lines: Vec<&str> = original.split('\n').collect();
     let effective: &[&str] = if lines.last() == Some(&"") {
         &lines[..lines.len().saturating_sub(1)]
