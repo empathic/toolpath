@@ -6,7 +6,7 @@ Read by `toolpath-otel`. The OpenRouter Broadcast profile was observed in M0
 instrumentations against local mock servers (see Pinned instrumentation
 behavior; the event-mode captures, with content on log records, are
 described under Event-mode captures). Keep in sync with
-`crates/toolpath-otel/src/{lib,otlp,walk,session,stitch,branch,provider,derive,hash,jsonl,record,generation}.rs`,
+`crates/toolpath-otel/src/{lib,input,protojson,otlp,walk,session,stitch,branch,provider,derive,hash,jsonl,record,generation}.rs`,
 `crates/toolpath-otel/src/stitch/frontier.rs`,
 `crates/toolpath-otel/src/walk/logs.rs`,
 `crates/toolpath-otel/src/harness/` and
@@ -34,8 +34,8 @@ logs- or metrics-only body is OTLP. When no generation can be read
 (every span unclaimed, skipped, or an error) the call is
 `OtelError::NoGenerations { skipped }`. Generations carrying more than one
 client session id are `OtelError::MixedSessions` (the sorted ids; see
-Sessions and ids). Decoding the transport (protobuf bodies,
-Collector file-exporter frames, gzip and zstd) is the caller's.
+Sessions and ids). `decode_input` turns files and raw request bodies
+into these values (see Transport).
 
 `resourceSpans`: `{resource, scopeSpans:[{scope, spans:[…]}]}`;
 `resourceLogs`: `{resource, scopeLogs:[{scope, logRecords:[…]}]}`, each
@@ -59,6 +59,206 @@ case-insensitive), so every comparison, dedupe key, generation id and
 `Generation.trace_id` sees one spelling; unknown
 fields are ignored. Log records are read as described under Logs; metrics
 are ignored without counting.
+
+## Transport
+
+```rust
+pub fn decode_input(bytes: &[u8], name: Option<&str>) -> Result<Vec<serde_json::Value>>
+pub fn decode_input_with_limit(bytes: &[u8], name: Option<&str>, limit: u64) -> Result<Vec<serde_json::Value>>
+pub fn decode_protobuf(bytes: &[u8]) -> Result<serde_json::Value>      // feature `protobuf`
+pub fn encode_protobuf(delivery: &serde_json::Value) -> Result<Vec<u8>> // feature `protobuf`
+```
+
+`decode_input` decodes one file or request body into the request bodies
+the deriver takes (here called deliveries). `name` only enables
+file-extension rules.
+
+| Form | Recognized by | Decoded to |
+|---|---|---|
+| OTLP/HTTP JSON body | the whole file parses as one JSON value | one delivery |
+| JSON lines (Collector file exporter `format: json`, or bodies concatenated one per line) | otherwise, every non-empty line parses as one JSON value | one delivery per line |
+| OTLP/HTTP protobuf body (`ExportTraceServiceRequest` or `ExportLogsServiceRequest`; feature `protobuf`) | bytes that are not JSON text and not Collector frames | one delivery (see Protobuf) |
+| Collector file-exporter frames (`format: proto`, or `format: json` with per-message compression) | a leading `0x00` byte, or 4-byte big-endian length prefixes that tile the file exactly | one delivery per frame (see Framing and zstd) |
+| gzip (OTLP/HTTP `Content-Encoding: gzip`, Collector `compression: gzip`) | magic `1f 8b`, whole file; every gzip member is read | decompress, then sniff again |
+| zstd (Collector `compression: zstd`) | magic `28 b5 2f fd`, whole file or one frame; every concatenated zstd frame is read | decompress, then sniff again |
+
+gzip is also read inside one frame; the Collector compresses frames with
+zstd, but a gzip frame is decoded the same way.
+
+A UTF-8 byte-order mark and CRLF line endings are accepted. The exact
+sniffing order is under Framing and zstd. gzip and zstd need feature
+`compression`; protobuf bodies and protobuf frames need feature
+`protobuf` (JSON frames need neither, unless they are compressed).
+Without `protobuf`, bytes that are neither JSON text nor Collector frames
+fail as `not OTLP/JSON: …`, or, when the name ends `.pb`, `.binpb` or
+`.protobuf` (any case), as ``input needs the `protobuf` feature, which
+this build does not have``; input that is not UTF-8 is such bytes. With
+`protobuf`, they are decoded as a protobuf body: text that merely fails to
+parse as JSON, and does not start with `{` or `[`, then fails as a
+`not an OTLP request: …` error, not as `not OTLP/JSON`; without a
+protobuf extension on the name the error also names the JSON error.
+Compressed input is sniffed again under its name without
+the `.gz` or `.zst`, so `x.pb.gz` is read as a protobuf body.
+
+A delivery is a JSON object holding at least one of `resourceSpans`,
+`resourceLogs`, `resourceMetrics` (an array or `null`). Anything else is
+**not OTLP**. Two results mean the input is not OTLP at all: *not OTLP*
+(`OtelError::NotOtlp`) and *not an OTLP request* (`OtelError::NotOtlpBody`,
+bytes that are no OTLP protobuf request); `OtelError::is_not_otlp` is true
+for both, so a caller reading a directory can skip such a file. Every
+other error is OTLP that is malformed, cut short or unreadable in this
+build. Per file:
+
+| Input | Result |
+|---|---|
+| Valid JSON with no OTLP value (`expected.json`, a manifest, an array, a scalar, an empty file), or an empty or whitespace-only file of any name | not OTLP |
+| Every value OTLP (a logs- or metrics-only value included) | read |
+| JSON lines mixing OTLP and non-OTLP values | error `not OTLP/JSON: line N: not an OTLP object`; the whole file fails, because skipping part of a file would drop data silently |
+| JSON text (first non-whitespace byte `{` or `[`) that is neither one JSON value nor all-lines JSON | error `not OTLP/JSON: line N: <JSON parser message>` |
+| gzip or zstd without the `compression` feature / a bad gzip or zstd stream | error ``input needs the `compression` feature, which this build does not have`` / `cannot decompress: …` (`cannot decompress: zstd: …` for zstd) |
+| More than 4 nested compression layers (`MAX_LAYERS`) (gzip or zstd, in any mix, a compressed frame included), or more decompressed bytes across all layers and frames of the file than the limit (1 GiB, `MAX_DECOMPRESSED`, or the caller's with `decode_input_with_limit`) | error `cannot decompress: more than N nested compression layers` (`OtelError::Decompress`) / `cannot decompress: decompressed output exceeds <cap>` (`OtelError::TooLarge { limit }`, the limit in use, in exact binary units; `OtelError::is_too_large` is true, also when the overrun happens inside a Collector frame, and the error carries no `frame i:`, since the budget belongs to the whole input) |
+| A protobuf body that decodes on the wire as neither request | not an OTLP request: `not an OTLP request: not an OTLP traces request (…); not an OTLP logs request (…)`, followed by `; not JSON either (…)` when the name has no protobuf extension |
+| A protobuf body that is a traces request on the wire, with a span whose `trace_id` is not 16 bytes or whose `span_id` is not 8 (and that is no logs request) | error `OTLP protobuf: not an OTLP traces request (…); not an OTLP logs request (…)`; the traces reason names the span and both lengths |
+| A body read by content (no protobuf extension) that decodes as a request with no `resourceSpans` or `resourceLogs` entry | not an OTLP request: `not an OTLP request: content-sniffed as protobuf, but the body carries no resourceSpans or resourceLogs entry; not JSON either (…)` |
+| Frames that do not tile a file starting with `0x00`, or that do not tile a file whose complete first frame is an OTLP request (a first frame of 16 MiB or more, cut short later) | error `OTLP file framing: frame i is cut short: n of its 4 length bytes` / `OTLP file framing: frame i declares N bytes but M remain`. A file cut short inside such a first frame cannot be told from a stray body and is read as rule 6 |
+| A zero-length frame | error `OTLP file framing: frame i is empty` |
+| A frame that fails to decode | the frame's error; `not OTLP/JSON`, `OTLP protobuf` and `cannot decompress` messages are prefixed `frame i: `, while ``input needs the `…` feature`` carries no frame index (a JSON frame that is not OTLP: `not OTLP/JSON: frame i: not an OTLP object`; a frame that is no OTLP request: `OTLP protobuf: frame i: not an OTLP traces request (…); …`, an error, never skipped) |
+
+### Protobuf
+
+Feature `protobuf`.
+
+- **Types:** prost message types vendored in
+  `crates/toolpath-otel/src/proto/`, generated from
+  `open-telemetry/opentelemetry-proto` tag `v1.11.0` (commit
+  `790608c4d51e6ffc12210b541e8514cbed9e91a4`; `LogRecord.event_name`
+  exists since v1.5.0) by `prost-build` 0.14.4 and `libprotoc` 36.1. Each
+  file's header names the tag, the commit and the generator, and keeps the
+  upstream Apache-2.0 notice. Only the common, resource, trace and logs
+  messages and the two collector export requests are generated.
+  `scripts/otel-proto-gen.sh` regenerates them; `--check` regenerates into
+  a temporary directory and diffs against the committed files. There is no
+  `build.rs`, and users need no `protoc`. The module is crate-private; the
+  public surface is the two functions below.
+- **`decode_protobuf(bytes)`** returns canonical OTLP/JSON: lowercase hex
+  `traceId`/`spanId`/`parentSpanId`, `fixed64`/`int64` fields as decimal
+  strings, `uint32`/`fixed32` fields and enums as JSON numbers,
+  `bytesValue` as padded standard base64, non-finite doubles as
+  `"NaN"`/`"Infinity"`/`"-Infinity"`, lowerCamelCase keys, fields at their
+  proto3 default left out, and `stringValueStrindex`/`keyStrindex` kept.
+  Two defaults are kept: a `KeyValue` always carries `"key"` (even `""`),
+  and an empty `arrayValue` or `kvlistValue` is `{"values":[]}`, so the
+  value's kind survives.
+- **Signal discrimination (try both):** the body is decoded as an
+  `ExportTraceServiceRequest` and accepted only if every span has a
+  16-byte `trace_id` and an 8-byte `span_id`; otherwise it is decoded as
+  an `ExportLogsServiceRequest`. If neither decodes on the wire, the
+  bytes are not an OTLP request (`OtelError::NotOtlpBody`):
+  `not an OTLP request: not an OTLP traces request (…); not an OTLP logs request (…)`.
+  If the traces decode succeeds on the wire but fails the id check and
+  the logs decode fails, the body is a malformed traces request
+  (`OtelError::Protobuf`): `OTLP protobuf: not an OTLP traces request (…); not an OTLP logs request (…)`.
+  A request with no spans (and so no log records either) is
+  `{"resourceSpans":[]}`. The rule is sound because a log record's field
+  1 (`fixed64`) or field 2 (varint) fails the traces decode on wire type,
+  and a body-only record decodes as a span with an empty `trace_id`, which
+  fails the id check.
+- **Strictness:** one span with a missing or wrong-length id fails the
+  whole request, so the file fails (`OtelError::Protobuf`, not
+  `NotOtlpBody`: a directory reader does not skip it). JSON reads the
+  same span leniently.
+  Relaxing the rule is exactly what would let a body-only log request pass
+  as traces, and OTLP requires both ids.
+- **`encode_protobuf(delivery)`** is the strict inverse: non-hex ids,
+  64-bit integers that are neither decimal strings nor integral numbers,
+  containers of the wrong JSON type and `AnyValue`s with more than one
+  value are errors naming the JSON path; a delivery carrying both
+  `resourceSpans` and `resourceLogs` is
+  `OTLP protobuf: one request carries one signal`. Id *lengths* are not
+  checked, so tests can build the malformed bodies `decode_protobuf`
+  rejects. Integer fields (`intValue`, the 64-bit and 32-bit numbers)
+  accept a JSON integer (`1`) or a decimal string (`"1"`) and reject a
+  whole-number float in any spelling (`1.0`, `1e3`, `"1.0"`), although
+  the JSON reader (see Input) accepts such a `doubleValue` for an integer
+  attribute. An `AnyValue` key the encoder does not know (a misspelling
+  such as `stringvalue` included) is skipped silently, as protobuf JSON
+  readers skip unknown fields, so an `AnyValue` holding only such keys
+  encodes as an empty value. `null` reads as the proto3 default; an enum
+  field (`kind`, `status.code`, `severityNumber`) takes its number or its
+  proto name in any case; `bytesValue` takes the standard or URL-safe base64
+  alphabet, padded or not. `AnyValue` nesting (arrays and kvlists) deeper
+  than `MAX_ANY_DEPTH` levels (a const in `protojson.rs`, derived from
+  prost's decode recursion limit so that every body the encoder accepts
+  also decodes) is the error `AnyValue nested deeper than <N> levels`.
+
+### Framing and zstd
+
+The OpenTelemetry Collector file exporter's layouts, from
+`opentelemetry-collector-contrib` v0.161.0,
+`exporter/fileexporter/file_writer.go` (`buildExportFunc`) and
+`marshaller.go`:
+
+| Exporter config | On disk |
+|---|---|
+| `format: json`, no compression | one JSON object per line |
+| `format: proto` (with or without compression, feature gate off) | 4-byte big-endian `uint32` length, then the message; each message compressed on its own when `compression` is set |
+| `format: json`, `compression: zstd`, feature gate off | length-prefixed like proto; each JSON message zstd-compressed on its own |
+| native-compression feature gate on, `compression` set | the whole stream is compressed; JSON stays line-delimited, proto stays length-prefixed |
+
+`decode_input(bytes, name)` sniffs, in order:
+
+1. gzip magic `1f 8b` or zstd magic `28 b5 2f fd` → decompress, drop
+   `.gz`/`.zst` from the name, sniff again. At most 4 (`MAX_LAYERS`)
+   nested layers, gzip and zstd in any mix; decompressed output is capped
+   by one budget across every layer and frame of the input:
+   1 GiB (`MAX_DECOMPRESSED`), or the `limit` a caller passes to
+   `decode_input_with_limit(bytes, name, limit)`. Both need feature
+   `compression` (gzip through `flate2`'s pure-Rust backend, zstd through
+   `ruzstd`).
+2. Empty or whitespace-only → not OTLP (even with a protobuf extension).
+3. First byte `0x00` → Collector frames. An OTLP protobuf body never
+   starts with `0x00` (it starts with field 1's tag `0x0a`, or is empty),
+   and JSON never does. The frames must tile the input exactly, else
+   `OTLP file framing: …`. A frame may be zstd- or gzip-compressed (the
+   Collector writes zstd; a layer, within
+   the same bounds), then JSON text (first byte `{` or `[`, read as a
+   JSON body or JSON lines; a non-OTLP frame is
+   `not OTLP/JSON: frame i: not an OTLP object`) or one protobuf body.
+   Errors carry `frame i:`; a frame that is no OTLP request is
+   `OTLP protobuf: frame i: …`, an error, never a file to skip
+   (framed bytes are Collector output gone wrong, not a stray file). Each
+   frame's signal is discriminated on its own. A zero-length frame is
+   `OTLP file framing: frame i is empty` (the Collector never writes one).
+4. Otherwise the JSON text reader. Its success, not OTLP, and any JSON
+   error on text whose first non-whitespace byte (after an optional BOM)
+   is `{` or `[` are final.
+5. Otherwise, frames that tile the input exactly although the first byte
+   is not `0x00` (a first frame of 16 MiB or more) are read as in rule 3.
+   A protobuf body cannot tile by accident at realistic sizes: its first
+   byte `0x0a` declares a first frame of at least 160 MiB
+   (`0x0a << 24` = 167,772,160 bytes). When the frames do not tile but
+   the first frame is complete and decodes as an OTLP request carrying a
+   resource entry, the input is such a Collector file cut short or
+   corrupted after frame 0, and the framing error is the result. A file
+   cut short inside that first frame is read as rule 6.
+6. Otherwise one protobuf body. With feature `protobuf` off it is
+   ``input needs the `protobuf` feature`` for a `.pb`/`.binpb`/`.protobuf`
+   name (any case), else the JSON error. With it on, bytes that are no
+   OTLP request on the wire are `not an OTLP request: …`, and so is a body
+   read by content (no protobuf extension) that carries no
+   `resourceSpans`/`resourceLogs` entry, not an empty delivery, because
+   protobuf skips unknown fields and arbitrary bytes often decode as an
+   empty request. A named `.binpb` holding an empty request reads as an
+   empty delivery.
+
+The limit bounds the decompressed bytes, not the allocation: each layer is read into a growing buffer, so peak memory is
+roughly twice the limit for the largest layer, plus the input and any outer
+layer still held during a nested read; `ruzstd`'s decoding window is not
+counted. On wasm32 (the site build) an allocation that large can abort
+the process rather than fail with `cannot decompress`. The default,
+1 GiB, is the same on every target; a caller decoding
+untrusted bodies (a hosted ingest) passes its own, smaller limit to
+`decode_input_with_limit`. zstd frame checksums are not verified.
 
 ## Walker
 
