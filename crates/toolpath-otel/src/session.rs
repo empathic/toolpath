@@ -3,6 +3,9 @@
 use crate::generation::Generation;
 use crate::hash::sha256_hex;
 use crate::normalize::{NormMessage, is_system_like, kept_prompt};
+use crate::record::{MessageHash, PromptHashes};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Session {
@@ -14,6 +17,10 @@ pub struct Session {
     pub generations: Vec<Generation>,
     /// Some generation of this session was skipped as truncated.
     pub truncated: bool,
+    /// Every generation's prompt as message hashes, by generation id, when
+    /// the session was rebuilt from stored records; stitching then matches
+    /// shared prompt prefixes by hash.
+    pub prompt_hashes: Option<Arc<HashMap<String, PromptHashes>>>,
 }
 
 impl Session {
@@ -25,7 +32,13 @@ impl Session {
             session_id,
             generations,
             truncated: false,
+            prompt_hashes: None,
         }
+    }
+
+    /// The message hashes of `g`'s prompt, when the session has them.
+    pub fn prompt_hashes(&self, g: &Generation) -> Option<&[MessageHash]> {
+        Some(self.prompt_hashes.as_ref()?.get(&g.id)?.as_slice())
     }
 
     /// All of `generations` as one session, keyed by the first client
@@ -37,14 +50,23 @@ impl Session {
         s.session_id = s.generations.iter().find_map(|g| g.session_id.clone());
         s.key = match &s.session_id {
             Some(id) => id.clone(),
-            None if first.is_delta() => trace_key(first.client_key.as_deref(), &first.trace_id),
-            None => cluster_key(
-                first.client_key.as_deref(),
-                &kept_prompt(&first.messages),
-                &first.id,
-            ),
+            None => derived_key(first),
         };
         Some(s)
+    }
+}
+
+/// The key of a session without a client session id whose first
+/// generation is `first`.
+pub fn derived_key(first: &Generation) -> String {
+    if first.is_delta() {
+        trace_key(first.client_key.as_deref(), &first.trace_id)
+    } else {
+        cluster_key(
+            first.client_key.as_deref(),
+            &kept_prompt(&first.messages),
+            &first.id,
+        )
     }
 }
 
@@ -102,7 +124,8 @@ mod tests {
                 role: "user".into(),
                 content: json!("hi"),
                 ..Default::default()
-            }],
+            }]
+            .into(),
             ..Default::default()
         }
     }

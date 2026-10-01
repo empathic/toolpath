@@ -65,6 +65,15 @@ pub struct Branches {
     /// continuation's tree, plus, while the main line is undecided, every
     /// tree outside sub-agent threads.
     pub head: Option<usize>,
+    /// Per node: held back from a non-final incremental send whatever its
+    /// own state, because a later generation could still change its marks
+    /// or parents (`docs/agents/formats/otel.md`, "Incremental JSONL").
+    pub held: Vec<bool>,
+    /// Merged sub-agent answers, by node, with the generation (feed order)
+    /// by which the merge is seen. The answer settles there: an echo that
+    /// only a later generation carries (a resumed sub-agent) is not part of
+    /// its step.
+    pub answers: BTreeMap<usize, usize>,
 }
 
 impl Branches {
@@ -212,10 +221,42 @@ pub fn classify(graph: &TurnGraph, category: &dyn Fn(&str) -> Option<ToolCategor
     }
 
     let ancestry = Ancestry::new(&parent, &children);
-    let merges = merges(
+    let Merged {
+        merges,
+        answers,
+        calls: merged_calls,
+    } = merges(
         graph, &calls, &delegated, &anchor, &thread, &kind, &ancestry,
     );
 
+    // Until the main line is decided an unmarked turn outside a continuing
+    // tree may still turn side; a side request waits for `final_`; a system
+    // turn without a child yet takes its first child's mark.
+    let mut held: Vec<bool> = (0..n)
+        .map(|i| match &kind[i] {
+            Some(BranchKind::Side) => true,
+            Some(BranchKind::Subagent(_)) => false,
+            None => {
+                main_root.is_none() && !continues(root[i])
+                    || anchor[i].is_none() && children[i].is_empty()
+            }
+        })
+        .collect();
+    // A call whose sub-agent has not answered yet may still give any later
+    // turn of its thread an extra parent.
+    for (ci, c) in calls.iter().enumerate() {
+        if merged_calls.contains(&ci) {
+            continue;
+        }
+        for j in c.node + 1..n {
+            if ancestry.is_descendant(j, c.node)
+                && thread[j] == thread[c.node]
+                && kind[j] == kind[c.node]
+            {
+                held[j] = true;
+            }
+        }
+    }
     let head = (0..n)
         .rev()
         .find(|&i| kind[i].is_none())
@@ -225,11 +266,15 @@ pub fn classify(graph: &TurnGraph, category: &dyn Fn(&str) -> Option<ToolCategor
         delegations,
         merges,
         head,
+        held,
+        answers,
     }
 }
 
 /// Where each matched sub-agent's answer joins its delegating thread, as
-/// `(node, extra parent)` pairs, sorted.
+/// `(node, extra parent)` pairs, sorted; each merged answer with the
+/// generation (feed order) by which its merge is seen; and the calls whose
+/// sub-agent merged.
 fn merges(
     graph: &TurnGraph,
     calls: &[Call],
@@ -238,7 +283,7 @@ fn merges(
     thread: &[Option<usize>],
     kind: &[Option<BranchKind>],
     ancestry: &Ancestry,
-) -> Vec<(usize, usize)> {
+) -> Merged {
     let nodes = &graph.nodes;
     let n = nodes.len();
     let generation = |i: usize| nodes[i].producer.unwrap_or(nodes[i].first_generation);
@@ -247,12 +292,11 @@ fn merges(
         .map(|x| content_text(&x.message.content))
         .collect();
     let mut merges = Vec::new();
+    let mut answers = BTreeMap::new();
+    let mut merged_calls = BTreeSet::new();
     for (&a, &ci) in delegated {
         let from = calls[ci].node;
-        let result = nodes[from]
-            .results
-            .get(&calls[ci].id)
-            .map(|r| r.content.as_str());
+        let result = nodes[from].results.get(&calls[ci].id);
         let in_thread = |j: usize, last: usize| {
             j > from.max(last)
                 && thread[j] == thread[from]
@@ -273,23 +317,43 @@ fn merges(
         });
         let join = finals.filter_map(|last| {
             let answer = texts[last].trim();
-            let returned = result
-                .is_some_and(|r| r.contains(answer))
-                .then(|| {
-                    (from + 1..n).find(|&j| {
-                        in_thread(j, last) && nodes[j].first_generation > generation(last)
-                    })
-                })
-                .flatten();
-            let carried = (from + 1..returned.unwrap_or(n)).find(|&j| {
-                nodes[j].message.role == "user" && in_thread(j, last) && texts[j].contains(answer)
+            // `(receiving turn, generation by which the merge is seen)`.
+            let returned = result.filter(|r| r.content.contains(answer)).and_then(|r| {
+                (from + 1..n)
+                    .find(|&j| in_thread(j, last) && nodes[j].first_generation > generation(last))
+                    .map(|j| (j, nodes[j].first_generation.max(r.generation)))
             });
-            carried.or(returned).map(|j| (j, last))
+            let carried = (from + 1..returned.map_or(n, |(j, _)| j))
+                .find(|&j| {
+                    nodes[j].message.role == "user"
+                        && in_thread(j, last)
+                        && texts[j].contains(answer)
+                })
+                .map(|j| (j, nodes[j].first_generation));
+            carried
+                .or(returned)
+                .map(|(j, seen)| (j, last, seen.max(generation(last))))
         });
-        merges.extend(join.min());
+        if let Some((j, last, seen)) = join.min() {
+            merges.push((j, last));
+            answers.insert(last, seen);
+            merged_calls.insert(ci);
+        }
     }
     merges.sort_unstable();
-    merges
+    Merged {
+        merges,
+        answers,
+        calls: merged_calls,
+    }
+}
+
+/// What [`merges`] finds.
+struct Merged {
+    merges: Vec<(usize, usize)>,
+    answers: BTreeMap<usize, usize>,
+    /// Calls whose sub-agent merged.
+    calls: BTreeSet<usize>,
 }
 
 /// Entry and exit times of a depth-first walk over the parent forest, so
@@ -394,7 +458,7 @@ mod tests {
             id: id.into(),
             start_ns: start,
             end_ns: start + 1,
-            messages,
+            messages: messages.into(),
             completion,
             cost: Cost {
                 total: Some(1.0),
@@ -547,7 +611,9 @@ mod tests {
     fn the_callers_classifier_gets_the_harness_and_drives_delegation() {
         let mut s = fan_out();
         for gi in [0, 4] {
-            s.generations[gi].messages[0].content = json!("You are Claude Code");
+            let mut messages = s.generations[gi].messages.to_vec();
+            messages[0].content = json!("You are Claude Code");
+            s.generations[gi].messages = messages.into();
         }
         let g = stitch(&s);
         let seen = std::sync::Arc::new(std::sync::Mutex::new(BTreeSet::new()));
@@ -580,14 +646,16 @@ mod tests {
     fn a_tool_no_provider_knows_takes_the_callers_category() {
         let mut s = fan_out();
         for g in &mut s.generations {
+            let mut messages = g.messages.to_vec();
             for c in g
                 .completion
                 .tool_calls
                 .iter_mut()
-                .chain(g.messages.iter_mut().flat_map(|m| m.tool_calls.iter_mut()))
+                .chain(messages.iter_mut().flat_map(|m| m.tool_calls.iter_mut()))
             {
                 c.function.name = "frobnicate".into();
             }
+            g.messages = messages.into();
         }
         let g = stitch(&s);
         let classifier = crate::ToolClassifier::new(|_, name| {
@@ -607,7 +675,7 @@ mod tests {
     #[test]
     fn a_background_sub_agent_joins_where_its_answer_arrives() {
         let mut s = fan_out();
-        let resumed = &mut s.generations[4].messages;
+        let mut resumed = s.generations[4].messages.to_vec();
         for t in resumed.iter_mut().filter(|t| t.role == "tool") {
             t.content = json!("launched");
         }
@@ -615,6 +683,7 @@ mod tests {
         resumed.push(m(
             json!({"role": "user", "content": "<task-notification>B done</task-notification>"}),
         ));
+        s.generations[4].messages = resumed.into();
         let g = stitch(&s);
         let b = classify(&g, &unknown);
         let note = g
@@ -631,7 +700,7 @@ mod tests {
     fn a_short_answer_merges_at_the_notification_that_delivers_it() {
         let mut s = fan_out();
         s.generations[2].completion.text = "OK".into();
-        let resumed = &mut s.generations[4].messages;
+        let mut resumed = s.generations[4].messages.to_vec();
         for t in resumed.iter_mut().filter(|t| t.role == "tool") {
             t.content = json!("launched");
         }
@@ -641,6 +710,7 @@ mod tests {
         resumed.push(m(
             json!({"role": "user", "content": "<task-notification>OK</task-notification>"}),
         ));
+        s.generations[4].messages = resumed.into();
         let g = stitch(&s);
         let b = classify(&g, &unknown);
         let note = g
@@ -841,6 +911,22 @@ mod tests {
         let noted = produced_by(&g, 2);
         assert_eq!(b.merges, [(noted, produced_by(&g, 1))]);
         assert_prefixes_agree(&s);
+    }
+
+    /// The answer settles at the generation that shows its merge (m1
+    /// returns it); the resumed sub-agent's request a2 echoes it later.
+    #[test]
+    fn a_merged_answer_settles_at_the_generation_that_shows_its_merge() {
+        let s = answering_twice();
+        let g = stitch(&s);
+        let b = classify(&g, &unknown);
+        let answer = produced_by(&g, 1);
+        assert_eq!(b.answers.get(&answer), Some(&2), "m1 carries the result");
+        assert_eq!(
+            g.nodes[answer].echoed_by,
+            Some(3),
+            "a2 resumes the sub-agent"
+        );
     }
 
     fn answering_twice() -> Session {
@@ -1194,10 +1280,12 @@ mod tests {
                 tool_calls: vec![agent("c1", "sub A")],
                 ..Default::default()
             };
-            main[3].messages.insert(
+            let mut resumed = main[3].messages.to_vec();
+            resumed.insert(
                 0,
                 m(json!({"role": "tool", "tool_call_id": "c1", "content": "A done"})),
             );
+            main[3].messages = resumed.into();
         }
         for (i, g) in main.into_iter().enumerate() {
             for (k, _) in sides.iter().enumerate().filter(|&(_, &at)| at == i) {

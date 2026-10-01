@@ -29,7 +29,7 @@ fn shared_steps_are_identical_when_the_session_grows() {
             let pending: Vec<String> = stitch(&head)
                 .nodes
                 .iter()
-                .filter(|n| n.producer.is_some() && !n.echoed)
+                .filter(|n| n.producer.is_some() && n.echoed_by.is_none())
                 .map(|n| n.id.clone())
                 .collect();
             for step in &part.steps {

@@ -4,15 +4,15 @@
 use crate::ToolClassifier;
 use crate::branch::{BranchKind, Branches, classify};
 use crate::generation::{Cost, Generation};
-use crate::harness::{SourceHarness, infer_harness, signals};
+use crate::harness::SourceHarness;
 use crate::profile;
 use crate::provider::{PROVIDER, rfc3339, token_usage, view_from_graph};
 use crate::session::Session;
-use crate::stitch::{Node, TurnGraph, stitch};
+use crate::stitch::{Node, TurnGraph, settled_harness, stitch};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use toolpath::v1::Path;
-use toolpath_convo::{DeriveConfig, Role, Turn};
+use toolpath_convo::{DeriveConfig, Role, ToolCategory, Turn};
 
 /// The key under which this crate stamps step extras and path meta.
 pub const EXTRA_KEY: &str = PROVIDER;
@@ -20,39 +20,80 @@ pub const EXTRA_KEY: &str = PROVIDER;
 /// Dropped texts by the generation index that stores them.
 type Homes = BTreeMap<usize, BTreeMap<String, String>>;
 
+/// The harness is the one the generations that settle the first turn show
+/// ([`settled_harness`]), so a later generation never changes it.
 pub fn derive_session(
     session: &Session,
     config: &DeriveConfig,
     classifier: Option<&ToolClassifier>,
 ) -> Path {
-    let graph = stitch(session);
-    let harness = infer_harness(&signals(session));
-    let category = |name: &str| classifier.and_then(|c| c.classify(harness.as_str(), name));
-    let branches = classify(&graph, &category);
-    let mut view = view_from_graph(session, &graph, &branches, harness, &category);
-    let placed: BTreeSet<usize> = graph.nodes.iter().filter_map(|n| n.producer).collect();
-    view.turns.extend(unplaced_turns(session, &graph, &placed));
+    let harness = settled_harness(session, true, classifier);
+    derive_stitched(session, &stitch(session), config, harness, classifier).0
+}
+
+/// `classifier`'s category of a tool called in a `harness` session; none
+/// without a classifier.
+pub fn categories(
+    classifier: Option<&ToolClassifier>,
+    harness: SourceHarness,
+) -> impl Fn(&str) -> Option<ToolCategory> + '_ {
+    move |name| classifier.and_then(|c| c.classify(harness.as_str(), name))
+}
+
+/// [`derive_session`] of `session`, stitched as `graph`, with `harness`,
+/// and the classification of `graph`.
+pub fn derive_stitched(
+    session: &Session,
+    graph: &TurnGraph,
+    config: &DeriveConfig,
+    harness: SourceHarness,
+    classifier: Option<&ToolClassifier>,
+) -> (Path, Branches) {
+    let (mut path, view_id, branches) = derive_steps(session, graph, config, harness, classifier);
+    stamp_meta(&mut path, session, harness, graph, &view_id);
+    (path, branches)
+}
+
+/// The path of the first `graph.links.len()` generations of `session`,
+/// stitched as `graph`, without the otel path meta: its steps are exactly
+/// those of [`derive_session`] of that prefix when `harness` is its
+/// harness.
+pub fn derive_steps(
+    session: &Session,
+    graph: &TurnGraph,
+    config: &DeriveConfig,
+    harness: SourceHarness,
+    classifier: Option<&ToolClassifier>,
+) -> (Path, String, Branches) {
+    let category = categories(classifier, harness);
+    let branches = classify(graph, &category);
+    let mut view = view_from_graph(session, graph, &branches, harness, &category);
+    let placed = placed(graph);
+    view.turns.extend(unplaced_turns(session, graph, &placed));
     let mut path = toolpath_convo::derive_path(&view, config);
-    link_branches(&mut path, &graph, &branches);
-    let homes = dropped_homes(&graph);
-    stamp_steps(
-        &mut path,
-        &conversation_key(&view.id),
-        session,
-        &graph,
-        &branches,
-        &homes,
-    );
-    stamp_unplaced(
-        &mut path,
-        &conversation_key(&view.id),
-        session,
-        &graph,
-        &placed,
-        &homes,
-    );
-    stamp_meta(&mut path, session, harness, &graph, &view.id);
-    path
+    link_branches(&mut path, graph, &branches);
+    let homes = dropped_homes(graph);
+    let key = conversation_key(&view.id);
+    stamp_steps(&mut path, &key, session, graph, &branches, &homes);
+    stamp_unplaced(&mut path, &key, session, graph, &placed, &homes);
+    (path, view.id, branches)
+}
+
+/// Generations whose completion is a turn of `graph`.
+fn placed(graph: &TurnGraph) -> BTreeSet<usize> {
+    graph.nodes.iter().filter_map(|n| n.producer).collect()
+}
+
+/// The ids of the unplaced steps of `graph`'s generations: dead ends that
+/// never change once their generation is stitched.
+pub fn unplaced_step_ids<'a>(
+    session: &'a Session,
+    graph: &'a TurnGraph,
+) -> impl Iterator<Item = String> + 'a {
+    let placed = placed(graph);
+    (0..graph.links.len())
+        .filter(move |gi| !placed.contains(gi))
+        .map(|gi| unplaced_step_id(&graph.links[gi].completion, &session.generations[gi].id))
 }
 
 /// The step id of unplaced generation `generation_id` whose completion is
@@ -206,6 +247,13 @@ fn stamp_steps(
             continue;
         };
         let mut extra = step_extra(node, &session.generations, graph, homes);
+        // A merged answer settles when its merge is seen; an echo only a
+        // later generation carries (a resumed sub-agent) is not part of it.
+        if let (Some(&at), Some(by)) = (branches.answers.get(&ni), node.echoed_by)
+            && by > at
+        {
+            extra.remove("echo");
+        }
         // Intrinsic: the turn comes from a metadata-only generation.
         let skeleton = extra.contains_key("absent");
         if let Some(name) = branches.branch_name(ni).or(skeleton.then_some("skeleton")) {

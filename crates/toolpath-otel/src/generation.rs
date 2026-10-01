@@ -2,9 +2,11 @@
 //! a telemetry dialect; profiles fill these in and everything downstream
 //! reads only these.
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::ops::Deref;
+use std::sync::Arc;
 
 fn null_as_default<'de, D, T>(d: D) -> Result<T, D::Error>
 where
@@ -30,7 +32,8 @@ pub struct Generation {
     /// Who sent the request (an API key name); partitions sessionless clustering.
     pub client_key: Option<String>,
     /// The full request history, OpenAI chat shape.
-    pub messages: Vec<Message>,
+    #[serde(default)]
+    pub messages: Prompt,
     pub completion: Completion,
     pub usage: Usage,
     pub cost: Cost,
@@ -70,6 +73,84 @@ impl Generation {
     /// `history = Delta`, or a prompt-absent skeleton (which implies Delta).
     pub fn is_delta(&self) -> bool {
         self.history == History::Delta || self.absent.prompt
+    }
+}
+
+/// A generation's prompt messages: a prefix of a list that generations
+/// rebuilt from stored records share (a later call's prompt extends an
+/// earlier one's), so a session holds each message once. Reads as a slice
+/// and serializes as a list.
+#[derive(Clone, Default)]
+pub struct Prompt {
+    all: Arc<[Message]>,
+    len: usize,
+}
+
+impl Prompt {
+    /// The first `len` messages of `all`.
+    pub fn shared(all: Arc<[Message]>, len: usize) -> Self {
+        assert!(len <= all.len(), "prompt longer than its messages");
+        Prompt { all, len }
+    }
+
+    pub fn pop(&mut self) -> Option<Message> {
+        let last = self.last()?.clone();
+        self.len -= 1;
+        Some(last)
+    }
+}
+
+impl Deref for Prompt {
+    type Target = [Message];
+
+    fn deref(&self) -> &[Message] {
+        &self.all[..self.len]
+    }
+}
+
+impl From<Vec<Message>> for Prompt {
+    fn from(v: Vec<Message>) -> Self {
+        let len = v.len();
+        Prompt { all: v.into(), len }
+    }
+}
+
+impl FromIterator<Message> for Prompt {
+    fn from_iter<I: IntoIterator<Item = Message>>(iter: I) -> Self {
+        iter.into_iter().collect::<Vec<_>>().into()
+    }
+}
+
+impl<'a> IntoIterator for &'a Prompt {
+    type Item = &'a Message;
+    type IntoIter = std::slice::Iter<'a, Message>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl PartialEq for Prompt {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl std::fmt::Debug for Prompt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl Serialize for Prompt {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        (**self).serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Prompt {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Vec::<Message>::deserialize(d).map(Prompt::from)
     }
 }
 
@@ -330,7 +411,8 @@ mod tests {
                     is_error: Some(false),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             completion: Completion {
                 text: "done".into(),
                 reasoning: Some("thought".into()),

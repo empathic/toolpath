@@ -937,7 +937,7 @@ fn extract_unit(unit: &Unit<'_>, exclusive: &[&str]) -> Result<Generation, SkipR
         client_key: Attrs(&resource.attributes)
             .str("service.name")
             .map(str::to_string),
-        messages,
+        messages: messages.into(),
         completion,
         usage: usage(&lk, scope.name, exclusive),
         request_model: lk.string("gen_ai.request.model"),

@@ -132,7 +132,7 @@ mod tests {
 
     fn of(messages: Vec<Message>) -> [Generation; 1] {
         [Generation {
-            messages,
+            messages: messages.into(),
             ..Default::default()
         }]
     }

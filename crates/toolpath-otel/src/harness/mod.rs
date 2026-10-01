@@ -32,6 +32,19 @@ impl SourceHarness {
             SourceHarness::Unknown => "unknown",
         }
     }
+
+    /// Exact inverse of [`SourceHarness::as_str`].
+    pub fn from_name(name: &str) -> Option<SourceHarness> {
+        [
+            Self::ClaudeCode,
+            Self::Codex,
+            Self::Opencode,
+            Self::Pi,
+            Self::Unknown,
+        ]
+        .into_iter()
+        .find(|h| h.as_str() == name)
+    }
 }
 
 /// What harness inference looks at.
@@ -225,7 +238,8 @@ mod tests {
                     content: json!("hi"),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         };
         let s = Session::new("otel-cluster:0000000000000000".into(), None, vec![g]);

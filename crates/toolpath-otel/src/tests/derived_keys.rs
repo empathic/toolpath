@@ -20,7 +20,7 @@ fn gen_(id: &str, start: u64, profile: &str, messages: Vec<Message>, text: &str)
         start_ns: start,
         end_ns: start + 1,
         profile: profile.into(),
-        messages,
+        messages: messages.into(),
         response_model: Some("m".into()),
         ..Default::default()
     };

@@ -122,3 +122,18 @@ pub fn check_snapshot_at(path: &std::path::Path, actual: &Value, bless: bool) {
         }
     }
 }
+
+/// Drops the OpenRouter `session.id` attribute from every span.
+pub fn without_session_ids(values: &mut [Value]) {
+    for v in values {
+        for rs in v["resourceSpans"].as_array_mut().into_iter().flatten() {
+            for ss in rs["scopeSpans"].as_array_mut().into_iter().flatten() {
+                for span in ss["spans"].as_array_mut().into_iter().flatten() {
+                    if let Some(attrs) = span["attributes"].as_array_mut() {
+                        attrs.retain(|a| a["key"] != "session.id");
+                    }
+                }
+            }
+        }
+    }
+}
