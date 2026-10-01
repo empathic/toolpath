@@ -27,59 +27,7 @@ pub const PRODUCER_NAME: &str = "copilot-cli";
 /// `None` for anything unrecognized (the raw `name`/`input` are still carried
 /// on the [`ToolInvocation`]). Tighten with observed names later.
 pub fn tool_category(name: &str) -> Option<ToolCategory> {
-    let n = name.to_ascii_lowercase();
-    // Exact-ish matches first.
-    match n.as_str() {
-        "shell" | "bash" | "sh" | "run" | "exec" | "execute" | "terminal" | "run_in_terminal"
-        | "run_command" | "run_shell" | "command" => return Some(ToolCategory::Shell),
-        "read" | "read_file" | "readfile" | "view" | "view_file" | "cat" | "open" | "get_file" => {
-            return Some(ToolCategory::FileRead);
-        }
-        "write"
-        | "write_file"
-        | "writefile"
-        | "create"
-        | "create_file"
-        | "edit"
-        | "edit_file"
-        | "apply_patch"
-        | "patch"
-        | "str_replace"
-        | "str_replace_editor"
-        | "replace"
-        | "replace_string_in_file"
-        | "insert"
-        | "delete_file" => {
-            return Some(ToolCategory::FileWrite);
-        }
-        "glob" | "list" | "list_dir" | "list_directory" | "ls" | "find" | "find_files" | "grep"
-        | "search" | "ripgrep" | "rg" | "file_search" | "grep_search" | "semantic_search"
-        | "codebase_search" => return Some(ToolCategory::FileSearch),
-        "fetch" | "web_fetch" | "fetch_url" | "web_search" | "search_web" | "browser"
-        | "open_url" | "http" => return Some(ToolCategory::Network),
-        "subagent" | "delegate" | "spawn_agent" | "task" | "agent" | "dispatch_agent" => {
-            return Some(ToolCategory::Delegation);
-        }
-        _ => {}
-    }
-    // Substring fallbacks for compound / namespaced names.
-    if n.contains("shell") || n.contains("terminal") || n.contains("command") {
-        Some(ToolCategory::Shell)
-    } else if n.contains("search") || n.contains("grep") || n.contains("glob") {
-        Some(ToolCategory::FileSearch)
-    } else if n.contains("write")
-        || n.contains("edit")
-        || n.contains("patch")
-        || n.contains("replace")
-    {
-        Some(ToolCategory::FileWrite)
-    } else if n.contains("read") || n.contains("view") || n.contains("file") {
-        Some(ToolCategory::FileRead)
-    } else if n.contains("web") || n.contains("fetch") || n.contains("http") {
-        Some(ToolCategory::Network)
-    } else {
-        None
-    }
+    toolpath_convo::tool_category(toolpath_convo::KnownHarness::CopilotCli, name)
 }
 
 /// Reverse of [`tool_category`]: the Copilot-native tool name for a category.

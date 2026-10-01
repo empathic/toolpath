@@ -2,6 +2,24 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-convo 0.11.2 — 2026-10-01
+
+- **`toolpath-convo`** (0.11.2): new `tools` module, the one source of
+  truth for per-harness tool-name → `ToolCategory` tables.
+  `tool_category(KnownHarness, name)` classifies a name as that
+  harness names its tools; `tool_category_for(Option<&str>, name)`
+  takes a provider id and falls back to `fallback_tool_category` for
+  an unknown or absent one, which classifies a name only when every
+  harness table that lists it exactly agrees. `KnownHarness` covers
+  `claude-code`, `gemini-cli`, `codex`, `opencode`, `pi`,
+  `copilot-cli` and `cursor`, with `id`, `from_id`, `ALL` and
+  `tool_table`.
+- **`toolpath-claude`**, **`toolpath-gemini`**, **`toolpath-codex`**,
+  **`toolpath-opencode`**, **`toolpath-pi`**, **`toolpath-copilot`**,
+  **`toolpath-cursor`**: their `tool_category` (pi: `classify_tool`)
+  now delegates to the shared table. Internal only: same signatures,
+  same categories, derived documents unchanged.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

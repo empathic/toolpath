@@ -28,18 +28,11 @@ fn claude_role_to_role(role: &MessageRole) -> Role {
 
 /// Classify a Claude Code tool into toolpath's category ontology.
 ///
-/// Returns `None` for unrecognized tools. When Claude Code adds or
-/// renames tools, update this map.
+/// Returns `None` for unrecognized tools. The table lives in
+/// [`toolpath_convo::tools`]; update it there when Claude Code adds or
+/// renames tools.
 pub fn tool_category(name: &str) -> Option<ToolCategory> {
-    match name {
-        "Read" => Some(ToolCategory::FileRead),
-        "Glob" | "Grep" => Some(ToolCategory::FileSearch),
-        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => Some(ToolCategory::FileWrite),
-        "Bash" => Some(ToolCategory::Shell),
-        "WebFetch" | "WebSearch" => Some(ToolCategory::Network),
-        "Task" | "Agent" => Some(ToolCategory::Delegation),
-        _ => None,
-    }
+    toolpath_convo::tool_category(toolpath_convo::KnownHarness::ClaudeCode, name)
 }
 
 /// Reverse of [`tool_category`]: pick Claude's native tool name for a
