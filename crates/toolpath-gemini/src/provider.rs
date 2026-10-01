@@ -30,19 +30,10 @@ fn gemini_role_to_role(role: &GeminiRole) -> Role {
 
 /// Classify a Gemini CLI tool name into toolpath's category ontology.
 ///
-/// Returns `None` for unrecognized tools. Keep this table in sync with
-/// <https://geminicli.com/docs/reference/tools>.
+/// Returns `None` for unrecognized tools. The table lives in
+/// [`toolpath_convo::tools`].
 pub fn tool_category(name: &str) -> Option<ToolCategory> {
-    match name {
-        "read_file" | "read_many_files" | "list_directory" | "get_internal_docs"
-        | "read_mcp_resource" => Some(ToolCategory::FileRead),
-        "glob" | "grep_search" | "search_file_content" => Some(ToolCategory::FileSearch),
-        "write_file" | "replace" | "edit" => Some(ToolCategory::FileWrite),
-        "run_shell_command" => Some(ToolCategory::Shell),
-        "web_fetch" | "google_web_search" => Some(ToolCategory::Network),
-        "task" | "activate_skill" => Some(ToolCategory::Delegation),
-        _ => None,
-    }
+    toolpath_convo::tool_category(toolpath_convo::KnownHarness::GeminiCli, name)
 }
 
 /// Reverse of [`tool_category`]: pick Gemini's preferred native tool name

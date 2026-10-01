@@ -103,21 +103,7 @@ impl OpencodeConvo {
 
 /// Map an opencode tool name to toolpath's category ontology.
 pub fn tool_category(name: &str) -> Option<ToolCategory> {
-    match name {
-        "read" | "list" | "view" | "ls" => Some(ToolCategory::FileRead),
-        "glob" | "grep" | "search" => Some(ToolCategory::FileSearch),
-        "write" | "edit" | "multiedit" | "patch" | "delete" => Some(ToolCategory::FileWrite),
-        "bash" | "shell" | "exec" | "terminal" => Some(ToolCategory::Shell),
-        "webfetch" | "websearch" | "web_fetch" | "web_search" | "fetch" => {
-            Some(ToolCategory::Network)
-        }
-        "task" | "agent" | "subagent" | "spawn_agent" => Some(ToolCategory::Delegation),
-        _ => {
-            // MCP tools use "mcp__<server>__<tool>" convention. We don't
-            // have enough info to categorize those; leave as None.
-            None
-        }
-    }
+    toolpath_convo::tool_category(toolpath_convo::KnownHarness::Opencode, name)
 }
 
 /// Reverse of `tool_category`: pick opencode's native tool name for a

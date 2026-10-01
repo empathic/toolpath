@@ -33,18 +33,7 @@ use toolpath_convo::{
 /// matching and let names containing `task` / `agent` collapse to
 /// [`ToolCategory::Delegation`]. Unknown names return `None`.
 pub fn classify_tool(name: &str) -> Option<ToolCategory> {
-    let lower = name.to_lowercase();
-    if lower.contains("task") || lower.contains("agent") {
-        return Some(ToolCategory::Delegation);
-    }
-    match lower.as_str() {
-        "read" => Some(ToolCategory::FileRead),
-        "write" | "edit" => Some(ToolCategory::FileWrite),
-        "bash" | "shell" | "run" | "exec" => Some(ToolCategory::Shell),
-        "grep" | "glob" | "find" | "ls" => Some(ToolCategory::FileSearch),
-        "webfetch" | "websearch" | "fetch" => Some(ToolCategory::Network),
-        _ => None,
-    }
+    toolpath_convo::tool_category(toolpath_convo::KnownHarness::Pi, name)
 }
 
 /// Reverse of [`classify_tool`]: pick Pi's preferred native tool name

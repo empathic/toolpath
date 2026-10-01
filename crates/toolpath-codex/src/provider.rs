@@ -113,24 +113,7 @@ impl CodexConvo {
 
 /// Classify a Codex tool name into toolpath's category ontology.
 pub fn tool_category(name: &str) -> Option<ToolCategory> {
-    match name {
-        "read_file" | "read_many_files" | "list_dir" | "view_image" | "mcp_resource" => {
-            Some(ToolCategory::FileRead)
-        }
-        "glob" | "grep_search" | "search_file_content" | "tool_search" | "tool_suggest" => {
-            Some(ToolCategory::FileSearch)
-        }
-        "write_file" | "apply_patch" | "replace" | "edit" => Some(ToolCategory::FileWrite),
-        "shell" | "exec_command" | "unified_exec" | "write_stdin" | "js_repl" => {
-            Some(ToolCategory::Shell)
-        }
-        "web_fetch" | "web_search" | "google_web_search" => Some(ToolCategory::Network),
-        "spawn_agent" | "close_agent" | "wait_agent" | "resume_agent" | "send_message"
-        | "followup_task" | "list_agents" | "agent_jobs" | "task" | "activate_skill" => {
-            Some(ToolCategory::Delegation)
-        }
-        _ => None,
-    }
+    toolpath_convo::tool_category(toolpath_convo::KnownHarness::Codex, name)
 }
 
 /// Reverse of [`tool_category`]: pick Codex's preferred native tool name

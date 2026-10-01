@@ -3,6 +3,7 @@
 pub mod derive;
 pub mod extract;
 pub mod project;
+pub mod tools;
 
 pub use derive::{DeriveConfig, derive_path, file_write_diff, unified_diff};
 
@@ -561,6 +562,7 @@ pub trait ConversationWatcher {
 
 pub use extract::extract_conversation;
 pub use project::{AnyProjector, ConversationProjector};
+pub use tools::{KnownHarness, fallback_tool_category, tool_category, tool_category_for};
 
 // ── Tests ────────────────────────────────────────────────────────────
 
