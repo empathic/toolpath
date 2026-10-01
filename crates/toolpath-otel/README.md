@@ -237,7 +237,10 @@ for body in &sent.output {
   side request until `Settle::Final`, and a delegating thread's turns after a
   `Task`/`Agent` call until that sub-agent's answer is found, because the
   turn that receives it gains an extra parent. A sub-agent's turns go out
-  as soon as they settle, marked with their call.
+  as soon as they settle, marked with their call. A turn from a later
+  generation also waits for an unanswered call that may move a persistent
+  shell (a Claude Code `Bash` `cd`, a worktree tool), since its shell-write
+  stamps read where that call left the shell.
 - **Harness fixed at the first settled turn.** The harness (tool
   categories, delegation calls, `producer.name`) is inferred from the
   generations that settle the session's first turn and kept for the rest
@@ -301,6 +304,7 @@ for body in &sent.output {
 | Side request (another system prompt) | Steps marked `extra.otel.branch = "side"`; `path.head` stays on the main line, the first system prompt to produce two turns |
 | Call whose content was not captured (skeleton) | Steps marked `extra.otel.branch = "skeleton"` and `extra.otel.absent` |
 | Write, edit and `apply_patch` tool calls | `change[file]` file changes |
+| Heredoc writes and `apply_patch` heredocs in shell calls | `change[file]` file changes with `extra.otel` `source` (`shell-heredoc`, `shell-apply-patch`), `outcome` and `executions[]`; a target that cannot be resolved is an attempt in the step's `extra.otel.unresolved_shell_writes` |
 | Token usage | `token_usage` on the step, additive: `input_tokens` excludes cache reads and writes (`cache_read_tokens`, `cache_write_tokens`); the source's convention is `extra.otel.usage.cache_basis` |
 | Cost | Per-call `extra.otel.cost`; `meta.otel.cost_usd` totals are `null` when any call is unpriced |
 | Working directory from the agent's system prompt | `path.base.uri` |
